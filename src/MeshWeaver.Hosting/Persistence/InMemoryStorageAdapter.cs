@@ -33,6 +33,29 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
     // whenever a write lands during a teardown. Symptom: a LIVE children query that silently stops
     // re-emitting after a create that completed successfully.
     private readonly IsolatedChangeFeed _changes;
+    // 🚨 The CHILDREN INDEX (2026-09-13). ListChildPaths used to walk EVERY key of the store on
+    // every call — a full scan with a Split per key — and the storage-adapter query provider calls
+    // it once per directory level of every subtree query. The plugin gate (mw-plugin-test) runs on
+    // this adapter with ~1,100 nodes and issues subtree queries per package install, so that scan
+    // was quadratic in the mesh size: 12.5 % of the tester's CPU samples in a dotnet-trace of one
+    // package (Hosting, 198 nodes), and the shard's 18 install-minutes scaled 4× from a laptop to
+    // a 2-vCPU runner. The index maps a directory to its immediate children (node paths AND implied
+    // directories) and is maintained by every write path of this adapter. It is keyed by the
+    // DICTIONARY instance, not the adapter, because several adapters can be built over one shared
+    // dictionary (the Orleans test cluster's silos): one index per store, every writer maintains
+    // it. A dictionary mutated behind the adapters' back (a test seeding the map directly) is
+    // caught by the count check in ChildrenOf, which rebuilds the whole index once.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        ConcurrentDictionary<string, MeshNode>, ChildIndex> Indexes = new();
+    private readonly ChildIndex _index;
+
+    private sealed class ChildIndex
+    {
+        public readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> Children =
+            new(StringComparer.OrdinalIgnoreCase);
+        public int IndexedCount = -1;
+        public readonly object Rebuild = new();
+    }
 
     /// <inheritdoc />
     public IObservable<DataChangeNotification> Changes => _changes;
@@ -66,12 +89,79 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         _nodes = nodes;
         _partitionObjects = partitionObjects;
         _logger = logger;
+        _index = Indexes.GetValue(nodes, _ => new ChildIndex());
         // The logger is passed on DELIBERATELY: an isolated fault that nobody logs is the silence
         // this feed exists to end (see PostgreSqlPartitionStorageProvider's null-logger regression).
         _changes = new IsolatedChangeFeed(logger, "in-memory");
     }
 
     private static string Norm(string? path) => path?.Trim('/') ?? "";
+
+    /// <summary>Records <paramref name="path"/> under every ancestor directory (the root is "").</summary>
+    private void Index(string path)
+    {
+        var child = path;
+        while (true)
+        {
+            var slash = child.LastIndexOf('/');
+            var parent = slash < 0 ? "" : child[..slash];
+            var set = _index.Children.GetOrAdd(parent, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase));
+            var added = set.TryAdd(child, 0);
+            if (slash < 0 || !added)
+                return; // the root, or an ancestor chain that is already indexed
+            child = parent;
+        }
+    }
+
+    /// <summary>Drops <paramref name="path"/> from its parent; an ancestor left with nothing under it is dropped too.</summary>
+    private void Unindex(string path)
+    {
+        var child = path;
+        while (true)
+        {
+            if (_index.Children.TryGetValue(child, out var own) && !own.IsEmpty)
+                return; // still a directory with descendants — keep the chain
+            _index.Children.TryRemove(child, out _);
+            var slash = child.LastIndexOf('/');
+            var parent = slash < 0 ? "" : child[..slash];
+            if (_index.Children.TryGetValue(parent, out var set))
+                set.TryRemove(child, out _);
+            if (slash < 0 || _nodes.ContainsKey(parent) || (set is not null && !set.IsEmpty))
+                return;
+            child = parent;
+        }
+    }
+
+    /// <summary>The indexed children of a directory, rebuilding the index once if the store was mutated directly.</summary>
+    private ConcurrentDictionary<string, byte>? ChildrenOf(string parent)
+    {
+        if (_index.IndexedCount != _nodes.Count)
+        {
+            lock (_index.Rebuild)
+            {
+                if (_index.IndexedCount != _nodes.Count)
+                {
+                    _index.Children.Clear();
+                    foreach (var k in _nodes.Keys)
+                        Index(k);
+                    _index.IndexedCount = _nodes.Count;
+                }
+            }
+        }
+        return _index.Children.TryGetValue(parent, out var set) ? set : null;
+    }
+
+    private void Added(string path)
+    {
+        Index(path);
+        _index.IndexedCount = _nodes.Count;
+    }
+
+    private void Removed(string path)
+    {
+        Unindex(path);
+        _index.IndexedCount = _nodes.Count;
+    }
 
     /// <inheritdoc />
     public override IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
@@ -137,6 +227,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
                 return Observable.Return<MeshNode?>(winner);
             }
 
+            Added(Norm(node.Path));
             _logger?.LogDebug("[InMemoryAdapter#{Id:X}] Write {Path} (count={Count})",
                 GetHashCode(), Norm(node.Path), _nodes.Count);
             // No try/catch: IsolatedChangeFeed already isolates and LOGS a faulty observer, so a
@@ -181,6 +272,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
                         GetHashCode(), path);
                     return Observable.Return<bool?>(false);
                 }
+                Added(path);
                 _changes.OnNext(DataChangeNotification.Updated(path, node));
                 return Observable.Return<bool?>(true);
             }
@@ -235,7 +327,8 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
     public override IObservable<string> Delete(string path)
         => Observable.Defer(() =>
         {
-            _nodes.TryRemove(Norm(path), out var removed);
+            if (_nodes.TryRemove(Norm(path), out var removed))
+                Removed(Norm(path));
             _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed));
             return Observable.Return(path);
         });
@@ -251,7 +344,10 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         {
             var won = _nodes.TryRemove(Norm(path), out var removed);
             if (won)
+            {
+                Removed(Norm(path));
                 _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed));
+            }
             return Observable.Return(won);
         });
 
@@ -261,53 +357,26 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         => Observable.Defer(() =>
         {
             var normalized = Norm(parentPath);
-            var prefix = string.IsNullOrEmpty(normalized) ? "" : normalized + "/";
-            var expectedDepth = string.IsNullOrEmpty(normalized)
-                ? 1
-                : normalized.Split('/', StringSplitOptions.RemoveEmptyEntries).Length + 1;
-
             var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            // 🚨 DirectoryPaths must include any intermediate prefix that has at
-            // least one descendant node — a stored node at depth N≥expectedDepth+1
-            // implies a "directory" at the expectedDepth level even if no node
-            // lives there (e.g. SaveNode("org/acme/project/web") doesn't store
-            // "org/acme/project" but WalkDescendants must recurse into it to find
-            // "web"/"mobile"). Without this, GetDescendants returns empty for
-            // any tree whose structure has "directory" levels.
+            // 🚨 DirectoryPaths must include any intermediate prefix that has at least one
+            // descendant node — a stored node at depth N≥expectedDepth+1 implies a "directory" at
+            // the expectedDepth level even if no node lives there (SaveNode("org/acme/project/web")
+            // stores no "org/acme/project", yet WalkDescendants must recurse into it). The index
+            // carries exactly those implied directories: a child that is not itself a node.
             var directoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var k in _nodes.Keys)
-            {
-                if (!string.IsNullOrEmpty(prefix) && !k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (string.IsNullOrEmpty(prefix) && k.Contains('/'))
+            var children = ChildrenOf(normalized);
+            if (children is not null)
+                foreach (var child in children.Keys)
                 {
-                    // root level: path with '/' — top segment is a directory
-                    directoryPaths.Add(k.Split('/', 2)[0]);
-                    continue;
+                    if (_nodes.ContainsKey(child))
+                        nodePaths.Add(child);
+                    else if (_index.Children.TryGetValue(child, out var own) && !own.IsEmpty)
+                        directoryPaths.Add(child);
                 }
-                var segments = k.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                if (segments.Length == expectedDepth)
-                    nodePaths.Add(k);
-                else if (segments.Length > expectedDepth)
-                {
-                    // intermediate segment at expectedDepth becomes a directory entry
-                    var dirPath = string.Join("/", segments.Take(expectedDepth));
-                    if (!_nodes.ContainsKey(dirPath))
-                        directoryPaths.Add(dirPath);
-                }
-            }
-
             return Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(
                 (nodePaths, directoryPaths));
         });
 
-    /// <summary>
-    /// Native descendant enumeration: a direct prefix scan over the path-keyed
-    /// store — exact and race-free against the dictionary that IS the storage of
-    /// record. Declared on this class (not inherited from the base) for the same
-    /// interface-slot reason as <see cref="ResolvePath"/> below.
-    /// </summary>
     public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
         => Observable.Defer(() =>
         {
