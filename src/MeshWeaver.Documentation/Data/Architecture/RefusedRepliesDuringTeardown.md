@@ -247,6 +247,22 @@ carrier accepted it (chase the requester's side); `REPLY_REFUSED_SHUTTING_DOWN` 
 refused it and names both run levels; `NACK_DECLINED reason=…` with nothing after it means every
 carrier declined and says why.
 
+**And the reply's own journey is on the same line.** A reply is posted under a fresh delivery id
+that nobody awaits, so until now every stage after `RESPONSE_POSTED` — its intake at the parent,
+its routing, its intake at the requester, the callback rule — was recorded nowhere, and the
+verdict could only say *"chase the response delivery"* (which is exactly what the 2026-09-13
+merge-queue failure on `DanglingNodeTypeUpdateTest` left a reader with: `PATCH_ACK ok →
+RESPONSE_POSTED … → PATCH_FLUSH_SUBSCRIBED ⇒ the reply was lost between the responder and the
+requester`, and nothing to chase it by). The ledger now **aliases the reply's id to the
+request** at `RESPONSE_POSTED`, so the same `Find(id)?.Add(…)` every hub already performs writes
+the reply's stages into a sub-trail rendered as `↩ reply#1: RECEIVED@… → ROUTED … → HANDLER_EXIT
+state=Processed@<requester>`, and the verdict reads its last stage: no stage at all ⇒ the post
+seam refused it or the target is outside the tree; `ROUTED … state=Failed` ⇒ routing dropped it
+and the stage names the hub; `RESPONSE_ARRIVED_NO_SUBJECT` ⇒ it arrived where no callback was
+held; a last `RECEIVED` ⇒ it is sitting in that hub's queue. Three replies per request are kept
+(a subscription is answered many times, and only the first few can say anything about a lost
+verdict). Pinned by `ReplyTrailFollowsTheRequestTest`.
+
 ### What it deliberately does not cover
 
 - **A reply that crossed a process boundary.** It arrives packaged (`RawJson`) and its waiter is in

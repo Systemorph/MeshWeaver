@@ -2572,6 +2572,11 @@ public class MessageService : IMessageService
         {
             replyFate = requestFates?.Find(correlatedRequestId?.ToString());
             replyFate?.Add($"RESPONSE_POSTED type={message.GetType().Name} target={opt.Target}", Address);
+            // From here on the reply's OWN stages (its intake at every hub it crosses, its routing,
+            // the callback rule at the requester) are written onto the request's trail as a reply
+            // sub-trail — the "chase the response delivery" the verdict used to ask a reader to do.
+            if (replyFate is not null)
+                requestFates?.Alias(delivery.Id, correlatedRequestId?.ToString());
         }
 
         // Teardown guard — hoisted ahead of postPipeline.Invoke. ScheduleNotify already
