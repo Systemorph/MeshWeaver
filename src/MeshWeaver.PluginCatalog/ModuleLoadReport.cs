@@ -28,7 +28,34 @@ public sealed record ModuleLoadLine(
     string Path,
     Guid? Mvid,
     DateTimeOffset? WrittenUtc,
-    ModuleCopy? Shadowed);
+    ModuleCopy? Shadowed)
+{
+    /// <summary>
+    /// The producing repository's commit these bytes were built from, as the activation record
+    /// states it for THIS generation (<see cref="ModuleActivationEntry.SourceCommit"/>), or
+    /// <c>null</c> when nothing recorded one — which prints as an explicit <c>(unrecorded)</c>.
+    ///
+    /// <para>🚨 Never derived. <see cref="Mvid"/> and <see cref="WrittenUtc"/> are properties of the
+    /// FILE and both read "newest" for a bundle that is newest on the volume and carries types from
+    /// last week (#4158, measured on MeshWeaver.Plugins#1585). Filling this in from the version, the
+    /// generation, the MVID or the path would reproduce exactly that — a marker that looks current
+    /// over bytes that are not — with one more field to be misled by.</para>
+    ///
+    /// <para>An INIT property, not a seventh primary-constructor parameter: adding one replaces a
+    /// public record's constructor signature and is a binary break across the fleet
+    /// (<c>scripts/record-signatures.allow</c>).</para>
+    /// </summary>
+    public string? SourceCommit { get; init; }
+
+    /// <summary>
+    /// The framework identity these bytes were COMPILED AGAINST, as the activation record states it
+    /// for this generation (<see cref="ModuleActivationEntry.FrameworkMvid"/>), or <c>null</c> when
+    /// unrecorded. Already carried on every landed entry since #3154 and simply never printed;
+    /// it is what tells a bundle built for this platform line from one built for another, which is
+    /// the difference between "landed" and "adopted".
+    /// </summary>
+    public string? FrameworkMvid { get; init; }
+}
 
 /// <summary>One copy of a module's entry assembly found on disk.</summary>
 /// <param name="Path">Full path of the DLL.</param>
@@ -63,6 +90,17 @@ public sealed record ModuleCopy(string Path, Guid? Mvid, DateTimeOffset? Written
 /// <para><b>Identity, not just a timestamp.</b> Two copies of a pack with the same MVID are the same
 /// bytes in two places — that is not a defect and must not warn, or the line becomes noise everyone
 /// scrolls past. The warning fires only on a store copy that is BOTH newer AND different.</para>
+///
+/// <para>🚨 <b>AND THE FILE IS NOT THE SOURCE (#4158).</b> <c>mvid=</c> and <c>written=</c> are both
+/// read off the FILE, so a bundle that is genuinely the newest one on the volume prints "newest"
+/// twice while carrying types that predate two merged pull requests — measured on
+/// memex.meshweaver.cloud 2026-09-10 (MeshWeaver.Plugins#1585), where the reading "the registry
+/// serves stale bytes" was written down and acted on (three RefreshModules, two restarts) before
+/// <c>/health</c> falsified it: the bundle had never been ADOPTED and the previously adopted build
+/// kept serving under the same-MAJOR rule of #3844. So the line also names what the activation
+/// record says the bytes were BUILT FROM (<c>built-from=</c>, the producing repository's commit) and
+/// BUILT AGAINST (<c>framework=</c>, the platform identity) — and says <c>(unrecorded)</c> when
+/// nobody stated one, because a value invented here would be the same defect with a new field.</para>
 /// </summary>
 public static class ModuleLoadReport
 {
@@ -94,13 +132,18 @@ public static class ModuleLoadReport
         {
             var name = System.IO.Path.GetFileNameWithoutExtension(module.Entry);
             var loaded = Describe(path);
+            var built = BuildBehind(module.Landed, name, path);
             lines.Add(new ModuleLoadLine(
                 name,
                 module.Landed is null ? ModuleActivationSources.AppSettings : ModuleActivationSources.Store,
                 path,
                 loaded.Mvid,
                 loaded.WrittenUtc,
-                NewerDifferentStoreCopy(moduleRoot, name, loaded)));
+                NewerDifferentStoreCopy(moduleRoot, name, loaded))
+            {
+                SourceCommit = built.SourceCommit,
+                FrameworkMvid = built.FrameworkMvid,
+            });
         }
         return lines.ToImmutable();
     }
@@ -117,7 +160,8 @@ public static class ModuleLoadReport
         foreach (var line in lines)
         {
             info($"{LogPrefix} {line.Name} ← {line.Path} "
-                 + $"(source={line.Source}, mvid={Format(line.Mvid)}, written={Format(line.WrittenUtc)})");
+                 + $"(source={line.Source}, mvid={Format(line.Mvid)}, written={Format(line.WrittenUtc)}, "
+                 + $"built-from={Recorded(line.SourceCommit)}, framework={Recorded(line.FrameworkMvid)})");
             if (line.Shadowed is { } shadowed)
                 warn($"{LogPrefix} STALE PACK: {line.Name} is loading {line.Path} "
                      + $"(mvid={Format(line.Mvid)}, written={Format(line.WrittenUtc)}) while the module "
@@ -232,6 +276,53 @@ public static class ModuleLoadReport
         }
         return new ModuleCopy(path, mvid, writtenUtc);
     }
+
+    /// <summary>
+    /// What the activation record says about the build behind the bytes AT
+    /// <paramref name="path"/> — never about the module in general.
+    ///
+    /// <para>🚨 <b>The generation is matched, not assumed.</b> An entry carries TWO generations —
+    /// its head (<see cref="ModuleActivationEntry.Directory"/>) and the previous one it falls back
+    /// to when the head does not load here (#3649) — and they are different bytes from different
+    /// commits. Boot hands this report whichever it is about to load, so reading the head's fields
+    /// for a path that is the PREVIOUS generation would print a current-looking commit over older
+    /// bytes: #4158's defect wearing the field that was added to close it. A path this entry
+    /// accounts for neither way (an image copy resolved for a baseline name, a legacy fixed folder
+    /// under another entry's name) states NOTHING — the record makes no claim about it.</para>
+    /// </summary>
+    private static (string? SourceCommit, string? FrameworkMvid) BuildBehind(
+        ModuleActivationEntry? entry, string name, string path)
+    {
+        if (entry is null)
+            return (null, null);
+
+        // The directory the file sits in IS the generation — that is the one resolution rule
+        // (ModuleLandingService.ModuleDirectoryFor), and an entry naming no generation means the
+        // legacy fixed folder modules/<name>/.
+        var generation = System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(path));
+        if (string.IsNullOrEmpty(generation))
+            return (null, null);
+
+        var head = string.IsNullOrWhiteSpace(entry.Directory) ? name : entry.Directory!;
+        if (string.Equals(generation, head, StringComparison.OrdinalIgnoreCase))
+            return (entry.SourceCommit, entry.FrameworkMvid);
+
+        return entry.PreviousDirectory is { Length: > 0 } previous
+               && string.Equals(generation, previous, StringComparison.OrdinalIgnoreCase)
+            ? (entry.PreviousSourceCommit, entry.PreviousFrameworkMvid)
+            : (null, null);
+    }
+
+    /// <summary>
+    /// A producer-recorded value, or <c>(unrecorded)</c> — the word already used where a module's
+    /// framework identity is absent (<c>ModuleLandingService</c>'s displaced-generation line), and
+    /// deliberately NOT <c>unknown</c>: <c>unknown</c> is what this report says when it could not
+    /// READ a file it holds, while this says the file was read fine and nobody ever stated the
+    /// fact. Printed VERBATIM, never abbreviated the way an MVID is — two recorded commits that
+    /// printed identically would defeat the one thing the field exists for.
+    /// </summary>
+    private static string Recorded(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "(unrecorded)" : value;
 
     private static string Format(Guid? mvid) =>
         mvid is { } value ? value.ToString("N")[..8] : "unknown";

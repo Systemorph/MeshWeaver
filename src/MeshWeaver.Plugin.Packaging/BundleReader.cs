@@ -51,7 +51,30 @@ public static class BundleReader
         string? Architecture = null,
         IReadOnlyList<string>? Misses = null,
         IReadOnlyList<string>? Content = null,
-        bool? SourceIncluded = null);
+        bool? SourceIncluded = null)
+    {
+        /// <summary>
+        /// 🚨 <b>The PRODUCING REPOSITORY'S COMMIT these bytes were built from</b> (#4158) — the
+        /// producer's own statement, carried to the consumer so a landed module can say what it was
+        /// built from rather than only what its file looks like.
+        ///
+        /// <para>Everything else the consumer has is a property of the FILE: the MVID it reads out
+        /// of the PE and the last-write time of the copy on its volume. Both read "newest" for a
+        /// bundle that is the newest on the volume and carries types from last week — measured on
+        /// memex.meshweaver.cloud 2026-09-10 (MeshWeaver.Plugins#1585), where that pairing cost a
+        /// night of diagnosis and three RefreshModules before <c>/health</c> showed the bundle had
+        /// never been adopted at all.</para>
+        ///
+        /// <para><c>null</c> when the producer recorded none — which every consumer must print and
+        /// store as an explicit "unrecorded", never fill in from the version, the architecture or
+        /// the file. DIAGNOSTIC: nothing gates on it, and nothing may start to, or a bundle from an
+        /// older packer would stop landing over a field that is allowed to be absent.</para>
+        ///
+        /// <para>An INIT property, not a tenth primary-constructor parameter — see
+        /// <see cref="AssemblyRef.SourceFingerprint"/> for why.</para>
+        /// </summary>
+        public string? SourceCommit { get; init; }
+    }
 
     /// <summary>One assembly and the NodeType it implements.</summary>
     /// <param name="NodePath">Mesh path of the NodeType — the key a consumer re-seeds under.</param>

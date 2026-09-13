@@ -73,6 +73,13 @@ public sealed record ModuleActivationEntry
     /// like <see cref="FrameworkMvid"/>.</summary>
     public string? PreviousFrameworkMvid { get; init; }
 
+    /// <summary>The producing repository's commit <see cref="PreviousDirectory"/> was built from —
+    /// diagnostic, like <see cref="SourceCommit"/>. Recorded so a generation that is running as the
+    /// FALLBACK can name its own build rather than borrowing the head's: the two generations are
+    /// different bytes from different commits, and a line that printed the head's commit over the
+    /// fallback's bytes would be the #4158 defect with a new field.</summary>
+    public string? PreviousSourceCommit { get; init; }
+
     /// <summary>The framework MVID (MeshWeaver.Graph's ModuleVersionId) the landed assemblies
     /// were built against, as the producer recorded it. It names the exact build behind the bytes
     /// when something needs debugging — and since #4161 it is also the DISCRIMINATOR the boot
@@ -104,6 +111,30 @@ public sealed record ModuleActivationEntry
     /// Null on an entry written before this field existed — which reads as "unknown", so the next
     /// reconcile re-lands once and records it.</summary>
     public string? Version { get; init; }
+
+    /// <summary>
+    /// 🚨 The PRODUCING REPOSITORY'S COMMIT the landed bundle was built from, exactly as the
+    /// producer recorded it in the bundle manifest (#4158) — the one fact that separates "this
+    /// generation is the newest" from "its types are current".
+    ///
+    /// <para>Both of the other identity fields are properties of the FILE, not of the source behind
+    /// it: <see cref="ModuleLoadReport"/>'s <c>mvid=</c> is read out of the PE and <c>written=</c>
+    /// is its last-write time, so a bundle that is genuinely the newest on the volume prints
+    /// "newest" for both while carrying types that predate two merged pull requests. That is
+    /// measured, not hypothetical — memex.meshweaver.cloud 2026-09-10, MeshWeaver.Plugins#1585,
+    /// where the bundle had never been ADOPTED and the previously adopted build kept serving under
+    /// the same-MAJOR rule of #3844. Three RefreshModules and two restarts were spent on the
+    /// reading that fell out of the two fields that WERE on the line.</para>
+    ///
+    /// <para>🚨 <b>DIAGNOSTIC, never a gate, and never inferred.</b> Nothing decides anything on it:
+    /// landing is decided by the link probe and updating by
+    /// <see cref="ModuleUpdateDecision"/>'s (version, framework identity) pair. Null means the
+    /// producer recorded none — which prints as an explicit <c>(unrecorded)</c> and must NEVER be
+    /// filled in from the version, the generation, the MVID or the path. A commit-shaped value that
+    /// names no commit these bytes came from would restate the very defect the field exists to
+    /// close.</para>
+    /// </summary>
+    public string? SourceCommit { get; init; }
 
     /// <summary>
     /// 🚨 The framework identity of the HEAD generation (<see cref="Directory"/>) when the boot
@@ -988,7 +1019,11 @@ public static class ModuleActivationBoot
                 // displaced generation was measured unloadable — that older one is exactly what
                 // boot must fall back to if the set's generation does not load here either.
                 var previous = string.Equals(entry.PreviousDirectory, generation, StringComparison.Ordinal)
-                    ? entry with { PreviousDirectory = null, PreviousVersion = null, PreviousFrameworkMvid = null }
+                    ? entry with
+                    {
+                        PreviousDirectory = null, PreviousVersion = null,
+                        PreviousFrameworkMvid = null, PreviousSourceCommit = null,
+                    }
                     : entry;
                 var onSet = previous with { Directory = generation };
                 if (landedDllExists is null || landedDllExists(onSet))
@@ -1337,8 +1372,9 @@ public static class ModuleActivationBoot
 
     /// <summary>
     /// The PREVIOUS generation of <paramref name="entry"/> as an entry of its own — the same name,
-    /// with <see cref="ModuleActivationEntry.Directory"/>, <see cref="ModuleActivationEntry.Version"/>
-    /// and <see cref="ModuleActivationEntry.FrameworkMvid"/> taken from the <c>Previous*</c>
+    /// with <see cref="ModuleActivationEntry.Directory"/>, <see cref="ModuleActivationEntry.Version"/>,
+    /// <see cref="ModuleActivationEntry.FrameworkMvid"/> and
+    /// <see cref="ModuleActivationEntry.SourceCommit"/> taken from the <c>Previous*</c>
     /// fields and no previous of its own — or null when the entry holds none (#3649).
     ///
     /// <para>One derivation, so every reader of the fallback (the boot loader pinning it, the GC
@@ -1357,9 +1393,11 @@ public static class ModuleActivationBoot
             Directory = entry.PreviousDirectory,
             Version = entry.PreviousVersion,
             FrameworkMvid = entry.PreviousFrameworkMvid,
+            SourceCommit = entry.PreviousSourceCommit,
             PreviousDirectory = null,
             PreviousVersion = null,
             PreviousFrameworkMvid = null,
+            PreviousSourceCommit = null,
         };
     }
 

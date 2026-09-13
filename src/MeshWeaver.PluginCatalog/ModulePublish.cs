@@ -63,7 +63,26 @@ public static class ModulePublish
         string? FrameworkMvid,
         IReadOnlyList<(string FileName, byte[] Bytes)> Files,
         string? PackagePath = null,
-        IReadOnlyList<(string RelativePath, byte[] Bytes)>? StaticAssets = null);
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? StaticAssets = null)
+    {
+        /// <summary>
+        /// The producing repository's commit the uploaded bundle was built from, as its manifest
+        /// states it (#4158) — carried to <c>ModuleLandingService.ShelveModule</c> so the shelf's
+        /// own activation entry records it and this registry's <c>[ModuleLoad]</c> line can name it.
+        ///
+        /// <para>🚨 <b>Optional, and it must stay optional.</b> Unlike
+        /// <see cref="FrameworkMvid"/> — whose absence #3240 refuses here, because an unknown on the
+        /// SERVED side parks every consumer in the skip-and-say-so branch forever — nothing decides
+        /// anything on this value. Refusing a bundle for the want of it would take the fleet's
+        /// publishes down over a diagnostic, and an unrecorded commit is a state that prints as
+        /// "(unrecorded)" and costs nobody anything.</para>
+        ///
+        /// <para>An INIT property, not an eighth primary-constructor parameter: adding one replaces
+        /// a public record's constructor signature and is a binary break across the fleet
+        /// (<c>scripts/record-signatures.allow</c>).</para>
+        /// </summary>
+        public string? SourceCommit { get; init; }
+    }
 
     /// <summary>
     /// Why <paramref name="authorizationHeader"/> may not publish, or null when it may.
@@ -208,6 +227,12 @@ public static class ModulePublish
             string.IsNullOrWhiteSpace(packagePath) ? null : packagePath,
             staticAssets is { Count: > 0 }
                 ? [.. staticAssets.Select(a => (a.RelativePath, a.Bytes))]
-                : null), null);
+                : null)
+        {
+            // #4158 — carried, never derived. Blank reads as absent everywhere downstream, so it is
+            // normalised to null HERE rather than shelved as a field that renders empty.
+            SourceCommit = string.IsNullOrWhiteSpace(manifest.SourceCommit)
+                ? null : manifest.SourceCommit,
+        }, null);
     }
 }

@@ -488,6 +488,10 @@ public sealed class ModuleLandingService : IDisposable
     /// #3538): the module's actual link requirements against this platform's surface, which
     /// refuses bytes this process could not load whatever the floor says — and lands bytes it can
     /// load whatever the floor says.</param>
+    /// <param name="sourceCommit">The producing repository's commit the bundle was built from, as
+    /// the producer recorded it in the bundle manifest (#4158) — recorded on the activation entry
+    /// and printed by <see cref="ModuleLoadReport"/>. DIAGNOSTIC, and never inferred: null means the
+    /// producer stated none, which prints as an explicit "(unrecorded)".</param>
     public IObservable<Unit> LandModule(
         string name,
         IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
@@ -495,11 +499,12 @@ public sealed class ModuleLandingService : IDisposable
         string? packagePath = null,
         string? version = null,
         string? minMeshVersion = null,
-        IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null)
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null,
+        string? sourceCommit = null)
         => pool.InvokeBlocking(_ =>
         {
             LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
-                staticAssets, holdUnloadable: false, keepNewerHead: false);
+                staticAssets, sourceCommit, holdUnloadable: false, keepNewerHead: false);
             return Unit.Default;
         })
         .Do(_ => AnnounceActivationChanged());
@@ -562,10 +567,11 @@ public sealed class ModuleLandingService : IDisposable
         string? packagePath = null,
         string? version = null,
         string? minMeshVersion = null,
-        IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null)
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null,
+        string? sourceCommit = null)
         => pool.InvokeBlocking(_ =>
             LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
-                staticAssets, holdUnloadable: true, keepNewerHead: true))
+                staticAssets, sourceCommit, holdUnloadable: true, keepNewerHead: true))
             .Do(_ => AnnounceActivationChanged());
 
     /// <summary>
@@ -660,6 +666,7 @@ public sealed class ModuleLandingService : IDisposable
         string? version,
         string? minMeshVersion,
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets,
+        string? sourceCommit,
         bool holdUnloadable,
         bool keepNewerHead)
     {
@@ -963,6 +970,7 @@ public sealed class ModuleLandingService : IDisposable
                 Source = ModuleActivationSources.Store,
                 PackagePath = packagePath,
                 FrameworkMvid = frameworkMvid,
+                SourceCommit = sourceCommit,
                 Version = version,
                 MinMeshVersion = minMeshVersion,
                 Enabled = true,
@@ -970,6 +978,7 @@ public sealed class ModuleLandingService : IDisposable
                 PreviousDirectory = previous?.Directory,
                 PreviousVersion = previous?.Version,
                 PreviousFrameworkMvid = previous?.FrameworkMvid,
+                PreviousSourceCommit = previous?.SourceCommit,
             }
             : ShelfOnlyEntry(displaced!);
 
@@ -1007,6 +1016,7 @@ public sealed class ModuleLandingService : IDisposable
                 PreviousDirectory = generation,
                 PreviousVersion = version,
                 PreviousFrameworkMvid = frameworkMvid,
+                PreviousSourceCommit = sourceCommit,
             };
         }
 
