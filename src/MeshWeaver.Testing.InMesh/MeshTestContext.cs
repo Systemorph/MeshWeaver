@@ -22,6 +22,15 @@ public sealed class MeshTestContext
     /// <summary>The root every in-mesh test partition lives under.</summary>
     public const string TestRoot = "InMeshTests";
 
+    private static readonly System.Threading.AsyncLocal<MeshTestContext?> current = new();
+
+    /// <summary>
+    /// The context of the class the runner is executing right now — for a migrated class whose
+    /// constructor takes nothing (the xunit estate's plain <c>class XTest</c>), whose in-mesh base reads
+    /// it here. Set by <see cref="MeshTestRunner"/> around each class; null outside a run.
+    /// </summary>
+    public static MeshTestContext? Current { get => current.Value; internal set => current.Value = value; }
+
     /// <summary>The hub the Tests area renders on — the mesh, monolith-routed in the gate.</summary>
     public IMessageHub Hub { get; }
 

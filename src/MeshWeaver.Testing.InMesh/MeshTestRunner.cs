@@ -63,6 +63,7 @@ public static class MeshTestRunner
             var output = new List<string>();
             var context = host is null ? null : new MeshTestContext(host, partition, output.Add, deadline);
             object? instance;
+            MeshTestContext.Current = context;
             try
             {
                 instance = Instantiate(cls, context);
