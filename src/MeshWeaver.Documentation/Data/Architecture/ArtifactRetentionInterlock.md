@@ -439,6 +439,20 @@ more often a repository is republished the FASTER its older manifests become eli
 That is #3438's own root cause — *republishing frequency is what destroys a pin* — restated as a
 flag, so a quota is removed rather than raised.
 
+🚨 **The flag that counts is the one on the command that DELETES, and a quota has two spellings.**
+A `cmd:` is a shell line: `echo --ago 30d; acr purge --filter 'x:.*' --untagged` carries the window
+on the line and not on the purge. So each `acr purge` invocation is isolated at the first shell
+separator and checked on its own — **every** invocation on the line — and the quota check reads
+`--keep N`, `--keep=N` and a bare `--keep` alike. A bare `--ago` with no duration is *unchecked*,
+which is a failure, not a pass.
+
+🚨 **And a declaration whose switch is not a boolean is fail-open, silently.** Every reader of
+`pause` and `recordAheadOfRegistry` asks `inForce is True` — correct for a JSON boolean, and
+catastrophic for `"true"`, which is not `True`. One typed quote mark would disarm the apply
+interlock, the `record` overwrite guard and the coherence gate at once, while reading to a human as
+if it were armed. The shape is asserted on every pull request, and both shell halves **fail closed**
+on the same condition rather than trusting that to have run.
+
 `lock-pinned-digests.py --check-retention-record` now asserts both halves over **every** recorded
 purge step, enabled or not — the record is what `acr-retention-tasks.sh apply` pushes, so a disabled
 task carrying a 7-day window is a 7-day window one command away from running. It needs no
@@ -452,7 +466,11 @@ things follow from the declaration rather than from anyone remembering it:
 - `acr-retention-tasks.sh verify` prints the declared drift instead of reporting it as an incident
   — a drift report that is always red is one nobody reads — **and reds when a declared task shows
   NO drift**, because after `apply` the declaration excuses nothing and would excuse the next real
-  drift.
+  drift. 🚨 **The exemption covers the WINDOW moving, never the task becoming something else:** the
+  declaration is keyed by task name, so without a second check a live definition that had gained
+  `--include-locked`, swapped its filters or stopped being an `acr purge` would print as *declared*
+  and leave `verify` green — and the record-side checks read the recorded file, so they would never
+  see it. The LIVE steps of a declared task are held to all three.
 - `acr-retention-tasks.sh record` — the one command that overwrites the record FROM live — refuses
   without an explicit `OVERWRITE`, because re-recording would silently restore `--ago 7d --keep 10`
   into a file whose comments explain at length why it must not say that.
