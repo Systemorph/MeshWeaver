@@ -143,6 +143,16 @@ registry serves this module built against this platform it lands and wins again 
 no re-install. And every replica of a deployment runs one image, so every replica states one
 identity and reaches one verdict (#3395 holds).
 
+**The decline has to reach the loader, not just the log.** A baseline entry resolves through
+`MeshBuilder.ResolveModulePath`, whose probes are **landed root → image → app closure** and whose
+landed probe looks in the *fixed* `modules/<name>/<name>.dll`. Generation landing writes
+`modules/<name>@<gen>/`, so that probe misses on its own — but an entry from before generation
+landing carries no `Directory` and its bytes sit in exactly that folder, so the resolver would hand
+back the copy pass 1 had just declined, silently, with the decline line already printed. The
+baseline emitted in place of a declined store copy therefore carries
+`EffectiveModule.PreferImageCopy`, and `ResolveLoadPath` resolves it with **no landed root** —
+image → app closure. Every other baseline entry keeps the probe order it always had.
+
 The seam is explicit: the identity is a **parameter** of the pure computation, not something it
 reads from the process. The six-argument overload states none and declines nothing, which is what a
 host compiled against the previous platform binds — an optional parameter is a compile-time default

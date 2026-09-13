@@ -199,6 +199,77 @@ public class ModuleIdentityDiscriminatorTest : IDisposable
         Assert.Empty(skips);
     }
 
+    // ───────────────────────────────────── the decline has to REACH the loader, not just the log
+
+    /// <summary>
+    /// 🚨 A decline that the path resolver then undoes is not a decline. <c>ResolveLoadPath</c>
+    /// sends a baseline entry through <c>MeshBuilder.ResolveModulePath</c>, whose probes are
+    /// LANDED ROOT → image → app closure, and whose landed probe looks in the FIXED
+    /// <c>modules/&lt;name&gt;/&lt;name&gt;.dll</c>. Generation landing writes
+    /// <c>modules/&lt;name&gt;@&lt;gen&gt;/</c>, so that probe misses on its own — but an entry
+    /// from BEFORE generation landing carries no <c>Directory</c> and its bytes sit in exactly
+    /// that folder, so the resolver would hand back the copy pass 1 had just declined, with the
+    /// decline line already printed.
+    ///
+    /// <para>Staged the way that shape really looks: a legacy entry with no <c>Directory</c>, real
+    /// bytes at the fixed path — asserted present, so the landed probe genuinely WOULD hit — and
+    /// the resolved path must not be under the module root.</para>
+    /// </summary>
+    [Fact]
+    public void ADeclinedLegacyLayoutCopy_IsNotHandedBackByTheResolver()
+    {
+        var legacyDll = Path.Combine(root, "modules", Plugin, Plugin + ".dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyDll)!);
+        File.WriteAllBytes(legacyDll, RealAssemblyBytes);
+
+        var legacy = new ModuleActivationEntry
+        {
+            Name = Plugin,
+            PackagePath = PackagePath,
+            Version = "1.0.0",
+            FrameworkMvid = StoreIdentity,
+            Enabled = true,
+            // No Directory — the pre-generation shape, whose bytes live in modules/<name>/.
+        };
+        ModuleActivationBoot.LandedModuleDllExists(root, legacy).Should().BeTrue(
+            "the landed probe would genuinely find these bytes — which is what makes this able to fail");
+
+        var skips = new List<(string Module, string Reason)>();
+        var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+            [ImageBaseline],
+            new ModuleActivationList { Entries = [legacy] },
+            floor => ModulePlatformFloor.DeclineReason(floor, RunningVersion),
+            entry => ModuleActivationBoot.LandedModuleDllExists(root, entry),
+            (m, r) => skips.Add((m, r)),
+            onAdvisory: null,
+            LiveIdentity);
+
+        var module = Assert.Single(effective);
+        module.Landed.Should().BeNull("the store copy was declined");
+        module.PreferImageCopy.Should().BeTrue(
+            "a baseline that displaced a declined store copy must skip the landed probe");
+        ModuleActivationBoot.ResolveLoadPath(root, module).Should().NotContain(root,
+            "the declined bytes are under the module root, and handing them back would undo the "
+            + "decline in silence");
+        Assert.Single(skips);
+    }
+
+    /// <summary>An ordinary baseline entry — nothing declined — keeps the probe order it always
+    /// had, landed root first. Flipping <c>PreferImageCopy</c> on unconditionally would stop every
+    /// legitimately landed baseline module from being found, so this is the other half.</summary>
+    [Fact]
+    public void AnUndisplacedBaseline_KeepsTheLandedProbe()
+    {
+        var landedDll = Path.Combine(root, "modules", Plugin, Plugin + ".dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(landedDll)!);
+        File.WriteAllBytes(landedDll, RealAssemblyBytes);
+
+        var module = Assert.Single(Boot(LiveIdentity, [ImageBaseline]));
+        module.PreferImageCopy.Should().BeFalse("nothing was declined for this name");
+        ModuleActivationBoot.ResolveLoadPath(root, module).Should().Be(landedDll,
+            "an undisplaced baseline still resolves landed root first");
+    }
+
     // ─────────────────────────────────────────────── the seam is a seam, not a hidden default
 
     /// <summary>

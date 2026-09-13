@@ -850,6 +850,28 @@ public sealed record EffectiveModule(string Entry, ModuleActivationEntry? Landed
     /// Init-only, for binary compatibility with hosts compiled against the two-argument record.
     /// </summary>
     public string? BaselineEntry { get; init; }
+
+    /// <summary>
+    /// 🚨 Resolve this BASELINE entry to the IMAGE's copy specifically, never to a landed one
+    /// (#4161) — set only on a baseline entry whose same-named store copy was DECLINED as built
+    /// for another platform, and never otherwise.
+    ///
+    /// <para><b>Without it the decline is a no-op for one layout.</b>
+    /// <see cref="ModuleActivationBoot.ResolveLoadPath(string, EffectiveModule)"/> sends a baseline entry through
+    /// <c>MeshBuilder.ResolveModulePath</c>, whose probes are <b>landed root → image → app
+    /// closure</b>, and whose landed probe looks in the FIXED
+    /// <c>modules/&lt;name&gt;/&lt;name&gt;.dll</c>. Landing writes GENERATIONS
+    /// (<c>modules/&lt;name&gt;@&lt;gen&gt;/</c>), so that probe misses for every
+    /// generation-landed module and the image copy wins by itself — but an entry from before
+    /// generation landing carries no <see cref="ModuleActivationEntry.Directory"/> and its bytes
+    /// sit in exactly that fixed folder, so the resolver would hand back the copy pass 1 had just
+    /// declined, silently and with the decline line already printed.</para>
+    ///
+    /// <para>Init-only, for binary compatibility with hosts compiled against the earlier record.
+    /// Default <c>false</c> = today's probe order, which is correct for every baseline entry that
+    /// displaced nothing.</para>
+    /// </summary>
+    public bool PreferImageCopy { get; init; }
 }
 
 /// <summary>
@@ -1168,6 +1190,10 @@ public static class ModuleActivationBoot
         // that could not load was silently indistinguishable from one that was never installed.
         // Reporting it is the point — the operator needs to know the registry copy was refused.
         var overrides = new Dictionary<string, ModuleActivationEntry>(StringComparer.OrdinalIgnoreCase);
+        // The names whose store copy was DECLINED below, so pass 2 can pin the baseline it emits to
+        // the IMAGE's copy rather than letting the resolver's landed probe find the declined bytes
+        // again (EffectiveModule.PreferImageCopy).
+        var declined = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var module in persisted?.Entries ?? [])
         {
             if (!module.Enabled || string.IsNullOrWhiteSpace(module.Name))
@@ -1231,6 +1257,7 @@ public static class ModuleActivationBoot
                     + "registrations match the types this platform emits (#4161). No action is "
                     + "needed: publish this module built against this platform and the next "
                     + "reconcile lands it and it wins again.");
+                declined.Add(module.Name);
                 continue;
             }
 
@@ -1258,7 +1285,7 @@ public static class ModuleActivationBoot
             // generation came to shadow the working image copy (memex.systemorph.com, 2026-09-08).
             effective.Add(overrides.TryGetValue(name, out var winner)
                 ? new EffectiveModule(winner.Name + ".dll", winner) { BaselineEntry = entry }
-                : new EffectiveModule(entry, Landed: null));
+                : new EffectiveModule(entry, Landed: null) { PreferImageCopy = declined.Contains(name) });
         }
 
         // ── Pass 3: usable persisted entries with no baseline counterpart, in persisted order ────
@@ -1532,7 +1559,12 @@ public static class ModuleActivationBoot
     public static string ResolveLoadPath(string baseDirectory, EffectiveModule module) =>
         module.Landed is not null
             ? LandedDllPath(baseDirectory, module.Landed)
-            : MeshBuilder.ResolveModulePath(module.Entry, baseDirectory);
+            // 🚨 #4161 — a baseline that DISPLACED a declined store copy resolves with NO landed
+            // root, so the probe order is image → app closure. See EffectiveModule.PreferImageCopy:
+            // the landed probe's fixed modules/<name>/ folder is exactly where a pre-generation
+            // landing's bytes sit, and handing those back would undo the decline in silence.
+            : MeshBuilder.ResolveModulePath(
+                module.Entry, module.PreferImageCopy ? null : baseDirectory);
 
     /// <summary>The entry's landed DLL as the deployment-relative path a skip report names —
     /// the generation directory when the entry carries one, else the legacy fixed folder.</summary>
