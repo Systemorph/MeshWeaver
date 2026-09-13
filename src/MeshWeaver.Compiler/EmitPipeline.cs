@@ -433,11 +433,17 @@ public static class EmitPipeline
         // purpose. Leg 2 varies the reference set; leg 4 varies the SOURCE and nothing else, so
         // "the flat source emits and the nested one does not" is a statement about nesting rather
         // than about references. Running it against the pristine set would confound the two.
+        // Leg 5 — the pristine-COMPILER control (#890): the same source through a copy of Roslyn
+        // loaded from fresh bytes into its own collectible context. Legs 1–4 all execute the one
+        // shared Microsoft.CodeAnalysis*, so none of them can separate "the process cannot emit"
+        // from "the shared copy of Roslyn cannot emit"; this one can, and it is the reading the
+        // BELOW-ROSLYN verdict has been missing on every occurrence.
         return Verdict(
             shared,
             EmitCanary(() => pristineRefs),
             () => DissectTheNull(() => faulted.References),
-            () => EmitCanary(() => faulted.References, FlatCanarySource));
+            () => EmitCanary(() => faulted.References, FlatCanarySource),
+            () => PrivateRoslynCopy.Emit(EmitCanarySource));
     }
 
     /// <summary>
@@ -809,7 +815,8 @@ public static class EmitPipeline
     /// <c>flat=NOT-RUN</c>: an absent reading must be visible as absent.
     /// </param>
     internal static string Verdict(
-        string shared, string pristine, Func<string>? dissect = null, Func<string>? flat = null)
+        string shared, string pristine, Func<string>? dissect = null, Func<string>? flat = null,
+        Func<string>? compiler = null)
     {
         if (pristine.StartsWith("OK", StringComparison.Ordinal))
             return $"canary=REFERENCES shared:{shared} pristine:{pristine} — the same source emits fine "
@@ -832,7 +839,8 @@ public static class EmitPipeline
                 + "TWO SITES: one corruption can surface a frame apart, but two unrelated faults "
                 + "look exactly like this as well, and only the sites tell them apart. Start with "
                 + "whichever site is not the emit itself. " + Dissection(dissect)
-                + " " + Flatness(flat, sharedSite);
+                + " " + Flatness(flat, sharedSite)
+                + " " + PrivateRoslynCopy.Render(compiler);
 
         return $"canary=BELOW-ROSLYN shared:{shared} pristine:{pristine} — a trivial compilation "
             + "with freshly parsed source and an IMAGE-BACKED CoreLib (fresh managed bytes, "
@@ -853,8 +861,13 @@ public static class EmitPipeline
             + "one-method reproduction. RESIDUAL: both legs still run on the one "
             + "CLR, so this does not separate a corrupted heap from a miscompiled Roslyn method; "
             + "#613 is the SIGNALLING twin and is where a faulting address actually comes from. "
+            + "🚨 THEN READ compiler=: it is the one leg that does not run the shared Roslyn — "
+            + "PRIVATE-COPY-EMITS means a fresh copy of the compiler emits this very source in this "
+            + "very process, so the fault is in the shared copy's state or code and NOT below "
+            + "Roslyn after all; PRIVATE-COPY-THREW at the same frame is what earns this verdict. "
             + Dissection(dissect)
-            + " " + Flatness(flat, sharedSite);
+            + " " + Flatness(flat, sharedSite)
+            + " " + PrivateRoslynCopy.Render(compiler);
     }
 
     /// <summary>

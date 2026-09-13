@@ -1339,6 +1339,49 @@ getter, and `flat=SAME-FRAME` silently stops meaning what it says. The shape is 
 own binding (`SourceModule.GlobalNamespace`, `ContainingType`, `Arity`, members), not by matching the
 literal, so a rewrite that preserves the shape passes and one that does not cannot.
 
+#### Leg 5 — the pristine-COMPILER control (`compiler=`, 2026-09-13)
+
+Legs 1–4 have one ceiling in common that none of them can see over: **all four execute the same
+`Microsoft.CodeAnalysis*.dll`** — the same mapped image, the same native code, the same statics.
+Leg 2 varies the references, leg 4 the source, leg 3 the call site; nothing varies the compiler.
+So `BELOW-ROSLYN` — "the broken state is below Roslyn (CLR heap / JIT / GC)" — has been read on
+every occurrence from evidence that only ever showed "not the references" and "not the source",
+and the 2026-09-12 supersession check named this as the decisive control still unbuilt.
+
+`PrivateRoslynCopy.Emit` (`MeshWeaver.Compiler`) is that control. On the same two verdicts legs
+3 and 4 ride on, it loads `Microsoft.CodeAnalysis` and `Microsoft.CodeAnalysis.CSharp` a SECOND
+time — from freshly read bytes, into a collectible `AssemblyLoadContext` that serves the two to
+each other and lets every other dependency fall through to the default context — and drives
+`EmitCanarySource` through that private copy by reflection, against an image-backed CoreLib
+reference the private copy builds itself (leg 2's shape). Nothing of the shared copy is touched:
+not its statics, not its caches, not its JIT'd code.
+
+| verdict | meaning | where it sends triage |
+|---|---|---|
+| `compiler=PRIVATE-COPY-EMITS` | a never-before-executed Roslyn emits the source the shared one cannot, same process, same CLR | 🚨 **the broken state lives IN the shared copy** — a static, a cache, a miscompiled method — not below it. `BELOW-ROSLYN` was NOT earned. The remedy is to scope the shared compiler out (a per-generation compiler context); a `dotnet/runtime` report is not what the evidence supports |
+| `compiler=PRIVATE-COPY-THREW … at …` | even fresh compiler code cannot emit | the process cannot emit at all: `BELOW-ROSLYN` is earned, and the private copy's throwing frame is the reproduction to file |
+| `compiler=PRIVATE-COPY-DIAGNOSTICS(…)` | the private copy compiled and REFUSED the canary | no other leg has ever produced this for this source — read the ids before concluding anything |
+| `compiler=PRIVATE-COPY-UNAVAILABLE(…)` | the leg could not run (a single-file host with no on-disk Roslyn, a context that handed the shared assembly back, a Roslyn shape this reflection does not know) | its own verdict, never folded into the others |
+| `compiler=NOT-RUN` | no probe supplied | an absent reading is visible as absent |
+
+Cost: two assembly loads (~15 MB read), one tiny emit, one `Unload()` — on the already-failing
+terminal path only, never on a success or an ordinary compile error. Measured on a healthy process:
+~1 s for the first run including both loads.
+
+🚨 **The control that cannot run is the trap this leg is most exposed to**, and
+`EmitCanaryPrivateCompilerLegTest` is the guard: on a healthy process the only acceptable reading
+is `PRIVATE-COPY-EMITS`, twice in a row (the context is collectible and re-created per run). A
+Roslyn upgrade that renames a type or reshapes `Create`/`Emit` turns the reflection into
+`UNAVAILABLE` — visibly, as a red test, not silently on the next occurrence. The reflection binds
+to the private copy's OWN types by full name and fills every optional parameter with its declared
+default, so it names nothing of Roslyn's optional-parameter surface.
+
+**What the next occurrence therefore prints, for the first time:** `compiler=PRIVATE-COPY-EMITS`
+or `compiler=PRIVATE-COPY-THREW@<frame>` on the same line as `canary=`, `dissect=` and `flat=`.
+The 2026-09-12 check on #890 stated the closing condition as exactly that reading; until it is
+read on an occurrence, every `BELOW-ROSLYN` on this thread is to be taken as "not the references
+and not the source", no more.
+
 #### The first `dissect=` readings, 2026-09-06 — and what they do and do not settle
 
 Leg 3 landed 2026-09-04 and its first readings arrived immediately. Two occurrences, both in
