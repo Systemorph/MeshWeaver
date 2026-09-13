@@ -144,7 +144,10 @@ POLL_SECONDS = 30
 # when the chosen run's own seal is not green — one `jobs` call each, so this bounds the budget.
 PLUGINS_LOOKBACK = 40
 
-Fetch = Callable[[str], dict]                      # GitHub REST: path → JSON
+# GitHub REST: path → JSON. A `list` because the check-run ANNOTATIONS endpoint answers a
+# bare array; every other path this script reads answers an object, so callers that expect
+# one keep reading `.get(...)` unchanged.
+Fetch = Callable[[str], dict | list]
 Resolve = Callable[[str, str], str | None]         # registry: (repo, tag) → digest or None (absent)
 
 
@@ -155,7 +158,7 @@ class ResolutionError(RuntimeError):
 # ───────────────────────────── GitHub REST (public core repo) ─────────────────────────────
 
 def github_fetch_with(token: str) -> Fetch:
-    def fetch(path: str) -> dict:
+    def fetch(path: str) -> dict | list:
         last: Exception | None = None
         for attempt in range(4):
             request = urllib.request.Request(
@@ -199,17 +202,24 @@ def cd_runs(fetch: Fetch, page: int) -> list[dict]:
     return list(data.get("workflow_runs") or [])
 
 
-def run_jobs(fetch: Fetch, run_id: int) -> list[dict]:
+def run_jobs_of(fetch: Fetch, repo: str, run_id: int) -> list[dict]:
+    """Every job of one run in `repo`. The repo is a PARAMETER because the optional main-ceiling
+    below reads the CALLING repository's own runs, not core's; `run_jobs` keeps the core-pinned
+    spelling every existing caller uses."""
     jobs: list[dict] = []
     page = 1
     while True:
-        data = fetch(f"/repos/{CORE_REPO}/actions/runs/{run_id}/jobs"
+        data = fetch(f"/repos/{repo}/actions/runs/{run_id}/jobs"
                      f"?filter=latest&per_page=100&page={page}")
         rows = list(data.get("jobs") or [])
         jobs += rows
         if len(rows) < 100 or len(jobs) >= int(data.get("total_count") or 0):
             return jobs
         page += 1
+
+
+def run_jobs(fetch: Fetch, run_id: int) -> list[dict]:
+    return run_jobs_of(fetch, CORE_REPO, run_id)
 
 
 def platform_version(fetch: Fetch, sha: str, log: Callable[[str], None] = print) -> str | None:
@@ -224,6 +234,99 @@ def platform_version(fetch: Fetch, sha: str, log: Callable[[str], None] = print)
         return None
     match = PLATFORM_VERSION.search(text)
     return match.group(1) if match else None
+
+
+# ───── OPTIONAL: what the CALLING repo's own `main` has already passed on (#3842, #4171) ─────
+#
+# 🚨 OFF UNLESS ASKED. Nothing below runs without `--passed-on-main` or `--passed-ceiling`, and
+# `choose(..., passed_ceiling=None)` — every caller that does not pass one — takes exactly the
+# path it took before this existed. That is the whole shape of the option: this lives in the
+# canonical so a repository that wants the rule does not have to FORK the resolver to get it
+# (MeshWeaver#4171 — a vendored copy that drifts is named by `check-resolver-copy.py`, and "a
+# deliberate difference belongs in the canonical as an option, never in a fork").
+#
+# 🚨 What the rule IS. A pull request resolves the newest sealed set **that this repository's
+# `main` has already passed on**, not simply the newest sealed set. The failure mode is the point:
+# when core seals a set that regresses the repository, `main` goes red on it and every open pull
+# request keeps building on the last set main passed. Before it, one such set reddened every open
+# PR at once, for a reason no author's diff could reach — measured four times in 24 h, 91 PR-hours
+# exposed (MeshWeaver.Plugins, Hosting/PullRequestDrain.md).
+#
+# The evidence is each run's OWN answer, not a second bookkeeping mechanism: `emit` below publishes
+# `::notice title=Platform for this run::<set> — core <sha9>` on every run, and an annotation
+# survives with its check run. So the ceiling is read back from the newest SUCCESSFUL push runs of
+# the repository's own CD workflow on main. A run whose annotation cannot be read is SKIPPED and
+# said so — never read as "main passed nothing", which would silently take the newest set again.
+SATELLITE_CD_WORKFLOW = "ci.yml"
+MAIN_RUNS_EXAMINED = 12          # ~a day of merges; deep enough to survive a red patch on main
+PLATFORM_REF_JOB = "Resolve the released platform"
+NOTICE_TITLE = "Platform for this run"
+NOTICE_SET = re.compile(r"(\d+\.\d+\.\d+[0-9A-Za-z.\-]*)[.-]ci\.(\d+)")
+
+
+def ceiling_for(fetch: Fetch, repo: str, freeze: str | None,
+                log: Callable[[str], None] = print) -> tuple[int | None, list[str], bool]:
+    """`(ceiling, notes, fatal)` for a run that asked to follow its own main.
+
+    🚨 A FREEZE OVERRIDES THE CEILING, INCLUDING AN UNREADABLE ONE. `MW_PLATFORM_REF` is an
+    instruction for an incident — a bisect, an upstream outage — and the likeliest moment to need
+    it is precisely when `main` is red and has passed nothing recently. Computing the ceiling first
+    and refusing on it would take the freeze away exactly then, so a freeze skips the ceiling
+    entirely rather than being checked against it.
+    """
+    if freeze:
+        return None, [f"freeze {freeze} overrides the main ceiling — not consulted"], False
+    ceiling, notes = main_passed_ceiling(fetch, repo, log=log)
+    return ceiling, notes, ceiling is None
+
+
+def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED,
+                        log: Callable[[str], None] = print) -> tuple[int | None, list[str]]:
+    """`(highest core-CD run number this repo's main has PASSED on, one note per run examined)`.
+
+    `None` means it could not be established from the newest `limit` successful main runs — which
+    is a RED verdict for the caller, never a licence to take the newest sealed set: that silent
+    fallback would put every pull request back on an unvouched set, which is exactly what this
+    rule exists to prevent.
+    """
+    notes: list[str] = []
+    best: int | None = None
+    data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
+                 f"?branch=main&event=push&status=success&per_page={limit}")
+    runs = list(data.get("workflow_runs") or [])
+    if not runs:
+        notes.append(f"no successful push run of {SATELLITE_CD_WORKFLOW} on {repo} main in the "
+                     f"newest {limit} — main has published no passing run to follow")
+        return None, notes
+    for run in runs:
+        run_id = int(run["id"])
+        jobs = [j for j in run_jobs_of(fetch, repo, run_id) if j.get("name") == PLATFORM_REF_JOB]
+        if not jobs:
+            notes.append(f"main run {run_id}: no `{PLATFORM_REF_JOB}` job — skipped")
+            continue
+        try:
+            annotations = fetch(f"/repos/{repo}/check-runs/{int(jobs[0]['id'])}/annotations")
+        except ResolutionError as error:
+            notes.append(f"main run {run_id}: annotations unreadable ({error}) — skipped")
+            continue
+        rows = annotations if isinstance(annotations, list) else annotations.get("annotations") or []
+        found = None
+        for row in rows:
+            if NOTICE_TITLE in str(row.get("title") or ""):
+                match = NOTICE_SET.search(str(row.get("message") or ""))
+                if match:
+                    found = int(match.group(2))
+                    break
+        if found is None:
+            notes.append(f"main run {run_id}: no `{NOTICE_TITLE}` annotation — skipped")
+            continue
+        notes.append(f"main run {run_id} passed on core CD #{found}")
+        best = found if best is None else max(best, found)
+        if len(notes) >= limit:
+            break
+    if best is None:
+        notes.append(f"none of the {len(runs)} successful main run(s) named the set it resolved")
+    return best, notes
 
 
 # ───────────────────────────────── the seal verdict ──────────────────────────────────────
@@ -381,6 +484,10 @@ class Chosen(NamedTuple):
     plugins: str                              # the chosen run's OWN Plugins seal verdict
     source: str
     publication: PluginsPublication | None = None   # the newest sealed publication, found on its own
+    # Why a NEWER sealed set was not taken, naming both set ids. Empty unless the optional main
+    # ceiling (`--passed-on-main`) held this run back — so it answers "why did my core fix not
+    # show up in my PR?" from the log alone, and is inert for every caller that does not use it.
+    lag: str = ""
 
 
 def parse_freeze(value: str) -> tuple[str, str]:
@@ -399,7 +506,14 @@ def parse_freeze(value: str) -> tuple[str, str]:
 def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
            wait_for_seal: float = 0.0, freeze: str | None = None,
            sleep: Callable[[float], None] = time.sleep, log: Callable[[str], None] = print,
-           now: Callable[[], float] = time.time, migration: str | None = None) -> Chosen:
+           now: Callable[[], float] = time.time, migration: str | None = None,
+           passed_ceiling: int | None = None) -> Chosen:
+    """`passed_ceiling` — OPTIONAL, and `None` (every caller that does not ask for it) leaves this
+    function on exactly the path it took before the option existed. When given, it is the highest
+    core-CD run number the CALLING repository's own `main` has passed on: a sealed set NEWER than
+    it is passed over and said so, so a set that regresses that repository reds `main` alone
+    instead of every open pull request (see `main_passed_ceiling`). A freeze overrides it, because
+    a freeze is an instruction rather than a preference."""
     freeze_kind = freeze_value = None
     if freeze:
         freeze_kind, freeze_value = parse_freeze(freeze)
@@ -408,6 +522,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
     deadline = now() + wait_for_seal
     examined = 0
     skipped: list[str] = []
+    newer_than_main: str | None = None     # the newest sealed set main has NOT passed, if any
     chosen: Chosen | None = None
     publication: PluginsPublication | None = None
     lookback = 0
@@ -512,6 +627,16 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 raise ResolutionError(
                     f"the freeze names {freeze_value}, but {label} resolves to {set_name}. "
                     "Refusing a different or unverifiable release version.")
+            # 🚨 SEALED IS NOT ENOUGH WHEN THE CALLER FOLLOWS ITS OWN MAIN. Take the set only if
+            # `main` has already passed on it. Inert when no ceiling was asked for.
+            if passed_ceiling is not None and not freeze_kind and number > passed_ceiling:
+                if newer_than_main is None:
+                    newer_than_main = set_name
+                skipped.append(f"{label} = {set_name}: sealed, but this repo's `main` has not "
+                               f"passed on it yet (main's newest passed set is core CD "
+                               f"#{passed_ceiling})")
+                log(f"  skip {skipped[-1]}")
+                continue
             digests: dict[str, str] = {}
             if resolve is not None:
                 images = resolve_images(resolve, tester, portal, version, sha[:7], number, migration)
@@ -529,11 +654,19 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 log(f"  {label} = {set_name}: sealed (registry not consulted)")
 
             source = (f"frozen by the repo VARIABLE MW_PLATFORM_REF={freeze}" if freeze
+                      else "the newest sealed platform set this repo's `main` has passed"
+                      if passed_ceiling is not None
                       else "the newest sealed platform set")
             if skipped and not freeze:
                 source += f" — {len(skipped)} newer run(s) passed over, see the log"
+            lag = ""
+            if newer_than_main and newer_than_main != set_name:
+                lag = (f"this run resolved {set_name}, not the newer sealed {newer_than_main}: "
+                       "pull requests follow `main`, and main has not passed on it yet. A core "
+                       "change lands here once main's own run goes green on the set carrying it.")
+                log(f"  {lag}")
             chosen = Chosen(sha, number, str(run.get("html_url", "")), set_name, digests,
-                            v.plugins, source)
+                            v.plugins, source, lag=lag)
             if publication is not None:
                 break
             log(f"  {label}: its own Plugins seal is `{v.plugins}` — the platform is taken anyway "
@@ -637,6 +770,9 @@ def output_rows(chosen: Chosen, tester: str = "", portal: str = "",
         "plugins-sealed-at": pub.sealed_at if pub else "",
         "override": "false",
         "source": chosen.source,
+        # Always present, empty unless the optional main ceiling held this run back — a key that
+        # appears only sometimes is one no consumer can read.
+        "lag": chosen.lag,
     }
     if migration:
         rows["migration-image-digest"] = chosen.digests.get("migration-image-digest", "")
@@ -664,6 +800,8 @@ def emit(rows: dict[str, str], title: str = "Platform for this run") -> None:
            if rows.get("plugins-run") else "; no sealed plugins publication seen")
     print(f"::notice title={title}::{rows.get('set', '?')} — core {rows.get('sha', '?')[:9]} "
           f"({rows.get('source', '')}){pub}")
+    if rows.get("lag"):
+        print(f"::notice title=Platform lag (pull requests follow main)::{rows['lag']}")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
@@ -683,13 +821,25 @@ def emit(rows: dict[str, str], title: str = "Platform for this run") -> None:
                 if rows.get(key):
                     handle.write(f"| {label} | `{rows[key]}` | |\n")
             handle.write(f"| chosen because | {rows.get('source', '')} | |\n")
+            if rows.get("lag"):
+                handle.write(f"| lag | {rows['lag']} | |\n")
             if rows.get("override") == "true":
                 handle.write(f"| **refreshed** | this job overrode the run's baseline "
                              f"`{rows.get('baseline-set', '')}` — a re-run must not test a stale set | |\n")
-            handle.write("\nThe caller pinned no digest, so the lane took the newest platform-sealed "
-                         "set itself — and a re-run re-resolves (maintainer rule 2026-09-12: for "
-                         "compile always find latest package of platform and plugins; "
-                         "MeshWeaver#3842, MeshWeaver.Education#320).\n")
+            # 🚨 The closing sentence follows the RULE THIS RUN USED. Saying "the newest sealed
+            # set is taken on every run" under a lag row would contradict the row above it on the
+            # one run where the reader most needs the rule.
+            if "`main` has passed" in rows.get("source", ""):
+                handle.write("\nThe caller pinned no digest. This run followed `main`: it took the "
+                             "newest SEALED set this repository's `main` has already PASSED, so a "
+                             "set that regresses this repo reds `main` alone; `main`, the release "
+                             "dispatch and the daily poll take the newest sealed set "
+                             "(MeshWeaver#3842, MeshWeaver#4171).\n")
+            else:
+                handle.write("\nThe caller pinned no digest, so the lane took the newest platform-sealed "
+                             "set itself — and a re-run re-resolves (maintainer rule 2026-09-12: for "
+                             "compile always find latest package of platform and plugins; "
+                             "MeshWeaver#3842, MeshWeaver.Education#320).\n")
 
 
 def write_outputs(chosen: Chosen, tester: str, portal: str, migration: str | None = None) -> None:
@@ -1054,6 +1204,130 @@ def self_test() -> int:
             or load_baseline('{"run-number": "8203", "set": "x"}') != {"run-number": "8203", "set": "x"}:
         failures.append("load_baseline: empty/null → None, a dict → str rows")
 
+    # ── THE OPTIONAL MAIN CEILING (#4171) ───────────────────────────────────────────────────
+    # It only pays for itself if a sealed-but-unvouched set is actually passed over, if the lag is
+    # SAID (both set ids), and if "main has passed nothing" is a REFUSAL rather than a quiet
+    # fallback to the newest sealed set — which is the behaviour it replaces.
+    #
+    # 🚨 And the first two cases below are a PAIR on one fixture: the SAME runs, the SAME registry,
+    # one argument different, opposite answers. `passed_ceiling=None` is every caller that does not
+    # ask for the rule, and if the port had leaked into the default path the negative half would
+    # choose 8203 and FAIL. That is the case that can fail if this option is not opt-in.
+    SATELLITE = "Systemorph/MeshWeaver.Example"
+    sealed_two = {1000 + 8207: _jobs(), 1000 + 8203: _jobs()}
+
+    case("DEFAULT (no ceiling asked): the newest sealed set, even one main has not passed", True,
+         lambda: choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
+                        log=logs.append),
+         lambda c: c.set_name == "3.0.0-ci.8207" and c.lag == ""
+         and "`main` has passed" not in c.source)
+    case("…the SAME fixture WITH a ceiling: the unvouched set is passed over, lag names both", True,
+         lambda: choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
+                        log=logs.append, passed_ceiling=8203),
+         lambda c: c.set_name == "3.0.0-ci.8203" and "8207" in c.lag and "8203" in c.lag
+         and "follow" in c.lag and "`main` has passed" in c.source)
+    case("a ceiling AT the newest sealed set takes it, with no lag", True,
+         lambda: choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
+                        log=logs.append, passed_ceiling=8207),
+         lambda c: c.set_name == "3.0.0-ci.8207" and c.lag == "")
+    case("a freeze OVERRIDES the ceiling — a freeze is an instruction", True,
+         lambda: choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
+                        freeze="3.0.0-ci.8207", log=logs.append, passed_ceiling=8203),
+         lambda c: c.set_name == "3.0.0-ci.8207" and c.lag == "")
+
+    # The OUTPUT of a default run must be what it was: one inert `lag=` key and the unchanged
+    # closing sentence. A run that DID follow main says so instead — the summary may never carry a
+    # lag row under a sentence claiming the newest set is always taken.
+    total += 1
+    plain = output_rows(choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
+                               log=logs.append), tester, portal)
+    followed = output_rows(choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
+                                  log=logs.append, passed_ceiling=8203), tester, portal)
+    if plain.get("lag") != "" or "lag" not in plain or followed.get("lag", "") == "":
+        failures.append(f"output rows: `lag` must always be present and empty by default — "
+                        f"default={plain.get('lag')!r}, followed={followed.get('lag')!r}")
+    total += 1
+    if set(plain) != set(followed):
+        failures.append("output rows: a run that followed main must produce the SAME key set as "
+                        f"one that did not — {set(plain) ^ set(followed)}")
+
+    def _fetch_main(passed_set: str | None, has_run: bool = True, job: bool = True) -> Fetch:
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [{"id": 555}] if has_run else []}
+            if "/jobs" in path:
+                rows = [{"id": 777, "name": PLATFORM_REF_JOB}] if job else []
+                return {"total_count": len(rows), "jobs": rows}
+            if "/check-runs/777/annotations" in path:
+                if passed_set is None:
+                    return {"annotations": []}
+                return {"annotations": [{"title": NOTICE_TITLE,
+                                         "message": f"{passed_set} — core {B[:9]} (the newest)"}]}
+            raise AssertionError(path)
+        return fetch
+
+    def _ceiling_case(name: str, fetch: Fetch, expect: int | None, says: str = "") -> None:
+        nonlocal total
+        total += 1
+        got, notes = main_passed_ceiling(fetch, SATELLITE, log=logs.append)
+        if got != expect:
+            failures.append(f"{name}: ceiling {got}, expected {expect}")
+        elif says and not any(says in n for n in notes):
+            failures.append(f"{name}: no note saying {says!r} — notes={notes}")
+
+    def _freeze_case(name: str, freeze: str | None, fetch: Fetch, expect_fatal: bool,
+                     says: str = "") -> None:
+        nonlocal total
+        total += 1
+        _, notes, fatal = ceiling_for(fetch, SATELLITE, freeze, log=logs.append)
+        if fatal != expect_fatal:
+            failures.append(f"{name}: fatal={fatal}, expected {expect_fatal}")
+        elif says and not any(says in n for n in notes):
+            failures.append(f"{name}: no note saying {says!r} — notes={notes}")
+
+    def _refuses(_path: str) -> dict:
+        raise AssertionError("a freeze must not consult main at all")
+
+    _freeze_case("a freeze skips the ceiling ENTIRELY — main is never consulted",
+                 "3.0.0-ci.8207", _refuses, False, "overrides the main ceiling")
+    _freeze_case("…so an unreadable ceiling under a freeze is NOT fatal",
+                 "3.0.0-ci.8207", _fetch_main(None, has_run=False), False)
+    _freeze_case("…while without a freeze it IS fatal",
+                 None, _fetch_main(None, has_run=False), True, "no successful push run")
+
+    _ceiling_case("main's newest passed set is read back from its own run notice",
+                  _fetch_main("3.0.0-ci.8203"), 8203, "8203")
+    _ceiling_case("a prerelease set name in the notice is read too",
+                  _fetch_main("3.0.0-rc.1-ci.8203"), 8203, "8203")
+    _ceiling_case("no successful main run ⇒ no ceiling (the caller must go RED)",
+                  _fetch_main(None, has_run=False), None, "no successful push run")
+    _ceiling_case("a main run that named no set ⇒ no ceiling, and the reason is recorded",
+                  _fetch_main(None), None, "annotation")
+    _ceiling_case("a main run without the platform-ref job ⇒ skipped, named",
+                  _fetch_main("3.0.0-ci.8203", job=False), None, PLATFORM_REF_JOB)
+    # The annotations endpoint answers a BARE ARRAY in the real API; a reader that only handled
+    # the object form would read every main run as "named no set" and refuse every pull request.
+    total += 1
+    bare = _fetch_main("3.0.0-ci.8203")
+
+    def _bare_array(path: str):
+        rows = bare(path)
+        return rows["annotations"] if "/annotations" in path else rows
+
+    try:
+        got, _ = main_passed_ceiling(_bare_array, SATELLITE, log=logs.append)
+    except Exception as error:                       # noqa: BLE001 — a crash here IS the failure
+        got, error_text = None, f" ({type(error).__name__}: {error})"
+    else:
+        error_text = ""
+    if got != 8203:
+        failures.append("annotations as a bare array must read the same — got "
+                        f"{got}{error_text}")
+
     if failures:
         print(f"✗ resolve-platform self-test: {len(failures)} failure(s)")
         for failure in failures:
@@ -1064,7 +1338,9 @@ def self_test() -> int:
           "its own and reported beside it, a set still sealing its plugins is passed over (bounded), "
           "an unsealed or purged newer set is passed over and SAID, a sealing set is waited for on "
           "request, a freeze never substitutes, a re-run takes a newer set and keeps its baseline "
-          "otherwise, and every dead end is RED naming why.")
+          "otherwise, the OPTIONAL main ceiling changes nothing unless asked for and refuses "
+          "rather than falling back when main has passed nothing, and every dead end is RED "
+          "naming why.")
     return 0
 
 
@@ -1086,6 +1362,15 @@ def main() -> int:
     parser.add_argument("--portal-image", default=DEFAULT_PORTAL_IMAGE)
     parser.add_argument("--migration-image", default="",
                         help="optional migration image; require its digest in the same sealed set")
+    parser.add_argument("--passed-on-main", default="", metavar="OWNER/REPO",
+                        help="OPTIONAL: restrict the choice to a sealed set this repo's own `main` "
+                             "has already passed on (pull-request and merge-group runs). A set that "
+                             "regresses this repo then reds main alone, not every open PR. Omit it "
+                             "and the resolution is unchanged.")
+    parser.add_argument("--passed-ceiling", default="", metavar="N",
+                        help="OPTIONAL: the ceiling a `platform-ref` job already established (its "
+                             "`ceiling` output) — a re-resolving job on a pull request passes it "
+                             "instead of re-reading main's runs (no extra API cost).")
     arguments = parser.parse_args()
 
     if arguments.self_test:
@@ -1118,9 +1403,33 @@ def main() -> int:
         resolve = registry_resolver(user, password)
 
     fetch = github_fetch_with(token)
+    # OPT-IN. Without either flag `ceiling` stays None and `choose` takes the path it always has.
+    ceiling: int | None = None
+    if arguments.passed_ceiling.strip():
+        if not arguments.passed_ceiling.strip().isdigit():
+            print(f"::error title=Bad --passed-ceiling::{arguments.passed_ceiling!r} is not a core CD run number")
+            return 1
+        ceiling = int(arguments.passed_ceiling)
+        print(f"following main: ceiling core CD #{ceiling} (from the run's baseline)")
+    elif arguments.passed_on_main:
+        ceiling, notes, fatal = ceiling_for(fetch, arguments.passed_on_main,
+                                            arguments.freeze or None)
+        for note in notes:
+            print(f"  {note}")
+        if fatal:
+            detail = " ".join(notes)
+            print("::error title=No set this repo's main has passed::this run asked to follow "
+                  "`main` (--passed-on-main), so it resolves the newest sealed set main has "
+                  f"already passed, and none could be established. {detail} Fix main, or set the "
+                  "repo VARIABLE MW_PLATFORM_REF to select one set explicitly. Refusing to fall "
+                  "back to the newest sealed set: that is what reddened every open pull request "
+                  "at once.")
+            return 1
+        if ceiling is not None:
+            print(f"following main: the newest set main has passed is core CD #{ceiling}")
     choose_fn = lambda: choose(fetch, resolve, tester, portal,  # noqa: E731 — one call, two callers
                                wait_for_seal=arguments.wait_for_seal, freeze=arguments.freeze or None,
-                               migration=migration or None)
+                               migration=migration or None, passed_ceiling=ceiling)
     try:
         baseline = load_baseline(os.environ.get(BASELINE_ENV))
         if baseline is not None:
@@ -1141,6 +1450,12 @@ def main() -> int:
                              f"```\n{error}\n```\n")
         return 1
     write_outputs(chosen, tester, portal, migration or None)
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        # Always written (empty without the option) so a downstream job can pass it back as
+        # `--passed-ceiling` without asking whether the upstream job used the rule.
+        with open(output, "a", encoding="utf-8") as handle:
+            handle.write(f"ceiling={ceiling if ceiling is not None else ''}\n")
     return 0
 
 
