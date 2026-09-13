@@ -100,11 +100,11 @@ def parse_when(text: str) -> datetime:
 
 
 def run(root: Path, canonical: Path, red_from: datetime, now: datetime) -> int:
-    copy = root / COPY_PATH
-    if not copy.is_file():
-        print(f"resolver copy: none at {COPY_PATH} — this repository resolves the platform through the "
-              "lanes' fetched canonical; nothing to compare")
-        return 0
+    # 🚨 THE CANONICAL IS READ FIRST, BEFORE THE NO-COPY SHORTCUT (Copilot review, #4171). A
+    # repository that has deleted its copy — the end state — would otherwise pass while the file it
+    # is measured against is missing or unparsable, and the lane's own fetch only greps the body for
+    # a marker string. "There is nothing to compare" and "the thing to compare against cannot be
+    # read" are different sentences, and only the first is a pass.
     try:
         canonical_src = canonical.read_text(encoding="utf-8")
         code_of(canonical_src)
@@ -112,6 +112,11 @@ def run(root: Path, canonical: Path, red_from: datetime, now: datetime) -> int:
         print(f"::error::the canonical resolve-platform.py at {canonical} cannot be read or parsed "
               f"({type(ex).__name__}: {ex}) — a guard that cannot read its subject must not pass")
         return 1
+    copy = root / COPY_PATH
+    if not copy.is_file():
+        print(f"resolver copy: none at {COPY_PATH} — this repository resolves the platform through the "
+              "lanes' fetched canonical; nothing to compare")
+        return 0
     try:
         copy_src = copy.read_text(encoding="utf-8")
         code_of(copy_src)
@@ -181,6 +186,8 @@ def self_test() -> int:
             return r
 
         check("no copy passes with a notice", run(repo("none", None), canonical, flip, after) == 0)
+        check("no copy + an ABSENT canonical is RED (the shortcut does not bypass the subject check)",
+              run(repo("none-absent", None), tmp / "not-there.py", flip, after) == 1)
         check("an identical copy passes", run(repo("same", CANON), canonical, flip, after) == 0)
         prose = CANON.replace('"""pick the newest sealed run"""', '"""pick the newest SEALED run, differently worded"""') \
                      .replace("# a comment", "# a different comment\n\n")
@@ -202,6 +209,8 @@ def self_test() -> int:
         broken = tmp / "broken.py"
         broken.write_text("def (:\n", encoding="utf-8")
         check("a canonical that does not parse is RED", run(repo("y", CANON), broken, flip, before) == 1)
+        check("no copy + an UNPARSABLE canonical is RED",
+              run(repo("none-broken", None), broken, flip, before) == 1)
         check("an unparsable copy is RED", run(repo("z", "def (:\n"), canonical, flip, before) == 1)
         check("RED_FROM parses as an instant", flip.tzinfo is not None)
     if failures:
