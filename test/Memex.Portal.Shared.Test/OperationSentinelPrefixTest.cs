@@ -17,7 +17,7 @@ namespace Memex.Portal.Shared.Test;
 public class OperationSentinelPrefixTest
 {
     private static readonly Regex SentinelLiteral = new(
-        """(?<q>\$?@?\$?")(?<text>(?:Error|Not found|Unavailable)\b[^"]{0,40})""", RegexOptions.Compiled);
+        """(?<q>\$?@?\$?")(?<text>(?:Error|Not found|Unavailable|Refused)\b[^"]{0,40})""", RegexOptions.Compiled);
 
     [Fact]
     public void Every_sentinel_literal_the_verbs_write_is_one_the_classifier_reads()
@@ -25,7 +25,7 @@ public class OperationSentinelPrefixTest
         var source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "MeshWeaver.Mesh.Operations", "MeshOperations.cs"));
         var literals = SentinelLiteral.Matches(source)
             .Select(m => m.Groups["text"].Value)
-            .Where(text => text.Contains(':'))                    // the sentinel shape is "<Word>: …"
+            .Where(text => text.Contains(':') || text.StartsWith("Refused ", StringComparison.Ordinal))  // "<Word>: …", or the colon-less refusal
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -46,6 +46,7 @@ public class OperationSentinelPrefixTest
         OperationSentinel.ErrorPrefix.Should().Be("Error:");
         OperationSentinel.NotFoundPrefix.Should().Be("Not found:");
         OperationSentinel.UnavailablePrefix.Should().Be("Unavailable:");
+        OperationSentinel.RefusedPrefix.Should().Be("Refused ");
     }
 
     private static string FindRepoRoot()

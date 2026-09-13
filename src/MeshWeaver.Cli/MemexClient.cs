@@ -109,7 +109,7 @@ public sealed class MemexClient : IDisposable
             if (doc.RootElement.ValueKind != JsonValueKind.Object
                 || !doc.RootElement.TryGetProperty("kind", out var kind)
                 || kind.ValueKind != JsonValueKind.String
-                || kind.GetString() is not ("Error" or "NotFound" or "Unavailable")
+                || kind.GetString() is not ("Error" or "NotFound" or "Unavailable" or "Refused")
                 || !doc.RootElement.TryGetProperty("error", out var error)
                 || error.ValueKind != JsonValueKind.String)
                 return null;

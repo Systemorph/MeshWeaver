@@ -3,8 +3,9 @@ namespace MeshWeaver.AI;
 
 /// <summary>
 /// The three NON-JSON answers a <see cref="MeshOperations"/> verb can produce — the model-facing
-/// sentinel sentences that ride the MCP tool result as plain text — and, for every HTTP host that
-/// mirrors those verbs, the ONE mapping from sentinel to status code.
+/// sentinel sentences that ride the MCP tool result as plain text (plus the permission refusal
+/// <c>DeleteErrorLine</c> writes) — and, for every HTTP host that mirrors those verbs, the ONE
+/// mapping from sentinel to status code.
 ///
 /// <para>The verbs return a string that is EITHER a JSON document OR one of these prose sentences
 /// (<c>"Error: …"</c>, <c>"Not found: …"</c>, <c>"Unavailable: …"</c>). On the MCP surface that is
@@ -33,6 +34,14 @@ public static class OperationSentinel
     public const string UnavailablePrefix = "Unavailable:";
 
     /// <summary>
+    /// A verb the current identity may not perform here (<c>DeleteErrorLine</c>: "Refused deleting
+    /// {path}: … do not retry"): a permission verdict that hands the model a GUI URL to present to the
+    /// user. Prefix-shaped without a colon — the writer predates the other three; the sentence stays
+    /// as written because the model reads it.
+    /// </summary>
+    public const string RefusedPrefix = "Refused ";
+
+    /// <summary>
     /// Classifies one verb result. <c>null</c> for a JSON document (ship it as-is); otherwise the
     /// sentinel's kind and the HTTP status an HTTP mirror answers with.
     /// </summary>
@@ -46,6 +55,8 @@ public static class OperationSentinel
             return new SentinelVerdict(SentinelKind.Unavailable, 503);
         if (result.StartsWith(ErrorPrefix, StringComparison.Ordinal))
             return new SentinelVerdict(SentinelKind.Error, 500);
+        if (result.StartsWith(RefusedPrefix, StringComparison.Ordinal))
+            return new SentinelVerdict(SentinelKind.Refused, 403);
         return null;
     }
 }
@@ -61,12 +72,15 @@ public enum SentinelKind
 
     /// <summary><c>"Unavailable: …"</c> — no verdict was reached; retry, never create or delete.</summary>
     Unavailable,
+
+    /// <summary><c>"Refused …"</c> — the identity may not perform the verb here; do not retry, hand the user the GUI URL.</summary>
+    Refused,
 }
 
 /// <summary>
 /// A classified sentinel: its <see cref="Kind"/> and the <see cref="HttpStatus"/> every HTTP mirror
 /// of the verbs answers with — 404 for a definitive absence, 503 for a read that reached no verdict
-/// (the sentence itself says "retry shortly"), 500 for a fault. The HTTP body an HTTP mirror ships
+/// (the sentence itself says "retry shortly"), 500 for a fault, 403 for a permission refusal. The HTTP body an HTTP mirror ships
 /// is <c>{ "error": &lt;the sentence&gt;, "kind": &lt;Kind&gt; }</c>, so the reason stays readable
 /// and machine-addressable at once.
 /// </summary>

@@ -21,6 +21,7 @@ HTTP. This page is the contract those callers may rely on.
 | `Not found: …` | **404** | `{ "error": "Not found: …", "kind": "NotFound" }` |
 | `Unavailable: …` | **503** | `{ "error": "Unavailable: …", "kind": "Unavailable" }` |
 | `Error: …` | **500** | `{ "error": "Error: …", "kind": "Error" }` |
+| `Refused <verb> …` (a permission verdict — "do not retry", with the GUI URL to hand the user) | **403** | `{ "error": "Refused deleting …", "kind": "Refused" }` |
 
 So `response.ok` means exactly one thing — *the verb succeeded* — and a caller that checks the
 status before parsing is correct by construction. For a read verb the 200 body is the document;

@@ -48,6 +48,7 @@ public class MeshApiSentinelStatusTest
     [InlineData("Not found: Doc/Nope", HttpStatusCode.NotFound, "NotFound")]
     [InlineData("Unavailable: Doc/Guide — this read reached no verdict, so it is UNKNOWN whether this node exists. Retry shortly. Cause: timeout", HttpStatusCode.ServiceUnavailable, "Unavailable")]
     [InlineData("Error: path is required.", HttpStatusCode.InternalServerError, "Error")]
+    [InlineData("Refused deleting ACME/Doc: Access denied. The current identity does not hold Delete here — do not retry.", HttpStatusCode.Forbidden, "Refused")]
     public async Task A_sentinel_ships_as_a_non_2xx_json_envelope(string sentence, HttpStatusCode expected, string kind)
     {
         var (status, body, contentType) = await ExecuteAsync(MeshApiEndpoints.Ship(sentence));
@@ -73,6 +74,8 @@ public class MeshApiSentinelStatusTest
         OperationSentinel.Classify("Not found: x")!.Kind.Should().Be(SentinelKind.NotFound);
         OperationSentinel.Classify("Unavailable: x")!.Kind.Should().Be(SentinelKind.Unavailable);
         OperationSentinel.Classify("Error: x")!.Kind.Should().Be(SentinelKind.Error);
+        OperationSentinel.Classify("Refused deleting x: y")!.Kind.Should().Be(SentinelKind.Refused);
+        OperationSentinel.Classify("Refused: no").Should().BeNull("the refusal writer is 'Refused <verb> …', never 'Refused:'");
     }
 
     /// <summary>
@@ -89,6 +92,7 @@ public class MeshApiSentinelStatusTest
             .Should().Be("Error: path is required.");
         MemexClient.UnwrapSentinel("""{"error":"No API endpoint at /api/mesh/nope"}""")
             .Should().BeNull("no kind — an unmapped route's 404 is an HTTP failure, not a verb answer");
+        MemexClient.UnwrapSentinel("""{"error":"Refused deleting x: y","kind":"Refused"}""").Should().Be("Refused deleting x: y");
         MemexClient.UnwrapSentinel("""{"error":"x","kind":"Timeout"}""")
             .Should().BeNull("a kind this client does not know is not a sentinel");
         MemexClient.UnwrapSentinel("Unavailable: raw prose").Should().BeNull("not JSON at all");
