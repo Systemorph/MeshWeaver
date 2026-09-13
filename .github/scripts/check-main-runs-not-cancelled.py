@@ -328,8 +328,9 @@ def supersede_calls(body: str) -> list[str]:
 
 
 SUPERSEDE_SELF_TESTS = [
-    ("a supersede call", "jobs:\n  s:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-supersede.yml@main\n", 1),
-    ("a comment naming the lane", "jobs:\n  # uses: Systemorph/MeshWeaver/.github/workflows/node-repo-supersede.yml@main\n", 0),
+    ("a supersede call on a per-module-deploy repo", "jobs:\n  s:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-supersede.yml@main\n  p:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-publish.yml@main\n", 1),
+    ("a supersede call on a whole-repo-bake satellite (no module-publish) is by design", "jobs:\n  s:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-supersede.yml@main\n  b:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-publish-bake.yml@main\n", 0),
+    ("a comment naming the lane", "jobs:\n  # uses: Systemorph/MeshWeaver/.github/workflows/node-repo-supersede.yml@main\n  p:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-publish.yml@main\n", 0),
     ("another lane", "jobs:\n  v:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-validate.yml@main\n", 0),
 ]
 
