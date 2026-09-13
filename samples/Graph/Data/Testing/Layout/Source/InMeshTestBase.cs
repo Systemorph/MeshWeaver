@@ -78,15 +78,28 @@ public abstract class InMeshTestBase
         => ex.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)
            || ex.Message.Contains("does not exist", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Runs <paramref name="work"/> as the system identity in the sanctioned in-mesh shape (core#1820,
+    /// check-impersonation.py): the scope is opened on the subscribing thread and closed by it, never
+    /// latched onto a terminating thread. The xunit estate's <c>access.RunAsSystem(() => …)</c> is
+    /// rewritten to this by convert-xunit-to-inmesh.py.
+    /// </summary>
+    protected static IObservable<T> AsSystem<T>(AccessService? access, Func<IObservable<T>> work) =>
+        Observable.Create<T>(observer =>
+        {
+            using (access?.ImpersonateAsSystem())
+                return work().Subscribe(observer);
+        });
+
+    /// <summary>The mesh's access service.</summary>
+    protected AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
     /// <summary>Creates a node as the platform provisioner (the xunit base's SeedTopLevel).</summary>
     protected async Task<MeshNode> SeedTopLevel(MeshNode node)
-    {
-        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        return await access.RunAsSystem(() => NodeFactory.CreateNode(node))
+        => await AsSystem(Access, () => NodeFactory.CreateNode(node))
             .SubscribeOn(TaskPoolScheduler.Default)
             .Take(1)
             .Timeout(Context.Deadline);
-    }
 
     private readonly List<IMessageHub> _clients = new();
     private IMessageHub? _requestHub;

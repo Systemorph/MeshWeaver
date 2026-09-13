@@ -272,7 +272,7 @@ public class LogonPinMigrationTest(MeshTestContext context) : InMeshTestBase(out
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
-        await access.RunAsSystem(() => mesh.CreateNode(MeshNode.FromPath(path) with
+        await AsSystem(access, () => mesh.CreateNode(MeshNode.FromPath(path) with
         {
             NodeType = "User",
             Name = path,

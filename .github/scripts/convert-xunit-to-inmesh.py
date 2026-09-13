@@ -26,6 +26,7 @@ REFUSE = [
     (r"SetHostIdentity|ImpersonateAs\(", "acts as an arbitrary identity — declined by design"),
     (r"Process\.Start|new Process\(", "spawns a process — stays on xunit"),
     (r"IClassFixture<|ICollectionFixture<", "uses an xunit fixture — needs a hand port"),
+    (r"Observable\.Using\([^\n]*Impersonate", "opens an impersonation scope with Observable.Using — the in-mesh shape is AsSystem (check-impersonation.py); needs a hand port"),
 ]
 
 def convert(text: str, node_id: str) -> tuple[str | None, str]:
@@ -47,6 +48,9 @@ def convert(text: str, node_id: str) -> tuple[str | None, str]:
     s = re.sub(r"\(ITestOutputHelper\s+output\)\s*:\s*base\(output\)", "(MeshTestContext context) : base(context)", s)
     s = re.sub(r"\(ITestOutputHelper\s+output\)", "(MeshTestContext context)", s)
     s = s.replace("TestContext.Current.CancellationToken", "CancellationToken.None")
+    # `access.RunAsSystem(() => work)` latches the identity across threads in-mesh (core#1820): the base's
+    # AsSystem(access, () => work) is the sanctioned Observable.Create shape.
+    s = re.sub(r"\b([A-Za-z_][A-Za-z0-9_.]*)\.RunAsSystem\(", r"AsSystem(\1, ", s)
     s = re.sub(r"^using Xunit\.Abstractions;\n", "", s, flags=re.M)
     header = (f"// <meshweaver>\n// Id: {node_id}\n// DisplayName: {node_id} — migrated from xunit (convert-xunit-to-inmesh.py)\n// </meshweaver>\n"
               "#nullable enable\nusing MeshWeaver.Reactive.Assertions;\nusing MeshWeaver.Testing.InMesh;\n")
@@ -92,6 +96,8 @@ public class SampleTest : MonolithMeshTestBase
         assert never not in out, never
     assert convert("class X : MonolithMeshTestBase { protected override MeshBuilder ConfigureMesh(MeshBuilder b) => b; }", "x")[0] is None
     assert convert("using Testcontainers.PostgreSql;", "x")[0] is None
+    assert convert("var x = Observable.Using(() => access.ImpersonateAsSystem(), _ => y);", "x")[0] is None
+    assert "AsSystem(access, () => Mesh.CreateNode(n))" in convert("var r = access.RunAsSystem(() => Mesh.CreateNode(n));", "x")[0]
     print("✓ convert-xunit-to-inmesh self-test: attributes, base, ctor, usings, header; refusals name their reason"); return 0
 
 def main() -> int:

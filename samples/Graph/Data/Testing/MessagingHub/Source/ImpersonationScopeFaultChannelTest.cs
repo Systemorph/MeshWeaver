@@ -72,7 +72,7 @@ public class ImpersonationScopeFaultChannelTest
         var access = NewAccessService();
 
         var seen = 0;
-        access.RunAsSystem(() => Observable.Return(42)).Subscribe(v => seen = v);
+        AsSystem(access, () => Observable.Return(42)).Subscribe(v => seen = v);
         Assert.Equal(42, seen);
 
         Exception? captured = null;

@@ -117,7 +117,7 @@ public class AppArrangementRoundTripTest(MeshTestContext context) : InMeshTestBa
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        await access.RunAsSystem(() => mesh.CreateNode(node))
+        await AsSystem(access, () => mesh.CreateNode(node))
             .FirstAsync().Timeout(Bound).Await();
     }
 }

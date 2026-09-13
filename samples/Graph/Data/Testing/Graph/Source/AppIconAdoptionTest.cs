@@ -226,7 +226,7 @@ public class AppIconAdoptionTest(MeshTestContext context) : InMeshTestBase(outpu
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
-        await access.RunAsSystem(() => mesh.CreateNode(node))
+        await AsSystem(access, () => mesh.CreateNode(node))
             .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
     }
 }

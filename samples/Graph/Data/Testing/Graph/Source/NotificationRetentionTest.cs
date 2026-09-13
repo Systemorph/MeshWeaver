@@ -376,7 +376,7 @@ public class NotificationRetentionTest(MeshTestContext context) : InMeshTestBase
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
-        return access.RunAsSystem(() => mesh.CreateNode(node))
+        return AsSystem(access, () => mesh.CreateNode(node))
             .FirstAsync().Timeout(Bound).Await();
     }
 }

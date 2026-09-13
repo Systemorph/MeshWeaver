@@ -272,7 +272,7 @@ public class ForeignFrameworkStampOnTheMirrorTest(MeshTestContext context) : InM
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
-        return access.RunAsSystem(() => meshService.CreateNode(node))
+        return AsSystem(access, () => meshService.CreateNode(node))
             .FirstAsync().Timeout(VerdictBudget).Await();
     }
 }
