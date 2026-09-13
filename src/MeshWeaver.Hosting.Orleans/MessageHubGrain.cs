@@ -353,7 +353,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                     return ResolveHubConfigurationObservable(node);
                 })
             .Subscribe(
-                node => CompleteActivation(streamId, address, grainScheduler, node, sourceStream),
+                node => CompleteActivation(streamId, address, grainScheduler, node),
                 ex =>
                 {
                     logger.LogError(ex, "[ACTIVATE] Grain {StreamId}: activation faulted for {Path}", streamId, addressPath);
@@ -477,8 +477,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// is already set is a no-op.
     /// </summary>
     private void CompleteActivation(
-        string streamId, Address address, TaskScheduler grainScheduler,
-        MeshNode node, IObservable<MeshNode> ownNodeStream)
+        string streamId, Address address, TaskScheduler grainScheduler, MeshNode node)
     {
         if (_hub is not null) return;
         // Teardown race: the activation source (path resolver / mesh-node cache) can emit
@@ -554,7 +553,24 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             // fingerprinted and ticketed an expected shutdown.
             var creation = meshHub.TryGetHostedHub(address, config =>
             {
-                config = config.WithOwnNodeStream(ownNodeStream);
+                // 🚨 The hub's own-node source is the RESOLVED node, one-shot — the Monolith's shape
+                // (MonolithRoutingService: `Observable.Return(enriched)`), NOT the activation source.
+                // The activation source's cache leg is the process-wide mesh-node cache's SharedView
+                // of THIS grain's own path, and the hub's MeshNodeTypeSource keeps a
+                // Replay(1).RefCount() subscription on whatever it is handed for the hub's whole life.
+                // Handing it the cache view therefore pinned the entry at one subscriber forever: the
+                // idle sweep and the terminal ReleaseIfUnwatched could never release it, its hydration
+                // sync stream kept posting HeartBeatEvent to this hub every 45 s, HandleHeartBeat kept
+                // re-arming DelayDeactivation, and the grain could never go idle — a loop with nothing
+                // outside it, so every node ever activated on a replica stayed resident with its cache
+                // entry and the sync/ hubs on both sides (#3432, measured: ≈25 sync/ hubs per minute,
+                // never retiring). Nothing was lost by the loop either: the cache leg is hydrated by a
+                // SubscribeRequest to THIS hub, so every emission it could deliver after activation
+                // was an echo of this hub's own state; cross-hub updates reach the owner as the writes
+                // themselves, and cross-process changes through IMeshChangeFeed, exactly as on the
+                // Monolith. The cache leg stays where it belongs — in the activation chain, which
+                // takes one node and unsubscribes.
+                config = config.WithOwnNodeStream(Observable.Return(node));
                 return node.HubConfiguration!(config)
                     .WithTaskScheduler(grainScheduler)
                     .Set(new GrainKeepAliveCallback(() => TryDelayDeactivation(TimeSpan.FromMinutes(10))))
