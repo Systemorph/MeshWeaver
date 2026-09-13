@@ -1307,14 +1307,8 @@ public class ConfiguredModuleActivationTest
         string assemblyName, string source, string? excludeReference = null,
         MetadataReference? extra = null)
     {
-        var platform = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? string.Empty)
-            .Split(Path.PathSeparator)
-            .Where(p => p.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(p))
-            .Where(p => excludeReference is null
-                        || !string.Equals(Path.GetFileNameWithoutExtension(p), excludeReference,
-                            StringComparison.OrdinalIgnoreCase))
-            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
-            .ToList();
+        // The process-wide platform set, read once — see PlatformReferences for why (#4127).
+        var platform = PlatformReferences.Platform(excludeReference);
         if (extra is not null)
             platform.Add(extra);
 
