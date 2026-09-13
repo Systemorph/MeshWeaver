@@ -19,6 +19,16 @@
     "entry with no `reason`, as is an entry naming an installation no overlay declares (a stale",
     "exemption hides the next one).",
     "",
+    "🚨 `registry` IS A SCOPE STATEMENT, NOT AN EXEMPTION FROM ANSWERING. An entry carrying one is",
+    "still LIVE, still expected to answer `/api/version`, still counted — and it prints on its own",
+    "line in the report (`…declared OUT OF THIS REGISTRY'S SCOPE`) so it can never be read as",
+    "protected. The single thing it says is that this installation's images are served by a",
+    "registry `acr purge` cannot reach and this lane cannot lock, so there is nothing HERE to",
+    "protect for it. It is checked BOTH ways against what the overlay actually pins: a declaration",
+    "naming a registry the overlay does not pin in is RED, and so is one on an installation that",
+    "ALSO pins in this ACR (half in is not out). It is refused on a non-live entry, and refused",
+    "without a `reason`.",
+    "",
     "Removing an entry is how an installation re-enters the expected set.",
     "",
     "An installation that is LIVE but not reachable from a GitHub-hosted runner is deliberately",
@@ -28,6 +38,14 @@
     "reviewed diff, and it needs its own state rather than being filed under `retired`."
   ],
   "instances": [
+    {
+      "id": "build",
+      "state": "live",
+      "registry": "cr.meshweaver.cloud",
+      "reason": "The fleet's build server (build.meshweaver.cloud, MeshWeaver.Plugins#1784). It is LIVE and it ANSWERS — the 2026-09-13 01:18Z run read core c84c6c0 from it — but deployments/aks/build/values.build.public.yaml pins `cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411` and its migration twin in the FLEET'S OWN registry, which `acr purge` cannot reach and this lane cannot lock. Before this entry the ACR-scoped extractor read that overlay as pinning ZERO and the run refused with `pins no image at all` — a false sentence that reddened the lane from 2026-09-13 and, because `pause.reEnableWhen` is `lock-pinned-digests is green`, stood between the fleet and re-enabling cleanup. 🚨 WHAT RETAINS cr.meshweaver.cloud IS NOT ESTABLISHED HERE and is tracked on MeshWeaver#3438: this entry states that the images are out of THIS lane's reach, never that something else is protecting them. Delete it the day the overlay pins in this ACR again.",
+      "declaredAt": "2026-09-13",
+      "issue": "MeshWeaver#3438"
+    },
     {
       "id": "pearl",
       "state": "not-installed",

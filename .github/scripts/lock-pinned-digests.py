@@ -185,6 +185,26 @@ OVERLAY_TAG_RE = re.compile(
     r"(?P<tag>[A-Za-z0-9_][A-Za-z0-9._-]*)(?P=quote)[ \t]*(?:#[^\r\n]*)?$"
 )
 
+# 🚨 SHAPE C — AN IMAGE IN A REGISTRY THIS LANE DOES NOT PROTECT.
+#
+# `REGISTRY_HOST_RE` matches `*.azurecr.io` and nothing else, which is correct — this lane locks
+# manifests in ONE ACR. But an overlay that pins its images somewhere else then extracts as pinning
+# NOTHING, and AXIS 3 said so in as many words: *"installation `build` runs core c84c6c0 and its
+# overlay pins no image at all"*. That sentence was FALSE on 2026-09-13 — the overlay pins
+# `cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411` and its migration twin — and the fleet's own
+# registry is where new installations are provisioned (`pearl` pins there too). An instrument that
+# answers "pins nothing" about an overlay with two pins in it is the confidently-wrong shape this
+# whole family of gates exists to remove, and it reads as a broken extractor rather than as an
+# installation outside this registry.
+#
+# So foreign references are EXTRACTED and NAMED. They are never locked — nothing here can write to
+# another registry — but "this installation's images are in <host>, which this run does not
+# protect" and "this overlay pins nothing" are different facts with different fixes.
+FOREIGN_INLINE_RE = re.compile(
+    r"(?<![A-Za-z0-9._/-])(?P<host>[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+)"
+    r"/(?P<repo>[A-Za-z0-9][A-Za-z0-9._/-]*):(?P<tag>[A-Za-z0-9_][A-Za-z0-9._-]*)"
+)
+
 # A `${{ … }}` / `{{ … }}` value is a template, not a pin.
 TEMPLATED_RE = re.compile(r"\{\{")
 
@@ -203,6 +223,25 @@ def is_overlay_path(path: str) -> bool:
     if not any(segment in OVERLAY_DIR_SEGMENTS for segment in parts[:-1]):
         return False
     return bool(OVERLAY_FILE_RE.match(parts[-1]))
+
+
+def extract_foreign_pins(text: str) -> list[tuple[str, str, str]]:
+    """(registry host, repo, tag) for every image reference in a registry this lane does NOT lock.
+
+    Deliberately a SUPERSET minus the ACR matches, rather than a list of known hosts: a host nobody
+    thought of must show up as foreign, never as nothing."""
+    acr = {(m.group("host"), m.group("repo"), m.group("tag"))
+           for m in OVERLAY_INLINE_RE.finditer(text)}
+    foreign: list[tuple[str, str, str]] = []
+    for match in FOREIGN_INLINE_RE.finditer(text):
+        triple = (match.group("host"), match.group("repo"), match.group("tag"))
+        if triple in acr or triple[0].endswith(".azurecr.io"):
+            continue
+        if TEMPLATED_RE.search(match.group(0)):
+            continue
+        if triple not in foreign:
+            foreign.append(triple)
+    return foreign
 
 
 def extract_overlay_pins(text: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
@@ -304,6 +343,9 @@ class OverlayScan:
     floating: list[tuple[str, str, str]] = field(default_factory=list)
     # (deployment id, ingress host, where) — one per overlay that names an installation.
     instances: list[tuple[str, str | None, str]] = field(default_factory=list)
+    # (registry host, repo, tag, where) — images pinned in a registry this lane does NOT lock.
+    # Never locked; carried so "pins nothing" and "pins elsewhere" stay different answers.
+    foreign: list[tuple[str, str, str, str]] = field(default_factory=list)
     unreadable: str | None = None
 
 
@@ -355,6 +397,8 @@ def scan_overlays_remote(gh_repo: str) -> OverlayScan:
         scan.floating.extend((repo, tag, path) for repo, tag in floating)
         scan.instances.extend((ident, host, path)
                               for ident, host in extract_overlay_instances(text))
+        scan.foreign.extend((host, repo, tag, path)
+                            for host, repo, tag in extract_foreign_pins(text))
     return scan
 
 
@@ -374,6 +418,8 @@ def scan_overlays_local(root: str, gh_repo: str) -> OverlayScan:
         scan.pins.extend((repo, tag, rel) for repo, tag in pins)
         scan.floating.extend((repo, tag, rel) for repo, tag in floating)
         scan.instances.extend((ident, host, rel) for ident, host in extract_overlay_instances(text))
+        scan.foreign.extend((host, repo, tag, rel)
+                            for host, repo, tag in extract_foreign_pins(text))
     return scan
 
 
@@ -618,6 +664,12 @@ class Instance:
     version: str | None = None
     error: str = ""              # why it could not be asked, or could not be believed
     manifests: list[str] = field(default_factory=list)   # the closure this instance pins alive
+    # Declared out of this lane's scope: live, answering, and served by another registry.
+    out_of_scope: bool = False
+    # Registry hosts THIS installation's overlay pins images in, other than the ACR this lane locks.
+    foreign_registries: list[str] = field(default_factory=list)
+    # The host its roster entry declares as out of this lane's scope, if any.
+    declared_registry: str = ""
 
 
 @dataclass
@@ -772,7 +824,7 @@ INSTANCE_PROBE_TIMEOUT = 25
 VERSION_ROUTE = "/api/version"
 
 
-def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str]], list[str]]:
+def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str, str]], list[str]]:
     """The DECLARED state of any installation that is not live, from `.github/acr-retention/`.
 
     🚨 THE OVERLAYS ARE THE DENOMINATOR; THIS FILE ONLY EXPLAINS AN ABSENCE. An installation the
@@ -790,18 +842,36 @@ def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str]], list[st
     except (OSError, json.JSONDecodeError) as exc:
         return {}, [f"the instance roster {path} could not be read: {exc}. An unreadable roster is "
                     "not an empty one."]
-    roster: dict[str, tuple[str, str]] = {}
+    roster: dict[str, tuple[str, str, str]] = {}
     problems: list[str] = []
     for entry in document.get("instances", []):
         ident = str(entry.get("id", "")).strip()
         state = str(entry.get("state", "")).strip()
         reason = str(entry.get("reason", "")).strip()
+        registry = str(entry.get("registry", "")).strip()
         if not ident:
             problems.append(f"{ROSTER_PATH}: an entry has no `id`.")
             continue
         if state not in ROSTER_STATES:
             problems.append(f"{ROSTER_PATH}: `{ident}` has state {state!r}; expected one of "
                             + ", ".join(sorted(ROSTER_STATES)) + ".")
+            continue
+        # 🚨 `registry` DECLARES A SCOPE, NEVER AN EXEMPTION FROM ANSWERING. An installation
+        # carrying one is still LIVE, still expected to answer `/api/version`, still counted — the
+        # single thing it says is that the images it runs are served by a registry this lane cannot
+        # lock, so there is nothing here to protect for it. It is checked BOTH ways against what
+        # the overlay actually pins (`resolve_running_sets`), so it cannot go stale in silence.
+        if registry and state != "live":
+            problems.append(
+                f"{ROSTER_PATH}: `{ident}` is {state} AND declares `registry`. A non-live "
+                "installation runs nothing, so it needs no scope statement — the two together "
+                "read as an exemption wearing two hats. Keep the state, drop the registry.")
+            continue
+        if registry and not reason:
+            problems.append(
+                f"{ROSTER_PATH}: `{ident}` declares `registry` with no `reason`. Saying that an "
+                "installation's images are out of this lane's reach without saying what protects "
+                "them instead is where the next gap goes unnoticed.")
             continue
         if state != "live" and not reason:
             problems.append(f"{ROSTER_PATH}: `{ident}` is {state} with no `reason`. A declaration "
@@ -816,7 +886,7 @@ def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str]], list[st
                 "Which one is in force would be decided by the order of the array, so neither is. "
                 "Delete the line that no longer applies.")
             continue
-        roster[ident] = (state, reason)
+        roster[ident] = (state, reason, registry)
     return roster, problems
 
 
@@ -873,9 +943,12 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str]]
                     f"installation `{ident}` is declared by two overlays ({existing.source} and "
                     f"{source}), so which host answers for it is ambiguous.")
                 continue
-            state, reason = roster.get(ident, ("live", ""))
+            state, reason, registry = roster.get(ident, ("live", "", ""))
             instances[ident] = Instance(id=ident, host=host, source=source, state=state,
-                                        reason=reason)
+                                        reason=reason, declared_registry=registry,
+                                        foreign_registries=sorted({
+                                            foreign_host for foreign_host, _, _, foreign_where
+                                            in scan.foreign if foreign_where == where}))
     for ident in sorted(set(roster) - set(instances)):
         blockers.append(
             f"{ROSTER_PATH} declares `{ident}` ({roster[ident][0]}) and no overlay in the fleet "
@@ -911,11 +984,51 @@ def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
             continue
         patterns = running_tag_patterns(instance.commit)
         repositories = repositories_of.get(instance.id, [])
+        # 🚨 A DECLARATION THAT NAMES A REGISTRY THE OVERLAY DOES NOT PIN IS STALE, and a stale
+        # exemption hides the next one — the same rule the roster's own orphan check follows. It is
+        # checked whether or not the instance has ACR repositories, so it cannot outlive a move
+        # BACK to this registry.
+        if instance.declared_registry and instance.declared_registry not in instance.foreign_registries:
+            plan.blockers.append(
+                f"AXIS 3 — `{instance.id}` declares `registry: {instance.declared_registry}` in "
+                f"{ROSTER_PATH} and its overlay ({instance.source}) pins no image there"
+                + (f" (it pins in {', '.join(instance.foreign_registries)})"
+                   if instance.foreign_registries else "")
+                + ". A scope statement that matches nothing exempts nothing and hides the next "
+                  "one — delete the line or correct the host.")
+            continue
+        if repositories and instance.declared_registry:
+            plan.blockers.append(
+                f"AXIS 3 — `{instance.id}` declares `registry: {instance.declared_registry}` as "
+                f"out of this lane's scope, AND its overlay pins {len(repositories)} repository"
+                f"(ies) in the registry this run DOES lock ({', '.join(repositories)}). It is not "
+                "out of scope; it is half in. Protect the half that is here, and delete the "
+                "declaration.")
+            continue
         if not repositories:
+            # 🚨 "PINS NO IMAGE AT ALL" WAS FALSE ON 2026-09-13 AND THAT IS WHY THIS BRANCH SPLIT.
+            # `build` — the fleet's build server, live since that week — pins
+            # `cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411` and its migration twin, in the
+            # fleet's OWN registry. The ACR-scoped extractor saw zero and the run said the overlay
+            # pinned nothing, which reads as a broken matcher and sent the reader to the wrong
+            # place. The images are real; they are simply not in the registry this lane locks.
+            if instance.foreign_registries:
+                if instance.declared_registry:
+                    instance.out_of_scope = True
+                    continue
+                plan.blockers.append(
+                    f"AXIS 3 — installation `{instance.id}` runs core {instance.commit[:7]} and "
+                    f"its overlay ({instance.source}) pins its images in "
+                    f"{', '.join(instance.foreign_registries)}, NOT in the registry this run "
+                    "locks. Nothing here can protect them, and silently skipping it would make an "
+                    "unprotected installation look like a protected one. Declare the scope in "
+                    f"`.github/acr-retention/{ROSTER_PATH}` — `registry` plus a `reason` saying "
+                    "what retains that registry instead — or move the pins back.")
+                continue
             plan.blockers.append(
                 f"AXIS 3 — installation `{instance.id}` runs core {instance.commit[:7]} and its "
-                f"overlay ({instance.source}) pins no image at all, so there is no repository in "
-                "which to protect what it runs.")
+                f"overlay ({instance.source}) pins no image at all, in ANY registry, so there is "
+                "no repository in which to protect what it runs.")
             continue
         for acr_repo in repositories:
             manifests = inventory.get(acr_repo)
@@ -1255,9 +1368,22 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
          + ("   🚨 INVENTORY INCOMPLETE" if len(live) != len(answered) else ""))
     emit(f"      …declared not-live in instances.json     {len(declared)}"
          + (f"  ({', '.join(f'{i.id}: {i.state}' for i in declared)})" if declared else ""))
+    # 🚨 ITS OWN LINE, ALWAYS PRINTED. An installation whose images this lane cannot reach is
+    # neither protected nor a failure, and those two already have lines — so without a third it
+    # would be counted among the answered and read as covered. It is live, it answered, and
+    # NOTHING here protects what it runs; that has to be legible without opening the roster.
+    out_of_scope = [i for i in plan.instances if i.out_of_scope]
+    emit(f"      …declared OUT OF THIS REGISTRY'S SCOPE   {len(out_of_scope)}"
+         + (f"  ({', '.join(f'{i.id} → {i.declared_registry}' for i in out_of_scope)}"
+            + " — protected by that registry's own retention, not by this run)"
+            if out_of_scope else ""))
     for instance in sorted(plan.instances, key=lambda i: i.id):
         if instance.state != "live":
             emit(f"        {instance.id:<18} {instance.state} — {instance.reason}")
+        elif instance.out_of_scope:
+            emit(f"        {instance.id:<18} core "
+                 f"{(instance.commit or '???????')[:7]} — images in "
+                 f"{instance.declared_registry}, OUT OF SCOPE here: {instance.reason}")
         elif instance.commit and not instance.error:
             emit(f"        {instance.id:<18} core {instance.commit[:7]} "
                  f"({instance.version or 'no version'}) → {len(instance.manifests)} manifest(s) "
@@ -2044,6 +2170,10 @@ def _scan2(gh_repo: str, text: str, where: str = "deployments/aks/x/values.x.yam
     scan.pins = [(repo, tag, where) for repo, tag in pins]
     scan.floating = [(repo, tag, where) for repo, tag in floating]
     scan.instances = [(ident, host, where) for ident, host in extract_overlay_instances(text)]
+    # Mirrors both production scanners — ARM 29 compares the call lists, and an out-of-scope arm
+    # driven over a harness that never extracts a foreign pin would be about nothing.
+    scan.foreign = [(host, repo, tag, where)
+                    for host, repo, tag in extract_foreign_pins(text)]
     return scan
 
 
@@ -2060,6 +2190,22 @@ memex_migration:
 ingress:
   enabled: true
   host: "memex.example.cloud"
+"""
+
+# 🚨 THE REAL SHAPE, taken from Systemorph/Memex deployments/aks/build/values.build.public.yaml on
+# 2026-09-13: a LIVE installation whose images are pinned in the fleet's own registry rather than
+# in the ACR this lane locks. The overlay pins two images; the ACR-scoped extractor sees ZERO.
+FIXTURE_OVERLAY_FOREIGN = """
+config:
+  memex_portal:
+    Hosting__Deployment: "build"
+portal:
+  image: "cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411"
+migration:
+  image: "cr.meshweaver.cloud/memex-migration:3.0.0-ci.8411"
+ingress:
+  enabled: true
+  host: "build.example.cloud"
 """
 
 INDEX = "application/vnd.oci.image.index.v1+json"
@@ -2512,7 +2658,7 @@ def self_test() -> int:
           any("could not be accounted for" in b for b in plan.blockers),
           "ARM 24: a silent installation neither red nor pointed at the roster")
     plan, fails, registry = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
-                                   roster={"memex-cloud": ("not-installed", "never stood up")},
+                                   roster={"memex-cloud": ("not-installed", "never stood up", "")},
                                    probe=_answers(None, "no such host"))
     check(not plan.blockers,
           f"ARM 24: a DECLARED not-installed instance still red: {plan.blockers}")
@@ -2569,6 +2715,77 @@ def self_test() -> int:
         check(not empty and problem,
               "ARM 24c: a MISSING retention record reported windows, or reported no problem — "
               "an unstatable window must say so, never print as an empty list")
+
+    # ── ARM 32: an installation served by ANOTHER REGISTRY is named, never read as pinning zero ─
+    # 🚨 THE LIVE CASE. On 2026-09-13 the scheduled run died saying installation `build` "pins no
+    # image at all" — while its overlay pinned two images in `cr.meshweaver.cloud`. The lane was
+    # red, nothing was locked, and `pause.reEnableWhen` reads "lock-pinned-digests is green", so
+    # the false sentence was standing between the fleet and re-enabling cleanup.
+    foreign_scan = _scan2("Systemorph/Memex", FIXTURE_OVERLAY_FOREIGN,
+                          "deployments/aks/build/values.build.public.yaml")
+    check([h for h, _, _, _ in foreign_scan.foreign] == ["cr.meshweaver.cloud"] * 2,
+          f"ARM 32: the foreign extractor did not see the two `cr.meshweaver.cloud` pins in the "
+          f"real overlay shape: {foreign_scan.foreign}")
+    check(not foreign_scan.pins,
+          f"ARM 32: the ACR extractor claimed a pin from a non-ACR registry: {foreign_scan.pins}")
+
+    plan, _, _ = _drive(clean1, clean2 + [foreign_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers())
+    check(any("cr.meshweaver.cloud" in b and "NOT in the registry this run" in b
+              for b in plan.blockers),
+          f"ARM 32: an UNDECLARED installation served by another registry did not red naming that "
+          f"registry: {plan.blockers}")
+    check(not any("pins no image at all" in b for b in plan.blockers),
+          "ARM 32: the run still says an overlay with two pins in it 'pins no image at all'. That "
+          "sentence is FALSE and it sends the reader to fix an extractor that is working")
+
+    # Declared: live, answering, counted, and NOT a blocker — but visible in its own line.
+    plan, _, _ = _drive(clean1, clean2 + [foreign_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(),
+                        roster={"build": ("live", "the fleet's own registry retains it",
+                                          "cr.meshweaver.cloud")})
+    check(not plan.blockers,
+          f"ARM 32: a DECLARED out-of-scope installation still blocked the run: {plan.blockers}")
+    check([i.id for i in plan.instances if i.out_of_scope] == ["build"],
+          "ARM 32: a declared out-of-scope installation was not marked as such, so it would be "
+          "counted among the answered and read as PROTECTED")
+
+    # A declaration naming a registry the overlay does not pin is stale, and a stale exemption
+    # hides the next one.
+    plan, _, _ = _drive(clean1, clean2 + [foreign_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(),
+                        roster={"build": ("live", "r", "ghcr.io")})
+    check(any("pins no image there" in b for b in plan.blockers),
+          f"ARM 32: a STALE registry declaration was honoured: {plan.blockers}")
+
+    # Half in is not out: an installation pinning in BOTH registries must be protected here.
+    both = _scan2("Systemorph/Memex",
+                  FIXTURE_OVERLAY_INSTANCE + '\nextra:\n'
+                  '  image: "cr.meshweaver.cloud/memex-migration:3.0.0-ci.8411"\n',
+                  "deployments/aks/half/values.half.public.yaml")
+    plan, _, _ = _drive(clean1, clean2 + [both], FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                        roster={"memex": ("live", "r", "cr.meshweaver.cloud")})
+    check(any("half in" in b for b in plan.blockers),
+          f"ARM 32: an installation pinning in BOTH registries was excused wholesale by a scope "
+          f"declaration, which would leave its ACR half unprotected: {plan.blockers}")
+
+    # The roster reader refuses the two shapes that turn a scope statement into an exemption.
+    with tempfile.TemporaryDirectory() as scratch:
+        folder = Path(scratch) / ".github" / "acr-retention"
+        folder.mkdir(parents=True)
+        (folder / ROSTER_PATH).write_text(
+            '{"instances": [{"id": "x", "state": "retired", "reason": "r",'
+            ' "registry": "cr.meshweaver.cloud"}]}', encoding="utf-8")
+        _, problems = read_instance_roster(scratch)
+        check(any("needs no scope statement" in problem for problem in problems),
+              f"ARM 32: a NON-LIVE entry carrying a `registry` was accepted: {problems}")
+        (folder / ROSTER_PATH).write_text(
+            '{"instances": [{"id": "x", "state": "live", "registry": "cr.meshweaver.cloud"}]}',
+            encoding="utf-8")
+        _, problems = read_instance_roster(scratch)
+        check(any("with no `reason`" in problem for problem in problems),
+              f"ARM 32: a scope declaration with no reason was accepted — saying an installation "
+              f"is out of reach without saying what protects it instead: {problems}")
 
     # ── ARM 31: the decided WINDOW is asserted on the record, and the assertion can fail ────────
     # 🚨 The control that matters is the one this repository's own record FAILED on 2026-09-13:
@@ -2640,7 +2857,7 @@ def self_test() -> int:
 
     # ── ARM 25: a roster entry naming nobody is a stale exemption, and reds ─────────────────────
     plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
-                        roster={"ghost": ("retired", "decommissioned in 2019")})
+                        roster={"ghost": ("retired", "decommissioned in 2019", "")})
     check(any("ghost" in b and "exempts nothing" in b for b in plan.blockers),
           f"ARM 25: a roster entry for an installation no overlay declares did not red: {plan.blockers}")
 
@@ -2772,7 +2989,7 @@ env:
           "unresolved tag / indeterminate / unreadable registry all RED with nothing released, "
           "release arm off by default and live when enabled, report-only writes nothing, a lock "
           "write that exits 0 without taking and one whose read-back cannot answer are both RED "
-          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction.")
+          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), it REDS undeclared, it is counted on its own line when declared, and a declaration is refused when it names a registry the overlay does not pin in, when the overlay ALSO pins in this ACR, on a non-live entry, and with no reason.")
     return 0
 
 
