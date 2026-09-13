@@ -121,6 +121,17 @@ repos:
         job: test-repos
         lane: node-repo-gate.yml
         grants: {contents: read, id-token: write}
+        pending: "being replaced by the actions: read grant of the fleet-process caller PR (2026-09-13); drop this row when it lands"
+      - workflow: ci.yml
+        job: test-repos
+        lane: node-repo-gate.yml
+        grants: {contents: read, id-token: write, actions: read}
+        pending: "the fleet-process caller PR (2026-09-13, core #4194) adds actions: read so the gate lane can adopt a green verdict; this row replaces the {contents: read, id-token: write} row when that PR lands"
+      - workflow: resolve-generated-conflicts.yml
+        job: resolve
+        lane: node-repo-resolve-locks.yml
+        grants: {contents: write, pull-requests: write}
+        pending: "the fleet-process caller PR (2026-09-13, core #4194) adds the resolve-generated-conflicts.yml caller of node-repo-resolve-locks.yml"
       # ── ci-failure ledger (MeshWeaver PR `ci/node-repo-ci-failure`, 2026-09-12) — ARRIVING. The lane lands
       # in core first so its `{contents: read, issues: write, actions: read}` demand is paired against the
       # caller template BEFORE any satellite wires it; each satellite's ci.yml wiring PR spends these two.
@@ -170,6 +181,17 @@ repos:
         job: test-repos
         lane: node-repo-gate.yml
         grants: {contents: read, id-token: write}
+        pending: "being replaced by the actions: read grant of the fleet-process caller PR (2026-09-13); drop this row when it lands"
+      - workflow: ci.yml
+        job: test-repos
+        lane: node-repo-gate.yml
+        grants: {contents: read, id-token: write, actions: read}
+        pending: "the fleet-process caller PR (2026-09-13, core #4194) adds actions: read so the gate lane can adopt a green verdict; this row replaces the {contents: read, id-token: write} row when that PR lands"
+      - workflow: resolve-generated-conflicts.yml
+        job: resolve
+        lane: node-repo-resolve-locks.yml
+        grants: {contents: write, pull-requests: write}
+        pending: "the fleet-process caller PR (2026-09-13, core #4194) adds the resolve-generated-conflicts.yml caller of node-repo-resolve-locks.yml"
       # ── ci-failure ledger (MeshWeaver PR `ci/node-repo-ci-failure`, 2026-09-12) — ARRIVING. The lane lands
       # in core first so its `{contents: read, issues: write, actions: read}` demand is paired against the
       # caller template BEFORE any satellite wires it; each satellite's ci.yml wiring PR spends these two.
@@ -223,6 +245,17 @@ repos:
         job: test-repos
         lane: node-repo-gate.yml
         grants: {contents: read, id-token: write}
+        pending: "being replaced by the actions: read grant of the fleet-process caller PR (2026-09-13); drop this row when it lands"
+      - workflow: ci.yml
+        job: test-repos
+        lane: node-repo-gate.yml
+        grants: {contents: read, id-token: write, actions: read}
+        pending: "the fleet-process caller PR (2026-09-13, core #4194) adds actions: read so the gate lane can adopt a green verdict; this row replaces the {contents: read, id-token: write} row when that PR lands"
+      - workflow: resolve-generated-conflicts.yml
+        job: resolve
+        lane: node-repo-resolve-locks.yml
+        grants: {contents: write, pull-requests: write}
+        pending: "the fleet-process caller PR (2026-09-13, core #4194) adds the resolve-generated-conflicts.yml caller of node-repo-resolve-locks.yml"
       # ── ci-failure ledger (MeshWeaver PR `ci/node-repo-ci-failure`, 2026-09-12) — ARRIVING. The lane lands
       # in core first so its `{contents: read, issues: write, actions: read}` demand is paired against the
       # caller template BEFORE any satellite wires it; each satellite's ci.yml wiring PR spends these two.
@@ -265,6 +298,17 @@ repos:
         job: test-repos
         lane: node-repo-gate.yml
         grants: {contents: read, id-token: write}
+        pending: "being replaced by the actions: read grant of the fleet-process caller PR (2026-09-13); drop this row when it lands"
+      - workflow: ci.yml
+        job: test-repos
+        lane: node-repo-gate.yml
+        grants: {contents: read, id-token: write, actions: read}
+        pending: "the fleet-process caller PR (2026-09-13, core #4194) adds actions: read so the gate lane can adopt a green verdict; this row replaces the {contents: read, id-token: write} row when that PR lands"
+      - workflow: resolve-generated-conflicts.yml
+        job: resolve
+        lane: node-repo-resolve-locks.yml
+        grants: {contents: write, pull-requests: write}
+        pending: "the fleet-process caller PR (2026-09-13, core #4194) adds the resolve-generated-conflicts.yml caller of node-repo-resolve-locks.yml"
       # ── ci-failure ledger (MeshWeaver PR `ci/node-repo-ci-failure`, 2026-09-12) — ARRIVING. The lane lands
       # in core first so its `{contents: read, issues: write, actions: read}` demand is paired against the
       # caller template BEFORE any satellite wires it; each satellite's ci.yml wiring PR spends these two.
@@ -311,6 +355,17 @@ repos:
         job: test-repos
         lane: node-repo-gate.yml
         grants: {contents: read, id-token: write}
+        pending: "being replaced by the actions: read grant of the fleet-process caller PR (2026-09-13); drop this row when it lands"
+      - workflow: ci.yml
+        job: test-repos
+        lane: node-repo-gate.yml
+        grants: {contents: read, id-token: write, actions: read}
+        pending: "the fleet-process caller PR (2026-09-13, core #4194) adds actions: read so the gate lane can adopt a green verdict; this row replaces the {contents: read, id-token: write} row when that PR lands"
+      - workflow: resolve-generated-conflicts.yml
+        job: resolve
+        lane: node-repo-resolve-locks.yml
+        grants: {contents: write, pull-requests: write}
+        pending: "the fleet-process caller PR (2026-09-13, core #4194) adds the resolve-generated-conflicts.yml caller of node-repo-resolve-locks.yml"
       # ── ci-failure ledger (MeshWeaver PR `ci/node-repo-ci-failure`, 2026-09-12) — ARRIVING. The lane lands
       # in core first so its `{contents: read, issues: write, actions: read}` demand is paired against the
       # caller template BEFORE any satellite wires it; each satellite's ci.yml wiring PR spends these two.
