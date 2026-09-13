@@ -74,6 +74,24 @@ public static class SeoEndpoints
     private static readonly ImmutableArray<string> CandidateNodeTypes = ["Store/Plugin", "Store/Catalog", "Space"];
 
     /// <summary>
+    /// The root enumeration for one candidate type: every TOP-LEVEL main of that type, mesh-wide,
+    /// uncapped.
+    ///
+    /// <para>🚨 The root filter is pushed DOWN, not applied afterwards (#4080). This used to be
+    /// <c>nodeType:{type} is:main limit:500</c> with <c>!Path.Contains('/')</c> on the client, so
+    /// once a type had more than 500 mains mesh-wide — every course installed into a user
+    /// partition is a <c>Space</c> main, every store plugin copy a <c>Store/Plugin</c> — which
+    /// roots landed inside the window was decided by storage order, and a public root silently
+    /// dropped out of the sitemap. Nothing errored: the endpoint is fail-open to fewer URLs, which
+    /// is exactly what made it invisible. <c>namespace:</c> with an EMPTY value is
+    /// <c>namespace = ''</c> on every backend (the home catalog's root leg is the other consumer),
+    /// so the storage returns only roots and there is nothing left to cap: the population is
+    /// bounded by the number of partitions, not by the number of mains.</para>
+    /// </summary>
+    internal static string RootCandidateQuery(string nodeType) =>
+        MeshWideQuery.Declare($"nodeType:{nodeType} is:main namespace: limit:all");
+
+    /// <summary>
     /// 🚨 WHAT COUNTS AS A PAGE below a public root — the node types whose instances are documents
     /// a person reads, as opposed to the data, code, releases and registrations a partition also
     /// holds. A reinsurance plugin's partition carries hundreds of amount types, cashflows, source
@@ -344,12 +362,9 @@ public static class SeoEndpoints
             .Select(type => accessService.RunAsSystem(() =>
                 // Mesh-wide by nature: the sitemap enumerates the partition ROOTS of every
                 // partition, so there is no partition to anchor to (#3202 — fan-out is opt-in).
-                mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    MeshWideQuery.Declare($"nodeType:{type} is:main limit:500")))
+                mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(RootCandidateQuery(type)))
                     .Take(1)
-                    .Select(change => change.Items
-                        .Where(n => !n.Path.Contains('/'))     // top-level roots only
-                        .ToList())))
+                    .Select(change => change.Items.ToList())))
             .ToObservable().Concat().ToList()
             .Select(lists => lists.SelectMany(l => l).DistinctBy(n => n.Path).ToList());
 

@@ -1,3 +1,4 @@
+using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Email;
 using Memex.Portal.Shared.Settings;
@@ -69,7 +70,8 @@ public class UnanchoredQueryCensusTest(ITestOutputHelper output) : MonolithMeshT
         yield return ("OutboundEmailSender.WatchQuery", OutboundEmailSender.WatchQuery);
         foreach (var q in WhatsNewSettingsTab.ListingQueries)
             yield return ("WhatsNewSettingsTab.ListingQueries", q);
-        yield return ("SeoEndpoints sitemap candidates", MeshWideQuery.Declare("nodeType:Space is:main limit:500"));
+        foreach (var type in new[] { "Store/Plugin", "Store/Catalog", "Space" })
+            yield return ("SeoEndpoints sitemap candidates (#4080: root push-down, uncapped)", SeoEndpoints.RootCandidateQuery(type));
         yield return ("MeshWeaverInstanceService id lookup", MeshWideQuery.Declare("nodeType:MeshWeaverInstance id:inst-1"));
 
         // ── platform (src/) ────────────────────────────────────────────────────────────────
