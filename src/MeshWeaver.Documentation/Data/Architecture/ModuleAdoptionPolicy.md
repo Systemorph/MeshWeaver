@@ -82,9 +82,84 @@ builds of one assembly name, so *"does it render"* is not evidence a bundle is c
 half — a module bundle never carrying a `MeshWeaver.*` copy the platform already ships, measured off
 the image rather than declared in a list — is
 [The Platform-Shipped Witness](../PlatformShippedWitness), and it probes the same two locations
-`MeshBuilder.ResolveModulePath` does, on purpose. Two things this fallback cannot reach: a riding
-copy that *does* load shadows the image copy, so the fallback never runs; and the sealed-set
-conflict below still HOLDS the roll for the whole fleet whatever one process does at boot.
+`MeshBuilder.ResolveModulePath` does, on purpose. One thing this fallback still cannot reach: the
+sealed-set conflict below HOLDS the roll for the whole fleet whatever one process does at boot. The
+other — a riding copy that *does* load, shadowing the image copy so the fallback never runs — is
+what the next section closes.
+
+## Two copies of one module: the FRAMEWORK IDENTITY decides (#4161)
+
+The fallback above runs when the store generation does **not** load. The harder case is the one
+where it **does**: the image ships a copy of a module, the store holds another copy of the same
+name, both link, and the wrong one wins. Until #4161 the boot union
+(`ModuleActivationBoot.ComputeEffectiveModuleEntries`, pass 1) made *every* enabled store entry
+whose landed DLL existed an override of the same-named `Modules:Assemblies` baseline entry. The
+DLL's existence was the only gate.
+
+Measured on memex-local, 2026-09-08/09 (Plugins#1483): the portal was built from source that day
+(`3.0.0-ci.0`) and its image shipped its own `MeshWeaver.Blazor.Views`, written `2026-09-07
+08:30:50Z`, mvid `8c833e20`. A store pack of the same module, built `2026-08-27 14:00:29Z`, mvid
+`a87ef06f`, displaced it:
+
+```
+[ModuleLoad] MeshWeaver.Blazor.Views ← /tmp/meshweaver-pinned-modules/…@96af4c59/…
+             (source=store, mvid=a87ef06f, written=2026-08-27 14:00:29Z)
+```
+
+The link probe passed, the module loaded, and its **view registrations** no longer matched the
+control types the platform emits — so the Subscribe panel's outermost control rendered as
+`StackControl { … }`: a whole-tree `ToString()`. Not a missing-view error, not a log line, just a
+page that reads as broken. **"Loadable" and "correct for this platform" are different properties,
+and the link probe only answers the first** — it asks whether the types a module *references* exist,
+and a view pack that registers views against types the platform no longer emits references nothing
+that is missing.
+
+**The rule.** When a store entry's recorded framework identity
+(`ModuleActivationEntry.FrameworkMvid`) differs from the identity the booting platform reports
+(`PrebuiltAssemblySeeder.LiveFrameworkMvid`) **and the image ships a copy of that same module**, the
+image's copy runs and the store copy is reported *declined: built for another platform* on the boot
+skip channel. The image's copy is correct for this platform by construction — it was compiled with
+it.
+
+**Three bounds, each of which is the rule and not a caution:**
+
+| Case | Verdict | Why |
+|---|---|---|
+| Identity **unrecorded** on either side | Unchanged — the store copy wins | R2: an unrecorded identity is absence of evidence, not evidence of difference, exactly as an unrecorded version is to the landing service. Reading it as a difference would decline every module landed before identities were recorded at all. Deliberately *not* `PrebuiltAssemblySeeder.DeclineReason`, which declines an absent identity — declining is the safe answer there and the damaging one here. |
+| **Store-only** module (the image ships none) | Unchanged — the store copy wins | There is nothing to prefer it to. A declined module is an **absent** module, which is strictly worse than one whose identity does not match; this is the same trade "an unusable one must not override" already makes. |
+| Identity **matches** | Unchanged — the store copy wins | The ordinary upgrade path (#2548) and the whole point of installing a module. The discriminator decides on a *difference*, never on being a store copy. |
+
+**This is not the declared floor returning (#3648).** The floor is a string a module's author *wrote*
+about a platform they never saw, compared by a comparator that ranks `ci < rc < clean` — which is
+why it cannot gate, and why re-arming it held every production portal on its morning build for all
+of 2026-09-07. The identity is what the producing toolchain **measured** about the bytes it emitted,
+compared against what this process measures about itself. And the consequences differ in kind: the
+floor **removed** modules; this only chooses between two copies the deployment already holds, and
+never where there is just one.
+
+**It is self-healing, and it cannot tear a replica set apart.** R3 lands a bundle whose served
+identity differs from the landed one at the same version (`ModuleUpdateDecision`), so the moment the
+registry serves this module built against this platform it lands and wins again — no operator step,
+no re-install. And every replica of a deployment runs one image, so every replica states one
+identity and reaches one verdict (#3395 holds).
+
+**The decline has to reach the loader, not just the log.** A baseline entry resolves through
+`MeshBuilder.ResolveModulePath`, whose probes are **landed root → image → app closure** and whose
+landed probe looks in the *fixed* `modules/<name>/<name>.dll`. Generation landing writes
+`modules/<name>@<gen>/`, so that probe misses on its own — but an entry from before generation
+landing carries no `Directory` and its bytes sit in exactly that folder, so the resolver would hand
+back the copy pass 1 had just declined, silently, with the decline line already printed. The
+baseline emitted in place of a declined store copy therefore carries
+`EffectiveModule.PreferImageCopy`, and `ResolveLoadPath` resolves it with **no landed root** —
+image → app closure. Every other baseline entry keeps the probe order it always had.
+
+The seam is explicit: the identity is a **parameter** of the pure computation, not something it
+reads from the process. The six-argument overload states none and declines nothing, which is what a
+host compiled against the previous platform binds — an optional parameter is a compile-time default
+and not a binary one, so a discriminator that silently read the process's own identity would change
+what those hosts do at their next boot with nothing in their diff. `ModuleIdentityDiscriminatorTest`
+(`test/MeshWeaver.Compiler.Pipeline.Test`) lands every copy through the real landing service and
+carries all three bounds as negative controls.
 
 ## A declined bundle risks stale TYPES, not just a slower boot
 

@@ -74,11 +74,18 @@ public sealed record ModuleActivationEntry
     public string? PreviousFrameworkMvid { get; init; }
 
     /// <summary>The framework MVID (MeshWeaver.Graph's ModuleVersionId) the landed assemblies
-    /// were built against, as the producer recorded it — DIAGNOSTIC metadata only: it names the
-    /// exact build behind the bytes when something needs debugging, but it is never a gate.
-    /// Modules bind by simple name and their contract is API compatibility, expressed by
-    /// <see cref="MinMeshVersion"/>; the strict MVID gate is bake semantics and belongs to the
-    /// NodeType assembly lane.</summary>
+    /// were built against, as the producer recorded it. It names the exact build behind the bytes
+    /// when something needs debugging — and since #4161 it is also the DISCRIMINATOR the boot
+    /// union uses to choose between TWO copies of one module: a store copy stating a different
+    /// identity from the booting platform's loses to the image's own copy of that same module
+    /// (<see cref="ModuleActivationBoot.ComputeEffectiveModuleEntries(IReadOnlyList{string}, ModuleActivationList, Func{string, string}, Func{ModuleActivationEntry, bool}, Action{string, string}, Action{string, string}, string)"/>).
+    ///
+    /// <para>🚨 That is a CHOICE BETWEEN COPIES, never a gate on a module: a Store-only module
+    /// loads whatever it was built against, because the alternative to a copy that may be wrong is
+    /// no copy at all. Modules still bind by simple name across platform builds, and their
+    /// declared contract is still <see cref="MinMeshVersion"/> — which decides nothing, by #3648.
+    /// The strict MVID gate, where a mismatch REFUSES outright, remains bake semantics and belongs
+    /// to the NodeType assembly lane.</para></summary>
     public string? FrameworkMvid { get; init; }
 
     /// <summary>The module's declared platform FLOOR (<c>minMeshVersion</c>) as recorded at
@@ -843,6 +850,28 @@ public sealed record EffectiveModule(string Entry, ModuleActivationEntry? Landed
     /// Init-only, for binary compatibility with hosts compiled against the two-argument record.
     /// </summary>
     public string? BaselineEntry { get; init; }
+
+    /// <summary>
+    /// 🚨 Resolve this BASELINE entry to the IMAGE's copy specifically, never to a landed one
+    /// (#4161) — set only on a baseline entry whose same-named store copy was DECLINED as built
+    /// for another platform, and never otherwise.
+    ///
+    /// <para><b>Without it the decline is a no-op for one layout.</b>
+    /// <see cref="ModuleActivationBoot.ResolveLoadPath(string, EffectiveModule)"/> sends a baseline entry through
+    /// <c>MeshBuilder.ResolveModulePath</c>, whose probes are <b>landed root → image → app
+    /// closure</b>, and whose landed probe looks in the FIXED
+    /// <c>modules/&lt;name&gt;/&lt;name&gt;.dll</c>. Landing writes GENERATIONS
+    /// (<c>modules/&lt;name&gt;@&lt;gen&gt;/</c>), so that probe misses for every
+    /// generation-landed module and the image copy wins by itself — but an entry from before
+    /// generation landing carries no <see cref="ModuleActivationEntry.Directory"/> and its bytes
+    /// sit in exactly that fixed folder, so the resolver would hand back the copy pass 1 had just
+    /// declined, silently and with the decline line already printed.</para>
+    ///
+    /// <para>Init-only, for binary compatibility with hosts compiled against the earlier record.
+    /// Default <c>false</c> = today's probe order, which is correct for every baseline entry that
+    /// displaced nothing.</para>
+    /// </summary>
+    public bool PreferImageCopy { get; init; }
 }
 
 /// <summary>
@@ -1028,8 +1057,13 @@ public static class ModuleActivationBoot
     ///     is simply already activated; or its LANDED DLL is missing per
     ///     <paramref name="landedModuleDllExists"/> (a lost volume / manual deletion — SKIPPED
     ///     loudly; a same-named app-closure DLL does not count). A skip is never a crash: the
-    ///     deployment must boot. A landed module's MVID is deliberately NOT a skip condition —
-    ///     modules bind by simple name across platform builds; the recorded MVID is diagnostic.
+    ///     deployment must boot. 🚨 Since #4161 there is a SECOND report on that channel, and it
+    ///     exists only on the seven-argument overload: a store copy whose recorded
+    ///     <see cref="ModuleActivationEntry.FrameworkMvid"/> differs from the identity the booting
+    ///     platform states is DECLINED where the image ships a copy of the same module, so the
+    ///     image's own copy runs. This overload states no identity and therefore declines nothing —
+    ///     see that overload's <c>liveFrameworkIdentity</c> for the three bounds and the reason a
+    ///     Store-only module and an unrecorded identity are both untouched.
     ///     🚨 Nor is its recorded <see cref="ModuleActivationEntry.MinMeshVersion"/> floor, since
     ///     #3648: an entry whose declared floor ranks above the running platform is handed to the
     ///     loader like any other, with the claim ANNOUNCED through <paramref name="onAdvisory"/>;
@@ -1070,10 +1104,81 @@ public static class ModuleActivationBoot
         Func<string?, string?> platformGate,
         Func<ModuleActivationEntry, bool> landedModuleDllExists,
         Action<string, string>? onSkipped = null,
-        Action<string, string>? onAdvisory = null)
+        Action<string, string>? onAdvisory = null) =>
+        ComputeEffectiveModuleEntries(baselineEntries, persisted, platformGate,
+            landedModuleDllExists, onSkipped, onAdvisory, liveFrameworkIdentity: null);
+
+    /// <summary>
+    /// <see cref="ComputeEffectiveModuleEntries(IReadOnlyList{string}, ModuleActivationList, Func{string, string}, Func{ModuleActivationEntry, bool}, Action{string, string}, Action{string, string})"/>
+    /// with the FRAMEWORK IDENTITY the booting platform reports stated explicitly (#4161) — the
+    /// one rule the six-argument shape cannot express, and the discriminator between two copies of
+    /// the same module. See <paramref name="liveFrameworkIdentity"/>.
+    /// </summary>
+    /// <param name="baselineEntries">The raw <c>Modules:Assemblies</c> values (may be null/empty).</param>
+    /// <param name="persisted">The sidecar list (may be null).</param>
+    /// <param name="platformGate">Words the declared-floor ADVISORY; skips nothing (#3648).</param>
+    /// <param name="landedModuleDllExists">Whether a persisted module's LANDED entry DLL exists.</param>
+    /// <param name="onSkipped">The loud channel, one call per persisted entry that does NOT become
+    /// effective, with (module name, reason) — a missing DLL, or a DECLINE per
+    /// <paramref name="liveFrameworkIdentity"/>.</param>
+    /// <param name="onAdvisory">The advisory channel (#3648), for EFFECTIVE entries only.</param>
+    /// <param name="liveFrameworkIdentity">
+    /// The framework build identity THIS process runs — production passes
+    /// <c>PrebuiltAssemblySeeder.LiveFrameworkMvid</c>, the same value every other consumer of the
+    /// identity reads, so no two gates can disagree about what "the framework identity" is.
+    ///
+    /// <para>🚨 <b>When it is stated, it DECIDES between an image copy and a store copy of the same
+    /// module</b> — and only then. A store entry whose recorded
+    /// <see cref="ModuleActivationEntry.FrameworkMvid"/> differs from this value is DECLINED when
+    /// (and only when) <paramref name="baselineEntries"/> ships a copy of that same module: the
+    /// image's own copy is preferred and the store copy is reported on
+    /// <paramref name="onSkipped"/>. Measured on memex-local 2026-09-08 (Plugins#1483): a
+    /// 2026-08-27 store pack of <c>MeshWeaver.Blazor.Views</c> displaced the image's same-day
+    /// source build, the link probe passed — linked types EXIST, which is a different property
+    /// from "correct for this platform" — the module loaded, and its view registrations no longer
+    /// matched the control types the platform emits, so the Subscribe panel's outermost control
+    /// rendered as <c>StackControl { … }</c>: a whole-tree <c>ToString()</c>.</para>
+    ///
+    /// <para>🚨 <b>Null or blank on EITHER side states nothing and decides nothing</b> — rule R2 of
+    /// <c>Doc/Architecture/ModuleAdoptionPolicy</c>: an unrecorded identity is absence of evidence,
+    /// not evidence of difference, exactly as an unrecorded VERSION is to
+    /// <see cref="ModuleLandingService"/>. This is deliberately NOT
+    /// <c>PrebuiltAssemblySeeder.DeclineReason</c>, which declines an absent identity: declining is
+    /// the safe answer there (the caller compiles either way) and the DAMAGING one here, where it
+    /// would refuse every module landed before identities were recorded at all.</para>
+    ///
+    /// <para>🚨 <b>Nor does it touch a Store-only module</b> (one the image ships no copy of). There
+    /// is nothing to prefer it TO, and declining would turn a module that works into one that is
+    /// absent — the strictly worse outcome that the "an unusable one must not override" rule below
+    /// exists to avoid.</para>
+    ///
+    /// <para>The decline is SELF-HEALING and needs no operator: the update reconcile lands a bundle
+    /// whose served identity differs from the landed one at the same version
+    /// (<see cref="ModuleUpdateDecision"/>, rule R3), so the moment the registry serves this module
+    /// built against this platform it lands and wins again. And it cannot tear a replica set
+    /// apart (#3395): every replica of a deployment runs one image, so every replica states one
+    /// identity and reaches one verdict.</para>
+    /// </param>
+    public static ImmutableList<EffectiveModule> ComputeEffectiveModuleEntries(
+        IReadOnlyList<string>? baselineEntries,
+        ModuleActivationList? persisted,
+        Func<string?, string?> platformGate,
+        Func<ModuleActivationEntry, bool> landedModuleDllExists,
+        Action<string, string>? onSkipped,
+        Action<string, string>? onAdvisory,
+        string? liveFrameworkIdentity)
     {
         var effective = ImmutableList.CreateBuilder<EffectiveModule>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // The module names the IMAGE ships. Pass 2 walks the same list for ORDER; this set answers
+        // MEMBERSHIP, which Pass 1's identity discriminator needs before Pass 2 has run: an image
+        // copy is the thing a declined store copy is preferred TO, and where the image ships none
+        // there is nothing to decline in favour of.
+        var imageShips = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var baseline in baselineEntries ?? [])
+            if (!string.IsNullOrWhiteSpace(baseline))
+                imageShips.Add(Path.GetFileNameWithoutExtension(baseline));
 
         // ── Pass 1: which enabled persisted entries are USABLE ──────────────────────────────────
         // A usable one OVERRIDES a same-named baseline entry (#2548); an unusable one must not,
@@ -1085,6 +1190,10 @@ public static class ModuleActivationBoot
         // that could not load was silently indistinguishable from one that was never installed.
         // Reporting it is the point — the operator needs to know the registry copy was refused.
         var overrides = new Dictionary<string, ModuleActivationEntry>(StringComparer.OrdinalIgnoreCase);
+        // The names whose store copy was DECLINED below, so pass 2 can pin the baseline it emits to
+        // the IMAGE's copy rather than letting the resolver's landed probe find the declined bytes
+        // again (EffectiveModule.PreferImageCopy).
+        var declined = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var module in persisted?.Entries ?? [])
         {
             if (!module.Enabled || string.IsNullOrWhiteSpace(module.Name))
@@ -1104,6 +1213,51 @@ public static class ModuleActivationBoot
                     $"its landed DLL '{RelativeLandedDll(module)}' does not exist "
                     + "(folder lost or never landed; a same-named app-closure DLL deliberately "
                     + "does NOT satisfy a store-installed entry) — re-install the module");
+                continue;
+            }
+
+            // 🚨 #4161 — THE FRAMEWORK IDENTITY DECIDES BETWEEN TWO COPIES OF ONE MODULE, and the
+            // DLL's existence does not. Where the image ships its own copy of this module and the
+            // store copy states it was built against a DIFFERENT framework build, the image's copy
+            // is the one that is correct for this platform BY CONSTRUCTION — it was compiled with
+            // it — and the store copy is declined in its favour.
+            //
+            // What made this necessary: nothing upstream could see the difference. The link probe
+            // in MeshBuilder.InstallAssemblies answers "do this module's linked types exist", which
+            // is a DIFFERENT property from "is this module correct for this platform" — a view pack
+            // links fine and still registers views against control types the platform no longer
+            // emits. Measured on memex-local 2026-09-08 (Plugins#1483): a 2026-08-27 pack of
+            // MeshWeaver.Blazor.Views displaced the image's same-day source build, linked, loaded,
+            // and rendered the Subscribe panel's outermost control as `StackControl { … }` — a
+            // whole-tree ToString(), which reads to a user as a broken page and to a log reader as
+            // nothing at all.
+            //
+            // 🚨 Three bounds, each of which is a rule and not a caution:
+            //   • UNRECORDED on either side states nothing (rule R2) — an unrecorded identity is
+            //     absence of evidence, not evidence of difference, and reading it as a difference
+            //     would decline every module landed before identities were recorded.
+            //   • A STORE-ONLY module is never declined: with no image copy there is nothing to
+            //     prefer it to, and a declined module is an ABSENT module — the strictly worse
+            //     outcome the "an unusable one must not override" rule above exists to avoid.
+            //   • It is the DECLARED floor's opposite number, not its return (#3648). The floor is
+            //     a string the module's author WROTE about a platform they never saw, which is why
+            //     it cannot gate; the identity is what the producing toolchain MEASURED about the
+            //     bytes it emitted, and it is compared against what this process measures about
+            //     itself. Re-arming the floor here would hold the fleet again; this cannot — it
+            //     never removes a module, it only prefers the copy the image already ships.
+            if (!string.IsNullOrWhiteSpace(liveFrameworkIdentity)
+                && !string.IsNullOrWhiteSpace(module.FrameworkMvid)
+                && !string.Equals(module.FrameworkMvid, liveFrameworkIdentity, StringComparison.Ordinal)
+                && imageShips.Contains(module.Name))
+            {
+                onSkipped?.Invoke(module.Name,
+                    $"declined: built for another platform (framework {module.FrameworkMvid}; this "
+                    + $"deployment runs {liveFrameworkIdentity}) — the image's own copy runs "
+                    + "instead. Its DLL exists and its types link, and neither of those says its "
+                    + "registrations match the types this platform emits (#4161). No action is "
+                    + "needed: publish this module built against this platform and the next "
+                    + "reconcile lands it and it wins again.");
+                declined.Add(module.Name);
                 continue;
             }
 
@@ -1131,7 +1285,7 @@ public static class ModuleActivationBoot
             // generation came to shadow the working image copy (memex.systemorph.com, 2026-09-08).
             effective.Add(overrides.TryGetValue(name, out var winner)
                 ? new EffectiveModule(winner.Name + ".dll", winner) { BaselineEntry = entry }
-                : new EffectiveModule(entry, Landed: null));
+                : new EffectiveModule(entry, Landed: null) { PreferImageCopy = declined.Contains(name) });
         }
 
         // ── Pass 3: usable persisted entries with no baseline counterpart, in persisted order ────
@@ -1405,7 +1559,12 @@ public static class ModuleActivationBoot
     public static string ResolveLoadPath(string baseDirectory, EffectiveModule module) =>
         module.Landed is not null
             ? LandedDllPath(baseDirectory, module.Landed)
-            : MeshBuilder.ResolveModulePath(module.Entry, baseDirectory);
+            // 🚨 #4161 — a baseline that DISPLACED a declined store copy resolves with NO landed
+            // root, so the probe order is image → app closure. See EffectiveModule.PreferImageCopy:
+            // the landed probe's fixed modules/<name>/ folder is exactly where a pre-generation
+            // landing's bytes sit, and handing those back would undo the decline in silence.
+            : MeshBuilder.ResolveModulePath(
+                module.Entry, module.PreferImageCopy ? null : baseDirectory);
 
     /// <summary>The entry's landed DLL as the deployment-relative path a skip report names —
     /// the generation directory when the entry carries one, else the legacy fixed folder.</summary>
