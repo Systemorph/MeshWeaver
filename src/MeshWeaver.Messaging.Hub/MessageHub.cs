@@ -996,7 +996,13 @@ public sealed class MessageHub : IMessageHub
     /// LogLevel.Trace flooding. Tuned so chat / layout / routing hops only log
     /// when something is genuinely slow.
     /// </summary>
-    private static readonly long SlowDispatchTicks = (long)(TimeSpan.TicksPerMillisecond * 500);
+    // 🚨 In STOPWATCH ticks, because it is compared against `Stopwatch.GetTimestamp()` deltas
+    // (below). It used to be `TimeSpan.TicksPerMillisecond * 500` — 100-ns ticks — which on Linux
+    // (Stopwatch.Frequency = 1e9) is 5 ms, so every dispatch over 5 ms logged as SLOW: 366 lines
+    // per package install, 16,000 lines per gate shard, all at Information (measured
+    // 2026-09-13 on Plugins run 34731952463). The threshold the comment above describes — 500 ms
+    // — is what this now is, on every platform.
+    private static readonly long SlowDispatchTicks = Stopwatch.Frequency / 2;
 
     // Reactive end-to-end: IObservable, no async/await, no Task in the signature.
     // Runs INLINE on the turn thread (Defer → factory on Subscribe); a synchronous
