@@ -39,6 +39,91 @@ A hub whose initialization throws must:
    must not deactivate the grain, and a `DeliveryFailure` must never beget another (storm). This is
    the same bypass set `MessageService` applies at the gate.
 
+## A TRANSIENT infrastructure fault retires the activation instead — #4067 / #4068
+
+The FAILED state is the right outcome for a fault that belongs to the activation: a NodeType that
+does not compile, a handler that throws, a data source that is misconfigured. No retry would
+change it, and a terminal answer is honest. It is the wrong outcome in kind for a **transient
+infrastructure fault** — the database unreachable, a host name that did not resolve, a
+connection attempt that timed out. Nothing about the activation is broken; the dependency was
+away for a moment. Latching the activation for it turned a two-minute DNS blip into "this address
+is broken until the process restarts": every later request answered with a terminal
+`DeliveryFailure`, the data streams errored, nothing ever re-run.
+
+Measured: memex-cloud, 2026-09-12 06:19–06:21Z — three `DataContext` initializations failed on
+`SocketException: Name or service not known` inside `NpgsqlConnector.ConnectAsync` and stayed
+FAILED (#4068); memex, 2026-08-23 → 2026-09-12 — 19 `sync/*` BuildupActions failed on
+`NpgsqlException: Failed to connect … ---> TimeoutException` across four pods, each leaving its
+hub refusing (#4067).
+
+### The rule
+
+**A hub that demand routing re-creates does not latch a transient fault — it retires.** Both
+seams — `MessageHub.HandleInitialize` (a BuildupAction faulted) and
+`DataContext.SettleInitializationGate` (a data source's initial load faulted) — ask
+`InfrastructureFault.IsTransient(ex)` first, and for a hub declared
+`WithReactivationOnDemand()`:
+
+1. `Dispose()` — FIRST, so every refusal that follows is classified
+   `ErrorType.ShuttingDown` (the reporters read `IsShuttingDown`) and carries this activation's
+   identity;
+2. `FailGate(gate, reason)` — SECOND, so whatever is parked behind the init gate is answered NOW
+   with the SPECIFIC cause in the owner's refusal vocabulary (`Hub X is shutting down — its
+   initialization met a transient infrastructure fault (NpgsqlException: …) and this activation
+   is retired. The address may reactivate; retry to get the authoritative answer.`) rather than
+   the teardown's generic "Hub is shutting down" later;
+3. **no `InitializationError`, no rejection handler, no errored streams** — the marker describes
+   an activation that stays, and this one is going away.
+
+The next delivery to the address activates a fresh hub whose initialization runs again against
+the dependency that has come back. That is the same contract every recycle already carries, and
+every caller already rides it out: the paced re-probe in `GetMeshNodeOutcome`, the
+resubscribe latch in `SynchronizationStream`, the `OwnerDisposing` re-enqueue on the write path.
+Under a sustained outage each demand-driven activation pays one connection timeout and is
+retired — no latch, and no storm either, because the caller's re-probe is paced and bounded and
+ends in `AddressRecyclingException`, which is the honest answer while the database is away.
+
+`WithReactivationOnDemand()` is declared in the ONE funnel every per-node activation passes,
+`NodeTypeRebindWatcher.WithNodeTypeRebind` (Monolith routing and `MessageHubGrain` alike).
+
+### What is transient
+
+`InfrastructureFault.IsTransient` walks the inner-exception chain (so a reflective wrapper or an
+"initialization failed" wrapper does not hide the cause) for a `System.Data.Common.DbException`
+whose own `IsTransient` says so — every ADO.NET provider classifies its connection failures and
+timeouts there; Npgsql sets it for exactly the two shapes measured, with no provider reference
+needed in core — or a bare `SocketException`. A `TimeoutException` on its own is NOT transient:
+the init time-box mints one for a hang, and a hang is a defect. A provider that leaves
+`IsTransient` false has made its own classification, which is honoured.
+
+🚨 **An `AggregateException` is transient only when EVERY branch is.** A `DataContext` initialises
+its data sources under `Task.WhenAll`, so one aggregate can carry a connection timeout from one
+source and a genuine defect from another; reading "any branch transient" as transient would
+retire the activation, discard the defect, and re-run the same failing initialization on every
+reactivation — a latch traded for a loop. A mixed aggregate keeps the latch, whose recorded error
+still carries the transient branch. The full corpus — both incident shapes, the wrappers, the bare
+`TimeoutException`, the non-transient provider fault, all-transient / mixed / nested / empty
+aggregates, a cyclic chain — is `InfrastructureFaultTest`.
+
+### What keeps the latch, and why
+
+A hub **without** `WithReactivationOnDemand()` keeps the FAILED latch on the same fault, and its
+log line now says so explicitly (*"The cause is a TRANSIENT infrastructure fault, but this hub is
+not re-created on demand … so it stays FAILED until it is recycled or the process restarts"*):
+
+- **the root mesh hub** — built once for the process, disposed only by the host; retiring it
+  would not bring it back. A root whose DataContext cannot reach the store at boot is a
+  process-level condition, and the recovery is the process (readiness, restart). The three
+  `mesh/…` ids in #4068 are three boots of one pod, i.e. exactly that recovery happening.
+- **a hub owned by a live object** — a synchronization stream's `sync/*` sub-hub is re-created
+  by the stream's owner's own recovery (a faulted cache entry is evicted on the next read and
+  re-created), not by routing. Retiring it from underneath the stream would replace a terminal
+  fault its owner already handles with a completion its owner does not.
+
+Pinned by `MeshWeaver.Data.Test.TransientInitializationFaultRetiresTheActivationTest` — both
+seams, plus the control without the declaration. Falsified by reverting the two seams: the
+positive cases then fail with `ErrorType.Failed` (the latch) while the controls stay green.
+
 ## Where it lives
 
 `MessageHub.HandleInitialize` wraps the BuildupAction composition in a **liveness bound plus** a
@@ -54,6 +139,10 @@ return Observable
     .Select(_ => { OpenGate(MessageHubConfiguration.InitializeGateName); return request.Processed(); })
     .Catch((Exception ex) =>
     {
+        if (IsShuttingDown || this.IsTerminatedByScopeTeardown(ex))
+            …                                                   // a recognised shutdown, no failure state
+        if (InfrastructureFault.IsTransient(ex) && TryRetireAfterTransientInitializationFault(ex))
+            return Observable.Return(request.Processed());      // retired, not latched — see below
         var reason = ex is TimeoutException
             ? "a BuildupAction did not complete within …s (a hung dependency or stuck compile)"
             : $"a BuildupAction faulted ({ex.GetType().Name}: {ex.Message})";
