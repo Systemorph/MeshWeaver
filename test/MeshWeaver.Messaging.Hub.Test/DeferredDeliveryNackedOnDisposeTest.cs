@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
@@ -44,7 +45,14 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
 
     public DeferredDeliveryNackedOnDisposeTest(ITestOutputHelper output) : base(output)
     {
-        Services.AddLogging(l => l.Services.AddSingleton<ILoggerProvider>(log));
+        Services.AddLogging(l =>
+        {
+            l.Services.AddSingleton<ILoggerProvider>(log);
+            // Event 7301 is asserted at BOTH levels here, so the capture must be able to SEE a
+            // Debug line — otherwise "the Error is gone" and "the line vanished entirely" read
+            // identically and the self-addressed test would pass having checked nothing.
+            l.AddFilter<DeferredLog>(null, LogLevel.Debug);
+        });
     }
 
     private record GatedRequest : IRequest<GatedResponse>;
@@ -100,12 +108,74 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
         failure.Failure!.ErrorType.Should().Be(ErrorType.ShuttingDown);
         failure.Failure.Message.Should().Contain("test-never-opens",
             "the shutdown answer must name the gates recorded before teardown opened them");
-        log.Messages.Should().Contain(message => message.Contains("test-never-opens"),
-            "event 7301 must preserve the gate that actually held the delivery (#3712)");
+        log.At(LogLevel.Error).Should().Contain(message => message.Contains("test-never-opens"),
+            "event 7301 must preserve the gate that actually held the delivery (#3712), and a "
+            + "delivery from ANOTHER hub strands a real waiter on a transient NACK — that stays "
+            + "an Error (the control for the self-addressed case below, #4178)");
 
         failure.Failure.Message.Should().Contain("deferred",
             "the NACK must name WHY the message was abandoned — a bare failure sends the next "
             + "investigator hunting the wrong layer");
+    }
+
+    private static readonly Address SelfTalkerAddress = new("self-talker", "1");
+
+    /// <summary>
+    /// Systemorph/MeshWeaver#4178 — the <c>$model-probe</c> shape. A hub disposed with its OWN
+    /// deferred request strands NOBODY, so event 7301 must report it at Debug, not Error.
+    ///
+    /// <para><b>Why it is not a silenced fault.</b> <c>NackThroughParent</c> declines this
+    /// delivery one method down with <c>NACK_DECLINED reason=sender-is-self</c> — there is no
+    /// external registry to post an answer to, because the pending-response registry that would
+    /// resolve it is this hub's own and is cancelled in the same <c>Dispose</c>. So the Error's
+    /// sentence "the sender is answered ShuttingDown" was false for this shape, and the defect it
+    /// told the reader to hunt has no victim. Production measurement in #4178: 76 such lines per
+    /// plugin-gate shard, every one a <c>$model-probe/{guid}</c> discarding its own
+    /// <c>GetDataRequest</c> — a lifetime <c>TransientNodeProbe</c> declares by design.</para>
+    ///
+    /// <para><b>Negative control.</b> The Debug line is asserted POSITIVELY (it must exist, and
+    /// name the gate), so "classified as teardown-normal" cannot be confused with "the site stopped
+    /// reporting". The external-sender Error is pinned by the test above, on the same event id.</para>
+    /// </summary>
+    // No literal method timeout: every wait below carries TestTimeouts.Convergence, which is the
+    // reasoned bound, and xunit.runner.json's methodTimeout bounds the body. A hand-written
+    // `Timeout = 30_000` here would be a guessed wait on top of a measured one
+    // (TestTimeoutLiteralRatchetGuard).
+    [Fact]
+    public async Task SelfAddressedDeferredRequest_IsTeardownNormal_NotAnError()
+    {
+        var host = GetHost();
+
+        var selfTalker = host.GetHostedHub(
+            SelfTalkerAddress,
+            c => c.WithTypes(typeof(GatedRequest), typeof(GatedResponse))
+                // The hub posts on its own behalf below; PostPipeline fails closed with no
+                // AccessContext, so the infrastructure identity is what a probe hub carries too.
+                .WithPostingIdentity(PostingIdentity.System)
+                .WithInitializationGate("self-gate-never-opens", _ => false)
+                .WithHandler<GatedRequest>((h, d) =>
+                {
+                    h.Post(new GatedResponse(), o => o.ResponseFor(d));
+                    return d.Processed();
+                }));
+        selfTalker.Should().NotBeNull();
+
+        // THE SHAPE: the hub posts to ITSELF, so Sender == Target == this hub's address —
+        // byte-for-byte the production line's "Hub $model-probe/x … (from $model-probe/x)".
+        selfTalker!.Post(new GatedRequest(), o => o.WithTarget(SelfTalkerAddress));
+
+        await WaitForDeferredBacklog(host);
+
+        host.Post(new DisposeRequest(), o => o.WithTarget(SelfTalkerAddress));
+        await selfTalker.DisposalCompleted.FirstAsync().Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        log.At(LogLevel.Debug).Should().Contain(m => m.Contains("self-gate-never-opens"),
+            "the discard must STILL be reported and still name the gate that held it — a "
+            + "reclassification that stops reporting would be a silenced fault, not a classification");
+        log.At(LogLevel.Error).Should().NotContain(m => m.Contains("self-gate-never-opens"),
+            "the sender IS this hub, so no answer is owed outside it and NackThroughParent declines "
+            + "it as sender-is-self — an Error here alleges stranded work that has no waiter (#4178)");
     }
 
     /// <summary>
@@ -126,19 +196,26 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
     }
     private sealed class DeferredLog : ILoggerProvider
     {
-        public ConcurrentQueue<string> Messages { get; } = new();
-        public ILogger CreateLogger(string categoryName) => new Capture(Messages);
+        public ConcurrentQueue<(LogLevel Level, string Message)> Lines { get; } = new();
+
+        /// <summary>Event 7301 messages, any level — what the original assertions read.</summary>
+        public IEnumerable<string> Messages => Lines.Select(l => l.Message);
+
+        public IEnumerable<string> At(LogLevel level) =>
+            Lines.Where(l => l.Level == level).Select(l => l.Message).ToArray();
+
+        public ILogger CreateLogger(string categoryName) => new Capture(Lines);
         public void Dispose() { }
 
-        private sealed class Capture(ConcurrentQueue<string> messages) : ILogger
+        private sealed class Capture(ConcurrentQueue<(LogLevel, string)> lines) : ILogger
         {
             public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-            public bool IsEnabled(LogLevel level) => level >= LogLevel.Error;
+            public bool IsEnabled(LogLevel level) => level >= LogLevel.Debug;
             public void Log<TState>(LogLevel level, EventId eventId, TState state,
                 Exception? exception, Func<TState, Exception?, string> formatter)
             {
                 if (eventId.Id == 7301)
-                    messages.Enqueue(formatter(state, exception));
+                    lines.Enqueue((level, formatter(state, exception)));
             }
         }
     }
