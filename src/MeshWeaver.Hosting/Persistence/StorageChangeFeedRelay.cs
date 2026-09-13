@@ -16,11 +16,25 @@ namespace MeshWeaver.Hosting.Persistence;
 /// memory or re-running logical event consumers on every replica.
 /// </summary>
 /// <remarks>
-/// The relay is owned by the mesh-scoped <see cref="InProcessMeshChangeFeed"/> and dies with it.
-/// Missing create/update metadata is resolved by one authoritative storage read before the event
-/// reaches type-filtering consumers. Reads remain reactive and are serialised with
-/// <see cref="Observable.Concat{TSource}(IObservable{IObservable{TSource}})"/> so notification order
-/// is preserved while a backend I/O leaf is in flight.
+/// <para>The relay is owned by the mesh-scoped <see cref="InProcessMeshChangeFeed"/> and dies with
+/// it. A notification that carries what the consumers need — the node itself, or the
+/// <see cref="DataChangeNotification.NodeType"/> + <see cref="DataChangeNotification.Version"/>
+/// hints, or a delete — is relayed at once, in arrival order. A create/update that carries none of
+/// it (the mixed-version rollout: an older backend payload with only path/op, or a backend-private
+/// descriptor) needs one authoritative storage read before a consumer that filters on type sees
+/// it.</para>
+///
+/// <para>🚨 That read goes through <see cref="ReReadCoalescing"/> — THE coalescer the per-node hub's
+/// own reconcile in <c>MeshDataSource</c> already uses — per path: a burst of notifications on one
+/// path collapses to at most one read per quiet <see cref="ReReadCoalescing.Window"/>, the LAST
+/// notification of a burst always reads, and the reads on a path are serialised. The relay once
+/// read ahead of that coalescer, once per notification, and a burst of 200 entity-less
+/// notifications on one path cost 201 reads instead of a handful — a notification storm turned
+/// into a read storm on every replica (#4139, the shape #223 guards against). A path's group
+/// closes the moment it has been quiet for the same window, so an idle process holds no state per
+/// path ever notified, and a read that fails, stays silent past its bound, or finds no row still
+/// emits a path-only version-zero invalidation, so one backend fault cannot leave the replica's
+/// exact-path cache untouched.</para>
 /// </remarks>
 internal sealed class StorageChangeFeedRelay : IDisposable
 {
@@ -52,22 +66,29 @@ internal sealed class StorageChangeFeedRelay : IDisposable
         this.scheduler = scheduler ?? Scheduler.Default;
 
         subscription = storage.Changes
-            // Defer the whole conversion, not only the optional storage read. A malformed
-            // notification (for example an enum value from a newer backend) can throw while
-            // Resolve builds its observable; without Defer that synchronous throw terminates the
-            // outer Changes subscription and this replica misses every later commit.
-            .Select(notification => Observable.Defer(() => Resolve(notification))
-                .Catch((Exception ex) =>
-                {
-                    logger?.LogWarning(ex,
-                        "Storage change-feed relay could not enrich {Kind} {Path}; "
-                        + "publishing a path-only invalidation and continuing",
-                        notification.Kind, notification.Path);
-                    return TryPathOnly(notification, out var fallback)
-                        ? Observable.Return(fallback)
-                        : Observable.Empty<MeshChangeEvent>();
-                }))
-            .Concat()
+            .Select(Classify)
+            .Where(arrival => arrival.Path.Length > 0)
+            .Publish(arrivals => arrivals
+                // Self-contained: relayed in arrival order, nothing to wait for.
+                .Where(arrival => !arrival.NeedsCompatibilityRead)
+                .SelectMany(arrival => Observable.Defer(() =>
+                        Observable.Return(ToMeshChange(arrival.Notification, arrival.Node)))
+                    .Catch((Exception ex) => PathOnlyFallback(arrival.Notification, ex)))
+                // Entity-less create/update without hints: ONE coalesced read per path per quiet
+                // window, never one per notification. A path's group lives (quiet window + read
+                // bound) past its last notification: the coalesced read starts at the window and
+                // is over — answered, faulted or timed out — by the bound, so a notification that
+                // arrives while a read is in flight joins the SAME group and queues behind it.
+                // Reads on a path are serialised by construction, and a path that fell silent
+                // holds no state.
+                .Merge(arrivals
+                    .Where(arrival => arrival.NeedsCompatibilityRead)
+                    .GroupByUntil(
+                        arrival => arrival.Path,
+                        group => group.Throttle(
+                            ReReadCoalescing.Window + this.legacyReadTimeout, this.scheduler),
+                        StringComparer.OrdinalIgnoreCase)
+                    .SelectMany(group => group.CoalesceReReads(ReadThenResolve, this.scheduler))))
             .Subscribe(
                 PublishSafely,
                 ex => logger?.LogError(ex,
@@ -75,29 +96,53 @@ internal sealed class StorageChangeFeedRelay : IDisposable
                     + "storage-backed cache invalidations"));
     }
 
-    private IObservable<MeshChangeEvent> Resolve(DataChangeNotification notification)
+    /// <summary>
+    /// One notification as it arrived, classified ONCE: the path it names, the node its entity
+    /// carries (when it carries one), and whether a compatibility read is owed.
+    /// </summary>
+    private readonly record struct Arrival(DataChangeNotification Notification, string Path, MeshNode? Node)
     {
-        var path = NormalizePath(notification.Path);
-        if (string.IsNullOrEmpty(path))
-            return Observable.Empty<MeshChangeEvent>();
+        /// <summary>
+        /// A create/update whose entity is not the node and whose hints are incomplete. During the
+        /// additive rollout an older backend payload carries only path/op, and the PostgreSQL
+        /// listener carries a backend-private descriptor; a consumer that filters on NodeType
+        /// (<c>NodeTypeRebindWatcher</c>) or gates on Version (the remote-stream resubscribe) must
+        /// never see an "unknown" create/update merely because the notifier was upgraded second.
+        /// </summary>
+        public bool NeedsCompatibilityRead =>
+            Node is null
+            && Notification.Kind is DataChangeKind.Created or DataChangeKind.Updated
+            && (string.IsNullOrEmpty(Notification.NodeType) || !Notification.Version.HasValue);
+    }
 
-        var node = notification.Entity.As<MeshNode>(
-            readOptions, logger, $"storage notification {path}");
-        if (node is not null)
-            return Observable.Return(ToMeshChange(notification, node));
+    private Arrival Classify(DataChangeNotification notification)
+        // No logger on purpose: a foreign entity is the DESIGNED shape of the PostgreSQL feed (a
+        // ChangedNodeDescriptor, never a MeshNode), so "not convertible" here is a classification,
+        // not a fault — with a logger it was one Error line per NOTIFY per replica. A payload that
+        // fails to parse is not lost: it takes the coalesced read, and THAT logs when it fails.
+        => new(notification, NormalizePath(notification.Path),
+            notification.Entity.As<MeshNode>(readOptions));
 
-        if (notification.Kind == DataChangeKind.Deleted
-            || (!string.IsNullOrEmpty(notification.NodeType) && notification.Version.HasValue))
-            return Observable.Return(ToMeshChange(notification, null));
+    private IObservable<MeshChangeEvent> ReadThenResolve(Arrival arrival)
+        => Observable.Defer(() => storage.Read(arrival.Path, readOptions)
+                .Take(1)
+                .Timeout(legacyReadTimeout, scheduler)
+                .DefaultIfEmpty(null)
+                .Select(nodeAtCommit => ToMeshChange(arrival.Notification, nodeAtCommit)))
+            // Inside the coalescer's serialised queue a fault must resolve to a value or to
+            // nothing — never propagate — or the queue terminates and this path stops relaying.
+            .Catch((Exception ex) => PathOnlyFallback(arrival.Notification, ex));
 
-        // During the additive rollout an older backend payload carries only path/op (or a
-        // backend-private descriptor). Re-read once so consumers that filter by NodeType never
-        // see an "unknown" create/update merely because the notifier was upgraded second.
-        return storage.Read(path, readOptions)
-            .Take(1)
-            .Timeout(legacyReadTimeout, scheduler)
-            .DefaultIfEmpty(null)
-            .Select(nodeAtCommit => ToMeshChange(notification, nodeAtCommit));
+    private IObservable<MeshChangeEvent> PathOnlyFallback(
+        DataChangeNotification notification, Exception ex)
+    {
+        logger?.LogWarning(ex,
+            "Storage change-feed relay could not enrich {Kind} {Path}; "
+            + "publishing a path-only invalidation and continuing",
+            notification.Kind, notification.Path);
+        return TryPathOnly(notification, out var fallback)
+            ? Observable.Return(fallback)
+            : Observable.Empty<MeshChangeEvent>();
     }
 
     private void PublishSafely(MeshChangeEvent change)

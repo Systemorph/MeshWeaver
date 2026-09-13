@@ -199,6 +199,28 @@ Orleans broadcast during the additive rollout:
    event. That compatibility read has a five-second bound. An error, silence or missing row still
    emits a path-only version-zero invalidation, so one backend fault cannot wedge the serial relay
    or leave the replica's exact-path cache untouched.
+
+   🚨 **The compatibility read is coalesced per path, through the ONE coalescer**
+   (`ReReadCoalescing` in `MeshWeaver.Mesh.Contract`: a 50 ms `Throttle` that always emits the
+   LAST trigger of a burst, then `Concat` so reads on a path are serialised) — the same operator
+   and the same window the per-node hub's own reconcile in `MeshDataSource` has used since #1440.
+   The relay first shipped reading ONCE PER NOTIFICATION, ahead of any coalescer, and the plugins
+   suite's read-storm guard (`CrossProcessChangeFeedTest.AnEntitylessBurst…`, which measures that
+   window by name) went red on the first set carrying it: 200 entity-less notifications on one
+   path cost **801** reads against a query-layer baseline of 600 — 200 relay reads plus the one
+   coalesced reconcile read, **201** where the contract is "a handful" (< 20). That is the #223
+   shape — a notification storm turned into a read storm — on every replica, for every bulk import
+   under the older notifier (#4139). A path's group lives (window + read bound) past its last
+   notification, so a burst that lands while a read is in flight queues behind it rather than
+   racing it, and an idle path holds no state. A second coalescer with a second window is how this
+   comes back with a different number: both callers reference `ReReadCoalescing.Window`.
+
+   The PostgreSQL listener today carries a backend-private `ChangedNodeDescriptor` (path + node
+   type) as the entity and sets neither hint, so **every** production NOTIFY takes the coalesced
+   read on every replica until the plugins module sets `DataChangeNotification.NodeType` and
+   `Version` from the payload — the follow-up #4104's body names. The relay classifies that
+   descriptor silently: a foreign entity is the feed's designed shape, not a fault (the first relay
+   logged it at `Error`, once per NOTIFY per replica).
 2. **A relay, not a grain.** The mesh-scoped `InProcessMeshChangeFeed` owns one
    `StorageChangeFeedRelay`, which subscribes
    `IStorageAdapter.Changes` and relays each notification into
@@ -290,7 +312,7 @@ checked against it:
 | pod-hub claim: indefinite, derived lifetime, `Warning` where grains can be hosted | **landed** — #2745 | closed the #1742 residual *"a claim that fails to land degrades silently"*; core only |
 | routing: transient NACK on `PodHubNotHere`; fallback gated on declared client-hosted types | **landed** — #2745 | closed #2320, #2322, #2406 as *made unreachable*. Shipped with slice 1 rather than after a clean roll — see *The N+2 gate* above for why the two together satisfy it by construction |
 | owner-side eviction re-gated on the `TargetUnserved` STAMP alone | **landed with the slice above** | required by it: gating on `NotFound` would have made the new verdict inert and re-opened #2426/#2546 |
-| `DataChangeNotification.NodeType/Version` + `StorageChangeFeedRelay` | **implemented in the first core slice** | relay owns the mixed-version reread; tests pin the logical/invalidation boundary, old-payload recovery, per-event failure isolation and two independent replica feeds |
+| `DataChangeNotification.NodeType/Version` + `StorageChangeFeedRelay` | **implemented in the first core slice**; the compatibility read coalesced per path in the second (#4139) | relay owns the mixed-version reread through `ReReadCoalescing`; tests pin the logical/invalidation boundary, old-payload recovery, per-event failure isolation, two independent replica feeds, one read per burst and serialised reads per path |
 | `notify_mesh_node_changes()` emits `nodeType`, `version` | after the core slice | PostgreSql adapter (MeshWeaver.Plugins); a schema-initializer revision, re-applied by the existing DROP-then-CREATE |
 | delete `OrleansMeshChangeFeed` broadcast + `PathCacheInvalidatorGrain` | after both | the memory stream then carries routing fallback only |
 | `StreamMessageSizeGuard` retarget onto `MaxMessageBodySize` | optional, not blocking | the directed call already THROWS at that wall, which is the outcome the guard produces — see the bullet above |
