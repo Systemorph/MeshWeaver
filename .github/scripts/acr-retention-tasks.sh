@@ -69,7 +69,42 @@ cmd_show() {
   done
 }
 
+# The tasks `recordAheadOfRegistry` declares, space-separated; empty when nothing is declared.
+# 🚨 NO `2>/dev/null` AND NO `|| true`. A tasks.json this cannot read must stop the caller, not
+# answer "nothing is declared" — that is the swallow that turns "the call failed" into "the answer
+# is empty", and here it would decide whether a drift is excused. Callers say `|| return 1`.
+declared_ahead() {
+  if ! python3 -c "
+import json
+d = json.load(open('$RECORD/tasks.json'))
+a = d.get('recordAheadOfRegistry') or {}
+print(' '.join(a.get('tasks') or []) if a.get('inForce') is True else '')"; then
+    echo "::error::cannot read $RECORD/tasks.json, so it is unknown whether the record is" >&2
+    echo "  deliberately ahead of the registry. Refusing to decide either way." >&2
+    return 1
+  fi
+}
+
 cmd_record() {
+  # 🚨 `record` OVERWRITES THE RECORD FROM LIVE, so it is the one command that can silently undo a
+  # policy the record carries and the registry does not. On 2026-09-13 that was the whole of
+  # MeshWeaver#3438's remaining window fix: re-recording would have restored `--ago 7d --keep 10`
+  # into a file whose comments explain at length why it must not say that.
+  local ahead
+  ahead=$(declared_ahead) || return 1
+  if [ -n "$ahead" ]; then
+    echo "🚨 tasks.json declares recordAheadOfRegistry for: $ahead"
+    echo "   Recording OVERWRITES those files from the LIVE task, which discards the recorded"
+    echo "   policy and restores whatever the registry currently carries."
+    echo "   If that is what you want, say so in the same diff that deletes the declaration."
+    printf '   Type OVERWRITE to continue: '
+    local confirm
+    read -r confirm
+    if [ "$confirm" != "OVERWRITE" ]; then
+      echo "aborted."
+      return 1
+    fi
+  fi
   # 🚨 CAPTURE THROUGH THE SAME READER `verify` COMPARES WITH. Recording with a hand-typed
   # `az … | base64 -d > file` and verifying through `$(…)` differ by one trailing newline, and the
   # verifier then reports permanent drift over a byte nobody wrote. Measured 2026-09-07: the first
@@ -83,7 +118,9 @@ cmd_record() {
 }
 
 cmd_verify() {
-  local task drift=0 checked=0
+  local task drift=0 checked=0 ahead
+  ahead=$(declared_ahead) || return 1
+  ahead=" $ahead "
   for task in $TASKS; do
     local recorded="$RECORD/$task.yaml"
     if [ ! -f "$recorded" ]; then
@@ -99,14 +136,34 @@ cmd_verify() {
     live_yaml "$task" > "$live" || { rm -f "$live"; return 1; }
     checked=$((checked + 1))
     if ! diff -u "$recorded" "$live" > "${live}.diff" 2>&1; then
-      echo "::error::task '$task' DRIFTED from .github/acr-retention/$task.yaml:"
-      cat "${live}.diff"
-      echo "  Someone changed retention in the cloud without updating the record — or the record"
-      echo "  was changed without applying it. Decide which is right, then re-run \`apply\` or"
-      echo "  re-record with \`record\`. The reasoning in these comments is the only copy there is."
-      drift=1
+      # 🚨 A DECLARED drift is the record being deliberately AHEAD of the registry — the state a
+      # policy change lives in between "decided" and "applied". Reporting it as an incident would
+      # make `verify` permanently red, and a drift report that is always red is one nobody reads
+      # (this file learned that on 2026-09-07 over a trailing newline). It is still PRINTED.
+      if [ "$ahead" != "  " ] && [ "${ahead#* $task }" != "$ahead" ]; then
+        echo "  $task: drift is DECLARED (tasks.json → recordAheadOfRegistry) — the record is"
+        echo "    deliberately ahead of the registry and \`apply\` is what closes it:"
+        sed 's/^/      /' "${live}.diff"
+      else
+        echo "::error::task '$task' DRIFTED from .github/acr-retention/$task.yaml:"
+        cat "${live}.diff"
+        echo "  Someone changed retention in the cloud without updating the record — or the record"
+        echo "  was changed without applying it. Decide which is right, then re-run \`apply\` or"
+        echo "  re-record with \`record\`. The reasoning in these comments is the only copy there is."
+        drift=1
+      fi
     else
       echo "  $task: matches the record byte for byte."
+      # 🚨 THE DECLARATION EXPIRES BY BEING CHECKED, never by being remembered. Once `apply` has
+      # run, a still-standing `recordAheadOfRegistry` is a stale exemption that would excuse the
+      # NEXT real drift on this task — the same failure the instance roster's stale-entry arm
+      # exists for.
+      if [ "$ahead" != "  " ] && [ "${ahead#* $task }" != "$ahead" ]; then
+        echo "::error::tasks.json declares recordAheadOfRegistry for '$task' and there is NO drift."
+        echo "  The record has been applied, so the declaration now excuses nothing and would"
+        echo "  excuse the next real drift on this task. Delete it from tasks.json."
+        drift=1
+      fi
     fi
     rm -f "$live" "${live}.diff"
 
@@ -161,7 +218,53 @@ cmd_verify() {
   return $drift
 }
 
+# 🚨 THE RE-ENABLE INTERLOCK (MeshWeaver#3859, acceptance criterion 1).
+#
+# `apply` is the ONLY thing in this repository that can turn a destructive schedule back on: it
+# pushes `status` out of tasks.json with `az acr task update --status`. Until this function existed
+# it did so with no reference to anything — so editing one word in tasks.json (`Disabled` →
+# `Enabled`) and running `apply` restored the 03:00 purge with NO protection decision consulted,
+# which is the criterion this issue states in as many words: *failed / unavailable / incomplete
+# protection collection cannot be followed by deletion*.
+#
+# This does NOT close #3859. The two clocks are still independent — the lock is an Actions cron at
+# 01:00, the purge an ACR timer task at 03:00, and nothing makes the second wait for the first, so
+# a nightly deletion is still not downstream of that night's protection verdict. What it closes is
+# the ACT of re-enabling, which is the one edge this repository owns. The nightly interlock needs a
+# registry-side mechanism and an RBAC grant, both of which #3859 says to choose with the maintainer.
+#
+# 🚨 It refuses rather than warns, and it names the condition RATHER THAN asking for a flag. A
+# prompt answered "yes" is not a decision anyone can audit; `pause.reEnableWhen` is, and lifting
+# the pause is a reviewed diff against this record.
+assert_pause_permits_enabling() {
+  local paused reenable since blocked
+  paused=$(python3 -c "import json;d=json.load(open('$RECORD/tasks.json'));print('yes' if (d.get('pause') or {}).get('inForce') is True else 'no')") || return 1
+  [ "$paused" = "yes" ] || return 0
+  # 🚨 NO `|| true` — a status this cannot read must stop the apply, not be treated as Disabled.
+  blocked=$(python3 -c "
+import json
+d = json.load(open('$RECORD/tasks.json'))
+print(' '.join(t['name'] for t in d['tasks'] if str(t.get('status','')).lower() == 'enabled'))") || return 1
+  [ -n "$blocked" ] || return 0
+  since=$(python3 -c "import json;print((json.load(open('$RECORD/tasks.json')).get('pause') or {}).get('since',''))")
+  reenable=$(python3 -c "import json;print((json.load(open('$RECORD/tasks.json')).get('pause') or {}).get('reEnableWhen',''))")
+  echo "::error::REFUSING to apply: the record declares an in-force PAUSE (since $since) and asks" >&2
+  echo "  to enable: $blocked" >&2
+  echo "" >&2
+  echo "  re-enable when: $reenable" >&2
+  echo "" >&2
+  echo "  A pause is the mitigation held in front of an incomplete protection decision, so pushing" >&2
+  echo "  an Enabled status while it stands puts deletion back in front of the protection that is" >&2
+  echo "  not finished — MeshWeaver#3859's first acceptance criterion. Lift the pause DELIBERATELY:" >&2
+  echo "  delete the \`pause\` block from .github/acr-retention/tasks.json in a reviewed diff that" >&2
+  echo "  says what satisfied \`reEnableWhen\`, then run this again." >&2
+  return 1
+}
+
 cmd_apply() {
+  # Before the prompt, not after: a refusal the operator reads only after typing the registry name
+  # teaches them the prompt is the gate.
+  assert_pause_permits_enabling || return 1
   echo "🚨 This MUTATES shared registry infrastructure every deployment depends on."
   echo "   Registry: $REGISTRY   Tasks: $TASKS"
   echo "   Re-read Doc/Architecture/PinnedImageRetention before continuing."

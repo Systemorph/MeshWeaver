@@ -97,8 +97,14 @@ inventory. No pin removal, green build or major-version comparison authorizes an
 on its own.
 
 The files under `.github/acr-retention/` record the cloud tasks last read; they are not
-automatically deployed. The recorded 7-day/count-based CI cleanup is not the desired
-30-day policy. Update the live task only with the coordinated protection path ready,
+automatically deployed. The recorded CI cleanup carried a 7-day/count-based window until
+2026-09-13; it now records this page's 30-day, no-quota policy, and
+`lock-pinned-digests.py --check-retention-record` asserts it over every recorded step on
+every pull request. The LIVE task is disabled and still carries the old window — the gap is
+declared in `tasks.json` under `recordAheadOfRegistry`, and re-capturing the record from the
+live task would silently restore the quota, which is why `acr-retention-tasks.sh record`
+refuses without an explicit confirmation.
+Update the live task only with the coordinated protection path ready,
 a reviewed report-only deletion list, and verification that the superseded task stays
 disabled. Verify the actual purge-tool version enforces age for untagged artifacts and
 preserves referenced manifests. Never include locked manifests in a purge.
