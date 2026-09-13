@@ -96,6 +96,19 @@ public sealed class PathRemappingStorageAdapter : IStorageAdapter
         => _inner.Read(Remap(path), options);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 <b>Forwarded so the batch survives the remap.</b> The interface default would fan the
+    /// batch back out into one <see cref="Read"/> per path through <c>this</c> — remapping
+    /// correctly, but never reaching the inner adapter's batched implementation (#4200), which on
+    /// a cross-instance mirror is one HTTP round-trip per node instead of one per batch. Remapping
+    /// the SET is the whole difference: like <see cref="Read"/>, the nodes come back carrying the
+    /// TARGET-side path the remote stores them under, which is what every caller of this decorator
+    /// already expects.
+    /// </remarks>
+    public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
+        => _inner.ReadMany(paths.Select(Remap).ToArray(), options);
+
+    /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => _inner.Write(RemapNode(node), options);
 
