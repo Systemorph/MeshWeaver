@@ -508,7 +508,13 @@ public sealed class PluginBundleClient
                         // collocated JS 404s.
                         BundleReader.ReadModuleAssets(bundleBytes) is { Count: > 0 } assets
                             ? [.. assets.Select(a => (a.RelativePath, a.Bytes))]
-                            : null)
+                            : null,
+                        // #4158 — the producing repository's commit these bytes were built from,
+                        // read off the bundle the consumer actually downloaded. Recorded on the
+                        // activation entry so this deployment's [ModuleLoad] line can say what the
+                        // loaded generation came FROM, not only what its file looks like. Absent on
+                        // a bundle whose producer recorded none, which prints "(unrecorded)".
+                        manifest!.SourceCommit)
                     .Select(_ => files.Count)
                     .Do(count => _logger?.LogInformation(
                         "Module '{Module}' of {Plugin} landed ({Count} file(s), version {Version}) "

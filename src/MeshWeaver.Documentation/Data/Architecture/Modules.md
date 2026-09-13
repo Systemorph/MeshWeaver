@@ -547,10 +547,65 @@ green. The mechanism is not a bug in any single step:
 
 `ModuleLoadReport` (`src/MeshWeaver.PluginCatalog/ModuleLoadReport.cs`) makes that visible. At boot,
 immediately before `InstallAssemblies`, it emits one `[ModuleLoad]` line per pack — name, source
-(`appsettings` / `store`), the **exact path being loaded**, its MVID and its last-write time — and a
-`STALE PACK` warning when the store holds a copy of the same module that is both **newer** and
-carries a **different MVID**. Two copies with the same MVID are the same bytes in two places and
-warn nothing, or the line would be noise.
+(`appsettings` / `store`), the **exact path being loaded**, its MVID, its last-write time, the commit
+it was **built from** and the framework identity it was **built against** — and a `STALE PACK`
+warning when the store holds a copy of the same module that is both **newer** and carries a
+**different MVID**. Two copies with the same MVID are the same bytes in two places and warn nothing,
+or the line would be noise.
+
+```
+[ModuleLoad] MeshWeaver.AI ← /data/modules/MeshWeaver.AI@a7971ab5/MeshWeaver.AI.dll
+  (source=store, mvid=062dad08, written=2026-09-10 04:11:02Z,
+   built-from=1f2e3d4c5b6a798071625344556677889900aabb, framework=g7d644de95…)
+```
+
+### The file is not the source (#4158)
+
+🚨 **`mvid=` and `written=` are both properties of the FILE**, and reading them as an answer about the
+SOURCE is a measured failure mode. On memex.meshweaver.cloud, 2026-09-10 (MeshWeaver.Plugins#1585),
+the loaded `MeshWeaver.AI` bundle had the newest generation, the newest `written=` and types that
+predated two merged pull requests. Both fields said "newest" — truthfully, because the file genuinely
+was the newest one on the volume. The reading *"the registry serves stale bytes"* was written down and
+acted on (three `RefreshModules`, two restarts) before `/health` falsified it: `bundle_adoption: … AI:
+FrameworkDeclined`, i.e. the bundle had **never been adopted**, and the previously adopted build kept
+serving under the same-MAJOR rule of [ModuleAdoptionPolicy](/Doc/Architecture/ModuleAdoptionPolicy).
+
+So the line carries two more statements, and both come from the producer rather than from the file:
+
+| field | what it answers | where it comes from |
+|---|---|---|
+| `built-from=` | which commit of the producing repository these bytes were built from | `module-pack --source-commit` → the bundle manifest's `sourceCommit` → `ModuleActivationEntry.SourceCommit` |
+| `framework=` | which platform build they were compiled against | the manifest's `frameworkMvid` → `ModuleActivationEntry.FrameworkMvid` (recorded since #3154, printed since #4158) |
+
+Three rules hold the field to being evidence rather than decoration:
+
+- **Absence prints as `(unrecorded)`, never as a value.** A bundle whose producer stated no commit
+  records none, and the line says so in as many words. Filling it in from the version, the generation,
+  the MVID or the path would produce exactly the defect the field exists to close — a current-looking
+  marker over bytes that are not. (`unknown` means something else on this line: it is what the report
+  says when it could not READ the file it is describing.)
+- **The GENERATION is matched, not assumed.** An entry names two generations — its head and the
+  previous one it falls back to when the head does not load here (#3649) — and they are different bytes
+  from different commits. `ModuleLoadReport` reads the `Previous*` fields when the path it was handed
+  is the previous generation, and states nothing for a path the entry accounts for neither way.
+- **Nothing gates on it.** Landing is decided by the link probe and updating by
+  `ModuleUpdateDecision`'s *(version, framework identity)* pair. A `built-from` that started deciding
+  something would make a bundle from an older packer stop landing over a field that is allowed to be
+  absent.
+
+**The producer hop is deliberately not wired in CI yet.** `module-pack` accepts `--source-commit`, and
+the reusable `node-repo-module-pack.yml` lane does not pass it, for two separate reasons — both of
+which are the reason it is a flag and not an inference:
+
+1. **A satellite's lane pin and its platform pin move independently.** MeshWeaver.Plugins calls the lane
+   at `@main` while the pack TOOL is published from the *resolved sealed* `platform-ref`, which lags
+   `main`. An unconditional new flag would exit-2 (`unrecognised argument`) every satellite's pack jobs
+   for the whole window between this commit and the sealed set that contains it.
+2. **`github.sha` is the wrong value.** The lane reuses content-addressed module builds from earlier
+   runs (`module-build-ledger.py`), so the run's own commit is not the commit that built those bytes.
+   Stamping it would put a newer commit on older bytes — #1585 restated with one more field to be
+   misled by. The lane must take the commit from the BUILD's provenance, which is where the remaining
+   work is.
 
 It reports the array it is HANDED, so the line and the load cannot disagree; the acceptance is
 literally that the path in `/proc/1/maps` equals the path the line named (a break-glass read —

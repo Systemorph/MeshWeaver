@@ -60,6 +60,12 @@ public static class ModulePackCommand
 
     /// <summary>SemVer-ish shape: numeric core (2–4 parts, matching what manifests carry) with
     /// optional pre-release / build-metadata tail. Path separators are impossible here.</summary>
+    /// <summary>A revision identifier's shape: one token of letters, digits, '.', '_' and '-' — a
+    /// git sha, normally the full 40-character one, but deliberately not constrained to hex: the
+    /// field is the PRODUCER's statement of its own revision, and a producer need not be git.</summary>
+    private static readonly Regex RevisionShape =
+        new(@"^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$", RegexOptions.Compiled);
+
     private static readonly Regex VersionShape =
         new(@"^\d+(\.\d+){1,3}(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$", RegexOptions.Compiled);
 
@@ -165,6 +171,17 @@ public static class ModulePackCommand
                                               omitted — #3154 compares it on every consumer's
                                               update decision, and an unstated one can never be
                                               healed from the serving side (#3211)
+                  --source-commit <sha>       the PRODUCING REPOSITORY's commit these bytes were
+                                              built from — recorded in the bundle manifest and
+                                              carried to every consumer, which prints it on its
+                                              [ModuleLoad] line (#4158). Optional: a bundle that
+                                              states none records nothing and every consumer prints
+                                              "(unrecorded)", which is the honest reading. 🚨 It is
+                                              the commit THESE BYTES came from, never "the commit
+                                              the run is on" — a lane that reuses an earlier run's
+                                              content-addressed build must state the commit that
+                                              BUILT them, or the field restates the very defect it
+                                              exists to close.
                   --with <fileName>           an additional closure file from <moduleOutputDir>
                                               (repeatable). <name>.dll is always included, and its
                                               .pdb rides along when present.
@@ -213,6 +230,7 @@ public static class ModulePackCommand
         string? minMeshVersion = null;
         string? graphDll = null;
         string? statedFrameworkMvid = null;
+        string? sourceCommit = null;
         var extras = new List<string>();
         var ownPlatform = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         string? platformApp = null;
@@ -243,6 +261,9 @@ public static class ModulePackCommand
                     break;
                 case "--framework-mvid" when i + 1 < args.Length:
                     statedFrameworkMvid = args[++i].Trim();
+                    break;
+                case "--source-commit" when i + 1 < args.Length:
+                    sourceCommit = args[++i].Trim();
                     break;
                 case "--with" when i + 1 < args.Length:
                     extras.Add(args[++i]);
@@ -412,6 +433,24 @@ public static class ModulePackCommand
                 $"error: --framework-mvid '{frameworkMvid}' contains whitespace — the identity is a "
                 + "single token (s<hash>, g<sha> or a 32-hex MVID), and a value that has to be "
                 + "trimmed downstream is a value two readers can disagree about.");
+            return 2;
+        }
+
+        // ───── THE BUILT-FROM COMMIT — optional, but never written as something it is not ─────
+        // 🚨 #4158. Absence is a legitimate state and prints as "(unrecorded)" on every consumer, so
+        // this flag is not required the way --framework-mvid is (#3211). What is NOT legitimate is
+        // stating a value that reads as absent — a blank one is exactly "unrecorded" wearing a
+        // producer's signature, and every consumer would print an empty field instead of the word
+        // that says nobody stated it. Refused where it is created, like the blank identity.
+        if (sourceCommit is not null && !RevisionShape.IsMatch(sourceCommit))
+        {
+            Console.Error.WriteLine(
+                $"error: --source-commit '{sourceCommit}' is not a revision identifier — it must be "
+                + "a single token of letters, digits, '.', '_' or '-' (a git sha, normally the full "
+                + "40-character one). The value is printed VERBATIM on every consumer's "
+                + "[ModuleLoad] line, so a blank or padded one would render as a field nobody can "
+                + "read rather than as the '(unrecorded)' that says nobody stated it. Omit the flag "
+                + "to record nothing.");
             return 2;
         }
 
@@ -641,6 +680,10 @@ public static class ModulePackCommand
                 // (#3211 refuses above). The consumer's LANDING gate is still the module section's
                 // minMeshVersion floor below; this is what its UPDATE decision compares (#3154).
                 frameworkMvid,
+                // #4158 — what the bytes were built FROM, beside what they were built AGAINST.
+                // Omitted entirely when unstated (WhenWritingNull below), so a consumer reading an
+                // absent field and a consumer reading an older bundle answer the same thing.
+                sourceCommit,
                 module = new { assemblyName = moduleName, assemblies = closure, minMeshVersion,
                     staticAssets = staticAssets.Count > 0 ? staticAssets : null,
                 },
