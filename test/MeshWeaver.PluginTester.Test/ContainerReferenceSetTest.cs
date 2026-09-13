@@ -238,8 +238,10 @@ public class ContainerReferenceSetTest : IDisposable
     public void TheREALHostDepsJsonOfThisBuildIsReadable_NotJustTheSyntheticOne()
     {
         // The fixtures above are hand-written; this one is the deps.json mw-plugin-test actually
-        // SHIPS — 73 packages, the MeshWeaver assemblies, one binding identity. If the parser can
-        // only read the fixtures, it cannot read a container.
+        // SHIPS — the MeshWeaver assemblies, one binding identity, and the package closure. If the
+        // parser can only read the fixtures, it cannot read a container. The count is a floor, not
+        // a pin: 73 packages until #4188 gave the tester the ASP.NET shared framework, after which
+        // the Microsoft.AspNetCore.* packages leave the graph (41 remain, measured on that PR).
         var app = App("real");
         File.Copy(
             Path.Combine(AppContext.BaseDirectory, "mw-plugin-test.deps.json"),
@@ -250,10 +252,10 @@ public class ContainerReferenceSetTest : IDisposable
 
         var refs = ContainerReferenceSet.Read(app);
 
-        refs.PackageVersions.Count.Should().BeGreaterThan(50);
+        refs.PackageVersions.Count.Should().BeGreaterThan(30);
         refs.PlatformAssemblyVersion.Should().NotBeNullOrEmpty();
         // The shared framework and the rest of the closure arrive through the process's TPA.
-        refs.AssembliesByName.Count.Should().BeGreaterThan(50);
+        refs.AssembliesByName.Count.Should().BeGreaterThan(30);
         refs.FindAssembly("MeshWeaver.Data").Should().NotBeNull();
     }
 
