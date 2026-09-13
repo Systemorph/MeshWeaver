@@ -244,6 +244,41 @@ The old line read `"1 distinct fingerprint(s) from 5000 red line(s)"` with `5000
 **total** line count — the query returns every severity — so it looked like 5000 errors collapsing
 onto one ticket when it was 5000 lines of mostly `info:`.
 
+## Reading which watcher VINTAGE is running, without a cluster
+
+🚨 **The running watcher's image tag is not readable from the portal, and the capture-gap incident
+answers the question better anyway.** Measured 2026-09-13, all three portal instruments refuse for
+the same structural reason — they are scoped to an *instance*, and the watcher is not one:
+
+- there is no `Deployments/mw-log-watcher` record, so `Sample` (which is what reports per-replica
+  images) has nothing to target;
+- `Logs` builds its stream selector from the deployment record's own namespace
+  (`LokiQuery.ForNamespace`; every executed action's `logQl` field reads `{namespace="memex"} …`) and
+  the `query` field is only the pipeline appended after it — the watcher runs in `monitoring`;
+- `Audit` is likewise scoped to the instance's own helm release.
+
+So a tag read is `kubectl`, i.e. break-glass. Do not reach for it: the per-namespace capture-gap
+incident carries the answer, and carries it as a fact about the binary that is actually reporting
+rather than about the image a Deployment names.
+
+**The discriminator is textual, and the two sides cannot forge each other's wording** — they are
+emitted by two different assemblies:
+
+| on `Admin/_LogIncident/log-burst-header-only-{namespace}` | a CURRENT watcher (`LogPipelineGap.HeaderOnlyReport`) | the PORTAL refusing a bodyless report (`LogIncidentReportSanity.AsCaptureGap`) |
+|---|---|---|
+| `content.severity` | always `Error` | `max(reported, Error)` — so `Critical` is possible |
+| `content.normalizedMessage` ends | `…being dropped between the pod and the log store.` | `…and the log store — or an out-of-date log watcher is still fingerprinting headers.` |
+| `content.samples` | `"N bodyless red burst(s) in [start, end) — categories: …"` | the raw header lines **plus** a `refused undiagnosable report <fp> for category <cat> — no message, no exception, no stack frame` line |
+
+A fold carrying the portal's wording proves the reporting binary predates the `BurstAggregator`
+header-only holdback, because a current watcher never POSTs a bodyless report at all. That is the
+reading [#2681](https://github.com/Systemorph/MeshWeaver/issues/2681) turns on.
+
+🚨 **A `lastSeen` that merely stops advancing is NOT the same reading.** It is equally "the watcher is
+current" and "the watcher stopped reporting" — and telling those apart is the entire point of a
+capture-gap incident. Require the message-ending AND the sample shape together; either one alone can
+be produced by a stale node nobody has folded into recently.
+
 ## The incident lifecycle
 
 Incidents are `LogIncident` nodes at `Admin/_LogIncident/{fingerprint}` — Admin-scoped, because a
