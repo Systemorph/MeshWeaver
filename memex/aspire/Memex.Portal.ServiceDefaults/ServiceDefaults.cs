@@ -28,6 +28,16 @@ public static class ServiceDefaults
         builder.ConfigureOpenTelemetry();
         builder.AddDefaultHealthChecks();
 
+        // 🚨 The instrument that says WHICH KIND of silence a quiet window in this portal's log was
+        // (#4234). Every other stall detector here — Orleans' watchdog, the disposal stall verdict,
+        // the pending-callback report — fires on an event and reports ON RESUME, so a stop that
+        // outlives the process prints nothing, which is precisely the window a wedge investigation
+        // reads. One unconditional line per Diagnostics:LivenessHeartbeatSeconds (10 s; 0 = off),
+        // on a thread of its own so pool starvation cannot silence it. Armed HERE, in the host
+        // whose log is actually kept, and not in MeshHostApplicationBuilder — which would start a
+        // thread inside every mesh a test run builds.
+        builder.Services.AddProcessLivenessHeartbeat();
+
         builder.Services.AddServiceDiscovery();
 
         builder.Services.ConfigureHttpClientDefaults(http =>
