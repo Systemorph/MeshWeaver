@@ -55,7 +55,7 @@ public class PlatformMetricsTest(ITestOutputHelper output) : HubTestBase(output)
     /// a heap dump.
     /// </summary>
     [HubFact]
-    public void TheMeterReportsLiveHubs_ByKindAndRunLevel()
+    public async Task TheMeterReportsLiveHubs_ByKindAndRunLevel()
     {
         var host = GetHost();
         using var metrics = new PlatformMetrics(host);
@@ -63,6 +63,15 @@ public class PlatformMetricsTest(ITestOutputHelper output) : HubTestBase(output)
         // A hosted hub, so the walk has something below the root to find.
         var child = host.GetHostedHub(new Address("victim", "metrics-1"), c => c);
         child.Should().NotBeNull();
+
+        // 🚨 GetHostedHub returns a hub that is STARTING, not started: the constructor posts an
+        // InitializeHubRequest onto the hub's own queue and RunLevel only becomes Started when the
+        // last initialization gate opens on that loop. A scrape taken straight after creation
+        // therefore measures {Starting, Starting} on a slow runner — which is what shard 2 reported
+        // on 2026-09-13 (run 34748571694, job 103701109437): a race in this test, not a hub stuck.
+        // The assertion is about the Started bucket, so wait for the hubs to reach it first.
+        await host.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
+        await child!.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
 
         var taken = Scrape(metrics);
 
