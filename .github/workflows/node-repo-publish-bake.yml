@@ -1075,7 +1075,9 @@ jobs:
           set -uo pipefail
           # 🚨 The identity is resolved two steps up, from the PORTAL image — and WHICH portal image
           # this run got depends entirely on the trigger (a repo PIN on push/pull_request, the wake's
-          # payload on repository_dispatch, a MOVING release tag on schedule). When this gate holds,
+          # payload on repository_dispatch, a platform this run resolved for itself on schedule —
+          # normally the newest platform-SEALED set, else a pin, an allow-unpinned tag or a freeze).
+          # When this gate holds,
           # "why is it waiting" is a question about that choice, and the three paths want three
           # different actions. Stating it here makes the log self-contained (MeshWeaver#3583).
           TRIGGER="event=$GITHUB_EVENT_NAME"
@@ -1138,7 +1140,7 @@ jobs:
             echo "|---|---|---|"
             echo "| \`push\` / \`pull_request\` | this repo's PIN | the PIN is wrong — move it to an identity the upstream HAS published for |"
             echo "| \`repository_dispatch\` | the wake's own payload | the wave is mid-flight; the upstream's publication re-triggers this run |"
-            echo "| \`schedule\` | a MOVING release tag this run resolved itself | nobody promised the upstream published for it |"
+            echo "| \`schedule\` | the platform this run RESOLVED for itself — printed above; normally the newest platform-SEALED set, else a caller pin, an \`allow-unpinned\` tag or an \`MW_PLATFORM_REF\` freeze | nobody promised the upstream published for THAT set |"
             echo ""
             echo "**What re-enables it:** the upstream's own \`publish-bake\`, on sealing for this"
             echo "identity, POSTs the publication to the control instance, which dispatches"
@@ -1148,16 +1150,18 @@ jobs:
             echo "MeshWeaver.Crm: a \`meshweaver-framework-released\` run failed here at 15:36Z and"
             echo "the \`meshweaver-upstream-published\` wake for the same set succeeded at 16:01Z."
             echo ""
-            echo "🚨 **The \`schedule\` poll does NOT retry this identity.** It re-resolves a moving"
-            echo "tag, so the next poll asks about whatever has been promoted since — a DIFFERENT"
-            echo "identity. Waiting for the poll to clear this is waiting for something that never"
+            echo "🚨 **The \`schedule\` poll does NOT retry this identity.** It resolves the platform"
+            echo "again next time and lands on a DIFFERENT one. That is not a resolution defect to fix"
+            echo "here: what is missing is the UPSTREAM's publication for whichever set was chosen, and"
+            echo "\`Doc/Architecture/CiContentBake\` refuses the walk-back-to-the-newest-identity-that-HAS-a"
+            echo "publication fallback by name (MeshWeaver#3583). Waiting for the poll to clear this is waiting for something that never"
             echo "happens; the dispatch above is the only thing that re-asks this question."
             echo ""
             echo "If no wake ever arrives, the upstream is not publishing for released identities at"
             echo "all. That is the UPSTREAM's red — see its own \`publish-bake\` and its own poll —"
             echo "and it is not repaired by anything in this repository."
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::error title=Upstreams not ready — did not build::at least one upstream of this repo has no published artifact for framework identity ${{ steps.identity.outputs.identity }}; exiting without building. What re-enables it is the upstream's own publish-bake dispatching meshweaver-upstream-published for this identity — NOT the schedule poll, which re-resolves a moving tag and therefore asks about a different identity next time."
+          echo "::error title=Upstreams not ready — did not build::at least one upstream of this repo has no published artifact for framework identity ${{ steps.identity.outputs.identity }}; exiting without building. What re-enables it is the upstream's own publish-bake dispatching meshweaver-upstream-published for this identity — NOT the schedule poll, which resolves the platform again and therefore asks about a different identity next time."
           exit 1
       # ───────────────────── WHAT MUST ACTUALLY BE REBUILT (#1707) ─────────────────────
       # "When updating plugins, we should check from git history which modules are affected, and
