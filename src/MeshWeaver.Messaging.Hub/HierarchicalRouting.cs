@@ -63,6 +63,35 @@ internal class HierarchicalRouting
     }
 
     /// <summary>
+    /// Hands a <see cref="DeliveryFailure"/> this router is about to DROP straight to the
+    /// in-process hub its requester lives under (<see cref="MessageHub.TryDeliverNackInProcess"/>),
+    /// stamping the request's trail either way. Offered only on the arms where the drop happens.
+    /// </summary>
+    /// <returns><c>true</c> when the requester's hub accepted it, so the sender HAS its answer.</returns>
+    private bool TryHandOverNackInProcess(IMessageDelivery delivery)
+    {
+        if (delivery.Message is not DeliveryFailure
+            || !delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId)
+            || hub is not MessageHub own)
+            return false;
+        var fate = own.RequestFates.Find(requestId?.ToString());
+        if (own.TryDeliverNackInProcess(delivery))
+        {
+            fate?.Add($"NACK_DELIVERED_IN_PROCESS runLevel={hub.RunLevel} target={delivery.Target}", hub.Address);
+            logger.LogDebug(
+                "Undeliverable NACK (ID: {MessageId}) for request {RequestId} was handed to the requester's "
+                + "hub in-process instead of being dropped in {Address}",
+                delivery.Id, requestId, hub.Address);
+            return true;
+        }
+        fate?.Add(
+            $"REPLY_REFUSED_SHUTTING_DOWN runLevel={hub.RunLevel} parent="
+            + (parentHub is { } p ? $"{p.Address}@{p.RunLevel}" : "none"),
+            hub.Address);
+        return false;
+    }
+
+    /// <summary>
     /// Loops through forward rules in a sequence. Each forward rule either applies and returns delivery.Forwarded() or doesn't apply and returns delivery.
     /// </summary>
     /// <param name="delivery"></param>
@@ -172,6 +201,8 @@ internal class HierarchicalRouting
                 // forever). TRANSIENT (ShuttingDown): the address may reactivate on the next probe.
                 if (isDisposing && TryHandOverUndeliverableReply(delivery))
                     return delivery.Processed();
+                if (isDisposing && TryHandOverNackInProcess(delivery))
+                    return delivery.Processed();
 
                 return isDisposing
                     ? delivery.Failed(errorMessage, ErrorType.ShuttingDown)
@@ -246,6 +277,12 @@ internal class HierarchicalRouting
             // IUndeliverableReplySink — offered ONLY here, where no post can reach the caller any
             // more, never alongside a healthy one.
             if (TryHandOverUndeliverableReply(delivery))
+                return delivery.Processed();
+            // 🚨 …and a NACK somebody is waiting for gets the in-process carrier of last resort
+            // (#4072): the parent is closed for every sibling at once during a whole-tree
+            // teardown, and the requester — Quiescing on exactly this correlation — is reachable
+            // under the same root without it. NACKs only; see MessageHub.TryDeliverNackInProcess.
+            if (TryHandOverNackInProcess(delivery))
                 return delivery.Processed();
 
             return delivery.Failed(
