@@ -297,15 +297,37 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     private volatile bool faulted;
 
     /// <summary>
-    /// The ONE way this stream's store takes a terminal error — it records
-    /// <see cref="faulted"/> and then errors the store. Every <c>Store.OnError</c> in this type
-    /// goes through here so the flag can never drift from the store's actual state.
+    /// The ONE way this stream's store takes a terminal error — it errors the store and then
+    /// records <see cref="faulted"/>. Every <c>Store.OnError</c> in this type goes through here so
+    /// the flag can never drift from the store's actual state.
+    ///
+    /// <para>🚨 <b>Terminal FIRST, flag SECOND — the order is the contract.</b> A reader that finds
+    /// this stream unusable (<see cref="StreamLiveness.IsUsable"/> reads the flag) answers with the
+    /// store's terminal notification — <c>LayoutExtensions.GetStream&lt;T&gt;</c> re-delivers a
+    /// faulted store's <c>OnError</c> to its late subscriber — and that is only exact if the
+    /// terminal is already in the store by the time the flag says "dead". Flag-first opened a
+    /// window in which the stream read as faulted while its <see cref="ReplaySubject{T}"/> was still
+    /// open: a subscriber arriving inside it saw an open store, was told "completed", and the
+    /// <c>OnError</c> that followed reached nobody (Systemorph/MeshWeaver.Plugins#1715, Copilot's
+    /// review of MeshWeaver#4151). Store-first closes it: <c>ReplaySubject.OnError</c> marks the
+    /// subject terminal under its own lock before delivering, so any subscribe that observes the
+    /// flag observes the terminal too.</para>
+    ///
+    /// <para>The flag is written in a <c>finally</c>: a subscriber's <c>OnError</c> arm that throws
+    /// must not leave a terminally-errored store behind a flag that still reads "live" — that is
+    /// the corpse-serving cache of #2387 again. <see cref="OnError"/> already catches what escapes.</para>
     /// </summary>
     /// <param name="error">The terminal error to publish to subscribers.</param>
     private void FaultStore(Exception error)
     {
-        faulted = true;
-        Store.OnError(error);
+        try
+        {
+            Store.OnError(error);
+        }
+        finally
+        {
+            faulted = true;
+        }
     }
 
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below

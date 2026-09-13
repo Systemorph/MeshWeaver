@@ -91,7 +91,7 @@ were migrated and **26** were deliberately left.
 
 **Every migrated site answers with the "no" its own signature already modelled** — that is the rule,
 not a style preference. `GetPatch` returns `null` (its callers already test for it); `GetStream<T>`
-returns `Observable.Empty<T>()` (a dead stream's completed store would produce exactly that);
+forwards the dead stream's OWN terminal notification and no values (see the correction below);
 `GetDataBoundValue<T>` returns `default` (the answer it already gives twice for an absent value);
 `SubmitModel` returns an `ActivityLog` carrying `activity.dataUpdate.streamClosed`, the same shape
 as its existing no-route branch; `ToDataChanged` returns `null`, its declared "nothing to forward".
@@ -134,6 +134,49 @@ One more constraint the migration follows: **a guarded read inside a per-emissio
 `TryGetHub()` rather than capturing the hub resolved at pipeline-construction time.** Capturing
 would pin the hub's whole resolved graph for the lifetime of every subscription — the exact
 retention this issue exists to release.
+
+### 🚨 Correction: a dead stream has TWO terminals, and `GetStream<T>` answered one of them wrongly
+
+Step 2 migrated `GetStream<T>` onto `Observable.Empty<T>()` with the reasoning *"a dead stream's
+completed store would produce exactly that"*. That is true of a stream that is dead because it was
+**disposed** — `Dispose()` completes the store. It is false of a stream that is dead because it
+**faulted**, and `IsUsable` counts both (#2387, "FAULTED counts exactly as much as DISPOSED"): a
+faulted store is a `ReplaySubject` holding a terminal `OnError`, and under the Rx grammar every
+later subscriber has that error re-delivered. For that shape the "no" the signature already
+modelled was the fault itself, and answering `Empty` **swallowed it** — a violation of the very rule
+this section states ("No site swallows").
+
+It was measured, not theorised (Systemorph/MeshWeaver.Plugins#1715, 2026-09-12): `NamedAreaView`
+binds through `GetControlStream` → `GetStream<T>`, and the mesh answers a routing miss on a path it
+has already resolved once in a few milliseconds — faster than a render's first frame — so on the
+second viewer of a gone node the fault regularly landed **before** `BindData` subscribed. The view's
+control stream then completed without an error, no error branch was entered, and the area rendered
+nothing where its node-gone card belongs. The guard that renders that card read the swallow as
+`Sequence contains no elements`, intermittently.
+
+`GetStream<T>` now forwards the dead stream's **own** terminal and drops its values: a disposed
+stream still completes (the value replay off a frozen store is not live data — the
+`TornDownStreamCallSitesTest` pin from step 2 stands), a faulted stream faults with the same
+exception instance, and a stream whose hub has merely begun winding down while its store is still
+open keeps the immediate completion — nothing `GetStream<T>` could wait for will ever arrive on it.
+Whether the store has terminated is known synchronously, because a `ReplaySubject` replays its
+terminal inside `Subscribe` — **and for the faulted shape it is known to have terminated, because
+of an ordering that is now part of the contract**: `FaultStore` errors the store *before* it raises
+the flag `IsUsable` reads (in a `finally`, so a throwing subscriber cannot leave the store terminal
+behind a flag that still reads live — #2387's corpse again). Flag-first, as it stood, left a
+window in which the stream read as faulted while its store was still open; a reader arriving in it
+found an open store, answered "completed", and the fault that landed a moment later reached nobody —
+the same swallow one interleaving over, named by Copilot's review of #4151. Store-first closes it:
+`ReplaySubject.OnError` marks the subject terminal under its own lock before delivering, so any
+subscribe that observes the flag observes the terminal. Pinned from inside the delivery by
+`AFaultingStream_PublishesItsTerminal_BeforeItReadsAsDead` — an observer receiving the fault reads
+`IsUsable()` as still true, and false once `OnError` has returned; flag-first fails it. Pinned by
+`TornDownStreamCallSitesTest.GetControlStream_OnAFaultedStream_ReDeliversTheFault` (identity of the
+re-delivered fault) and, in MeshWeaver.Plugins, by
+`NodeGoneIsBenignGuard.TheNodeGoneArea_StillDrawsTheCard_WhenTheFaultLandedBeforeTheViewBound`,
+which renders the real view against a real routing miss in the fault-first order and asserts the
+card is in the markup. Both were run against the pre-fix code and both went red — the view guard
+with an empty string where the card belongs.
 
 ## What step 3 did
 
