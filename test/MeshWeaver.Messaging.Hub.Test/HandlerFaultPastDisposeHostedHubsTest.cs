@@ -191,7 +191,9 @@ public class HandlerFaultPastDisposeHostedHubsTest(ITestOutputHelper output) : H
     /// </summary>
     [Theory(Timeout = 120_000)]
     [InlineData(Fault.HubDisposing, ErrorType.ShuttingDown)]
-    [InlineData(Fault.DisposedContainer, ErrorType.ShuttingDown)]
+    // An ObjectDisposedException naming SOME disposed scope while THIS hub's own scope is live is a
+    // genuine fault: the classifier is probe-gated (ScopeTeardown), so it does not become a retry.
+    [InlineData(Fault.DisposedContainer, ErrorType.Unknown)]
     [InlineData(Fault.Genuine, ErrorType.Unknown)]
     public async Task AFaultUnderAWholeTreeTeardown_IsNackedToTheQuiescingRequesterInProcess(Fault fault, ErrorType expected)
     {

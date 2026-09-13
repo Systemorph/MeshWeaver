@@ -3099,8 +3099,12 @@ public sealed class MessageHub : IMessageHub
                 || ReferenceEquals(requester, this)
                 || requester.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
                 return false;
-            requester.DeliverMessage(failure);
-            return true;
+            // The intake's verdict IS the answer: the requester can cross DisposeHostedHubs
+            // between the check above and this call, and its gate then hands back Failed
+            // (or Ignored from the storm breaker) instead of enqueueing. Claiming "delivered" on
+            // that would suppress every remaining carrier for a callback that was never resolved.
+            var accepted = requester.DeliverMessage(failure);
+            return accepted.State is not (MessageDeliveryState.Failed or MessageDeliveryState.Ignored);
         }
         catch (ObjectDisposedException)
         {

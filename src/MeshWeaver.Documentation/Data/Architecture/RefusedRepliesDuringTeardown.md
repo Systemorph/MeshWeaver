@@ -225,10 +225,13 @@ Why this is not the second transport the rule above forbids:
   its own pump serialises — exactly what a routed delivery would get. Nothing runs on the
   responder's turn.
 
-Two classification changes ride along. A handler fault whose chain carries the DI container's
-"this scope is gone" (`HubDisposingException.IsDisposedContainer`) is a **teardown fact** and is
-answered `ShuttingDown` in the owner's refusal vocabulary, like a `HubDisposingException` — it
-used to fall to the genuine-fault arm and be answered `Unknown`, a bug read into a recycle. And
+Two classification changes ride along. A handler fault whose chain carries an
+`ObjectDisposedException` **while this hub's own service scope answers disposed** (the probe-gated
+`ScopeTeardown.IsTerminatedByScopeTeardown`, the same classifier `HandleInitialize` and the
+permission fold use — not the message-matching `IsDisposedContainer`, which would also catch a
+handler that reached into some *other* disposed scope) is a **teardown fact** and is answered
+`ShuttingDown` in the owner's refusal vocabulary, like a `HubDisposingException` — it used to
+fall to the genuine-fault arm and be answered `Unknown`, a bug read into a recycle. And
 the `HANDLER_FAULT` stage now names the inner exception types (`Outer→Inner→…`), because the
 dispose snapshot is the one artefact a green run keeps and #4072 was filed on a trail that could
 not tell the two apart.

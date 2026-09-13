@@ -815,9 +815,18 @@ public class MessageService : IMessageService
             : (ErrorType.ShuttingDown, reason);
         try
         {
-            parent.Post(
+            // 🚨 A refused post does not throw — the parent's own teardown guard hands back a
+            // Failed delivery when it crossed the shutdown boundary after the check above, and so
+            // does its post pipeline on a rejection. Reporting either as "answered" would suppress
+            // every remaining carrier while the requester stays unanswered (Copilot review on #4154).
+            var posted = parent.Post(
                 new DeliveryFailure(delivery) { ErrorType = errorType, Message = message },
                 o => o.ResponseFor(delivery));
+            if (posted is null || posted.State == MessageDeliveryState.Failed)
+            {
+                fate?.Add($"NACK_DECLINED reason=parent-post-refused parent={parent.Address}@{parent.RunLevel}", Address);
+                return false;
+            }
             fate?.Add($"NACKED_THROUGH_PARENT errorType={errorType} parent={parent.Address}", Address);
             return true;
         }
@@ -2242,7 +2251,7 @@ public class MessageService : IMessageService
                         cbEx => logger.LogWarning(cbEx,
                             "ExceptionCallback for ExecutionRequest itself threw in {Address}; original execution error: {Original}",
                             Address, e.Message));
-                else if (HubDisposingException.IsHubDisposal(e) || HubDisposingException.IsDisposedContainer(e))
+                else if (HubDisposingException.IsHubDisposal(e) || hub.IsTerminatedByScopeTeardown(e))
                 {
                     // 🚨 TRANSIENT, not a fault: the handler needed machinery a disposing hub
                     // can no longer create (hosted-hub creation is frozen from the first
@@ -2253,16 +2262,18 @@ public class MessageService : IMessageService
                     // landing in the overlay self-heal's recycle window — LayoutAreaHost's ctor
                     // could not build its SynchronizationStream.
                     //
-                    // 🚨 A DISPOSED CONTAINER is the same teardown fact reached one cause down
-                    // (#4072). A hub whose Autofac scope closed underneath a live delivery
+                    // 🚨 A DISPOSED SCOPE is the same teardown fact reached one cause down
+                    // (#4072). A hub whose own service scope closed underneath a live delivery
                     // announces nothing — no HubDisposingException is ever thrown for it — so the
-                    // ObjectDisposedException("…LifetimeScope…") the handler dies with used to fall
-                    // to the genuine-fault arm below and be answered as a RESULT
-                    // (ErrorType.Unknown): the caller read a bug into a recycle and stopped
-                    // retrying an address that was about to reactivate.
-                    // HubDisposingException.IsDisposedContainer is the one classifier every other
-                    // layer already uses for that fault (the read path, TrackActivity, the access
-                    // pipeline); this arm was the one seam that did not consult it.
+                    // ObjectDisposedException the handler dies with used to fall to the
+                    // genuine-fault arm below and be answered as a RESULT (ErrorType.Unknown): the
+                    // caller read a bug into a recycle and stopped retrying an address that was
+                    // about to reactivate. The classifier is the PROBE-GATED ScopeTeardown — an
+                    // ObjectDisposedException in the chain AND this hub's own scope answering
+                    // disposed — the same one HandleInitialize and the permission fold use. Not
+                    // the message-matching IsDisposedContainer: a handler that reached into some
+                    // OTHER disposed scope while this hub's is live has a genuine fault, and
+                    // telling its caller "ask again" would turn a bug into a retry loop.
                     //
                     // It MUST reach the sender as ErrorType.ShuttingDown, exactly like the
                     // intake/deferred NACKs (#672): the address is about to REACTIVATE, so the
