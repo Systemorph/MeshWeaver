@@ -220,13 +220,15 @@ So 4b's mechanism was in force, on the path 4b is about, and the gate red is unc
 
 **3. Why it cannot help, stated as a mechanism rather than as a measurement.** 4b resolves the newest
 set whose **PLATFORM** is sealed. The gate asks whether this repository's **UPSTREAM** has a sealed
-publication *for that set's identity*. Those are two different facts and the resolver checks only the
-first — it does not even hold the set back on the second: `plugins-sealed=absent` is **printed by the
-resolver itself** in the run above, and the set is chosen anyway. That is deliberate and documented in
-`resolve-platform.py` ("a seal that FAILED, was SKIPPED or CANCELLED is terminal and does not hold the
-set back … the lane's upstream fetch says RED, by name"). No resolution change reaches this: the
-publication the gate wants **does not exist for any recent identity**, which is stage ④'s condition —
-options 1–4.
+publication *for that set's identity*. Those are two different facts, and the resolver's treatment of
+the second is deliberately narrow rather than absent: a set whose `plugins` seal is **still running**
+IS passed over (or waited for on a release trigger — the measured Manufacturing 2026-09-10 case), while
+a seal that is **terminal or absent** — FAILED, SKIPPED, CANCELLED, or simply never made — does *not*
+hold the set back. That is stated in `resolve-platform.py` and it is why `plugins-sealed=absent` is
+**printed by the resolver itself** in the run above and the set is taken anyway: the lane's upstream
+fetch is where that becomes RED, by name. The rationale is sound — a Plugins-side red must not pin the
+whole fleet to an old platform — and it means no resolution change reaches this case: the publication
+the gate wants **does not exist for any recent identity**, which is stage ④'s condition, options 1–4.
 
 **What made it look open, and it is the instrument's own sentence.** Both lanes print, in the
 "Upstreams not ready" step summary and in the `::error` beside it, *"the `schedule` poll … re-resolves
@@ -237,12 +239,15 @@ its *mechanism* does not, and reading the mechanism as a defect put an implement
 list twice. Corrected in `node-repo-gate.yml` and `node-repo-publish-bake.yml` in the same change as
 this section.
 
-🚨 **The stronger reading is a DECISION, not a bigger 4b.** "Resolve the newest set for which every
-declared upstream has *also* published" is implementable — the resolver already has the datum it would
-branch on — but it means taking an **older** platform set whenever the fleet's publications lag, which
-directly contradicts the rule quoted at the top of `resolve-platform.py` (maintainer, 2026-09-12:
-*"for compile always find latest package of platform and plugins"*). So it belongs beside options 1–4
-on the decision list, not on the "needs no decision" line.
+🚨 **The stronger reading is not a bigger 4b — it is already REFUSED, by name.** "Resolve the newest
+set for which every declared upstream has *also* published" is implementable — the resolver already
+prints the datum it would branch on — and [CI Content Bake](../CiContentBake) rules it out in those
+words: *"Do NOT 'fix' this by having the poll walk back to the newest identity that HAS a complete
+publication. It reads like a narrowing and it is a fallback: an upstream that stops publishing would
+leave every dependent's poll green forever."* It also contradicts the rule quoted at the top of
+`resolve-platform.py` (maintainer, 2026-09-12: *"for compile always find latest package of platform
+and plugins"*), since satisfying an upstream means taking an **older** platform set. So the honest
+disposition is that nothing on the resolution side is open at all: what is left is options 1–4.
 
 ### Re-measured 2026-09-13 on a fresh window — the rate went UP, the ratio did not move
 
