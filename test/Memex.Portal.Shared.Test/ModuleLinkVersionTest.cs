@@ -480,7 +480,7 @@ public class ModuleLinkVersionTest : IDisposable
         // The process-wide platform set, read once — see PlatformReferences for why (#4127).
         var platform = PlatformReferences.Platform(excludeReference);
         if (extra is not null)
-            platform.Add(extra);
+            platform = platform.Add(extra);
 
         var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
         if (publicKey is not null)

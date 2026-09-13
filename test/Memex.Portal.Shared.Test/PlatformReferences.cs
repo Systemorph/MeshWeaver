@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Compiler;
 using Microsoft.CodeAnalysis;
 
@@ -27,13 +28,14 @@ internal static class PlatformReferences
     /// (file name without extension) — the way a test stands in a different build of one contract.
     /// </summary>
     /// <param name="excludeReference">An assembly to leave out, or <c>null</c> for the whole set.</param>
-    /// <returns>The references, in the order the platform lists them.</returns>
-    public static List<MetadataReference> Platform(string? excludeReference = null) =>
+    /// <returns>The references, in the order the platform lists them — immutable; a caller that
+    /// needs one more reassigns <c>platform = platform.Add(extra)</c>.</returns>
+    public static ImmutableList<MetadataReference> Platform(string? excludeReference = null) =>
         CompileReferences.Default
             .Where(r => r.Display is { } path
                         && path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
                         && (excludeReference is null
                             || !string.Equals(Path.GetFileNameWithoutExtension(path), excludeReference,
                                 StringComparison.OrdinalIgnoreCase)))
-            .ToList();
+            .ToImmutableList();
 }
