@@ -104,9 +104,28 @@ public static class BundleReader
     /// gate (a plain .NET assembly binding by simple name is compatible by API, expressed as a
     /// semver floor). Null = no constraint. The manifest-level <see cref="Manifest.FrameworkMvid"/>
     /// stays the NodeType lane's strict gate and, for the module, DIAGNOSTIC metadata only.</param>
+    /// <param name="StaticAssets">Module-relative paths inside
+    /// <see cref="NuGetPackageWriter.ModuleAssetFolder"/> — a view pack's <c>wwwroot</c> tree.</param>
     public sealed record ModuleRef(
         string? AssemblyName, IReadOnlyList<string>? Assemblies, string? MinMeshVersion = null,
-        IReadOnlyList<string>? StaticAssets = null);
+        IReadOnlyList<string>? StaticAssets = null)
+    {
+        /// <summary>
+        /// 🚨 Module-relative paths inside <see cref="NuGetPackageWriter.ModuleNativeFolder"/>, each
+        /// of the shape <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c> (#4126) — the RID-specific
+        /// loadable payloads a module's own dependency graph declares. DECLARED, never enumerated:
+        /// every other section of this bundle is manifest-driven for the same reason, and a
+        /// folder-enumerating reader would adopt any stray entry a future writer places there.
+        ///
+        /// <para>An INIT property, not a fifth primary-constructor parameter. A parameter — even
+        /// with a default — REPLACES the record's constructor signature, so every module already
+        /// compiled against the 4-parameter one calls a constructor this build no longer has; the
+        /// repo's <c>check-record-signatures.py</c> gate refuses it, and it caught exactly this
+        /// change. <see cref="Manifest.SourceCommit"/> and
+        /// <see cref="AssemblyRef.SourceFingerprint"/> are here for the same reason.</para>
+        /// </summary>
+        public IReadOnlyList<string>? NativeAssets { get; init; }
+    }
 
     /// <summary>One landed-to-be module file: its name and bytes.</summary>
     /// <param name="FileName">File name as the manifest declared it.</param>
@@ -411,6 +430,59 @@ public static class BundleReader
             assets.Add(new ModuleAsset(relative, ReadAll(entry)));
         }
         return assets;
+    }
+
+    /// <summary>
+    /// The module's RID-specific NATIVE payloads (#4126), read by the same all-or-nothing rule as
+    /// its assemblies and for a stronger reason: a module that loads without the engine it declared
+    /// does not render wrong, it throws <c>DllNotFoundException</c> at first use — so half a native
+    /// set is worse than none, and none is what a consumer of a legacy bundle already handles.
+    ///
+    /// <para>The relative path is preserved exactly as declared, because it IS the layout the
+    /// runtime resolver probes (<c>ModuleNativeAssets</c> →
+    /// <c>&lt;moduleDir&gt;/runtimes/&lt;rid&gt;/native/&lt;lib&gt;</c>).</para>
+    /// </summary>
+    /// <param name="bundle">The archive bytes.</param>
+    /// <returns>The declared native payloads, or empty when the bundle declares none.</returns>
+    public static IReadOnlyList<ModuleAsset> ReadModuleNativeAssets(byte[] bundle)
+    {
+        using var buffer = new MemoryStream(bundle, writable: false);
+        using var archive = new ZipArchive(buffer, ZipArchiveMode.Read);
+
+        var manifestEntry = archive.GetEntry(NuGetPackageWriter.ManifestEntry);
+        if (manifestEntry is null)
+            return [];
+        Manifest? manifest;
+        using (var stream = manifestEntry.Open())
+            manifest = JsonSerializer.Deserialize<Manifest>(stream, Json);
+        if (manifest?.Module?.NativeAssets is not { Count: > 0 } declared)
+            return [];
+
+        var natives = new List<ModuleAsset>();
+        foreach (var relative in declared)
+        {
+            // 🚨 The EXACT layout, validated HERE and not only in the packer. This is the
+            // boundary for a PRODUCER-controlled bundle, and the landing stage writes these paths
+            // to disk for the process to load — so a path that is merely "not traversing" is not
+            // enough. Two refusals, because they are two different statements: one is a safety
+            // violation, the other is a payload nothing would ever probe.
+            if (IsUnsafeContentPath(relative))
+                throw new InvalidOperationException(
+                    $"bundle declares an unsafe native path '{relative}' — native payloads are "
+                    + "written relative to the module folder and then loaded, so a rooted or "
+                    + "parent-traversing path would place executable code outside it");
+            if (!NuGetPackageWriter.IsModuleNativeLayout(relative))
+                throw new InvalidOperationException(
+                    $"bundle declares a native payload at '{relative}', which is not the layout "
+                    + "the module loader probes (exactly runtimes/<rid>/native/<file>). Landing it "
+                    + "would write bytes to a path nothing ever looks at — shipped in appearance, "
+                    + "absent in behaviour — so the bundle is refused instead");
+            var entry = archive.GetEntry(NuGetPackageWriter.ModuleNativeEntryPathFor(relative));
+            if (entry is null)
+                return [];
+            natives.Add(new ModuleAsset(relative, ReadAll(entry)));
+        }
+        return natives;
     }
 
     public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModule(byte[] bundle)

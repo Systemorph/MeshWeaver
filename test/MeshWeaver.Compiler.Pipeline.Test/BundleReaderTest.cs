@@ -293,4 +293,43 @@ public class BundleReaderTest
 
         Assert.Null(BundleReader.Read(buffer.ToArray()).Manifest!.FrameworkMvid);
     }
+    /// <summary>
+    /// 🚨 The READER enforces the native layout too, not only the packer (#4126). This is the
+    /// boundary for a PRODUCER-controlled bundle and the landing stage writes these paths to disk
+    /// for the process to LOAD — so "not traversing" is not enough: a payload at a path the loader
+    /// never probes would be written and then never looked at, shipped in appearance and absent in
+    /// behaviour. Refused, with the two cases kept apart because they are different statements.
+    /// </summary>
+    [Theory]
+    [InlineData("runtimes/linux-x64/other/native/deep.so", "not the layout")]
+    [InlineData("runtimes/linux-x64/native/sub/nested.so", "not the layout")]
+    [InlineData("../escape.so", "unsafe native path")]
+    public void ANativePayloadOutsideTheProbedLayoutIsREFUSED(string declared, string says)
+    {
+        var manifestJson = JsonSerializer.Serialize(new
+        {
+            plugin = "ThreeBody",
+            version = "1.0.0",
+            frameworkMvid = "abc",
+            module = new
+            {
+                assemblyName = "M",
+                assemblies = new[] { "M.dll" },
+                nativeAssets = new[] { declared },
+            },
+        });
+        var buffer = new MemoryStream();
+        NuGetPackageWriter.Write(buffer, Manifest, "3.0.0",
+        [
+            new NuGetPackageWriter.Entry(
+                NuGetPackageWriter.ModuleEntryPathFor("M.dll"),
+                () => new MemoryStream("M"u8.ToArray())),
+        ], manifestJson);
+        var bundle = buffer.ToArray();
+
+        var thrown = Assert.Throws<InvalidOperationException>(
+            () => BundleReader.ReadModuleNativeAssets(bundle));
+        Assert.Contains(says, thrown.Message, StringComparison.Ordinal);
+    }
+
 }
