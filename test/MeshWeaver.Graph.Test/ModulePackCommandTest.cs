@@ -291,6 +291,77 @@ public class ModulePackCommandTest : IDisposable
         Assert.False(Directory.Exists(outDir));
     }
 
+    /// <summary>
+    /// 🚨 #4158 — the bundle states the PRODUCING REPOSITORY'S COMMIT its bytes were built from,
+    /// beside the framework identity they were built against, so a consumer's <c>[ModuleLoad]</c>
+    /// line can tell "this generation is the newest" from "its types are current". On
+    /// memex.meshweaver.cloud 2026-09-10 (MeshWeaver.Plugins#1585) those two were read as one fact:
+    /// <c>mvid=</c> and <c>written=</c> are both properties of the FILE, the file WAS the newest on
+    /// the volume, and its types predated two merged pull requests.
+    ///
+    /// <para>Paired with its own negative: a pack that states no commit writes NO field, so a
+    /// consumer reading an older bundle and a consumer reading this one answer the same thing —
+    /// "nobody recorded it" — rather than one of them reading an empty string.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("6a5f0c1d2e3b4a596877665544332211aabbccdd")]
+    [InlineData(null)]
+    public void TheBuiltFromCommit_IsRecordedWhenStated_AndAbsentWhenNot(string? commit)
+    {
+        var outDir = Path.Combine(root, "out-source-commit-" + (commit ?? "none"));
+        var args = new List<string>
+        {
+            Path.Combine(root, "closure"),
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.5.0",
+            "--framework-mvid", Identity,
+            "--out", outDir,
+        };
+        if (commit is not null)
+            args.AddRange(["--source-commit", commit]);
+
+        Assert.Equal(0, ModulePackCommand.Run([.. args]));
+
+        var (manifest, _) = BundleReader.ReadModule(File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.5.0.module.nupkg")));
+
+        Assert.Equal(commit, manifest!.SourceCommit);
+        // The identity must be untouched by the new field — the two are separate statements, and a
+        // pack that started answering one with the other would be this issue's defect inverted.
+        Assert.Equal(Identity, manifest.FrameworkMvid);
+    }
+
+    /// <summary>
+    /// A commit that reads as ABSENT downstream is refused where it is created. Blank, padded or
+    /// shaped like anything but a revision identifier, it would print as an empty field on every
+    /// consumer's load line instead of the <c>(unrecorded)</c> that says nobody stated one — the
+    /// same rule the blank framework identity follows, for the same reason.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("a b")]
+    [InlineData("../escape")]
+    public void ASourceCommitThatWouldReadAsAbsent_IsRefused(string bad)
+    {
+        var outDir = Path.Combine(root, "out-bad-source-commit");
+        var exit = ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.5.0",
+            "--framework-mvid", Identity,
+            "--source-commit", bad,
+            "--out", outDir,
+        ]);
+
+        Assert.Equal(2, exit);
+        Assert.False(Directory.Exists(outDir),
+            "a refused invocation must not have written anything");
+    }
+
     [Fact]
     public void APackedModuleBundle_RoundTripsThroughTheReader()
     {
