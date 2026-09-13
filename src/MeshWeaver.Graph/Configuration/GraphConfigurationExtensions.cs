@@ -334,6 +334,16 @@ public static class GraphConfigurationExtensions
                 // set and a false CS0103. Stateless integrity rule, no hub dependency.
                 services.AddScoped<INodeValidator, CodeNodeSegmentNameValidator>();
 
+                // The create BOUNDARY's half of CreatableTypes (#4077). Until this, a parent
+                // NodeType's whitelist was honoured by the Create FORM alone and the write boundary
+                // asked nothing about it — so a direct CreateNodeRequest, an agent tool call, or a
+                // forged `/data/{form}/type` value wrote any type the parent did not list. It is a
+                // NO-OP unless the parent's type declares CreatableTypes, and it exempts the
+                // platform's own writers (system / hub identity: installer, GitSync, migrations),
+                // which is both why no import that is legal today starts failing and why the bulk
+                // fan-out pays no read. Scoped, like the other content-integrity validators.
+                services.AddScoped<INodeValidator, CreatableTypesCreationValidator>();
+
                 // Delivery for the compile pipeline's parked-failure bell. The pipeline lives in
                 // MeshWeaver.Compiler and cannot reference NotificationService (it reads the
                 // Notification* node types), so it resolves this seam optionally — registered
