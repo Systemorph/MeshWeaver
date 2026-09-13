@@ -88,14 +88,22 @@ ends in `AddressRecyclingException`, which is the honest answer while the databa
 
 ### What is transient
 
-`InfrastructureFault.IsTransient` walks the exception chain (`ExceptionChain`, so an
-`AggregateException` from a data-source initialization or a reflective wrapper does not hide
-the cause) for a `System.Data.Common.DbException` whose own `IsTransient` says so — every
-ADO.NET provider classifies its connection failures and timeouts there; Npgsql sets it for
-exactly the two shapes measured, with no provider reference needed in core — or a bare
-`SocketException`. A `TimeoutException` on its own is NOT transient: the init time-box mints
-one for a hang, and a hang is a defect. A provider that leaves `IsTransient` false has made its
-own classification, which is honoured.
+`InfrastructureFault.IsTransient` walks the inner-exception chain (so a reflective wrapper or an
+"initialization failed" wrapper does not hide the cause) for a `System.Data.Common.DbException`
+whose own `IsTransient` says so — every ADO.NET provider classifies its connection failures and
+timeouts there; Npgsql sets it for exactly the two shapes measured, with no provider reference
+needed in core — or a bare `SocketException`. A `TimeoutException` on its own is NOT transient:
+the init time-box mints one for a hang, and a hang is a defect. A provider that leaves
+`IsTransient` false has made its own classification, which is honoured.
+
+🚨 **An `AggregateException` is transient only when EVERY branch is.** A `DataContext` initialises
+its data sources under `Task.WhenAll`, so one aggregate can carry a connection timeout from one
+source and a genuine defect from another; reading "any branch transient" as transient would
+retire the activation, discard the defect, and re-run the same failing initialization on every
+reactivation — a latch traded for a loop. A mixed aggregate keeps the latch, whose recorded error
+still carries the transient branch. The full corpus — both incident shapes, the wrappers, the bare
+`TimeoutException`, the non-transient provider fault, all-transient / mixed / nested / empty
+aggregates, a cyclic chain — is `InfrastructureFaultTest`.
 
 ### What keeps the latch, and why
 
@@ -131,6 +139,10 @@ return Observable
     .Select(_ => { OpenGate(MessageHubConfiguration.InitializeGateName); return request.Processed(); })
     .Catch((Exception ex) =>
     {
+        if (IsShuttingDown || this.IsTerminatedByScopeTeardown(ex))
+            …                                                   // a recognised shutdown, no failure state
+        if (InfrastructureFault.IsTransient(ex) && TryRetireAfterTransientInitializationFault(ex))
+            return Observable.Return(request.Processed());      // retired, not latched — see below
         var reason = ex is TimeoutException
             ? "a BuildupAction did not complete within …s (a hung dependency or stuck compile)"
             : $"a BuildupAction faulted ({ex.GetType().Name}: {ex.Message})";
