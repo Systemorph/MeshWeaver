@@ -5,10 +5,13 @@ WHY
 ---
 Doc/Architecture/PluginBundlesInTheRegistry puts plugin bundles into the fleet registry as OCI
 artifacts, authorized per repository at the edge by memex's licence answer, and materialised into
-the pre-warm's directory by an init container before the portal starts. Three pieces of shell do
+the pre-warm's directory by an init container before the portal starts. Four pieces of shell do
 all of it and nothing else executes them before a deploy:
 
-  * .github/scripts/push-bundle-publication.sh   the publisher (standalone; a lane will call it)
+  * .github/scripts/push-bundle-publication.sh   the publisher (main-cd.yml's bake jobs and the
+                                                 satellites' node-repo-publish-bake.yml call it
+                                                 after the share seal)
+  * .github/scripts/install-oras.sh              the pinned ORAS install every lane runs first
   * deploy/helm/files/bundle-fetch.sh            the `bundle-fetch` init container's script
   * deploy/helm/files/registry-validate.sh       docker_auth's ext_auth hook, emitting the labels
                                                  the ACL in templates/registry/configmap.yaml
@@ -43,24 +46,21 @@ in the Plugins repo. Here the entries are the documented shapes — `Plugins/*`,
 makes of each. No Kubernetes is involved either: the init container's mounts and environment are
 asserted by check-chart-invariants (invariant 13); this harness runs the script those mounts feed.
 
-Needs: docker, helm, openssl, shellcheck, PyYAML; ORAS is installed from a PINNED release
-(version + sha256 per platform) unless $ORAS names a binary.
+Needs: docker, helm, openssl, shellcheck, PyYAML; ORAS is installed through the lanes' own
+install-oras.sh (ONE pin, sha256-verified) unless $ORAS names a binary at that pin.
 """
 
 from __future__ import annotations
 
 import base64
-import hashlib
 import http.server
 import io
 import json
 import os
-import platform
 import shutil
 import socket
 import subprocess
 import sys
-import tarfile
 import tempfile
 import threading
 import urllib.error
@@ -79,16 +79,10 @@ FETCH = REPO / "deploy/helm/files/bundle-fetch.sh"
 VALIDATE = REPO / "deploy/helm/files/registry-validate.sh"
 CHART = REPO / "deploy/helm"
 
-# The images the chart pins (values.registry.example.yaml / values.yaml). Read from the values so
-# the harness cannot drift from the chart: it tests whatever the chart would deploy.
-ORAS_VERSION = "1.3.4"
-ORAS_SHA256 = {
-    ("linux", "x86_64"): "f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454",
-    ("linux", "aarch64"): "15702c6e3a4a56a8bd8ac5c17efdbcab56d9bada661ccbcf017f5b10c1d89399",
-    ("darwin", "arm64"): "217761a9500242ff473de8656b5aca21136ff39e17e9e61fd8936bbfd902704c",
-    ("darwin", "x86_64"): "5e964f3d5a36eb9499a9d3e252a86b09e7adf3e6f6447eec56fd249c6702af7e",
-}
-ORAS_ARCH = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
+# ORAS comes from install-oras.sh — the ONE pin (version + sha256 per platform) the bake lanes
+# install with, so the client this harness executes the publisher with is the client the lanes
+# publish with. A second pin table here was the drift this replaces.
+INSTALL_ORAS = HERE / "install-oras.sh"
 
 IDENTITY = "s0123456789abcdef0123456789abcdef"
 PUBLISHER_PASSWORD = "example-publisher-password"  # the hash in values.registry.example.yaml
@@ -135,14 +129,6 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def sha256_of(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 # ---------------------------------------------------------------------------------------------
 # Preflight: every input asserted, RED naming what to provide. No skip-trapdoor.
 # ---------------------------------------------------------------------------------------------
@@ -166,32 +152,22 @@ def preflight(work: Path) -> str:
     if info.returncode != 0:
         print(f"::error::docker is on PATH but the engine does not answer: {info.stderr.strip()}")
         sys.exit(1)
-    oras = os.environ.get("ORAS")
-    if oras and shutil.which(oras):
-        return oras
-    system = platform.system().lower()
-    machine = platform.machine()
-    key = (system, "arm64" if machine in ("arm64", "aarch64") and system == "darwin" else machine)
-    if key not in ORAS_SHA256:
-        print(f"::error::no pinned ORAS checksum for {system}/{machine}; set $ORAS to a binary")
+    # The lanes' own installer, executed (not re-implemented): $ORAS naming a binary is honoured by
+    # the script itself, at the pin only. Its last line is `oras=<path>`; anything else is RED.
+    if not INSTALL_ORAS.is_file():
+        print(f"::error::{INSTALL_ORAS} is missing — the harness installs ORAS through the lanes' script")
         sys.exit(1)
-    arch = ORAS_ARCH[machine]
-    name = f"oras_{ORAS_VERSION}_{system}_{arch}.tar.gz"
-    url = f"https://github.com/oras-project/oras/releases/download/v{ORAS_VERSION}/{name}"
-    tgz = work / name
-    with urllib.request.urlopen(url, timeout=120) as resp, open(tgz, "wb") as out:
-        shutil.copyfileobj(resp, out)
-    actual = sha256_of(tgz)
-    if actual != ORAS_SHA256[key]:
-        print(f"::error::{name} sha256 {actual} != pinned {ORAS_SHA256[key]} — refusing to run an unverified binary")
+    r = run(["bash", str(INSTALL_ORAS), str(work / "oras-install")])
+    print(r.stdout.rstrip())
+    line = (r.stdout.strip().splitlines() or [""])[-1]
+    if r.returncode != 0 or not line.startswith("oras="):
+        print(f"::error::install-oras.sh failed (exit {r.returncode}): {r.stderr.strip()[:400]}")
         sys.exit(1)
-    with tarfile.open(tgz) as tf:
-        member = tf.getmember("oras")
-        with tf.extractfile(member) as src, open(work / "oras", "wb") as dst:
-            shutil.copyfileobj(src, dst)
-    (work / "oras").chmod(0o755)
-    print(f"oras {ORAS_VERSION} installed from {url} (sha256 verified)")
-    return str(work / "oras")
+    oras = line[len("oras="):]
+    if not (Path(oras).is_file() and os.access(oras, os.X_OK)):
+        print(f"::error::install-oras.sh reported '{oras}', which is not an executable file")
+        sys.exit(1)
+    return oras
 
 
 # ---------------------------------------------------------------------------------------------
@@ -380,6 +356,40 @@ def case_plain(oras: str, work: Path, containers: Containers, reg_image: str) ->
     r2 = push(pub, IDENTITY, "--tag-run", "4243", "--release", "3.1.0")
     d2 = next((t.split("=", 1)[1] for l in r2.stdout.splitlines() for t in l.split() if t.startswith("index=")), "")
     expect(r2.returncode == 0 and d2 == index_digest, f"a second push of the same bytes yields the same index digest ({d2 == index_digest})")
+
+    # The registry's sealed-skip (--skip-if-published): the lanes' mode. Same content under the
+    # tag ⇒ nothing pushed, the existing digest reported, the release still recorded; different
+    # content ⇒ pushed, the tag moves, the previous generation stays resident by digest; a
+    # publication with no recorded source commit cannot be skipped and is refused outright.
+    def index_of(res: subprocess.CompletedProcess) -> str:
+        return next((t.split("=", 1)[1] for l in res.stdout.splitlines() for t in l.split() if t.startswith("index=")), "")
+
+    r3 = push(pub, IDENTITY, "--tag-run", "4244", "--release", "3.1.0", "--skip-if-published")
+    expect(r3.returncode == 0 and "skipped=already-published" in r3.stdout and index_of(r3) == index_digest,
+           f"--skip-if-published on already-published content pushes nothing and reports the existing index (exit {r3.returncode})")
+    expect(resolve(f"plugins/plugins:{IDENTITY}-4244") == "", "…and the run tag of the skipped run was NOT written")
+    expect("release=3.1.0" in r3.stdout and resolve("plugins/releases:3.1.0").startswith("sha256:"),
+           "…while the release identity is still recorded on the skipped run")
+    two = make_publication(work, "two")
+    r4 = push(two, IDENTITY, "--tag-run", "4245", "--skip-if-published")
+    d4 = index_of(r4)
+    expect(r4.returncode == 0 and "skipped=" not in r4.stdout and d4.startswith("sha256:") and d4 != index_digest,
+           f"--skip-if-published with a DIFFERENT source commit republishes under a new index digest (exit {r4.returncode})")
+    expect(resolve(f"plugins/plugins:{IDENTITY}") == d4, "…the identity tag moved to the new publication")
+    old = run([oras, "manifest", "fetch", "--plain-http", f"{host}/plugins/plugins@{index_digest}"])
+    expect(old.returncode == 0, "…and the previous generation is still resident by digest")
+    r5 = push(two, IDENTITY, "--skip-if-published")
+    expect(r5.returncode == 0 and "skipped=already-published" in r5.stdout and index_of(r5) == d4,
+           "…a repeat of the new content is then skipped against the moved tag")
+    nocommit = make_publication(work, "nocommit"); (nocommit / "source-commit.txt").write_text("unknown\n")
+    r6 = push(nocommit, "snocommit", "--skip-if-published")
+    expect(r6.returncode == 1 and "needs a recorded source commit" in r6.stdout and resolve("plugins/plugins:snocommit") == "",
+           "a publication without a recorded source commit is refused under --skip-if-published, before any push")
+    # Back to the fixture the fetch cases below diff against — with the same --release, because the
+    # release rides in the sidecar config and therefore in the index digest.
+    r7 = push(pub, IDENTITY, "--tag-run", "4246", "--release", "3.1.0")
+    expect(r7.returncode == 0 and index_of(r7) == index_digest and resolve(f"plugins/plugins:{IDENTITY}") == index_digest,
+           "re-pushing the first publication moves the tag back to its (unchanged) digest")
 
     # Refusals: nothing reaches the registry.
     unsealed = make_publication(work, "unsealed"); (unsealed / "_complete").unlink()

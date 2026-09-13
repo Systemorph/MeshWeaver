@@ -93,8 +93,17 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
             "the runtime NodeType in the instance's own partition is what the ancestor-scoped leg is FOR — "
             + "without it in the baseline this comparison is not measuring the query legs at all");
 
+        // The static registrations, under the SAME create-context rule every query backend applies
+        // — the type-level map plus the node's own opt-out. The retired form applied only the
+        // second half to its fixed Items, so it also offered 25 INSTANCES whose type had opted out
+        // (every `*/_Access/Public_Access`, the `Admin/Partition/*` records, the `*/_Policy`
+        // nodes, the `Templates/Import/*` code templates). Not one of them is a type declaration,
+        // and dropping them is the menu and its own query legs finally agreeing; the named
+        // assertion below is what makes sure no TYPE went with them.
+        var config = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
         var staticItems = Mesh.ServiceProvider.EnumerateStaticNodes()
-            .Where(n => !n.IsExcludedFromContext(MeshContexts.Create))
+            .Where(n => !config.IsExcludedFromContext(n.NodeType, MeshContexts.Create)
+                        && !n.IsExcludedFromContext(MeshContexts.Create))
             .Select(n => n.Path)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         staticItems.Should().NotBeEmpty("the form passed these as the picker's fixed Items");
@@ -108,9 +117,17 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
             + "silently disappeared, which is #4040 pointed the other way");
         staticItems.Except(offered).OrderBy(x => x).Should().BeEmpty(
             "the static registrations the form handed the picker as fixed Items are the bulk of the "
-            + "menu (Markdown, Group, Role, Redirect, UiContribution, HomeTab, License, WhatsNew — "
-            + "none of which carries NodeType=\"NodeType\", which is why filtering on that stamp "
-            + "kept 7 of 42)");
+            + "menu");
+
+        // 🚨 NAMED, so the assertion above cannot pass by moving with the implementation. These
+        // are platform TYPE REGISTRATIONS and every one of them carries NO NodeType stamp at all —
+        // `AddMeshNodes(new MeshNode("Group") { HubConfiguration = … })` — which is why filtering
+        // the static bucket on `NodeType == "NodeType"` kept 7 of 42 and silently dropped them.
+        string[] platformTypes =
+            ["Markdown", "Group", "Role", "Redirect", "UiContribution", "HomeTab", "License", "WhatsNew"];
+        platformTypes.Except(offered).OrderBy(x => x).Should().BeEmpty(
+            "these are types a person creates from this menu, and none of them is discoverable by "
+            + "any query — they reach it only through the static bucket");
         offered.Should().Contain($"{types}/Widget/Part",
             "the second discovery leg — the child NodeTypes the PARENT'S TYPE defines, so a "
             + "{0}/Widget instance offers {0}/Widget/Part. The retired literals could not reach it "
@@ -215,7 +232,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task ATypeThatOptedOutOfTheCreateContextIsNeverOffered()
     {
-        var (_, host, declaredButOptedOut) = await Fixture();
+        var (types, host, declaredButOptedOut) = await Fixture();
 
         var optedOut = Mesh.ServiceProvider.EnumerateStaticNodes()
             .Where(n => n.IsExcludedFromContext(MeshContexts.Create))
@@ -235,6 +252,17 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
             "the parent's CreatableTypes names {0}, which opted out of context:create — a "
             + "whitelist ADDS types the queries could not reach, it does not overrule a type's own "
             + "statement that it is not created by hand", declaredButOptedOut);
+
+        // 🚨 And the same for a RUNTIME type, whose opt-out is on the persisted node rather than
+        // in the static registry — so it is invisible without a read. The create-filtered queries
+        // omit it correctly; the declaration would otherwise synthesise it straight back in.
+        declaring.Should().NotContain($"{types}/Internal",
+            "a runtime NodeType carries ExcludeFromContext: [\"create\"] exactly as a platform one "
+            + "does — an opt-out the provider can only see by resolving the declared path, which "
+            + "is the whole reason it does");
+        declaring.Should().Contain($"{types}/Question",
+            "the declared type that did NOT opt out is still offered — this is the control that "
+            + "keeps the assertion above from passing because declarations stopped working");
     }
 
     /// <summary>
@@ -271,6 +299,42 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
             + "withholds a type while the form still submits it enforces nothing");
         submitted.Should().Be($"{types}/Question",
             "with one allowed type it is the one selected — the person sees what will be created");
+    }
+
+    /// <summary>
+    /// 🚨 THE SINGLE-TYPE URL SHAPE IS GOVERNED TOO. <c>?types=X</c> (the MeshSearch "+" button)
+    /// and <c>?type=X</c> pin one type, and that shape used to render a read-only label without
+    /// asking <see cref="ICreatableTypesProvider"/> at all — so a URL naming a type the parent
+    /// forbids seeded it, showed it as a fait accompli, and submitted it. Both shapes of the field
+    /// now come out of the same resolved set.
+    ///
+    /// <para>Non-vacuous: the same URL against the sibling instance whose type declares nothing
+    /// DOES pin the type, so "the field offers nothing" is not simply what this URL always does.</para>
+    /// </summary>
+    [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
+    public async Task APinnedTypeTheParentForbidsIsNotSubmittableThroughTheUrl()
+    {
+        var (_, host, _) = await Fixture();
+
+        // The control: a parent that declares nothing allows Markdown, so the pinned URL is
+        // honoured — the field renders as the read-only label and the value stands. Without this
+        // half, the measurement below would pass for a type this URL simply never pins.
+        var (openStream, openContext) = await RenderedFormContext($"{host}/Thing?types=Markdown");
+        (await SubmittedType(openStream, openContext)).Should().Be("Markdown",
+            "the parent declares nothing, so it restricts nothing and the pinned type stands");
+
+        // The measurement: the sealed parent declares CreatableTypes and switches the globals off,
+        // so Markdown is not creatable under it however the URL asks.
+        var (stream, picker) = await RenderedCreateForm($"{host}/Sealed?types=Markdown");
+        var offered = PickerPaths(picker);
+        var submitted = await SubmittedType(stream, picker);
+        Output.WriteLine($"pinned-URL offered: [{string.Join(", ", offered)}] submitted: '{submitted}'");
+
+        offered.Should().NotContain("Markdown",
+            "the parent excludes it, and a URL parameter is not a permission");
+        submitted.Should().NotBe("Markdown",
+            "the field is what the Create button reads — pinning a forbidden type in the URL must "
+            + "not be a route around the parent's declaration");
     }
 
     // ── fixture ────────────────────────────────────────────────────────────────────────────────
@@ -310,7 +374,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
                 TypeNode(types, "Offer", new NodeTypeDefinition
                 {
                     Configuration = "config => config",
-                    CreatableTypes = [$"{types}/Question", optedOut],
+                    CreatableTypes = [$"{types}/Question", optedOut, $"{types}/Internal"],
                 }),
                 // Same, with the globals switched off.
                 TypeNode(types, "SealedOffer", new NodeTypeDefinition
@@ -320,6 +384,11 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
                     IncludeGlobalTypes = false,
                 }),
                 TypeNode(types, "Question", new NodeTypeDefinition { Configuration = "config => config" }),
+                // A RUNTIME NodeType that opts out of being created, declared by Offer below. Its
+                // opt-out lives on the persisted node, not in the static registry, so it is only
+                // visible to a read.
+                TypeNode(types, "Internal", new NodeTypeDefinition { Configuration = "config => config" })
+                    with { ExcludeFromContext = ImmutableHashSet.Create(MeshContexts.Create) },
             ],
         });
 
@@ -388,20 +457,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     private async Task<(ISynchronizationStream<JsonElement> Stream, MeshNodePickerControl Picker)>
         RenderedCreateForm(string nodePath)
     {
-        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.CreateNodeArea);
-        var stream = GetClient().GetWorkspace()
-            .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(nodePath), reference);
-
-        var root = await stream.GetControlStream(reference.Area!)
-            .Where(c => c is StackControl { Areas.Count: > 0 })
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
-
-        var areas = ((StackControl)root!).Areas
-            .Select(a => a.Area?.ToString())
-            .Where(a => !string.IsNullOrEmpty(a))
-            .Select(a => stream.GetControlStream(a!))
-            .ToArray();
-
+        var (stream, areas) = await RenderedAreas(nodePath);
         var picker = await Observable.Merge(areas)
             .OfType<MeshNodePickerControl>()
             .Where(IsTypePicker)
@@ -413,17 +469,61 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
         => (await RenderedCreateForm(nodePath)).Picker;
 
     /// <summary>
+    /// The rendered form's data pointer, taken from the first form-bound control that arrives —
+    /// used where the type field renders as a read-only LABEL and there is no picker to read it
+    /// off. Every field on this form shares the one <c>DataContext</c>.
+    /// </summary>
+    private async Task<(ISynchronizationStream<JsonElement> Stream, string DataContext)>
+        RenderedFormContext(string nodePath)
+    {
+        var (stream, areas) = await RenderedAreas(nodePath);
+        var dataContext = await Observable.Merge(areas)
+            .Select(c => (c as UiControl)?.DataContext?.ToString())
+            .Where(d => !string.IsNullOrEmpty(d) && d!.StartsWith("/data/", StringComparison.Ordinal))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        return (stream, dataContext!);
+    }
+
+    /// <summary>
     /// The value the Create button would SUBMIT — the form's own <c>type</c> field, read off the
     /// rendered area's data at the pointer the picker is bound to. This is the value
     /// <c>CreateLayoutArea</c>'s click handler reads; the picker's item list is only what a person
     /// is shown.
     /// </summary>
-    private static async Task<string> SubmittedType(
+    private static Task<string> SubmittedType(
         ISynchronizationStream<JsonElement> stream, MeshNodePickerControl picker)
-    {
-        var pointer = $"{picker.DataContext}/type";
-        return await stream.GetDataStream<string>(new JsonPointerReference(pointer))
+        => SubmittedType(stream, picker.DataContext?.ToString() ?? "");
+
+    private static async Task<string> SubmittedType(
+        ISynchronizationStream<JsonElement> stream, string dataContext)
+        => await stream.GetDataStream<string>(new JsonPointerReference($"{dataContext}/type"))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await() ?? "";
+
+    /// <summary>
+    /// Subscribes to every child area of the rendered Create form at once, so a sibling that has
+    /// not rendered yet can never hold the read.
+    /// </summary>
+    private async Task<(ISynchronizationStream<JsonElement> Stream, IObservable<object?>[] Areas)>
+        RenderedAreas(string nodePath)
+    {
+        var parts = nodePath.Split('?', 2);
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.CreateNodeArea)
+        {
+            Id = parts.Length == 2 ? parts[1] : null,
+        };
+        var stream = GetClient().GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(parts[0]), reference);
+
+        var root = await stream.GetControlStream(reference.Area!)
+            .Where(c => c is StackControl { Areas.Count: > 0 })
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+
+        var areas = ((StackControl)root!).Areas
+            .Select(a => a.Area?.ToString())
+            .Where(a => !string.IsNullOrEmpty(a))
+            .Select(a => stream.GetControlStream(a!))
+            .ToArray();
+        return (stream, areas);
     }
 
     private static bool IsTypePicker(MeshNodePickerControl picker) =>

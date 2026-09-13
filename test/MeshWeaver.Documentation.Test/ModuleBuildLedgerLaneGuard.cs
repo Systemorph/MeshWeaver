@@ -88,7 +88,8 @@ public class ModuleBuildLedgerLaneGuard
             return i;
         }
 
-        var upload = At("name: module-bundle-${{ matrix.entry.module }}");
+        // The first of the unrolled per-module upload slots (batched legs, 2026-09-12).
+        var upload = At("name: module-bundle-${{ steps.bundles.outputs.s1 }}");
         var built = At("--status Built");
         var tests = At("dotnet test \"$tests\"");
         var tested = At("--status Tested --trx");
@@ -107,9 +108,14 @@ public class ModuleBuildLedgerLaneGuard
         // Tested and Published are gated on the OUTCOME of the step they attest, not on the job's mood.
         Assert.Contains("steps.tests.outcome == 'success'", pack, StringComparison.Ordinal);
         Assert.Contains("steps.publish.outcome == 'success'", pack, StringComparison.Ordinal);
-        // The verdict steps run on failure / cancellation only.
-        Assert.Contains("if: failure() && inputs.ledger == 'required' && steps.plan.outputs.key != ''", pack, StringComparison.Ordinal);
-        Assert.Contains("if: cancelled() && inputs.ledger == 'required' && steps.plan.outputs.key != ''", pack, StringComparison.Ordinal);
+        // The Failed verdict is PER MODULE and the failures it records did not fail the step that
+        // found them (a batched leg isolates each module), so it runs `always()` and reads the
+        // batch state: the modules marked failed, plus — when the LEG itself stopped in a shared
+        // step — the ones still in play. Released runs on cancellation only, for every key.
+        Assert.Contains("if: always() && inputs.ledger == 'required'", pack, StringComparison.Ordinal);
+        Assert.Contains("for MODULE in $(bk list --failed); do", pack, StringComparison.Ordinal);
+        Assert.Contains("if [ \"$JOB_STATUS\" = failure ]; then", pack, StringComparison.Ordinal);
+        Assert.Contains("if: cancelled() && inputs.ledger == 'required'", pack, StringComparison.Ordinal);
         // The reuse leg verifies the bytes against the record and never packs anyway.
         Assert.Contains("gh run download \"$ART_RUN\"", pack, StringComparison.Ordinal);
         Assert.Contains("is not the ledger's $EXPECTED_SHA", pack, StringComparison.Ordinal);
@@ -135,15 +141,17 @@ public class ModuleBuildLedgerLaneGuard
         var tested = tests.IndexOf("--status Tested --trx", StringComparison.Ordinal);
         Assert.True(suite >= 0, "the tests lane must run the module's suite");
         Assert.True(tested > suite, "`Tested` must be recorded AFTER the suite it attests");
-        // Gated on the OUTCOME of the step it attests — never on the job's mood.
-        Assert.Contains("if: inputs.ledger == 'required' && steps.tests.outcome == 'success' && matrix.entry.ledger.key != ''",
+        // Gated on the OUTCOME of the step it attests — never on the job's mood — and, inside,
+        // on each module's own `tested` fact and ledger key (batched legs, 2026-09-12).
+        Assert.Contains("if: inputs.ledger == 'required' && steps.tests.outcome == 'success'",
             tests, StringComparison.Ordinal);
+        Assert.Contains("bk list --ok --where tested=true --where 'ledger.key!='", tests, StringComparison.Ordinal);
         // The suite writes the evidence the ledger records, exactly as the inline one does.
         Assert.Contains("--logger \"trx;LogFileName=ledger.trx\"", tests, StringComparison.Ordinal);
         // The way out: this lane can only fail in one phase, so it names it rather than deriving it.
         Assert.Contains("--status Failed --phase test", tests, StringComparison.Ordinal);
-        Assert.Contains("if: failure() && inputs.ledger == 'required' && matrix.entry.ledger.key != ''",
-            tests, StringComparison.Ordinal);
+        Assert.Contains("if: always() && inputs.ledger == 'required'", tests, StringComparison.Ordinal);
+        Assert.Contains("for MODULE in $(bk list --failed); do", tests, StringComparison.Ordinal);
     }
 
     [Fact]

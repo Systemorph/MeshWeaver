@@ -149,27 +149,76 @@ next token exchange, within a token's fifteen minutes.
 
 ## Publishing
 
-`.github/scripts/push-bundle-publication.sh --registry <host> --source <name> --identity <id>
---dir <publication dir> [--tag-run <run>] [--release <version>]` pushes one sealed publication —
-the directory `publish-bake-bundles.sh` writes for one source and one identity — with ORAS as the
-publisher, in the order that is the seal: every bundle manifest, tagged `<identity>` in
-`plugins/<source>/<package>` and copied by digest into `plugins/<source>`; the sidecar manifest;
-the index by digest; then the tags, `<identity>-<run>` (immutable) and `<identity>` LAST — the
-tag move is the seal, and until it moves nothing above is visible under the tag. It refuses a
-directory without `_complete`, or with a listed bundle or module absent, before the first push,
-and prints the index digest and one `(package, digest)` line per bundle. The bake lane calls it
-after the bake and the link gate and records the index digest in the publication it registers at
-`Hosting/PlatformBuilds` (`register-publication`), so the sealed set is a list of
-`(package, digest)` pairs and the catalog index carries `artifact:
-cr.meshweaver.cloud/plugins/<source>/<package>@sha256:…` per package.
+**Wired (2026-09-08).** `.github/scripts/push-bundle-publication.sh --registry <host> --source
+<name> --identity <id> --dir <publication dir> [--tag-run <run>] [--release <version>]
+[--skip-if-published]` pushes one sealed publication — the directory `publish-bake-bundles.sh`
+writes for one source and one identity — with ORAS as the publisher, in the order that is the
+seal: every bundle manifest, tagged `<identity>` in `plugins/<source>/<package>` and copied by
+digest into `plugins/<source>`; the sidecar manifest; the index by digest; then the tags,
+`<identity>-<run>` (immutable) and `<identity>` LAST — the tag move is the seal, and until it
+moves nothing above is visible under the tag. It refuses a directory without `_complete`, or
+with a listed bundle or module absent, before the first push, and prints the index digest and one
+`(package, digest)` line per bundle.
+
+**Who calls it, and with what.** Three lanes, one shape — after the share seal succeeds, never
+before and never instead:
+
+| lane | source | call |
+|---|---|---|
+| `main-cd.yml` → `publish-bake` (the platform's own content, one leg per architecture) | `meshweaver-content` | `--tag-run <run id> --release <version> --skip-if-published` — the release identity lands at `plugins/releases:<version>` on every run, exactly as the share's `_releases/<version>` marker does |
+| `main-cd.yml` → `plugins-bake` (through the reusable lane) | `plugins` | as below |
+| `node-repo-publish-bake.yml` (every satellite, and core's `plugins-bake`) | the caller's `bake-source` | `--tag-run <run id> --skip-if-published`, registry and account from the `bundle-registry` / `bundle-registry-publisher` inputs (defaults `cr.meshweaver.cloud` / `publisher`) |
+
+The directory pushed is the one `publish-bake-bundles.sh` **materialises itself**
+(`BAKE_PUBLICATION_DIR`): every file of its verified upload plan, byte-checked against the
+digests the shares were verified against, then `_complete` last — written only after every share
+target sealed or already held the content, so the registry and the shares hold ONE set and the
+registry never seals what a share refused. The lanes install ORAS pinned through
+`.github/scripts/install-oras.sh` (the one pin; the harness below executes the publisher with the
+same binary), and log in with `.github/scripts/registry-login.sh` as the publisher — the password
+is `secrets.MW_REGISTRY_PUBLISHER_PASSWORD` on the calling repository, asserted RED by the lane's
+preflight before the bake starts (never an `if:` that skips the push), and provisioned in BOTH
+secret stores (Actions and Dependabot); core's `main-cd.yml` asserts the same secret in its own
+`preflight` and passes it into the lane as `bundle-registry-publisher-password`.
+
+🚨 **`--skip-if-published` is the registry's sealed-skip, and it needs positive proof.** The
+shares skip a publication when the sealed directory's `source-commit.txt` equals this bake's
+(content × framework); the registry applies the same rule to the tag: `plugins/<source>:<identity>`
+resolves, its sidecar manifest's config blob is readable, and its `sourceCommit` equals the
+publication's — then nothing is pushed and the existing index digest is reported. Anything less
+(an absent tag, an unreadable index, a different commit) pushes, because a push is idempotent and
+never leaves the registry worse, while a wrong skip would freeze the tag on a publication the run
+was asked to replace. The reason the skip exists at all: a compile is not byte-reproducible, so
+without it every core merge under an unchanged identity would push a full set of new blobs to a
+registry that runs no garbage collection.
+
+🚨 **`plugins/releases:<version>` is written by BOTH architecture legs of core's content bake,
+last writer wins** — the same shape as the share's `_releases/<version>` marker today, whose
+content is whichever leg's identity landed last. A reader that needs the identity per
+architecture resolves `plugins/meshweaver-content:<identity>` for the identity its own image
+reports, not the release tag.
+
+**The index digest is not yet in the registration.** The record `register-publication` POSTs to
+`Hosting/PlatformBuilds` (`{event:"bundle-publication", repo, source, sha, identity, image,
+digest, platformImage, version, run, upstreams}`, parsed by `BundlePublication` in the Hosting
+module) carries no field for it; the lane prints it (`fleet registry:
+cr.meshweaver.cloud/plugins/<source>@sha256:…` in the job log and the step summary, from the
+`bundle_index_digest` output) and fails RED when it published without one. TODO: add an
+`artifact` field to the record and to `BundlePublication`, so the sealed set memex registers is a
+list of `(package, digest)` pairs and the catalog index carries `artifact:
+cr.meshweaver.cloud/plugins/<source>/<package>@sha256:…` per package — the lane then sends what
+it already prints.
 
 The registry's push notification reaches memex (`registry.notifications.url`), which shelves the
 module set and proposes it exactly as the bundle POST does today; the POST stays as the metadata
 path until the notification handler carries the same effect.
 
-The share copy under `prebuilt-bundles/<identity>/<source>/` continues to be written beside the
-push until every consumer reads the registry; a publication that reaches one target and not the
-other is refused as unsealed, as it is today.
+**Who reads which copy, so this page stays true.** The share copy under
+`prebuilt-bundles/<identity>/<source>/` continues to be written beside the push until every
+consumer reads the registry: the `bundle-fetch` init container reads cr (into the same directory
+layout), while `ShippedPrebuiltBundles` — the pre-warm on an installation whose chart does not set
+`bundles.registry` — still reads the share. A publication that reaches one target and not the
+other is refused as unsealed, as it is today: the lane fails RED on either half.
 
 ## What stays on the HTTP surface
 

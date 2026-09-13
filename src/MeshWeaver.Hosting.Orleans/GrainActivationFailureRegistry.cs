@@ -33,9 +33,8 @@ namespace MeshWeaver.Hosting.Orleans;
 /// recompiled fix re-activates cleanly and the stale error is gone.</para>
 ///
 /// <para><b>Invalidation.</b> The registry also subscribes to the
-/// <see cref="IMeshChangeFeed"/> invalidation broadcast (the same signal a recycle —
-/// <c>MeshOperations.RecycleCore</c> — and every post-commit write publish, relayed
-/// cross-silo by <c>PathCacheInvalidatorGrain</c>): a change event for a path clears any
+/// <see cref="IMeshInvalidationFeed"/> broadcast (the same signal a recycle —
+/// <c>MeshOperations.RecycleCore</c> — and every post-commit write publish): a change event for a path clears any
 /// stored activation error for that grain key. A recycled / just-written node must get a
 /// completely fresh activation attempt — without this, <see cref="RoutingGrain"/>'s
 /// NACK fallback served the STALE pre-recycle error text (e.g. a compile failure that was
@@ -57,8 +56,23 @@ public sealed class GrainActivationFailureRegistry : IDisposable
     /// fixtures) the registry still works, it just never auto-clears on broadcasts.</param>
     public GrainActivationFailureRegistry(IMeshChangeFeed? changeFeed = null)
     {
-        _changeFeedSubscription = changeFeed?.Subscribe(evt => Clear(evt.Path));
+        _changeFeedSubscription = changeFeed?.Subscribe(OnMeshChanged);
     }
+
+    private GrainActivationFailureRegistry(IMeshInvalidationFeed? invalidationFeed)
+    {
+        _changeFeedSubscription = invalidationFeed?.Subscribe(OnMeshChanged);
+    }
+
+    /// <summary>
+    /// Creates the process registry against the cache-only invalidation feed. Kept as a factory so
+    /// the public legacy constructor above retains its exact binary signature.
+    /// </summary>
+    internal static GrainActivationFailureRegistry FromInvalidationFeed(
+        IMeshInvalidationFeed? invalidationFeed)
+        => new(invalidationFeed);
+
+    private void OnMeshChanged(MeshChangeEvent change) => Clear(change.Path);
 
     /// <summary>Record the real activation error for <paramref name="grainKey"/>.</summary>
     public void Record(string grainKey, string error)

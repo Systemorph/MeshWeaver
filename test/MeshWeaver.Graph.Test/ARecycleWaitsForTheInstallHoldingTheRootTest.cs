@@ -63,7 +63,7 @@ public class ARecycleWaitsForTheInstallHoldingTheRootTest(ITestOutputHelper outp
     /// The same hot, non-replaying stand-in <c>NodeTypeRebindWatcherTest</c> uses: the production
     /// <c>InProcessMeshChangeFeed</c> never replays, and that property is load-bearing.
     /// </summary>
-    private sealed class TestChangeFeed : IMeshChangeFeed
+    private sealed class TestChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed
     {
         // 🚨 Instance ConcurrentDictionary, never a mutable List: the repository's collections
         // policy holds in test/ too, and this feed is published from one thread while a watcher's

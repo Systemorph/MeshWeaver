@@ -454,19 +454,7 @@ public static class CreateLayoutArea
         stack = stack.WithView(Controls.Body(host.Localize("create.autoGenIdHint"))
             .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-bottom: 16px;"));
 
-        // 6. Type picker (or readonly label if restricted to single value)
-        if (restrictedTypes is { Length: 1 })
-        {
-            // Single type restriction — show readonly info
-            var typeNode = host.Hub.ServiceProvider.FindStaticNode(restrictedTypes[0]);
-            var typeLabel = typeNode?.Name ?? restrictedTypes[0];
-            stack = stack.WithView(Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("margin-bottom: 16px;")
-                .WithView(Controls.Body(host.Localize("ui.type")).WithStyle("font-weight: 600; margin-bottom: 4px;"))
-                .WithView(Controls.Body(typeLabel).WithStyle("color: var(--neutral-foreground-rest);")));
-        }
-        else
+        // 6. Type field — read-only label when one allowed type is pinned, picker otherwise.
         {
             // 🚨 WHAT MAY BE CREATED HERE IS ICreatableTypesProvider'S ANSWER — this form does
             // not build a second one (#4040). It used to run two query literals of its own
@@ -482,6 +470,12 @@ public static class CreateLayoutArea
             // queries, the parent type's own whitelist (which RESTRICTS discovery as well as
             // EXTENDING it), and the global set. The picker therefore carries ITEMS and no
             // queries — a query leg would re-admit exactly what a restricting parent excluded.
+            //
+            // 🚨 ONE branch, on purpose. The single-type shape (`?type=X` / `?types=X`, the
+            // MeshSearch "+" button) used to render a read-only label WITHOUT asking the provider
+            // at all — so a URL naming a type the parent forbids seeded that type, showed it as a
+            // fait accompli, and submitted it. Both shapes of this field now come out of the same
+            // resolved set, and the alignment below runs for both.
             var creatableTypes = host.Hub.ServiceProvider
                 .GetRequiredService<ICreatableTypesProvider>()
                 .GetCreatableTypes(parentPath, currentNode);
@@ -494,10 +488,23 @@ public static class CreateLayoutArea
                 // 🚨 The SEEDED default has to become one the parent allows. `type` was seeded
                 // several sections above (from ?type=, the current node, or "Markdown") — before
                 // anything knew what this parent permits — and the SUBMIT reads that value, not
-                // the picker's contents. So a restricting parent would render a picker offering
-                // only its declared types while a user who never touched the field still created
-                // the stale default. The restriction has to hold on the path that WRITES.
+                // the picker's contents. So a restricting parent would render a field offering
+                // only its declared types while a user who never touched it still created the
+                // stale default. The restriction has to hold on the path that WRITES.
                 AlignSeededTypeWithOffer(h, formId, offered);
+
+                // A pinned type the parent ALLOWS needs no picker — show it and move on. When the
+                // parent does not allow it, `offered` is empty and the picker below renders with
+                // nothing to choose, which is the honest answer: this type cannot be created here.
+                if (restrictedTypes is { Length: 1 } && offered.Length == 1)
+                    return (UiControl)Controls.Stack
+                        .WithWidth("100%")
+                        .WithStyle("margin-bottom: 16px;")
+                        .WithView(Controls.Body(host.Localize("ui.type"))
+                            .WithStyle("font-weight: 600; margin-bottom: 4px;"))
+                        .WithView(Controls.Body(offered[0].DisplayName ?? offered[0].NodeTypePath)
+                            .WithStyle("color: var(--neutral-foreground-rest);"));
+
                 return (UiControl)new MeshNodePickerControl(new JsonPointerReference("type"))
                 {
                     Label = host.Localize("ui.typeRequired"),

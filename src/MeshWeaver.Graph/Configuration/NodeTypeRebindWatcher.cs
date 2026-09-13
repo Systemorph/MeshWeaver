@@ -38,7 +38,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// <para><b>The mechanism.</b> Every activation arms a watcher on the instance hub (the same
 /// <c>WithInitialization</c> + self-<see cref="DisposeRequest"/> idiom as
 /// <c>NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal</c> and <c>RecycleLayoutArea</c>). It observes
-/// <see cref="IMeshChangeFeed"/> for THIS node's path and recycles the hub the first time an event
+/// <see cref="IMeshInvalidationFeed"/> for THIS node's path and recycles the hub the first time an event
 /// reports a NodeType different from the one the configuration was bound from. The hub tears down,
 /// the next access re-activates it, and enrichment binds the node's real type.</para>
 ///
@@ -71,6 +71,14 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 internal static class NodeTypeRebindWatcher
 {
+    private sealed class LegacyInvalidationFeed(IMeshChangeFeed feed) : IMeshInvalidationFeed
+    {
+        public IDisposable Subscribe(
+            Action<MeshChangeEvent> handler,
+            MeshChangeKind? filter = null)
+            => feed.Subscribe(handler, filter);
+    }
+
     /// <summary>
     /// Wraps <paramref name="enriched"/>'s HubConfiguration so the hub it activates arms the
     /// rebind watcher. The baseline is <paramref name="enriched"/>'s own NodeType — the type the
@@ -104,7 +112,10 @@ internal static class NodeTypeRebindWatcher
                         // on its activation-time type until someone recycles it), never a dead hub.
                         try
                         {
-                            var feed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
+                            var feed = meshHub.ServiceProvider.GetService<IMeshInvalidationFeed>();
+                            if (feed is null
+                                && meshHub.ServiceProvider.GetService<IMeshChangeFeed>() is { } logicalFeed)
+                                feed = new LegacyInvalidationFeed(logicalFeed);
                             if (feed is null)
                                 return;
                             // #3510: a recycle of a root an install is writing under waits for the
@@ -150,7 +161,7 @@ internal static class NodeTypeRebindWatcher
     /// <param name="leases">The mesh's install-lease registry, or null on a host that registers
     /// none — in which case no lease can exist and the recycle posts as it always did.</param>
     public static IDisposable Arm(
-        IMeshChangeFeed feed,
+        IMeshInvalidationFeed feed,
         IMessageHub instanceHub,
         string path,
         string? boundNodeType,

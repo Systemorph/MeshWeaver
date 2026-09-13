@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# hosting-signin-app --name <id> --host <host> --vault <vault> --object <prefix>Authentication-Microsoft-ClientSecret
+#                    [--client-id <Entra app id>] [--years 1]
+#
+# The SIGN-IN (Entra) app's client secret, in the vault, for the app the record names
+# (MeshWeaver.Plugins#1719). Runbook step 1 registered the multi-tenant app, minted a secret and
+# wrote it under <prefix>Authentication-Microsoft-ClientSecret by hand. What this step can and
+# cannot do is decided by two facts and stated rather than papered over:
+#
+#   • A vault object that EXISTS is KEPT — never minted over, never rotated (the master-key rule).
+#     With --client-id the app is then VERIFIED: its redirect URIs must carry
+#     https://<host>/signin-microsoft, or every Microsoft sign-in fails with AADSTS50011 and nothing
+#     names this step. Reading the app needs Graph `Application.Read.All`; an identity without it
+#     cannot verify, SAYS so with the hand command, and does not fail the provision on a right it
+#     was never granted (`signin_app_verify=unknown`).
+#   • A vault object that is ABSENT and a record that NAMES the app → a NEW credential is ADDED to
+#     the app (`az ad app credential reset --append`: existing credentials stay valid — this adds,
+#     it never rotates) and written through --file. That needs Graph `Application.ReadWrite.OwnedBy`
+#     on an app the operator identity OWNS (or `Application.ReadWrite.All`); without it the step is
+#     RED with the exact hand commands.
+#   • ABSENT and NO client id on the record → the app does not exist yet. Registering it is NOT
+#     automated here: it needs the same Graph right AND writing the new client id back to the
+#     git-owned record — RED with the runbook's exact commands and what to set on the record.
+#
+# 🚨 NEVER PRINTS THE SECRET. `az ad app credential reset` prints the minted secret on STDERR as
+# well as in its output (measured, runbook step 1) — stderr is discarded, the value goes from az's
+# stdout into a mode-600 temporary and reaches the vault through --file, never argv, never a log.
+# shellcheck source=_common.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-signin-app"
+
+name="" host="" vault="" object="" client_id="" years="1"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --name)      name="${2:-}";      shift 2 ;;
+    --host)      host="${2:-}";      shift 2 ;;
+    --vault)     vault="${2:-}";     shift 2 ;;
+    --object)    object="${2:-}";    shift 2 ;;
+    --client-id) client_id="${2:-}"; shift 2 ;;
+    --years)     years="${2:-}";     shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+hosting::need_flag name "$name"
+hosting::need_flag host "$host"
+hosting::need_flag vault "$vault"
+hosting::need_flag object "$object"
+hosting::safe_name name "$name"
+hosting::safe_host host "$host"
+hosting::safe_name vault "$vault"
+hosting::safe_name object "$object"
+[[ "$years" =~ ^[1-9]$ ]] || hosting::die "years '${years}' is not a small whole number (1–9)"
+if [ -n "$client_id" ] && ! [[ "$client_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+  hosting::die "client-id '${client_id}' is not an Entra application (client) id — refusing to interpolate it into a command"
+fi
+
+redirect="https://${host}/signin-microsoft"
+display="${name} Portal (${host})"
+register_by_hand="APP_ID=\$(az ad app create --display-name \"${display}\" --sign-in-audience AzureADMultipleOrgs --web-redirect-uris \"${redirect}\" --query appId -o tsv); az ad sp create --id \"\$APP_ID\" --output none; az ad app credential reset --id \"\$APP_ID\" --display-name ${name} --years ${years} --query password -o tsv > <file> 2>/dev/null; az keyvault secret set --vault-name ${vault} --name ${object} --file <file> --output none; rm <file>; then set signIn.microsoftClientId: \"\$APP_ID\" on the record"
+mint_by_hand="az ad app credential reset --id ${client_id:-<client id>} --append --display-name ${name} --years ${years} --query password -o tsv > <file> 2>/dev/null; az keyvault secret set --vault-name ${vault} --name ${object} --file <file> --output none; rm <file>"
+
+kv_exists() { az keyvault secret show --vault-name "$vault" --name "$1" --query id -o tsv >/dev/null 2>&1; }
+
+# verify_app — with a client id: the redirect must be on the app. Unreadable → said, not failed.
+verify_app() {
+  [ -n "$client_id" ] || { hosting::say signin_app_verify skipped; return 0; }
+  hosting::step "Verify the sign-in app's redirect URI"
+  local uris
+  if ! uris="$(az ad app show --id "$client_id" --query 'web.redirectUris' -o tsv 2>/dev/null)"; then
+    hosting::log "could not read app ${client_id} — the operator identity lacks Graph Application.Read.All. Verify by hand: az ad app show --id ${client_id} --query web.redirectUris (must list ${redirect})"
+    hosting::say signin_app_verify unknown
+    return 0
+  fi
+  if printf '%s\n' "$uris" | grep -qxF "$redirect"; then
+    hosting::log "verified  app ${client_id} redirects to ${redirect}"
+    hosting::say signin_app_verify true
+    return 0
+  fi
+  hosting::die "app ${client_id} does not list ${redirect} among its web redirect URIs (it lists: $(printf '%s' "$uris" | tr '\n' ' ')) — every Microsoft sign-in would fail with AADSTS50011. Add it by hand: az ad app update --id ${client_id} --web-redirect-uris ${redirect} <existing URIs…>, then re-request."
+}
+
+if kv_exists "$object"; then
+  hosting::log "keep    ${object} (exists — never minted over, never rotated)"
+  hosting::say signin_secret kept
+  if hosting::dry; then
+    hosting::log "(dry run) would verify app ${client_id:-<none on the record>} lists ${redirect}"
+    hosting::say signin_app_verify dry-run
+    exit 0
+  fi
+  verify_app
+  exit 0
+fi
+
+# ── absent ────────────────────────────────────────────────────────────────────────────────────
+if [ -z "$client_id" ]; then
+  hosting::die "${object} is absent from vault ${vault} and the record names no signIn.microsoftClientId — the sign-in app does not exist yet. Registering it is a hand step: it needs Graph Application.ReadWrite.OwnedBy (the operator identity holds no Graph right) AND the new client id written back to the git-owned record. Run: ${register_by_hand}; then re-request the action (this step then keeps the object and verifies the app)."
+fi
+if hosting::dry; then
+  hosting::log "(dry run) ${object} is absent — a real run ADDS a credential to app ${client_id} (--append: nothing existing is rotated), stores it under ${object} through --file and verifies ${redirect}"
+  hosting::say signin_secret would-create
+  hosting::say signin_app_verify dry-run
+  exit 0
+fi
+
+hosting::step "Add a client secret to the sign-in app"
+umask 077
+secret_file="$(mktemp)"
+trap 'rm -f "$secret_file"' EXIT
+# 🚨 stderr DISCARDED: az prints the minted secret there too. --append: an existing credential
+# stays valid — this adds a secret for THIS vault, it never rotates the app.
+if ! az ad app credential reset --id "$client_id" --append --display-name "$name" --years "$years" \
+       --query password -o tsv > "$secret_file" 2>/dev/null; then
+  rm -f "$secret_file"
+  hosting::die "could not add a credential to app ${client_id} — the operator identity needs Graph Application.ReadWrite.OwnedBy on an app it OWNS (or Application.ReadWrite.All); it holds neither today. Nothing was changed. Run by hand: ${mint_by_hand}; then re-request."
+fi
+[ -s "$secret_file" ] || { rm -f "$secret_file"; hosting::die "az ad app credential reset returned no password for app ${client_id} — nothing was stored"; }
+# A trailing newline from -o tsv would become part of the secret the portal presents.
+printf '%s' "$(cat "$secret_file")" > "$secret_file"
+hosting::log "added     a credential '${name}' to app ${client_id} (valid ${years} year(s); the secret is not shown, here or anywhere)"
+
+hosting::step "Store the client secret in Key Vault"
+az keyvault secret set --vault-name "$vault" --name "$object" --file "$secret_file" --output none \
+  || { rm -f "$secret_file"; hosting::die "the credential was added to app ${client_id} but could not be stored under ${object} in vault ${vault} — remove it (az ad app credential delete --id ${client_id} --key-id <the '${name}' credential>) or store it by hand, then re-request."; }
+rm -f "$secret_file"
+kv_exists "$object" || hosting::die "${object} was written to vault ${vault} but cannot be read back — refusing to report a secret the CSI driver will not find"
+hosting::log "stored    ${object} in vault ${vault} (read back by id)"
+expires="$(az ad app credential list --id "$client_id" --query "[?displayName=='${name}'].endDateTime | [0]" -o tsv 2>/dev/null || true)"
+hosting::say signin_secret created
+hosting::say signin_secret_expires "${expires:-unknown}"
+verify_app

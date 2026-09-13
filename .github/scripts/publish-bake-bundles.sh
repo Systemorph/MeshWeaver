@@ -39,6 +39,17 @@
 #                          repository.txt so an instance can attribute the seal (see the marker
 #                          below). Defaults to $GITHUB_REPOSITORY, which is the LANE's repository
 #                          and therefore right only when the lane bakes its own content.
+#   BAKE_PUBLICATION_DIR   optional. When set, and ONLY after every target above is published (or
+#                          was already), the EXACT publication — every file of the upload plan,
+#                          byte-for-byte, then `_complete` LAST — is written into this directory
+#                          (replaced wholesale). It is what the registry publisher
+#                          (push-bundle-publication.sh) pushes to cr.meshweaver.cloud as the OCI
+#                          index for this source × identity (Doc/Architecture/
+#                          PluginBundlesInTheRegistry): the shares and the registry receive ONE
+#                          set, never two assemblies of "the same" publication. Nothing is written
+#                          when a target failed — a publication that reached one target and not
+#                          another is unsealed, and the registry must not seal what the shares did
+#                          not.
 #
 # AUTH: `az login` must already have happened (the CD jobs use OIDC). Data-plane access uses
 # --auth-mode login with --backup-intent, which requires the identity to hold the
@@ -1318,6 +1329,41 @@ CONVERGED=$(awk '/^converged$/ { c++ } END { print c + 0 }' "$OUTCOMES")
 if [ "${#FAILED[@]}" -gt 0 ]; then
   echo "::error::bake publication FAILED on ${#FAILED[@]} of $(printf '%s\n' $BAKE_PUBLISH_TARGETS | wc -l | tr -d ' ') target(s): ${FAILED[*]} — identity=$IDENTITY source=$SOURCE. Every OTHER target above was published and sealed; these were not. A target that no longer exists (a torn-down instance's share) belongs OUT of BAKE_PUBLISH_TARGETS — remove it, never route around it."
   exit 1
+fi
+
+# ═══════════ THE LOCAL COPY FOR THE REGISTRY PUBLISHER (Doc/Architecture/PluginBundlesInTheRegistry) ═══════════
+#
+# The registry is a SECOND target for the same publication, not a second publication: it gets the
+# plan's files — the same local bytes every share received, checked against the manifest's digests
+# as they are copied — and the sentinel last, in the layout push-bundle-publication.sh refuses to
+# push half of. Written only here, after the per-target loop has proven every share sealed (or
+# already held this content), so the registry never carries a set the shares refused. Whether the
+# registry ALREADY holds this content is the publisher's own sealed-skip (`--skip-if-published`),
+# keyed on source-commit.txt exactly as the share skip above is — so a share that skipped and a
+# registry that has never seen this identity still converge on the first run.
+materialise_publication() { # <directory>
+  local dir="$1" rel src digest copied=0
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  while IFS=$'\t' read -r rel src digest; do
+    [ -n "$rel" ] || continue
+    mkdir -p "$dir/$(dirname "$rel")"
+    cp "$src" "$dir/$rel"
+    if [ "$(sha256_of "$dir/$rel")" != "$digest" ]; then
+      echo "::error::BAKE_PUBLICATION_DIR: '$rel' copied into $dir does not hash to the digest the shares were verified against ($digest) — the local copy would not be the publication the shares hold. Refusing to hand it to the registry publisher."
+      exit 1
+    fi
+    copied=$((copied + 1))
+  done < "$PLAN"
+  if [ "$copied" -ne "$PLAN_COUNT" ]; then
+    echo "::error::BAKE_PUBLICATION_DIR: $copied of $PLAN_COUNT planned file(s) were copied into $dir — a partial copy is an unsealed publication, and the registry publisher must never see one that looks whole. Refusing."
+    exit 1
+  fi
+  cp "$SENTINEL_LOCAL" "$dir/$SENTINEL"
+  echo "publication materialised: $dir ($copied file(s) + $SENTINEL, the set the share targets hold) — for the registry publisher"
+}
+if [ -n "${BAKE_PUBLICATION_DIR:-}" ]; then
+  materialise_publication "$BAKE_PUBLICATION_DIR"
 fi
 
 echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} surface=$HAS_SURFACE targets-published=$PUBLISHED targets-converged=$CONVERGED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"

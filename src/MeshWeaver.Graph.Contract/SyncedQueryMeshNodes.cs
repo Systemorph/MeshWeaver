@@ -193,7 +193,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
     ///         per-query stream plus the
     ///         <see cref="_externalChanges"/> side-channel (synthetic
     ///         <see cref="NotifyDeleted"/> events) and
-    ///         <see cref="IMeshChangeFeed"/> deletion fast-path into a
+    ///         <see cref="IMeshInvalidationFeed"/> deletion fast-path into a
     ///         single tagged stream of
     ///         <see cref="QueryResultChange{MeshNode}"/>.</item>
     ///   <item>A single <c>Scan</c> folds the deltas into
@@ -205,7 +205,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
     ///         ALL downstream emissions until the upstream query has produced
     ///         its first provider <c>Initial</c>/<c>Reset</c>. The
     ///         <see cref="_externalChanges"/> side-channel and the
-    ///         <see cref="IMeshChangeFeed"/> deletion fast-path are NOT
+    ///         <see cref="IMeshInvalidationFeed"/> deletion fast-path are NOT
     ///         filtered by the query — if either fires in the
     ///         subscribe→Initial window, an un-gated Scan emits an EMPTY
     ///         dictionary as its FIRST emission, which <c>Replay(1)</c>
@@ -314,24 +314,30 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         }
 
         // Hub-level change-feed deletion fast-path: when ANY hub publishes a
-        // delete via IMeshChangeFeed (the canonical post-delete dispatch in
+        // delete via IMeshInvalidationFeed (the canonical post-delete dispatch in
         // <c>HandleDeleteNodeRequest</c>), translate it into a synthetic
         // Removed event for the path-set Scan. Synchronous reliability path
         // on top of the upstream IMeshQueryProvider.Query's Removed
         // event, which can be debounced/stalled by the persistence layer's
         // change-notifier and security-filter chain.
-        var changeFeed = workspace.Hub.ServiceProvider.GetService<IMeshChangeFeed>();
-        var feedRemovals = changeFeed is null
+        var invalidationFeed = workspace.Hub.ServiceProvider.GetService<IMeshInvalidationFeed>();
+        var legacyFeed = invalidationFeed is null
+            ? workspace.Hub.ServiceProvider.GetService<IMeshChangeFeed>()
+            : null;
+        var feedRemovals = invalidationFeed is null && legacyFeed is null
             ? Observable.Empty<QueryResultChange<MeshNode>>()
             : Observable.Create<QueryResultChange<MeshNode>>(observer =>
-                changeFeed.Subscribe(
-                    e => observer.OnNext(new QueryResultChange<MeshNode>
-                    {
-                        ChangeType = QueryChangeType.Removed,
-                        Items = new[] { new MeshNode(e.Path) },
-                        Timestamp = e.Timestamp,
-                    }),
-                    MeshChangeKind.Deleted));
+            {
+                void Removed(MeshChangeEvent e) => observer.OnNext(new QueryResultChange<MeshNode>
+                {
+                    ChangeType = QueryChangeType.Removed,
+                    Items = new[] { new MeshNode(e.Path) },
+                    Timestamp = e.Timestamp,
+                });
+                return invalidationFeed is not null
+                    ? invalidationFeed.Subscribe(Removed, MeshChangeKind.Deleted)
+                    : legacyFeed!.Subscribe(Removed, MeshChangeKind.Deleted);
+            });
 
         var allChanges = upstream.Merge(externalChanges).Merge(feedRemovals);
 
@@ -346,7 +352,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         // promises NO downstream emission until the upstream query has
         // produced its first Initial/Reset. `externalChanges` (the
         // NotifyDeleted side-channel) and `feedRemovals` (the process-wide
-        // IMeshChangeFeed deletions, UNFILTERED by this query) can fire in
+        // IMeshInvalidationFeed deletions, UNFILTERED by this query) can fire in
         // the subscribe→Initial window; without the gate the Scan's FIRST
         // emission is an EMPTY dictionary, which Replay(1) consumers
         // (MeshNodeStreamCache.GetQueryRaw) cache and replay — downstream

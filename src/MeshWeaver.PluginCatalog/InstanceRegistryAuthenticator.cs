@@ -727,4 +727,28 @@ public sealed record AuthenticatedInstance(MeshWeaverInstance Instance, PluginGr
     /// <summary><see cref="Allows(string,string,string?,DateTimeOffset)"/> right now.</summary>
     public bool Allows(string sourceName, string packageId, string? packageTier) =>
         Allows(sourceName, packageId, packageTier, DateTimeOffset.UtcNow);
+
+    /// <summary>
+    /// 🚨 The typed refusal for a package this caller's grant REACHES but its plan does not cover
+    /// (#4097) — <see cref="PluginGrant.TierRefusal"/> decided with the caller's ladder and the
+    /// record's plan, as a <see cref="PlanTierRefusal"/> the listing can return. Null when the
+    /// package is allowed, when no grant entry reaches it (absence — the enumeration defence), or
+    /// when the presented token's scope excludes it (a token can only narrow; a package outside its
+    /// scope is absent to this token, whatever the grant says).
+    /// </summary>
+    /// <param name="module">The compiled module the package delivers, carried onto the refusal so
+    /// the consumer can key it by module name (<c>Modules:Required</c>, the activation record).</param>
+    public PlanTierRefusal? TierRefusal(
+        string sourceName, string packageId, string? packageTier, string? module, DateTimeOffset now)
+    {
+        if (TokenScope is not null && !TokenScope.Covers(sourceName, packageId))
+            return null;
+        return Grant.TierRefusal(sourceName, packageId, packageTier, Ranks, Instance.Plan, now) is { } plan
+            ? new PlanTierRefusal(packageId, module, PlanTierRanks.Canonical(packageTier), plan)
+            : null;
+    }
+
+    /// <summary><see cref="TierRefusal(string,string,string?,string?,DateTimeOffset)"/> right now.</summary>
+    public PlanTierRefusal? TierRefusal(string sourceName, string packageId, string? packageTier, string? module) =>
+        TierRefusal(sourceName, packageId, packageTier, module, DateTimeOffset.UtcNow);
 }

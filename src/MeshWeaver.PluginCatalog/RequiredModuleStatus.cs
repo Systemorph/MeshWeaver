@@ -55,6 +55,14 @@ public sealed record RequiredModuleVerdict(
 /// standing revert-debt — a "gate" whose one escape hatch is deleting the declaration is the
 /// skip-trapdoor with its polarity flipped: it fails on no evidence instead of passing on it.</para>
 ///
+/// <para>🚨 <b>A module the instance's PLAN refuses says so (#4097).</b> The registry declares
+/// the package in the instance's default set and refuses it by tier; that verdict reaches this
+/// classification through the activation record (<see cref="ModuleActivationList.TierRefusals"/>,
+/// kept in step by the default install) and the reason names the package, the tier it needs and
+/// the plan the instance is on — instead of "install the package from the registry", which the
+/// instance cannot do. Still <see cref="RequiredModuleState.ExpectedLater"/>: no rollout can
+/// change a plan.</para>
+///
 /// <para><b>The missing evidence was already on disk: <c>Modules:Assemblies</c>.</b> That list is
 /// the IMAGE's own claim about what it carries. A module named under BOTH keys is the image's
 /// responsibility — absent means the build lost it, and that stays <see cref="RequiredModuleState.Absent"/>
@@ -235,6 +243,17 @@ public static class RequiredModuleStatus
 
         string StoreReason(string name)
         {
+            // 🚨 #4097 — BEFORE "install the package from the registry", because on this plan the
+            // instance cannot. The registry declared the package in this instance's default set
+            // and refused it by PLAN TIER; the default install recorded that verdict on the
+            // activation record (ModuleActivationSidecar.SyncTierRefusals), and this is the one
+            // line on /health that used to name only the consequence. Same vocabulary as #4091's
+            // binding conflict, with the nouns of a plan.
+            if (activation?.TierRefusalFor(name) is { } refused)
+                return $"store-delivered and NOT installed on this instance: {refused.Describe()} "
+                    + "Installing it from the registry is not possible on this plan — raise the "
+                    + "instance's plan on the registry, or delist it from Modules:Required if this "
+                    + "deployment does not want the feature.";
             if (!landed.TryGetValue(name, out var record) || !record.Enabled)
                 return "store-delivered and NOT installed on this instance — install the package "
                     + "from the registry, or delist it from Modules:Required if this deployment "

@@ -154,6 +154,23 @@ curl -s https://memex.meshweaver.cloud/robots.txt | grep -c 'Disallow: /$'
 curl -sI https://www.meshweaver.cloud/Doc | head -1
 ```
 
+### It is watched continuously, and the 301 is the assertion
+
+`prod-synthetic-probe.yml` runs those two app-host checks against every portal every 15 minutes: the
+public page must answer **200 on the public host**, and the app host must answer **301 to exactly
+that URL** — never `curl -L`, because following the redirect makes a real outage and a correct
+canonicalisation produce the identical green.
+
+🚨 **Which host is public is a per-deployment decision, so the probe READS it rather than pinning
+it**, from the `Sitemap:` line of the portal's own `robots.txt` — the one line that names
+`CanonicalBaseUrl` on either host. That makes the two-host split machine-readable at probe time and
+a single-host portal (which declares itself) assert 200 with no redirect, with nothing to keep in
+step in CI. Two consequences for anyone editing `SeoEndpoints.MapSeo`: that line is a contract, and
+so is `Disallow: /` on an app host that differs from the public one. Before this, the probe asserted
+`200` for a public page **on the app host** and went red for three runs on a healthy portal the day
+`Portal:PublicHost` was set — the shape of a check that is true about a broken portal and false
+about a working one.
+
 Search Console's URL inspection, "rendered HTML" view, is the acceptance test for the whole design:
 it must show the article text for a documentation page, a course cover, a course lesson and a plugin
 cover. Indexing before that view shows text only fills the report with "crawled, currently not

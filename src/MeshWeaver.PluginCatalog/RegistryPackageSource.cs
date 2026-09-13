@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -63,7 +64,6 @@ public sealed class RegistryPackageSource : IPackageSource
     /// </summary>
     public PluginBundleClient? Bundles { get; init; }
 
-    private sealed record ListResponse(IReadOnlyList<PackageManifest>? Packages);
     private sealed record FilesResponse(IReadOnlyList<PackageFile>? Files);
 
     // Per-REQUEST auth header — never on the client: _http can be the process-wide SharedHttp, and
@@ -81,6 +81,18 @@ public sealed class RegistryPackageSource : IPackageSource
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
+        ListCatalog(gitRef).Select(listing => listing.Packages);
+
+    /// <summary>
+    /// The registry's whole answer for this instance (#4097): the packages it is granted AND the
+    /// pre-installed packages the registry declares in its default set that its PLAN refuses, as
+    /// typed <see cref="PlanTierRefusal"/>s. <see cref="ListPackages"/> is the first half and is
+    /// what every existing consumer keeps reading — a refused package is never mistaken for an
+    /// installable one by the reconciler, the update watcher or the Store's count. The two surfaces
+    /// that must SAY the refusal (the unattended default install, which records it, and the package
+    /// card, which renders it) read this form.
+    /// </summary>
+    public IObservable<RegistryListing> ListCatalog(string gitRef) =>
         _httpPool.Invoke(async ct =>
         {
             var url = $"{_registryUrl}{RoutePrefix}?ref={Uri.EscapeDataString(gitRef ?? "")}";
@@ -90,8 +102,7 @@ public sealed class RegistryPackageSource : IPackageSource
             if (!resp.IsSuccessStatusCode)
                 throw new RegistryResponseException(resp.StatusCode,
                     $"Registry catalog list failed ({(int)resp.StatusCode}): {json}");
-            var parsed = JsonSerializer.Deserialize<ListResponse>(json, Json);
-            return (IReadOnlyList<PackageManifest>)(parsed?.Packages ?? []);
+            return PluginRegistryPayloads.ParseList(json);
         })
         // 🚨 A successful read is the EVENT a deferred boot reconcile waits for (#2888). Every
         // registry contact this installation makes — a catalog open, an install, the Store's
@@ -103,12 +114,12 @@ public sealed class RegistryPackageSource : IPackageSource
         // service scope is being torn down and a resolve would throw ObjectDisposedException INTO the
         // caller's successful read. A read during teardown has no boot reconcile left to drain, so it
         // simply does not report.
-        .Do(packages =>
+        .Do(listing =>
         {
             if (_hub.RunLevel > MessageHubRunLevel.Started)
                 return;
             _hub.ServiceProvider.GetService<RegistryUpdateReconciler>()
-                ?.OnFeedRead(_registryUrl, gitRef, packages);
+                ?.OnFeedRead(_registryUrl, gitRef, listing.Packages);
         });
 
     /// <inheritdoc />
@@ -153,13 +164,48 @@ public static class PluginRegistryPayloads
     /// <summary>Serializer options both sides use (Web camelCase).</summary>
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    /// <summary>Serializes the list-catalog response: <c>{ packages: [PackageManifest…] }</c>.</summary>
-    public static string List(IReadOnlyList<PackageManifest> packages) =>
-        JsonSerializer.Serialize(new { packages }, Json);
+    /// <summary>Serializes the list-catalog response: <c>{ packages: [PackageManifest…] }</c>, plus
+    /// <c>refused: [PlanTierRefusal…]</c> when the registry has plan-tier refusals to report
+    /// (#4097). An old consumer deserializes only <c>packages</c> and ignores the sibling; an old
+    /// registry never writes it and the consumer reads an empty list — additive both ways.</summary>
+    public static string List(IReadOnlyList<PackageManifest> packages, IReadOnlyList<PlanTierRefusal>? refused = null) =>
+        refused is { Count: > 0 }
+            ? JsonSerializer.Serialize(new { packages, refused }, Json)
+            // Nothing refused ⇒ the member is not written at all — the pre-#4097 bytes exactly.
+            : JsonSerializer.Serialize(new { packages }, Json);
+
+    /// <summary>Parses the list-catalog response <see cref="List"/> wrote.</summary>
+    public static RegistryListing ParseList(string json)
+    {
+        var parsed = JsonSerializer.Deserialize<ListResponse>(json, Json);
+        return new RegistryListing
+        {
+            Packages = parsed?.Packages ?? [],
+            Refused = parsed?.Refused ?? [],
+        };
+    }
+
+    private sealed record ListResponse(
+        IReadOnlyList<PackageManifest>? Packages, IReadOnlyList<PlanTierRefusal>? Refused);
 
     /// <summary>Serializes the fetch-files response: <c>{ files: [PackageFile…] }</c>.</summary>
     public static string Files(IReadOnlyList<PackageFile> files) =>
         JsonSerializer.Serialize(new { files }, Json);
+}
+
+/// <summary>
+/// One registry listing as the consumer sees it (#4097): what it may pull, and what the registry
+/// declares in its default set but its plan refuses. Init properties rather than positional
+/// parameters so a later field is not a binary break for a host compiled against this shape.
+/// </summary>
+public sealed record RegistryListing
+{
+    /// <summary>The packages this instance is granted and its plan covers — the catalog.</summary>
+    public IReadOnlyList<PackageManifest> Packages { get; init; } = [];
+
+    /// <summary>The pre-installed packages the registry declares in this instance's default set
+    /// whose tier the instance's plan does not cover. Empty from a registry that predates #4097.</summary>
+    public IReadOnlyList<PlanTierRefusal> Refused { get; init; } = [];
 }
 
 /// <summary>

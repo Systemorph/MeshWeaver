@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# hosting-kv-copy --vault <name> --copy <target>=<source> [--copy <target>=<source> …]
+#
+# Materialise a FLEET-SHARED vault object under an instance's own prefix (MeshWeaver.Plugins#1723).
+#
+# The fleet convention is one vault object per prefix, and `hosting-kv-purge` deletes an instance's
+# objects by that prefix on teardown — so a credential several instances hold (the fleet GitHub
+# App's private key: `memexsystemorph-GitHub-App-PrivateKey`, needed by `build` as
+# `build-GitHub-App-PrivateKey`) has to be COPIED under each holder's prefix rather than mapped
+# across prefixes, or the first teardown would take the shared PEM with it. Until now that copy was
+# a hand step (`az keyvault secret show … | az keyvault secret set --file /dev/stdin`). The record
+# now states it (`keyVaultSecrets.secrets[].copyFrom`) and the Provision runs this.
+#
+#   target exists   → KEPT, never rewritten (the master-key rule: hosting-kv-ensure). Its value is
+#                     compared with the source's BY HASH and a difference is REPORTED as a fact
+#                     (`kv_copy_drift`), not treated as a failure — a rotated source is the
+#                     operator's call to propagate, by RotateRegistryKey-style action or by hand.
+#   target absent   → the source is read and written under the target name, through --file, then
+#                     read back by id.
+#
+# 🚨 NEVER PRINTS A VALUE. Both values live in shell variables, are compared by sha256, reach az
+# through a mode-600 temporary file (never argv, which every process in the pod can read), and are
+# unset. Every refusal names the one hand command that still works.
+# shellcheck source=_common.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-kv-copy"
+
+vault="" copies=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --vault) vault="${2:-}"; shift 2 ;;
+    --copy)  copies+=("${2:-}"); shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+hosting::need_flag vault "$vault"
+hosting::safe_name vault "$vault"
+[ ${#copies[@]} -gt 0 ] || hosting::die "missing required flag --copy — nothing to copy is a bug in the caller, not a no-op"
+
+# Validate EVERY pair before the vault is touched: a pair that is not <target>=<source> of two
+# plain names refuses the whole run, so a partial copy set never reports as a run.
+for pair in "${copies[@]}"; do
+  case "$pair" in
+    *=*) ;;
+    *) hosting::die "--copy '${pair}' is not <target>=<source>" ;;
+  esac
+  target="${pair%%=*}" source_name="${pair#*=}"
+  [ -n "$target" ] && [ -n "$source_name" ] || hosting::die "--copy '${pair}' names an empty target or source"
+  hosting::safe_name copy-target "$target"
+  hosting::safe_name copy-source "$source_name"
+  [ "$target" != "$source_name" ] || hosting::die "--copy '${pair}' would copy ${target} onto itself — refusing"
+done
+
+kv_exists() {
+  az keyvault secret show --vault-name "$vault" --name "$1" --query id -o tsv >/dev/null 2>&1
+}
+
+created=0 kept=0 drift=0
+for pair in "${copies[@]}"; do
+  target="${pair%%=*}" source_name="${pair#*=}"
+  manual="az keyvault secret show --vault-name ${vault} --name ${source_name} --query value -o json | jq -j . | az keyvault secret set --vault-name ${vault} --name ${target} --file /dev/stdin --output none"
+  if hosting::dry; then
+    if kv_exists "$target"; then
+      hosting::log "keep    ${target} (exists — never rewritten; a real run compares it with ${source_name} by hash)"
+      kept=$((kept + 1))
+    else
+      hosting::log "copy    ${source_name} → ${target} (dry run: the value is not read)"
+      created=$((created + 1))
+    fi
+    continue
+  fi
+  # The source is read first in BOTH branches: an unreadable source is a refusal even when the
+  # target exists, because a target nobody can compare against the fleet's copy is a drift
+  # nobody can see.
+  source_value="$(az keyvault secret show --vault-name "$vault" --name "$source_name" --query value -o tsv 2>/dev/null)" \
+    || hosting::die "could not read ${source_name} from vault ${vault} — the fleet-shared object ${target} is a copy of. Nothing was written. Grant the operator identity secret GET on it, or copy by hand: ${manual}"
+  [ -n "$source_value" ] || { unset source_value; hosting::die "vault ${vault} object ${source_name} is EMPTY — refusing to copy nothing under ${target}"; }
+  source_hash="$(printf '%s' "$source_value" | hosting::sha256)"
+  if kv_exists "$target"; then
+    target_value="$(az keyvault secret show --vault-name "$vault" --name "$target" --query value -o tsv 2>/dev/null)" || target_value=""
+    target_hash="$(printf '%s' "$target_value" | hosting::sha256)"
+    unset source_value target_value
+    if [ "$target_hash" = "$source_hash" ]; then
+      hosting::log "keep    ${target} (exists and matches ${source_name}, sha256 ${source_hash:0:12}…)"
+    else
+      hosting::log "keep    ${target} (exists — NEVER rewritten — but DIFFERS from ${source_name}: ${target_hash:0:12}… vs ${source_hash:0:12}…; propagate deliberately if the source was rotated)"
+      drift=$((drift + 1))
+    fi
+    kept=$((kept + 1))
+    continue
+  fi
+  umask 077
+  copy_file="$(mktemp)"
+  trap 'rm -f "$copy_file"' EXIT
+  printf '%s' "$source_value" > "$copy_file"
+  unset source_value
+  az keyvault secret set --vault-name "$vault" --name "$target" --file "$copy_file" --output none \
+    || hosting::die "could not create ${target} in vault ${vault}. Nothing was written; the hand command is: ${manual}"
+  rm -f "$copy_file"
+  kv_exists "$target" \
+    || hosting::die "${target} was written to vault ${vault} but cannot be read back — refusing to report a secret the CSI driver will not find"
+  hosting::log "copied  ${source_name} → ${target} (sha256 ${source_hash:0:12}…, read back by id)"
+  created=$((created + 1))
+done
+
+hosting::log "vault ${vault}: ${created} copied, ${kept} already present, ${drift} differing from their source"
+hosting::say kv_copy_created "$created"
+hosting::say kv_copy_kept "$kept"
+hosting::say kv_copy_drift "$drift"

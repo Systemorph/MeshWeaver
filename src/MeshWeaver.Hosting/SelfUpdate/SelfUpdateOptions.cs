@@ -34,6 +34,86 @@ public record SelfUpdateOptions
     public string RegistryUsername { get; init; } = "instance";
 
     /// <summary>
+    /// 🚨 The portal that VALIDATES this installation's instance key at <see cref="Registry"/> —
+    /// the container registry's own <c>RegistrySpec.ValidationUrl</c>, restated on the consuming
+    /// side. Blank (the default) declares no pairing, and an absent declaration is never
+    /// permission: the lister then presents the key only to a registry that IS a configured plugin
+    /// registry, exactly as before.
+    ///
+    /// <para><b>Why a declaration and not an inference.</b> A consuming installation holds ONE
+    /// <c>mwi_</c> key, and the fleet's registry deliberately validates it by forwarding it to a
+    /// portal: <c>cr.meshweaver.cloud</c>'s <c>docker_auth</c> asks
+    /// <c>https://memex.meshweaver.cloud/api/instances/token</c> whether the key is good
+    /// (<c>Doc/Architecture/ContainerRegistryInMemex</c>). So the image registry and the plugin
+    /// registry are two DIFFERENT hosts by design, and a rule that presents the key only to a host
+    /// that is itself a plugin registry can never authenticate there (#4093 — every instance
+    /// provisioned on <c>cr.meshweaver.cloud</c> booted and then never self-updated). What makes
+    /// the pairing safe is not that the names look alike — they must never be compared by suffix or
+    /// registrable domain, which is a coincidence of naming, not a grant — but that the registry
+    /// DECLARES which portal it trusts with that key, and the operator restates that declaration
+    /// here. Two explicit statements, both required: this key names the validator, and
+    /// <c>PluginCatalog:Registries</c> must hold a key for it.</para>
+    ///
+    /// <para>A full URL (copy the registry record's <c>validationUrl</c> verbatim) or a bare host;
+    /// only <see cref="RegistryValidatorHost"/> is ever read from it. The chart renders it from
+    /// <c>selfUpdate.registryValidationUrl</c> as <c>SelfUpdate__RegistryValidationUrl</c>.</para>
+    /// </summary>
+    public string RegistryValidationUrl { get; init; } = "";
+
+    /// <summary>
+    /// Whether the operator SET <see cref="RegistryValidationUrl"/> at all — a separate question
+    /// from whether it could be read (<see cref="RegistryValidatorHost"/>), and the two must stay
+    /// separate: collapsing "declared but unreadable" into "not declared" diagnoses a typo'd scheme
+    /// or a userinfo-bearing value as an ABSENT declaration, and the refusal then tells the operator
+    /// to set the key they already set — a fail-closed fallback forging a correct-looking bug. A
+    /// declared value that yields no host is refused as MALFORMED, naming the key and never the
+    /// value. Pure.
+    /// </summary>
+    public bool RegistryValidatorDeclared => !string.IsNullOrWhiteSpace(RegistryValidationUrl);
+
+    /// <summary>
+    /// The HOST of <see cref="RegistryValidationUrl"/> — the ONE extra plugin registry whose
+    /// instance key may be presented to <see cref="Registry"/>. <c>null</c> when nothing is
+    /// declared OR when the declared value names no http(s) host; the two are told apart by
+    /// <see cref="RegistryValidatorDeclared"/>, and a caller that refuses on <c>null</c> must
+    /// consult it to say WHICH of the two it is refusing on. Pure; a non-default port is part of
+    /// the host, the path and scheme are discarded.
+    /// </summary>
+    public string? RegistryValidatorHost => HostOf(RegistryValidationUrl);
+
+    /// <summary>
+    /// The <c>host[:port]</c> of an http(s) URL, or of a bare host (an operator who states
+    /// <c>memex.meshweaver.cloud</c> rather than the full validation URL means the same portal).
+    /// Null for anything else — a mailto:, a file path, a blank — so a value that cannot be read
+    /// as a host declares no pairing rather than half of one. Pure.
+    ///
+    /// <para>Public because it is THE registry-host rule of the platform, not this record's: the tag
+    /// lister reads plugin-registry URLs with it, and <c>RegistryUpdateReconciler.SameRegistry</c>
+    /// decides whether a broadcast names a configured registry with it — ONE reader on every side
+    /// of every comparison, so no two subsystems can drift into disagreeing about what
+    /// <c>https://memex.meshweaver.cloud:443/</c> is. The port rule is therefore fleet-wide: a
+    /// scheme-default port is not part of the host, any other port is.</para>
+    /// </summary>
+    public static string? HostOf(string? value)
+    {
+        var text = (value ?? string.Empty).Trim();
+        if (text.Length == 0)
+            return null;
+        if (!text.Contains("://", StringComparison.Ordinal))
+            text = "https://" + text;
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri))
+            return null;
+        if (uri.Scheme is not "http" and not "https" || uri.Host.Length == 0)
+            return null;
+        // 🚨 USERINFO IS REFUSED, not stripped. `https://memex.meshweaver.cloud@evil.test` has the
+        // host `evil.test` and reads to a human as the opposite; a value that can be misread that
+        // way declares no pairing at all rather than one nobody meant.
+        if (uri.UserInfo.Length > 0)
+            return null;
+        return uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
+    }
+
+    /// <summary>
     /// Whether <see cref="Registry"/> is an Azure Container Registry host — the discriminator
     /// between the ACR tag lister (proprietary API, Workload Identity) and the OCI Distribution
     /// lister (<c>/v2/{repo}/tags/list</c>, bearer handshake, instance key). Pure: a suffix test

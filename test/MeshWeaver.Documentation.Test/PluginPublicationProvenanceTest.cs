@@ -138,9 +138,37 @@ public class PluginPublicationProvenanceTest
         Assert.Equal("${{ needs.publish-bake.outputs.version }}", env.Children[new YamlScalarNode("RELEASED_VERSION")].ToString());
     }
 
-    private static ShellRun Publish(string sha, string version, string workflowRepository)
+    [Fact]
+    public void AFleetRegistryPushWithoutItsIndexDigestIsRefusedBeforeTheRecordIsWritten()
     {
-        var run = new ShellRun(ImmutableDictionary<string, string>.Empty
+        // The case the assertion exists for: the lane pushed to the fleet registry (a registry is
+        // configured) but the push step's `index_digest` output never reached this job. The record
+        // must not be written at all — not posted, not even composed.
+        using var run = Publish(ContentSha, Version, "Systemorph/MeshWeaver",
+            ImmutableDictionary<string, string>.Empty.Add("BUNDLE_REGISTRY", "cr.invalid"));
+        Assert.True(run.Exit != 0, run.Output);
+        Assert.Contains("::error::publish-bake reported no fleet-registry index digest", run.Output);
+        Assert.False(File.Exists(run.File("body")), "A publication the registry cannot be asked about must never be recorded.");
+        Assert.False(File.Exists(run.File("requests")), "The refusal must precede HTTP, not follow a misleading record.");
+    }
+
+    [Fact]
+    public void AFleetRegistryPushWithItsIndexDigestIsRecordedAndNamed()
+    {
+        using var run = Publish(ContentSha, Version, "Systemorph/MeshWeaver",
+            ImmutableDictionary<string, string>.Empty
+                .Add("BUNDLE_REGISTRY", "cr.invalid")
+                .Add("INDEX_DIGEST", "sha256:index"));
+        Assert.True(run.Exit == 0, run.Output);
+        Assert.Contains("fleet registry: cr.invalid/plugins/plugins@sha256:index", run.Output);
+        Assert.Single(File.ReadAllLines(run.File("requests")));
+        Assert.Contains("cr.invalid/plugins/plugins@sha256:index", File.ReadAllText(run.File("summary")));
+    }
+
+    private static ShellRun Publish(string sha, string version, string workflowRepository,
+        ImmutableDictionary<string, string>? registry = null)
+    {
+        var run = new ShellRun((registry ?? ImmutableDictionary<string, string>.Empty)
             .Add("URL", "https://inbox.invalid/api/hooks/Hosting/PlatformBuilds")
             .Add("SECRET", "synthetic-not-a-credential")
             .Add("SOURCE", "plugins")

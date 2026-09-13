@@ -1,5 +1,9 @@
-using Microsoft.Extensions.Logging;
+using System.IO;
 using MeshWeaver.Hosting.SelfUpdate;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.PluginCatalog;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace Memex.Portal.Shared.SelfUpdate;
 
@@ -20,6 +24,42 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// </summary>
 internal static class UnavailableUpdateMechanics
 {
+    /// <summary>The module that supplies the ACR reader and the Kubernetes patcher — what
+    /// <see cref="IDeploymentUpdater.CanPatch"/> is false without. Ships in the registry's
+    /// <c>Hosting</c> package (<c>tier: enterprise</c>), which is why a lower-plan instance runs
+    /// detect-only (#4097).</summary>
+    internal const string PatcherModule = "MeshWeaver.SelfUpdate.Aks";
+
+    /// <summary>
+    /// 🚨 WHY this install cannot patch, when the reason is the instance's PLAN (#4097): the
+    /// registry declared the patcher's package in the default set and refused it by tier, and the
+    /// default install recorded that on the activation record. Read at startup so the
+    /// <c>canPatch=False</c> line names the tier instead of pointing at <c>Modules:Assemblies</c>,
+    /// which is not where the module was going to come from. Null when no such refusal is
+    /// recorded — a non-Kubernetes install, or a plan that covers the package.
+    /// </summary>
+    internal static PlanTierRefusal? PatcherTierRefusal(IConfiguration? configuration)
+    {
+        try
+        {
+            return ModuleActivationSidecar.ReadTierRefusals(ModuleRoot.Resolve(configuration))
+                .Values.FirstOrDefault(r => r.IsForModule(PatcherModule));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The startup line's qualifier after <c>canPatch=False</c>: the plan-tier sentence
+    /// when the patcher's package was refused by plan, otherwise the standing hint.</summary>
+    internal static string DescribeCannotPatch(PlanTierRefusal? patcherRefusal) =>
+        patcherRefusal is { } refused
+            ? $" ({refused.Describe()} The Kubernetes patcher ships in that package, so this install "
+              + "runs detect-and-notify until the instance's plan covers it.)"
+            : $" (detect-and-notify: list {PatcherModule} under Modules:Assemblies for a Kubernetes install, "
+              + "or install the Hosting package from the registry)";
+
     /// <summary>
     /// Reports no tags, so the poller finds no candidate version. Correct for an install with no
     /// container registry to read: the alternative — leaving <see cref="IAcrTagLister"/>

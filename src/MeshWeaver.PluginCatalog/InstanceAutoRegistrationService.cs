@@ -106,16 +106,38 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Token, DateTimeOffset ExpiresAt)> tokens =
         new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>The effective credential for <paramref name="registry"/> — a JWT when the registry
-    /// issues one, else the durable key. Cold; emits once.</summary>
-    public IObservable<string> ResolveToken(PluginRegistryReference registry)
-    {
-        if (!string.IsNullOrWhiteSpace(registry.Token))
-            return Observable.Return(registry.Token.Trim());
+    /// <summary>The effective credential for <paramref name="registry"/> — a configured token as
+    /// configured, never exchanged; else the stored key EXCHANGED for a JWT when the registry issues
+    /// one, else that key itself. Cold; emits once.</summary>
+    public IObservable<string> ResolveToken(PluginRegistryReference registry) =>
+        ConfiguredToken(registry) is { } configured
+            ? Observable.Return(configured)
+            : StoredCredential(registry)
+                .SelectMany(raw => raw.Length == 0 ? Observable.Return("") : Exchange(registry.Url, raw));
 
-        return StoredCredential(registry)
-            .SelectMany(raw => raw.Length == 0 ? Observable.Return("") : Exchange(registry.Url, raw));
-    }
+    /// <summary>
+    /// The DURABLE credential this installation holds for <paramref name="registry"/> — the
+    /// configured <c>Token</c>, else the stored auto-registration key decrypted — with NO exchange.
+    /// Empty when it holds neither. Cold; emits once.
+    ///
+    /// <para>🚨 For the ONE caller whose counterpart IS the exchange endpoint. A container registry
+    /// that decides a pull by forwarding the presented secret to the portal's key→token exchange
+    /// (<c>cr.meshweaver.cloud</c> → <c>/api/instances/token</c>, <c>SelfUpdate:RegistryValidationUrl</c>)
+    /// must be handed the <c>mwi_</c> key itself: that endpoint refuses a token by design — a token
+    /// may never mint its successor — so the <c>mwa_</c> JWT <see cref="ResolveToken"/> yields for an
+    /// auto-registered installation is a 401 there on every attempt (#4093, review of #4094). The
+    /// two methods share ONE rule for "which durable credential" (<see cref="ConfiguredToken"/>,
+    /// then the store) and differ only in whether the STORED key is exchanged.</para>
+    /// </summary>
+    public IObservable<string> ResolveDurableKey(PluginRegistryReference registry) =>
+        ConfiguredToken(registry) is { } configured
+            ? Observable.Return(configured)
+            : StoredCredential(registry);
+
+    /// <summary>An explicitly configured token wins over the store, on every path, as configured —
+    /// it is presented as-is whether or not it is an instance key. Null when none is configured.</summary>
+    private static string? ConfiguredToken(PluginRegistryReference registry) =>
+        string.IsNullOrWhiteSpace(registry.Token) ? null : registry.Token.Trim();
 
     /// <summary>
     /// The durable <c>mwi_</c> key exchanged for a token at <c>{registry}/api/instances/token</c>,
@@ -854,10 +876,10 @@ public sealed class InstanceAutoRegistrationService(
                     // package this environment's flags declare must re-assert on every boot — that
                     // is the difference between the two lanes — so it is never dropped here, the
                     // same exemption the platform's own preInstalled baseline already has.
-                    .Select(candidates => (IReadOnlyList<InstallCandidate>)candidates
-                        .Where(c => c.Reconciled || !seeded.Contains(c.Package.Id))
-                        .ToList())
-                    .SelectMany(InstallAll)
+                    .SelectMany(selection => InstallAll(selection.Candidates
+                            .Where(c => c.Reconciled || !seeded.Contains(c.Package.Id))
+                            .ToList())
+                        .Select(summary => summary with { ListingIncomplete = selection.ListingIncomplete }))
                     .SelectMany(summary => RecordSeeded(ledger, summary).Select(_ => summary));
             }));
     }
@@ -950,9 +972,47 @@ public sealed class InstanceAutoRegistrationService(
             .OrderBy(s => s.Package, StringComparer.Ordinal)
             .ToImmutableList();
 
+        // 🚨 #4097 — a pass in which SOME source did not answer knows only what it saw. The
+        // per-source catch in Candidates substitutes an empty list for a failed listing, so
+        // another source can still populate this summary while the failed source's refusals are
+        // simply missing from it — not lifted. Treating that as authoritative would clear the
+        // markers and send /health and the self-updater back to the generic "not installed"
+        // sentence for the length of a registry outage. So an incomplete pass keeps the ledger's
+        // previous refusals and leaves the markers standing; only a pass every source answered
+        // may move them — in either direction.
+        var tierRefused = summary.ListingIncomplete
+            ? ledger.TierRefused
+            : summary.TierRefused
+                .DistinctBy(r => r.PackageId, StringComparer.Ordinal)
+                .OrderBy(r => r.PackageId, StringComparer.Ordinal)
+                .ToImmutableList();
+
+        // The activation record's plan-tier markers are made to MATCH this pass's answer, before
+        // the ledger and regardless of whether the ledger changes: /health's required_modules
+        // line, the activation report and the self-updater read the markers, and a marker left
+        // standing after a plan upgrade would name a refusal that no longer exists. Guarded by
+        // the "knows nothing" rule above and the completeness rule here — a failed listing must
+        // not clear a standing refusal. A volume that cannot be written is reported, never
+        // fatal: the ledger below still records the verdict.
+        if (!summary.ListingIncomplete)
+        {
+            try
+            {
+                ModuleActivationSidecar.SyncTierRefusals(
+                    ModuleRoot.Resolve(hub.ServiceProvider.GetService<IConfiguration>()), tierRefused);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(ex,
+                    "[DefaultInstall] could not write the plan-tier refusal markers under the module root; "
+                    + "/health and the self-updater will not name the plan until a pass can.");
+            }
+        }
+
         if (delivered.Count == 0
             && failures.SequenceEqual(ledger.Failed, StringComparer.Ordinal)
-            && skipped.SequenceEqual(ledger.Skipped))
+            && skipped.SequenceEqual(ledger.Skipped)
+            && tierRefused.SequenceEqual(ledger.TierRefused))
             return Observable.Return(Unit.Default);
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
@@ -978,6 +1038,7 @@ public sealed class InstanceAutoRegistrationService(
                 Seeded = already.Union(delivered).OrderBy(x => x, StringComparer.Ordinal).ToImmutableList(),
                 Failed = failures,
                 Skipped = skipped,
+                TierRefused = tierRefused,
                 UpdatedAt = DateTimeOffset.UtcNow,
             },
         };
@@ -1152,7 +1213,12 @@ public sealed class InstanceAutoRegistrationService(
             ? hit.Flag
             : null;
 
-    private IObservable<IReadOnlyList<InstallCandidate>> Candidates(
+    /// <summary>One pass's selection, and whether every source ANSWERED (#4097): a source whose
+    /// listing failed contributes nothing, and a pass with such a source must not read its own
+    /// silence as "that source refuses nothing".</summary>
+    private sealed record CandidateSelection(IReadOnlyList<InstallCandidate> Candidates, bool ListingIncomplete);
+
+    private IObservable<CandidateSelection> Candidates(
         IReadOnlyList<ConfiguredPackageSource> sources,
         bool baseline,
         IReadOnlyList<PluginGrantEntry> wanted,
@@ -1188,7 +1254,7 @@ public sealed class InstanceAutoRegistrationService(
                         string.Join(", ", sourceNames));
             return Observable.Return(Unit.Default);
         }).SelectMany(_ => sources
-            .Select(source => source.Source.ListPackages(source.GitRef)
+            .Select(source => ListWithRefusals(source)
                 .Take(1)
                 // 🚨 Stamp the source name HERE, not only in the registry's HTTP merge. Source-
                 // scoped matching reads PackageManifest.Source, and until now only
@@ -1201,22 +1267,24 @@ public sealed class InstanceAutoRegistrationService(
                 // The WHOLE listing is carried forward, not just the selected packages: a selected
                 // package's requirements are resolved against the full catalog below, and a
                 // dependency that is neither pre-installed nor pattern-matched exists only here.
-                .Select(packages => packages
+                .Select(packages => (Candidates: packages
                     .Select(p => string.IsNullOrEmpty(p.Source) ? p with { Source = source.Name } : p)
                     .Select(p => new InstallCandidate(source, p))
-                    .ToList())
+                    .ToList(), Failed: false))
                 .Catch((Exception exception) =>
                 {
                     logger.LogWarning(exception,
                         "[DefaultInstall] listing {Name} @ {Ref} failed — its packages are skipped "
                         + "this boot", source.Name, source.GitRef);
-                    return Observable.Return(new List<InstallCandidate>());
+                    return Observable.Return((Candidates: new List<InstallCandidate>(), Failed: true));
                 }))
             .ToObservable()
             .Concat()
             .ToList()
-            .Select(perSource =>
+            .Select(answers =>
             {
+                var listingIncomplete = answers.Any(a => a.Failed);
+                var perSource = answers.Select(a => a.Candidates).ToList();
                 var catalog = perSource
                     .SelectMany(list => list)
                     .GroupBy(c => c.Package.Id, StringComparer.Ordinal)
@@ -1274,7 +1342,7 @@ public sealed class InstanceAutoRegistrationService(
                 // policy (PackageDependencyGraph.InstallClosure).
                 var ordered = PackageDependencyGraph.InDependencyOrder(withDependencies, logger);
                 var bySource = catalog.ToDictionary(c => c.Package.Id, StringComparer.Ordinal);
-                return (IReadOnlyList<InstallCandidate>)ordered
+                return new CandidateSelection(ordered
                     .Select(p => bySource[p.Id])
                     // 🚨 The EXCLUSION is applied LAST — after the dependency closure, so it also
                     // removes a package the closure pulled back in as somebody's requirement. That
@@ -1310,8 +1378,25 @@ public sealed class InstanceAutoRegistrationService(
                                      || IsIncluded(c)
                                      || (c.Source.LocalCheckout && IsWanted(c)),
                     })
-                    .ToList();
+                    .ToList(), listingIncomplete);
             }));
+
+    /// <summary>
+    /// One source's listing WITH the registry's plan-tier refusals folded in as refused rows
+    /// (#4097). Only a <see cref="RegistryPackageSource"/> can answer with refusals — a git source
+    /// read directly (a registry installing its own defaults) has no plan to refuse against — so
+    /// every other source is its plain listing. A refused row carries <see cref="PackageManifest.Refusal"/>
+    /// and is selected like the pre-installed package it is, so that the pass SKIPS it with the
+    /// typed reason and records it, instead of never learning the package exists.
+    /// </summary>
+    private static IObservable<IReadOnlyList<PackageManifest>> ListWithRefusals(ConfiguredPackageSource source) =>
+        source.Source is RegistryPackageSource registry
+            ? registry.ListCatalog(source.GitRef).Select(listing => (IReadOnlyList<PackageManifest>)listing.Packages
+                .Concat(listing.Refused
+                    .Where(r => !listing.Packages.Any(p => string.Equals(p.Id, r.PackageId, StringComparison.Ordinal)))
+                    .Select(r => PackageManifest.FromRefusal(r, source.Name)))
+                .ToList())
+            : source.Source.ListPackages(source.GitRef);
 
     /// <summary>
     /// <paramref name="selected"/> plus everything it transitively REQUIRES that the catalog can
@@ -1431,7 +1516,12 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="package">The selected candidate's manifest, as the catalog lists it now.</param>
     /// <returns>The speaking skip reason, or null when the pass may install it.</returns>
     internal static string? TerminalSkipReason(PackageManifest package) =>
-        package.IsCommercial() ? PackageEntitlement.Reason(package, null) : null;
+        package.Refusal is { } refused
+            // #4097 — the registry refuses it to this instance's PLAN. Not an authorization this
+            // lane lacks; a licence the instance does not hold. Re-derived from the listing each
+            // pass, so a plan upgrade lifts it on the next boot.
+            ? refused.Describe()
+            : package.IsCommercial() ? PackageEntitlement.Reason(package, null) : null;
 
     /// <summary>Installs the selected packages sequentially and folds their outcomes into one summary.</summary>
     private IObservable<DefaultInstallSummary> InstallAll(IReadOnlyList<InstallCandidate> candidates)
@@ -1451,16 +1541,37 @@ public sealed class InstanceAutoRegistrationService(
         var installable = skipped.Count == 0
             ? candidates
             : candidates.Where(c => TerminalSkipReason(c.Package) is null).ToList();
-        if (skipped.Count > 0)
+        if (skipped.Count(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused)) > 0)
             logger.LogWarning(
                 "[DefaultInstall] {Count} declared package(s) require an authorization this "
                 + "unattended install can never obtain and are SKIPPED, not failed: [{Skipped}]. "
                 + "They are recorded with their reasons on {Ledger} and no boot re-attempts them — "
                 + "a Global Admin installing them from the catalog, or the package ceasing to be "
                 + "commercial, is what changes this.",
-                skipped.Count, string.Join(", ", skipped.Select(s => s.Package)), SeedLedgerPath);
+                skipped.Count(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused)),
+                string.Join(", ", skipped
+                    .Where(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused))
+                    .Select(s => s.Package)),
+                SeedLedgerPath);
 
-        var seed = DefaultInstallSummary.Empty with { Skipped = skipped };
+        // 🚨 #4097 — the plan-tier refusals, TYPED, beside the string-reasoned skips above: the
+        // ledger and the activation record carry them as data (package, module, tier, plan), and
+        // the log line names the cause the instance never used to see. Warning, once per pass,
+        // like the other skips — this is a standing fact about the plan, not a per-boot error.
+        var tierRefused = candidates
+            .Select(c => c.Package.Refusal)
+            .Where(r => r is not null)
+            .Select(r => r!)
+            .DistinctBy(r => r.PackageId, StringComparer.Ordinal)
+            .ToImmutableList();
+        if (tierRefused.Count > 0)
+            logger.LogWarning(
+                "[DefaultInstall] {Count} package(s) the registry declares in this instance's default "
+                + "set are REFUSED by its plan tier and are not installed: {Refused}. Raise the "
+                + "instance's plan on the registry to receive them; nothing on this instance can.",
+                tierRefused.Count, string.Join("; ", tierRefused.Select(r => r.Describe())));
+
+        var seed = DefaultInstallSummary.Empty with { Skipped = skipped, TierRefused = tierRefused };
         if (installable.Count == 0)
             return Observable.Return(seed);
         logger.LogInformation(
@@ -1639,7 +1750,8 @@ public sealed class InstanceAutoRegistrationService(
                 sources, baseline, wanted,
                 Parse((composition ?? FeatureComposition.Empty).Included),
                 Parse((composition ?? FeatureComposition.Empty).Excluded))
-            .SelectMany(InstallAll);
+            .SelectMany(selection => InstallAll(selection.Candidates)
+                .Select(summary => summary with { ListingIncomplete = selection.ListingIncomplete }));
 
     /// <summary>
     /// Runs the PRODUCTION default-install pass on demand — the identical selection, ordering and
@@ -1698,6 +1810,14 @@ public record DefaultInstallLedger
     public ImmutableList<DefaultInstallSkip> Skipped { get; init; } =
         ImmutableList<DefaultInstallSkip>.Empty;
 
+    /// <summary>
+    /// The default-set packages the registry refused to this instance's PLAN on the last pass
+    /// (#4097), typed. A snapshot with <see cref="Skipped"/>'s semantics: an entry drops off the
+    /// moment the registry stops refusing the package (a plan upgrade) or stops declaring it in
+    /// the default set. Every entry is also in <see cref="Skipped"/> with the same sentence.
+    /// </summary>
+    public ImmutableList<PlanTierRefusal> TierRefused { get; init; } = ImmutableList<PlanTierRefusal>.Empty;
+
     /// <summary>When the ledger last changed.</summary>
     public DateTimeOffset UpdatedAt { get; init; }
 }
@@ -1740,6 +1860,23 @@ public readonly record struct DefaultInstallSummary(
         ImmutableList<DefaultInstallSkip>.Empty;
 
     /// <summary>
+    /// The default-set packages the registry REFUSED to this instance's plan tier this pass
+    /// (#4097), typed — package, module, required tier, instance plan. Every one is also in
+    /// <see cref="Skipped"/> with the same sentence as its reason; this is the data the ledger
+    /// and the activation record keep, so <c>/health</c>, the package card and the self-updater
+    /// can name the plan instead of the consequence.
+    /// </summary>
+    public ImmutableList<PlanTierRefusal> TierRefused { get; init; } = ImmutableList<PlanTierRefusal>.Empty;
+
+    /// <summary>
+    /// 🚨 True when at least one source's listing FAILED this pass (#4097), so what the pass did
+    /// not see is unknown rather than absent. <see cref="TierRefused"/> is then a partial answer:
+    /// the ledger keeps its previous refusals and the activation markers are left standing,
+    /// because a registry that was down at boot has not lifted anybody's plan.
+    /// </summary>
+    public bool ListingIncomplete { get; init; }
+
+    /// <summary>
     /// The ids this pass actually DELIVERED — installed or already current. The ledger's input:
     /// what the seed may stop re-asserting.
     /// </summary>
@@ -1761,6 +1898,9 @@ public readonly record struct DefaultInstallSummary(
             .AddRange(other.Failures ?? ImmutableList<string>.Empty),
         Skipped = (Skipped ?? ImmutableList<DefaultInstallSkip>.Empty)
             .AddRange(other.Skipped ?? ImmutableList<DefaultInstallSkip>.Empty),
+        TierRefused = (TierRefused ?? ImmutableList<PlanTierRefusal>.Empty)
+            .AddRange(other.TierRefused ?? ImmutableList<PlanTierRefusal>.Empty),
+        ListingIncomplete = ListingIncomplete || other.ListingIncomplete,
     };
 
     /// <inheritdoc />

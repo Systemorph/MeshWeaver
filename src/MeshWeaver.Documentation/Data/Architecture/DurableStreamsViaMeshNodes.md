@@ -44,7 +44,7 @@ Registered once, `silo.AddMemoryStreams(StreamProviders.Memory)` in
 |---|---|---|---|
 | `RoutingGrain.BuildPodHubRoute` → `FallBackToStream` | a delivery to a stream-routed address (`portal`, `client`, `cache`, `mesh`, `import`) **only after** the directed `IPodHubGrain.Deliver` threw `PodHubNotHereException` | the owner's `SubscribeWhenStreamingReadyAsync` subscription | the requester waits out its budget (#2320, #2322, #2406) |
 | `RoutingGrain.PostFailure` → `PublishFailureOverStream` | a `DeliveryFailure` to a stream-routed sender, when the directed NACK failed for any reason | same | the sender waits out its budget |
-| `OrleansMeshChangeFeed.BroadcastAsync` | every `MeshChangeEvent` (Created / Updated / Deleted), one stream per kind | `PathCacheInvalidatorGrain` on every other silo → `InProcessMeshChangeFeed.PublishLocal` | **permanent, silent, per-node staleness** on every other silo — the path-resolution cache, the remote-stream cache, `NodeTypeRebindWatcher`, `EventSubscriptionRunner`, `AccessGrantNotifier`, `SyncedQueryMeshNodes` all miss it for the life of the process |
+| `OrleansMeshChangeFeed.BroadcastAsync` | every `MeshChangeEvent` (Created / Updated / Deleted), one stream per kind | intended: `PathCacheInvalidatorGrain` → process-local cache invalidation; actual default composition selects the local feed before the wrapper, and the grain key would activate once per cluster rather than once per silo | **permanent, silent, per-node staleness** on replicas that never receive it — the path-resolution cache, the remote-stream cache, `NodeTypeRebindWatcher`, activation-failure registry and `SyncedQueryMeshNodes` all miss it for the life of the process |
 | `RootMeshHubReplyStreamService` | the `mesh/{id}` root hub's *subscription* (not a publisher) | the root hub | cross-silo replies to the root hub — served by the directed call since the swap; the stream is its fallback |
 
 Two facts that change the shape of the design, both verified from source:
@@ -58,8 +58,8 @@ Two facts that change the shape of the design, both verified from source:
    registers `PostgreSqlChangeListener` *and* the `IHostedService` that opens its `LISTEN mesh_node_changes`
    session (`PostgreSqlExtensions.cs`, pinned by `ChangeListenerWiringTests` since #1814/#1816).
    Every commit on any `mesh_nodes` table fires `notify_mesh_node_changes()`, which already
-   de-duplicates no-op updates. The feed carries `{path, op}` and surfaces as
-   `IStorageAdapter.Changes` (`DataChangeNotification`, `Entity = null`). Several code comments still
+   de-duplicates no-op updates. The feed carries `{path, op, node_type}` and surfaces as
+   `IStorageAdapter.Changes` (`DataChangeNotification`, with an identifier-only descriptor). Several code comments still
    say this session "is not started in the partitioned wiring"; they date from before #1816 and
    are wrong — see *Stale claims* below.
 
@@ -178,34 +178,46 @@ be loud (a windowed `Warning` naming the address) rather than silent.
 This is the only memory-stream user whose loss is **permanent**, and it is also the one with a
 ready-made durable substitute that the platform already operates, monitors and backs up.
 
-Today there are two parallel cross-process channels for the same commit:
+Before the storage relay there were two parallel cross-process channels for the same commit:
 
 ```
-write ──commit──► pg_notify('mesh_node_changes', {path, op})  ──LISTEN──► IStorageAdapter.Changes  ─► synced queries re-run,
+write ──commit──► pg_notify('mesh_node_changes', {path, op, node_type}) ──LISTEN──► IStorageAdapter.Changes ─► synced queries re-run,
                                                                                                     MeshDataSource reconcile re-reads
       └─post-commit─► IMeshChangeFeed.Publish(MeshChangeEvent)  ─local Subject─► consumers
                                 └─► Orleans memory stream "mesh-{kind}" ─► PathCacheInvalidatorGrain (other silos) ─► PublishLocal
 ```
 
-The design collapses the second cross-process leg onto the first:
+The first core slice collapses the cache-invalidation leg onto the storage feed while retaining the
+Orleans broadcast during the additive rollout:
 
-1. **The NOTIFY payload carries `nodeType` and `version`** beside `path` and `op` — the trigger
-   already has `NEW.node_type` / `NEW.version` in hand. `DataChangeNotification` gains
-   `NodeType` and `Version` as **optional** members (additive; every existing producer passes
-   `null`). Core lands first, the trigger change in the PostgreSql adapter second; the relay below
-   tolerates a payload without them by re-reading the node before any consumer that filters on
-   type sees the event.
-2. **A relay, not a grain.** A mesh-scoped singleton `StorageChangeFeedRelay` subscribes
+1. **The notification contract carries `NodeType` and `Version`.** The PostgreSQL trigger already
+   sends `node_type` beside `path` and `op`, and has `NEW.version` in hand. `DataChangeNotification`
+   gains `NodeType` and `Version` as **optional** members. Typed in-process producers derive the
+   hints from their entity immediately; older and path-only backend payloads leave them null. Core
+   lands first, the trigger change in the PostgreSql adapter second; the relay below tolerates a
+   payload without them by re-reading the node before any consumer that filters on type sees the
+   event. That compatibility read has a five-second bound. An error, silence or missing row still
+   emits a path-only version-zero invalidation, so one backend fault cannot wedge the serial relay
+   or leave the replica's exact-path cache untouched.
+2. **A relay, not a grain.** The mesh-scoped `InProcessMeshChangeFeed` owns one
+   `StorageChangeFeedRelay`, which subscribes
    `IStorageAdapter.Changes` and relays each notification into
-   `InProcessMeshChangeFeed.PublishLocal(MeshChangeEvent)`. It replaces `OrleansMeshChangeFeed`'s
-   broadcast queue and `PathCacheInvalidatorGrain` entirely; `IMeshChangeFeed` is
-   `InProcessMeshChangeFeed` on every host, and a monolith or `LocalMesh` process that shares a
-   database with another process gains cross-process invalidation it never had.
-3. **Own-write echoes are already tolerated.** Every consumer of `IMeshChangeFeed` is an
-   invalidation or a `Pending → Fired`-gated continuation, and on the publishing silo they *already*
-   receive each own write twice — once from `Publish`, once relayed back by that silo's own
-   `PathCacheInvalidatorGrain`. The relay changes the second delivery's transport, not its
-   existence.
+   the process-local `IMeshInvalidationFeed`. Each process therefore receives its own database
+   listener's copy directly. A monolith or `LocalMesh` process that shares a database with another
+   process gains cross-process invalidation too. The old Orleans broadcast classes remain
+   binary-compatible during the additive rollout; their `PublishLocal` entry point now feeds only
+   invalidators. After the PostgreSQL payload upgrade ships, the dead wrapper registration and
+   `PathCacheInvalidatorGrain` can be deleted without a mixed-version gap.
+3. **Cache invalidation and logical delivery are separate.** A direct
+   `IMeshChangeFeed.Publish` reaches both logical subscribers and the writer's local invalidators.
+   A storage or Orleans echo reaches only `IMeshInvalidationFeed`. This boundary is load-bearing:
+   logical subscribers include `AccessGrantNotifier` (which can send mail) and
+   `InstanceSyncCoordinator` (which can write to another instance). Sending a database echo through
+   the logical feed would run those effects once per replica, while PostgreSQL can additionally
+   echo the writer's own commit. Cache invalidators are idempotent and deliberately run in every
+   process; logical effects retain the publisher's single delivery. Both channels serialize
+   concurrent publishers. Invalidation subscribers are isolated per callback, so a broken cache
+   misses its own event and cannot prevent later caches from receiving the same commit.
 4. **Loss semantics are strictly better.** A NOTIFY is missed only inside the listener's own
    reconnect window (a 5 s retry loop, logged at `Error`), which is the window the synced queries
    already accept and the reconcile-on-start pattern in
@@ -215,6 +227,25 @@ The design collapses the second cross-process leg onto the first:
 5. **Backend-agnostic by construction.** Cosmos and Snowflake already feed `Changes` with
    `Entity = null`; the in-memory and file-system adapters feed it in-process. The relay does not
    know which one it is on.
+
+### The production proof that selected the relay
+
+On 2026-09-12 the public two-replica portal held two incompatible answers for the same path after a
+successful plugin publication. An exact read of `Hosting/PlatformBuilds/plugins` on one request
+returned the old v7 row and source SHA, while the children query returned a newly-created v1 row
+with a different storage identity and the current SHA. The new row had committed and its Created
+notification had been emitted; one process's exact-path cache had simply never seen it.
+
+The reason is structural twice over. The default Orleans composition calls
+`AddPartitionedInMemoryPersistence` first; that reaches `AddMeshCatalog` and registers
+`IMeshChangeFeed` as the process-local feed, so the later Orleans wrapper's `TryAdd` is ignored.
+Even if that order were reversed, `OrleansMeshChangeFeed` publishes every kind at stream id
+`Guid.Empty`, and `PathCacheInvalidatorGrain` is an ordinary grain at that same key. Orleans grain
+identity is a cluster singleton, although the class comment claimed one activation per silo. Its
+handler calls a process-local `InProcessMeshChangeFeed`, so only the process hosting that one
+activation is invalidated. No retry, registration reorder or second publish can guarantee delivery
+to every process. Subscribing each process to the storage notification stream removes both
+impossible fan-out assumptions.
 
 ## 4 · At-least-once work items — the `_Inbox` node is the durable stream
 
@@ -259,7 +290,7 @@ checked against it:
 | pod-hub claim: indefinite, derived lifetime, `Warning` where grains can be hosted | **landed** — #2745 | closed the #1742 residual *"a claim that fails to land degrades silently"*; core only |
 | routing: transient NACK on `PodHubNotHere`; fallback gated on declared client-hosted types | **landed** — #2745 | closed #2320, #2322, #2406 as *made unreachable*. Shipped with slice 1 rather than after a clean roll — see *The N+2 gate* above for why the two together satisfy it by construction |
 | owner-side eviction re-gated on the `TargetUnserved` STAMP alone | **landed with the slice above** | required by it: gating on `NotFound` would have made the new verdict inert and re-opened #2426/#2546 |
-| `DataChangeNotification.NodeType/Version` + `StorageChangeFeedRelay` | next | **core first**; the relay must tolerate a payload without the new fields |
+| `DataChangeNotification.NodeType/Version` + `StorageChangeFeedRelay` | **implemented in the first core slice** | relay owns the mixed-version reread; tests pin the logical/invalidation boundary, old-payload recovery, per-event failure isolation and two independent replica feeds |
 | `notify_mesh_node_changes()` emits `nodeType`, `version` | after the core slice | PostgreSql adapter (MeshWeaver.Plugins); a schema-initializer revision, re-applied by the existing DROP-then-CREATE |
 | delete `OrleansMeshChangeFeed` broadcast + `PathCacheInvalidatorGrain` | after both | the memory stream then carries routing fallback only |
 | `StreamMessageSizeGuard` retarget onto `MaxMessageBodySize` | optional, not blocking | the directed call already THROWS at that wall, which is the outcome the guard produces — see the bullet above |

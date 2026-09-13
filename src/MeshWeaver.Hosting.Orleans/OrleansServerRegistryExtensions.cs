@@ -205,10 +205,11 @@ public static class OrleansServerRegistryExtensions
         // RoutingGrain falls back to it when a persistent activation-fault loop would otherwise
         // NACK the raw Orleans rejection ("DeactivateOnIdle was called … Rejecting now") instead
         // of the actual cause (a compilation failure). See issue #464, Defect 3.
-        // The registry's ctor takes the IMeshChangeFeed (registered below; DI injects it into
-        // the optional parameter) so a recycle / post-commit invalidation broadcast clears the
-        // stored error — stale pre-recycle error text must never be NACKed after a recycle.
-        services.TryAddSingleton<GrainActivationFailureRegistry>();
+        // The registry listens to cache-only invalidations so every replica clears stale errors
+        // without turning a database echo into a second logical event delivery.
+        services.TryAddSingleton(sp => sp.GetService<IMeshInvalidationFeed>() is { } invalidations
+            ? GrainActivationFailureRegistry.FromInvalidationFeed(invalidations)
+            : new GrainActivationFailureRegistry(sp.GetService<IMeshChangeFeed>()));
 
         // Register Orleans-distributed change feed (wraps local feed + Orleans streams).
         // 🚨 The factory captures the ROOT IServiceProvider (sp), never IMessageHub — the feed is

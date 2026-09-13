@@ -221,6 +221,35 @@ public record PackageManifest
     /// </summary>
     public bool PreInstalled { get; init; }
 
+    /// <summary>
+    /// 🚨 Set on a catalog entry the registry declares in this instance's default set but REFUSES
+    /// by plan tier (#4097) — the typed verdict the listing carries beside the granted packages
+    /// (<see cref="RegistryListing.Refused"/>), folded into a manifest so the package card and the
+    /// unattended default install can say it in the package's own row. Never on an installable
+    /// entry, never on an install record (<see cref="JsonIgnoreAttribute"/>): a refused package is
+    /// not installed, and <see cref="RegistryPackageSource.ListPackages"/> — what every other
+    /// consumer reads — never carries one.
+    /// </summary>
+    [JsonIgnore]
+    public Mesh.Security.PlanTierRefusal? Refusal { get; init; }
+
+    /// <summary>Whether this entry is a plan-tier refusal rather than an installable package.</summary>
+    [JsonIgnore]
+    public bool IsRefused => Refusal is not null;
+
+    /// <summary>The manifest-shaped row for a plan-tier refusal (#4097): the package's identity,
+    /// its module and tier, pre-installed by definition, with <see cref="Refusal"/> set.</summary>
+    public static PackageManifest FromRefusal(Mesh.Security.PlanTierRefusal refusal, string? source) => new()
+    {
+        Id = refusal.PackageId,
+        Name = refusal.PackageId,
+        Module = refusal.Module,
+        Tier = refusal.RequiredTier,
+        PreInstalled = true,
+        Source = source,
+        Refusal = refusal,
+    };
+
     // ── storefront metadata (read off the root node when listing; all optional) ──
 
     /// <summary>The store's browse-by-category key (the root node's <c>category</c>).</summary>

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# A stand-in `az` for hosting-registry-register's behaviour tests (MeshWeaver.Plugins#1720). Records every
+# invocation VERBATIM (argv is how the test proves a copied value never travels on a command line)
+# and answers the vault from a small state:
+#
+#   HOSTING_RRAZ_STATE    directory: az.log (every argv), set.<name> (what a `set --file` wrote)
+#   HOSTING_RRAZ_VALUES   space-separated <name>=<value> pairs the vault holds; `show --query id`
+#                        answers for any of them, `show --query value` answers the value
+#   HOSTING_RRAZ_SET_FAIL=1   every `keyvault secret set` refuses
+set -uo pipefail
+state="${HOSTING_RRAZ_STATE:?the az stub needs HOSTING_RRAZ_STATE}"
+printf 'az %s\n' "$*" >> "$state/az.log"
+lookup() {  # lookup <name> → prints the value, returns 1 when absent
+  local pair
+  for pair in ${HOSTING_RRAZ_VALUES:-}; do
+    if [ "${pair%%=*}" = "$1" ]; then printf '%s' "${pair#*=}"; return 0; fi
+  done
+  [ -f "$state/set.$1" ] && { cat "$state/set.$1"; return 0; }
+  return 1
+}
+case "${1:-} ${2:-} ${3:-}" in
+  "keyvault secret show")
+    name="" query=""
+    while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; --query) query="${2:-}"; shift 2 ;; *) shift ;; esac; done
+    if value="$(lookup "$name")"; then
+      if [ "$query" = "value" ]; then printf '%s\n' "$value"; else printf 'https://vault.test/secrets/%s/0\n' "$name"; fi
+      exit 0
+    fi
+    echo "ERROR: (SecretNotFound) A secret with (name/id) ${name} was not found in this key vault." >&2; exit 3 ;;
+  "keyvault secret set")
+    [ "${HOSTING_RRAZ_SET_FAIL:-0}" = "1" ] && { echo "ERROR: (Forbidden) secrets set permission" >&2; exit 1; }
+    name="" file=""
+    while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; --file) file="${2:-}"; shift 2 ;; *) shift ;; esac; done
+    [ -n "$file" ] || { echo "az stub: hosting-registry-register must write through --file, never --value" >&2; exit 1; }
+    [ -f "$file" ] || { echo "az stub: --file ${file} does not exist" >&2; exit 1; }
+    cp "$file" "$state/set.$name"; exit 0 ;;
+esac
+echo "az stub: unexpected invocation: $*" >&2
+exit 1

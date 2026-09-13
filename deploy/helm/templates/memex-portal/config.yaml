@@ -456,6 +456,16 @@ data:
   {{- if (.Values.selfUpdate).registry }}
   SelfUpdate__Registry: "{{ .Values.selfUpdate.registry }}"
   {{- end }}
+  # 🚨 The portal that VALIDATES this installation's instance key at that registry — the registry
+  # record's own `validationUrl` (MeshWeaver#4093). The fleet registry cr.meshweaver.cloud decides a
+  # pull by forwarding the caller's key to memex.meshweaver.cloud, so the image registry and the
+  # plugin registry are DIFFERENT hosts by design, and without this declaration the self-updater
+  # refuses to present the key it holds — an instance boots fine and then never self-updates.
+  # A string, so an absent value IS inert: no declaration ⇒ the key is presented only to a host that
+  # is itself a configured plugin registry, exactly as before. Never read as permission, and never
+  # inferred from name resemblance. It may be set through an overlay's config.memex_portal or a
+  # record's extraPortalConfig; the values path below is what the instance record renders.
+  SelfUpdate__RegistryValidationUrl: "{{ (.Values.selfUpdate).registryValidationUrl | default .Values.config.memex_portal.SelfUpdate__RegistryValidationUrl | default "" }}"
   # ---- Container image mirror (MeshWeaver#3353, src/MeshWeaver.ContainerImages) --------------
   # The /v2 pull surface THIS installation serves. Rendered only when containerImages.upstream is
   # set — an absent block reaches no container and the mirror stays OFF (every /v2 route 404s).

@@ -5,7 +5,8 @@
 #   content hop (collection-config GetDataRequest to the owning node's hub) — the transport that
 #   actually wedges in the incidents we have had (#1729, the 2026-08-31 store outage). /api/og/…
 #   is the documented NEGATIVE control (it proves gate+resolver, crosses nothing) and is
-#   deliberately NOT used here. The Store page adds a Blazor-shell 200 as a secondary signal.
+#   deliberately NOT used here. A public page adds a Blazor-shell 200 as a secondary signal — on
+#   the PUBLIC host, because that is where a public page is served (assertion 4).
 #
 # 🚨 WHAT THIS FILE MAY NOT CONTAIN, and why it used to (#3578).
 #   Until 2026-09-08 the matrix paired each portal with a hard-coded asset of an INSTALLED PACKAGE:
@@ -22,7 +23,7 @@
 #   a course. It names HOSTS. Everything it asserts is either shipped by the platform image or read
 #   from the deployment at probe time.
 #
-# THE THREE ASSERTIONS, and what each is honestly worth:
+# THE FOUR ASSERTIONS, and what each is honestly worth:
 #
 #   1. PLATFORM FLOOR — /api/content/Doc/Architecture/content/platform-overview.svg.
 #      Present on every deployment BY CONSTRUCTION: the bytes are an EmbeddedResource in
@@ -54,6 +55,33 @@
 #      over an empty list exits 0 having asserted nothing, which is the "green on no evidence" shape
 #      AGENTS.md forbids; the count is asserted BEFORE the loop and printed either way, so a zero is
 #      readable rather than silent.
+#
+#   4. THE TWO-HOST SPLIT — a public page on the PUBLIC host, and the app host's 301 to it.
+#      🚨 A deployment may serve two hosts from one process (core #4056, Doc/Architecture/
+#      PublicWebPresence): a PUBLIC host that is the canonical address of everything a signed-out
+#      visitor may read, and an APP host carrying sign-in, the APIs, MCP and the registry. On the
+#      app host a stranger's HTML GET for a public page answers 301 to the same path on the public
+#      host, and robots.txt says `Disallow: /` — both BY DESIGN, both shipped in the platform image
+#      (PublicSite.UsePublicHostRedirect, SeoEndpoints.MapSeo).
+#
+#      So a public-page assertion belongs on the PUBLIC host, and the app host is asserted for the
+#      REDIRECT — status 301 AND the exact target. This probe asserted `/Store` == 200 on the app
+#      host and went red the day memex.meshweaver.cloud gained a public host: a true statement about
+#      a healthy portal, the #3578 shape again. The fix is NOT `curl -L`: following the redirect
+#      makes a real outage and the intended 301 look identical, and drops the only evidence that the
+#      canonicalisation still works.
+#
+#      🚨 WHICH host is public is a per-DEPLOYMENT decision this repo cannot see — the same reason
+#      a package name may not appear here. It is therefore READ FROM THE DEPLOYMENT at probe time,
+#      from the `Sitemap:` line of its own robots.txt, which is built on PublicSite.CanonicalBaseUrl
+#      and so names the public host on either host (measured 2026-09-12: memex.meshweaver.cloud
+#      declares www.meshweaver.cloud; memex.systemorph.com declares itself). A single-host portal
+#      declares ITSELF and is then asserted exactly as before — 200, no redirect — with no entry
+#      here to keep in step. Reading the value is asserted before it is used: an unreadable robots
+#      or one with no Sitemap: line is a FAILURE, never a skipped assertion.
+#
+#      What this buys is self-consistency, and that is the honest claim: the portal names its own
+#      public host and is then held to it, exactly as assertion 3 holds it to its own sitemap.
 #
 # HOW it fails (no skip-trapdoors, per AGENTS "a gate never tests its own inputs"):
 #   - no secrets, no `if:` on configuration, no credential — the probe always runs, on every portal;
@@ -89,7 +117,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # HOSTS ONLY. Anything content-shaped here is the #3578 defect coming back.
+        # HOSTS ONLY, and only APP hosts — the address the fleet is reached at. Anything
+        # content-shaped here is the #3578 defect coming back, and a PUBLIC host pinned here would
+        # be the same shape (a per-deployment decision frozen in the platform repo): each portal
+        # names its own, and the probe reads it. See assertion 4.
         portal:
           - memex.meshweaver.cloud
           - memex.systemorph.com
@@ -154,6 +185,55 @@ jobs:
           fi
           echo "content route OK on ${PORTAL} (platform asset 200, impossible path 404)"
 
+      - name: Public host — read the deployment's own declaration, then the app/public split
+        env:
+          PORTAL: ${{ matrix.portal }}
+        run: |
+          set -euo pipefail
+          url="https://${PORTAL}/robots.txt"
+          body=$(mktemp)
+          code=$(curl -sS -o "$body" -w '%{http_code}' --max-time 20 "$url") || code=000
+          if [ "$code" != "200" ]; then
+            echo "::error::GET $url -> HTTP $code. robots.txt is anonymous, unconditional and served" \
+                 "from the platform image on every portal, and it is where this deployment names its" \
+                 "own public host. It could not be read, so the host split was NOT checked — that is" \
+                 "a failure, not an absence of findings."
+            exit 1
+          fi
+
+          # `Sitemap: {CanonicalBaseUrl}/sitemap.xml` — SeoEndpoints.MapSeo builds it from
+          # PublicSite.CanonicalBaseUrl, which IS the public host when one is configured and the
+          # request's own host when none is. So this one line answers "is this portal two-host, and
+          # if so which name is public" without this repo knowing either.
+          public=$(sed -nE 's|^[[:space:]]*[Ss]itemap:[[:space:]]*https://([^/[:space:]]+)/.*$|\1|p' "$body" | head -1)
+          if [ -z "$public" ]; then
+            echo "::error::${PORTAL} served robots.txt with no parseable 'Sitemap: https://…/sitemap.xml'" \
+                 "line, so this deployment did not name a public host and nothing downstream may assume" \
+                 "one. The line ships in the platform image; its absence is a portal defect, not a" \
+                 "configuration choice. Body was:" "$(tr '\n' ' ' < "$body")"
+            exit 1
+          fi
+          echo "PUBLIC_HOST=$public" >> "$GITHUB_ENV"
+          echo "public host declared by ${PORTAL}: $public" | tee -a "$GITHUB_STEP_SUMMARY"
+
+          if [ "$public" = "${PORTAL}" ]; then
+            echo "single-host deployment — ${PORTAL} is its own public host; no redirect is expected"
+            exit 0
+          fi
+
+          # Two hosts ⇒ the app host is the same site under a second name, and MUST be closed to the
+          # index or it competes with the public host for its own ranking. This assertion is about
+          # the APP host and stays here; it is platform behaviour (IsAppOnlyHost ⇒ "Disallow: /"),
+          # not a per-deployment choice.
+          if ! grep -qiE '^[[:space:]]*Disallow:[[:space:]]*/[[:space:]]*$' "$body"; then
+            echo "::error::${PORTAL} declares $public as its public host but its own robots.txt does" \
+                 "NOT say 'Disallow: /'. The app host is the public site under a second address —" \
+                 "leaving it crawlable is the duplicate-content exposure the two-host split exists to" \
+                 "prevent. Body was:" "$(tr '\n' ' ' < "$body")"
+            exit 1
+          fi
+          echo "two-host deployment — ${PORTAL} is app-only (Disallow: /), $public is public"
+
       - name: Declared content — read the deployment's sitemap, then hold it to it
         env:
           PORTAL: ${{ matrix.portal }}
@@ -182,7 +262,11 @@ jobs:
             exit 1
           fi
 
-          # One <loc> per declared public root. `grep` exits 1 on no match, which under `set -e`
+          # One <loc> per declared public root, ABSOLUTE and canonical: BuildSitemap builds every
+          # entry on PublicSite.CanonicalBaseUrl, so on a two-host portal these already name the
+          # PUBLIC host and this step therefore already probes public pages where they are served.
+          # That is why it stayed green through the change that broke the Store assertion below.
+          # `grep` exits 1 on no match, which under `set -e`
           # would kill the step before the zero could be REPORTED — and "the step died" and "the
           # portal declares nothing" must not look the same. So the no-match case is made explicit
           # and falls through to the denominator assertion below, which says so by name.
@@ -243,15 +327,68 @@ jobs:
           fi
           echo "all $checked sampled root(s) of $count declared serve 200 on ${PORTAL}"
 
-      - name: Probe Store page
+      - name: Public page — served by the public host, and the app host sends strangers to it
         env:
           PORTAL: ${{ matrix.portal }}
         run: |
-          set -eu
-          url="https://${PORTAL}/Store"
-          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url") || code=000
-          echo "Store: $code  $url" | tee -a "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          # /Store is a PLATFORM route (the store root ships in the image), not a package, a space
+          # or a course — the one thing this file is allowed to name besides hosts.
+          path="/Store"
+          pub="https://${PUBLIC_HOST}${path}"
+
+          # (a) THE PUBLIC PAGE, ON THE PUBLIC HOST. A Blazor-shell 200 for a signed-out visitor at
+          #     the address search engines are pointed at. This is the assertion that used to sit on
+          #     the app host, where the page is deliberately not served.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$pub") || code=000
           if [ "$code" != "200" ]; then
-            echo "::error::Store page returned $code on ${PORTAL}"
+            # One retry, same reasoning as the declared-roots sample: a single slow first render of
+            # the Blazor shell is not a portal defect (measured once at 20 s while building this),
+            # but a page that fails twice is. The retry is only ever reached by a failure, so it can
+            # never mask a healthy-looking red.
+            sleep 3
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$pub") || code=000
+          fi
+          echo "public page: $code  $pub" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$code" != "200" ]; then
+            echo "::error::the PUBLIC host does not serve $pub — HTTP $code. This is the canonical" \
+                 "address ${PORTAL} names in its own robots.txt and sitemap, so a signed-out visitor" \
+                 "and every crawler following those links get this answer."
             exit 1
           fi
+
+          if [ "${PUBLIC_HOST}" = "${PORTAL}" ]; then
+            echo "single-host deployment — public page asserted on ${PORTAL} itself; no redirect expected"
+            exit 0
+          fi
+
+          # (b) THE APP HOST, ASSERTED FOR THE REDIRECT ITSELF. 🚨 Deliberately WITHOUT `-L`: the
+          #     301 is the behaviour under test (core #4056), so it is asserted by status AND by
+          #     exact target. Following it would make an outage on the public host and a correct
+          #     canonicalisation produce the identical green, and would assert neither.
+          app="https://${PORTAL}${path}"
+          out=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 "$app") || out="000 "
+          code=${out%% *}
+          location=${out#* }
+          echo "app host: $code -> ${location:-(no redirect)}  $app" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$code" = "200" ]; then
+            echo "::error::${PORTAL} SERVED the public page $app (HTTP 200) instead of redirecting to" \
+                 "$pub. It declares $PUBLIC_HOST as its public host, so the same page now answers on" \
+                 "two addresses — PublicSite.UsePublicHostRedirect is not running, or is registered" \
+                 "after the page endpoints. That is the duplicate-content split-ranking this redirect" \
+                 "exists to prevent."
+            exit 1
+          fi
+          if [ "$code" != "301" ]; then
+            echo "::error::${PORTAL} answered HTTP $code for $app; a stranger's HTML GET for a public" \
+                 "page must be a PERMANENT redirect (301) to $pub. A 302/307 is not the canonical" \
+                 "signal crawlers need; a 000, 4xx or 5xx is the app host failing to answer at all."
+            exit 1
+          fi
+          if [ "$location" != "$pub" ]; then
+            echo "::error::${PORTAL} redirected $app to '${location:-(empty)}' — expected exactly $pub." \
+                 "The redirect must preserve the path and target the host the portal itself declares;" \
+                 "a different target sends every stranger and every crawler somewhere else."
+            exit 1
+          fi
+          echo "public page OK: $pub serves 200 and $app 301s to it"

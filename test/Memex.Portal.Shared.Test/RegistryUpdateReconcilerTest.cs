@@ -160,14 +160,21 @@ public class RegistryUpdateReconcilerTest(ITestOutputHelper output) : MonolithMe
     }
 
     /// <summary>The host-based match: a consumer configured with a trailing slash or another scheme
-    /// still recognises its registry; a different host never does.</summary>
+    /// still recognises its registry; a different host never does. Since #4094 the reader is the
+    /// platform's ONE registry-host rule (<c>SelfUpdateOptions.HostOf</c>, shared with the
+    /// self-updater's credential selection), so a value that names no http(s) host names no
+    /// registry — two copies of an unreadable string no longer "match", and a URL carrying
+    /// userinfo matches nothing rather than the host a human would not have read.</summary>
     [Theory]
     [InlineData("https://memex.meshweaver.cloud", "https://memex.meshweaver.cloud/", true)]
     [InlineData("https://memex.meshweaver.cloud", "http://memex.meshweaver.cloud", true)]
     [InlineData("https://MEMEX.meshweaver.cloud/", "https://memex.meshweaver.cloud", true)]
+    [InlineData("https://memex.meshweaver.cloud:443", "https://memex.meshweaver.cloud", true)]
     [InlineData("https://memex.meshweaver.cloud", "https://memex.systemorph.com", false)]
     [InlineData("http://registry:8080", "http://registry:9090", false)]
-    [InlineData("not a url", "not a url/", true)]
+    [InlineData("http://registry:8080", "http://registry", false)]
+    [InlineData("not a url", "not a url/", false)]
+    [InlineData("https://memex.meshweaver.cloud@evil.example.test", "https://evil.example.test", false)]
     public void SameRegistry_MatchesByHost(string configured, string announced, bool expected)
         => Assert.Equal(expected, RegistryUpdateReconciler.SameRegistry(configured, announced));
 
