@@ -235,7 +235,42 @@ That line names the gate-selected source and release; workflow metadata does not
 - **A set that cannot attribute itself is PASSED OVER, never taken unattributed.** A missing,
   duplicated, malformed or inconsistent receipt raises `ProvenanceUnavailable`, the reason is
   recorded in `skipped`, and the resolution continues at an older VERIFIED set. Under a freeze the
-  same condition is fatal — a freeze names one set and may not substitute another.
+  same condition is fatal — **for the run the freeze NAMES**; see below, this was #4242.
+
+🚨 **"The freeze names this run" is a question, and `if freeze_kind:` is not it.** Every *"a freeze
+is an instruction, not a preference"* escalation used to be spelled that way — correct only because
+the two filters at the top of the scan had already narrowed it to one run. `--verify-source`
+deliberately does NOT apply the head-sha filter (the set's real sha is the receipt's, unknown until
+the jobs are read), so the scan reaches runs the freeze does not name, and the FIRST unsealed one
+aborted the whole resolution with a sentence that was simply false:
+
+```
+--freeze 7ee11bc7… --verify-source
+::error:: the freeze names main-cd #8531 (core e0e4aeff3), which is not a sealed set …
+```
+
+`7ee11bc7` is the head of main-cd **#8506**; #8531 was merely the newest run in the scan. Measured
+against live core CD on 2026-09-13 — and it made `--verify-source` unusable during an incident
+freeze, which is exactly when resolution has to keep working. The predicate is now
+`freeze_names_this_run`, which NARROWS and never widens: a set freeze is already one run number and
+a sha freeze without verification is already one head sha, so both answer exactly as before; the
+only case that changes is a sha freeze WITH verification, where a run that cannot produce a receipt
+carries no evidence that it is the frozen one and the scan continues.
+
+🚨 **An ABSENT receipt is not a DISAGREEMENT, and reporting one as the other cost an investigation.**
+`publication_source` used to answer *"successful platform bakes disagree on source/release (found 0
+distinct receipts)"* for a run that has **no successful platform bake at all** — an absence in the
+vocabulary of a disagreement. `choose` never asks about such a run (it skips an unsealed one first),
+but anything probing runs directly does, and on 2026-09-13 that sentence was read off eleven
+ordinary non-publishing `main-cd` runs and reported as a fleet-wide bake defect. Re-measured the
+same day over **main-cd 8505–8531**: **20 of 27 runs are UNSEALED** (they never reach the receipt
+read), **all 7 sealed runs are attributable, and NONE disagrees.** The two states are now two
+sentences, and the disagreement one names the receipts it found.
+
+One of those seven is worth reading, because it is the feature working rather than failing: **8514's
+head is `7be4af59` and its receipt names `371f289b`** — which is 8513's head. The bake reused the
+content-addressed build from the previous commit, so the receipt is right and the run head would
+have been wrong. That is precisely what `--verify-source` exists to see.
 - **A freeze BY SHA is matched against the receipt's sha**, which is the point: the run's head sha is
   a different value and would match nothing.
 - **The log read is the only text this script ever fetches, it is bounded** (`MAX_LOG_BYTES`; over the
