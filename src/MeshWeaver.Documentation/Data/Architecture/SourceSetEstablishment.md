@@ -177,6 +177,45 @@ without making it impossible, and the invariant above is what makes rarity irrel
 now produces "I don't know" instead of a verdict. Widening the bound would trade a correctness
 property for a probability.
 
+### What the instrument read, once it was deployed (2026-09-13)
+
+The measurement above was built (#3799: `ChunkTiming` on every source-discovery query) and then
+published on `/health` as the `source-discovery` entry (#4015), which prints its reading whether
+or not it is healthy. Both live portals reached an image carrying it on 2026-09-12. Read 2026-09-13
+07:1xZ, six calls per portal sampling two replicas each, every replica said the same thing:
+
+```
+source-discovery: Healthy — 3 discovery query/queries measured on this replica; every gap stayed
+well inside the completion window … 'nodeType:Code partitions:all limit:25000' settled at 116
+node(s) from 1 change(s) (116 item(s) delivered) … largest inter-chunk gap 0ms = 0% of the 1000ms
+completion window
+```
+
+Per query, on memex.systemorph.com: `namespace:*/Source scope:subtree nodeType:Code` 844 nodes,
+`nodeType:Code partitions:all` 116, `namespace:*/Test scope:subtree nodeType:Code` 379 — each from
+**one** change, gap 0 ms, 0 % of the window; on memex.meshweaver.cloud 2507 / 1581 / 1741, likewise
+one change each. Every discovery query on every sampled replica delivered its whole answer as a
+single `Initial`, and the fold settled on it.
+
+That is what the provider contract predicts (`IMeshQueryProvider`: the first emission carries the
+full initial result set; `MeshQuery.MergeProviderObservables` waits for every provider's `Initial`
+before emitting the merged one; the partitioned Postgres query drains its enumeration before
+publishing), so the quiet window has nothing to truncate: a `Throttle(…).Take(1)` after a
+single-chunk `Initial` settles on that chunk whatever the gap to a later `Added` would have been. A
+later change is by protocol a change *after* the initial set, not part of it. The completion rule
+is therefore **exonerated as the mechanism of the 2026-09-08 short read** — on the readings and on
+the contract — and the terminal marker that would replace it remains a protocol design decision
+with no measured defect behind it.
+
+What that leaves is the other branch this section already named: the shortfall was **upstream, in
+what the providers returned** at 00:31:22Z on that boot. The same shape has since been measured
+independently, at boot, on the other portal: while the `8403` replicas came up on 2026-09-12 the
+sitemap's mesh-wide query saw **0** `Doc` entries at 08:34Z and **1 507** two minutes later, with
+the Doc partition being re-synced in between (#4080). A partition whose import is in flight
+answers a mesh-wide query short and completely, with no marker to say so — which is the residue the
+historical 91 cannot be re-read against, and which #3698's invariant already makes harmless: a
+short pass concludes nothing.
+
 ## Re-measuring this
 
 One Loki query answers whether a pass was short, and it needs no pod to still exist:

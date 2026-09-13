@@ -153,6 +153,36 @@ because checked (a static NodeType with no compilable source) and never checked 
 deliberately different states with different counters; collapsing them would be the same defect
 again. See [Controls That Cannot Fail](/Doc/Architecture/ControlsThatCannotFail).
 
+## Measured after the fix — the cold boot after a framework roll
+
+The reading this fix was waiting for is a cold boot on a NEW framework identity, read off the
+`bake-report` entry `/health` publishes (system-side, past RLS, its own denominator — see
+[NodeType Compilation](/Doc/Architecture/NodeTypeCompilation)). Both live portals rolled to
+`c84c6c055` on 2026-09-12 and booted on framework `sd608997`; read 2026-09-13 07:1xZ, six calls
+per portal, which sampled two replicas each:
+
+| portal, replica (boot) | `bake-report` | adoption stamps held |
+|---|---|---:|
+| memex.systemorph.com, 16:49:06Z | `total=215 baked=214 pending=1 previouslybroken=1` | 59 |
+| memex.systemorph.com, 16:51:56Z | `total=215 baked=214 pending=1 previouslybroken=1` | 1 |
+| memex.meshweaver.cloud, 12:55:11Z | `total=353 baked=295 pending=58 frameworkstale=55 previouslybroken=3` | 105 |
+| memex.meshweaver.cloud, 17:28:10Z | `total=353 baked=350 pending=3 previouslybroken=3` | 68 |
+
+All four read `Healthy`, which on this check means `ClassifiedFromLocalAdoption == 0` — no
+replica's enumeration snapshot predated its own adoptions. Against the boot this page opens with
+(`baked=5 pending=204 frameworkstale=201` with 78 adopted), the seeding replica of the control
+instance classified 214 of 215 as baked with 59 stamps of its own; the one pending type is the
+standing `previouslybroken`. The first memex-cloud replica on the new framework still reports
+`frameworkstale=55`: a 353-type mesh where only module content ships in bundles, read by the first
+process on the identity, so 55 authored types had no bytes under the new tag anywhere yet — the
+compile that is supposed to happen, not the disagreement this page is about. Its sibling five
+hours later reads 350 of 353.
+
+So the defect this page describes did not recur on the boot shape that produced it, on either
+portal, and the confirming instrument is the one an unauthenticated `curl` can read. 🚨 Six calls
+sampled two of the replicas each portal runs; a third would need `Sample` on the deployment record
+to be read per pod.
+
 ## The general rule
 
 > **Before comparing two numbers, make each one state its population, its unit and its source.**
