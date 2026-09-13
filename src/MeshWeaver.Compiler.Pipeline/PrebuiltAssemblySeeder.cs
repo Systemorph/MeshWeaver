@@ -715,9 +715,23 @@ public static class PrebuiltAssemblySeeder
         // the last build the mesh holds (StaleAdopted) rather than leaving the type with no build
         // at all. Measured 2026-09-09: the refusal left Essentials/Email dead on every page for an
         // afternoon over a one-line CSS change.
+        //
+        // 🚨 #4208 — "ALREADY carries a live fingerprint" is asked through
+        // NodeTypeSourceFingerprint.Establishes, not through `is { Length: > 0 }`. An EMPTY compile
+        // input folds to a perfectly well-formed 16-character value, so a NodeType activated ahead
+        // of the sources it declares — the import still in flight, its shared= library not written
+        // yet — carries one that disagrees with EVERY producer. Read as a measurement it makes the
+        // refusal look certain ("sources only ever move the live fingerprint further from a bundle
+        // baked earlier"); it is not a measurement at all, and the premise that sentence rests on
+        // does not hold for a set nobody has established. Measured on MeshWeaver.Reinsurance#204,
+        // 2026-09-13: Reinsurance/AggregateSection declined here against e3b0c44298fc1c14, compiled
+        // against 3 of 3 declared queries matching NO nodes, and parked. Deferring instead costs
+        // nothing — the owner's own check (ApplyAdoptedSourceStamp) leaves the stamp request
+        // standing and re-judges on the sources watcher's next publication.
         var store = hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
         if (sourceFingerprint is { Length: > 0 } producerFingerprint
             && observed.CurrentSourceFingerprint is { Length: > 0 } liveFingerprint
+            && NodeTypeSourceFingerprint.Establishes(liveFingerprint)
             && !string.Equals(producerFingerprint, liveFingerprint, StringComparison.Ordinal))
         {
             var verdict = ModuleVersionCompatibility.Classify(moduleVersion, observed.CurrentModuleVersion);
@@ -748,6 +762,23 @@ public static class PrebuiltAssemblySeeder
                         return Write(SeedOutcome.AdoptedStale);
                     });
         }
+
+        // 🚨 #4208 — and say when the decline was DEFERRED rather than not reached. Without this
+        // line an adoption over an unestablished live source set is indistinguishable in the log
+        // from one whose fingerprints agreed, which is the same "a probe that cannot run must not
+        // look like a probe that ran clean" rule the decline above is written to.
+        if (sourceFingerprint is { Length: > 0 } deferred
+            && observed.CurrentSourceFingerprint is { Length: > 0 } unestablished
+            && !NodeTypeSourceFingerprint.Establishes(unestablished)
+            && !string.Equals(deferred, unestablished, StringComparison.Ordinal))
+            logger?.LogWarning(
+                "Prebuilt assembly for {NodeTypePath}: the bundle records source fingerprint "
+                + "{Producer} and this mesh's live fingerprint is the EMPTY fold ({Live}) — not one "
+                + "of the type's declared source queries has matched a node here yet (#4208). That "
+                + "is not a disagreement about the source, it is the absence of a source set to "
+                + "disagree with, so the bundle is ADOPTED and the owner defers its judgement until "
+                + "the sources land.",
+                nodeTypePath, deferred, unestablished);
 
         return Write(SeedOutcome.Adopted);
 
