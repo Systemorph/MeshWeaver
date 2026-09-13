@@ -2337,6 +2337,16 @@ jobs:
     - name: "Execute the lanes' one-build-per-assembly-name assertion"
       run: python3 .github/scripts/test-module-set-consistency.py
 
+    # The gate's shard PLAN decides how many runners judge a run's packages, and it read the
+    # caller's `shards` alone while the step above it narrowed the run — so a PR touching fewer
+    # packages than `shards` handed a shard an empty slice, the tester's bake-consumption
+    # postcondition fired on it ("NONE of which this run installed"), and the required context went
+    # red on a diff that was fine (MeshWeaver#4175, measured on MeshWeaver.Plugins#1768). The step is
+    # extracted by `id:` and executed: the clamp, the full-run path it must NOT touch, every
+    # pre-existing refusal, and a falsification arm that reproduces the defect without the clamp.
+    - name: "Execute the node-repo gate's shard plan (the fan-out never exceeds the work)"
+      run: python3 .github/scripts/test-gate-shard-plan.py
+
     # carry-forward-bundles.sh is the other half of that publication and had NO CI execution at
     # all: it runs only inside a node repo's publish lane, so the first execution of an edit was a
     # production publish. Its self-test covers the shrink refusals it has always owed and the
