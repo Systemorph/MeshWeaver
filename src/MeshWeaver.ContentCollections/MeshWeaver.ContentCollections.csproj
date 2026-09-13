@@ -14,4 +14,14 @@
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="DynamicNode_Testing_CompilerPipeline" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_ContentCollections" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Data" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_DeploymentContract" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Graph" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Hosting" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Layout" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_MessagingHub" />
+  </ItemGroup>
 </Project>

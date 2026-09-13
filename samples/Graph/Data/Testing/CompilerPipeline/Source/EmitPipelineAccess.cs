@@ -1,0 +1,27 @@
+// <meshweaver>
+// Id: Testing/CompilerPipeline/EmitPipelineAccess
+// DisplayName: Testing/CompilerPipeline/EmitPipelineAccess — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+using MeshWeaver.Compiler;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+
+/// <summary>Thin access to the compiler's internal option factories, so the warning tests use the
+/// SAME options a real compile uses rather than a copy that can drift from them.</summary>
+internal static class EmitPipelineAccess
+{
+    public static CSharpParseOptions ParseOptions() => EmitPipeline.CreateParseOptions();
+    public static CSharpCompilationOptions CompilationOptions() => EmitPipeline.CreateCompilationOptions();
+    public static IReadOnlyList<string> Warnings(IEnumerable<Diagnostic> d) => EmitPipeline.Warnings(d);
+    public static int MaxReported => EmitPipeline.MaxReportedWarnings;
+}

@@ -47,3 +47,20 @@ PensionFund idempotence intermittent
 # Before adding one, prove the flap — two runs of the same commit disagreeing, or the git history of
 # this file showing an entry dropped as stale and restored. That is what justified this one:
 # 768f9ba0b dropped it, f32047e0e restored it one commit later.
+# ── Testing/* — the in-mesh xunit estate (#4185), RUNTIME debt ──────────────────────────────────
+# Every suite below COMPILES and RENDERS its Tests area in the gate's mesh (the bake is green); what is
+# listed is the tests verdict, measured 2026-09-13 with `mw-plugin-test <samples> --seed <bake>`:
+#   • Graph (835 cases), CompilerPipeline (499), Hosting (296), Layout (178), MessagingHub (108),
+#     Data (116): "Tests area reported no verdict within 120s" — the gate's per-area verdict deadline
+#     is sized for a handful of cases, not a whole xunit project; the runner needs a per-suite
+#     budget or sharding before these can be judged (MeshWeaver.Testing.InMesh, #4184).
+#   • DeploymentContract (3 cases): ConfigurationBindingTest reads a file by repository path — a
+#     case that must move to an in-mesh fixture.
+# One-way: a suite that starts passing fails this gate until its line is removed. Burn down, never add.
+Testing/CompilerPipeline tests
+Testing/Data tests
+Testing/DeploymentContract tests
+Testing/Graph tests
+Testing/Hosting tests
+Testing/Layout tests
+Testing/MessagingHub tests

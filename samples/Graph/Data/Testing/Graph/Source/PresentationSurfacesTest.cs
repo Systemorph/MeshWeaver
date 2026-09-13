@@ -1,0 +1,275 @@
+// <meshweaver>
+// Id: Testing/Graph/PresentationSurfacesTest
+// DisplayName: Testing/Graph/PresentationSurfacesTest — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Linq;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+
+/// <summary>
+/// Presentation mode (issue #1803) on the SURFACES the issue names — the home's viewer-scoped
+/// surfaces (the Apps section, the Content section's Pinned tab and its one All category, the
+/// Shared-with-me band) and the node menu that marks them.
+///
+/// <para>The Pinned tab and the Shared band filter at the point the QUERY is built rather than
+/// only where a card is painted, and that is the interesting part: a pinned path and a shared-band
+/// target are INTERPOLATED INTO the control's query string, which the view exposes in its
+/// search-options editor and carries in the <c>hq=</c> parameter of "open in search". A marked name
+/// reaching the address bar mid-presentation is the leak, whether or not a card for it is ever
+/// drawn. The Apps records are the viewer's own — their query is generic, so they screen at paint,
+/// keyed by each tile's navigation target.</para>
+///
+/// <para>The OG-card surface is NOT here: <c>MeshWeaver.OgCard</c> left the platform in #1975, so
+/// screening it is a follow-up in the repo that owns it now.</para>
+/// </summary>
+public class PresentationSurfacesTest
+{
+    private const string Owner = "alice";
+
+    private static PresentationScreen Active(params string[] marks)
+        => PresentationScreen.For(true, marks);
+
+    private static string QueryOf(UiControl? control)
+        => ((MeshSearchControl)control!).HiddenQuery!.ToString()!;
+
+    // ── Pinned tiles ───────────────────────────────────────────────────────────────────────────
+
+    [MeshFact]
+    public void PinnedTiles_DropAMarkedPin_AndKeepTheRest()
+    {
+        var user = new User { PinnedPaths = ["Acme", "Northwind", "Doc/Guide"] };
+
+        var query = QueryOf(UserActivityLayoutAreas.BuildPinnedItems(user, screen: Active("Acme")));
+
+        query.Should().NotContain("Acme", "the marked name must not even reach the query string");
+        query.Should().Contain("Northwind");
+        query.Should().Contain("Doc/Guide");
+    }
+
+    [MeshFact]
+    public void PinnedTiles_DropAPinInsideAMarkedSpace()
+    {
+        var user = new User { PinnedPaths = ["Acme/Q3-Renewal", "Northwind"] };
+
+        QueryOf(UserActivityLayoutAreas.BuildPinnedItems(user, screen: Active("Acme")))
+            .Should().NotContain("Q3-Renewal").And.Contain("Northwind");
+    }
+
+    [MeshFact]
+    public void PinnedTiles_CollapseWhenEveryPinIsMarked()
+    {
+        var user = new User { PinnedPaths = ["Acme", "Acme/Q3-Renewal"] };
+
+        UserActivityLayoutAreas.BuildPinnedItems(user, screen: Active("Acme"))
+            .Should().BeNull("an empty Pinned region collapses rather than rendering a bare title");
+    }
+
+    [MeshFact]
+    public void PinnedTiles_AreUntouchedWhenTheModeIsOff()
+    {
+        var user = new User { PinnedPaths = ["Acme", "Northwind"] };
+
+        // Marked, but presentation mode is off — the whole undo story.
+        QueryOf(UserActivityLayoutAreas.BuildPinnedItems(
+                user, screen: PresentationScreen.For(false, ["Acme"])))
+            .Should().Contain("Acme").And.Contain("Northwind");
+        // And with no screen supplied at all, which is every existing caller.
+        QueryOf(UserActivityLayoutAreas.BuildPinnedItems(user))
+            .Should().Contain("Acme").And.Contain("Northwind");
+    }
+
+    [MeshFact]
+    public void PinnedTiles_OfAnotherUserAreUnaffected()
+    {
+        var bob = new User { PinnedPaths = ["Acme", "Northwind"] };
+
+        // Bob is presenting too — with his OWN marks, which say nothing about Acme.
+        QueryOf(UserActivityLayoutAreas.BuildPinnedItems(bob, screen: Active("Contoso")))
+            .Should().Contain("Acme");
+    }
+
+    // ── The home's sections: Apps, Content (Pinned + All), Shared with me ──────────────────────
+
+    private static string[] ScopeLabels(MeshSearchControl content) =>
+        content.ScopeTabs!.Select(t => t.Label).ToArray();
+
+    private static string ScopeQuery(MeshSearchControl content, string label) =>
+        content.ScopeTabs!.Single(t => t.Label == label).Query;
+
+    private static MeshSearchControl ContentOf(User? user, PresentationScreen? screen) =>
+        UserActivityLayoutAreas.BuildContentSection(Owner, null, user, null, screen);
+
+    [MeshFact]
+    public void Content_AScopeWhoseWholeContentIsMarked_Disappears()
+    {
+        var user = new User { PinnedPaths = ["Acme/Q3-Renewal"] };
+
+        // Off: the Pinned tab is there.
+        ScopeLabels(ContentOf(user, null)).Should().Equal("All", "Pinned", "Mine");
+
+        // On, with Acme marked: everything pinned is inside the marked space, so the tab goes — an
+        // empty tab labelled "Pinned" would itself say something. Mine is unaffected: it is scoped
+        // to the viewer's own partition, not to the marked one.
+        ScopeLabels(ContentOf(user, Active("Acme"))).Should().Equal("All", "Mine");
+    }
+
+    [MeshFact]
+    public void Content_AScopeKeepsItsUnmarkedContent()
+    {
+        var content = ContentOf(new User { PinnedPaths = ["Acme", "Doc/Guide"] }, Active("Acme"));
+
+        ScopeLabels(content).Should().Equal("All", "Pinned", "Mine");
+        ScopeQuery(content, "Pinned").Should().NotContain("Acme").And.Contain("Doc/Guide");
+    }
+
+    [MeshFact]
+    public void SharedGrants_AreScreenedBeforeTheyReachTheAllQuery()
+    {
+        // The grants are now a union leg of All rather than their own band, so the screen still
+        // has to apply BEFORE the query is built: a marked target must not reach the query string
+        // (and therefore the options editor and the `hq=` URL) at all.
+        var marked = UserActivityLayoutAreas.BuildContentSection(
+            Owner, null, null, null, Active("Acme"),
+            Active("Acme").Retain(["Acme/Deals", "Northwind/Sales"]));
+
+        var all = marked.ScopeTabs!.Single(t => t.Label == "All").Query;
+        all.Should().NotContain("Acme");
+        all.Should().Contain("Northwind/Sales");
+    }
+
+    [MeshFact]
+    public void SharedBand_DropsAMarkedTarget()
+    {
+        var painted = Active("Acme").Retain(["Acme/Deals", "Northwind/Sales"]);
+        painted.Should().Equal("Northwind/Sales");
+
+        var band = UserActivityLayoutAreas.BuildSharedBand(painted, locale: null)!;
+        band.HiddenQuery!.ToString()
+            .Should().NotContain("Acme").And.Contain("Northwind/Sales");
+    }
+
+    [MeshFact]
+    public void AppsBand_QueryNeverCarriesAppPaths()
+    {
+        // The Apps band queries the viewer's OWN {owner}/_App records — a GENERIC query, so no
+        // app path (marked or not) can ever reach the query string / the `hq=` URL. The marked-app
+        // guarantee therefore lives at PAINT (below), where the tile's name would otherwise show.
+        var query = UserActivityLayoutAreas.BuildAppsBand(Owner, null).HiddenQuery!.ToString()!;
+
+        query.Should().NotContain("Acme");
+        query.Should().Contain($"path:{Owner}/_App");
+    }
+
+    [MeshFact]
+    public void AppRecords_AreScreenedByTheirTargetAtPaint()
+    {
+        // Icons tiles paint straight from the query rows; the view's paint filter is keyed by the
+        // tile's navigation TARGET (the record's MainNode), so a marked app hides even though its
+        // RECORD path ({owner}/_App/…) is never itself marked.
+        var records = new[]
+        {
+            MeshNode.FromPath($"{Owner}/_App/Acme") with
+            {
+                NodeType = AppNodeType.NodeType, Name = "Acme", MainNode = "Acme",
+            },
+            MeshNode.FromPath($"{Owner}/_App/Northwind") with
+            {
+                NodeType = AppNodeType.NodeType, Name = "Northwind", MainNode = "Northwind",
+            },
+        };
+
+        Active("Acme").Filter(records, n => n.MainNode).Select(n => n.Name)
+            .Should().Equal("Northwind");
+        // Mode off (marks curated but not presenting): everything paints.
+        PresentationScreen.For(false, ["Acme"]).Filter(records, n => n.MainNode)
+            .Should().HaveCount(2);
+    }
+
+    // ── The legacy single-list catalog ─────────────────────────────────────────────────────────
+
+    [MeshFact]
+    public void LegacyCatalog_SharedBand_DisappearsWhenEveryTargetIsMarked()
+    {
+        var catalog = UserActivityLayoutAreas.BuildCatalog(
+            Owner, config: null, sharedTargets: ["Acme/Deals"], locale: null, screen: Active("Acme"));
+
+        // No band at all — the catalog is the single list again, exactly as with no grants.
+        catalog.Should().BeOfType<MeshSearchControl>();
+    }
+
+    [MeshFact]
+    public void LegacyCatalog_SharedBand_IsUnchangedWhenTheModeIsOff()
+    {
+        var catalog = UserActivityLayoutAreas.BuildCatalog(
+            Owner, config: null, sharedTargets: ["Acme/Deals"], locale: null,
+            screen: PresentationScreen.For(false, ["Acme"]));
+
+        catalog.Should().BeOfType<StackControl>();
+    }
+
+    [MeshFact]
+    public void TheCatalogQueryItselfIsNeverRewritten()
+    {
+        // 🚨 The Spaces list is filtered where its results are PAINTED, never by narrowing the
+        // query: a `-path:Acme` clause would put the marked name straight into the `hq=` URL, and
+        // would make the privacy screen a query-engine concern — the first step towards it becoming
+        // a second access-control system.
+        var marked = UserActivityLayoutAreas.BuildCatalog(Owner, screen: Active("Acme"));
+        var plain = UserActivityLayoutAreas.BuildCatalog(Owner);
+
+        QueryOf(marked).Should().Be(QueryOf(plain));
+        QueryOf(marked).Should().NotContain("Acme");
+
+        // Same for the content section's one category: identical query with and without the screen.
+        var spacesMarked = ScopeQuery(ContentOf(null, Active("Acme")), "All");
+        var spacesPlain = ScopeQuery(ContentOf(null, null), "All");
+        spacesMarked.Should().Be(spacesPlain).And.NotContain("Acme");
+    }
+
+    // ── The marking affordance ─────────────────────────────────────────────────────────────────
+
+    [MeshFact]
+    public void NodeMenu_OffersHideForAnUnmarkedNode_AndShowForAMarkedOne()
+    {
+        var hide = PresentationLayoutArea.GetMenuItem("Acme", Owner, PresentationScreen.Off);
+        hide!.Area.Should().Be(PresentationLayoutArea.HideArea);
+        hide.LabelKey.Should().Be("menu.hideInPresentation");
+
+        // The mark is visible to the menu even while the mode is OFF — that is how you curate the
+        // list before you start presenting.
+        var show = PresentationLayoutArea.GetMenuItem(
+            "Acme", Owner, PresentationScreen.For(false, ["Acme"]));
+        show!.Area.Should().Be(PresentationLayoutArea.ShowArea);
+        show.LabelKey.Should().Be("menu.showInPresentation");
+    }
+
+    [MeshFact]
+    public void NodeMenu_OffersNothingToAnAnonymousViewer_OrOnTheViewersOwnHome()
+    {
+        PresentationLayoutArea.GetMenuItem("Acme", null, PresentationScreen.Off)
+            .Should().BeNull("there is no profile to write the mark to");
+        PresentationLayoutArea.GetMenuItem(Owner, Owner, PresentationScreen.Off)
+            .Should().BeNull("hiding your own home would empty the page you are reading");
+    }
+
+    [MeshFact]
+    public void NodeMenu_IsNotGatedOnAnyPermissionOfTheTarget()
+    {
+        // The signature is the assertion: marking edits the VIEWER's profile, so no Permission of
+        // the marked node is consulted — unlike Move / Copy / Delete, which all take `perms`.
+        typeof(PresentationLayoutArea).GetMethod(nameof(PresentationLayoutArea.GetMenuItem))!
+            .GetParameters().Select(p => p.ParameterType)
+            .Should().NotContain(typeof(Permission));
+    }
+}

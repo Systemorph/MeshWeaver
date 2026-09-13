@@ -8,10 +8,24 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Cli" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_ContainerImages" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_ContentCollections" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Data" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_DeploymentContract" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Documentation" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Hosting" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Layout" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_MemexPortalShared" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_MessagingHub" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_PluginTester" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_PortalE2E" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Graph" />
     <!-- OverlaySelfHealWatcherTest moved to the pipeline suite with its subject
          (OverlayHealBudget), but the self-heal it exercises is ARMED by
          NodeTypeEnrichmentHelpers, which stays here with the hub enrichment. -->
     <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_CompilerPipeline" />
     <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
     <!-- The build/bake pipeline drives NodeType compilation (MeshNodeCompilationService,
          NodeTypeCompilationHelpers, TryCreateReleaseNode) — a live internal coupling,
@@ -24,6 +38,7 @@
          fold in the test is the one thing its own contract forbids — two call sites computing the
          token differently either never converge or never fire, and both are silent. -->
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_HostingOrleans" />
     <!-- The build-time packer calls DynamicMeshNodeAttributeGenerator directly. A prebuilt
          assembly MUST carry the same generated skeleton the runtime compiles (the
          MeshNodeProviderAttribute subclass + ConfigureHub wrapping the `configuration` lambda),

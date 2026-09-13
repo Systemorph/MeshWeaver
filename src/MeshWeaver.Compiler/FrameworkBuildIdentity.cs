@@ -172,9 +172,11 @@ public static class FrameworkBuildIdentity
         "MeshWeaver.NuGet",
         "MeshWeaver.Plugin.Packaging",
         "MeshWeaver.PluginCatalog",
+        "MeshWeaver.Reactive.Assertions",
         "MeshWeaver.Reflection",
         "MeshWeaver.ServiceProvider",
         "MeshWeaver.ShortGuid",
+        "MeshWeaver.Testing.InMesh",
         "MeshWeaver.Utils",
     ];
 

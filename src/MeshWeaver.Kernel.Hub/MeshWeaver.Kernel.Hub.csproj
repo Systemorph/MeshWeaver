@@ -17,6 +17,7 @@
          while the ~350 framework assemblies stay de-duplicated across sessions) can only be
          asserted from inside. -->
     <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_CompilerPipeline" />
   </ItemGroup>
 
   <ItemGroup>

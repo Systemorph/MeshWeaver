@@ -257,6 +257,14 @@
     <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
+    <!-- The in-mesh test estate (#4184, #4185): samples/Graph/Data/Testing/* and every satellite's
+         Testing/* suites compile against MeshWeaver.Testing.InMesh ([MeshFact], MeshTestContext,
+         MeshTestRunner) and MeshWeaver.Reactive.Assertions (the portable Should() vocabulary). Both
+         are part of the content surface from here on — the portal host ships them (Plugins
+         src/Memex.Portal.Distributed, image 3.0.0-ci.8492+), so the bake's identity and the
+         portal's agree. FrameworkBuildIdentity.ContentSurfaceAssemblies lists them beside this. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Testing.InMesh\MeshWeaver.Testing.InMesh.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Reactive.Assertions\MeshWeaver.Reactive.Assertions.csproj" />
     <!-- Import mirrors the PORTAL's assembly surface: both portals reference it PRECISELY so
          in-mesh sample source (Northwind/Product's loader) can compile at runtime. Without it the
          gate flags content the real host compiles fine — the gate must judge against the surface

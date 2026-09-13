@@ -1,0 +1,209 @@
+// <meshweaver>
+// Id: Testing/Layout/AreaFrameClassifierTest
+// DisplayName: Testing/Layout/AreaFrameClassifierTest — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Text.Json;
+
+/// <summary>
+/// Pins the boundary between the two placeholder frames a layout area can serve. They look alike
+/// to a human and mean opposite things to a consumer: "Area not found" is a VERDICT (nothing will
+/// ever render here — give up and say so), the compile-progress page is a PROMISE (the instance's
+/// NodeType is still building — keep waiting). Collapsing them either way is a real defect:
+/// treating the promise as a verdict is issue #1411; treating the verdict as a promise turns a
+/// clear answer into a wait that never ends.
+/// </summary>
+public class AreaFrameClassifierTest
+{
+    private static MarkdownControl NotFoundFrame() =>
+        new("**Area not found**\n\nNo renderer is registered for area `KeyMetrics` on hub `A/B`.")
+        {
+            Id = AreaFrameClassifier.AreaNotFoundId
+        };
+
+    private static StackControl CompileProgressFrame() =>
+        Controls.Stack.WithId(AreaFrameClassifier.CompileProgressId);
+
+    [MeshFact]
+    public void NotFoundFrame_IsNotFound_AndNotTransient()
+    {
+        var frame = NotFoundFrame();
+        AreaFrameClassifier.IsAreaNotFound(frame).Should().BeTrue();
+        AreaFrameClassifier.IsCompileProgress(frame).Should().BeFalse();
+        AreaFrameClassifier.IsTransientFrame(frame).Should().BeFalse(
+            "a missing area is a verdict — nothing is going to replace it");
+    }
+
+    [MeshFact]
+    public void CompileProgressFrame_IsTransient_AndNotNotFound()
+    {
+        var frame = CompileProgressFrame();
+        AreaFrameClassifier.IsCompileProgress(frame).Should().BeTrue();
+        AreaFrameClassifier.IsTransientFrame(frame).Should().BeTrue();
+        AreaFrameClassifier.IsAreaNotFound(frame).Should().BeFalse(
+            "a page that is still building must never be reported as a page that does not exist");
+    }
+
+    /// <summary>
+    /// The redirect the compile-progress surface emits the instant the build settles is just as
+    /// much "not the content" as the progress page itself — a waiter that accepted it would latch
+    /// a navigation instruction as the area's control.
+    /// </summary>
+    [MeshFact]
+    public void Redirect_IsTransient()
+    {
+        AreaFrameClassifier.IsTransientFrame(Controls.Redirect("/Some/Where")).Should().BeTrue();
+        AreaFrameClassifier.IsAreaNotFound(Controls.Redirect("/Some/Where")).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// 🚨 The trap that makes the marker worth a test. <see cref="UiControl.Id"/> is
+    /// <c>object?</c>, so a frame that came back over the sync stream carries a
+    /// <see cref="JsonElement"/> there, not a <see cref="string"/> — and the client side is the
+    /// ONLY place these predicates are consulted. A CLR type test would answer "no" for every
+    /// real frame while passing every unit test built from freshly-constructed controls.
+    /// </summary>
+    [MeshFact]
+    public void FrameIdSurvivesTheWire_WhereIdIsAJsonElementNotAString()
+    {
+        var wireId = JsonSerializer.Deserialize<JsonElement>(
+            JsonSerializer.Serialize(AreaFrameClassifier.CompileProgressId));
+        wireId.Should().NotBeOfType<string>();
+
+        var frame = Controls.Stack.WithId(wireId);
+        AreaFrameClassifier.IsCompileProgress(frame).Should().BeTrue();
+        AreaFrameClassifier.IsTransientFrame(frame).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The FIFTH state (#2876): the store could not be reached. Distinct from every other frame,
+    /// and — unlike the other two whose CAUSE is temporary — deliberately not
+    /// <see cref="AreaFrameClassifier.IsTransientFrame"/>.
+    ///
+    /// <para>That exclusion is the whole point of giving it an id of its own. "Transient" here
+    /// means "a replacement is coming without anyone acting": the compile-progress page is followed
+    /// by a redirect, a recycling hub reactivates and the client's own resubscribe re-renders.
+    /// Nothing fires when a database becomes reachable again, so a waiter told this frame was
+    /// transient would wait forever — while a waiter told it was a VERDICT (area-not-found) would
+    /// give up on an area that is perfectly fine.</para>
+    /// </summary>
+    [MeshFact]
+    public void StorageUnavailableFrame_IsItsOwnState_AndNotTransient()
+    {
+        var frame = new MarkdownControl("**This view is temporarily unavailable.**")
+        {
+            Id = AreaFrameClassifier.StorageUnavailableId
+        };
+
+        AreaFrameClassifier.IsStorageUnavailable(frame).Should().BeTrue();
+        AreaFrameClassifier.IsTransientFrame(frame).Should().BeFalse(
+            "nothing pushes a replacement when a connect times out — a waiter must not spin");
+        AreaFrameClassifier.IsAreaNotFound(frame).Should().BeFalse(
+            "the area is registered and rendering; the STORE did not answer");
+        AreaFrameClassifier.IsMissingReference(frame).Should().BeFalse(
+            "the content it points at is not the problem either");
+        AreaFrameClassifier.IsHubRecycling(frame).Should().BeFalse(
+            "a hub recycle announces its own return; a database outage does not");
+        AreaFrameClassifier.IsCompileProgress(frame).Should().BeFalse();
+
+        // …and the wire form, for the same reason the compile-progress id needs it.
+        var wireId = JsonSerializer.Deserialize<JsonElement>(
+            JsonSerializer.Serialize(AreaFrameClassifier.StorageUnavailableId));
+        AreaFrameClassifier.IsStorageUnavailable(Controls.Stack.WithId(wireId)).Should().BeTrue();
+
+        // The other frames must not answer to it.
+        AreaFrameClassifier.IsStorageUnavailable(NotFoundFrame()).Should().BeFalse();
+        AreaFrameClassifier.IsStorageUnavailable(CompileProgressFrame()).Should().BeFalse();
+        AreaFrameClassifier.IsStorageUnavailable(Controls.Markdown("### Total Premium")).Should().BeFalse();
+        AreaFrameClassifier.IsStorageUnavailable(null).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The markdown fallback: a not-found frame whose id did not survive (an older peer, a control
+    /// rebuilt from partial JSON) is still recognised, so the fix cannot regress a consumer that
+    /// used to match the banner.
+    /// </summary>
+    [MeshFact]
+    public void NotFoundFrameWithoutItsId_IsStillRecognised()
+        => AreaFrameClassifier.IsAreaNotFound(
+                new MarkdownControl("**Area not found**\n\nNo renderer is registered for area `X`."))
+            .Should().BeTrue();
+
+    [MeshFact]
+    public void OrdinaryContent_IsNeither()
+    {
+        var content = Controls.Markdown("### Total Premium\n\n1,234");
+        AreaFrameClassifier.IsAreaNotFound(content).Should().BeFalse();
+        AreaFrameClassifier.IsCompileProgress(content).Should().BeFalse();
+        AreaFrameClassifier.IsMissingReference(content).Should().BeFalse();
+        AreaFrameClassifier.IsTransientFrame(content).Should().BeFalse();
+
+        AreaFrameClassifier.IsAreaNotFound(null).Should().BeFalse();
+        AreaFrameClassifier.IsCompileProgress(null).Should().BeFalse();
+        AreaFrameClassifier.IsMissingReference(null).Should().BeFalse();
+        AreaFrameClassifier.IsTransientFrame(null).Should().BeFalse();
+    }
+
+    // ── The THIRD state (#1456): the area renders, its REFERENCE is broken ────────────────
+
+    private static MarkdownControl MissingReferenceFrame() =>
+        new("**Missing reference**\n\nThis area refers to an item that does not exist.\n\n`ClientDelta/Abschlusspraesentation/04-extraktion`")
+        {
+            Id = AreaFrameClassifier.MissingReferenceId
+        };
+
+    /// <summary>
+    /// The distinction the whole class exists for, now three-way. A broken reference is TERMINAL
+    /// like "area not found" (nothing will replace it) but it is NOT "area not found": the area is
+    /// registered and rendering — the data it points at is absent. Conflating them sends an author
+    /// hunting for a missing renderer instead of a missing node.
+    /// </summary>
+    [MeshFact]
+    public void MissingReferenceFrame_IsItsOwnState_TerminalButNotAreaNotFound()
+    {
+        var frame = MissingReferenceFrame();
+        AreaFrameClassifier.IsMissingReference(frame).Should().BeTrue();
+        AreaFrameClassifier.IsAreaNotFound(frame).Should().BeFalse(
+            "the area exists and rendered — it is the referenced NODE that does not");
+        AreaFrameClassifier.IsCompileProgress(frame).Should().BeFalse(
+            "nothing is building — a waiter must not treat this as 'not yet'");
+        AreaFrameClassifier.IsTransientFrame(frame).Should().BeFalse(
+            "a broken reference is data an author must fix — nothing is going to replace it");
+    }
+
+    /// <summary>The other two frames must not answer to the new predicate.</summary>
+    [MeshFact]
+    public void TheThreeStatesAreMutuallyExclusive()
+    {
+        AreaFrameClassifier.IsMissingReference(NotFoundFrame()).Should().BeFalse();
+        AreaFrameClassifier.IsMissingReference(CompileProgressFrame()).Should().BeFalse();
+        AreaFrameClassifier.IsAreaNotFound(MissingReferenceFrame()).Should().BeFalse();
+        AreaFrameClassifier.IsCompileProgress(MissingReferenceFrame()).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// 🚨 The same wire trap as <see cref="FrameIdSurvivesTheWire_WhereIdIsAJsonElementNotAString"/>,
+    /// asserted for the new state too — a CLR `is string` check would pass every test above and
+    /// answer "no" for every frame that actually reached a client.
+    /// </summary>
+    [MeshFact]
+    public void MissingReferenceIdSurvivesTheWire_AsAJsonElement()
+    {
+        var wireId = JsonSerializer.Deserialize<JsonElement>(
+            JsonSerializer.Serialize(AreaFrameClassifier.MissingReferenceId));
+        wireId.Should().NotBeOfType<string>();
+
+        var frame = Controls.Markdown("**Missing reference**").WithId(wireId);
+        AreaFrameClassifier.IsMissingReference(frame).Should().BeTrue();
+        AreaFrameClassifier.IsTransientFrame(frame).Should().BeFalse();
+    }
+}
