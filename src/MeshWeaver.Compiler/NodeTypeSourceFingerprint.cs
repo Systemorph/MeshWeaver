@@ -100,54 +100,28 @@ public static class NodeTypeSourceFingerprint
     /// <para>Computed from the fold rather than written as a literal, so it cannot drift away from
     /// the function it describes: an immutable constant initialised once and never written
     /// (<c>NoStaticState.md</c>'s sanctioned <c>static readonly</c>).</para>
+    ///
+    /// <para><b>Why it is worth naming</b> (issue #4208). There is no null here: an empty compile
+    /// input folds to a perfectly ordinary-looking 16-character value, so every
+    /// <c>is { Length: &gt; 0 }</c> guard accepts it. Measured on MeshWeaver.Reinsurance#204,
+    /// 2026-09-13: a bake's prebuilt assembly for <c>Reinsurance/AggregateSection</c> was ADOPTED,
+    /// and 2 ms later the adoption was judged against a live fingerprint of
+    /// <c>e3b0c44298fc1c14</c> — this value — because the type sorts first in its namespace, ahead
+    /// of the <c>Reinsurance/Source/*</c> nodes its <c>shared=@…</c> queries read, which had not
+    /// been written yet. "The source moved past the adopted build" was the conclusion drawn from a
+    /// set nobody had established; the refusal dispatched a compile, that compile ran with 3 of 3
+    /// declared queries matching NO nodes, and the type parked on <c>CS0246</c>s about code nothing
+    /// is wrong with.</para>
+    ///
+    /// <para>🚨 <b>It is a diagnostic, never the witness.</b>
+    /// <c>NodeTypeCompilationHelpers.CanJudgeAdoption</c> asks the SNAPSHOT — did any declared
+    /// query match a node? — because this value is not a reliable proxy for that: the fold drops
+    /// executable cells and blank files, so a type whose only matched node is one of those has an
+    /// established source set and this fingerprint. Use it to SAY what was measured, not to decide
+    /// whether anything was.</para>
     /// </summary>
     public static readonly string EmptySourceSet =
         PartitionSourceFingerprint.Compute(Array.Empty<(string Path, string Token)>());
-
-    /// <summary>
-    /// 🚨 <b>Does <paramref name="fingerprint"/> ESTABLISH anything about a mesh's live source
-    /// set?</b> (issue #4208.) Three states, never two — the same rule
-    /// <see cref="SourceCoverage"/> keeps, and for the same reason.
-    ///
-    /// <list type="bullet">
-    ///   <item><c>null</c>/empty — never computed.</item>
-    ///   <item><see cref="EmptySourceSet"/> — computed, over a source set that matched NOTHING.
-    ///     The fold ran; it had no input. A NodeType whose declared queries match no node on this
-    ///     mesh <b>yet</b> — an import still in flight, a shared library package not installed
-    ///     here — is indistinguishable, from this value alone, from one whose sources were
-    ///     deleted. So it says nothing that may be READ AS a statement about the live source.</item>
-    ///   <item>anything else — established: these are the sources this mesh holds.</item>
-    /// </list>
-    ///
-    /// <para><b>The incident.</b> MeshWeaver.Reinsurance#204, 2026-09-13: a bake's prebuilt
-    /// assembly for <c>Reinsurance/AggregateSection</c> was ADOPTED, and 2 ms later the adoption
-    /// was judged against a live fingerprint of <see cref="EmptySourceSet"/> — the type sorts
-    /// first in its namespace, ahead of the <c>Reinsurance/Source/*</c> nodes its
-    /// <c>shared=@…</c> queries read, which had not been written yet. "The source moved past the
-    /// adopted build" was the conclusion drawn from a set nobody had established; the refusal
-    /// dispatched a compile, that compile ran with 3 of 3 declared queries matching NO nodes, and
-    /// Roslyn's completely genuine-looking <c>CS0246</c>s parked the type. Every later sibling,
-    /// declaring the identical queries, adopted green once the sources had landed.</para>
-    ///
-    /// <para>🚨 <b>It is deliberately NOT the same question as "is the fingerprint absent?"</b>
-    /// The absent case is the pre-publication window (<c>#2813</c>); this is the pre-IMPORT one.
-    /// Both are "nothing has been compared", and both must leave the one-shot adoption stamp
-    /// STANDING rather than spend it — but only the first was guarded, because an empty fold
-    /// produces a perfectly well-formed 16-character value that every <c>is { Length: &gt; 0 }</c>
-    /// test accepts.</para>
-    ///
-    /// <para>🚨 <b>Equality still outranks this.</b> A type that genuinely compiles from no
-    /// sources at all carries <see cref="EmptySourceSet"/> on BOTH sides, and two equal
-    /// fingerprints are a match — the caller compares first and asks this only about a
-    /// DISAGREEMENT. Treating the empty fold as unestablished before comparing would demote that
-    /// type's honest verification to unverified.</para>
-    /// </summary>
-    /// <param name="fingerprint">A value read from
-    /// <c>NodeTypeDefinition.CurrentSourceFingerprint</c> or
-    /// <c>NodeTypeDefinition.AdoptedSourceFingerprint</c>.</param>
-    public static bool Establishes(string? fingerprint)
-        => fingerprint is { Length: > 0 }
-           && !string.Equals(fingerprint, EmptySourceSet, StringComparison.Ordinal);
 
     /// <summary>
     /// The fingerprint of <paramref name="sourceNodes"/> as a compile input for the NodeType at

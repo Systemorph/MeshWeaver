@@ -731,7 +731,8 @@ public static class PrebuiltAssemblySeeder
         var store = hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
         if (sourceFingerprint is { Length: > 0 } producerFingerprint
             && observed.CurrentSourceFingerprint is { Length: > 0 } liveFingerprint
-            && NodeTypeSourceFingerprint.Establishes(liveFingerprint)
+            && NodeTypeCompilationHelpers.CanJudgeAdoption(
+                producerFingerprint, liveFingerprint, observed.CurrentSourceVersions)
             && !string.Equals(producerFingerprint, liveFingerprint, StringComparison.Ordinal))
         {
             var verdict = ModuleVersionCompatibility.Classify(moduleVersion, observed.CurrentModuleVersion);
@@ -768,17 +769,18 @@ public static class PrebuiltAssemblySeeder
         // from one whose fingerprints agreed, which is the same "a probe that cannot run must not
         // look like a probe that ran clean" rule the decline above is written to.
         if (sourceFingerprint is { Length: > 0 } deferred
-            && observed.CurrentSourceFingerprint is { Length: > 0 } unestablished
-            && !NodeTypeSourceFingerprint.Establishes(unestablished)
-            && !string.Equals(deferred, unestablished, StringComparison.Ordinal))
+            && observed.CurrentSourceFingerprint is { Length: > 0 } unjudged
+            && !NodeTypeCompilationHelpers.CanJudgeAdoption(
+                deferred, unjudged, observed.CurrentSourceVersions)
+            && !string.Equals(deferred, unjudged, StringComparison.Ordinal))
             logger?.LogWarning(
                 "Prebuilt assembly for {NodeTypePath}: the bundle records source fingerprint "
-                + "{Producer} and this mesh's live fingerprint is the EMPTY fold ({Live}) — not one "
-                + "of the type's declared source queries has matched a node here yet (#4208). That "
-                + "is not a disagreement about the source, it is the absence of a source set to "
-                + "disagree with, so the bundle is ADOPTED and the owner defers its judgement until "
-                + "the sources land.",
-                nodeTypePath, deferred, unestablished);
+                + "{Producer} and this mesh's live fingerprint is {Live}, but NOT ONE of the type's "
+                + "declared source queries has matched a node here yet (#4208). That is not a "
+                + "disagreement about the source, it is the absence of a source set to disagree "
+                + "with, so the bundle is ADOPTED and the owner defers its judgement until the "
+                + "sources land.",
+                nodeTypePath, deferred, unjudged);
 
         return Write(SeedOutcome.Adopted);
 

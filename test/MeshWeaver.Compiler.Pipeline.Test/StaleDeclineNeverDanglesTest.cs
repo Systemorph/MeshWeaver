@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.IO;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -72,6 +73,14 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
     /// and there is no window in which the record means something else.</summary>
     private static string LiveFingerprintFor(string typePath) =>
         NodeTypeSourceFingerprint.Compute([SourceNode(typePath)], typePath);
+
+    /// <summary>🚨 The live source SNAPSHOT — the witness a decline needs (MeshWeaver#4208). Both
+    /// the seeder and the owner ask "did any declared query match a node here?"; a record with no
+    /// snapshot answers NO and the adoption is DEFERRED, which would leave these two tests with no
+    /// decline to observe. The tick is arbitrary and stable — nothing reads it.</summary>
+    private static ImmutableDictionary<string, long> LiveSnapshotFor(string typePath) =>
+        ImmutableDictionary<string, long>.Empty.SetItem(
+            SourceNode(typePath).Path, 638_000_000_000_000_000);
 
     /// <summary>The pure decisions below never read a fingerprint, so any ESTABLISHED value does;
     /// stating one keeps the record honest rather than carrying the empty fold into a row that
@@ -165,6 +174,7 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
             {
                 CurrentModuleVersion = currentModuleVersion,
                 CurrentSourceFingerprint = LiveFingerprintFor(typePath),
+                CurrentSourceVersions = LiveSnapshotFor(typePath),
             },
         };
         await MeshService.CreateNode(typeNode)
@@ -174,10 +184,10 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
         // convenience: the watcher's first publication can be the empty fold, and the seeder
         // deliberately DEFERS on that rather than declining from a source set nobody established.
         var expected = LiveFingerprintFor(typePath);
-        NodeTypeSourceFingerprint.Establishes(expected).Should().BeTrue(
-            "the fixture's source node is what makes the live set establishable at all — without "
-            + "it this type publishes the empty fold and the seeder correctly DEFERS instead of "
-            + "declining, so the experiment below would have no subject");
+        LiveSnapshotFor(typePath).Should().NotBeEmpty(
+            "the fixture's source node is what makes the live set ESTABLISHED at all — without a "
+            + "matched node the seeder correctly DEFERS instead of declining (MeshWeaver#4208), so "
+            + "the experiment below would have no subject");
         await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition d
                         && string.Equals(d.LatestAssemblyMvid, DeadMvid, StringComparison.Ordinal)

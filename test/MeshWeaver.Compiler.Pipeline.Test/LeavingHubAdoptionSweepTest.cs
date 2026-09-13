@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.IO;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -81,6 +82,16 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
     private static string LiveFingerprintFor(string typePath) =>
         NodeTypeSourceFingerprint.Compute([SourceNode(typePath)], typePath);
 
+    /// <summary>🚨 The live source SNAPSHOT — the witness a decline needs (MeshWeaver#4208). The
+    /// seeder and the owner both ask "did any declared query match a node here?", and a record
+    /// carrying no snapshot answers NO, at which point the adoption is DEFERRED and the decline
+    /// these arms are about is unreachable. The tick value is arbitrary and stable: nothing reads
+    /// it, and the sources watcher's own recompute would write a real one that is equally
+    /// non-empty.</summary>
+    private static ImmutableDictionary<string, long> LiveSnapshotFor(string typePath) =>
+        ImmutableDictionary<string, long>.Empty.SetItem(
+            SourceNode(typePath).Path, 638_000_000_000_000_000);
+
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     /// <summary>A hub standing in for the sweep's hub — a child of the mesh so that disposing it
@@ -121,6 +132,7 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
                 LatestAssemblyMvid = LiveMvid,
                 CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
                 CurrentSourceFingerprint = LiveFingerprintFor(typePath),
+                CurrentSourceVersions = LiveSnapshotFor(typePath),
             },
         };
         await MeshService.CreateNode(typeNode)
@@ -135,10 +147,10 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
         // off that value is the defect, not the subject: the seeder defers there. Waiting on
         // Establishes is therefore the precondition of the experiment, not a convenience.
         var expected = LiveFingerprintFor(typePath);
-        NodeTypeSourceFingerprint.Establishes(expected).Should().BeTrue(
-            "the fixture's source node is what makes the live set establishable at all — without "
-            + "it this type publishes the empty fold and the seeder correctly DEFERS instead of "
-            + "declining, so the experiment below would have no subject");
+        LiveSnapshotFor(typePath).Should().NotBeEmpty(
+            "the fixture's source node is what makes the live set ESTABLISHED at all — without a "
+            + "matched node the seeder correctly DEFERS instead of declining (MeshWeaver#4208), so "
+            + "the experiment below would have no subject");
         await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition d
                         && string.Equals(d.LatestAssemblyMvid, LiveMvid, StringComparison.Ordinal)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -104,6 +105,38 @@ public class AdoptionIsNotJudgedFromAnEmptySourceSetTest
             "the constant is computed from the fold so it cannot drift away from it");
         NodeTypeSourceFingerprint.EmptySourceSet.Should().Be("e3b0c44298fc1c14",
             "that is the live fingerprint MeshWeaver.Reinsurance#204 recorded at 16:16:50.760");
+    }
+
+    /// <summary>
+    /// 🚨 The reason the witness is the SNAPSHOT and not this constant. The tick snapshot counts
+    /// every MATCHED node; the fingerprint is folded over
+    /// <c>NodeCompileShaping.CollectCompileSources</c>, which drops executable cells and blank
+    /// files. A type whose only matched node is one of those has an established source set AND the
+    /// empty fold — reading the hash as the witness would defer its adoption indefinitely, trading
+    /// #4208's park for a permanent hold.
+    /// </summary>
+    [Fact]
+    public void AMatchedSourceTheFoldDROPS_IsStillAnEstablishedSourceSet()
+    {
+        var blank = new MeshNode("blank", $"{TypePath}/Source")
+        {
+            NodeType = "Code",
+            Name = "blank",
+            State = MeshNodeState.Active,
+            Content = new CodeConfiguration { Language = "csharp", Code = "   " },
+        };
+        NodeTypeSourceFingerprint.Compute([blank], TypePath).Should().Be(
+            NodeTypeSourceFingerprint.EmptySourceSet,
+            "a blank file contributes nothing to the compile input, so the fold is empty");
+
+        var matched = ImmutableDictionary.CreateRange(
+            new Dictionary<string, long> { [blank.Path] = 638_000_000_000_000_000 });
+
+        NodeTypeCompilationHelpers.CanJudgeAdoption(
+                JustSeeded(NodeTypeSourceFingerprint.EmptySourceSet, matched), matched)
+            .Should().BeTrue(
+                "a declared query DID match a node here — the disagreement is a measurement, and "
+                + "deferring on it would hold this type's adoption for ever");
     }
 
     // ── The defect ───────────────────────────────────────────────────────────────────────────
@@ -230,27 +263,42 @@ public class AdoptionIsNotJudgedFromAnEmptySourceSetTest
     // ── The shared predicate ─────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// The one definition all three writers ask, so no two of them can disagree about when the
-    /// three-way is answerable.
+    /// The one definition every writer asks, so no two of them can disagree about when the
+    /// three-way is answerable. The third column is whether ANY declared source query matched a
+    /// node — the snapshot, not the hash.
     /// </summary>
     [Theory]
     // A legacy bundle records no fingerprint: the verdict is Unverified and needs no live side.
-    [InlineData(null, null, true)]
-    [InlineData(null, "4ed23561cfd142d1", true)]
+    [InlineData(null, null, 0, true)]
+    [InlineData(null, "4ed23561cfd142d1", 1, true)]
     // #2813 — the owner has not published a live fingerprint yet.
-    [InlineData(BundleFingerprint, null, false)]
-    [InlineData(BundleFingerprint, "", false)]
-    // #4208 — it HAS published one, over a source set that matched nothing.
-    [InlineData(BundleFingerprint, "e3b0c44298fc1c14", false)]
-    // A real, established live set — answerable, whether it agrees or not.
-    [InlineData(BundleFingerprint, "4ed23561cfd142d1", true)]
-    [InlineData(BundleFingerprint, BundleFingerprint, true)]
-    // …and the sourceless type, whose empty fold on both sides IS the answer.
-    [InlineData("e3b0c44298fc1c14", "e3b0c44298fc1c14", true)]
-    public void CanJudgeAdoption_IsAnsweredByEvidence(string? adopted, string? live, bool expected)
-        => NodeTypeCompilationHelpers.CanJudgeAdoption(new NodeTypeDefinition
-        {
-            AdoptedSourceFingerprint = adopted,
-            CurrentSourceFingerprint = live,
-        }).Should().Be(expected);
+    [InlineData(BundleFingerprint, null, 0, false)]
+    [InlineData(BundleFingerprint, "", 1, false)]
+    // #4208 — it HAS published one, and not one declared query matched a node.
+    [InlineData(BundleFingerprint, "e3b0c44298fc1c14", 0, false)]
+    // …the same, with a live fingerprint that is NOT the empty fold — unreachable in practice, but
+    // it pins that the witness is the snapshot rather than the hash.
+    [InlineData(BundleFingerprint, "4ed23561cfd142d1", 0, false)]
+    // A query DID match — answerable, whether the fingerprints agree or not, and INCLUDING the
+    // case where the fold dropped every matched node (an executable cell, a blank file).
+    [InlineData(BundleFingerprint, "4ed23561cfd142d1", 2, true)]
+    [InlineData(BundleFingerprint, "e3b0c44298fc1c14", 1, true)]
+    // Equality outranks the witness: a match is a match, empty==empty included.
+    [InlineData(BundleFingerprint, BundleFingerprint, 0, true)]
+    [InlineData("e3b0c44298fc1c14", "e3b0c44298fc1c14", 0, true)]
+    public void CanJudgeAdoption_IsAnsweredByEvidence(
+        string? adopted, string? live, int matchedSources, bool expected)
+    {
+        var snapshot = ImmutableDictionary.CreateRange(
+            Enumerable.Range(0, matchedSources)
+                .Select(i => new KeyValuePair<string, long>($"{TypePath}/Source/n{i}", 638L + i)));
+        NodeTypeCompilationHelpers.CanJudgeAdoption(
+            new NodeTypeDefinition
+            {
+                AdoptedSourceFingerprint = adopted,
+                CurrentSourceFingerprint = live,
+                CurrentSourceVersions = snapshot,
+            },
+            snapshot).Should().Be(expected);
+    }
 }
