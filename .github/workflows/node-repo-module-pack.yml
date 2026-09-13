@@ -866,6 +866,10 @@ jobs:
       # The helper is lane orchestration, while the workflow below is the exact definition GitHub
       # loaded for this job. Keep both absolute so a later `cd` cannot silently change either.
       MODULE_PACK_BATCH: ${{ github.workspace }}/build-logic/.github/scripts/module-pack-batch.py
+      # The publication-wide assembly census (#3732) — asserted here so a build-logic ref that
+      # predates it fails ONE preflight by name, instead of failing every pack leg inside a
+      # subshell whose recorded reason names neither the helper nor the ref.
+      MODULE_SET_CENSUS: ${{ github.workspace }}/build-logic/.github/scripts/module-set-census.py
       EXECUTING_WORKFLOW: ${{ github.workspace }}/lane-definition/.github/workflows/node-repo-module-pack.yml
     outputs:
       # The matrix the pack job expands: the scope's selection, each entry annotated by the ledger
@@ -1064,6 +1068,8 @@ jobs:
             python3 build-logic/.github/scripts/node-repo-publication-reuse.py --self-test
           fi
           python3 build-logic/.github/scripts/node-repo-pack-verify.py --self-test
+          [ -f "$MODULE_SET_CENSUS" ] || { echo "::error::the resolved build-logic ref carries no .github/scripts/module-set-census.py. The pack legs write the publication's assembly census onto their receipts and verify reads it (MeshWeaver#3732); when build-logic-ref is explicit, move it to a commit compatible with the loaded reusable workflow."; exit 1; }
+          python3 "$MODULE_SET_CENSUS" --self-test
           python3 build-logic/.github/scripts/module-build-key.py --self-test
           python3 build-logic/.github/scripts/module-build-ledger.py --self-test
           python3 "$MODULE_PACK_BATCH" --self-test --workflow "$EXECUTING_WORKFLOW"
@@ -1900,6 +1906,10 @@ jobs:
       # Workflow orchestration belongs to build-logic-ref. The platform checkout below is the
       # framework source/tests compile against and can deliberately predate this lane's scripts.
       MODULE_PACK_BATCH: ${{ github.workspace }}/build-logic/.github/scripts/module-pack-batch.py
+      # The publication-wide assembly census (#3732). Same ref as the batching helper — it is
+      # build logic, not platform source, and its two halves (here and in `verify`) must be the
+      # same version or the receipt field and the reader disagree about its shape.
+      MODULE_SET_CENSUS: ${{ github.workspace }}/build-logic/.github/scripts/module-set-census.py
     # Inherit the caller's least-privilege map; declaring OIDC here rejects basic-auth callers at
     # graph creation time, before this job's `acr-login` mode can choose its conditional steps.
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
@@ -3745,12 +3755,26 @@ jobs:
               IDENTITY="$(printf '%s' "$manifest_json" | jq -r '.frameworkMvid // ""' | tr -d '[:space:]')"
               [ -n "$IDENTITY" ] || { echo "::error::$MODULE's bundle states no framework identity (manifest .frameworkMvid is $(printf '%s' "$manifest_json" | jq -c '.frameworkMvid')) — the receipt would attest nothing and 'the run's bundles agree' would be vacuously true for it (#3310). On a BUILD leg the pack step names the anchor and this manifest did not get it; on a REUSE leg these bytes were packed before the identity was recorded — rebuild them."; exit 1; }
               echo "$MODULE states framework identity $IDENTITY"
+              # ───── THE MeshWeaver.* ASSEMBLIES THIS BUNDLE CARRIES, ON THE RECEIPT (#3732) ─────
+              # 🚨 THE POPULATION THE EXISTING ASSERTION CANNOT SEE. The gate and the bake already
+              # refuse "one assembly name at two builds" — over the set a bake COMPOSES, which is 4
+              # bundles on Reinsurance and 5 on Plugins. The defect #3732 was filed on was measured
+              # across a publication's ~40 MODULE bundles: MeshWeaver.Markdown.Collaboration in 15
+              # copies and THREE builds on one memex pod. No pack leg can see that — each holds ONE
+              # bundle — so the census is taken here, where the bytes are, and the verdict is read
+              # in `verify`, the only job that sees the whole wave.
+              # Read off the BYTES, out of the archive, for the same reason the identity above is:
+              # the packer's exit code and the contents of the artifact are different claims, and
+              # two bundles declaring one entry assembly unpack over each other.
+              ASSEMBLIES="$(python3 "$MODULE_SET_CENSUS" census --bundle "$BUNDLE")"
+              [ -n "$ASSEMBLIES" ] || { echo "::error::the assembly census of $MODULE's bundle produced nothing — a receipt with no census is a bundle nobody measured, and verify would report it as unmeasured rather than clean (#3732)."; exit 1; }
               jq -n --arg l "$LANE" --arg p "$PACKAGE" --arg m "$MODULE" \
                     --arg v "$VERSION" --arg c "$COMPILER" --arg t "$TESTS" \
                     --argjson pub "$PUBLISHED" --arg pm "$PUBLICATION" \
                     --arg lk "$LEDGER_KEY" --arg ld "$LEDGER_DECISION" \
                     --arg fid "$IDENTITY" --arg sb "${SUPERSEDED_BY:-}" \
-                 '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, tests:$t, published:$pub, publication:$pm, frameworkIdentity:$fid, ledger:{key:$lk, decision:$ld}} + (if $sb == "" then {} else {supersededBy:$sb} end)' \
+                    --argjson asm "$ASSEMBLIES" \
+                 '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, tests:$t, published:$pub, publication:$pm, frameworkIdentity:$fid, assemblies:$asm, ledger:{key:$lk, decision:$ld}} + (if $sb == "" then {} else {supersededBy:$sb} end)' \
                  > "$RUNNER_TEMP/receipts/$MODULE.json"
               bk set --module "$MODULE" "tests=$TESTS" "publication=$PUBLICATION"
               cat "$RUNNER_TEMP/receipts/$MODULE.json"
@@ -4431,6 +4455,60 @@ jobs:
             --test-receipts "$RUNNER_TEMP/test-receipts" \
             --tests-result "$TESTS_RESULT" \
             --github-output "$GITHUB_OUTPUT"
+
+      # ───── ONE BUILD PER ASSEMBLY NAME, over the PUBLICATION's whole module set (#3732) ─────
+      # 🚨 THE DENOMINATOR THE EXISTING ASSERTION COULD NOT REACH. The gate and the bake already
+      # refuse "one assembly name at two builds" — over the set a bake COMPOSES, measured at 4
+      # bundles on Reinsurance's gate and 5 on Plugins' publish-bake. The defect #3732 was filed on
+      # lived across a publication's ~40 MODULE bundles: MeshWeaver.Markdown.Collaboration in 15
+      # copies and THREE builds on one memex pod. Every green reading of the existing assertion has
+      # therefore been green about a different population — which is what a denominator of 4 against
+      # a population of 40 means, and the issue says so in the instrument's own words.
+      #
+      # This job is the only place the whole wave is in one hand, so it is the only place the
+      # reading can be taken. The census rides each receipt; the arithmetic happens here.
+      #
+      # 🚨 A REPORT, NOT A REFUSAL — and the reason is EVIDENCE, not timidity. Nobody has read this
+      # population: the instrument is what #3732's closing condition asks for and it did not exist,
+      # so what a refusal here would REFUSE is unknown. A `reuse` leg republishes bytes packed in an
+      # earlier run by construction, so a shared sibling riding both a reused and a freshly built
+      # bundle would diverge — possibly on every wave, in every satellite, the moment this landed.
+      # This job is a REQUIRED context in five satellites, and turning an unread measurement into a
+      # refusal there is how a new guard takes CD down fleet-wide. The population is not unguarded
+      # meanwhile, it is guarded LATE: the consumer answers `SealedSetInconsistent` and holds the
+      # roll for the whole fleet. Moving that refusal earlier is the point — read the denominator
+      # line on the first waves, then add `--enforce` with the evidence of what it refuses.
+      # `if: always()` so a red verifier above does not also hide the number.
+      # 🚨 EVERY receipt in the RUN, not this call's — deliberately the opposite narrowing from the
+      # build accounting above, and the reason is the same denominator argument one level up. A
+      # PUBLICATION is composed from several calls of this lane (MeshWeaver.Plugins invokes it twice
+      # in one run, `modules-floor` and `modules-rest`, with different lane stamps), and the
+      # 15-copies/3-builds measurement this reading exists for spanned exactly those calls. Filtering
+      # by lane would make each verifier drop the other call's receipts and print a confident zero.
+      # The verdict names the lanes it folded so "publication-wide" is checkable, not assumed.
+      - name: Collect every receipt in this run (the publication spans calls)
+        if: always()
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: module-pack-receipt-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/receipts-run
+      - name: The publication's module set, read at one build per assembly name
+        if: always()
+        # 🚨 NO `continue-on-error`. This is a REPORT about divergence — the script exits 0 when it
+        # FINDS divergence, because no lane passes `--enforce` yet — so the only way this step can
+        # fail is that the reading did not happen: a malformed receipt, a helper the build-logic ref
+        # does not carry, a changed CLI. Tolerating that is exactly the skip-trapdoor AGENTS.md
+        # forbids: it would leave this required job green while promising a reading nobody took, and
+        # "the gate never ran" would be spelled like "the gate passed". When the report becomes a
+        # refusal, `--enforce` is added here and `test-module-set-census.py` pins that the two move
+        # together, so the promotion cannot happen by halves.
+        run: |
+          set -euo pipefail
+          helper=build-logic/.github/scripts/module-set-census.py
+          [ -f "$helper" ] || { echo "::error::$helper is not present, so the publication's module set was NOT read. On a run whose \`select\` job failed the build-logic checkout is skipped and this is downstream of that failure; otherwise the resolved build-logic ref predates MeshWeaver#3732."; exit 1; }
+          python3 "$helper" verdict --receipts "$RUNNER_TEMP/receipts-run"
 
       # ─────────── WHICH COMPILER BUILT WHAT — a NUMBER, on every run ───────────
       # 🚨 The split between `memex build project` (the container: no SDK, no NuGet, the image's own

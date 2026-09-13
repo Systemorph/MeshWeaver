@@ -2,9 +2,11 @@ version: v1.1.0
 # 🚨 ONE task, TWO steps. Do NOT merge the filter lists into a single `acr purge`.
 #
 # The two lists are NOT symmetric and the difference is load-bearing:
-#   * mw-plugin-test  is unique to the 7d step  — the CI tester, republished many times a day.
-#   * memex-portal    is unique to the 30d step — the PRODUCTION portal image.
-# A union-merge silently moves memex-portal to `--ago 7d --keep 10`. It is pinned on the OTHER axis
+#   * mw-plugin-test  is unique to the FIRST step — the CI tester, republished many times a day.
+#   * memex-portal    is unique to the SECOND    — the PRODUCTION portal image.
+# 🚨 BOTH STEPS NOW CARRY THE SAME `--ago 30d` (see the window note below; until 2026-09-13 the
+# first was `--ago 7d --keep 10`). They stay SEPARATE anyway: a union-merge would silently retune
+# one of them the next time either window moves, and memex-portal is pinned on the OTHER axis
 # (committed tags in the deployment overlays, Memex#141), which the pinned-digest guard cannot see —
 # exactly how Memex#122's victim was pinned, where purging a pinned tag took the public brand site
 # down for ~11 h and nothing alerted.

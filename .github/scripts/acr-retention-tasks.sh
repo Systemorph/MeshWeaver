@@ -159,36 +159,53 @@ cmd_verify() {
         # `acr purge` at all. The record-side checks below read the RECORDED file and would never
         # see it. So the LIVE steps of a declared task are held to the invariants that are not
         # what the declaration is about.
-        local live_steps
-        live_steps=$(grep -E "^[[:space:]]*-[[:space:]]+cmd:" "$live" || true)
-        if [ -z "$live_steps" ]; then
-          echo "::error::the LIVE definition of '$task' has no \`cmd:\` step, so the declared drift"
-          echo "  excused a task that no longer purges anything."
+        # 🚨 TOKENS, NOT A GREP, AND THE SAME PARSER BOTH SIDES USE. A search for the literal
+        # `--include-locked` is defeated by the shell's own quoting: `--include-"locked"` EXECUTES
+        # with that option and matches no such search, so the one invariant this whole lane rests
+        # on would be bypassed while `verify` printed the drift as declared and went green.
+        # `lock-pinned-digests.py --describe-purge-file` is the only correct reader of a purge step
+        # in this repository; keeping a second, weaker copy here is how the two drift apart.
+        local live_desc recorded_desc
+        if ! live_desc=$(python3 "$HERE/lock-pinned-digests.py" --describe-purge-file "$live"); then
+          echo "::error::the LIVE definition of '$task' could not be parsed, so the declared drift"
+          echo "  excused a task nothing has read."
           drift=1
-        fi
-        if printf '%s\n' "$live_steps" | grep -q -- "--include-locked"; then
-          echo "::error::the LIVE definition of '$task' passes --include-locked."
-          echo "  That flag DELETES LOCKED MANIFESTS — the entire protection the lock job provides."
-          echo "  A recordAheadOfRegistry declaration is about the retention WINDOW; it does not"
-          echo "  excuse this, and without this line the drift would have printed as declared."
+        elif ! recorded_desc=$(python3 "$HERE/lock-pinned-digests.py" \
+                                 --describe-purge-file "$recorded"); then
+          echo "::error::the RECORDED definition of '$task' could not be parsed."
           drift=1
-        fi
-        if printf '%s\n' "$live_steps" | grep -qv "acr purge"; then
-          echo "::error::the LIVE definition of '$task' has a \`cmd:\` step that is not an acr purge."
-          drift=1
-        fi
-        # The declaration is about the window, so the FILTERS must still match the record. A live
-        # filter set the record does not carry is a repository nobody reviewed into the purge.
-        local live_filters recorded_filters
-        live_filters=$(printf '%s\n' "$live_steps" | grep -o -- "--filter '[^']*'" | sort | uniq)
-        recorded_filters=$(grep -E "^[[:space:]]*-[[:space:]]+cmd:" "$recorded" \
-                             | grep -o -- "--filter '[^']*'" | sort | uniq)
-        if [ "$live_filters" != "$recorded_filters" ]; then
-          echo "::error::the LIVE definition of '$task' purges a different set of repositories than"
-          echo "  the record does. A recordAheadOfRegistry declaration covers the WINDOW, not WHAT"
-          echo "  is purged. live: $(printf '%s' "$live_filters" | tr '\n' ' ')"
-          echo "  recorded: $(printf '%s' "$recorded_filters" | tr '\n' ' ')"
-          drift=1
+        else
+          if ! python3 - "$live_desc" "$recorded_desc" "$task" <<'PYEOF'; then
+import json, sys
+live, recorded, task = json.loads(sys.argv[1]), json.loads(sys.argv[2]), sys.argv[3]
+problems = []
+if live["steps"] == 0 or not live["purges"]:
+    problems.append(f"the LIVE definition of {task!r} has no `cmd:` step, so the declared drift "
+                    "excused a task that no longer purges anything.")
+for purge in live["purges"]:
+    if purge.get("notAPurge") is not None:
+        problems.append(f"the LIVE definition of {task!r} has a `cmd:` step that is not an "
+                        f"acr purge: {purge['notAPurge']}")
+    if purge.get("parseError"):
+        problems.append(f"a LIVE step of {task!r} could not be tokenized: {purge['parseError']}")
+    if purge.get("includeLocked"):
+        problems.append(
+            f"the LIVE definition of {task!r} passes --include-locked. That flag DELETES LOCKED "
+            "MANIFESTS — the entire protection the lock job provides. A recordAheadOfRegistry "
+            "declaration is about the retention WINDOW and does not excuse it.")
+live_filters = sorted(f for p in live["purges"] for f in p.get("filters", []))
+recorded_filters = sorted(f for p in recorded["purges"] for f in p.get("filters", []))
+if live_filters != recorded_filters:
+    problems.append(
+        f"the LIVE definition of {task!r} purges a different set of repositories than the record "
+        "does. A recordAheadOfRegistry declaration covers the WINDOW, not WHAT is purged. "
+        f"live: {live_filters} recorded: {recorded_filters}")
+for problem in problems:
+    print(f"::error::{problem}")
+sys.exit(1 if problems else 0)
+PYEOF
+            drift=1
+          fi
         fi
       else
         echo "::error::task '$task' DRIFTED from .github/acr-retention/$task.yaml:"

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.IO;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -39,8 +40,52 @@ namespace MeshWeaver.Compiler.Pipeline.Test;
 public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string DeadMvid = "dead0000dead0000";
-    private static readonly string FixtureLiveFingerprint =
-        NodeTypeSourceFingerprint.Compute([], "type/FixtureLiveSources");
+
+    /// <summary>
+    /// 🚨 The fixture type's ONE source node — here because a DECLINE needs a live source set that
+    /// ESTABLISHES something (MeshWeaver#4208).
+    ///
+    /// <para>This fixture used to be sourceless, and its live fingerprint was
+    /// <c>NodeTypeSourceFingerprint.Compute([], …)</c> — the EMPTY fold. That is also what a
+    /// NodeType activated before its sources landed publishes, so a decline read off it is a
+    /// conclusion about a source set nobody established; the seeder now defers there, and a
+    /// sourceless fixture can no longer reach the decline these two tests are about. One real
+    /// source node makes the live set ESTABLISHED, and the fingerprint is still stated with the
+    /// product's own function over THIS node, so the sources watcher's recompute writes the same
+    /// value and cannot move it mid-test. Nothing compiles: the record carries
+    /// <c>CompilationStatus.Ok</c> and claims a build, so no kickoff arms.</para>
+    /// </summary>
+    private static MeshNode SourceNode(string typePath) =>
+        new("fixture", $"{typePath}/Source")
+        {
+            NodeType = "Code",
+            Name = "fixture",
+            State = MeshNodeState.Active,
+            Content = new CodeConfiguration
+            {
+                Language = "csharp",
+                Code = "public static class StaleDeclineFixture { public static int N() => 5; }",
+            },
+        };
+
+    /// <summary>The fingerprint the OWNER computes for a fixture type — the product's own function
+    /// over that type's one source node, so the sources watcher's recompute writes the same value
+    /// and there is no window in which the record means something else.</summary>
+    private static string LiveFingerprintFor(string typePath) =>
+        NodeTypeSourceFingerprint.Compute([SourceNode(typePath)], typePath);
+
+    /// <summary>🚨 The live source SNAPSHOT — the witness a decline needs (MeshWeaver#4208). Both
+    /// the seeder and the owner ask "did any declared query match a node here?"; a record with no
+    /// snapshot answers NO and the adoption is DEFERRED, which would leave these two tests with no
+    /// decline to observe. The tick is arbitrary and stable — nothing reads it.</summary>
+    private static ImmutableDictionary<string, long> LiveSnapshotFor(string typePath) =>
+        ImmutableDictionary<string, long>.Empty.SetItem(
+            SourceNode(typePath).Path, 638_000_000_000_000_000);
+
+    /// <summary>The pure decisions below never read a fingerprint, so any ESTABLISHED value does;
+    /// stating one keeps the record honest rather than carrying the empty fold into a row that
+    /// means "the source moved".</summary>
+    private const string PureFixtureFingerprint = "4ed23561cfd142d1";
 
     private static NodeTypeDefinition ClaimingABuild() => new()
     {
@@ -50,7 +95,7 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
         LatestAssemblyPath = "Type_Stale/v5-dead.dll",
         LatestAssemblyMvid = DeadMvid,
         CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
-        CurrentSourceFingerprint = FixtureLiveFingerprint,
+        CurrentSourceFingerprint = PureFixtureFingerprint,
     };
 
     // ── the pure decision ─────────────────────────────────────────────────────────────────────
@@ -113,7 +158,11 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
     /// Persists a record that claims a build this mesh's store has never held — the restarted-pod
     /// shape — and returns its path once the mirror shows it.
     /// </summary>
-    private async Task<string> PersistDanglingRecord(string typeName, string? currentModuleVersion = null)
+    /// <returns>The type's path and the live source fingerprint the OWNER published for it — read
+    /// back from the product, because the owner's sources watcher writes that field itself and a
+    /// fixture-asserted value would be racing it.</returns>
+    private async Task<(string TypePath, string LiveFingerprint)> PersistDanglingRecord(
+        string typeName, string? currentModuleVersion = null)
     {
         var typePath = $"type/{typeName}";
         var typeNode = MeshNode.FromPath(typePath) with
@@ -121,20 +170,35 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
             Name = typeName,
             NodeType = MeshNode.NodeTypePath,
             State = MeshNodeState.Active,
-            Content = ClaimingABuild() with { CurrentModuleVersion = currentModuleVersion },
+            Content = ClaimingABuild() with
+            {
+                CurrentModuleVersion = currentModuleVersion,
+                CurrentSourceFingerprint = LiveFingerprintFor(typePath),
+                CurrentSourceVersions = LiveSnapshotFor(typePath),
+            },
         };
-        await MeshService.CreateNode(typeNode).Should().Within(20.Seconds()).Emit();
+        await MeshService.CreateNode(typeNode)
+            .SelectMany(_ => MeshService.CreateNode(SourceNode(typePath)))
+            .Should().Within(20.Seconds()).Emit();
+        // 🚨 #4208 — an ESTABLISHED fingerprint is the precondition of a decline, not a
+        // convenience: the watcher's first publication can be the empty fold, and the seeder
+        // deliberately DEFERS on that rather than declining from a source set nobody established.
+        var expected = LiveFingerprintFor(typePath);
+        LiveSnapshotFor(typePath).Should().NotBeEmpty(
+            "the fixture's source node is what makes the live set ESTABLISHED at all — without a "
+            + "matched node the seeder correctly DEFERS instead of declining (MeshWeaver#4208), so "
+            + "the experiment below would have no subject");
         await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition d
                         && string.Equals(d.LatestAssemblyMvid, DeadMvid, StringComparison.Ordinal)
-                        && string.Equals(d.CurrentSourceFingerprint, FixtureLiveFingerprint, StringComparison.Ordinal));
+                        && string.Equals(d.CurrentSourceFingerprint, expected, StringComparison.Ordinal));
 
         // The store of this mesh has never held version 5 of this type — exactly the restarted-pod
         // shape: the record claims a build, the process has no bytes for it.
         var store = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
         var path = await store.TryGetAssemblyPath(typePath, 5).Should().Within(10.Seconds()).Emit();
         path.Should().BeNull("the precondition: the claimed build does not resolve here");
-        return typePath;
+        return (typePath, expected);
     }
 
     /// <summary>
@@ -149,12 +213,12 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
     [Fact]
     public async Task ACompatibleDeclinedBundle_OverARecordWhoseBuildTheStoreDoesNotHold_IsAdoptedNotCompiled()
     {
-        var typePath = await PersistDanglingRecord("DanglingStaleType");
+        var (typePath, liveFingerprint) = await PersistDanglingRecord("DanglingStaleType");
 
         var outcome = await PrebuiltAssemblySeeder.SeedDetailed(
                 SweepHub("sweep"), typePath, BundleBytes(), pdbBytes: null,
                 frameworkMvid: PrebuiltAssemblySeeder.LiveFrameworkMvid, logger: null,
-                dependencies: null, sourceFingerprint: FixtureLiveFingerprint + "-stale")
+                dependencies: null, sourceFingerprint: liveFingerprint + "-stale")
             .Should().Within(20.Seconds()).Emit("a decline completes like any other");
         outcome.Should().Be(PrebuiltAssemblySeeder.SeedOutcome.AdoptedStale,
             "the bytes were declined on their fingerprint, the dead build does not resolve here, and "
@@ -177,12 +241,13 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
     [Fact]
     public async Task AnIncompatibleDeclinedBundle_OverARecordWhoseBuildTheStoreDoesNotHold_ClearsItAndDispatchesACompile()
     {
-        var typePath = await PersistDanglingRecord("DanglingIncompatibleType", currentModuleVersion: "1.0");
+        var (typePath, liveFingerprint) =
+            await PersistDanglingRecord("DanglingIncompatibleType", currentModuleVersion: "1.0");
 
         var outcome = await PrebuiltAssemblySeeder.SeedDetailed(
                 SweepHub("sweep-incompatible"), typePath, BundleBytes(), pdbBytes: null,
                 frameworkMvid: PrebuiltAssemblySeeder.LiveFrameworkMvid, logger: null,
-                dependencies: null, sourceFingerprint: FixtureLiveFingerprint + "-stale",
+                dependencies: null, sourceFingerprint: liveFingerprint + "-stale",
                 moduleVersion: "2.0.0")
             .Should().Within(20.Seconds()).Emit("a decline completes like any other");
         outcome.Should().Be(PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSourcesCompileDispatched,

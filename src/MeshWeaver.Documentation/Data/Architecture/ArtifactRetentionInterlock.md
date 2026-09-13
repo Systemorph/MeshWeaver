@@ -439,18 +439,32 @@ more often a repository is republished the FASTER its older manifests become eli
 That is #3438's own root cause — *republishing frequency is what destroys a pin* — restated as a
 flag, so a quota is removed rather than raised.
 
-🚨 **The flag that counts is the one on the command that DELETES, and a quota has two spellings.**
-A `cmd:` is a shell line: `echo --ago 30d; acr purge --filter 'x:.*' --untagged` carries the window
-on the line and not on the purge. So each `acr purge` invocation is isolated at the first shell
-separator and checked on its own — **every** invocation on the line — and the quota check reads
-`--keep N`, `--keep=N` and a bare `--keep` alike. A bare `--ago` with no duration is *unchecked*,
-which is a failure, not a pass.
+🚨 **A purge step is read as TOKENS, not as text, and the reason is that quoting defeats a search
+in both directions.** `acr purge --include-"locked" …` **executes** with that option — the shell
+joins the fragment — and matches no grep for the literal string; that flag deletes every manifest
+the lock protects, so a text search is the wrong instrument for the one invariant this lane rests
+on. And `echo "acr purge --filter 'a:.*' --ago 30d"` *contains* the text and deletes nothing, so a
+text search reports a compliant purge where no purge exists.
+
+So a `cmd:` is tokenized the way a shell would, split on the operators, and only a command whose
+first two tokens are literally `acr` and `purge` is a purge — **every** such command on the line,
+because a second one carrying `--ago 7d` must not ride in behind a compliant first. A step with
+unbalanced quotes cannot be tokenized at all, which means nothing in it was checked, which is a
+failure rather than a pass. The quota reads `--keep N`, `--keep=N` and a bare `--keep` alike, and a
+bare `--ago` is *unchecked*, not compliant.
+
+🚨 **One parser, both sides.** `acr-retention-tasks.sh` used to grep the live YAML for
+`--include-locked` and for `--filter '…'`, which is the same defeated search one file along. It now
+asks `lock-pinned-digests.py --describe-purge-file`, so the live check and the record check cannot
+drift apart.
 
 🚨 **And a declaration whose switch is not a boolean is fail-open, silently.** Every reader of
 `pause` and `recordAheadOfRegistry` asks `inForce is True` — correct for a JSON boolean, and
 catastrophic for `"true"`, which is not `True`. One typed quote mark would disarm the apply
 interlock, the `record` overwrite guard and the coherence gate at once, while reading to a human as
-if it were armed. The shape is asserted on every pull request, and both shell halves **fail closed**
+if it were armed. A block written as an explicit `null` does the same thing — `dict.get` answers
+`None` for an absent key and for a written null alike — so absent and null are separated before
+anything reads the value. The shape is asserted on every pull request, and both shell halves **fail closed**
 on the same condition rather than trusting that to have run.
 
 `lock-pinned-digests.py --check-retention-record` now asserts both halves over **every** recorded

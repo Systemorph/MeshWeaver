@@ -447,6 +447,78 @@ and still disagree with each other. See
 two ways to close it (the seal composes the registry's bytes, or the instance adopts module bytes
 for its identity from the sealed publication).
 
+## 🚨 The assertion's denominator is 4; the defect's population was ~40
+
+Everything above is about the set a bake **composes** — the `ext-modules` step, where the refusal
+lives. Measured, that set is small:
+
+| lane | what its verdict line prints |
+|---|---|
+| `MeshWeaver.Reinsurance` gate, 2026-09-11 05:54Z | `4 MeshWeaver.* assembly file(s) across 4 bundle(s), 4 distinct name(s), 0 shared, 0 diverged` |
+| `MeshWeaver.Plugins` publish-bake, 2026-09-11 05:30Z | `5 … across 5 bundle(s), 5 distinct name(s), 0 shared, 0 diverged` |
+
+**The 15 copies / 3 builds this page measures did not live there.** They lived across the ~40
+*module bundles* a publication carries — the population `node-repo-module-pack.yml` produces and
+publishes to the registry, most of which no single bake composes. So every green reading of the
+composed-set assertion has been green **about a different population**, and saying "the guard is
+green" has never been evidence that this defect is absent. A denominator of 4 against a population
+of 40 is not a weak measurement; it is a measurement of something else.
+
+### Where the whole population is in one hand
+
+Not in a pack leg — each holds ONE bundle. The only job that sees the whole wave is
+`node-repo-module-pack.yml`'s `verify`, which already collects one receipt per module and says so in
+its own comment. So the reading is split to match:
+
+* **`module-set-census.py census`**, in each pack leg: every `MeshWeaver.*` assembly the bundle
+  carries, digested **out of the archive** (never from an unpacked folder — two bundles declaring one
+  entry assembly unpack over each other, which is the accident of glob order that hid this in the
+  first place), with its role (`declared` per the manifest's `module.assemblyName`, else `riding`).
+  It rides the receipt.
+* **`module-set-census.py verdict`**, in `verify`: the same arithmetic over the receipts, with its
+  denominator printed on every run — including the two shapes that print a zero while looking like a
+  clean measurement (no receipts directory; a receipt carrying no census, which is counted and
+  **named** as unmeasured rather than folded into the clean count).
+
+🚨 **It reads every receipt in the RUN, and passes no `--lane` — the opposite narrowing from the
+build accounting beside it, on purpose.** That accounting asks *"did THIS call build what it was
+asked to"*, where attributing a sibling call's evidence to this one was a real defect (Plugins#1077).
+This reading asks whether a **publication** carries one name at two builds, and a publication is
+composed from several calls: MeshWeaver.Plugins invokes the lane twice in one run (`modules-floor`
+and `modules-rest`) with different lane stamps, and the 15-copies/3-builds measurement above spanned
+exactly those calls. Narrowing by lane would make each verifier drop the other call's receipts and
+print a confident zero — this page's own denominator error, one level up. The verdict therefore
+**names the lanes it folded** on every run, so "publication-wide" is checkable rather than assumed.
+
+🚨 **And the reader step carries no `continue-on-error`.** The script exits 0 when it *finds*
+divergence (that is the report posture), so the only way the step can fail is that the reading did
+not happen — a malformed receipt, a helper the build-logic ref does not carry, a changed CLI.
+Tolerating that would leave a required job green while promising a reading nobody took, which is the
+skip-trapdoor rule exactly.
+
+### It REPORTS; it does not yet refuse — and the reason is evidence
+
+`verdict` exits 0 on divergence unless `--enforce`, and no lane passes it.
+
+Nobody has ever read this population, so what a refusal would REFUSE is unknown. A `reuse` leg
+republishes bytes packed in an earlier run **by construction**, so a shared sibling riding both a
+reused and a freshly built bundle would diverge — possibly on every wave, in every satellite, the
+moment it landed. `verify` is a required context in five satellites; turning an unread measurement
+into a refusal there is how a new guard takes CD down fleet-wide.
+
+The population is not unguarded in the meantime. It is guarded **late**, at the consumer, where
+`PublishedBundleCatalogue` answers `SealedSetInconsistent` and holds the roll for the whole fleet —
+days later, on a portal. Moving that refusal earlier is the whole point; doing it before one wave has
+been read is guessing, and the promotion condition is therefore explicit:
+
+> Read the `publication module set: …` line on the first waves. If the divergence is zero, add
+> `--enforce` and the report becomes the refusal. If it is not zero, the reading names which
+> assemblies and which bundles — and THAT is the defect to remove, exactly as "One compilation per
+> publication" removed it for the composed set.
+
+`test-module-set-census.py` pins both halves, the denominator's zero-shapes, and the report posture
+in both directions, so the promotion cannot happen by halves. `MeshWeaver#3732`.
+
 See also: [The Dependency Record Floor](../DependencyRecordFloor) ·
 [Module Closure Accounting](../ModuleClosureAccounting) ·
 [Module Build Architecture](../ModuleBuildArchitecture) ·
