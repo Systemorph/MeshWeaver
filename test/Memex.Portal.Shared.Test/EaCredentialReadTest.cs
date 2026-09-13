@@ -1,6 +1,7 @@
 using System;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
@@ -354,6 +355,118 @@ public class EaCredentialReadTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <c>HubReachableAsyncGuard</c>'s contract-seam arm, which is what removes them. What this
     /// asserts is that the REACTIVE surface exists and is the primary one.</para>
     /// </summary>
+    // ── A refused grant is a finding, an outage is not (MeshWeaver.Plugins#1615) ─────────────────
+
+    /// <summary>
+    /// Answers the code exchange with a fresh grant and every refresh-token redemption with the
+    /// scripted status/body, counting calls — so "the token endpoint was not asked again" is a
+    /// measured number.
+    /// </summary>
+    private sealed class ScriptedTokenEndpoint(System.Net.HttpStatusCode refreshStatus, string refreshBody) : HttpMessageHandler
+    {
+        private int refreshCalls;
+        public int RefreshCalls => Volatile.Read(ref refreshCalls);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var form = await request.Content!.ReadAsStringAsync(cancellationToken);
+            if (form.Contains("grant_type=authorization_code", StringComparison.Ordinal))
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"access_token":"at-1","refresh_token":"rt-1","expires_in":3600}"""),
+                };
+            Interlocked.Increment(ref refreshCalls);
+            return new HttpResponseMessage(refreshStatus) { Content = new StringContent(refreshBody) };
+        }
+    }
+
+    private const string InvalidGrantBody =
+        """{"error":"invalid_grant","error_description":"AADSTS70000: The user or administrator has not consented to use the application.\r\nTrace ID: t\r\nCorrelation ID: c"}""";
+
+    /// <summary>
+    /// 🚨 THE STRANDING, pinned. A grant consented for THIS build's scopes that Entra then refuses
+    /// (revoked, expired, password changed, consent withdrawn) used to read as "could not determine
+    /// … ask me again in a moment" — forever, because the next call redeemed the same dead token and
+    /// got the same 400 — while the consent controller, whose read never asks the token endpoint,
+    /// saw a stored credential and bounced the reconnect without a dialog. Now the refusal is a
+    /// finding: NotConnected (the consent link), the credential is stamped so BOTH readers agree,
+    /// and the dead token is not offered again.
+    /// </summary>
+    [Fact]
+    public async Task AGrantEntraRefuses_ReadsAsNotConnected_IsStamped_AndIsNotOfferedAgain()
+    {
+        const string user = "ea-refused-grant-user";
+        var endpoint = new ScriptedTokenEndpoint(System.Net.HttpStatusCode.BadRequest, InvalidGrantBody);
+        var auth = NewAuth(tokenEndpoint: endpoint);
+
+        (await auth.ExchangeAndStore("code", "https://portal.test/auth/ea/callback", user)
+            .Should().Within(TestTimeouts.Convergence).Emit()).Should().BeTrue("the consent stores a current-scope grant");
+        (await auth.GetConnection(user).Should().Within(TestTimeouts.Convergence).Emit())
+            .Connection.Should().Be(EaConnection.Connected, "before any redemption the stored grant reads as connected");
+
+        var refused = await auth.GetAccessToken(user).Should().Within(TestTimeouts.Convergence).Emit();
+
+        refused.Connection.Should().Be(EaConnection.NotConnected,
+            "Entra ANSWERED, and the answer names the grant — consent is the remedy, not a retry");
+        refused.AccessToken.Should().BeNull();
+        refused.Diagnostic.Should().Contain("invalid_grant").And.Contain("AADSTS70000")
+            .And.Contain("consented again", "the sentence must say reconnect, never 'you never connected'");
+        endpoint.RefreshCalls.Should().Be(1);
+
+        // The controller's read — GetConnection never asks the token endpoint — agrees, because the
+        // refusal was stamped on the credential: the reconnect link now runs the dialog.
+        var controllerRead = await auth.GetConnection(user).Should().Within(TestTimeouts.Convergence).Emit();
+        controllerRead.Connection.Should().Be(EaConnection.NotConnected,
+            "a reconnect that bounces a 'connected' user back without a dialog is the loop this stamp ends");
+        controllerRead.Diagnostic.Should().Contain("refused the stored grant");
+
+        (await auth.GetAccessToken(user).Should().Within(TestTimeouts.Convergence).Emit())
+            .Connection.Should().Be(EaConnection.NotConnected);
+        endpoint.RefreshCalls.Should().Be(1, "a grant Entra has refused is not redeemed again — the stamp answers first");
+    }
+
+    /// <summary>
+    /// The other half of #3433, kept: a token endpoint that is DOWN says nothing about the grant.
+    /// The answer stays Undetermined (no consent link), the credential is not stamped, the
+    /// controller's read still says Connected, and the next call asks again.
+    /// </summary>
+    [Fact]
+    public async Task ATokenEndpointOutage_StaysUndetermined_AndTheGrantIsNotStamped()
+    {
+        const string user = "ea-outage-user";
+        var endpoint = new ScriptedTokenEndpoint(System.Net.HttpStatusCode.ServiceUnavailable, "<html>503 Service Unavailable</html>");
+        var auth = NewAuth(tokenEndpoint: endpoint);
+        (await auth.ExchangeAndStore("code", "https://portal.test/auth/ea/callback", user)
+            .Should().Within(TestTimeouts.Convergence).Emit()).Should().BeTrue();
+
+        var outage = await auth.GetAccessToken(user).Should().Within(TestTimeouts.Convergence).Emit();
+
+        outage.Connection.Should().Be(EaConnection.Undetermined, "a 503 is a failure to find out, not a finding");
+        outage.Diagnostic.Should().Contain("503");
+        (await auth.GetConnection(user).Should().Within(TestTimeouts.Convergence).Emit())
+            .Connection.Should().Be(EaConnection.Connected, "nothing was learned about the grant, so nothing was stamped");
+        await auth.GetAccessToken(user).Should().Within(TestTimeouts.Convergence).Emit();
+        endpoint.RefreshCalls.Should().Be(2, "an outage is retried on the next call — that is what 'ask me again in a moment' promises");
+    }
+
+    /// <summary>The classifier, without a network: which answers name the grant and which do not.</summary>
+    [Theory]
+    [InlineData(400, """{"error":"invalid_grant","error_description":"AADSTS70008: expired"}""", true, "invalid_grant: AADSTS70008: expired")]
+    [InlineData(400, """{"error":"interaction_required","error_description":"AADSTS50076: MFA"}""", true, "interaction_required: AADSTS50076: MFA")]
+    [InlineData(400, """{"error":"consent_required"}""", true, "consent_required")]
+    [InlineData(400, """{"error":"invalid_request","error_description":"AADSTS90014: missing field"}""", false, "invalid_request: AADSTS90014: missing field")]
+    [InlineData(401, """{"error":"invalid_client","error_description":"AADSTS7000215: bad secret"}""", false, "invalid_client: AADSTS7000215: bad secret")]
+    [InlineData(429, "", false, "HTTP 429")]
+    [InlineData(503, "<html>down</html>", false, "HTTP 503")]
+    [InlineData(400, "[1,2]", false, "HTTP 400")]
+    public void TheRefusalClassifier_NamesTheGrantOnlyWhenEntraDid(int status, string body, bool grantRefused, string summary)
+    {
+        var refusal = TokenRefusal.Of(status, body);
+
+        refusal.GrantRefused.Should().Be(grantRefused);
+        refusal.Summary.Should().Be(summary);
+    }
+
     [Fact]
     public void TheSeamsPrimarySurfaceIsReactive()
     {

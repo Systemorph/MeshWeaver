@@ -38,12 +38,15 @@ namespace Memex.Portal.Shared.Authentication;
 /// <c>Task</c> shape at its OWN edge (one <c>ObserveCompletion</c> bridge per action), which is what
 /// it always should have done instead of forcing the shape onto the hub-facing path.</para>
 ///
-/// <para>🚨 <b>Every failure is <see cref="EaConnection.Undetermined"/>, never
+/// <para>🚨 <b>Every failure to FIND OUT is <see cref="EaConnection.Undetermined"/>, never
 /// <see cref="EaConnection.NotConnected"/>.</b> The three sites that used to collapse into "never
 /// connected" — a blanket <c>catch</c> returning <c>(null, null)</c>, a bare
 /// <c>catch { return null; }</c> around the deserialization, and the <c>_ =&gt; null</c> arm of a
 /// hand-rolled content shape test — are gone: the read is classified, the deserialization is
-/// <c>ContentAs&lt;T&gt;</c>, and there is no shape switch left to have an arm.</para>
+/// <c>ContentAs&lt;T&gt;</c>, and there is no shape switch left to have an arm. A token endpoint
+/// that DID answer, and answered that the grant itself is dead (<see cref="TokenRefusal"/>), is
+/// the one refusal that is a finding rather than a failure to find out — it stamps the credential
+/// and reads as NotConnected (MeshWeaver.Plugins#1615).</para>
 ///
 /// <para><b>Azure setup (one-time):</b> on the sign-in app registration add the <i>delegated</i> scopes
 /// <c>Mail.ReadWrite Mail.Send Calendars.ReadWrite Team.ReadBasic.All Channel.ReadBasic.All
@@ -152,15 +155,19 @@ public sealed class EaGraphAuth(
                 ["redirect_uri"] = redirectUri,
                 ["scope"] = Scopes
             })
-            .SelectMany(json =>
+            .SelectMany(answer =>
             {
-                if (json is null) return Observable.Return(false);
+                if (!answer.IsSuccess)
+                {
+                    logger?.LogWarning("EaGraphAuth: token endpoint returned {Status} to the code exchange", answer.StatusCode);
+                    return Observable.Return(false);
+                }
                 string? refresh;
                 try
                 {
                     // Synchronous parse of a value already in hand — the try covers this statement
                     // and nothing in the stream around it (/async Rule 1b).
-                    refresh = RefreshTokenIn(json);
+                    refresh = RefreshTokenIn(answer.Body);
                 }
                 catch (JsonException ex)
                 {
@@ -203,15 +210,80 @@ public sealed class EaGraphAuth(
                         ["refresh_token"] = refresh!,
                         ["scope"] = Scopes
                     })
-                    .SelectMany(json => json is null
-                        // 🚨 Entra refusing the redemption is UNDETERMINED, not "never connected".
-                        // The credential IS stored; whether the grant is still good is precisely
-                        // what we failed to find out. PostToken has already logged the status.
-                        ? Observable.Return(EaGraphAccess.Unknown(
-                            "the Microsoft token endpoint refused the refresh-token redemption"))
-                        : MintFrom(json, userObjectId));
+                    .SelectMany(answer => answer.IsSuccess
+                        ? MintFrom(answer.Body, userObjectId)
+                        : Refused(userObjectId, read.Credential!, TokenRefusal.Of(answer.StatusCode, answer.Body)));
             });
     }
+
+    /// <summary>
+    /// What a non-2xx token-endpoint answer means for the caller — two different things, and the
+    /// difference is the whole of MeshWeaver.Plugins#1615.
+    ///
+    /// <para><b>The grant was refused</b> (<see cref="TokenRefusal.GrantRefused"/> — a 400 whose OAuth
+    /// <c>error</c> names the grant: <c>invalid_grant</c>, <c>interaction_required</c>,
+    /// <c>consent_required</c>): Entra DID answer, and the answer is that this refresh token cannot
+    /// be redeemed — revoked, expired, the password changed, consent withdrawn, or minted for a
+    /// narrower scope set. The remedy is consent, so the credential is STAMPED
+    /// (<see cref="EaCredential.RefusedAt"/>) and the answer is <see cref="EaConnection.NotConnected"/>.
+    /// The stamp is what makes the two readers agree: the assistant's next call reads NotConnected
+    /// before asking the token endpoint again, and the consent controller — whose read never asks
+    /// the token endpoint — runs the dialog instead of bouncing a "connected" user straight back.
+    /// Without it the user was stranded both ways: the tool said "retry in a moment" and the link
+    /// said "already connected".</para>
+    ///
+    /// <para><b>Anything else</b> — a 401 <c>invalid_client</c> (OUR app credential is wrong), a 429,
+    /// a 5xx, a body that is not the OAuth error shape — says nothing about the grant, so it stays
+    /// <see cref="EaConnection.Undetermined"/> (#3433): never the consent link for a grant that may
+    /// be perfectly good.</para>
+    /// </summary>
+    private IObservable<EaGraphAccess> Refused(string userObjectId, EaCredential credential, TokenRefusal refusal)
+    {
+        logger?.LogWarning("EaGraphAuth: token endpoint refused the redemption for {User}: {Status} {Error}",
+            userObjectId, refusal.StatusCode, refusal.Error ?? "(no OAuth error in the body)");
+        if (!refusal.GrantRefused)
+            return Observable.Return(EaGraphAccess.Unknown(
+                $"the Microsoft token endpoint answered {refusal.StatusCode}"
+                + (refusal.Error is null ? "" : $" ({refusal.Error})")
+                + " to the refresh-token redemption; this says nothing about the stored grant"));
+
+        var verdict = EaGraphAccess.NotConnected(
+            $"Microsoft refused the stored grant ({refusal.Summary}); it must be consented again — "
+            + "a reconnect, never a first connection");
+        return Stamp(userObjectId, credential, refusal.Summary)
+            // The stamp is bookkeeping for the NEXT read; the verdict stands whether or not the
+            // write landed, and a failed stamp must not turn a refused grant into an outage.
+            .Select(_ => verdict)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "EaGraphAuth: could not stamp the refused grant for {User}", userObjectId);
+                return Observable.Return(verdict);
+            });
+    }
+
+    /// <summary>
+    /// Records a definitive refusal on the credential node — on the owning hub, through the one
+    /// mutation API — so every later read of it classifies NotConnected until a new consent
+    /// rewrites the node. Cold.
+    /// </summary>
+    private IObservable<MeshNode> Stamp(string userObjectId, EaCredential credential, string reason) =>
+        Observable.Defer(() =>
+        {
+            var scope = rootServices.CreateScope();
+            var hub = HubFrom(scope.ServiceProvider);
+            if (hub is null)
+            {
+                scope.Dispose();
+                return Observable.Throw<MeshNode>(new InvalidOperationException(
+                    "EaGraphAuth: no message hub is available to stamp the credential."));
+            }
+            var ws = hub.GetWorkspace();
+            var access = hub.ServiceProvider.GetService<AccessService>();
+            var stamped = credential with { RefusedAt = DateTimeOffset.UtcNow, RefusalReason = reason };
+            return access.RunAsSystem(() => ws.GetMeshNodeStream(PathFor(userObjectId))
+                    .Update(node => node with { Content = stamped }))
+                .Finally(scope.Dispose);
+        });
 
     /// <inheritdoc />
     public IObservable<EaGraphAccess> GetConnection(string userObjectId) =>
@@ -279,17 +351,24 @@ public sealed class EaGraphAuth(
     /// Resolved from the mesh-scoped <see cref="IoPoolRegistry"/>, per subscribe, so a host without
     /// a mesh still works.</para>
     /// </summary>
-    private IObservable<string?> PostToken(Dictionary<string, string> form) =>
-        Observable.Defer(() => HttpPool().Invoke<string?>(async ct =>
+    private IObservable<TokenEndpointAnswer> PostToken(Dictionary<string, string> form) =>
+        Observable.Defer(() => HttpPool().Invoke<TokenEndpointAnswer>(async ct =>
         {
             using var resp = await http
                 .PostAsync($"{Authority}/token", new FormUrlEncodedContent(form), ct)
                 .ConfigureAwait(false);
             var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            if (resp.IsSuccessStatusCode) return body;
-            logger?.LogWarning("EaGraphAuth: token endpoint returned {Status}", (int)resp.StatusCode);
-            return null;
+            // The status travels with the body: a 400 whose body names the grant and a 503 are
+            // two different answers, and collapsing both to null is what read every refusal as
+            // "retry in a moment" (MeshWeaver.Plugins#1615).
+            return new TokenEndpointAnswer((int)resp.StatusCode, body);
         }));
+
+    /// <summary>One token-endpoint answer, status and body together.</summary>
+    private readonly record struct TokenEndpointAnswer(int StatusCode, string Body)
+    {
+        public bool IsSuccess => StatusCode is >= 200 and < 300;
+    }
 
     private IIoPool HttpPool()
     {
@@ -461,6 +540,15 @@ public sealed class EaGraphAuth(
             return new CredentialRead(node, cred, EaGraphAccess.NotConnected(
                 "the stored grant was consented for an earlier scope set; this build needs more "
                 + "(Teams), so a reconnect is required — the mailbox connection itself is intact"));
+
+        // 🚨 A grant Microsoft has already refused (see Refused): the read COMPLETED and found a
+        // credential the token endpoint will not redeem. NotConnected hands the assistant the
+        // consent link and makes the controller run the dialog; the token endpoint is not asked
+        // again for a dead refresh token. A new consent rewrites the node without the stamp.
+        if (cred.RefusedAt is { } refusedAt)
+            return new CredentialRead(node, cred, EaGraphAccess.NotConnected(
+                $"Microsoft refused the stored grant on {refusedAt:u} ({cred.RefusalReason ?? "no reason recorded"}); "
+                + "it must be consented again — a reconnect, never a first connection"));
 
         return new CredentialRead(node, cred, EaGraphAccess.Connected());
     }
