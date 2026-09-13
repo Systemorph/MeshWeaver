@@ -1718,10 +1718,115 @@ public sealed class MessageHub : IMessageHub
         }
 
         var result = (IMessageDelivery<TMessage>?)messageService.Post(message, options);
+        ReportRouterTrafficOrigin(result);
         if (traceEnabled)
             logger.LogTrace("MESSAGE_FLOW: HUB_POST_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
                 typeof(TMessage).Name, Address, result?.Id, options.Target);
         return result;
+    }
+
+    // One report per (role, message type) for this hub's lifetime, keyed independently of the
+    // receiver-side dictionary: the two sites answer different questions and one must not mute the
+    // other.
+    private readonly ConcurrentDictionary<string, byte> routerTrafficOriginReported = new();
+
+    /// <summary>
+    /// 🚨 The ORIGIN half of the <c>ROUTER_TRAFFIC</c> detector: the same rule, evaluated where the
+    /// delivery is CREATED, so the line can name the CALL SITE.
+    ///
+    /// <para><b>Why the receiver-side report is not enough.</b>
+    /// <see cref="ReportRouterTraffic"/> fires inside <see cref="DeliverMessage"/>, on the hub the
+    /// delivery is addressed to — a stack there is the routing machinery, not the code that made the
+    /// mistake. So every production line carries two addresses and nothing else, and the reader has
+    /// to guess which of the mesh's many root-hub callers produced it. On <c>memex</c> that guess
+    /// stayed unresolved through four re-filings and 41,087 lines
+    /// (<see href="https://github.com/Systemorph/MeshWeaver/issues/1140">#1140</see>, and #1113 /
+    /// #1121 / #1136 before it) — a detector that says a rule was broken but not by whom cannot
+    /// close the issue it opens. The payload type does not help either: a delivery that crossed a
+    /// silo arrives packed, so the receiver reports the honest but useless <c>RawJson</c>.</para>
+    ///
+    /// <para><b>Cost.</b> The rule is two ordinal compares and a type check, the same check
+    /// <see cref="DeliverMessage"/> already runs per inbound message. The STACK is captured only
+    /// after the rule has fired AND the per-(role, type) key was new, so a hub pays for it at most
+    /// once per message type per role per lifetime — two extra lines per process for #1140's shape,
+    /// against the tens of thousands the receiver side emits (its count scales with the number of
+    /// per-node hubs that see the traffic; this one does not).</para>
+    ///
+    /// <para>Same exclusions as the receiver side, because it is literally the same predicate: a
+    /// heartbeat is routing liveness, and a response the router posts is the undeliverable-mail NACK
+    /// — routing's own duty (see <see cref="RouterTrafficRule.RoleOf(string?, string?, object?, bool)"/>).</para>
+    /// </summary>
+    /// <param name="delivery">The delivery just created by this post, or <c>null</c> if none was.</param>
+    private void ReportRouterTrafficOrigin(IMessageDelivery? delivery)
+    {
+        if (delivery is null)
+            return;
+
+        // 🚨 A TARGET-LESS delivery is handled by the POSTING hub and never leaves it, so "the mesh
+        // hub is an END of this delivery" is trivially true of it and says nothing. Reporting it
+        // fires on every mesh hub's own `InitializeHubRequest` — measured, on the first run of this
+        // detector — and a line that appears on every boot is the kind that gets muted, taking the
+        // real ones with it. The receiver side draws the same boundary, structurally: a self-post
+        // never reaches `DeliverMessage`, which is why ROUTER_TRAFFIC has never reported one.
+        //
+        // The class that goes with it — WORK self-posted on the router, e.g. a target-less
+        // `CreateNodeRequest` executing on the router's action block — is a different symptom with
+        // its own instruments (MeshExtensions.NodeOperationTarget, which stops it being posted, and
+        // the turn-loop snapshot, which measures the block). It was never covered by this detector
+        // at either site, and quietly folding it in here would cost the detector its signal.
+        if (delivery.Target is null)
+            return;
+
+        // The DELIVERY's own ends, exactly as the receiver side reads them — never Address, which
+        // here happens to be one of them but would silently stop being so for a post that names an
+        // explicit Sender.
+        var role = RouterTrafficRule.RoleOf(delivery.Target?.Type, delivery.Sender?.Type, delivery.Message,
+            delivery.Properties.ContainsKey(PostOptions.RequestId));
+        if (role is null)
+            return;
+
+        var messageType = delivery.Message?.GetType().Name ?? "(null)";
+        if (!routerTrafficOriginReported.TryAdd($"{role}:{messageType}", 0))
+            return;
+
+        logger.LogError(
+            "ROUTER_TRAFFIC ORIGIN: {MessageType} was POSTED with the mesh hub as {Role} (sender: "
+            + "{Sender}, target: {Target}). The mesh hub is the ROUTER and must not be an end of a "
+            + "work delivery — hop off it with MeshExtensions.NodeOperationIssuingHub() (writes) or "
+            + "MeshExtensions.ReadIssuingHub() (reads) before posting. Reported once per role+type "
+            + "for this hub. Call site:\n{CallSite}",
+            messageType, role, delivery.Sender?.ToString() ?? "(none)",
+            delivery.Target?.ToString() ?? "(none)", DescribeCallSite());
+    }
+
+    /// <summary>
+    /// The frames worth printing for <see cref="ReportRouterTrafficOrigin"/>: the posting code, with
+    /// this hub's own plumbing dropped off the top so the first line is the caller rather than
+    /// <c>Post</c> itself. Bounded — a stack dump nobody reads is as unhelpful as no stack at all.
+    /// </summary>
+    private static string DescribeCallSite()
+    {
+        const int MaxFrames = 12;
+        var frames = new StackTrace(fNeedFileInfo: true).GetFrames();
+        var lines = new List<string>(MaxFrames);
+        var started = false;
+        foreach (var frame in frames)
+        {
+            var method = frame.GetMethod();
+            if (method is null)
+                continue;
+            // Drop the leading frames inside this type (Post, ReportRouterTrafficOrigin and this
+            // method) — they are the same three lines on every report and push the answer down.
+            if (!started && method.DeclaringType == typeof(MessageHub))
+                continue;
+            started = true;
+            var file = frame.GetFileName();
+            var where = file is { Length: > 0 } ? $" ({Path.GetFileName(file)}:{frame.GetFileLineNumber()})" : string.Empty;
+            lines.Add($"   at {method.DeclaringType?.FullName}.{method.Name}{where}");
+            if (lines.Count >= MaxFrames)
+                break;
+        }
+        return lines.Count > 0 ? string.Join("\n", lines) : "   (no managed frames)";
     }
 
     /// <summary>
