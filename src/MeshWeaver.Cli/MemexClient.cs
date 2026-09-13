@@ -9,9 +9,14 @@ namespace MeshWeaver.Cli;
 /// Thin HTTP wrapper around the portal's <c>/api/mesh/*</c> surface. Each method
 /// mirrors one REST endpoint (which in turn mirrors one MCP tool).
 ///
-/// <para>All endpoints accept JSON bodies and return JSON strings — the server
-/// preserves the <c>MeshWeaver.AI.MeshOperations</c> output verbatim
-/// (either a JSON document or an <c>"Error: …"</c> sentinel).</para>
+/// <para>All endpoints accept JSON bodies and return JSON strings. A verb's JSON document
+/// arrives verbatim with a 200; a <c>MeshWeaver.AI.MeshOperations</c> sentinel sentence
+/// (<c>"Error: …"</c>, <c>"Not found: …"</c>, <c>"Unavailable: …"</c>) arrives as a non-2xx
+/// whose JSON body is <c>{ "error": &lt;the sentence&gt;, "kind": … }</c> (Plugins#1699). This
+/// client unwraps that envelope back to the sentence, so <c>memex</c>'s stdout/stderr and exit
+/// codes are what they always were: the sentence verbatim, <c>Error:</c> to stderr with exit 1.
+/// Any other non-2xx (401, 404 for an unmapped route, 504) is still a
+/// <see cref="MemexCliException"/>.</para>
 /// </summary>
 public sealed class MemexClient : IDisposable
 {
@@ -83,9 +88,37 @@ public sealed class MemexClient : IDisposable
     private static async Task<string> ReadBodyAndCheck(HttpResponseMessage resp, CancellationToken ct)
     {
         var body = await resp.Content.ReadAsStringAsync(ct);
-        if (!resp.IsSuccessStatusCode)
-            throw new MemexCliException(resp.StatusCode, body);
-        return body;
+        if (resp.IsSuccessStatusCode)
+            return body;
+        return UnwrapSentinel(body) ?? throw new MemexCliException(resp.StatusCode, body);
+    }
+
+    /// <summary>
+    /// The sentinel sentence inside a <c>{ "error": …, "kind": … }</c> verb answer, or <c>null</c>
+    /// when the body is not that envelope. Recognised by its WIRE shape — a string <c>error</c>
+    /// beside a <c>kind</c> naming one of the three sentinels — because this client is
+    /// deliberately dependency-free (it links no mesh assembly, so it cannot call
+    /// <c>OperationSentinel.Classify</c>); an unrelated <c>{ "error": … }</c> (an unmapped route's
+    /// 404, an upload refusal) carries no <c>kind</c> and stays an HTTP failure.
+    /// </summary>
+    public static string? UnwrapSentinel(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("kind", out var kind)
+                || kind.ValueKind != JsonValueKind.String
+                || kind.GetString() is not ("Error" or "NotFound" or "Unavailable")
+                || !doc.RootElement.TryGetProperty("error", out var error)
+                || error.ValueKind != JsonValueKind.String)
+                return null;
+            return error.GetString();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static string GuessContentType(string path) =>
