@@ -1253,6 +1253,20 @@ jobs:
           set -euo pipefail
           EXT="${RUNNER_TEMP:-/tmp}/ext-modules"; mkdir -p "$EXT"; chmod 777 "$EXT"
           BUNDLES="${RUNNER_TEMP:-/tmp}/ext-bundles"; mkdir -p "$BUNDLES"
+          # 🚨 TWO ORIGINS, TWO DIRECTORIES (MeshWeaver#3732, defect 1). `$BUNDLES` holds THIS
+          # repository's own module bundles — the artifacts its module-pack jobs built in this run.
+          # `$UPSTREAM` holds what was composed from an UPSTREAM's sealed publication (or, for a repo
+          # that declares no upstream, from the registry's package endpoint). Both are composed into
+          # the compile surface below and both take part in the one-build-per-name verdict, because
+          # the bake loads them all — but ONLY the first is SEALED into this publication's
+          # `modules/_index`. A downstream that re-seals its upstream's modules hands every reader
+          # of the identity a second copy of each to choose between (`crm` measured on
+          # memex.systemorph.com 2026-09-08 with two builds of MeshWeaver.Markdown.Collaboration, one
+          # riding each publication), and it is what made `Modules:VersionStrictness` readers answer
+          # `SealedSetInconsistent` for the whole identity. The upstream's own seal carries its
+          # modules; a consumer composes each package from the FIRST upstream whose seal lists it
+          # (compose-sealed-modules.sh), so nothing downstream loses a module it declared.
+          UPSTREAM="${RUNNER_TEMP:-/tmp}/ext-bundles-upstream"; mkdir -p "$UPSTREAM"
           if [ -n "${REGISTRY_MODULES:-}" ]; then
             if [ -n "${SEAL_UPSTREAMS:-}" ]; then
               # 🚨 The publication is the unit of consistency (MeshWeaver#2698): module bytes come
@@ -1260,7 +1274,7 @@ jobs:
               # package endpoint. No fallback — a missing seal or module set is RED in the script.
               [ -n "${REGISTRY_URL:-}" ] || { echo "::error::upstream-sources is set but registry-url is empty — the bake reads sealed module sets from the registry."; exit 1; }
               mw-platform-gate/.github/scripts/compose-sealed-modules.sh --identity "$IDENTITY" --packages "$REGISTRY_MODULES" \
-                --upstreams "$SEAL_UPSTREAMS" --out "$BUNDLES" --registry-url "$REGISTRY_URL" --registry-key "$REGISTRY_KEY"
+                --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" --registry-url "$REGISTRY_URL" --registry-key "$REGISTRY_KEY"
             else
               echo "::notice::composing registry-modules ($REGISTRY_MODULES) from the REGISTRY's package endpoint: this repo declares no upstream seed, so there is no sealed publication to take module bytes from. These bytes are whatever the module's own lane published last — a bake-consumption decline against a publication that composed different ones is expected, and is the reason to declare the upstream (upstream-seed / upstream-sources) instead."
             for pkg in ${REGISTRY_MODULES:-}; do
@@ -1268,7 +1282,7 @@ jobs:
                 || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
               ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
               [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key — check the key's grants, and that the upstream wave has published the bundle."; exit 1; }
-              curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
+              curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$UPSTREAM/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
                 || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
               echo "fetched $pkg@$ver from $REGISTRY_URL"
             done
@@ -1311,8 +1325,11 @@ jobs:
             else shasum -a 256 "$1" | cut -d' ' -f1; fi
           }
           DIGESTS="${RUNNER_TEMP:-/tmp}/ext-module-builds"; : > "$DIGESTS"
-          for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do
-            u="${RUNNER_TEMP:-/tmp}/unpack-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
+          SEALED_OWN=0
+          UPSTREAM_COMPOSED=0
+          for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip "$UPSTREAM"/*.nupkg "$UPSTREAM"/*.zip; do
+            case "$b" in "$UPSTREAM"/*) origin=upstream ;; *) origin=own ;; esac
+            u="${RUNNER_TEMP:-/tmp}/unpack-$origin-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
             unzip -o -q "$b" -d "$u"
             name=""
             [ -f "$u/meshweaver/manifest.json" ] && name=$(jq -r '.module.assemblyName // empty' "$u/meshweaver/manifest.json")
@@ -1380,9 +1397,15 @@ jobs:
               pkg=$(printf '%s' "$stem" | sed -E 's/\.[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.+-]*)?$//')
             fi
             [ -n "$pkg" ] || { echo "::error::$(basename "$b"): cannot derive the package id this bundle seals under — no manifest plugin id, and the file name is not MeshWeaver.Plugin.<pkg>.<version>.module.nupkg / <pkg>.bundle.zip / <pkg>.module.nupkg"; exit 1; }
-            SEAL="${RUNNER_TEMP:-/tmp}/seal-modules"; mkdir -p "$SEAL"
-            cp "$b" "$SEAL/$(printf '%s' "$pkg" | tr '[:upper:]' '[:lower:]').module.nupkg"
-            echo "sealing $name as module package '$pkg'"
+            if [ "$origin" = "own" ]; then
+              SEAL="${RUNNER_TEMP:-/tmp}/seal-modules"; mkdir -p "$SEAL"
+              cp "$b" "$SEAL/$(printf '%s' "$pkg" | tr '[:upper:]' '[:lower:]').module.nupkg"
+              SEALED_OWN=$((SEALED_OWN + 1))
+              echo "sealing $name as module package '$pkg'"
+            else
+              UPSTREAM_COMPOSED=$((UPSTREAM_COMPOSED + 1))
+              echo "composed only: $name (package '$pkg') is an UPSTREAM's module — in this bake's compile surface, NOT in this publication's seal; its own source's publication carries it (MeshWeaver#3732)"
+            fi
           done
           [ -n "$MODULE_ARGS" ] || { echo "::error::external modules were requested but none were assembled — the artifact pattern matched nothing and no registry bundle was fetched."; exit 1; }
           # ───── THE VERDICT ON THE SET (MeshWeaver#3732; the reading is collected above) ─────
@@ -1405,9 +1428,19 @@ jobs:
             exit 1
           fi
           echo "external modules: $MODULE_COUNT composed, $ASSET_MODULES of them carrying static web assets, $ASSET_FILES asset file(s) landed module-relative under /ext/<module>/"
+          # 🚨 The SEALED set is a different population from the COMPOSED set, and both denominators
+          # are printed: the verdict above covers everything the bake loads; the seal carries only
+          # what this repository owns. A satellite that owns no module seals an EMPTY set — which a
+          # reader distinguishes from "predates module sealing" by the presence of modules/_index.
+          echo "sealed set: $SEALED_OWN own module bundle(s) go into this publication's modules/_index; $UPSTREAM_COMPOSED upstream cop(y/ies) composed for the compile surface only and NOT sealed here (MeshWeaver#3732)"
           echo "EXT_MODULES_DIR=$EXT" >> "$GITHUB_ENV"
           echo "EXT_MODULE_ARGS=$MODULE_ARGS" >> "$GITHUB_ENV"
           echo "SEAL_MODULES_DIR=${RUNNER_TEMP:-/tmp}/seal-modules" >> "$GITHUB_ENV"
+          # Read by publish-bake-bundles.sh: a bake that composed modules but STAGED none is a
+          # version-skew refusal there (workflow predates module sealing) — unless this step says
+          # the staged set is empty BECAUSE every composed module was an upstream's (own = 0).
+          echo "SEAL_MODULES_OWN=$SEALED_OWN" >> "$GITHUB_ENV"
+          echo "EXT_MODULES_UPSTREAM=$UPSTREAM_COMPOSED" >> "$GITHUB_ENV"
       - name: Bake (compiler --output), then gate a mesh against it (--seed)
         # scope=none means the decision above VERIFIED that this exact content is already sealed
         # for this framework identity at every target — a positive finding, logged with both

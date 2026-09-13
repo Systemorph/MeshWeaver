@@ -225,11 +225,19 @@ def realistic_assets(module: str) -> dict[str, bytes]:
 
 
 # ── running the real step ───────────────────────────────────────────────────────────────────
-def run_step(body: str, workdir: Path, bundles: list[Path]) -> subprocess.CompletedProcess[str]:
+def run_step(body: str, workdir: Path, bundles: list[Path],
+             upstream: list[Path] | None = None) -> subprocess.CompletedProcess[str]:
+    """`bundles` are THIS repository's own module bundles (the artifact download's directory);
+    `upstream` are bundles an upstream's sealed publication supplied — the directory
+    compose-sealed-modules.sh writes to (MeshWeaver#3732). Placing them there directly stands in
+    for the fetch the harness cannot perform; the step's own loop then composes both."""
     runner_temp = workdir / "runner-temp"
     (runner_temp / "ext-bundles").mkdir(parents=True)
     for bundle in bundles:
         shutil.copy2(bundle, runner_temp / "ext-bundles" / bundle.name)
+    (runner_temp / "ext-bundles-upstream").mkdir(parents=True)
+    for bundle in upstream or []:
+        shutil.copy2(bundle, runner_temp / "ext-bundles-upstream" / bundle.name)
     github_env = workdir / "github-env"
     github_env.touch()
     script = workdir / "step.sh"
@@ -256,6 +264,12 @@ def run_step(body: str, workdir: Path, bundles: list[Path]) -> subprocess.Comple
 
 def ext_dir(workdir: Path) -> Path:
     return workdir / "runner-temp" / "ext-modules"
+
+
+def seal_dir(workdir: Path) -> Path:
+    """Where the publish-bake lane stages what its publication SEALS (`modules/_index`). The gate
+    lane never creates it."""
+    return workdir / "runner-temp" / "seal-modules"
 
 
 def sha(data: bytes) -> str:

@@ -142,6 +142,21 @@ The 10 remaining failures are Reinsurance content-gate failures (7 `render:`, 3 
 
 ## Stage ② — what the guard sees, and what it does not
 
+> **2026-09-13 — defect 1 fixed at the lane.** The `ext-modules` step of `node-repo-publish-bake.yml`
+> keeps this repository's own module bundles and the ones composed from an upstream's seal in two
+> directories; both are composed into the compile surface and both take part in the one-build
+> verdict, but only the own ones are staged for `modules/_index`. A satellite that owns no module
+> seals an EMPTY index, which `publish-bake-bundles.sh` accepts only when the workflow exports
+> `SEAL_MODULES_OWN=0` (a workflow that exports nothing is still the pre-#2707 skew, refused).
+> Replayed on Crm's and Education's 2026-09-12 composition (four upstream packages, no own module):
+> before, `sealing MeshWeaver.AI as module package 'AI'` ×4 and a four-entry index; after, four
+> `composed only: … NOT in this publication's seal` lines and `sealed set: 0 own module bundle(s)
+> …; 4 upstream cop(y/ies) … NOT sealed`. Core's `plugins-bake` (four own artifacts, no upstream)
+> is unchanged: `sealed set: 4 own …; 0 upstream`. The guard's denominator is still the COMPOSED
+> set (4 on those repositories) — the population the bake loads — and pointing it at a
+> publication's ~40 module bundles remains the module-pack lane's change.
+
+
 🚨 **#3905's assertion was green in all 10 of those bake jobs — over a denominator of 4:**
 
 ```
