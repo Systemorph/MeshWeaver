@@ -27,6 +27,12 @@ superseded by the next dispatch before they finished.
   publication baked and sealed. The satellites no longer list `meshweaver-framework-released` at
   all; a satellite's own publication still wakes exactly its declared dependents
   (`meshweaver-upstream-published`).
+  > **Measured 2026-09-13:** core's own per-build `plugins` publication is such a wake, and every
+  > satellite declares `plugins` — so Crm, SocialMedia and Manufacturing each ran ~23
+  > `meshweaver-upstream-published` runs in the first 19 h, one per core build. The wave changed its
+  > event type; the per-build run count did not fall. Education still received
+  > `meshweaver-framework-released` (its receiver change, Education#320, was not merged). The
+  > numbers, with denominators, are on [The Release Wave](/Doc/Architecture/TheReleaseWave).
 - **"Validated" means the daily runs stayed green on the set.** There is no tag for it and none is
   planned: a set is sealed by its CD run's job conclusions and its `_releases/<version>` markers,
   which every reader re-derives. The clean `X.Y.Z` of a release remains the only tag-shaped

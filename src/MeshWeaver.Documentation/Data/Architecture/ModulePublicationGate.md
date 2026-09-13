@@ -15,6 +15,23 @@ Until MeshWeaver#3878 it did. `node-repo-module-pack.yml` POSTed each bundle fro
 matrix leg, immediately after that module's own suite — and everything else that validates the
 source runs beside or after that leg.
 
+> 🚨 **Superseded as the default on 2026-09-11 — read before adopting.** The staged hand-over below
+> landed in MeshWeaver.Plugins as #1663 (2026-09-11T17:17Z), handed over 37–38 bundles three times
+> (18:05Z, 23:54Z, 03:49Z, every POST answered 200) — and in between published **nothing for
+> 5 h 49 min**, because ten consecutive `main` runs were superseded before their whole-run verdict
+> could arrive. The maintainer's directive on that day (*"why do deployments depend on a complete
+> main run?!"*, *"each module should update individually"*, *"builds are not superseded … however
+> they must be atomic"*) reversed it: Plugins#1676 (02:36Z) returned the pack call to
+> `publish-mode: direct`, and core #4062 removed the `publish-modules` roster row. **Per-module
+> deploy is the design of record** — a module publishes on ITS OWN suite's verdict inside a
+> dependency network that is the atomic unit ([Module Build Architecture](../ModuleBuildArchitecture)
+> → *Per-module deploy*). Measured on Plugins trunk run #6330 (2026-09-13): six modules reached the
+> registry at 05:30Z while the same run's `portal-hosts` leg went red at 06:26Z — that is the shape
+> this page was written to prevent, and it is now the intended one. `staged` + the publication lane
+> stay available as an **opt-in** for a repository that wants one verdict per run; `check-callers`
+> names an in-leg publisher and no longer recommends converting it. #3878 is closed on this basis.
+
+
 ## What the ordering actually was
 
 ```

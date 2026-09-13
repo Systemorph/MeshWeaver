@@ -183,6 +183,31 @@ detection window is tolerable for a backwards-compatible platform. But it is the
 making a gate advisory: a loud CI red becomes a quiet runtime compile. It should be chosen
 knowingly, not arrived at, which is why it is written down here rather than left in a thread.
 
+### Measured one day later (2026-09-13): the report did not stop either, and the bake stopped
+
+Phase 1 merged on 2026-09-12. Counted by job over 2026-09-12T12:00Z → 09-13T07:08Z:
+
+- **The wake is still per build.** Core CD's `plugins-bake` registers a `plugins` publication on
+  every core build (20 of 20 register jobs), and the control instance fans
+  `meshweaver-upstream-published` to every satellite that declares `plugins`: Crm 23, SocialMedia
+  24, Manufacturing 23 runs in 19 h, one per core register-publication; Education 42
+  `framework-released` on top (Education#320 unmerged). The event type changed; the run count did
+  not. Detail and the per-repo table: [The Release Wave](../TheReleaseWave) → *After phase 1*.
+- **Reinsurance, the repository measured above, received 0 wakes** — so the 23-of-33 gate reds
+  did stop there, but not by the mechanism phase 1 intended. Its four publish-bake jobs in the
+  window (3 `push`, 1 `schedule`) all failed: two at the upstream gate (`crm` unsealed for
+  `s1765294…` and `s759c3e6…` — the condition, on a `push` trigger now), two at a NEW preflight.
+- **That preflight is #4142**: #3760 (18:11Z) made `bundle-registry-publisher-password` an input
+  of the reusable lane, no satellite provisions `MW_REGISTRY_PUBLISHER_PASSWORD` or passes it, and
+  **66 of 66** satellite publish-bake jobs started at or after 18:20Z failed there — the five
+  03:xxZ daily runs included (22 of 24 had succeeded before the merge). So on 2026-09-13 the
+  condition this page is about is not partial but total: **no satellite has sealed anything for any
+  identity since 18:11Z**, and every portal rolling onto a set from that window compiles all
+  satellite content locally.
+
+The two are different facts and are recorded separately on purpose — one is a broken lane, the
+other a design expectation that did not hold.
+
 ## A related scope question, recorded so it stops being re-litigated
 
 #3583's requirement 3 asks to *"announce a version when it is actually READY on the portal"*. The
