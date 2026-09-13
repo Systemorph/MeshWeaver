@@ -26,7 +26,7 @@
 # decline under a green tick — the exact shape a gate must never take.
 set -euo pipefail
 
-identity="" packages="" upstreams="" out="" registry_url="" registry_key="" storage_target=""
+identity="" packages="" upstreams="" out="" registry_url="" registry_key="" storage_target="" generation=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --identity)       identity="${2:-}";       shift 2 ;;
@@ -36,6 +36,13 @@ while [ $# -gt 0 ]; do
     --registry-url)   registry_url="${2:-}";   shift 2 ;;
     --registry-key)   registry_key="${2:-}";   shift 2 ;;
     --storage-target) storage_target="${2:-}"; shift 2 ;;
+    # 🚨 The generation the CALLER already resolved for this publication, on the storage path
+    # (MeshWeaver#3461). A gate's `seed` step downloads the publication's bundles and this script
+    # composes its module bytes; resolving the pointer independently in each would let a pointer
+    # that advanced in between hand one gate one generation's BUNDLES and another's MODULES — the
+    # cross-step form of the mix the per-module pin already prevents inside one composition. Given,
+    # it REPLACES the resolution; absent, this script resolves the pointer itself.
+    --generation)     generation="${2:-}";     shift 2 ;;
     *) echo "::error::compose-sealed-modules.sh: unknown argument '$1'"; exit 2 ;;
   esac
 done
@@ -49,6 +56,13 @@ elif [ -z "$storage_target" ]; then
   echo "::error::compose-sealed-modules.sh: pass --registry-url/--registry-key or --storage-target"; exit 2
 fi
 case "$identity" in */*|*..*|"") echo "::error::compose-sealed-modules.sh: identity '$identity' is not a bare name"; exit 2 ;; esac
+# A generation is a NAME, exactly as a pointer is: it must never address bytes outside its own
+# source directory. Refused rather than sanitised — a caller that passed one is stating a fact.
+case "$generation" in
+  "") ;;
+  .|..|*/*|*\\*) echo "::error::compose-sealed-modules.sh: --generation '$generation' is not a single directory name"; exit 2 ;;
+esac
+[ -z "$generation" ] || [ -n "$storage_target" ] || { echo "::error::compose-sealed-modules.sh: --generation applies to --storage-target only; on the registry path the module-set index names the generation it was read from"; exit 2; }
 
 mkdir -p "$out"
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
@@ -206,8 +220,15 @@ sealed_modules_of() { # <source> <list-file> <generation-file>
     local prefix="${base:+$base/}prebuilt-bundles/$identity/$src"
     # 🚨 The publication that APPLIES, never the prefix (MeshWeaver#3461). Under the flat layout
     # this resolves to the prefix itself and every path below is byte-identical to what it was.
-    resolve_publication_dir "$account" "$share" "$prefix"
-    local dir="$RESOLVED_DIR"
+    # A caller that has ALREADY resolved it for this gate passes it, and that answer wins: two
+    # independent resolutions of one pointer are two publications whenever it moves between them.
+    local dir
+    if [ -n "$generation" ]; then
+      dir="$prefix/$generation"
+    else
+      resolve_publication_dir "$account" "$share" "$prefix"
+      dir="$RESOLVED_DIR"
+    fi
     # The generation this listing came from — the storage-path analogue of the registry index's
     # `generation` field, and it travels to fetch_module for exactly the same reason: every module
     # of one composition must come from the ONE publication instance the index was read from. Empty

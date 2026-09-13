@@ -134,12 +134,25 @@ public static class SealedPublicationIndex
 
     private static SealedSource ReadSource(string sourceDirectory, ILogger? logger)
     {
+        // 🚨 The SOURCE name is the directory's own, taken BEFORE resolution — a generation is
+        // an instance of a publication of 'plugins', never a source called
+        // 'Systemorph-MeshWeaver-42-1'. SealedSyncGate attributes seals by this name.
         var source = Path.GetFileName(sourceDirectory)!;
-        var repository = ReadMarker(Path.Combine(sourceDirectory, RepositoryMarkerFileName));
-        var commit = ReadMarker(Path.Combine(sourceDirectory, SourceCommitMarkerFileName));
+        // 🚨 …and every path below is composed under the RESOLVED directory (#3461, phase 3).
+        // This reader is in the portal image and phase 1 missed it: SeedPublishedRoot already
+        // reads the BUNDLES through PublicationDirectoryOf, so without this the index and the
+        // seeder would read two different publications of one source. While the flat
+        // compatibility copy exists that is merely inconsistent; once it is dropped (phase 5) this
+        // reader would find no sentinel at all, report every source unsealed, and SealedSyncGate
+        // would then see an EMPTY `mine` and return Go for every repository — silently removing
+        // the whole "advance only to the commit sealed for this instance" rule
+        // (MeshWeaver.Plugins#1430) at the moment it matters most.
+        var publication = ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory, logger);
+        var repository = ReadMarker(Path.Combine(publication, RepositoryMarkerFileName));
+        var commit = ReadMarker(Path.Combine(publication, SourceCommitMarkerFileName));
         if (string.Equals(commit, "unknown", StringComparison.OrdinalIgnoreCase))
             commit = null;
-        var sentinel = Path.Combine(sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+        var sentinel = Path.Combine(publication, ShippedPrebuiltBundles.CompletionSentinelFileName);
         if (!File.Exists(sentinel))
             return new SealedSource(source, repository, commit, false, "no completion sentinel");
         try
@@ -147,7 +160,7 @@ public static class SealedPublicationIndex
             var missing = File.ReadAllLines(sentinel)
                 .Select(l => l.Trim())
                 .Where(l => l.Length > 0)
-                .FirstOrDefault(name => !File.Exists(Path.Combine(sourceDirectory, name)));
+                .FirstOrDefault(name => !File.Exists(Path.Combine(publication, name)));
             return missing is null
                 ? new SealedSource(source, repository, commit, true, null)
                 : new SealedSource(source, repository, commit, false,
@@ -155,7 +168,7 @@ public static class SealedPublicationIndex
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "SealedPublicationIndex: could not read the seal of {Directory}", sourceDirectory);
+            logger?.LogWarning(ex, "SealedPublicationIndex: could not read the seal of {Directory}", publication);
             return new SealedSource(source, repository, commit, false, $"the seal could not be read: {ex.GetType().Name}");
         }
     }

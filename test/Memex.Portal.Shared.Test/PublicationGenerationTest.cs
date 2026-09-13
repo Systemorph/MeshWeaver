@@ -277,6 +277,96 @@ public class PublicationGenerationTest
 
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// 🚨 <b>The SEAL INDEX is a reader too, and phase 1 missed it</b> (#3461, phase 3).
+    /// <c>SealedPublicationIndex.ReadFor</c> is what <c>SealedSyncGate</c> decides on and what
+    /// <c>SeedPublishedRoot</c> hands the sync reconciler; it read the three markers and the
+    /// sentinel straight out of the SOURCE directory while the same sweep read the BUNDLES through
+    /// <c>PublicationDirectoryOf</c>. Two readers of one source, answering about two different
+    /// publications.
+    ///
+    /// <para>While the flat compatibility copy exists that is merely inconsistent — the same run
+    /// writes both, so the markers usually agree. Once the copy is dropped (phase 5) this reader
+    /// finds no sentinel at all, reports every source unsealed, and <c>SealedSyncGate</c> then sees
+    /// an EMPTY <c>mine</c> and returns <c>Go</c> for every repository — silently removing the
+    /// whole "advance only to the commit sealed for this instance" rule at the moment it matters
+    /// most. So the fixture makes the two publications name DIFFERENT COMMITS: the verdict is
+    /// which commit came back, not whether the call threw.</para>
+    /// </summary>
+    [Fact]
+    public void TheSealIndex_ReadsTheGenerationsMarkers_NotTheFlatCopys()
+    {
+        using var root = new TempRoot();
+        var source = root.Source(Identity, Source);
+
+        // The flat publication: complete, sealed, and at an OLDER commit.
+        WriteBundle(Path.Combine(source, "Store.zip"), "flat-store");
+        Seal(source, "Store.zip");
+        Marker(source, SealedPublicationIndex.SourceCommitMarkerFileName, "24c2d024");
+        Marker(source, SealedPublicationIndex.RepositoryMarkerFileName, "Systemorph/MeshWeaver.Plugins");
+
+        // The generation the pointer names: the publication that actually applies.
+        var generation = Path.Combine(source, Gen1);
+        Directory.CreateDirectory(generation);
+        WriteBundle(Path.Combine(generation, "Store.zip"), "gen-store");
+        Seal(generation, "Store.zip");
+        Marker(generation, SealedPublicationIndex.SourceCommitMarkerFileName, "4b97be19");
+        Marker(generation, SealedPublicationIndex.RepositoryMarkerFileName, "Systemorph/MeshWeaver.Plugins");
+
+        Point(source, Gen1);
+
+        var sealed_ = SealedPublicationIndex.ReadFor(root.Path, Identity);
+        var only = Assert.Single(sealed_);
+        Assert.Equal(Source, only.Source);
+        Assert.True(only.IsSealed, only.Refusal);
+        Assert.Equal("4b97be19", only.SourceCommit);
+    }
+
+    /// <summary>
+    /// The phase-5 shape, and the reason the case above is not cosmetic: with NO flat copy behind
+    /// the pointer, an unrouted index reports the source UNSEALED — which <c>SealedSyncGate</c>
+    /// reads as "no seal attributable to this repository", i.e. <c>Go</c>. A routed one reads the
+    /// generation and the gate keeps gating.
+    /// </summary>
+    [Fact]
+    public void TheSealIndex_WithNoFlatCopyBehindThePointer_StillReadsTheGenerationAsSealed()
+    {
+        using var root = new TempRoot();
+        var source = root.Source(Identity, Source);
+        var generation = Path.Combine(source, Gen1);
+        Directory.CreateDirectory(generation);
+        WriteBundle(Path.Combine(generation, "Store.zip"), "gen-store");
+        Seal(generation, "Store.zip");
+        Marker(generation, SealedPublicationIndex.SourceCommitMarkerFileName, "4b97be19");
+        Point(source, Gen1);
+
+        var only = Assert.Single(SealedPublicationIndex.ReadFor(root.Path, Identity));
+        Assert.True(only.IsSealed,
+            "an unrouted index finds no sentinel here and reports the source unsealed — which "
+            + "SealedSyncGate reads as 'this gate does not apply' and lets every source of the "
+            + $"repository advance ungated. Refusal was: {only.Refusal}");
+        Assert.Equal("4b97be19", only.SourceCommit);
+    }
+
+    /// <summary>The control: with no pointer, the index reads the flat copy exactly as it always
+    /// has. Resolution is opt-in by the WRITER.</summary>
+    [Fact]
+    public void TheSealIndex_WithNoPointer_ReadsTheFlatCopy()
+    {
+        using var root = new TempRoot();
+        var source = root.Source(Identity, Source);
+        WriteBundle(Path.Combine(source, "Store.zip"), "flat-store");
+        Seal(source, "Store.zip");
+        Marker(source, SealedPublicationIndex.SourceCommitMarkerFileName, "24c2d024");
+
+        var only = Assert.Single(SealedPublicationIndex.ReadFor(root.Path, Identity));
+        Assert.True(only.IsSealed, only.Refusal);
+        Assert.Equal("24c2d024", only.SourceCommit);
+    }
+
+    private static void Marker(string directory, string name, string value) =>
+        File.WriteAllText(Path.Combine(directory, name), value + "\n");
+
     private static void Seal(string directory, params string[] bundles) =>
         File.WriteAllText(
             Path.Combine(directory, ShippedPrebuiltBundles.CompletionSentinelFileName),
