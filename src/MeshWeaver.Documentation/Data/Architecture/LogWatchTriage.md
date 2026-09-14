@@ -270,6 +270,7 @@ raises an occurrence count instead of opening another ticket.
 | The cursor was **floored by `MaxCatchUp`** | `WatcherState.CursorFor` returns the skipped stretch | Critical | one of the two paths that LOSE evidence outright — that stretch will never be read |
 | Red bursts arrived as a console **header and nothing else** | `BurstAggregator` → `LogPipelineGap.HeaderOnlyReport` | Error | a capture with no body; never fingerprinted, because `(category, eventId)` names a component and no defect |
 | The portal **permanently rejected** a report | `LogIncidentDelivery.IsPermanent` → `LogPipelineGap.RejectedReport` | Critical | the other path that loses outright — that report is gone from the queue and its red log will never be ticketed |
+| …and the **portal's own** record of the same refusal | `LogIncidentEndpoints.PermanentRefusal` → `LogIncidentDelivery.RefusalReport` | Critical | written by the ingest endpoint, not the watcher — the only one that survives a contract skew |
 
 ### 🚨 A rejected report is DESTROYED, so the destruction is a finding
 
@@ -292,11 +293,41 @@ Three properties make the finding sound, and each is pinned by `RejectedReportIs
 - **It stops at one.** `LogPipelineGap.IsRejectionFinding` is a guard, not a budget: a finding about
   a rejected finding would be refused for the same reason and mint its own successor, growing the
   queue fastest exactly when the portal refuses everything.
-- **The residual is covered from the other side.** When the watcher's report *shape* has diverged
-  from the contract, the finding is as unbindable as what it reports. So the portal logs **every**
-  permanent refusal at `Error` (`LogIncidentEndpoints.PermanentRefusal`) — and the portal's log is
-  precisely what `mw-log-watcher` reads, so that line becomes a burst, an incident and a ticket
-  through the pipeline that is otherwise broken.
+- **The swap is ONE durable write** (`WatcherState.Replace`). Removing the report and appending the
+  finding as two persists leaves a gap holding neither, and a crash there loses the red log *and* the
+  record that it was lost — this defect, one level down.
+
+### 🚨 …and the portal files its OWN record, because a log line cannot escape a contract skew
+
+The finding above covers one bad payload. It cannot cover the case worth catching. The watcher ships
+as a separate image on its own cadence — [#2681](https://github.com/Systemorph/MeshWeaver/issues/2681)
+ran **35 days** behind the portal it reported to — so once its report *shape* has drifted from
+`MeshWeaver.Observability.Contract`, it can POST nothing the portal will take, its own finding
+included.
+
+Leaving the fact in a log line does not rescue it either, and this is worth spelling out because it
+looks like it should: the portal's log **is** what the watcher reads, so the obvious move is to log
+loudly and let the pipeline pick it up. Follow it through and it is a loop — the watcher reads the
+line, builds a report from it, and has *that* refused too, forever, persisting nothing.
+
+So `LogIncidentEndpoints.PermanentRefusal` **writes the incident itself**, through the
+`ILogIncidentIngest` seam it has already resolved, on a path that does not travel through the watcher
+at all. It names no field of the refused payload, so it cannot be refused for the reason it is
+reporting, and a failed write degrades to a Warning rather than turning a 400 into a 500. The Error
+log stays — as what a reader of the portal's log sees, not as the mechanism.
+
+🚨 **Its fingerprint is `log-ingest-refused-{ns}`, deliberately NOT the watcher's
+`log-report-rejected-{ns}`.** They are two facts with two observers: the watcher knows *which* report
+it lost, the portal knows it *refused* one, and only the second is obtainable when the watcher cannot
+serialise anything the portal accepts. Folding them would also hand whichever arrived first the
+incident's `normalizedMessage` — the swallowing this subsystem already has a production instance of
+(see the section above).
+
+Both findings state their scope conditionally, for the same reason: **one refusal proves that one
+report is gone and nothing about the rest.** A single occurrence is a payload the portal could not
+take; an occurrence count that keeps climbing is the drift, and red-log ticketing is down for that
+namespace until the images agree. The per-namespace, timestamp-free fingerprint is what puts that
+discriminator in front of the responder.
 
 🚨 **The permanence rule itself lives in the contract** (`LogIncidentDelivery.IsPermanent`), not on
 either side. The consequence of a status is a *joint* fact: the portal picks the number, the watcher
