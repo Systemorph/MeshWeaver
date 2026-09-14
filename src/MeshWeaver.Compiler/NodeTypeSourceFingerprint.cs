@@ -148,6 +148,29 @@ public static class NodeTypeSourceFingerprint
         string nodeTypePath,
         Func<string, string?, IObservable<(MeshNode? Node, string Path)>> readInclude,
         ILogger? logger = null)
+        => ComputeWithIncludes(sourceNodes, nodeTypePath, readInclude, logger)
+            .Select(computed => computed.Fingerprint);
+
+    /// <summary>
+    /// <see cref="Compute(IEnumerable{MeshNode}, string, Func{string, string, IObservable{ValueTuple{MeshNode, string}}}, ILogger)"/>
+    /// that also hands back WHICH <c>@@</c>-include targets the closure resolved as PRESENT — sorted
+    /// ordinal, the resolved mesh paths (MeshWeaver#4280, second finding on #4293).
+    ///
+    /// <para>🚨 An ABSENT include is an answer (it contributes nothing to the bytes, so it is not in
+    /// the closure), and that is exactly why the paths matter as a separate fact: a producer that
+    /// baked WITH an include and a consumer whose copy of that include has not landed yet fold to
+    /// DIFFERENT fingerprints, and nothing in the hash says whether the difference is a move or an
+    /// arrival. The producer records the include paths beside the query-resolved
+    /// <c>sourceVersions</c>; the owner publishes this list as
+    /// <c>NodeTypeDefinition.CurrentSourceIncludes</c>; and
+    /// <c>NodeTypeCompilationHelpers.CanJudgeAdoption</c> defers while any recorded include is not
+    /// yet among the present ones — the same witness the query-resolved paths already get.</para>
+    /// </summary>
+    public static IObservable<(string Fingerprint, ImmutableList<string> Includes)> ComputeWithIncludes(
+        IEnumerable<MeshNode> sourceNodes,
+        string nodeTypePath,
+        Func<string, string?, IObservable<(MeshNode? Node, string Path)>> readInclude,
+        ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(sourceNodes);
         ArgumentException.ThrowIfNullOrEmpty(nodeTypePath);
@@ -159,8 +182,13 @@ public static class NodeTypeSourceFingerprint
 
         return NodeCompileShaping
             .CollectIncludeClosure(sources, nodeTypePath, readInclude, log)
-            .Select(closure => Fold(sources, paths, closure));
+            .Select(closure => (Fold(sources, paths, closure), IncludePathsOf(closure)));
     }
+
+    /// <summary>The include closure's PATHS, sorted ordinal — the shape both the bundle manifest
+    /// (<c>sourceIncludes</c>) and <c>NodeTypeDefinition.CurrentSourceIncludes</c> carry.</summary>
+    public static ImmutableList<string> IncludePathsOf(IReadOnlyDictionary<string, string> resolvedIncludes)
+        => resolvedIncludes.Keys.OrderBy(k => k, StringComparer.Ordinal).ToImmutableList();
 
     /// <summary>
     /// The fingerprint for a caller that has ALREADY resolved the include closure — the tree bake,

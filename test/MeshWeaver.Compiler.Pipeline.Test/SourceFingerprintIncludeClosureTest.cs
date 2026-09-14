@@ -301,6 +301,40 @@ public class SourceFingerprintIncludeClosureTest
                 + "both fold an empty closure for it");
     }
 
+    // ── #4280: the include PATHS ride beside the hash, and an absent one is not among them ───
+
+    /// <summary>
+    /// The hash cannot say WHICH includes it folded over; the owner's completeness witness needs
+    /// to know, because an include that has not landed is an ABSENT include here (an answer, per
+    /// <see cref="AnIncludeThatResolvesToNothing_ContributesNothing"/>) — the fold is shorter, the
+    /// fingerprints differ, and only the list says whether that is an arrival or a move.
+    /// </summary>
+    [Fact]
+    public void ComputeWithIncludes_NamesThePresentIncludes_TransitivelyAndSorted()
+    {
+        var sources = new[]
+        {
+            Code($"{TypePath}/Source/Thing", "public record Thing;\n\n@@Widget/Snippets/Outer\n@@Widget/Snippets/Missing"),
+        };
+        var mesh = new Dictionary<string, string>
+        {
+            ["Widget/Snippets/Outer"] = "public static class Outer { }\n\n@@Widget/Snippets/Inner",
+            ["Widget/Snippets/Inner"] = "public static class Inner { }",
+        };
+
+        (string Fingerprint, ImmutableList<string> Includes)? captured = null;
+        NodeTypeSourceFingerprint
+            .ComputeWithIncludes(sources, TypePath, ReaderOver(mesh))
+            .Subscribe(value => captured = value);
+
+        captured.Should().NotBeNull();
+        captured!.Value.Fingerprint.Should().Be(FingerprintOf(sources, mesh),
+            "the same fold — the list is additional information, not a different hash");
+        captured.Value.Includes.Should().Equal(["Widget/Snippets/Inner", "Widget/Snippets/Outer"],
+            "the transitive closure, sorted ordinal; the include that resolved to nothing is NOT "
+            + "listed — that absence is exactly what the owner compares against the bundle's list");
+    }
+
     // ── The two producer-side entry points agree, and the third one cannot under-cover ────────
 
     /// <summary>

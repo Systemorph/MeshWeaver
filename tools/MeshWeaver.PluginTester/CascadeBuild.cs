@@ -513,6 +513,8 @@ public static class CascadeBuild
                     SourceFingerprint = NodeTypeSourceFingerprint.Compute(
                         resolution.Sources, candidate.Node.Path,
                         compiled.Inputs.ResolvedIncludes, options.Logger),
+                    // #4280 — see TreeBake: the include paths ride beside the key set.
+                    SourceIncludes = NodeTypeSourceFingerprint.IncludePathsOf(compiled.Inputs.ResolvedIncludes),
                 });
             }
 

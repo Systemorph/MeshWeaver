@@ -261,6 +261,72 @@ public class AdoptionIsNotJudgedFromAPartialSourceSetTest
             "producer and consumer hashed the same compile input, and they agree");
     }
 
+    // ── The include half of the witness (#4293's first review finding) ───────────────────────
+
+    /// <summary>The bundle was compiled with two <c>@@</c> includes; the query-resolved set is
+    /// complete, the includes are what is still landing.</summary>
+    private static readonly ImmutableList<string> BundleIncludes =
+        ["Ifrs17/Shared/Snippets/Header", "Ifrs17/Shared/Snippets/Usings"];
+
+    [Fact]
+    public void AnIncludeStillLanding_IsAnArrivalNotAMove()
+    {
+        NodeTypeCompilationHelpers.SourceIncludesNotYetLive(
+                BundleIncludes, ["Ifrs17/Shared/Snippets/Usings"])
+            .Should().Equal(["Ifrs17/Shared/Snippets/Header"],
+                "an ABSENT include is an answer in the include reader — it contributes nothing to the "
+                + "live fold — so the only way to know it is an arrival is to know the bundle had it");
+
+        var seeded = JustSeeded("4ed23561cfd142d1", AllFourteen) with
+        {
+            AdoptedSourceIncludes = BundleIncludes,
+            CurrentSourceIncludes = ["Ifrs17/Shared/Snippets/Usings"],
+        };
+        NodeTypeCompilationHelpers.CanJudgeAdoption(seeded, AllFourteen).Should().BeFalse(
+            "every query-resolved path is live, and one @@ target the bundle folded over is not");
+
+        var result = NodeTypeCompilationHelpers.ApplyAdoptedSourceStamp(
+            seeded, AllFourteen, canCompileLocally: true);
+        result.Should().BeSameAs(seeded, "deferred: the record is returned untouched");
+        result.CompilationStatus.Should().Be(CompilationStatus.Ok, "no compile is dispatched");
+    }
+
+    [Fact]
+    public void AnIncludeListNotPublishedYet_IsNotJudged_ButNoIncludesRecordedJudgesAsBefore()
+    {
+        var unpublished = JustSeeded("4ed23561cfd142d1", AllFourteen) with
+        {
+            AdoptedSourceIncludes = BundleIncludes,
+            CurrentSourceIncludes = null,
+        };
+        NodeTypeCompilationHelpers.CanJudgeAdoption(unpublished, AllFourteen).Should().BeFalse(
+            "the fingerprint and the include list are written together, so 'not published' is "
+            + "'not computed', never 'none present'");
+
+        var legacy = JustSeeded("4ed23561cfd142d1", AllFourteen) with
+        {
+            AdoptedSourceIncludes = null,
+            CurrentSourceIncludes = null,
+        };
+        NodeTypeCompilationHelpers.CanJudgeAdoption(legacy, AllFourteen).Should().BeTrue(
+            "a producer that recorded no includes gets the path witness alone, as before");
+    }
+
+    [Fact]
+    public void OnceTheIncludesArePresent_ACompleteSetThatDisagreesIsJudged()
+    {
+        var landed = JustSeeded("4ed23561cfd142d1", AllFourteen) with
+        {
+            AdoptedSourceIncludes = BundleIncludes,
+            CurrentSourceIncludes = BundleIncludes.Add("Ifrs17/Shared/Snippets/Extra"),
+        };
+        NodeTypeCompilationHelpers.CanJudgeAdoption(landed, AllFourteen).Should().BeTrue(
+            "every include the bundle folded over is present (an extra one is the move); the "
+            + "disagreement is a measurement");
+        NodeTypeCompilationHelpers.ApplyAdoptedSourceStamp(landed, AllFourteen, canCompileLocally: true)
+            .BuildProvenance.Should().Be(BuildProvenance.StaleAdopted);
+    }
+
     // ── The second half: a verdict formed under a set that has moved is re-driven, not parked ─
 
     [Fact]

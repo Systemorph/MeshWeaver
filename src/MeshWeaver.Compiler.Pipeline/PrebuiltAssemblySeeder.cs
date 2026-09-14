@@ -407,8 +407,28 @@ public static class PrebuiltAssemblySeeder
         string? sourceFingerprint,
         string? moduleVersion,
         IReadOnlyList<string>? sourcePaths)
+        => Seed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
+            sourceFingerprint, moduleVersion, sourcePaths, sourceIncludes: null);
+
+    /// <summary>
+    /// <see cref="Seed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string, string, IReadOnlyList{string})"/>
+    /// carrying the bundle's <c>@@</c>-include paths as well (MeshWeaver#4280) — see the
+    /// <c>SeedDetailed</c> overload of the same arity.
+    /// </summary>
+    public static IObservable<bool> Seed(
+        IMessageHub hub,
+        string nodeTypePath,
+        byte[] assemblyBytes,
+        byte[]? pdbBytes,
+        string? frameworkMvid,
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint,
+        string? moduleVersion,
+        IReadOnlyList<string>? sourcePaths,
+        IReadOnlyList<string>? sourceIncludes)
         => SeedDetailed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
-                sourceFingerprint, moduleVersion, sourcePaths)
+                sourceFingerprint, moduleVersion, sourcePaths, sourceIncludes)
             .Select(outcome => outcome is SeedOutcome.Adopted or SeedOutcome.AdoptedStale);
 
     /// <summary>What <see cref="DecideAfterStaleDecline"/> concluded for one declined entry.</summary>
@@ -613,6 +633,28 @@ public static class PrebuiltAssemblySeeder
         string? sourceFingerprint,
         string? moduleVersion,
         IReadOnlyList<string>? sourcePaths)
+        => SeedDetailed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
+            sourceFingerprint, moduleVersion, sourcePaths, sourceIncludes: null);
+
+    /// <summary>
+    /// <see cref="SeedDetailed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string, string, IReadOnlyList{string})"/>
+    /// carrying the bundle's <c>@@</c>-include paths as well (MeshWeaver#4280, second finding on
+    /// #4293) — the manifest's <c>sourceIncludes</c>, stamped as
+    /// <see cref="NodeTypeDefinition.AdoptedSourceIncludes"/> and read by the pre-write decline
+    /// beside the query-resolved paths. Null from a producer that recorded none.
+    /// </summary>
+    public static IObservable<SeedOutcome> SeedDetailed(
+        IMessageHub hub,
+        string nodeTypePath,
+        byte[] assemblyBytes,
+        byte[]? pdbBytes,
+        string? frameworkMvid,
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint,
+        string? moduleVersion,
+        IReadOnlyList<string>? sourcePaths,
+        IReadOnlyList<string>? sourceIncludes)
     {
         // 🚨 THE GATE. FrameworkVersion is the resolved framework build identity — a content/
         // surface identity, not a version string — and the assembly-store key carries the first
@@ -704,7 +746,7 @@ public static class PrebuiltAssemblySeeder
                 .Take(1)
                 .SelectMany(node => SeedObserved(
                     hub, workspace, node!, nodeTypePath, assemblyBytes, pdbBytes, logger,
-                    dependencies, sourceFingerprint, moduleVersion, sourcePaths)));
+                    dependencies, sourceFingerprint, moduleVersion, sourcePaths, sourceIncludes)));
         });
     }
 
@@ -721,7 +763,8 @@ public static class PrebuiltAssemblySeeder
         IReadOnlyDictionary<string, string>? dependencies,
         string? sourceFingerprint,
         string? moduleVersion,
-        IReadOnlyList<string>? sourcePaths)
+        IReadOnlyList<string>? sourcePaths,
+        IReadOnlyList<string>? sourceIncludes)
     {
         var observed = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
         if (observed is null)
@@ -780,7 +823,8 @@ public static class PrebuiltAssemblySeeder
         if (sourceFingerprint is { Length: > 0 } producerFingerprint
             && observed.CurrentSourceFingerprint is { Length: > 0 } liveFingerprint
             && NodeTypeCompilationHelpers.CanJudgeAdoption(
-                producerFingerprint, liveFingerprint, observed.CurrentSourceVersions, sourcePaths)
+                producerFingerprint, liveFingerprint, observed.CurrentSourceVersions, sourcePaths,
+                sourceIncludes, observed.CurrentSourceIncludes)
             && !string.Equals(producerFingerprint, liveFingerprint, StringComparison.Ordinal))
         {
             var verdict = ModuleVersionCompatibility.Classify(moduleVersion, observed.CurrentModuleVersion);
@@ -819,12 +863,26 @@ public static class PrebuiltAssemblySeeder
         if (sourceFingerprint is { Length: > 0 } deferred
             && observed.CurrentSourceFingerprint is { Length: > 0 } unjudged
             && !NodeTypeCompilationHelpers.CanJudgeAdoption(
-                deferred, unjudged, observed.CurrentSourceVersions, sourcePaths)
+                deferred, unjudged, observed.CurrentSourceVersions, sourcePaths,
+                sourceIncludes, observed.CurrentSourceIncludes)
             && !string.Equals(deferred, unjudged, StringComparison.Ordinal))
         {
             var notYetLive = NodeTypeCompilationHelpers.SourcePathsNotYetLive(
                 sourcePaths, observed.CurrentSourceVersions);
-            if (observed.CurrentSourceVersions is { Count: > 0 } partial && notYetLive.Count > 0)
+            var includesNotYetLive = NodeTypeCompilationHelpers.SourceIncludesNotYetLive(
+                sourceIncludes, observed.CurrentSourceIncludes);
+            if (observed.CurrentSourceVersions is { Count: > 0 } && notYetLive.Count == 0
+                && includesNotYetLive.Count > 0)
+                logger?.LogWarning(
+                    "Prebuilt assembly for {NodeTypePath}: the bundle records source fingerprint "
+                    + "{Producer} and this mesh's live fingerprint is {Live}, but {Missing} of the "
+                    + "{Declared} @@-include(s) the bundle was compiled with are not resolved as "
+                    + "present here yet (#4280): {Paths}. An absent include is an arrival, not a "
+                    + "move, so the bundle is ADOPTED and the owner defers its judgement until "
+                    + "they land.",
+                    nodeTypePath, deferred, unjudged, includesNotYetLive.Count, sourceIncludes!.Count,
+                    string.Join(", ", includesNotYetLive.Take(6)) + (includesNotYetLive.Count > 6 ? ", …" : ""));
+            else if (observed.CurrentSourceVersions is { Count: > 0 } partial && notYetLive.Count > 0)
                 logger?.LogWarning(
                     "Prebuilt assembly for {NodeTypePath}: the bundle records source fingerprint "
                     + "{Producer} and this mesh's live fingerprint is {Live}, but the live set holds "
@@ -942,6 +1000,11 @@ public static class PrebuiltAssemblySeeder
                             // the fingerprint alone.
                             AdoptedSourcePaths = sourcePaths is { Count: > 0 }
                                 ? sourcePaths.ToImmutableList()
+                                : null,
+                            // #4280 — and WHICH includes, so an included node still landing is an
+                            // arrival to the owner and not a move.
+                            AdoptedSourceIncludes = sourceIncludes is { Count: > 0 }
+                                ? sourceIncludes.ToImmutableList()
                                 : null,
                             // #3583 — the module version these bytes were released at, for the
                             // compatibility rule the owner applies when the source later moves.
