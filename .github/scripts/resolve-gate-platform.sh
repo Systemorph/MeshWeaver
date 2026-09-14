@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # resolve-gate-platform.sh --volume-root <dir> [--tester-digest <sha256:…>] [--portal-digest <sha256:…>]
+#                          [--set <3.0.0-ci.N>] [--wait-seconds <N>]
 #
 # Decides WHERE a gate shard takes the platform from, and — when that is the CI platform volume —
 # proves the set on it is the one the caller pinned and is COMPLETE, before a single assembly is
@@ -32,7 +33,36 @@
 #   <root>/sha256-<hex>/app/             the tester image's /app        (89 files' worth of CLI)
 #   <root>/sha256-<hex>/platform-refs/   the PORTAL image's /app        (the reference surface)
 #   <root>/sha256-<hex>/platform.json    set, core sha, both digests, installed-at
-#   <root>/sha256-<hex>/.complete        the tester digest, written LAST — no .complete, no set
+#   <root>/sha256-<hex>/.complete        the tester digest — the set is COMPLETE only with it
+#   <root>/sha256-<hex>.tmp.<pod>/       an install IN FLIGHT, being extracted by that refresh pod
+#
+# 🚨 A SET CAN BE ABSENT FOR THREE REASONS, AND THEY HAVE OPPOSITE REMEDIES (#4281). Until
+# 2026-09-14 this script named two of them — "older than the three kept, or never sealed" — and
+# sent the reader to bump the caller's digest. Two refusals measured that morning were NEITHER:
+#   • Education run 34809613064 (05:42Z) wanted sha256:cda259b4… and the volume listing printed
+#     INSIDE that very refusal contained `sha256-cda259b4….tmp.ci-platform-refresh-29822740-7x7xb`
+#     — the exact digest, being extracted as the shard looked. ARRIVING.
+#   • Manufacturing PR#89 (~06:5xZ) wanted sha256:0860c392… while the volume held 4c327117,
+#     cda259b4 and ce95ac38 — by then cda259b4 had finished, so the volume had advanced and the
+#     wanted set had advanced past it. AHEAD.
+# In both the caller's digest was RIGHT and merely early, so the remedy the message gave would have
+# pinned a gate to an older platform to work around a wait. The three cases:
+#
+#   ARRIVING     `<SET_DIR>.tmp.<pod>` exists, or `<SET_DIR>` exists without `.complete`. A refresh
+#                pod is extracting exactly this digest right now (~200 s on the share).
+#   AHEAD        the caller's set has a HIGHER core-CD run number than the newest set installed.
+#                The refresh is a CronJob on a 10-minute schedule while a satellite run is
+#                triggered by the SEAL, so a run is ahead of the volume by design, for up to one
+#                period plus one install.
+#   GONE         the caller's set is older than the oldest kept, or was overtaken (a newer set
+#                sealed before the refresh's next tick, and the refresh only ever takes the NEWEST
+#                sealed set, so this one will never be installed).
+#
+# The first two are WAITED OUT, on the actual condition — `<SET_DIR>/.complete` appearing — under a
+# bounded deadline; the third is RED at once, because waiting for it could never end. The wait
+# polls, because the share is SMB (no inotify, and `actimeo=30` caches a negative dentry for up to
+# 30 s) — it is a wait on a condition, never a sleep for time to pass. `--set` is what makes AHEAD
+# and GONE distinguishable; without it only ARRIVING can be seen, and the other two are RED at once.
 #
 # WHAT IT DOES NOT DO: it never runs `docker`, never reaches a registry, and never writes to the
 # volume. It is pure enough to be self-tested against synthetic directories, which is the only way
@@ -64,18 +94,19 @@ if [ "${1:-}" = "--self-test" ]; then
   fail() { echo "SELF-TEST FAILED: $1"; exit 1; }
   D1="sha256:1111111111111111111111111111111111111111111111111111111111111111"
   D2="sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  D3="sha256:3333333333333333333333333333333333333333333333333333333333333333"
   P1="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   P2="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-  make_set() {  # <root> <tester-digest> <portal-digest>
-    local root="$1" d="$2" p="$3" dir
+  make_set() {  # <root> <tester-digest> <portal-digest> [set name]
+    local root="$1" d="$2" p="$3" name="${4:-3.0.0-ci.1}" dir
     dir="$root/${2/:/-}"
     mkdir -p "$dir/app" "$dir/platform-refs"
     printf 'CLI'  > "$dir/app/mw-plugin-test.dll"
     printf '{}'   > "$dir/app/mw-plugin-test.runtimeconfig.json"
     printf 'X=1\n' > "$dir/platform-refs/meshweaver-surface.manifest"
     printf '{"tfm":"net10.0"}' > "$dir/platform-refs/Memex.Portal.Distributed.runtimeconfig.json"
-    printf '{"set":"3.0.0-ci.1","sha":"deadbeef","image-digest":"%s","portal-image-digest":"%s"}\n' "$d" "$p" \
+    printf '{"set":"%s","sha":"deadbeef","image-digest":"%s","portal-image-digest":"%s"}\n' "$name" "$d" "$p" \
       > "$dir/platform.json"
     printf '%s\n' "$d" > "$dir/.complete"
     printf '%s\n' "$d" > "$root/current"
@@ -103,9 +134,13 @@ if [ "${1:-}" = "--self-test" ]; then
   grep -q "^tester_app=$dir/app$" <<<"$out" || fail "an empty pin must resolve the set that 'current' names (got: $out)"
 
   # ── the refusals. Each must exit non-zero, name the refresh job, and never say mode=container. ──
-  refuses() {  # <label> <root> <tester-digest> <portal-digest>
-    local label="$1" root="$2" d="$3" p="$4" o rc
-    o="$("$self" --volume-root "$root" --tester-digest "$d" --portal-digest "$p" 2>&1)"; rc=$?
+  # 🚨 `--wait-seconds 0` on every one of them. The absence cases now WAIT (see the header), so a
+  # refusal case that did not disable the wait would sit here for seven minutes and then pass the
+  # assertion for the wrong reason — a self-test that measures patience rather than the refusal.
+  # The wait itself gets its own cases (5a–5d), where it is the subject rather than an obstacle.
+  refuses() {  # <label> <root> <tester-digest> <portal-digest> [extra args…]
+    local label="$1" root="$2" d="$3" p="$4" o rc; shift 4
+    o="$("$self" --volume-root "$root" --tester-digest "$d" --portal-digest "$p" --wait-seconds 0 "$@" 2>&1)"; rc=$?
     [ "$rc" -ne 0 ] || fail "$label must be refused, got exit 0: $o"
     grep -q 'ci-platform-refresh' <<<"$o" || fail "$label must name the refresh job (got: $o)"
     grep -q '^mode=container$' <<<"$o" && fail "$label must NOT fall back to a registry pull (got: $o)"
@@ -139,22 +174,128 @@ if [ "${1:-}" = "--self-test" ]; then
   "$self" > /dev/null 2>&1 && fail "a missing --volume-root must be refused"
   "$self" --volume-root "$good" --tester-digest "not-a-digest" > /dev/null 2>&1 \
     && fail "a malformed digest must be refused"
+  "$self" --volume-root "$good" --tester-digest "$D1" --wait-seconds later > /dev/null 2>&1 \
+    && fail "a non-numeric --wait-seconds must be refused"
 
-  echo "resolve-gate-platform.sh self-test: OK (1 container case, 2 volume cases, 8 refusals, 2 usage refusals)"
+  # ── 5. THE WAIT (#4281). The measured failure was a shard refusing a set that was ARRIVING. ────
+  # 🚨 Each of these has a "could it fail?" partner: 5a would go red if the wait were removed, 5b
+  # and 5c would go red if the wait were UNBOUNDED or blind, and 5d proves the classification is
+  # what decides — not the clock.
+
+  # 5a. ARRIVING: the set's `.tmp.<pod>` is there and `.complete` lands 3 s later. The shard must
+  #     WAIT and then succeed. (This is the 2026-09-14 05:41Z case, four satellites at once.)
+  arr="$tmp/arriving"; mkdir -p "$arr"
+  adir="$(make_set "$arr" "$D1" "$P1" "3.0.0-ci.8547")"
+  mv "$adir" "$adir.tmp.ci-platform-refresh-abc12"
+  ( sleep 3; mv "$arr/${D1/:/-}.tmp.ci-platform-refresh-abc12" "$arr/${D1/:/-}" ) &
+  started=$(date +%s)
+  out="$("$self" --volume-root "$arr" --tester-digest "$D1" --portal-digest "$P1" \
+         --set 3.0.0-ci.8547 --wait-seconds 60 2>&1)" \
+    || fail "a set that is ARRIVING must be waited for, not refused (got: $out)"
+  elapsed=$(( $(date +%s) - started ))
+  wait
+  grep -q '^mode=volume$' <<<"$out" || fail "an arriving set must end in volume mode (got: $out)"
+  grep -qi 'INSTALLING right now' <<<"$out" || fail "the wait must say the set is installing (got: $out)"
+  [ "$elapsed" -ge 2 ] || fail "5a completed in ${elapsed}s — it cannot have waited for anything, so it proves nothing"
+  [ "$elapsed" -le 40 ] || fail "5a took ${elapsed}s — the wait is not polling the condition"
+
+  # 5b. ARRIVING but it never lands ⇒ RED at the deadline, naming the in-flight directory, and
+  #     bounded: the assertion is on the CLOCK, so an unbounded wait fails here rather than hanging.
+  stuck="$tmp/stuck"; mkdir -p "$stuck"
+  sdir="$(make_set "$stuck" "$D1" "$P1" "3.0.0-ci.8547")"; mv "$sdir" "$sdir.tmp.ci-platform-refresh-dead"
+  started=$(date +%s)
+  o="$("$self" --volume-root "$stuck" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.0.0-ci.8547 --wait-seconds 12 2>&1)"; rc=$?
+  elapsed=$(( $(date +%s) - started ))
+  [ "$rc" -ne 0 ] || fail "an install that never completes must be refused at the deadline (got: $o)"
+  [ "$elapsed" -le 45 ] || fail "the wait is not bounded — it ran ${elapsed}s against a 12s deadline"
+  grep -q 'INSTALLING when this shard arrived' <<<"$o" || fail "the timeout must name the in-flight case (got: $o)"
+  grep -q 'Do NOT bump' <<<"$o" || fail "the timeout must not send the reader to bump the digest (got: $o)"
+  grep -q '^mode=container$' <<<"$o" && fail "a timed-out wait must NOT fall back to a pull (got: $o)"
+
+  # 5c. AHEAD: the caller's set is newer than everything installed and no `.tmp.` yet — the
+  #     2026-09-14 03:43Z / 04:36Z case. Waited, then RED naming the cadence, never the pin.
+  ahead="$tmp/ahead"; make_set "$ahead" "$D2" "$P1" "3.0.0-ci.8500" > /dev/null
+  refuses "a set AHEAD of the volume" "$ahead" "$D1" "$P1" --set 3.0.0-ci.8547
+  o="$("$self" --volume-root "$ahead" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.0.0-ci.8547 --wait-seconds 0 2>&1)"
+  grep -q 'had not reached the platform volume' <<<"$o" || fail "the AHEAD refusal must name the cadence (got: $o)"
+  grep -q 'Do NOT bump' <<<"$o" || fail "the AHEAD refusal must not send the reader to bump the digest (got: $o)"
+
+  # 5d. OVERTAKEN inside the kept window: the volume holds #8400 and #8600, the caller wants #8547.
+  #     Absent and bracketed ⇒ it was never installed and never will be, so this is RED AT ONCE
+  #     even with a generous deadline. The elapsed assertion is what proves the CLASSIFICATION
+  #     decided it rather than the clock: remove the early exit and this case waits 600 s.
+  past="$tmp/overtaken"; make_set "$past" "$D2" "$P1" "3.0.0-ci.8600" > /dev/null
+  make_set "$past" "$D3" "$P1" "3.0.0-ci.8400" > /dev/null
+  printf '%s\n' "$D2" > "$past/current"
+  started=$(date +%s)
+  o="$("$self" --volume-root "$past" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.0.0-ci.8547 --wait-seconds 600 2>&1)"; rc=$?
+  elapsed=$(( $(date +%s) - started ))
+  [ "$rc" -ne 0 ] || fail "an overtaken set must be refused (got: $o)"
+  [ "$elapsed" -le 20 ] || fail "an overtaken set must be refused AT ONCE, not waited out (${elapsed}s)"
+  grep -q 'moved PAST it' <<<"$o" || fail "the overtaken refusal must say the refresh moved past (got: $o)"
+
+  # 5e. BELOW the oldest kept ⇒ RED at once, and the message must name BOTH histories (purged /
+  #     overtaken) rather than asserting one, and point at the retention issue.
+  gone="$tmp/gone"; make_set "$gone" "$D2" "$P1" "3.0.0-ci.8600" > /dev/null
+  o="$("$self" --volume-root "$gone" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.0.0-ci.8001 --wait-seconds 0 2>&1)"; rc=$?
+  [ "$rc" -ne 0 ] || fail "a set older than retention must be refused (got: $o)"
+  grep -q 'below the OLDEST set kept' <<<"$o" || fail "the retention refusal must name retention (got: $o)"
+  grep -q 'PURGED' <<<"$o" || fail "the retention refusal must offer the purged history (got: $o)"
+  grep -q 'OVERTAKEN' <<<"$o" || fail "the retention refusal must offer the overtaken history too (got: $o)"
+  grep -q 'Memex#329' <<<"$o" || fail "the retention refusal must name the retention issue (got: $o)"
+
+  # 5g. An EMPTY volume with a pinned caller: the refresh has completed no run, which is the same
+  #     "has not caught up" family — waited out, then RED naming the empty volume, never retention.
+  empty="$tmp/empty"; mkdir -p "$empty"
+  o="$("$self" --volume-root "$empty" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.0.0-ci.8547 --wait-seconds 0 2>&1)"; rc=$?
+  [ "$rc" -ne 0 ] || fail "an empty volume must be refused (got: $o)"
+  grep -q 'still core CD #none' <<<"$o" || fail "an empty volume must be named as such (got: $o)"
+  grep -q 'OLDER' <<<"$o" && fail "an empty volume is not a retention miss (got: $o)"
+
+  # 5f. Without `--set`, the three absences cannot be told apart — and the message must SAY SO
+  #     rather than asserting one of them, which is the defect this change is about.
+  o="$("$self" --volume-root "$good" --tester-digest "$D2" --portal-digest "$P1" --wait-seconds 0 2>&1)"
+  grep -q 'cannot be told apart' <<<"$o" || fail "an unclassifiable absence must say so (got: $o)"
+  grep -q 'either older than those three or has never been sealed' <<<"$o" \
+    && fail "the old FALSE DICHOTOMY is back — it excluded the case that actually occurs (got: $o)"
+
+  echo "resolve-gate-platform.sh self-test: OK (1 container case, 2 volume cases, 8 refusals, 3 usage refusals, 7 wait cases)"
   exit 0
 fi
 
 VOLUME_ROOT=""
 TESTER_DIGEST=""
 PORTAL_DIGEST=""
+CALLER_SET=""
+# The bound on waiting for a set that is ARRIVING or AHEAD, in seconds. It is not a guess and it is
+# not a knob to turn up when a run fails: it is the refresh's worst-case latency, and it is
+# arithmetic over values that are declared elsewhere —
+#   120 s  the CronJob's schedule (Systemorph/Memex ci-platform.yaml; `*/10` until that change is
+#          applied, in which case the wait simply runs out and says so rather than passing wrongly)
+# + 210 s  one install, measured in-cluster at 197 s with the browser on the share
+# +  90 s  the runner mount's `actimeo=30` attribute cache, twice over, plus slack
+# = 420 s. A shard that waits longer than that is not waiting for the refresh; it is waiting for a
+# refresh that is not coming, which is what the refusals below say. Raising it would only move a
+# red later into the job.
+WAIT_SECONDS=420
 while [ $# -gt 0 ]; do
   case "$1" in
     --volume-root)   VOLUME_ROOT="${2:-}"; shift 2 ;;
     --tester-digest) TESTER_DIGEST="${2:-}"; shift 2 ;;
     --portal-digest) PORTAL_DIGEST="${2:-}"; shift 2 ;;
-    *) die "unknown argument '$1' (usage: --volume-root <dir> [--tester-digest <sha256:…>] [--portal-digest <sha256:…>])" ;;
+    --set)           CALLER_SET="${2:-}"; shift 2 ;;
+    --wait-seconds)  WAIT_SECONDS="${2:-}"; shift 2 ;;
+    *) die "unknown argument '$1' (usage: --volume-root <dir> [--tester-digest <sha256:…>] [--portal-digest <sha256:…>] [--set <3.0.0-ci.N>] [--wait-seconds <N>])" ;;
   esac
 done
+case "$WAIT_SECONDS" in
+  ''|*[!0-9]*) die "--wait-seconds '$WAIT_SECONDS' is not a whole number of seconds" ;;
+esac
 [ -n "$VOLUME_ROOT" ] || die "--volume-root is required — it is the path the runner pod mounts the CI platform share at (/opt/platform)"
 for d in "$TESTER_DIGEST" "$PORTAL_DIGEST"; do
   case "$d" in
@@ -185,18 +326,144 @@ if [ -z "$resolved" ]; then
 fi
 
 SET_DIR="$VOLUME_ROOT/${resolved/:/-}"
-installed=""
-for candidate in "$VOLUME_ROOT"/sha256-*; do
-  [ -d "$candidate" ] && installed="$installed $(basename "$candidate")"
-done
-[ -n "$installed" ] || installed=" none"
-[ -d "$SET_DIR" ] \
-  || die "the platform volume at '$VOLUME_ROOT' carries no set for tester digest ${resolved}. $REFRESH_JOB installs the newest SEALED set every 10 minutes and keeps the 3 newest, so this pin is either older than those three or has never been sealed. Fix it by bumping the caller's image-digest/platform-image-digest to a set the refresh has installed (the volume holds:${installed}), or by forcing a refresh run. 🚨 This shard does NOT fall back to 'docker pull': a gate that quietly reached the registry would hide a dead refresh job for as long as the registry answers."
-[ -f "$SET_DIR/.complete" ] \
-  || die "'$SET_DIR' has no .complete marker — $REFRESH_JOB writes it LAST, so this directory is a half-install and its assemblies may be a mix of two sets. Wait for the next refresh run (≤ 10 min) or force one; do not gate on it."
-marker="$(tr -d '[:space:]' < "$SET_DIR/.complete")"
-[ "$marker" = "$resolved" ] \
-  || die "'$SET_DIR/.complete' names '$marker' but this shard asked for '$resolved' — the directory and its marker disagree, which $REFRESH_JOB's write order (bytes, then .complete) makes impossible for a completed run. Treat the set as corrupt: delete its .complete so the next refresh rebuilds it in place."
+
+# ── the volume as it is RIGHT NOW ────────────────────────────────────────────────────────────
+# Every one of these re-reads the share on each call: the whole point is that the picture moves
+# while this shard looks at it.
+
+listing() {  # every set directory, in-flight ones NAMED as such rather than listed as sets
+  local out="" candidate
+  for candidate in "$VOLUME_ROOT"/sha256-*; do
+    [ -d "$candidate" ] || continue
+    case "$candidate" in
+      *.tmp.*) out="$out $(basename "$candidate") (INSTALLING now)" ;;
+      *)       out="$out $(basename "$candidate")" ;;
+    esac
+  done
+  printf '%s' "${out:- none}"
+}
+
+run_number_of() {  # `3.0.0-ci.8547` → `8547`; empty when the name does not carry one
+  printf '%s' "${1:-}" | sed -n 's/.*[.-][cC][iI]\.\([0-9][0-9]*\).*/\1/p'
+}
+
+installed_run_numbers() {  # one core-CD run number per COMPLETE set on the volume
+  local candidate number
+  for candidate in "$VOLUME_ROOT"/sha256-*; do
+    case "$candidate" in *.tmp.*) continue ;; esac
+    [ -d "$candidate" ] || continue
+    [ -f "$candidate/.complete" ] || continue
+    number="$(run_number_of "$(sed -n 's/.*"set"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      "$candidate/platform.json" 2>/dev/null | sed -n 1p)")"
+    [ -n "$number" ] && printf '%s\n' "$number"
+  done
+  return 0
+}
+
+newest_installed() { installed_run_numbers | sort -rn | sed -n 1p; }
+oldest_installed() { installed_run_numbers | sort -n  | sed -n 1p; }
+
+# The refresh pod's scratch directory for THIS digest, or empty. Deliberately a glob loop and not
+# `ls … | head`: under `set -o pipefail` a non-matching `ls` makes the whole command substitution
+# non-zero, and `x="$(…)"` then EXITS the script under `set -e` — a "no install in flight" reading
+# would have killed the shard before it could say anything at all. (Measured while writing this:
+# the refusal printed nothing and exited 1.)
+in_flight() {
+  local candidate
+  for candidate in "$SET_DIR".tmp.*; do
+    if [ -d "$candidate" ]; then basename "$candidate"; return 0; fi
+  done
+  return 0
+}
+
+# 🚨 THE ONE CONDITION. Every wait below is on exactly this and nothing else — not on a duration,
+# not on a retry count. `.complete` is the refresh's publication marker; a directory without it is
+# a half-install whose assemblies may be a mix of two sets.
+set_is_complete() {
+  [ -d "$SET_DIR" ] && [ -f "$SET_DIR/.complete" ] \
+    && [ "$(tr -d '[:space:]' < "$SET_DIR/.complete")" = "$resolved" ]
+}
+
+# A `.complete` that EXISTS and names another digest is corruption, never an arrival — waiting for
+# it could never end, so it is RED the moment it is seen, inside the wait as well as before it.
+refuse_if_marker_disagrees() {
+  local marker
+  [ -f "$SET_DIR/.complete" ] || return 0
+  marker="$(tr -d '[:space:]' < "$SET_DIR/.complete")"
+  [ "$marker" = "$resolved" ] && return 0
+  die "'$SET_DIR/.complete' names '$marker' but this shard asked for '$resolved' — the directory and its marker disagree, which $REFRESH_JOB's write order (extract into <digest>.tmp.<pod>, then rename into place) makes impossible for a completed run. Treat the set as corrupt: delete its .complete so the next refresh rebuilds it in place."
+}
+
+CALLER_RUN="$(run_number_of "$CALLER_SET")"
+SET_LABEL="${CALLER_SET:+set $CALLER_SET (core CD #$CALLER_RUN), }"
+NO_PULL="🚨 This shard does NOT fall back to 'docker pull': a gate that quietly reached the registry would hide a dead refresh job for as long as the registry answers."
+NOT_THE_DIGEST="Do NOT bump the caller's image-digest/platform-image-digest: this run resolved a set that exists and is sealed, and the pin is right."
+
+waited=0
+if ! set_is_complete; then
+  refuse_if_marker_disagrees
+  newest="$(newest_installed)"
+  flight="$(in_flight)"
+  # ARRIVING is an OBSERVATION, not an assumption: either a refresh pod's scratch directory for
+  # exactly this digest, or the set directory itself already renamed into place but not yet marked.
+  if [ -n "$flight" ] || [ -d "$SET_DIR" ]; then
+    reason=arriving
+  elif [ -n "$CALLER_RUN" ] && { [ -z "$newest" ] || [ "$CALLER_RUN" -gt "$newest" ]; }; then
+    # AHEAD also covers an EMPTY volume: nothing complete on it means the refresh has not finished
+    # a run yet, which is the same "the volume has not caught up" family and is waited out the same
+    # way. The timeout message below names it (`#none`) rather than claiming a retention miss.
+    reason=ahead
+  else
+    reason=gone
+  fi
+
+  if [ "$reason" = gone ]; then
+    oldest="$(oldest_installed)"
+    # 🚨 BELOW THE OLDEST KEPT IS GENUINELY AMBIGUOUS and the message says so rather than picking
+    # one. The volume cannot tell "installed once, then purged" from "never installed, because a
+    # newer set sealed first" — both leave exactly no trace. Naming one of them would be the same
+    # mistake this whole change is about; the remedy happens to be the same for both.
+    if [ -n "$CALLER_RUN" ] && [ -n "$oldest" ] && [ "$CALLER_RUN" -lt "$oldest" ]; then
+      die "the platform volume at '$VOLUME_ROOT' does not carry ${SET_LABEL}tester digest ${resolved}, and never will: core CD #$CALLER_RUN is below the OLDEST set kept (#$oldest), and $REFRESH_JOB only ever installs the NEWEST sealed set. Two histories end here and the volume cannot tell them apart: the set was installed and has since been PURGED (it keeps the 3 newest — a pull request following the newest set its own main PASSED outlives that window; Systemorph/Memex#329 asks for those to be kept too), or it was OVERTAKEN before its turn came and was never installed at all. Either way no future refresh will install it: re-run the job so it re-resolves. $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
+    fi
+    if [ -n "$CALLER_RUN" ] && [ -n "$newest" ]; then
+      die "the platform volume at '$VOLUME_ROOT' will never carry ${SET_LABEL}tester digest ${resolved}: the refresh has moved PAST it — the volume's newest set is core CD #$newest and its oldest is #${oldest:-?}, so #$CALLER_RUN is INSIDE the kept window and absent, which means it was overtaken (a newer set sealed before the refresh's next tick) and never installed. $REFRESH_JOB only ever installs the NEWEST sealed set, so no future run will install it. Re-run the job so it resolves a set the volume has. $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
+    fi
+    die "the platform volume at '$VOLUME_ROOT' carries no set for tester digest ${resolved}, and this caller passed no --set (or one carrying no core-CD run number — it got '${CALLER_SET:-}'), so which of the three absences this is cannot be told apart here. $REFRESH_JOB installs the newest SEALED set every 10 minutes and keeps the 3 newest, so a set is absent because it is (1) OLDER than the three kept — re-run to re-resolve; see Systemorph/Memex#329; (2) OVERTAKEN — a newer set sealed before the refresh's next tick and the refresh only takes the newest, so it will never arrive — re-run; or (3) ARRIVING — which this shard waits out on its own and would have said so. Pass --set <3.0.0-ci.N> (the resolver's \`set\` output) to have the three named apart. The volume holds:$(listing). $NO_PULL"
+  fi
+
+  # ── the bounded wait, on the condition itself ───────────────────────────────────────────────
+  if [ "$reason" = arriving ]; then
+    echo "::notice::the set for ${SET_LABEL}tester ${resolved} is INSTALLING right now (${flight:-$SET_DIR}) — waiting up to ${WAIT_SECONDS}s for its .complete. An install takes ~200 s on the share."
+  else
+    echo "::notice::this run resolved ${SET_LABEL}which is NEWER than the volume's newest installed set (core CD #${newest:-unknown}) — the refresh is a 10-minute CronJob and this run was triggered by the seal, so it is ahead of the volume. Waiting up to ${WAIT_SECONDS}s for it to arrive."
+  fi
+  started_waiting="$(date +%s)"
+  deadline=$(( started_waiting + WAIT_SECONDS ))
+  while ! set_is_complete; do
+    refuse_if_marker_disagrees
+    waited=$(( $(date +%s) - started_waiting ))
+    newest="$(newest_installed)"
+    flight="$(in_flight)"
+    # The refresh overtook us WHILE we waited: nothing will ever install this set now, so the wait
+    # ends here rather than at the deadline — the remedy is a re-run, not more patience.
+    if [ -z "$flight" ] && [ ! -d "$SET_DIR" ] && [ -n "$CALLER_RUN" ] && [ -n "$newest" ] \
+       && [ "$newest" -gt "$CALLER_RUN" ]; then
+      die "while this shard waited ${waited}s for ${SET_LABEL}tester ${resolved}, $REFRESH_JOB installed core CD #$newest instead — it only ever takes the NEWEST sealed set, so #$CALLER_RUN was overtaken and will never be installed. Re-run the job so it resolves a set the volume has. $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      if [ "$reason" = arriving ]; then
+        die "the set for ${SET_LABEL}tester digest ${resolved} was INSTALLING when this shard arrived (${flight:-$SET_DIR}) and its .complete did not land within ${waited}s. The digest is right and was merely early, so $NOT_THE_DIGEST An install takes ~200 s on the share, so a wait that runs out means the refresh pod died mid-extract or the share stalled — read that pod's log. $REFRESH_JOB. The volume holds:$(listing). $NO_PULL"
+      fi
+      die "${SET_LABEL}tester digest ${resolved} had not reached the platform volume at '$VOLUME_ROOT' after ${waited}s — the volume's newest installed set is still core CD #${newest:-none}. $REFRESH_JOB is a 10-minute CronJob that takes ~200 s to install, so a run triggered by the seal is ahead of it by design and this shard waits; a wait that runs out means the refresh is not running, is failing, or is further behind than one period. Read that CronJob's last runs. $NOT_THE_DIGEST The volume holds:$(listing). $NO_PULL"
+    fi
+    # SMB has no inotify and the runner's mount caches attributes for 30 s (`actimeo=30`), so the
+    # condition is re-READ on an interval. This is a poll of the condition, not a sleep for time.
+    sleep 10
+  done
+  waited=$(( $(date +%s) - started_waiting ))
+  echo "::notice::${SET_LABEL}tester ${resolved} became complete on the volume after ${waited}s — the shard waited for the refresh instead of failing on a digest that was merely early."
+fi
 [ -f "$SET_DIR/app/mw-plugin-test.dll" ] \
   || die "'$SET_DIR/app' has no mw-plugin-test.dll — that directory is meant to be the TESTER image's /app, and $REFRESH_JOB asserts the same file before it writes .complete. A set that passed that assertion and lacks it now has been damaged on the share."
 [ -f "$SET_DIR/app/mw-plugin-test.runtimeconfig.json" ] \
@@ -224,6 +491,7 @@ if [ -z "$portal_on_volume" ]; then
 fi
 
 emit mode volume
+emit waited "$waited"
 emit dir "$SET_DIR"
 emit tester_app "$SET_DIR/app"
 emit portal_app "$SET_DIR/platform-refs"
