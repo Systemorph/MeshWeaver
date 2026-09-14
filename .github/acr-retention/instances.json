@@ -109,12 +109,12 @@
           {
             "mechanism": "registry garbage-collect (blob GC)",
             "present": false,
-            "verdict": "No Job, no CronJob — the 8 objects rendered under deploy/helm/templates/registry are 2 ConfigMaps, 2 Deployments, 2 Services, an Ingress and a SecretProviderClass — and no invocation anywhere in deploy/ or .github/ (409 files swept 2026-09-14, the sweep pattern proven on a synthetic control first). So blobs are never collected: this is the unbounded-growth half."
+            "verdict": "No Job, no CronJob — the 8 objects rendered under deploy/helm/templates/registry are 2 ConfigMaps, 2 Deployments, 2 Services, an Ingress and a SecretProviderClass — and no invocation anywhere in deploy/ or .github/ (hand sweep 2026-09-14 over all 409 files under deploy/ and .github/; the GATE sweeps the 246 of them that can run a command and names the 3 it skips — two denominators, not one. Both with the pattern proven on a synthetic control first). So blobs are never collected: this is the unbounded-growth half."
           },
           {
-            "mechanism": "an explicit registry DELETE (curl -X DELETE, crane/skopeo/regctl/oras delete, acr repository delete)",
+            "mechanism": "an explicit registry DELETE (HTTP DELETE, or a crane / skopeo / regctl / oras / az-acr-repository deletion)",
             "present": false,
-            "verdict": "Zero callers over the same 409 files. CD only ever PUSHES here — mirror-image-to-registry.sh for images, node-repo-publish-bake.yml for bundles."
+            "verdict": "Zero callers over the same hand sweep. CD only ever PUSHES here — mirror-image-to-registry.sh for images, node-repo-publish-bake.yml for bundles."
           },
           {
             "mechanism": "a non-publisher account deleting",

@@ -28,17 +28,25 @@ second store: **what may be deleted, and what proves something is still needed.*
 ## 1. What deletes today — enumerated, with the denominator
 
 Measured 2026-09-14 (`date -u`) against core `origin/main` `192bb073b8`, read-only throughout: no
-registry call of any kind, no purge, no dry run, no deletion. **409 files** under `deploy/` and
-`.github/` were swept, with the sweep pattern proven to fire on a synthetic control first (a file
-containing each deleter spelling) — a grep that matches nothing is not evidence until it has been
-shown able to match something.
+registry call of any kind, no purge, no dry run, no deletion.
+
+🚨 **Two denominators, and they are different numbers on purpose.** The hand sweep that produced
+this table read **all 409 files** under `deploy/` and `.github/`, every extension included. The
+GATE (§6) sweeps the **246** of them that could actually run a command — `.yml`, `.yaml`, `.sh`,
+`.py`, `.tpl`, `.bicep` — and skips 3 it names: this script, which carries every pattern as a
+literal, and the ACR record, whose job is to name deleters. Neither number is the other's; a reader
+who takes 246 for a shortfall against 409 is reading two sweeps as one.
+
+Both were run with the pattern **proven to fire on a synthetic control first** — a file containing
+each deleter spelling — because a grep that matches nothing is not evidence until it has been shown
+able to match something.
 
 | mechanism | present? | what it could delete | verdict |
 |---|---|---|---|
 | `acr purge` / the two recorded ACR tasks | **cannot reach this host** — `az acr` addresses `meshweaver.azurecr.io` | — | not a deleter here, and this is the fact that makes #4230 a separate question |
 | `maintenance.uploadpurging` (registry `config.yml`) | **YES — enabled**, `age: 168h`, `interval: 24h`, `dryrun: false` | **incomplete upload sessions only** — the `_uploads/` scratch state of a push that never finished | the ONE automatic deletion in this registry, and it can never reach a manifest, a tag or a referenced blob |
 | `registry garbage-collect` (blob GC) | **NO** — no `Job`, no `CronJob`, nothing under `deploy/helm/templates/registry/` (8 rendered objects, none of them a Job) and no invocation anywhere in `deploy/` or `.github/` | unreferenced blobs, permanently | never runs. Storage therefore grows without bound, which is the other half of §1's answer |
-| an explicit registry `DELETE` | **NO CALLER** — zero matches over the 409 files for `-X DELETE`, `crane delete`, `skopeo delete`, `regctl manifest delete`, `oras manifest delete` or `acr repository delete` | any manifest or tag | CD only ever **pushes** here (`mirror-image-to-registry.sh` for images, `node-repo-publish-bake.yml` for bundles) |
+| an explicit registry `DELETE` | **NO CALLER** — zero matches over the 409-file hand sweep for an HTTP DELETE (`-X DELETE`, `-XDELETE`, `--request=DELETE`) or a crane / skopeo / regctl / oras / `az acr repository` deletion | any manifest or tag | CD only ever **pushes** here (`mirror-image-to-registry.sh` for images, `node-repo-publish-bake.yml` for bundles) |
 | anything authenticating as a non-publisher account | **NO** — by the ACL, not by a grep | — | `docker_auth`'s ACL grants `delete` to **exactly one account**, the publisher. Every other authenticated account matches a `pull`-only rule, and anonymous matches no rule at all. An installation holding an instance key **cannot** delete, whatever it asks |
 | an Azure blob lifecycle / management policy on the registry's storage container | **UNVERIFIED** — and that is a state of its own in the record, not a `false` | any blob, including a referenced one | 🚨 **the one remaining unknown, and it is a maintainer read.** The storage account is `registry.storage.accountName`, provisioned outside this chart; `storage.bicep` in this repo is pgBackRest's, not the registry's. See §7 |
 
