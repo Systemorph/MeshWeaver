@@ -154,6 +154,20 @@ public sealed class NodeTypeCompileParkRegistry
         _parked.TryGetValue(nodeTypePath, out var p)
         && !SnapshotEquals(p.Sources, currentSources);
 
+    /// <summary>
+    /// 🚨 #4280 — whether a compile's CONSUMED source snapshot is one the live snapshot has since
+    /// MOVED PAST: the verdict it produced is about a set that no longer exists, so it is re-driven
+    /// at the stamp instead of resting at Error until the next source arrival happens to wake the
+    /// sources watcher (which, when the last arrival preceded the failure write, is never). The
+    /// same equality <see cref="ShouldRetryForSourceChange"/> applies, so the two triggers cannot
+    /// disagree about what "changed" means. A <c>null</c> consumed set — the compile never
+    /// resolved one — is not comparable and answers <c>false</c>: no re-drive off a set nobody
+    /// established (#1216).
+    /// </summary>
+    public static bool SourcesMovedSince(
+        IReadOnlyDictionary<string, long>? consumed, IReadOnlyDictionary<string, long>? live) =>
+        consumed is not null && live is not null && !SnapshotEquals(consumed, live);
+
     /// <summary>Source-snapshot equality treating <c>null</c> and an empty map as equal.</summary>
     private static bool SnapshotEquals(
         IReadOnlyDictionary<string, long>? a, IReadOnlyDictionary<string, long>? b)

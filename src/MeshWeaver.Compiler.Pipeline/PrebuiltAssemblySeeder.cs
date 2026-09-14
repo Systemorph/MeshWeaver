@@ -388,8 +388,27 @@ public static class PrebuiltAssemblySeeder
         IReadOnlyDictionary<string, string>? dependencies,
         string? sourceFingerprint,
         string? moduleVersion)
+        => Seed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
+            sourceFingerprint, moduleVersion, sourcePaths: null);
+
+    /// <summary>
+    /// <see cref="Seed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string, string)"/>
+    /// carrying the bundle's source PATHS as well (MeshWeaver#4280) — see the
+    /// <c>SeedDetailed</c> overload of the same arity.
+    /// </summary>
+    public static IObservable<bool> Seed(
+        IMessageHub hub,
+        string nodeTypePath,
+        byte[] assemblyBytes,
+        byte[]? pdbBytes,
+        string? frameworkMvid,
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint,
+        string? moduleVersion,
+        IReadOnlyList<string>? sourcePaths)
         => SeedDetailed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
-                sourceFingerprint, moduleVersion)
+                sourceFingerprint, moduleVersion, sourcePaths)
             .Select(outcome => outcome is SeedOutcome.Adopted or SeedOutcome.AdoptedStale);
 
     /// <summary>What <see cref="DecideAfterStaleDecline"/> concluded for one declined entry.</summary>
@@ -572,6 +591,28 @@ public static class PrebuiltAssemblySeeder
         IReadOnlyDictionary<string, string>? dependencies,
         string? sourceFingerprint,
         string? moduleVersion)
+        => SeedDetailed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
+            sourceFingerprint, moduleVersion, sourcePaths: null);
+
+    /// <summary>
+    /// <see cref="SeedDetailed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string, string)"/>
+    /// carrying the bundle's source PATHS as well (MeshWeaver#4280) — the key set of the manifest's
+    /// <c>sourceVersions</c>, stamped as <see cref="NodeTypeDefinition.AdoptedSourcePaths"/> so
+    /// the owner can tell a live set that MOVED past the bundle from one still ARRIVING, and read
+    /// here by the pre-write decline for the same distinction. Null from a producer that recorded
+    /// none — the judgement then rests on the fingerprint alone, exactly as before.
+    /// </summary>
+    public static IObservable<SeedOutcome> SeedDetailed(
+        IMessageHub hub,
+        string nodeTypePath,
+        byte[] assemblyBytes,
+        byte[]? pdbBytes,
+        string? frameworkMvid,
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint,
+        string? moduleVersion,
+        IReadOnlyList<string>? sourcePaths)
     {
         // 🚨 THE GATE. FrameworkVersion is the resolved framework build identity — a content/
         // surface identity, not a version string — and the assembly-store key carries the first
@@ -663,7 +704,7 @@ public static class PrebuiltAssemblySeeder
                 .Take(1)
                 .SelectMany(node => SeedObserved(
                     hub, workspace, node!, nodeTypePath, assemblyBytes, pdbBytes, logger,
-                    dependencies, sourceFingerprint, moduleVersion)));
+                    dependencies, sourceFingerprint, moduleVersion, sourcePaths)));
         });
     }
 
@@ -679,7 +720,8 @@ public static class PrebuiltAssemblySeeder
         ILogger? logger,
         IReadOnlyDictionary<string, string>? dependencies,
         string? sourceFingerprint,
-        string? moduleVersion)
+        string? moduleVersion,
+        IReadOnlyList<string>? sourcePaths)
     {
         var observed = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
         if (observed is null)
@@ -729,10 +771,16 @@ public static class PrebuiltAssemblySeeder
         // nothing — the owner's own check (ApplyAdoptedSourceStamp) leaves the stamp request
         // standing and re-judges on the sources watcher's next publication.
         var store = hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
+        //
+        // 🚨 #4280 — and "established" now also means COMPLETE. The bundle names the paths it was
+        // built from; while the live snapshot is short of any of them the install is still
+        // writing, and a fingerprint taken over 8 of 14 files is not a measurement of staleness.
+        // Same deferral as #4208's, one step further — the owner re-judges on the publication
+        // that carries the last arrival.
         if (sourceFingerprint is { Length: > 0 } producerFingerprint
             && observed.CurrentSourceFingerprint is { Length: > 0 } liveFingerprint
             && NodeTypeCompilationHelpers.CanJudgeAdoption(
-                producerFingerprint, liveFingerprint, observed.CurrentSourceVersions)
+                producerFingerprint, liveFingerprint, observed.CurrentSourceVersions, sourcePaths)
             && !string.Equals(producerFingerprint, liveFingerprint, StringComparison.Ordinal))
         {
             var verdict = ModuleVersionCompatibility.Classify(moduleVersion, observed.CurrentModuleVersion);
@@ -771,16 +819,32 @@ public static class PrebuiltAssemblySeeder
         if (sourceFingerprint is { Length: > 0 } deferred
             && observed.CurrentSourceFingerprint is { Length: > 0 } unjudged
             && !NodeTypeCompilationHelpers.CanJudgeAdoption(
-                deferred, unjudged, observed.CurrentSourceVersions)
+                deferred, unjudged, observed.CurrentSourceVersions, sourcePaths)
             && !string.Equals(deferred, unjudged, StringComparison.Ordinal))
-            logger?.LogWarning(
-                "Prebuilt assembly for {NodeTypePath}: the bundle records source fingerprint "
-                + "{Producer} and this mesh's live fingerprint is {Live}, but NOT ONE of the type's "
-                + "declared source queries has matched a node here yet (#4208). That is not a "
-                + "disagreement about the source, it is the absence of a source set to disagree "
-                + "with, so the bundle is ADOPTED and the owner defers its judgement until the "
-                + "sources land.",
-                nodeTypePath, deferred, unjudged);
+        {
+            var notYetLive = NodeTypeCompilationHelpers.SourcePathsNotYetLive(
+                sourcePaths, observed.CurrentSourceVersions);
+            if (observed.CurrentSourceVersions is { Count: > 0 } partial && notYetLive.Count > 0)
+                logger?.LogWarning(
+                    "Prebuilt assembly for {NodeTypePath}: the bundle records source fingerprint "
+                    + "{Producer} and this mesh's live fingerprint is {Live}, but the live set holds "
+                    + "{LiveCount} source(s) and {Missing} of the {Declared} the bundle was built from "
+                    + "have not landed here yet (#4280): {Paths}. That is an install still writing, "
+                    + "not a disagreement about the source, so the bundle is ADOPTED and the owner "
+                    + "defers its judgement until the last of them lands.",
+                    nodeTypePath, deferred, unjudged, partial.Count, notYetLive.Count,
+                    sourcePaths!.Count,
+                    string.Join(", ", notYetLive.Take(6)) + (notYetLive.Count > 6 ? ", …" : ""));
+            else
+                logger?.LogWarning(
+                    "Prebuilt assembly for {NodeTypePath}: the bundle records source fingerprint "
+                    + "{Producer} and this mesh's live fingerprint is {Live}, but NOT ONE of the type's "
+                    + "declared source queries has matched a node here yet (#4208). That is not a "
+                    + "disagreement about the source, it is the absence of a source set to disagree "
+                    + "with, so the bundle is ADOPTED and the owner defers its judgement until the "
+                    + "sources land.",
+                    nodeTypePath, deferred, unjudged);
+        }
 
         return Write(SeedOutcome.Adopted);
 
@@ -872,6 +936,13 @@ public static class PrebuiltAssemblySeeder
                             // match: the owner then records AdoptedUnverified rather
                             // than AdoptedVerified.
                             AdoptedSourceFingerprint = sourceFingerprint,
+                            // #4280 — WHICH sources, so the owner can tell a live set that has
+                            // not finished arriving from one that moved. Null (a producer that
+                            // recorded no snapshot) is carried as null: the owner then judges on
+                            // the fingerprint alone.
+                            AdoptedSourcePaths = sourcePaths is { Count: > 0 }
+                                ? sourcePaths.ToImmutableList()
+                                : null,
                             // #3583 — the module version these bytes were released at, for the
                             // compatibility rule the owner applies when the source later moves.
                             // Null from a producer that recorded none is carried as null: the

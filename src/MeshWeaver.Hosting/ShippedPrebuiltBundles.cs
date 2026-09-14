@@ -1343,7 +1343,10 @@ public static class ShippedPrebuiltBundles
                                 : a.Dependencies,
                             a.SourceFingerprint,
                             // #3583 — the manifest's released SemVer, for the owner's compatibility rule.
-                            moduleVersion)
+                            moduleVersion,
+                            // #4280 — the paths the bytes were built from, for the owner's
+                            // arriving-vs-moved distinction.
+                            a.SourcePaths)
                         .Take(1)
                         .Timeout(SeedBudget)
                         .Do(outcome =>

@@ -128,6 +128,11 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.AdoptedSourceFingerprint"/>.</summary>
     public string? AdoptedSourceFingerprint { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.AdoptedSourcePaths"/> — the source paths the
+    /// adopted bytes were built from (#4280). Mirrored for the same reason as the fingerprint
+    /// beside it.</summary>
+    public System.Collections.Immutable.ImmutableList<string>? AdoptedSourcePaths { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.CurrentModuleVersion"/> — the module version of
     /// the source this mesh HOLDS. Mirrored for the same reason as the pair beside it.</summary>
     public string? CurrentModuleVersion { get; init; }
@@ -178,6 +183,7 @@ public record NodeTypeCompileState
                 FailedBuildInputs = definition.FailedBuildInputs,
                 FailedSourceQueries = definition.FailedSourceQueries,
                 AdoptedSourceFingerprint = definition.AdoptedSourceFingerprint,
+                AdoptedSourcePaths = definition.AdoptedSourcePaths,
                 AdoptedModuleVersion = definition.AdoptedModuleVersion,
                 CurrentModuleVersion = definition.CurrentModuleVersion,
                 CurrentSourceFingerprint = definition.CurrentSourceFingerprint,
@@ -198,7 +204,8 @@ public record NodeTypeCompileState
         && RequestedSourceStampAt is null
         && CompiledFrameworkVersion is null && FailedBuildInputs is null
         && FailedSourceQueries is null
-        && AdoptedSourceFingerprint is null && AdoptedModuleVersion is null
+        && AdoptedSourceFingerprint is null && AdoptedSourcePaths is null
+        && AdoptedModuleVersion is null
         && CurrentModuleVersion is null
         && CurrentSourceFingerprint is null
         && BuildProvenance is Mesh.Services.BuildProvenance.Compiled;

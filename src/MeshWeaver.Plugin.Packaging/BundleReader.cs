@@ -92,6 +92,17 @@ public static class BundleReader
         /// a public record's constructor signature and is a binary break across the fleet.</para>
         /// </summary>
         public string? SourceFingerprint { get; init; }
+
+        /// <summary>
+        /// The producer's source snapshot for these bytes — <c>BundleWriter.AssemblyEntry.SourceVersions</c>,
+        /// Code-node path → version ticks. The VALUES are meaningless to a consumer (the tree bake
+        /// writes zeros; a mesh producer's ticks are its own clock) and were skipped by every
+        /// reader until MeshWeaver#4280; the KEY SET is the provenance — which source nodes the
+        /// compile consumed — and is what <see cref="Payload.SourcePaths"/> carries to the seeder.
+        /// Null for a producer that recorded none. An INIT property for the same binary-break
+        /// reason as <see cref="SourceFingerprint"/>.
+        /// </summary>
+        public IReadOnlyDictionary<string, long>? SourceVersions { get; init; }
     }
 
     /// <summary>The bundle's compiled-module declaration.</summary>
@@ -173,6 +184,19 @@ public static class BundleReader
         /// <see cref="AssemblyRef.SourceFingerprint"/>.</para>
         /// </summary>
         public string? SourceFingerprint { get; init; }
+
+        /// <summary>
+        /// 🚨 The source-node PATHS these bytes were compiled from — the key set of the manifest's
+        /// <c>sourceVersions</c>, sorted ordinal (MeshWeaver#4280). Carried to
+        /// <c>PrebuiltAssemblySeeder.Seed</c> and stamped as
+        /// <c>NodeTypeDefinition.AdoptedSourcePaths</c> so the owner can tell a live source set
+        /// that has MOVED past the bundle from one that has not finished ARRIVING: while a path the
+        /// bundle was built from is not on the mesh yet, a differing live fingerprint is not a
+        /// measurement of staleness, it is a snapshot of an install in flight. Null for a legacy
+        /// bundle whose producer recorded no snapshot — the owner then judges on the fingerprint
+        /// alone, exactly as before.
+        /// </summary>
+        public IReadOnlyList<string>? SourcePaths { get; init; }
     }
 
     /// <summary>
@@ -249,6 +273,11 @@ public static class BundleReader
                 // consumer unable to tell a current adoption from a stale one, which is exactly
                 // the state this mechanism sat in while it looked implemented.
                 SourceFingerprint = reference.SourceFingerprint,
+                // #4280 — the key set of the producer's snapshot, so the owner can defer its
+                // judgement while any of these has not landed on the mesh yet.
+                SourcePaths = reference.SourceVersions is { Count: > 0 } versions
+                    ? versions.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList()
+                    : null,
             });
         }
 

@@ -1186,6 +1186,29 @@ internal static class NodeTypeCompilationHelpers
     /// the type on every judgement attempt. The alternative — refusing on an absence — is what
     /// #4208 measured: a compile against nothing, CS0246s about correct code, and a parked type.
     /// </para>
+    ///
+    /// <para>🚨 <b>#4280 — the same deferral one step further: a PARTIAL live set.</b> The empty
+    /// witness above covers a type activated before ANY of its sources landed; the Reinsurance
+    /// gate (run 34804118498) measured the type activated 1.7 s into a 6.7 s install, with 8 of
+    /// the 14 files its bundle names on the mesh. Every declared query had matched something, so
+    /// the snapshot witness said "judgeable", the fingerprints disagreed (of course — six files
+    /// short), the build went StaleAdopted and a compile of the 8-file set was dispatched, failed
+    /// CS0246 on names declared in the six still landing, and parked. The affected set was a
+    /// different one on every run, and included types the repo does not own: an install-order
+    /// race, not a property of any type. So the bundle now carries the PATHS it was built from
+    /// (<see cref="NodeTypeDefinition.AdoptedSourcePaths"/>), and while any of them is absent
+    /// from the live snapshot the judgement is deferred exactly as the empty case is: the request
+    /// stays standing, the next publication — the one carrying the last arrival — judges it, and
+    /// nothing is dispatched off a set still being written.</para>
+    ///
+    /// <para><b>Its residue, also named.</b> A path DELETED upstream after the bundle was baked is
+    /// absent from the live set forever, so from here the judgement defers for as long as that
+    /// bundle stands. It is bounded by the install's own release request: that fold re-judges
+    /// after the install completes and, on a mesh that compiles module content, an
+    /// <c>IsDirty</c> record compiles the live (complete) set and replaces the adopted build; on
+    /// a mesh that does not, the adopted build keeps serving as it would have as StaleAdopted —
+    /// the same bytes, minus the notification — until the bundle for the commit that deleted the
+    /// file arrives, which names a set the live one covers.</para>
     /// </summary>
     /// <param name="def">The owner's own definition.</param>
     /// <param name="liveSources">The live source snapshot to judge against — the value
@@ -1194,7 +1217,28 @@ internal static class NodeTypeCompilationHelpers
     internal static bool CanJudgeAdoption(
         NodeTypeDefinition def, IReadOnlyDictionary<string, long>? liveSources)
         => CanJudgeAdoption(
-            def.AdoptedSourceFingerprint, def.CurrentSourceFingerprint, liveSources);
+            def.AdoptedSourceFingerprint, def.CurrentSourceFingerprint, liveSources,
+            def.AdoptedSourcePaths);
+
+    /// <summary>
+    /// 🚨 #4280 — the source paths the adopted bytes were built from that the live snapshot does
+    /// NOT hold yet: the set that makes a differing fingerprint an install in flight rather than a
+    /// measurement. Empty when the bundle recorded no paths (a legacy producer — nothing to wait
+    /// for) or when every path is present. Ordinal-ignore-case on the path, the same equivalence
+    /// <c>NodeCompileShaping.CollectCompileSources</c> deduplicates on, so a producer and a
+    /// consumer that spell a path differently cannot hold each other hostage.
+    /// </summary>
+    internal static IReadOnlyList<string> SourcePathsNotYetLive(
+        IReadOnlyCollection<string>? adoptedSourcePaths,
+        IReadOnlyDictionary<string, long>? liveSources)
+    {
+        if (adoptedSourcePaths is not { Count: > 0 })
+            return [];
+        if (liveSources is not { Count: > 0 })
+            return adoptedSourcePaths.ToList();
+        var live = new HashSet<string>(liveSources.Keys, StringComparer.OrdinalIgnoreCase);
+        return adoptedSourcePaths.Where(p => !live.Contains(p)).ToList();
+    }
 
     /// <summary>
     /// <see cref="CanJudgeAdoption(NodeTypeDefinition, IReadOnlyDictionary{string, long})"/> for a
@@ -1214,13 +1258,32 @@ internal static class NodeTypeCompilationHelpers
         string? adoptedFingerprint,
         string? liveFingerprint,
         IReadOnlyDictionary<string, long>? liveSources)
+        => CanJudgeAdoption(adoptedFingerprint, liveFingerprint, liveSources, adoptedSourcePaths: null);
+
+    /// <summary>
+    /// <see cref="CanJudgeAdoption(string, string, IReadOnlyDictionary{string, long})"/> with the
+    /// producer's source PATHS as the third witness (#4280): a live set that is short of a path
+    /// the bundle was built from is still ARRIVING, and the judgement waits for it. Null paths —
+    /// a legacy producer — fall back to the two-witness rule unchanged.
+    /// </summary>
+    internal static bool CanJudgeAdoption(
+        string? adoptedFingerprint,
+        string? liveFingerprint,
+        IReadOnlyDictionary<string, long>? liveSources,
+        IReadOnlyCollection<string>? adoptedSourcePaths)
     {
         if (adoptedFingerprint is not { Length: > 0 } adopted)
             return true;
         if (liveFingerprint is not { Length: > 0 } live)
             return false;
-        return string.Equals(adopted, live, StringComparison.Ordinal)
-               || liveSources is { Count: > 0 };
+        if (string.Equals(adopted, live, StringComparison.Ordinal))
+            return true;
+        if (liveSources is not { Count: > 0 })
+            return false;
+        // #4280 — the fingerprints differ and something matched: was the live set COMPLETE when
+        // it was measured? Ordered after the equality check for the same reason the empty
+        // witness is — an honest match is an honest match whatever the paths say.
+        return SourcePathsNotYetLive(adoptedSourcePaths, liveSources).Count == 0;
     }
 
     /// <summary>
@@ -1511,21 +1574,30 @@ internal static class NodeTypeCompilationHelpers
         // says a NodeType was activated ahead of the sources it declares.
         if (!CanJudgeAdoption(def, snapshot))
         {
+            var notYetLive = SourcePathsNotYetLive(def.AdoptedSourcePaths, snapshot);
             logger?.LogWarning(
-                "[AdoptedSourceStamp] {HubPath}: the adoption is NOT judged yet (#4208) — the "
+                "[AdoptedSourceStamp] {HubPath}: the adoption is NOT judged yet ({Issue}) — the "
                 + "bundle records source fingerprint {Adopted}, and there is NOTHING established to "
                 + "compare it against: {Reason} (live fingerprint {Live}). The stamp request is left "
                 + "STANDING and the adopted build keeps serving; the sources watcher's next "
                 + "publication judges it. Nothing is wrong with this type — it was activated ahead "
                 + "of the sources it declares.",
-                hubPath, def.AdoptedSourceFingerprint,
+                hubPath,
+                notYetLive.Count > 0 && snapshot is { Count: > 0 } ? "#4280" : "#4208",
+                def.AdoptedSourceFingerprint,
                 def.CurrentSourceFingerprint is not { Length: > 0 }
                     ? "the owner has not published a live fingerprint yet"
-                    : "not one of its declared source queries has matched a node on this mesh"
-                      + (NodeTypeSourceFingerprint.EmptySourceSet.Equals(
-                             def.CurrentSourceFingerprint, StringComparison.Ordinal)
-                          ? ", and the live fingerprint is the EMPTY fold"
-                          : ""),
+                    : snapshot is { Count: > 0 } && notYetLive.Count > 0
+                        ? $"the live set holds {snapshot.Count} source(s) but {notYetLive.Count} of "
+                          + $"the {def.AdoptedSourcePaths!.Count} the bundle was built from have not "
+                          + $"landed on this mesh yet — the install is still writing them: "
+                          + string.Join(", ", notYetLive.Take(6))
+                          + (notYetLive.Count > 6 ? ", …" : "")
+                        : "not one of its declared source queries has matched a node on this mesh"
+                          + (NodeTypeSourceFingerprint.EmptySourceSet.Equals(
+                                 def.CurrentSourceFingerprint, StringComparison.Ordinal)
+                              ? ", and the live fingerprint is the EMPTY fold"
+                              : ""),
                 def.CurrentSourceFingerprint ?? "(not computed)");
             return def;
         }
@@ -4359,13 +4431,57 @@ internal static class NodeTypeCompilationHelpers
                         logger?.LogWarning(outcome.Error,
                             "Compile failure for {HubPath}: {Error}", hubPath,
                             SummarizeCompileError(outcome.Result, outcome.Error));
-                        return curr with
+                        var modulesHashNow = hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash;
+                        var failed = ApplyCompileFailure(
+                            def, outcome.Result, outcome.Error, resolvedActivityPath,
+                            modulesHashNow, hubPath);
+
+                        // 🚨 #4280 — A VERDICT ABOUT A SOURCE SET THAT NO LONGER EXISTS IS NOT A
+                        // VERDICT. `def` here is the node as it is being committed against, so
+                        // CurrentSourceVersions is the LIVE set at the instant of this write; the
+                        // result's CompiledSources is the set Roslyn was handed. When the two differ
+                        // the sources moved DURING the compile — a package install still writing
+                        // its Source/ siblings (measured: a compile dispatched 1.7 s into a 6.7 s
+                        // install, 8 of 14 files, CS0246 on names declared in the other six) — and
+                        // the diagnostics describe code nothing is wrong with. The sources
+                        // watcher's parked auto-retry covers this ONLY when a further arrival lands
+                        // after this write; when the last one landed between the compile's snapshot
+                        // and this stamp, nothing re-drives, the type rests at Error, and a gate
+                        // that takes the first terminal status reads a red that the same process
+                        // would have cleared. So the retry the watcher would have made is made
+                        // HERE, in the same write: un-park first (in-memory, happens-before the
+                        // Pending emission the compile watcher observes — the watcher's own order),
+                        // then Pending through the one door with the live set stamped. The failure
+                        // is still recorded in full (diagnostics, FailedBuildInputs over the
+                        // consumed set) — it is not hidden, it is not final. An availability
+                        // non-verdict is excluded: it never parks and has its own re-drive.
+                        // Bounded by construction: every re-drive needs a live set that differs
+                        // from the one just consumed, so a type whose sources have stopped moving
+                        // parks on its next failure exactly as before.
+                        if (!IsAvailabilityNonVerdict(outcome.Error)
+                            && NodeTypeCompileParkRegistry.SourcesMovedSince(
+                                outcome.Result?.CompiledSources, def.CurrentSourceVersions))
                         {
-                            Content = ApplyCompileFailure(
-                                def, outcome.Result, outcome.Error, resolvedActivityPath,
-                                hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
-                                hubPath)
-                        };
+                            var consumedCount = outcome.Result!.CompiledSources!.Count;
+                            var liveCount = def.CurrentSourceVersions!.Count;
+                            logger?.LogWarning(
+                                "Compile failure for {HubPath} was formed under a source set the live one "
+                                + "has MOVED PAST (#4280): Roslyn was handed {Consumed} source(s), the mesh "
+                                + "now holds {Live} — the sources were still landing while it compiled. "
+                                + "The failure is recorded and NOT left standing: the type is re-driven "
+                                + "against the live set in this same write, as the sources watcher would "
+                                + "have done had one more source arrived after the verdict.",
+                                hubPath, consumedCount, liveCount);
+                            // Idempotent, so a re-run of this lambda on a version conflict is safe
+                            // (the retried lambda re-derives the same decision from the same facts).
+                            parkRegistry?.Unpark(hubPath);
+                            return curr with
+                            {
+                                Content = DispatchPending(failed, modulesHashNow, def.CurrentSourceVersions),
+                            };
+                        }
+
+                        return curr with { Content = failed };
                     })
                     .Do(saved =>
                     {

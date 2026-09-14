@@ -590,6 +590,30 @@ public record NodeTypeDefinition
     public string? AdoptedSourceFingerprint { get; init; }
 
     /// <summary>
+    /// The source-node PATHS the PRODUCER compiled the adopted bytes from — the key set of the
+    /// bundle manifest's <c>sourceVersions</c> (MeshWeaver#4280). Written by
+    /// <c>PrebuiltAssemblySeeder.Seed</c> beside <see cref="AdoptedSourceFingerprint"/>; null for
+    /// a locally-compiled build and for a bundle whose producer recorded no snapshot.
+    ///
+    /// <para>🚨 <b>What it decides: whether a differing live fingerprint is a MEASUREMENT.</b>
+    /// A package installs its Source/ siblings one file at a time, and the sources watcher
+    /// publishes <see cref="CurrentSourceVersions"/> on every arrival — so a NodeType adopted 1.7 s
+    /// into a 6.7 s install has its adoption judged against 8 of the 14 files its bundle names.
+    /// The fingerprints disagree, of course; that disagreement says nothing about staleness. The
+    /// owner (<c>NodeTypeCompilationHelpers.CanJudgeAdoption</c>) therefore defers the judgement
+    /// while ANY path listed here is absent from the live set, leaving the stamp request standing
+    /// for the publication that carries the last arrival — the same shape as the #4208 deferral on
+    /// an EMPTY live set, one step further. Measured on MeshWeaver.Reinsurance run 34804118498:
+    /// a premature compile of the 8-file set failed CS0246 on names declared in the 6 files still
+    /// landing, and the type was parked on a verdict about code nothing was wrong with.</para>
+    ///
+    /// <para>Operational, never authored — stripped on export, preserved from the live node on
+    /// import — for the same reason the fingerprint is: an authored list would let a repo file
+    /// hold its own adoption unjudged.</para>
+    /// </summary>
+    public ImmutableList<string>? AdoptedSourcePaths { get; init; }
+
+    /// <summary>
     /// Content fingerprint of the LIVE source set — the same
     /// <see cref="Mesh.PartitionSourceFingerprint"/> shape as
     /// <see cref="AdoptedSourceFingerprint"/>, computed over this NodeType's own Code/Test nodes
