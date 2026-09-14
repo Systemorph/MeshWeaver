@@ -1182,6 +1182,13 @@ public static class CatalogLayoutAreas
         var recordPath = $"{PackageInstaller.InstalledPartition}/{pkg.Id}";
         return persistence.Read(recordPath, hub.JsonSerializerOptions)
             .Take(1)
+            // 🚨 DefaultIfEmpty, and it is load-bearing. A read that COMPLETES WITHOUT EMITTING
+            // would make the SelectMany below produce nothing, and the caller's install result —
+            // which this method only passes through — would be swallowed. That is a worse failure
+            // than the fault this method already catches: the install would have run and its
+            // observable would simply never emit. An absent record is a value here (null → the
+            // Undeclared verdict, reported at Warning as "NOT verified"), never a silence.
+            .DefaultIfEmpty()
             .Select(n => n?.ContentAs<PackageManifest>(hub.JsonSerializerOptions))
             // A record that cannot be read yields the Undeclared verdict below, which reports at
             // Warning as "NOT verified" — never as a pass, and never as a shortfall.
