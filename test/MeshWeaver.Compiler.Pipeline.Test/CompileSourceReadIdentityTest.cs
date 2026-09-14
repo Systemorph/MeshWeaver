@@ -26,7 +26,7 @@ public class CompileSourceReadIdentityTest(ITestOutputHelper output) : MonolithM
         var path = "type/CompileReadIdentity" + Guid.NewGuid().ToString("N");
         await Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateNode(MeshNode.FromPath(path) with
             { NodeType = "Markdown", Content = "Compiler read identity probe" })
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         var compiler = Mesh.ServiceProvider.GetRequiredService<IMeshNodeCompilationService>();
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         using var caller = access.SwitchAccessContext(new AccessContext
@@ -55,7 +55,7 @@ public class CompileSourceReadIdentityTest(ITestOutputHelper output) : MonolithM
         using var subscription = read.Select(node => (node, access.Context?.ObjectId)).Subscribe(outcome);
         access.Context?.ObjectId.Should().Be("compile-read-caller",
             "the synchronous Subscribe must close the infrastructure identity on this flow");
-        var result = await outcome.Should().Within(TestTimeouts.Convergence).Emit();
+        var result = await outcome.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         result.Node.Should().NotBeNull("the scoped infrastructure read still has to reach the node");
         result.Node!.Path.Should().Be(path);
         result.Identity.Should().Be("compile-read-caller",

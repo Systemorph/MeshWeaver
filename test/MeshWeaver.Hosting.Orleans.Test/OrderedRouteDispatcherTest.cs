@@ -56,23 +56,23 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
             dispatcher.Enqueue(Destination, GatedLeg(i, starts, gates[i]), () => { });
 
         // Leg 0 starts…
-        (await starts.Take(1).Timeout(10.Seconds()).Await()).Should().Be(0);
+        (await starts.Take(1).Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken)).Should().Be(0);
 
         // …and NOTHING else does while leg 0 is still in flight. No positive signal exists for
         // "the second leg did not start", so the bounded absence IS the assertion.
         await Assert.ThrowsAsync<TimeoutException>(() =>
-            starts.Skip(1).Take(1).Timeout(1.Seconds()).Await());
+            starts.Skip(1).Take(1).Timeout(1.Seconds()).Await(TestContext.Current.CancellationToken));
 
         for (var i = 0; i < gates.Length - 1; i++)
         {
             gates[i].OnNext(Unit.Default);
             gates[i].OnCompleted();
-            (await starts.Skip(i + 1).Take(1).Timeout(10.Seconds()).Await()).Should().Be(i + 1,
+            (await starts.Skip(i + 1).Take(1).Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken)).Should().Be(i + 1,
                 "each leg is subscribed only after the one ahead of it has completed, in arrival order");
         }
 
         gates[^1].OnCompleted();
-        var order = await starts.Take(3).ToList().Timeout(10.Seconds()).Await();
+        var order = await starts.Take(3).ToList().Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken);
         order.Should().Equal([0, 1, 2], "the destination's FIFO must preserve the routing grain's arrival order");
     }
 
@@ -88,7 +88,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
         dispatcher.Enqueue(Destination, GatedLeg(0, starts, blocked), () => { });
         dispatcher.Enqueue(OtherDestination, GatedLeg(1, starts, free), () => { });
 
-        var seen = await starts.Take(2).ToList().Timeout(10.Seconds()).Await();
+        var seen = await starts.Take(2).ToList().Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken);
         seen.Should().Contain(1,
             "a stalled destination must not hold up any other destination's routing");
         seen.Should().HaveCount(2);
@@ -107,10 +107,10 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
         var completed = new Subject<Unit>();
 
         dispatcher.Enqueue(Destination, GatedLeg(0, starts, gate), () => completed.OnNext(Unit.Default));
-        await starts.Take(1).Timeout(10.Seconds()).Await();
+        await starts.Take(1).Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken);
         dispatcher.ActiveDestinations.Should().Be(1);
 
-        var drained = completed.Take(1).Timeout(10.Seconds()).Await();
+        var drained = completed.Take(1).Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken);
         gate.OnCompleted();
         await drained;
 
@@ -121,7 +121,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
             .Where(count => count == 0)
             .FirstAsync()
             .Timeout(10.Seconds())
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         released.Should().Be(0,
             "a destination holds a FIFO entry only while it has work in flight — a silo that has "
             + "served millions of short-lived portal/{user} addresses must retain none of them");
@@ -144,7 +144,7 @@ public class OrderedRouteDispatcherTest(ITestOutputHelper output) : TestBase(out
             subscriptions.Add(pool.SubscribeThroughPool(GatedLeg(i, starts, gates[i]))
                 .Subscribe(_ => { }, _ => { }));
 
-        var seen = await starts.Take(3).ToList().Timeout(10.Seconds()).Await();
+        var seen = await starts.Take(3).ToList().Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken);
         seen.Should().HaveCount(3,
             "the unordered dispatch subscribes all three legs even though none has completed — "
             + "there is no per-destination ordering, which is the defect OrderedRouteDispatcher fixes");

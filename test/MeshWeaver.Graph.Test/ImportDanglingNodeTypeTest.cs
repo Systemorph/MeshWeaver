@@ -138,7 +138,7 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
                 Root = Space(partition),
                 Nodes = [Instance(partition, "Thing", "Markdown")],
             })
-            .FirstAsync().Timeout(180.Seconds()).Await();
+            .FirstAsync().Timeout(180.Seconds()).Await(TestContext.Current.CancellationToken);
         first.Failed.Should().Be(0, "the fixture import must land cleanly");
         first.Outcome.Should().Be("Imported");
 
@@ -150,7 +150,7 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
                 Root = Space(partition),
                 Nodes = [Instance(partition, "Thing", foreignType)],
             })
-            .FirstAsync().Timeout(180.Seconds()).Await();
+            .FirstAsync().Timeout(180.Seconds()).Await(TestContext.Current.CancellationToken);
 
         Output.WriteLine(
             $"outcome={second.Outcome} failed={second.Failed} written=[{string.Join(", ", second.WrittenPaths)}]");
@@ -203,13 +203,13 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
                 Root = Space(partition),
                 Nodes = [TypeNode(partition, "Widget"), Page(partition, "Doc")],
             })
-            .FirstAsync().Timeout(180.Seconds()).Await();
+            .FirstAsync().Timeout(180.Seconds()).Await(TestContext.Current.CancellationToken);
         first.Failed.Should().Be(0);
 
         // 2. An instance of it lands in a DIFFERENT partition — a user's data, which is exactly
         //    what a package retirement cannot see and must not silently break.
         await meshService.CreateNode(Instance(TestPartition, instanceId, typePath))
-            .Take(1).Should().Within(60.Seconds()).Emit("the instance must exist before the prune");
+            .Take(1).Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit("the instance must exist before the prune");
         await WaitForInstanceListing(typePath, instancePath, present: true);
 
         var attemptsBefore = await AttemptPaths(partition);
@@ -221,7 +221,7 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
             Nodes = [Page(partition, "Doc")],
         };
         var second = await StaticRepoImporter.ImportSource(Mesh, retired)
-            .FirstAsync().Timeout(180.Seconds()).Await();
+            .FirstAsync().Timeout(180.Seconds()).Await(TestContext.Current.CancellationToken);
 
         Output.WriteLine(
             $"outcome={second.Outcome} pruned=[{string.Join(", ", second.PrunedPaths)}] "
@@ -241,7 +241,7 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
         var definition = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.PendingRetirement
                 is { Length: > 0 })
-            .FirstAsync().Timeout(60.Seconds()).Await();
+            .FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
         var stamp = definition.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!.PendingRetirement!;
         Output.WriteLine($"PendingRetirement = {stamp}");
         stamp.Should().Contain(instancePath,
@@ -249,7 +249,7 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
 
         // The instance is still readable — it was the point.
         var instance = await Mesh.GetWorkspace().GetMeshNodeStream(instancePath)
-            .Take(1).Timeout(60.Seconds()).Await();
+            .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
         instance.NodeType.Should().Be(typePath);
 
         var report = await TerminalSummary(partition, attemptsBefore);
@@ -262,11 +262,11 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
         // 4. The instance is retyped/deleted — here, deleted — and the SAME content completes the
         //    retirement on the next run. The prior run's marker was not green, so nothing skips.
         await meshService.DeleteNode(instancePath)
-            .Take(1).Should().Within(60.Seconds()).Emit("the instance must be gone before the re-run");
+            .Take(1).Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit("the instance must be gone before the re-run");
         await WaitForInstanceListing(typePath, instancePath, present: false);
 
         var third = await StaticRepoImporter.ImportSource(Mesh, retired)
-            .FirstAsync().Timeout(180.Seconds()).Await();
+            .FirstAsync().Timeout(180.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine(
             $"outcome={third.Outcome} pruned=[{string.Join(", ", third.PrunedPaths)}] "
             + $"held=[{string.Join(", ", third.HeldNodeTypePaths)}]");
@@ -294,7 +294,7 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
                 Root = Space(partition),
                 Nodes = [TypeNode(partition, "Widget"), Page(partition, "Doc")],
             })
-            .FirstAsync().Timeout(180.Seconds()).Await();
+            .FirstAsync().Timeout(180.Seconds()).Await(TestContext.Current.CancellationToken);
         first.Failed.Should().Be(0);
 
         var second = await StaticRepoImporter
@@ -303,7 +303,7 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
                 Root = Space(partition),
                 Nodes = [Page(partition, "Doc")],
             })
-            .FirstAsync().Timeout(180.Seconds()).Await();
+            .FirstAsync().Timeout(180.Seconds()).Await(TestContext.Current.CancellationToken);
 
         Output.WriteLine(
             $"outcome={second.Outcome} pruned=[{string.Join(", ", second.PrunedPaths)}] "

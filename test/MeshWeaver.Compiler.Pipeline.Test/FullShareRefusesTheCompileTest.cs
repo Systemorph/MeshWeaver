@@ -84,10 +84,10 @@ public class FullShareRefusesTheCompileTest(ITestOutputHelper output) : Monolith
                         """,
                 },
             }))
-            .Should().Within(60.Seconds()).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit();
 
         var settled = await Mesh.GetMeshNodeStream(TypePath)
-            .Should().Within(120.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(120.Seconds())
             .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
                 is { CompilationStatus: CompilationStatus.Ok or CompilationStatus.Error });
         var def = settled.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
@@ -117,7 +117,7 @@ public class FullShareRefusesTheCompileTest(ITestOutputHelper output) : Monolith
         // ── THE ACTIVITY SAYS WHICH FAILURE THIS IS ──────────────────────────────────────────────
         def.LastCompilationActivityPath.Should().NotBeNull();
         var activity = await Mesh.GetMeshNodeStream(def.LastCompilationActivityPath!)
-            .Should().Within(60.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds())
             .Match(n => n.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions)
                 is { Status: ActivityStatus.Failed });
         var log = activity.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions)!;

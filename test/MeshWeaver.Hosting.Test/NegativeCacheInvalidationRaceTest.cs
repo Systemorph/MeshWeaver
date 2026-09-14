@@ -120,7 +120,7 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
 
         var failure = await Cache.GetStream(path, Mesh.JsonSerializerOptions)
             .Materialize()
-            .Should().Within(TestTimeouts.Convergence).Match(
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Match(
                 notification => notification.Kind == NotificationKind.OnError,
                 "the owner must return the genuine missing-node verdict used by the subject arm");
 
@@ -143,13 +143,13 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
         using var connection = terminal.Connect();
         try
         {
-            await owner.RequestEntered.Should().Within(TestTimeouts.Convergence).Emit(
+            await owner.RequestEntered.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit(
                 "the NotFound must already be in flight before the invalidation, or the race is not held");
 
             PublishAuthoritativeChange(path);
             owner.Release();
 
-            var failure = await terminal.Should().Within(TestTimeouts.Convergence).Match(
+            var failure = await terminal.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Match(
                 notification => notification.Kind == NotificationKind.OnError,
                 "the held owner must deliver its pre-invalidation NotFound after the change event");
             MeshNodeStreamCache.IsMissingNodeFailure(failure.Exception!).Should().BeTrue(
@@ -162,13 +162,13 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
             // help from the diagnostic seam.
             owner.RestoreRealOwner();
             var recovered = await Cache.GetStream(path, Mesh.JsonSerializerOptions)
-                .Take(1).Timeout(TestTimeouts.Convergence).Await();
+                .Take(1).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
             recovered.Path.Should().Be(path);
             var updated = await Cache.Update(
                     path,
                     node => node with { Name = "Recovered after stale read verdict" },
                     Mesh.JsonSerializerOptions)
-                .Take(1).Timeout(TestTimeouts.Convergence).Await();
+                .Take(1).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
             updated.Name.Should().Be("Recovered after stale read verdict");
             Cache.IsStormWindowOpen(path).Should().BeFalse(
                 "the change event is authoritative over a missing verdict minted in the older failure era");
@@ -197,7 +197,7 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
                 path,
                 node => node with { Name = "write recovered" },
                 Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(TestTimeouts.Convergence).Await();
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         updated.Name.Should().Be("write recovered");
         Cache.IsStormWindowOpen(path).Should().BeFalse();
     }
@@ -230,13 +230,13 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
 
         try
         {
-            await oldReachedPublish.Should().Within(TestTimeouts.Convergence).Emit(
+            await oldReachedPublish.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit(
                 "the old probe must be parked after validation and before publication");
             var newClaim = Cache.BeginNegativeProbe(path);
             Cache.TryRecordNegativeForTest(path, newError, newClaim, static () => { }).Should().BeTrue();
 
             Volatile.Write(ref releaseOld, 1);
-            (await oldResult.Should().Within(TestTimeouts.Convergence).Emit()).Should().BeFalse(
+            (await oldResult.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit()).Should().BeFalse(
                 "the stale claim lost publication ownership");
             Cache.CurrentNegativeErrorForTest(path).Should().BeSameAs(newError,
                 "the stale writer must neither overwrite nor pair-remove the newer entry");
@@ -277,7 +277,7 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
         using var subscriber = Cache.GetStream(path, Mesh.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
         try
         {
-            await owner.RequestEntered.Should().Within(TestTimeouts.Convergence).Emit();
+            await owner.RequestEntered.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
             Cache.HasNegativeProbeClaimForTest(path).Should().BeTrue();
             subscriber.Dispose();
             Cache.ReleaseIfUnwatched(path).Should().BeTrue(

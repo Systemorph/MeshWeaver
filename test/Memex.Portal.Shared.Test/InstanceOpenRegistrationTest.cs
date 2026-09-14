@@ -164,7 +164,7 @@ public class InstanceOpenRegistrationTest(ITestOutputHelper output) : MonolithMe
         // never invents entitlement.
         var openKey = await Mesh.ServiceProvider.GetRequiredService<RegistrationKeyService>()
             .Mint("open-owner", "Open Owner", "open@test.com", "open registration (no plan)")
-            .Select(r => r.RawKey).FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
+            .Select(r => r.RawKey).FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
         var app = await StartRegistrationHost(openKey);
         await using var _ = app;
 

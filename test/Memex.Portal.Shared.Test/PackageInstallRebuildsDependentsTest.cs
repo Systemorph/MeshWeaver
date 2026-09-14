@@ -113,7 +113,7 @@ public class PackageInstallRebuildsDependentsTest(ITestOutputHelper output) : Mo
                     Sources = [$"shared=@{ProviderType}/Source"],
                 },
             })
-            .Should().Within(60.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds())
             .Emit("the dependent type must exist BEFORE the provider updates — that is the whole "
                   + "premise: it is already running an assembly built from the provider's sources");
 
@@ -125,7 +125,7 @@ public class PackageInstallRebuildsDependentsTest(ITestOutputHelper output) : Mo
                 string.Equals(n.Path, ConsumerType, StringComparison.OrdinalIgnoreCase)))
             .FirstAsync()
             .Timeout(60.Seconds())
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         // ── The provider package's install. A node repo: the files ARE nodes at their canonical
         //    paths. Its NodeType arrives with UNTYPED content on purpose (see UntypedNodeTypeJson).
@@ -146,7 +146,7 @@ public class PackageInstallRebuildsDependentsTest(ITestOutputHelper output) : Mo
                     new PackageFile($"{SharedSource}.cs", "public class SharedThing { }"),
                 ],
                 "HEAD")
-            .Should().Within(180.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(180.Seconds())
             .Emit("the install itself must complete before anything about releases can be read");
 
         result.WrittenPaths.Should().Contain(SharedSource,
@@ -155,7 +155,7 @@ public class PackageInstallRebuildsDependentsTest(ITestOutputHelper output) : Mo
 
         // ── THE assertion. A release stamps RequestedReleaseAt, and nothing else writes it.
         await Mesh.GetWorkspace().GetMeshNodeStream(ConsumerType)
-            .Should().Within(120.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(120.Seconds())
             .Match(
                 n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
                     ?.RequestedReleaseAt is not null,

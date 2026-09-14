@@ -157,7 +157,7 @@ public class PostCreationAnnouncementContextTest(ITestOutputHelper output) : Mon
             NodeType = SpaceNodeType.NodeType,
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Should().Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space");
+        }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space");
 
         // ── the NEGATIVE CONTROL, first: the same instrument on a node the creator DOES own,
         // written by the creator. If it reported the hub identity here too, the assertion below
@@ -166,7 +166,7 @@ public class PostCreationAnnouncementContextTest(ITestOutputHelper output) : Mon
         {
             Name = "Owned", NodeType = TargetType, State = MeshNodeState.Active,
             Content = new PartitionDefinition { Namespace = OwnedId, DataSource = "default" },
-        }).Should().Within(TestTimeouts.CrossSilo).Emit("the creator owns the Space");
+        }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.CrossSilo).Emit("the creator owns the Space");
 
         // The SAME message, to a path the creator may write, posted by the creator.
         Mesh.Post(
@@ -176,7 +176,7 @@ public class PostCreationAnnouncementContextTest(ITestOutputHelper output) : Mon
                 Content = new PartitionDefinition { Namespace = OwnedId, DataSource = "default" },
             }]),
             o => o.WithTarget(new Address($"{SpaceId}/{OwnedId}")));
-        await ownedWriteArrived.Should().Within(TestTimeouts.Convergence).Emit(
+        await ownedWriteArrived.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit(
             "an ordinary DataChangeRequest by the creator, to a path the creator owns, reaches the "
             + "node's hub — so the instrument below is measuring the announcement, not a path that "
             + "always answers the same way");
@@ -193,9 +193,9 @@ public class PostCreationAnnouncementContextTest(ITestOutputHelper output) : Mon
         await meshService.CreateNode(new MeshNode(TriggerId, SpaceId)
         {
             Name = "Trigger", NodeType = TriggerType, State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.CrossSilo).Emit("the creator owns the Space, so the trigger create is permitted");
+        }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.CrossSilo).Emit("the creator owns the Space, so the trigger create is permitted");
 
-        await announcementArrived.Should().Within(TestTimeouts.Convergence).Emit(
+        await announcementArrived.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit(
             "the post-creation announcement of an additional node must reach that node's hub");
 
         var announcedContext = receivedAs[$"{TargetNamespace}/{TriggerId}"];

@@ -219,7 +219,7 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
                 SourceSha = "deadbeef",
                 CompileTimeout = TimeSpan.FromMinutes(4),
                 RenderTimeout = TimeSpan.FromMinutes(2),
-            }).FirstAsync().Await();
+            }).FirstAsync().Await(TestContext.Current.CancellationToken);
             output.WriteLine("── mesh-driven bake ──");
             output.WriteLine(meshLog.ToString());
             // 🚨 Assert.True(…, message) rather than Assert.Null — xUnit renders a failed

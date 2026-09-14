@@ -60,22 +60,22 @@ public class SpaceRecreateGrantVisibilityTest(ITestOutputHelper output) : Monoli
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         await meshService.CreateNode(Space())
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space");
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space");
 
         // The negative control: the SAME child create, on the FIRST incarnation. If this failed the
         // assertion below would be reading a constant of the create path, not the recreate.
         await meshService.CreateNode(Child("first"))
-            .Should().Within(TestTimeouts.CrossSilo).Emit(
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.CrossSilo).Emit(
                 "the creator holds Admin on the Space it just created, so a child create is permitted");
 
         await meshService.DeleteNode(SpaceId)
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may delete its own Space");
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.CrossSilo).Emit("the creator may delete its own Space");
 
         await meshService.CreateNode(Space())
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the same id may be created again");
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.CrossSilo).Emit("the same id may be created again");
 
         await meshService.CreateNode(Child("second"))
-            .Should().Within(TestTimeouts.CrossSilo).Emit(
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.CrossSilo).Emit(
                 "the RECREATE writes the creator's grant exactly as the first create did, so the "
                 + "child create must be permitted on the recreated Space too");
     }

@@ -62,7 +62,7 @@ public class StreamRoutedSilenceGateTest(ITestOutputHelper output) : OrleansMesh
         Func<Task> post = () => sender
             .Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(ghost))
             .FirstAsync()
-            .Await()
+            .Await(TestContext.Current.CancellationToken)
             .WaitAsync(30.Seconds());
 
         var thrown = await post.Should().ThrowAsync<Exception>(
@@ -98,7 +98,7 @@ public class StreamRoutedSilenceGateTest(ITestOutputHelper output) : OrleansMesh
         var response = await sender
             .Observe(new PingRequest(), o => o.WithTarget(receiver.Address))
             .FirstAsync()
-            .Await()
+            .Await(TestContext.Current.CancellationToken)
             .WaitAsync(30.Seconds());
 
         response.Message.Should().NotBeNull(

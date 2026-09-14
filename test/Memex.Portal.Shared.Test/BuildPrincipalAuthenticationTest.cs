@@ -260,9 +260,9 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         // A failure propagates AND is not cached — the next caller starts a genuinely new attempt
         // rather than replaying a latched OnError (the ReplaySubject trap, #1369).
         await Assert.ThrowsAnyAsync<Exception>(() =>
-            service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await());
+            service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken));
         await Assert.ThrowsAnyAsync<Exception>(() =>
-            service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await());
+            service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken));
         Assert.Equal(2, reads);
 
         // 🚨 A ROTATION ARRIVING WHILE THE CACHE IS EMPTY. The fault above evicted the promise, so
@@ -273,35 +273,35 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         var afterFault = await service
             .Refresh(new GitHubSigningKeys(
                 new Dictionary<string, GitHubSigningKey>(), now - TimeSpan.FromHours(1)), now)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Single(afterFault.ByKeyId);
         Assert.Equal(3, reads);
 
-        var first = await service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        var first = await service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Single(first.ByKeyId);
         // …and it was SHARED with the refresh above rather than starting a round trip of its own.
         Assert.Equal(3, reads);
 
         // A success is shared: a second caller inside the window costs no round trip.
-        await service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        await service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Equal(3, reads);
 
         // 🚨 The refresh floor. An unknown kid may force ONE early re-read; inside the floor it
         // returns the set unchanged, so a caller inventing key ids cannot amplify into a fetch per
         // request.
         var suppressed = await service.Refresh(first, now).FirstAsync()
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Equal(3, reads);
         Assert.Equal(first.FetchedAt, suppressed.FetchedAt);
 
         // Past the floor it really does re-read — a rotation is recoverable without a restart.
         await service.Refresh(first, now + GitHubOidcKeyService.MinimumRefreshInterval + TimeSpan.FromSeconds(1))
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Equal(4, reads);
 
         // And a stale set is re-read on the ordinary path too.
         await service.Keys(now + GitHubOidcKeyService.CacheDuration + TimeSpan.FromMinutes(1))
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Equal(5, reads);
     }
 
@@ -374,7 +374,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
                 State = MeshNodeState.Active,
                 Content = new UpdatePolicyContent { Policy = UpdatePolicyKind.None,
                     LatestAvailableTag = "3.0.0-ci.123" },
-            })).Timeout(TestTimeouts.Convergence).Await();
+            })).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         await using var app = await StartHost(Path.GetTempPath());
         var token = tokens.Mint(Audience, eventName: "workflow_run");
         using var combo = await Get(app, ReleaseGateEndpoints.ComboRoute, token);
@@ -394,7 +394,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
                 .GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
                 .Select(n => UpdatePolicyNodeType.Parse(n, Mesh.JsonSerializerOptions)))
             .Where(c => c.VerificationFor(verdict.CandidateTag)?.VerifiedAt == verdict.VerifiedAt)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Equal(UpdatePolicyKind.None, policy.Policy);
         Assert.Equal("3.0.0-ci.123", policy.LatestAvailableTag);
         Assert.Equal(ComboVerdictKind.NotVerifiable, policy.VerificationFor(verdict.CandidateTag)!.Verdict);

@@ -1116,7 +1116,7 @@ public class IoPoolTest
             pool.Dispose();
             sw.Stop();
 
-            await teardownEntered.Should().Within(Timeout5)
+            await teardownEntered.Should(TestContext.Current.CancellationToken).Within(Timeout5)
                 .Emit("disposal must still terminate the subscription");
             sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
                 "Dispose must return immediately — the WAIT belongs on Disposed, and running the "

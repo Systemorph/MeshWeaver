@@ -54,7 +54,7 @@ public class AFreshGrantIsVisibleToTheNextCheckTest(ITestOutputHelper output) : 
         {
             Name = "Grant Probe", NodeType = SpaceNodeType.NodeType,
             State = MeshNodeState.Active, Content = new Space(),
-        }).Should().Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space");
+        }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space");
 
         // Opens $security-access:{SpaceId} and settles its snapshot — the newcomer has nothing.
         var before = await Mesh.GetEffectivePermissions(SpaceId, Newcomer)
@@ -78,7 +78,7 @@ public class AFreshGrantIsVisibleToTheNextCheckTest(ITestOutputHelper output) : 
                     DisplayName = Newcomer,
                     Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }],
                 },
-            }).Should().Within(TestTimeouts.CrossSilo).Emit("the grant write must complete");
+            }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.CrossSilo).Emit("the grant write must complete");
         }
 
         // THE PROPERTY: the very next check must see it. The grant's durable write has returned.

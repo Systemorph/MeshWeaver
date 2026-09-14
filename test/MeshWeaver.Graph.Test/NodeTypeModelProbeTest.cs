@@ -156,13 +156,13 @@ public class NodeTypeModelProbeTest(ITestOutputHelper output) : MonolithMeshTest
     {
         var model = await NodeTypeDataModelAreas
             .ProbeInstanceModel(Mesh, CacheSelfReadingInstanceConfig)
-            .Should().Within(40.Seconds()).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(40.Seconds()).Emit();
 
         model.Should().NotBeNull(
             "content that reads its own address through the cache must not stop the snapshot");
         model!.ContentTypeName.Should().Be(nameof(ProbeOrder));
 
-        var verdict = await selfReadVerdict.Should().Within(20.Seconds())
+        var verdict = await selfReadVerdict.Should(TestContext.Current.CancellationToken).Within(20.Seconds())
             .Emit("the provider always reports how its own-address read ended");
 
         Output.WriteLine($"own-address read through the stream cache ended: {verdict}");
@@ -211,7 +211,7 @@ public class NodeTypeModelProbeTest(ITestOutputHelper output) : MonolithMeshTest
             stream = cache.GetStream(probePath, Mesh.JsonSerializerOptions);
         }
 
-        var emitted = await stream.ToArray().Timeout(20.Seconds()).Await();
+        var emitted = await stream.ToArray().Timeout(20.Seconds()).Await(TestContext.Current.CancellationToken);
 
         emitted.Should().BeEmpty(
             "there is no node at a probe's synthetic address and there never will be — the read "
@@ -223,7 +223,7 @@ public class NodeTypeModelProbeTest(ITestOutputHelper output) : MonolithMeshTest
     {
         var model = await NodeTypeDataModelAreas
             .ProbeInstanceModel(Mesh, InstanceConfig)
-            .Should().Within(30.Seconds()).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(30.Seconds()).Emit();
 
         model.Should().NotBeNull("the probe must resolve the instance data model");
 
@@ -251,7 +251,7 @@ public class NodeTypeModelProbeTest(ITestOutputHelper output) : MonolithMeshTest
     {
         var model = await NodeTypeDataModelAreas
             .ProbeInstanceModel(Mesh, InstanceConfig)
-            .Should().Within(30.Seconds()).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(30.Seconds()).Emit();
 
         model.Should().NotBeNull();
 
@@ -272,7 +272,7 @@ public class NodeTypeModelProbeTest(ITestOutputHelper output) : MonolithMeshTest
 
         var model = await NodeTypeDataModelAreas
             .ProbeInstanceModel(Mesh, InstanceConfig)
-            .Should().Within(30.Seconds()).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(30.Seconds()).Emit();
 
         model.Should().NotBeNull();
 
@@ -284,7 +284,7 @@ public class NodeTypeModelProbeTest(ITestOutputHelper output) : MonolithMeshTest
                 a.StartsWith("$model-probe", StringComparison.Ordinal) && ProbeStillLive(a)))
             .FirstAsync()
             .Timeout(10.Seconds())
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         var probeHubs = counter.Created.Keys
             .Where(a => a.StartsWith("$model-probe", StringComparison.Ordinal)).ToArray();
@@ -321,7 +321,7 @@ public class NodeTypeModelProbeTest(ITestOutputHelper output) : MonolithMeshTest
         var started = Stopwatch.StartNew();
         var model = await NodeTypeDataModelAreas
             .ProbeInstanceModel(Mesh, SelfReadingInstanceConfig)
-            .Should().Within(40.Seconds()).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(40.Seconds()).Emit();
         started.Stop();
 
         Output.WriteLine($"probe with a self-reading provider completed in {started.Elapsed}");

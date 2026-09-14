@@ -168,19 +168,19 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
             .Subscribe(changeCounts.OnNext);
 
         // Wait for initial data — the first emission is change #1.
-        var initialChangeCount = await changeCounts.Should().Within(10.Seconds()).Match(c => c >= 1);
+        var initialChangeCount = await changeCounts.Should(TestContext.Current.CancellationToken).Within(10.Seconds()).Match(c => c >= 1);
 
         // act
         await client.Observe(DataChangeRequest.Update(new object[] { updatedItem }), o => o.WithTarget(CreateClientAddress()))
-            .Should().Within(10.Seconds()).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(10.Seconds()).Emit();
 
         // assert — the update produces a further change event (count strictly grows).
-        await changeCounts.Should().Within(10.Seconds()).Match(c => c > initialChangeCount);
+        await changeCounts.Should(TestContext.Current.CancellationToken).Within(10.Seconds()).Match(c => c > initialChangeCount);
 
         // and the new value is present in the workspace.
         var currentData = await workspace
             .GetObservable<WorkspaceTestData>()
-            .Should().Within(10.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(10.Seconds())
             .Match(x => x.Any(item => item.Id == "1" && item.Name == "Updated First Item"));
         currentData.Should().Contain(x => x.Id == "1" && x.Name == "Updated First Item");
 
@@ -197,19 +197,19 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 
         var initialData = await workspace
             .GetObservable<WorkspaceTestData>()
-            .Should().Within(10.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(10.Seconds())
             .Emit();
 
         var itemToDelete = initialData.First(x => x.Id == "3");
 
         // act
         await client.Observe(DataChangeRequest.Delete(new object[] { itemToDelete }, "TestUser"), o => o.WithTarget(CreateClientAddress()))
-            .Should().Within(10.Seconds()).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(10.Seconds()).Emit();
 
         // assert
         var updatedData = await workspace
             .GetObservable<WorkspaceTestData>()
-            .Should().Within(10.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(10.Seconds())
             .Match(x => x.Count == 2);
 
         updatedData.Should().HaveCount(2);

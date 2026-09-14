@@ -145,7 +145,7 @@ public class NodeCrudDoesNotOccupyTheExecutionBlockTest(ITestOutputHelper output
         // snapshot says.
         try
         {
-            await _parked.Should().Within(TestTimeouts.Convergence)
+            await _parked.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
                 .Emit("the create must actually be in flight and blocked, or this test describes an "
                     + "idle mesh and proves nothing");
 
@@ -156,7 +156,7 @@ public class NodeCrudDoesNotOccupyTheExecutionBlockTest(ITestOutputHelper output
                     NodeType = "Markdown",
                 }));
 
-            await probe.Should().Within(ProbeBudget)
+            await probe.Should(TestContext.Current.CancellationToken).Within(ProbeBudget)
                 .Emit("the node-CRUD execution hub must still process a SECOND node operation while "
                     + "the first is parked inside its validator: the create pipeline leaves the "
                     + "action block at its first pooled storage hop, so it is a pool thread that is "
@@ -173,7 +173,7 @@ public class NodeCrudDoesNotOccupyTheExecutionBlockTest(ITestOutputHelper output
             _park!.Release();
         }
 
-        await write.Should().Within(TestTimeouts.Convergence)
+        await write.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
             .Emit("the parked write must complete once released — a stranded create would leak into "
                 + "the next test");
     }
@@ -195,7 +195,7 @@ public class NodeCrudDoesNotOccupyTheExecutionBlockTest(ITestOutputHelper output
                 NodeType = "Markdown",
             }));
 
-        await probe.Should().Within(ProbeBudget)
+        await probe.Should(TestContext.Current.CancellationToken).Within(ProbeBudget)
             .Emit("an unparked node create must complete well inside the budget the probe above "
                 + "uses — that budget is only meaningful if this passes");
     }
@@ -222,9 +222,9 @@ public class NodeCrudDoesNotOccupyTheExecutionBlockTest(ITestOutputHelper output
 
         try
         {
-            await _parkedA.Should().Within(TestTimeouts.Convergence)
+            await _parkedA.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
                 .Emit("the first create must reach its validator");
-            await _parkedB.Should().Within(ProbeBudget)
+            await _parkedB.Should(TestContext.Current.CancellationToken).Within(ProbeBudget)
                 .Emit("the SECOND create must reach its validator while the first is still parked "
                     + "there — two node writes genuinely in flight at once. A hub that runs "
                     + "continuations on its own action block cannot get here: the second create "
@@ -235,8 +235,8 @@ public class NodeCrudDoesNotOccupyTheExecutionBlockTest(ITestOutputHelper output
             _park!.Release();
         }
 
-        await a.Should().Within(TestTimeouts.Convergence).Emit("the first create must complete");
-        await b.Should().Within(TestTimeouts.Convergence).Emit("the second create must complete");
+        await a.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit("the first create must complete");
+        await b.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit("the second create must complete");
     }
 
     /// <summary>

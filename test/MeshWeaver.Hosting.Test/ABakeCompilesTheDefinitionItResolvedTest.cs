@@ -234,13 +234,13 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var sets = await NodeTypeBatchBake
             .ResolveSources(MeshService, access, enumerated.Definitions, [TypePath], null)
-            .Should().Within(TestTimeouts.Convergence).Emit("the batch resolves the broken edit");
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit("the batch resolves the broken edit");
         var batch = sets[TypePath];
 
         // The repair lands under the SAME queries, after the batch took its set.
         await Mesh.GetWorkspace().GetMeshNodeStream(MainPath)
             .Update(node => node with { Content = new CodeConfiguration { Language = "csharp", Code = SelfContained } })
-            .Should().Within(TestTimeouts.Convergence).Emit("the repair lands");
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit("the repair lands");
         var repaired = await Observable.Interval(200.Milliseconds()).StartWith(0L)
             .SelectMany(_ => MeshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{MainPath}").AsSystem()).Take(1))
@@ -248,7 +248,7 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
                 n.ContentAs<CodeConfiguration>(Mesh.JsonSerializerOptions)?.Code == SelfContained))
             .Where(n => n is not null)
             .FirstAsync()
-            .Should().Within(TestTimeouts.Convergence).Emit("the repair is listed");
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit("the repair is listed");
         var repairedVersion = NodeTypeDefinition.SourceVersionOf(repaired!);
 
         // The type's own sources watcher records the repair — its hub activated by reading its stream.
@@ -262,7 +262,7 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
             .Should().Contain(CallsWhatNothingDeclares, "precondition — the batch still holds the broken edit");
         var outcome = await NodeTypeBatchBake
             .BakeOne(Mesh, enumerated.Nodes[TypePath], batch, PerTypeBudget, null)
-            .Should().Within(PerTypeBudget + TimeSpan.FromMinutes(1)).Emit("BakeOne always reaches exactly one outcome");
+            .Should(TestContext.Current.CancellationToken).Within(PerTypeBudget + TimeSpan.FromMinutes(1)).Emit("BakeOne always reaches exactly one outcome");
         Output.WriteLine("outcome: {0} — {1}", outcome.Status, outcome.Detail ?? "(no detail)");
 
         outcome.Status.Should().Be(PreWarmStatus.Compiled,
@@ -299,23 +299,23 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
     public async Task ATypePrunedDuringTheSweep_IsRemoved_AndNotRecreated()
     {
         await MeshService.CreateNode(TypeNode($"Consumer{suffix}", null)).Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit("the type exists when the sweep enumerates it");
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit("the type exists when the sweep enumerates it");
         var enumerated = await Enumerate(_ => true, "the sweep enumerates the type");
 
         await MeshService.DeleteNode(TypePath).Take(1).DefaultIfEmpty()
-            .Should().Within(TestTimeouts.Convergence).Emit("the repository prunes the type");
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit("the repository prunes the type");
         await Observable.Interval(200.Milliseconds()).StartWith(0L)
             .SelectMany(_ => DynamicTypePreWarmer.TypeNodeExists(Mesh, TypePath, null).Take(1))
             .Where(exists => !exists)
             .FirstAsync()
-            .Should().Within(TestTimeouts.Convergence).Emit("the prune is visible to a listing");
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit("the prune is visible to a listing");
 
         var (_, outcome) = await Bake(enumerated);
 
         outcome.Status.Should().Be(PreWarmStatus.Removed, outcome.Detail ?? "(no detail)");
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var row = await storage.Read(TypePath, Mesh.JsonSerializerOptions).Take(1).DefaultIfEmpty()
-            .Should().Within(TestTimeouts.Convergence).Emit("the storage read answers");
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit("the storage read answers");
         row.Should().BeNull("the bake must not re-create a type its repository pruned");
     }
 }

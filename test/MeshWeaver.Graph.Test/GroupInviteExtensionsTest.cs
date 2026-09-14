@@ -55,7 +55,7 @@ public class GroupInviteExtensionsTest(ITestOutputHelper output) : MonolithMeshT
                 NodeType = "User",
                 Name = "Bob",
                 Content = new User { Email = email, FullName = "Bob" },
-            }).Should().Emit();
+            }).Should(TestContext.Current.CancellationToken).Emit();
 
         // Wait until the account is queryable by email (the extension looks it up that way).
         await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:User content.email:{email}"))

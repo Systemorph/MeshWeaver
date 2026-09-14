@@ -126,7 +126,7 @@ public class SelfUpdateChecksOnlyAtDecisionPointsTest(ITestOutputHelper output) 
 
         run.PushBuildCompletion();
 
-        await run.LaterChecks.Should().NotEmit(TestTimeouts.Quick,
+        await run.LaterChecks.Should(TestContext.Current.CancellationToken).NotEmit(TestTimeouts.Quick,
             "under None a build completion can neither roll nor restart (MayRestartAfter is false "
             + "for UpdatesDisabled), so all it could do is rewrite a verdict the node already "
             + "carries — 158 times in 5 h on memex, from both replicas, onto one leaf");

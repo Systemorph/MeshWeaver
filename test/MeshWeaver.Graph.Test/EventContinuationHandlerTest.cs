@@ -115,7 +115,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
             ContinuationType = EventContinuationType.PublishSocialPost,
             TargetPath = PostPath,
         };
-        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should(TestContext.Current.CancellationToken).Emit();
 
         var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
             Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
@@ -168,7 +168,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
             ContinuationType = EventContinuationType.PublishSocialPost,
             TargetPath = PostPath,
         };
-        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should(TestContext.Current.CancellationToken).Emit();
 
         var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
             Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
@@ -177,7 +177,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
 
         // Cancel it while the timer is armed and still counting down.
         await EventSubscriptionOps.SetStatus(Mesh, EventSubscriptionNodeType.Path(subscription.Id),
-            EventSubscriptionStatus.Cancelled, "no longer wanted").Should().Emit();
+            EventSubscriptionStatus.Cancelled, "no longer wanted").Should(TestContext.Current.CancellationToken).Emit();
 
         // Well past the slot: the handler must never have been reached.
         await Task.Delay(12.Seconds());
@@ -206,7 +206,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
             TargetPath = PostPath,
             CreatedBy = null,          // armed WITHOUT an identity …
         };
-        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should(TestContext.Current.CancellationToken).Emit();
 
         var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
             Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
@@ -218,7 +218,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
             .Update(node => node.Content is EventSubscription s
                 ? node with { Content = s with { CreatedBy = "rbuergi" } }
                 : node)
-            .Should().Emit();
+            .Should(TestContext.Current.CancellationToken).Emit();
 
         var seen = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(_ => handler.SeenCreatedBy)
@@ -289,7 +289,7 @@ public class EventContinuationHandlerMissingTest(ITestOutputHelper output) : Mon
             ContinuationType = EventContinuationType.PublishSocialPost,
             TargetPath = "SomePost",
         };
-        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should(TestContext.Current.CancellationToken).Emit();
 
         using var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
             Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());

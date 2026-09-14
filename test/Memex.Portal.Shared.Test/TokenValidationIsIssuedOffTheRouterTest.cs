@@ -113,7 +113,7 @@ public class TokenValidationIsIssuedOffTheRouterTest : MonolithMeshTestBase
                     CreatedAt = DateTimeOffset.UtcNow,
                 },
             })
-            .Should().Emit("the token must exist, or the validation never reaches a receiving hub "
+            .Should(TestContext.Current.CancellationToken).Emit("the token must exist, or the validation never reaches a receiving hub "
                 + "and the assertion below would measure nothing");
 
         // The routing index the middleware's target address names — `ApiToken/{hashPrefix}`. In
@@ -131,12 +131,12 @@ public class TokenValidationIsIssuedOffTheRouterTest : MonolithMeshTestBase
                     TokenPath = $"User/{TokenUserId}/_Api/{hashPrefix}",
                 },
             })
-            .Should().Emit("the validation routes to the INDEX at ApiToken/{hashPrefix} first");
+            .Should(TestContext.Current.CancellationToken).Emit("the validation routes to the INDEX at ApiToken/{hashPrefix} first");
 
         // 🚨 On `Mesh` DELIBERATELY: the ROUTER as the caller IS the subject, and it is the shape
         // the middleware's own fallback produces.
         var response = await UserContextMiddleware.ValidateTokenViaHub(rawToken, Mesh)
-            .Should().Within(TestTimeouts.Convergence)
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
             .Emit("the validation must actually complete — an exchange that never happened emits no "
                 + "traffic at all");
 
@@ -174,7 +174,7 @@ public class TokenValidationIsIssuedOffTheRouterTest : MonolithMeshTestBase
 
         Mesh.Post(new RouterOriginProbe(), o => o.WithTarget(client.Address));
 
-        await _probeArrived.Should().Within(TestTimeouts.Convergence)
+        await _probeArrived.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
             .Emit("the probe must actually reach the client hub, or nothing was delivered and this "
                 + "control proves nothing");
 

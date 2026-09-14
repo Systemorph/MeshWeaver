@@ -68,7 +68,7 @@ public class DisposalStallNamesThePumpTest : HubTestBase
             // (RunLevel < Started), which is a different path and a different verdict — a test that
             // froze the scheduler before this point would be measuring that instead.
             await victim.Observe(new Ping(), o => o.WithTarget(victim.Address))
-                .Should().Within(TestTimeouts.Quick)
+                .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Quick)
                 .Emit("the hub must answer once, on its own scheduler, before that scheduler is frozen");
             victim.RunLevel.Should().Be(MessageHubRunLevel.Started,
                 "the wedge under test is a STARTED hub whose pump stops turning — not a hub that "
@@ -125,7 +125,7 @@ public class DisposalStallNamesThePumpTest : HubTestBase
             scheduler.Resume();
         }
 
-        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TestTimeouts.Convergence);
+        await victim.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(TestTimeouts.Convergence);
         victim.RunLevel.Should().Be(MessageHubRunLevel.Dead,
             "the wedge is in the scheduler, not in the hub — once turns are delivered again the "
             + "teardown completes normally, which is why this PR claims a nameable wedge and not a "
@@ -161,7 +161,7 @@ public class DisposalStallNamesThePumpTest : HubTestBase
 
         // Bring-up on a working scheduler, for the same reason as the test above.
         await victim.Observe(new Ping(), o => o.WithTarget(victim.Address))
-            .Should().Within(TestTimeouts.Quick)
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Quick)
             .Emit("the hub must answer once before its scheduler starts refusing");
 
         // Every schedule from here throws. The post latches `draining`, the schedule fails, and the
@@ -176,13 +176,13 @@ public class DisposalStallNamesThePumpTest : HubTestBase
         // The recovery, and the whole point: a pump whose latch was released can be driven again.
         scheduler.Accept();
         await victim.Observe(new Ping(), o => o.WithTarget(victim.Address))
-            .Should().Within(TestTimeouts.Convergence)
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
             .Emit("a refused schedule must not latch the pump: once the scheduler accepts work "
                 + "again the hub processes messages normally. A leaked latch makes every later "
                 + "KickDrain return immediately, so this request would never be dequeued");
 
         victim.Dispose();
-        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TestTimeouts.Convergence);
+        await victim.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(TestTimeouts.Convergence);
         victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
     }
 

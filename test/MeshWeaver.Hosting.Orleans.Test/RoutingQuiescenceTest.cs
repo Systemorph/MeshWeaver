@@ -320,7 +320,7 @@ public class RoutingQuiescenceTest
                 deliveryId: "d-2638-leg",
                 postFailureToSender: (_, _) => { },
                 logger: NullLogger.Instance)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         leg.IsCompleted.Should().BeFalse(
             "the leg must remain in flight while the grain call is pending — a detached delivery is "
@@ -349,7 +349,7 @@ public class RoutingQuiescenceTest
                 logger: NullLogger.Instance,
                 backoff: _ => TimeSpan.Zero,
                 scheduler: System.Reactive.Concurrency.Scheduler.Immediate)
-            .Await()
+            .Await(TestContext.Current.CancellationToken)
             .WaitAsync(Bound);
 
         var nack = nacks.Should().ContainSingle().Subject;

@@ -95,7 +95,7 @@ public class PagedQueryTotalOrderTest
     {
         var store = new InMemoryStorageAdapter();
         foreach (var path in Stories.Prepend("Marketing"))
-            await store.Write(Node(path, path == "Marketing" ? "Group" : "Markdown"), Options).Await();
+            await store.Write(Node(path, path == "Marketing" ? "Group" : "Markdown"), Options).Await(TestContext.Current.CancellationToken);
 
         var rotating = new RotatingWalkStorageAdapter(store);
         var query = (IMeshQueryCore)new MeshQuery(

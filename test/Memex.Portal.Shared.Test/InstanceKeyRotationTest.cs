@@ -114,7 +114,7 @@ public class InstanceKeyRotationTest(ITestOutputHelper output) : MonolithMeshTes
     {
         IInstanceKeyRegistry registry = Service();
         var act = () => registry.AdoptKeyHash("not-in-this-registry", InstanceKeys.Hash(InstanceKeys.Generate()))
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         (await act.Should().ThrowAsync<InstanceNotRegisteredException>())
             .Which.InstanceId.Should().Be("not-in-this-registry");
     }
@@ -184,7 +184,7 @@ public class InstanceKeyRotationTest(ITestOutputHelper output) : MonolithMeshTes
 
         (await Self(app, key)).Status.Should().Be(HttpStatusCode.Unauthorized, "a revoked key no longer authenticates");
         var authenticated = await Mesh.ServiceProvider.GetRequiredService<InstanceRegistryAuthenticator>()
-            .Authenticate(InstanceKeys.AuthorizationHeader(key)).Timeout(TestTimeouts.Convergence).Await();
+            .Authenticate(InstanceKeys.AuthorizationHeader(key)).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         authenticated.Should().BeNull("and every OTHER surface the registry serves refuses it too — one authenticator");
     }
 
@@ -204,13 +204,13 @@ public class InstanceKeyRotationTest(ITestOutputHelper output) : MonolithMeshTes
         (await Stage(app, current, InstanceKeys.Hash(staged))).Status.Should().Be(HttpStatusCode.OK);
         (await Self(app, staged)).Status.Should().Be(HttpStatusCode.OK, "CONTROL: both keys authenticate before the revocation");
 
-        await ((IInstanceKeyRegistry)service).RevokeKey("revoke-by-id").Timeout(TimeSpan.FromSeconds(60)).Await();
+        await ((IInstanceKeyRegistry)service).RevokeKey("revoke-by-id").Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
 
         (await Self(app, current)).Status.Should().Be(HttpStatusCode.Unauthorized, "the current key is revoked");
         (await Self(app, staged)).Status.Should().Be(HttpStatusCode.Unauthorized, "and so is the staged one");
 
         var absent = () => ((IInstanceKeyRegistry)service).RevokeKey("never-registered")
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         await absent.Should().ThrowAsync<InstanceNotRegisteredException>(
             "revoking an id this registry does not hold fails by name — never a silent no-op on the wrong store");
     }
@@ -229,7 +229,7 @@ public class InstanceKeyRotationTest(ITestOutputHelper output) : MonolithMeshTes
         var first = await Register(service, "adopt-current");
         var stagedA = InstanceKeys.Generate();
         (await Stage(app, first.RawKey, InstanceKeys.Hash(stagedA))).Status.Should().Be(HttpStatusCode.OK);
-        await service.AdoptKeyHash(first.Node.Path!, InstanceKeys.Hash(first.RawKey)).Timeout(TimeSpan.FromSeconds(60)).Await();
+        await service.AdoptKeyHash(first.Node.Path!, InstanceKeys.Hash(first.RawKey)).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
         (await Self(app, stagedA)).Status.Should().Be(HttpStatusCode.Unauthorized,
             "adopting the already-current hash retires the staged key");
         (await Self(app, first.RawKey)).Status.Should().Be(HttpStatusCode.OK, "…and keeps the current one");
@@ -237,7 +237,7 @@ public class InstanceKeyRotationTest(ITestOutputHelper output) : MonolithMeshTes
         var second = await Register(service, "adopt-staged");
         var stagedB = InstanceKeys.Generate();
         (await Stage(app, second.RawKey, InstanceKeys.Hash(stagedB))).Status.Should().Be(HttpStatusCode.OK);
-        await service.AdoptKeyHash(second.Node.Path!, InstanceKeys.Hash(stagedB)).Timeout(TimeSpan.FromSeconds(60)).Await();
+        await service.AdoptKeyHash(second.Node.Path!, InstanceKeys.Hash(stagedB)).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
         (await Self(app, stagedB)).Body.GetProperty("key").GetString().Should().Be(InstanceKeyPayloads.CurrentKey,
             "adopting the staged hash promotes it (its index entry already existed)");
         (await Self(app, second.RawKey)).Status.Should().Be(HttpStatusCode.Unauthorized, "…and retires the previous key");
@@ -279,7 +279,7 @@ public class InstanceKeyRotationTest(ITestOutputHelper output) : MonolithMeshTes
 
         var authenticator = Mesh.ServiceProvider.GetRequiredService<InstanceRegistryAuthenticator>();
         var outcome = await authenticator.AuthenticateOutcome($"{SyncAccessToken.Scheme} {token}")
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         outcome.Instance.Should().NotBeNull("a token minted with the staged key still resolves once that key is current");
         outcome.Instance!.Instance.InstanceId.Should().Be("token-through-commit");
     }

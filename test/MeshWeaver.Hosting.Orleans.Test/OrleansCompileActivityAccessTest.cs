@@ -177,7 +177,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{activityNamespace} scope:subtree"))
             .Select(r => r.Items.Count(n => n.Id != NodeTypeCompileStateMirror.StateId));
-        var firstCount = await activityCount.Should().Within(30.Seconds()).Match(c => c >= 1);
+        var firstCount = await activityCount.Should(TestContext.Current.CancellationToken).Within(30.Seconds()).Match(c => c >= 1);
         Output.WriteLine($"_Activity compile rows after first background-activation: {firstCount}");
 
         // Re-activate by a SECOND background read. If the kickoff is unguarded
@@ -199,7 +199,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // stream of "Access denied: user 'sync/...' lacks Create permission" lines.
         await activityCount
             .Where(c => c > firstCount)
-            .Should().NotEmit(within: TimeSpan.FromSeconds(8),
+            .Should(TestContext.Current.CancellationToken).NotEmit(within: TimeSpan.FromSeconds(8),
                 because: "the first-build kickoff fires exactly once (status guard + Take(1)); " +
                     "a second background activation MUST NOT trigger a second compile — the prod " +
                     "2026-05-21 loop bug the status guard fixes");
@@ -525,7 +525,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             .Select(r => r.Items.Count(n => n.Id != NodeTypeCompileStateMirror.StateId));
         await activityCount
             .Where(c => c > 0)
-            .Should().NotEmit(within: TimeSpan.FromSeconds(5),
+            .Should(TestContext.Current.CancellationToken).NotEmit(within: TimeSpan.FromSeconds(5),
                 because: "TestUser lacks Edit on OtherUser/; the write itself was denied " +
                     $"({updateException?.GetType().Name ?? "no exception"}), so no release-request " +
                     "lands and — with every System-driven kickoff excluded by a record that is " +

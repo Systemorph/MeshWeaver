@@ -141,7 +141,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         repoClient.Files = [Page("Lesson"), NestedSpace("Nested")];
 
         var first = await Sync.ReimportAtCommit(space, BuiltSha, UserId)
-            .Timeout(TestTimeouts.Convergence * 2).Await();
+            .Timeout(TestTimeouts.Convergence * 2).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"import 1: outcome={first.Outcome} count={first.Count} failed={first.Failed}");
 
         first.Outcome.Should().Be(StaticRepoImportResult.ContentErrorsOutcome,
@@ -172,7 +172,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
 
         // ── 2. THE MEASURED SHAPE. The same green build arrives again — three workflows go green on
         //       one merge, and a `*/15` cron probe re-delivers the unchanged tip 96 times a day.
-        var noSecondClone = repoClient.Fetches.Should().NotEmit(TestTimeouts.Quick,
+        var noSecondClone = repoClient.Fetches.Should(TestContext.Current.CancellationToken).NotEmit(TestTimeouts.Quick,
             "a delivery at a commit this source has already reached a FINAL verdict on must not "
             + "reach GitHub at all — the clone is unconditional (fetch first, diff second) and a "
             + "subdirectory scopes only the parse, so an attempt that can change nothing still "
@@ -183,7 +183,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         await noSecondClone;
 
         // ── 3. THE CONTROL THAT KEEPS THIS FROM BEING 'NEVER SYNC AGAIN'. The repository moves.
-        var newCommitClones = repoClient.Fetches.Should().Within(TestTimeouts.Convergence * 2)
+        var newCommitClones = repoClient.Fetches.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence * 2)
             .Emit("a source that is genuinely behind must still import: the skip is scoped to the "
                 + "ONE commit already judged, never to the source");
 
@@ -225,7 +225,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         repoClient.Files = [Page("Lesson"), Page($"{UnreachableMarker}Blip")];
 
         var first = await Sync.ReimportAtCommit(space, BuiltSha, UserId)
-            .Timeout(TestTimeouts.Convergence * 2).Await();
+            .Timeout(TestTimeouts.Convergence * 2).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"import 1: outcome={first.Outcome} count={first.Count} failed={first.Failed}");
 
         first.Failed.Should().BeGreaterThan(0,
@@ -254,7 +254,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         await QueryShows(space, c => c.LastAttemptedCommitSha == BuiltSha);
 
         // ── 2. THE POSITIVE CONTROL. The same green build arrives again and MUST be acted on.
-        var retried = repoClient.Fetches.Should().Within(TestTimeouts.Convergence * 2)
+        var retried = repoClient.Fetches.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence * 2)
             .Emit("a source whose last failure was NOT a verdict about the content must still be "
                 + "attempted at the same commit — the next delivery is the only thing that retries "
                 + "it, and a skip here would make a transient store fault permanent (#3101)");

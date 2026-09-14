@@ -310,7 +310,7 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
         // promotion invalidates — so the next request already sees `pro`.
         var plans = Mesh.ServiceProvider.GetRequiredService<InstancePlanService>();
         await plans.SetPlan(InstancePath(FreeInstance), "pro")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
 
         using var after = await Get(app, BundleRoute(ProApp), key);
         after.StatusCode.Should().Be(HttpStatusCode.OK, "the promoted instance pulls the pro package on its next request");

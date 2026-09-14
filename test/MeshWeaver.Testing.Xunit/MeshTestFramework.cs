@@ -44,8 +44,14 @@ public class MeshTestFramework : XunitTestFramework
     protected override ITestFrameworkExecutor CreateExecutor(Assembly assembly)
     {
         ArgumentNullException.ThrowIfNull(assembly);
+        // 🚨 `version:` BY NAME. xunit.v3 4.0 deprecated
+        // `XunitTestAssembly(Assembly, string, Version, string)` and replaced it with a wider
+        // signature whose tail is `assemblyName, assemblyPath, targetFramework, uniqueID, version`
+        // — so the positional third argument that used to be the Version now binds to
+        // `assemblyName` and the assembly reports a display name of "10.0.0.0". Nothing fails to
+        // compile and no test fails; the framework simply mislabels every assembly it hosts.
         return new MeshTestFrameworkExecutor(
-            new XunitTestAssembly(assembly, configFileName, assembly.GetName().Version));
+            new XunitTestAssembly(assembly, configFileName, version: assembly.GetName().Version));
     }
 }
 

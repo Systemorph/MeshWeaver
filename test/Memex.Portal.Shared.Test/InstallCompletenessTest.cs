@@ -126,7 +126,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
             .CreateLogger<InstallCompletenessTest>();
 
         await CatalogLayoutAreas.InstallOrUpdate(Mesh, source, "HEAD", Candidate(), logger)
-            .Should().Within(180.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(180.Seconds())
             .Emit("the first install must land before anything about a reinstall can be measured");
 
         (await WaitForNode(GuidePath, present: true)).Should().BeTrue(
@@ -144,7 +144,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
 
         // ── The loss. Exactly what happened to Feedback/Feedback/Source/FeedbackContent.
         await meshService.DeleteNode(GuidePath)
-            .Should().Within(60.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds())
             .Emit("the deletion is this test's precondition");
         // 🚨 The ABSENCE is read through the storage adapter, never GetMeshNodeStream: a point read
         // of an absent node FAULTS ("No node found at …") rather than emitting null, which is the
@@ -158,7 +158,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
         var second = await CatalogLayoutAreas
             .InstallOrUpdate(Mesh, source, "HEAD", Candidate(), logger)
             .Timeout(180.Seconds())
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         second.Written.Should().BeGreaterThan(0,
             "a reinstall over a mesh that is missing a declared node must WRITE — returning "
@@ -189,7 +189,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
 
         await CatalogLayoutAreas
             .InstallOrUpdate(Mesh, new FixedSource(Files()), "HEAD", Candidate(), logger)
-            .Should().Within(180.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(180.Seconds())
             .Emit("the install is the precondition");
 
         var record = await ReadRecord();
@@ -199,7 +199,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
             "immediately after an install every declared node is present — if this were false the "
             + "'incomplete' assertion below would prove nothing");
 
-        await meshService.DeleteNode(GuidePath).Should().Within(60.Seconds()).Emit("precondition");
+        await meshService.DeleteNode(GuidePath).Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit("precondition");
 
         var after = await WaitForVerdict(record!, InstallCompletenessKind.Incomplete);
         after.Kind.Should().Be(InstallCompletenessKind.Incomplete);
@@ -229,7 +229,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
 
         await CatalogLayoutAreas
             .InstallOrUpdate(Mesh, new FixedSource(Files()), "HEAD", Candidate(), logger)
-            .Should().Within(180.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(180.Seconds())
             .Emit("the accounted-for control has to exist before absence can discriminate anything");
 
         // The wreckage: the installer's stage-0 placeholder shape — a Space root with no content —
@@ -241,7 +241,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
                 Name = Abandoned,
                 State = MeshNodeState.Active,
             })
-            .Should().Within(60.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds())
             .Emit("the abandoned root is this test's subject");
 
         var persistence = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
@@ -255,7 +255,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
             .Where(list => list.Any(v => string.Equals(v.Partition, Abandoned, StringComparison.Ordinal)))
             .FirstAsync()
             .Timeout(120.Seconds())
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         reported.Should().Contain(
             v => v.Kind == InstallCompletenessKind.RootWithoutRecord
@@ -468,7 +468,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
 
         await CatalogLayoutAreas
             .InstallOrUpdate(Mesh, new FixedSource(CarryAlongFiles()), "HEAD", CarryAlongCandidate(), logger)
-            .Should().Within(180.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(180.Seconds())
             .Emit("the install has to land before its completeness can be measured");
 
         (await WaitForNode($"{CarryAlong}/Guide", present: true)).Should().BeTrue(
@@ -505,7 +505,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
 
         // ── The control: the gate must not have blinded the sweep to a REAL loss.
         await meshService.DeleteNode($"{CarryAlong}/Guide")
-            .Should().Within(60.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds())
             .Emit("the deletion is the control's precondition");
         (await WaitForNode($"{CarryAlong}/Guide", present: false)).Should().BeTrue(
             "the node has to be gone before its absence can be the thing measured");
@@ -620,7 +620,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
             // waits exactly that long gives up one second before the framework can explain itself
             // (TestTimeoutLiteralRatchetGuard).
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         verdicts.Should().ContainSingle(
             "a sweep that could not run emits exactly one verdict saying so — not zero, which is "
@@ -778,7 +778,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
             var activation = await landing.GetActivation()
                 .Take(1)
                 .Timeout(TestTimeouts.Convergence)
-                .Await();
+                .Await(TestContext.Current.CancellationToken);
             var record = MixedRecord();
             var loaded = ImmutableHashSet.Create(StringComparer.Ordinal, Module);
             var expectedDirectory = ModuleLandingService.ModuleDirectoryFor(root, Module, entry);
@@ -972,18 +972,18 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
         var log = new RecordingLogger();
 
         await CatalogLayoutAreas.InstallOrUpdate(Mesh, source, "HEAD", Candidate(), log)
-            .Should().Within(180.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(180.Seconds())
             .Emit("the first install is the precondition");
         (await WaitForNode(GuidePath, present: true)).Should().BeTrue(
             "the node this test deletes has to be there first");
 
-        await meshService.DeleteNode(GuidePath).Should().Within(60.Seconds()).Emit("the loss");
+        await meshService.DeleteNode(GuidePath).Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit("the loss");
         (await WaitForNode(GuidePath, present: false)).Should().BeTrue(
             "the node must really be gone, or the repair below repairs nothing");
 
         log.Clear();
         await CatalogLayoutAreas.InstallOrUpdate(Mesh, source, "HEAD", Candidate(), log)
-            .Should().Within(180.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(180.Seconds())
             .Emit("the repairing install");
         (await WaitForNode(GuidePath, present: true)).Should().BeTrue(
             "the repair must actually restore the node — this is #3485's own assertion, repeated "
@@ -1027,7 +1027,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
 
         await CatalogLayoutAreas
             .InstallOrUpdate(Mesh, new FixedSource(ShortFiles()), "HEAD", ShortCandidate(), log)
-            .Should().Within(180.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(180.Seconds())
             .Emit("the install itself must complete — a half-landed install is not a failed one, "
                   + "which is exactly why nothing noticed");
 

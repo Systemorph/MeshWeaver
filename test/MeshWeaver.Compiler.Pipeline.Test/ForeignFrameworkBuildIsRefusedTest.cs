@@ -102,10 +102,10 @@ public class ForeignFrameworkBuildIsRefusedTest(ITestOutputHelper output) : Mono
                         """,
                 },
             }))
-            .Should().Within(60.Seconds()).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit();
 
         await Mesh.GetMeshNodeStream(TypePath)
-            .Should().Within(120.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(120.Seconds())
             .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
                 is { CompilationStatus: CompilationStatus.Ok or CompilationStatus.Error });
 
@@ -144,8 +144,8 @@ public class ForeignFrameworkBuildIsRefusedTest(ITestOutputHelper output) : Mono
         // coordinates, same CompilationStatus.Ok.
         await Mesh.GetMeshNodeStream(TypePath)
             .Update<NodeTypeDefinition>(d => d with { CompiledFrameworkVersion = AnotherProcessesIdentity })
-            .Should().Within(60.Seconds()).Emit();
-        await Mesh.GetMeshNodeStream(TypePath).Should().Within(60.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit();
+        await Mesh.GetMeshNodeStream(TypePath).Should(TestContext.Current.CancellationToken).Within(60.Seconds())
             .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
                 is { CompiledFrameworkVersion: AnotherProcessesIdentity });
 

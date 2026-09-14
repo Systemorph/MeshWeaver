@@ -171,7 +171,7 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
 
         // ── the precondition: a green build the seal does not cover is HELD ──────────────
         var neverFetchedWhileHeld = repoClient.FetchedRefs.Where(r => r == LaterSha)
-            .Should().NotEmit(within: TestTimeouts.Quick);
+            .Should(TestContext.Current.CancellationToken).NotEmit(within: TestTimeouts.Quick);
         await Deliver(LaterSha);
         await neverFetchedWhileHeld;
 
@@ -185,13 +185,13 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
         // ── the negative control: an announcement while the seal is STILL at the old commit
         //    must move nothing, or this watcher imports on any stimulus rather than on the seal ──
         var stillNothing = repoClient.FetchedRefs.Where(r => r == LaterSha)
-            .Should().NotEmit(within: TestTimeouts.Quick);
+            .Should(TestContext.Current.CancellationToken).NotEmit(within: TestTimeouts.Quick);
         await AnnouncePublication();
         await stillNothing;
 
         // ── the fact under test: the lane seals at that commit and announces it ──────────
         var released = repoClient.FetchedRefs.Where(r => r == LaterSha)
-            .Should().Within(TestTimeouts.Convergence * 2)
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence * 2)
             .Emit("the seal is the trigger the green-build hook cannot be: it lands AFTER the hook, "
                   + "and the next hook asks about a newer commit the seal does not cover either — so "
                   + "without the announcement being listened to, this source waits for a restart");
@@ -210,7 +210,7 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
             .Where(h => h.Count == 0)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>

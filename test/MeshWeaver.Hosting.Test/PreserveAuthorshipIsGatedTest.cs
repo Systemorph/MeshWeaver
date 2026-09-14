@@ -68,7 +68,7 @@ public class PreserveAuthorshipIsGatedTest(ITestOutputHelper output) : MonolithM
                 {
                     PreserveAuthorship = true,
                 })
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         Output.WriteLine($"refusal: success={response.Message.Success} reason={response.Message.RejectionReason} error={response.Message.Error}");
 
@@ -92,7 +92,7 @@ public class PreserveAuthorshipIsGatedTest(ITestOutputHelper output) : MonolithM
 
         Access.SetCircuitContext(EditorContext);
         var response = await ObserveNodeOperation(new CopyNodeRequest(sourcePath, targetPath))
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         Output.WriteLine($"plain copy: success={response.Message.Success} reason={response.Message.RejectionReason} error={response.Message.Error}");
 
@@ -100,7 +100,7 @@ public class PreserveAuthorshipIsGatedTest(ITestOutputHelper output) : MonolithM
             response.Message.Error
             ?? "the gate is about the flag alone — an Editor may still copy, and the copy is stamped for them");
 
-        var copy = await ReadNode(targetPath).Should().Within(TestTimeouts.Convergence)
+        var copy = await ReadNode(targetPath).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
             .Match(n => n is not null, "the copy must exist");
         copy!.CreatedBy.Should().Be(EditorId,
             "a copy is a new node, stamped for whoever made it — which is exactly why it needs no "

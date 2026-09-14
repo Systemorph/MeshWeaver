@@ -271,7 +271,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
         // the per-NodeType hub, which is what installs the compile watcher and drives that first build
         // — so this waits on the real condition rather than sleeping past a race.
         await SiloMeshHub.GetWorkspace().GetMeshNodeStream(typePath)
-            .Should().Within(TimeSpan.FromSeconds(60))
+            .Should(TestContext.Current.CancellationToken).Within(TimeSpan.FromSeconds(60))
             .Match(n => n?.Content is NodeTypeDefinition def
                         && def.CompilationStatus == CompilationStatus.Ok);
 

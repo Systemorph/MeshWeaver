@@ -99,7 +99,7 @@ public abstract class OrleansMeshTestBase(ITestOutputHelper output) : TestBase(o
     /// fixture here (the AI one in MeshWeaver.Plugins does); everyone else gets the stock fixture
     /// built to this suite's <see cref="ClusterShape"/>.
     /// </summary>
-    protected virtual SharedOrleansFixture CreateFixture() => new(ClusterShape);
+    protected virtual SharedOrleansFixture CreateFixture() => new() { Shape = ClusterShape };
 
     /// <summary>The cluster this suite asked for, resolved from <see cref="Bootstrap"/>.</summary>
     protected OrleansClusterShape ClusterShape => new(

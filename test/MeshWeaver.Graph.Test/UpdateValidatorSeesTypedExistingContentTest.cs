@@ -69,13 +69,13 @@ public class UpdateValidatorSeesTypedExistingContentTest(ITestOutputHelper outpu
         var id = NewId();
         var path = $"{TestPartition}/{id}";
         await MeshService.CreateNode(Versioned(id, "High", 5)).Take(1)
-            .Should().Within(60.Seconds()).Emit("the node to downgrade must exist first");
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit("the node to downgrade must exist first");
 
         var failure = await Record.ExceptionAsync(() =>
             MeshService.UpdateNode(Versioned(id, "Downgraded", 3))
-                .Take(1).Timeout(60.Seconds()).Await());
+                .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken));
 
-        var seen = await Validator.ObservedExistingContentType.FirstAsync().Timeout(60.Seconds()).Await();
+        var seen = await Validator.ObservedExistingContentType.FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
         seen.Should().Be(typeof(VersionedContent),
             "the pipeline must hand validators the existing node with content typed like the "
             + "proposed one — a JsonElement here is the silent pass #3056 opened");
@@ -85,7 +85,7 @@ public class UpdateValidatorSeesTypedExistingContentTest(ITestOutputHelper outpu
         failure!.Message.Should().Contain("downgrade");
 
         var after = await Mesh.GetWorkspace().GetMeshNodeStream(path)
-            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds()).Await();
+            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
         after.ContentAs<VersionedContent>(Mesh.JsonSerializerOptions)!.Version.Should().Be(5,
             "a refused update must leave the node as it was");
     }
@@ -96,17 +96,17 @@ public class UpdateValidatorSeesTypedExistingContentTest(ITestOutputHelper outpu
         var id = NewId();
         var path = $"{TestPartition}/{id}";
         await MeshService.CreateNode(Versioned(id, "Low", 1)).Take(1)
-            .Should().Within(60.Seconds()).Emit("the node to upgrade must exist first");
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit("the node to upgrade must exist first");
 
         await MeshService.UpdateNode(Versioned(id, "Upgraded", 2)).Take(1)
-            .Should().Within(60.Seconds()).Emit("an upgrade passes the validator and lands");
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit("an upgrade passes the validator and lands");
 
-        var seen = await Validator.ObservedExistingContentType.FirstAsync().Timeout(60.Seconds()).Await();
+        var seen = await Validator.ObservedExistingContentType.FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
         seen.Should().Be(typeof(VersionedContent));
 
         var after = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null && n.ContentAs<VersionedContent>(Mesh.JsonSerializerOptions)?.Version == 2)
-            .FirstAsync().Timeout(60.Seconds()).Await();
+            .FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
         after.Name.Should().Be("Upgraded");
     }
 }

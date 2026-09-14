@@ -50,11 +50,11 @@ public class ImportTypeBeforeInstanceTest(ITestOutputHelper output) : MonolithMe
 
         var source = new FakeRepoSource(partition) { Root = Space(partition), Nodes = nodes };
 
-        // 🚨 .Await(), never a bare `await source`: Rx's own awaiter resumes the continuation
+        // 🚨 .Await(TestContext.Current.CancellationToken), never a bare `await source`: Rx's own awaiter resumes the continuation
         // INLINE on the signalling thread, still inside the trampoline, and every later await in
         // the method inherits that scheduler — the .ToTask() defect wearing different clothes.
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(180.Seconds()).Await();
+            .FirstAsync().Timeout(180.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine(
             $"outcome={result.Outcome} count={result.Count} failed={result.Failed} "
             + $"blocked=[{string.Join(", ", result.BlockedCreatePaths)}]");
@@ -88,11 +88,11 @@ public class ImportTypeBeforeInstanceTest(ITestOutputHelper output) : MonolithMe
             ],
         };
 
-        // 🚨 .Await(), never a bare `await source`: Rx's own awaiter resumes the continuation
+        // 🚨 .Await(TestContext.Current.CancellationToken), never a bare `await source`: Rx's own awaiter resumes the continuation
         // INLINE on the signalling thread, still inside the trampoline, and every later await in
         // the method inherits that scheduler — the .ToTask() defect wearing different clothes.
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(180.Seconds()).Await();
+            .FirstAsync().Timeout(180.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine(
             $"outcome={result.Outcome} count={result.Count} failed={result.Failed} "
             + $"blocked=[{string.Join(", ", result.BlockedCreatePaths)}]");

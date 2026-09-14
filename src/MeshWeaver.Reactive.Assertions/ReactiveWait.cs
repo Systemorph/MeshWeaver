@@ -52,8 +52,17 @@ internal static class ReactiveWait
     /// </summary>
     /// <typeparam name="T">The source's element type.</typeparam>
     /// <param name="source">The (terminating) source to wait on.</param>
+    /// <param name="cancellationToken">
+    /// Cancels the WAIT, not the source — the subscription is disposed and the task settles
+    /// canceled. This is how a test's own <c>[Fact(Timeout = …)]</c> reaches an assertion: xunit
+    /// v3 implements <c>Timeout</c> by firing <c>TestContext.Current.CancellationToken</c> and
+    /// nothing else, so an assertion that never sees the token keeps waiting out its OWN bound
+    /// after the runner has already failed the test and moved on — with a live subscriber still
+    /// attached to the stream the next test is about to use. Default is <c>None</c>, which keeps
+    /// every existing call site behaving exactly as before.
+    /// </param>
     /// <returns>The first value, or <c>default</c> if the source completed without one.</returns>
-    public static Task<T?> First<T>(IObservable<T> source)
+    public static Task<T?> First<T>(IObservable<T> source, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -115,6 +124,35 @@ internal static class ReactiveWait
                 subscription.Dispose();
                 completion.TrySetResult(default);
             });
+
+        // 🚨 REGISTERED AFTER the subscribe, and it disposes the subscription exactly the way the
+        // three handlers above do — so "the wait settled" keeps IMPLYING "the wait unsubscribed"
+        // on the cancellation path too. An already-cancelled token fires the callback inline here,
+        // which is correct: the test's budget is already spent, so the wait must not begin.
+        //
+        // No registration at all when the token cannot be cancelled (the default), so every
+        // existing call site allocates and executes exactly what it did before.
+        if (!cancellationToken.CanBeCanceled)
+            return completion.Task;
+
+        var registration = cancellationToken.Register(
+            static state =>
+            {
+                var (sub, tcs) = ((IDisposable, TaskCompletionSource<T?>))state!;
+                sub.Dispose();
+                tcs.TrySetCanceled();
+            },
+            (subscription, completion));
+
+        // Dispose the registration when the wait settles, whichever way it settled — a
+        // CancellationTokenRegistration left on a long-lived token roots the closure, and the
+        // token here lives as long as the TEST, not as long as this one assertion.
+        _ = completion.Task.ContinueWith(
+            static (_, state) => ((CancellationTokenRegistration)state!).Dispose(),
+            registration,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
         return completion.Task;
     }

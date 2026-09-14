@@ -113,7 +113,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
                     HiddenPaths = [Space],
                 }
             })
-            .Should().Emit();
+            .Should(TestContext.Current.CancellationToken).Emit();
 
         var screen = await ScreenOf(Alice)
             .Where(s => s.Active && s.MarkedPaths.Contains(Space))
@@ -165,7 +165,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
             {
                 Content = PresentationPreference.SetMode(node.ContentAs<User>(options), true)
             })
-            .Should().Emit();
+            .Should(TestContext.Current.CancellationToken).Emit();
 
         // The SAME subscription source now reports the screen up — no reload, no new circuit.
         var live = await ScreenOf(Alice)
@@ -180,7 +180,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
             {
                 Content = PresentationPreference.SetMode(node.ContentAs<User>(options), false)
             })
-            .Should().Emit();
+            .Should(TestContext.Current.CancellationToken).Emit();
 
         var off = await ScreenOf(Alice)
             .Where(s => !s.Active)

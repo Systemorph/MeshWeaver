@@ -91,7 +91,7 @@ public class CompileCacheInputFreshnessTest(ITestOutputHelper output) : Monolith
         var type = TypeNode(capturedAt);
         var before = Sources(capturedAt, 42, "original-case");
         var first = Assert.IsAssignableFrom<NodeCompilationResult>(await Compiler.CompileAndGetConfigurations(type, before)
-            .Take(1).Should().Within(TestTimeouts.Convergence).Emit());
+            .Take(1).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit());
         Transcript(first).Should().Contain("Compiled assembly written to");
         EmittedBehavior(first).Should().Be("42|original-case");
 
@@ -107,7 +107,7 @@ public class CompileCacheInputFreshnessTest(ITestOutputHelper output) : Monolith
         var after = ImmutableArray.Create(changeSource ? changed[0] : before[0],
             changeTest ? changed[1] : before[1]);
         var second = Assert.IsAssignableFrom<NodeCompilationResult>(await Compiler.CompileAndGetConfigurations(type, after)
-            .Take(1).Should().Within(TestTimeouts.Convergence).Emit());
+            .Take(1).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit());
         var behavior = EmittedBehavior(second);
         var stampedCurrentSources = after.All(source => second.CompiledSources is { } snapshot
             && snapshot.TryGetValue(source.Path, out var stamp)
@@ -140,7 +140,7 @@ public class CompileCacheInputFreshnessTest(ITestOutputHelper output) : Monolith
         var sources = Sources(capturedAt, 42, "original-case");
         var first = Assert.IsAssignableFrom<NodeCompilationResult>(await Compiler
             .CompileAndGetConfigurations(before, sources).Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit());
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit());
         Transcript(first).Should().Contain("Compiled assembly written to");
         EmittedConfiguration(first).Should().Be("original");
         var editedAt = new DateTimeOffset(File.GetLastWriteTimeUtc(first.AssemblyLocation!), TimeSpan.Zero)
@@ -149,7 +149,7 @@ public class CompileCacheInputFreshnessTest(ITestOutputHelper output) : Monolith
 
         var second = Assert.IsAssignableFrom<NodeCompilationResult>(await Compiler
             .CompileAndGetConfigurations(TypeNode(editedAt, "changed"), sources).Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit());
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit());
         EmittedConfiguration(second).Should().Be("changed");
         EmittedBehavior(second).Should().Be("42|original-case", "only the configuration changed");
         second.AssemblyLocation.Should().NotBe(first.AssemblyLocation);
@@ -175,14 +175,14 @@ public class CompileCacheInputFreshnessTest(ITestOutputHelper output) : Monolith
         var sources = Sources(capturedAt, 42, "original-case");
         var first = Assert.IsAssignableFrom<NodeCompilationResult>(await Compiler
             .CompileAndGetConfigurations(before, sources).Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit());
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit());
         Transcript(first).Should().Contain("Compiled assembly written to");
         EmittedBehavior(first).Should().Be("42|original-case");
 
         var next = definitionBecomesUnresolved ? before with { Content = null } : before;
         var second = Assert.IsAssignableFrom<NodeCompilationResult>(await Compiler
             .CompileAndGetConfigurations(next, sources).Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit());
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit());
         Output.WriteLine("Second compiler transcript: {0}", Transcript(second));
         EmittedBehavior(second).Should().Be("42|original-case");
         if (definitionBecomesUnresolved)

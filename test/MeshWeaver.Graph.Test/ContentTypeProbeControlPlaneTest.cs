@@ -210,7 +210,7 @@ public class ContentTypeProbeControlPlaneTest(ITestOutputHelper output) : Monoli
             $"{TransientProbeAddresses.ContentTypeRegistrationProbePrefix}{Guid.NewGuid():N}";
 
         var emitted = await cache.GetStream(probePath, Mesh.JsonSerializerOptions)
-            .ToArray().Should().Within(TestTimeouts.Quick).Emit();
+            .ToArray().Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Quick).Emit();
 
         emitted.Should().BeEmpty(
             "there is no node at a registration probe's synthetic address and there never will be "

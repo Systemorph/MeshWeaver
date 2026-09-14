@@ -68,7 +68,7 @@ public class RuleChainConcurrentDisposeTest(ITestOutputHelper output) : HubTestB
             // resolve; a raw-walk regression NREs the delivery so the response never lands → timeout.
             for (var i = 0; i < 300; i++)
                 await host.Observe(new PingReq(), o => o.WithTarget(target))
-                    .Should().Within(10.Seconds()).Emit();
+                    .Should(TestContext.Current.CancellationToken).Within(10.Seconds()).Emit();
         }
         finally
         {

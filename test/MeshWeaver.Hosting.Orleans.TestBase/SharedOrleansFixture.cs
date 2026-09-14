@@ -79,10 +79,32 @@ public class SharedOrleansFixture : IAsyncLifetime
     private readonly OrleansClusterShape? shape;
 
     /// <summary>Constructs the default cluster — one silo, the shared configurator.</summary>
+    ///
+    /// <remarks>
+    /// 🚨 THIS IS THE ONLY PUBLIC CONSTRUCTOR, AND THAT IS LOAD-BEARING — a described shape is
+    /// handed over through <see cref="Shape"/> in an object initializer, never through a second
+    /// ctor overload. xunit constructs a class/collection fixture by taking the type's single
+    /// public non-static constructor and resolving each parameter from the fixtures it already
+    /// holds; a type with two of them cannot be constructed at all, and a type with one taking a
+    /// parameter xunit does not know about fails on that parameter. This one used to declare
+    /// <c>SharedOrleansFixture()</c> AND <c>SharedOrleansFixture(OrleansClusterShape)</c>, so every
+    /// <c>ICollectionFixture&lt;SharedOrleansFixture&gt;</c> over it — here and in every repo that
+    /// declares its own collection over the same fixture — was unconstructible. xunit.v3 4.x
+    /// surfaces this as the xUnit1056 ERROR (not a warning) that fails the build; before 4.x it was
+    /// a runtime failure waiting for the first suite that actually used the collection.
+    /// </remarks>
     public SharedOrleansFixture() { }
 
-    /// <summary>Constructs the cluster a caller DESCRIBED, rather than one a subclass hard-codes.</summary>
-    public SharedOrleansFixture(OrleansClusterShape shape) => this.shape = shape;
+    /// <summary>
+    /// The cluster a caller DESCRIBED, rather than one a subclass hard-codes — set through an
+    /// object initializer (<c>new SharedOrleansFixture { Shape = … }</c>). <c>null</c> leaves every
+    /// hook below on its default, which is what a DERIVED fixture that overrides them wants.
+    /// </summary>
+    public OrleansClusterShape? Shape
+    {
+        get => shape;
+        init => shape = value;
+    }
 
     /// <summary>
     /// Subclass hook: the silo configurator this cluster is built with. Orleans instantiates it via

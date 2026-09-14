@@ -200,7 +200,7 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
         var typePath = $"{TestPartition}/{typeId}";
 
         var absent = await DynamicTypePreWarmer.TypeNodeExists(Mesh, typePath, null)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         absent.Should().BeFalse("a path nothing ever created is not in any listing");
 
         await meshService.CreateNode(new MeshNode(typeId, TestPartition)
@@ -208,13 +208,13 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
                 NodeType = MeshNode.NodeTypePath, Name = typeId, State = MeshNodeState.Active,
                 Content = new NodeTypeDefinition { Configuration = "config => config" },
             })
-            .Take(1).Should().Within(TestTimeouts.Convergence).Emit("the type must exist before it is asked about");
+            .Take(1).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit("the type must exist before it is asked about");
 
         // The listing is eventually consistent — wait for it to reflect the create, bounded.
         var present = await Observable.Interval(200.Milliseconds()).StartWith(0L)
             .SelectMany(_ => DynamicTypePreWarmer.TypeNodeExists(Mesh, typePath, null).Take(1))
             .Where(exists => exists)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         present.Should().BeTrue();
     }
 }

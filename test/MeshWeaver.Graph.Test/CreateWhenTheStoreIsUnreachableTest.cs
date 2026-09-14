@@ -316,7 +316,7 @@ public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : Mon
 
         response.Success.Should().BeTrue(
             $"the faulting adapter only fails the marked paths — {response.Error}");
-        (await ReadNode(PathOf(id)).FirstAsync().Timeout(60.Seconds()).Await())
+        (await ReadNode(PathOf(id)).FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken))
             .Should().NotBeNull("the create landed and must be readable back");
     }
 

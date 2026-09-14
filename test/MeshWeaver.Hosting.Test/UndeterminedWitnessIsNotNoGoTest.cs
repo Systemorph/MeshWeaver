@@ -387,7 +387,7 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
     {
         await WriteTheDurableBuildRoot(Go(MyFingerprint));
 
-        var reading = await Mesh.ReadBuildGoReading(MyFingerprint).Await();
+        var reading = await Mesh.ReadBuildGoReading(MyFingerprint).Await(TestContext.Current.CancellationToken);
 
         Witness.Served.Should().BeTrue("the injected fault must actually have been served");
         reading.Witness.Should().Be(BuildGoWitness.Undetermined,

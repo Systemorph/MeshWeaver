@@ -110,19 +110,19 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
                 LastSyncCommitSha = RevisionB,
                 LastSyncOutcome = "Skipped",
             },
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         var before = await Config(space);
 
         if (protectHumanEdit)
             await Mesh.GetWorkspace().GetMeshNodeStream($"{space}/Authored").Update(node => node with
             {
                 Content = new MarkdownContent { Content = "A person's uncommitted revision" },
-            }).Should().Within(TestTimeouts.Convergence).Emit();
+            }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         var result = await (reconcile
                 ? Sync.ReconcileAtCommit(space, RevisionB, UserId)
                 : Sync.ReimportAtCommit(space, RevisionB, UserId))
-            .Should().Within(TestTimeouts.Convergence * 2).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence * 2).Emit();
         result.WrittenPaths.Should().Contain($"{space}/Existing",
             "an empty B..B Git diff cannot describe drift in the live partition");
         result.WrittenPaths.Should().Contain($"{space}/Added");
@@ -151,11 +151,11 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
             {
                 Content = new MarkdownContent { Content = "System-written stale revision A" },
             });
-        await write.Should().Within(TestTimeouts.Convergence).Emit();
+        await write.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         (await Body($"{space}/Existing")).Should().Contain("revision A");
 
         var result = await Sync.ReconcileAtCommit(space, RevisionB, UserId)
-            .Should().Within(TestTimeouts.Convergence * 2).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence * 2).Emit();
         result.WrittenPaths.Should().Contain($"{space}/Existing",
             "reconciliation evaluates the measured live mismatch even when the source ledger matches B");
         await AssertRevisionB(space);
@@ -173,17 +173,17 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
                 Content = new MarkdownContent { Content = "Identical authored content" },
             }));
         var first = await StaticRepoImporter.ImportSource(Mesh, firstSource)
-            .Should().Within(TestTimeouts.Convergence * 2).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence * 2).Emit();
         first.Outcome.Should().Be("Imported");
         var path = $"{partition}/Page";
         var before = await Mesh.GetWorkspace().GetMeshNodeStream(path).Where(n => n is not null)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         var nextSource = firstSource with
         {
             Nodes = firstSource.Nodes.SetItem(0, firstSource.Nodes[0] with { Version = 43 }),
         };
         var next = await StaticRepoImporter.ImportSource(Mesh, nextSource)
-            .Should().Within(TestTimeouts.Convergence * 2).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence * 2).Emit();
         next.Fingerprint.Should().NotBe(first.Fingerprint,
             "Versioned sources use their revision in the import fingerprint");
         next.Outcome.Should().Be("Imported");
@@ -193,10 +193,10 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
         foreach (var source in ImmutableList.Create(firstSource, nextSource))
         {
             var repeat = await StaticRepoImporter.ImportSource(Mesh, source)
-                .Should().Within(TestTimeouts.Convergence * 2).Emit();
+                .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence * 2).Emit();
             repeat.Outcome.Should().Be("Skipped");
             var after = await Mesh.GetWorkspace().GetMeshNodeStream(path).Where(n => n is not null)
-                .Should().Within(TestTimeouts.Convergence).Emit();
+                .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
             after.Version.Should().Be(before.Version,
                 "the owner clocks writes; imported source revisions must not create a write of identical content");
             after.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)!.Content
@@ -215,12 +215,12 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
                 Content = new MarkdownContent { Content = "Preserved source" },
             }));
         var first = await StaticRepoImporter.ImportSource(Mesh, source)
-            .Should().Within(TestTimeouts.Convergence * 2).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence * 2).Emit();
         first.Outcome.Should().Be("Imported");
 
         var repeat = await StaticRepoImporter.ImportSource(Mesh,
                 source with { Nodes = source.Nodes.Add(new MeshNode(string.Empty)) })
-            .Should().Within(TestTimeouts.Convergence * 2).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence * 2).Emit();
         repeat.Fingerprint.Should().Be(first.Fingerprint,
             "the fingerprint and manifest writer both omit empty source paths");
         repeat.Outcome.Should().Be("Skipped");

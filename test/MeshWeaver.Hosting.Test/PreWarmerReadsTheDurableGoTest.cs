@@ -229,7 +229,7 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
         const long stagedVersion = 11;
         await Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>()
             .Put(bakedType, stagedVersion, [0x4D, 0x5A, 0x00, 0x00], null)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         // Recorded assembly + bytes on the share ⇒ the probe classifies this Baked, so nothing is
         // gate-relevant. The refusal below can therefore only come from the witness's answer.

@@ -64,38 +64,38 @@ public class MoveCarriesSatellitesTest(ITestOutputHelper output) : MonolithMeshT
             Name = "Doc",
             NodeType = "Markdown",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         await NodeFactory.CreateNode(MeshNode.FromPath(sourceChild) with
         {
             Name = "Pricing",
             NodeType = "Markdown",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         await NodeFactory.CreateNode(MeshNode.FromPath($"{sourceRoot}/{rootComment}") with
         {
             Name = "A comment on the doc",
             NodeType = "Comment",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         await NodeFactory.CreateNode(MeshNode.FromPath($"{sourceRoot}/{childComment}") with
         {
             Name = "A comment on the child",
             NodeType = "Comment",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         await NodeFactory.CreateNode(MeshNode.FromPath($"{sourceRoot}/{nestedReply}") with
         {
             Name = "A reply to the comment",
             NodeType = "Comment",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         var before = await Storage.ListDescendantPaths(sourceRoot)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         Output.WriteLine($"BEFORE storage descendants of {sourceRoot}: [{string.Join(", ", before.OrderBy(p => p, StringComparer.Ordinal))}]");
 
         // The copy leg's own read. It returns the MAIN subtree and nothing else — which is the
@@ -105,21 +105,21 @@ public class MoveCarriesSatellitesTest(ITestOutputHelper output) : MonolithMeshT
             .Where(c => c.ChangeType == QueryChangeType.Initial)
             .Select(c => c.Items)
             .Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         Output.WriteLine($"COPY-LEG QUERY 'path:{sourceRoot} scope:subtree' returns: "
             + $"[{string.Join(", ", copyLegSees.Select(n => n.Path).OrderBy(p => p, StringComparer.Ordinal))}]");
 
         var moved = await ObserveNodeOperation(new MoveNodeRequest(sourceRoot, targetRoot))
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         Output.WriteLine($"MOVE success={moved.Message.Success} error={moved.Message.Error}");
         moved.Message.Success.Should().BeTrue(moved.Message.Error ?? "the move must succeed");
 
         var after = await Storage.ListDescendantPaths(targetRoot)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         Output.WriteLine($"AFTER  storage descendants of {targetRoot}: [{string.Join(", ", after.OrderBy(p => p, StringComparer.Ordinal))}]");
 
         var leftBehind = await Storage.ListDescendantPaths(sourceRoot)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         Output.WriteLine($"AFTER  storage descendants of {sourceRoot}: [{string.Join(", ", leftBehind.OrderBy(p => p, StringComparer.Ordinal))}]");
 
         foreach (var tail in new[] { rootComment, childComment, nestedReply })
@@ -135,7 +135,7 @@ public class MoveCarriesSatellitesTest(ITestOutputHelper output) : MonolithMeshT
         // The node, not merely a path: a satellite carried as an empty shell would satisfy the
         // enumeration above and still have lost the comment.
         var carriedComment = await ReadNode($"{targetRoot}/{rootComment}")
-            .Should().Within(TestTimeouts.Convergence)
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
             .Match(n => n is not null, $"the comment must exist at {targetRoot}/{rootComment}");
         carriedComment!.Name.Should().Be("A comment on the doc", "the satellite's content travels with it");
         carriedComment.NodeType.Should().Be("Comment");
@@ -164,14 +164,14 @@ public class MoveCarriesSatellitesTest(ITestOutputHelper output) : MonolithMeshT
             Name = "Doc",
             NodeType = "Markdown",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         await NodeFactory.CreateNode(MeshNode.FromPath($"{sourceRoot}/_Comment/c1") with
         {
             Name = "A comment",
             NodeType = "Comment",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         var refused = await ObserveNodeOperation(new CopyNodeRequest(sourceRoot, targetRoot)
             {
@@ -179,7 +179,7 @@ public class MoveCarriesSatellitesTest(ITestOutputHelper output) : MonolithMeshT
                 IncludeSatellites = false,
                 RequireComplete = true,
             })
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         Output.WriteLine($"COPY success={refused.Message.Success} error={refused.Message.Error}");
 
@@ -191,13 +191,13 @@ public class MoveCarriesSatellitesTest(ITestOutputHelper output) : MonolithMeshT
         refused.Message.RejectionReason.Should().Be(NodeCopyRejectionReason.ValidationFailed);
 
         // Nothing was written at the target: the check runs before the first create.
-        var target = await ReadNode(targetRoot).Should().Within(TestTimeouts.Convergence)
+        var target = await ReadNode(targetRoot).Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
             .Match(n => n is null, "the refusal happens before anything is created");
         target.Should().BeNull();
 
         // And the source is untouched.
         var stillThere = await Storage.ListDescendantPaths(sourceRoot)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         stillThere.Should().Contain(
             p => string.Equals(p, $"{sourceRoot}/_Comment/c1", StringComparison.OrdinalIgnoreCase),
             "a refused copy removes nothing");

@@ -282,7 +282,7 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
             .Where(_ => bake.Regressions.Count == 0)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(20))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         bake.Retracted.Keys.Should().Contain(condemned,
             "the retraction must SAY the regression was withdrawn — a silently-vanished one is "

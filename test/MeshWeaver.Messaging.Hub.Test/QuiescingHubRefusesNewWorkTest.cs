@@ -147,7 +147,7 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
         // 🚨 The positive, specific signal that the hub left Quiescing by DRAINING: disposal
         // completes inside Convergence, orders of magnitude short of the held quiesce budget. A
         // refused reply would instead park until HeldQuiesceBudget and end in [QUIESCE-TIMEOUT].
-        await fixture.Victim.DisposalCompleted.FirstOrDefaultAsync().Await()
+        await fixture.Victim.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken)
             .WaitAsync(TestTimeouts.Convergence);
         fixture.Victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
     }
@@ -212,7 +212,7 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
                 AccessContext = new AccessContext { ObjectId = "forwarding-test" }
             };
             fixture.Victim.DeliverMessage(delivery);
-            await arrived.Should().Within(TestTimeouts.Convergence).Emit(
+            await arrived.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit(
                 "quiescing stops new work owned by this hub, but preserves transit traffic");
         }
         finally

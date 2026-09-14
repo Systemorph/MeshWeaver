@@ -177,11 +177,11 @@ public class ContentReadIsNotQueuedBehindNodeCrudTest(ITestOutputHelper output)
             }));
         try
         {
-            await _parked.Should().Within(TestTimeouts.Convergence)
+            await _parked.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
                 .Emit("the node-CRUD execution hub must actually be busy");
 
             var node = await Mesh.GetMeshNode(ProbeNodePath)
-                .Should().Within(TestTimeouts.Convergence)
+                .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
                 .Emit("a one-shot node read must answer while an unrelated node write is in flight");
 
             node.Should().NotBeNull("the probe node exists");
@@ -192,7 +192,7 @@ public class ContentReadIsNotQueuedBehindNodeCrudTest(ITestOutputHelper output)
             _park!.Release();
         }
 
-        await write.Should().Within(TestTimeouts.Convergence)
+        await write.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
             .Emit("the parked write must complete once released");
     }
 

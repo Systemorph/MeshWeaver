@@ -90,10 +90,10 @@ public class CellSurfaceRefusedBuildTest(ITestOutputHelper output) : MonolithMes
                         """,
                 },
             }))
-            .Should().Within(60.Seconds()).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit();
 
         var compiled = await Mesh.GetMeshNodeStream(TypePath)
-            .Should().Within(120.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(120.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition
             {
                 CompilationStatus: CompilationStatus.Ok or CompilationStatus.Error
@@ -116,8 +116,8 @@ public class CellSurfaceRefusedBuildTest(ITestOutputHelper output) : MonolithMes
                 CurrentSourceFingerprint = "livefingerprintB",
                 BuildProvenance = BuildProvenance.AdoptionRefused,
             })
-            .Should().Within(60.Seconds()).Emit();
-        await Mesh.GetMeshNodeStream(TypePath).Should().Within(60.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit();
+        await Mesh.GetMeshNodeStream(TypePath).Should(TestContext.Current.CancellationToken).Within(60.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition
             {
                 BuildProvenance: BuildProvenance.AdoptionRefused

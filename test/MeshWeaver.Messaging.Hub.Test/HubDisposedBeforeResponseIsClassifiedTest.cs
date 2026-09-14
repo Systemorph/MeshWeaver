@@ -62,7 +62,7 @@ public class HubDisposedBeforeResponseIsClassifiedTest(ITestOutputHelper output)
         using var _sub = sub;
 
         hub.Dispose();
-        await hub.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TimeSpan.FromSeconds(120));
+        await hub.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(120));
 
         Assert.NotNull(observed);
 

@@ -147,16 +147,16 @@ public class SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest(ITestOutputHelpe
         var configPath = GitHubSyncService.ConfigPath(space);
         await AssertTheFoldIsUnchanged(configPath);
 
-        await IsVisibleTo(configPath, PlatformAdmin).Should().Within(Budget).Match(seen => seen,
+        await IsVisibleTo(configPath, PlatformAdmin).Should(TestContext.Current.CancellationToken).Within(Budget).Match(seen => seen,
             "the platform admin must be able to SEE the config that re-imports a repository");
-        await IsVisibleTo(space, PlatformAdmin).Should().Within(Budget).Match(seen => seen,
+        await IsVisibleTo(space, PlatformAdmin).Should(TestContext.Current.CancellationToken).Within(Budget).Match(seen => seen,
             "the platform admin must be able to see that the system-owned Space EXISTS");
 
         var configSeenByPlainUser = await IsVisibleTo(configPath, PlainUser)
-            .Should().Within(Budget).Emit("the query itself must answer, so the emptiness is a verdict");
+            .Should(TestContext.Current.CancellationToken).Within(Budget).Emit("the query itself must answer, so the emptiness is a verdict");
         Assert.False(configSeenByPlainUser, "a non-admin still cannot see somebody else's sync config");
         var spaceSeenByPlainUser = await IsVisibleTo(space, PlainUser)
-            .Should().Within(Budget).Emit("the query itself must answer, so the emptiness is a verdict");
+            .Should(TestContext.Current.CancellationToken).Within(Budget).Emit("the query itself must answer, so the emptiness is a verdict");
         Assert.False(spaceSeenByPlainUser, "a non-admin still cannot see a Space they hold nothing on");
     }
 
@@ -173,18 +173,18 @@ public class SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest(ITestOutputHelpe
         await AssertTheFoldIsUnchanged(configPath);
 
         var refused = await DeleteAs(configPath, PlainUser)
-            .Should().Within(Budget).Emit("the delete must answer");
+            .Should(TestContext.Current.CancellationToken).Within(Budget).Emit("the delete must answer");
         Assert.False(refused.Success, "a non-admin must not be able to remove somebody else's sync");
         Assert.Equal(NodeDeletionRejectionReason.Unauthorized, refused.RejectionReason);
         Assert.NotNull(await NodeTypeAccessRuleGate.ReadSubjectNode(Mesh, configPath)
-            .Should().Within(Budget).Emit("the refused delete must have left the config in place"));
+            .Should(TestContext.Current.CancellationToken).Within(Budget).Emit("the refused delete must have left the config in place"));
 
         var deleted = await DeleteAs(configPath, PlatformAdmin)
-            .Should().Within(Budget).Emit("the delete must answer");
+            .Should(TestContext.Current.CancellationToken).Within(Budget).Emit("the delete must answer");
         Assert.True(deleted.Success,
             $"the platform admin's delete must succeed, but was refused: {deleted.Error}");
         var afterwards = await NodeTypeAccessRuleGate.ReadSubjectNode(Mesh, configPath)
-            .Should().Within(Budget).Emit("storage must answer about the deleted path");
+            .Should(TestContext.Current.CancellationToken).Within(Budget).Emit("storage must answer about the deleted path");
         Assert.Null(afterwards);
     }
 }

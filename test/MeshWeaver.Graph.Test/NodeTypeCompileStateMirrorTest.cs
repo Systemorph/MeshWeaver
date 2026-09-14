@@ -49,7 +49,7 @@ public class NodeTypeCompileStateMirrorTest(ITestOutputHelper output) : Monolith
                 Name = "Widget",
                 State = MeshNodeState.Active,
                 Content = WidgetContent(1082),
-            }).Should().Emit();
+            }).Should(TestContext.Current.CancellationToken).Emit();
 
         // The mirror (installed by the per-node hub's activation) lands the state on the
         // fixed-id satellite. Compile machinery may add its own flips (status kickoffs);
@@ -60,17 +60,17 @@ public class NodeTypeCompileStateMirrorTest(ITestOutputHelper output) : Monolith
         // bare create in this fixture does not spin the hub up. In production type hubs
         // activate constantly (compiles, instance resolution, the PreWarm sweep); the
         // authoritative owner round-trip is the same touch.
-        await ReadNode(TypePath).FirstAsync().Timeout(30.Seconds()).Await();
+        await ReadNode(TypePath).FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
         await WaitForState(statePath, s =>
             s.LastCompiledVersion == 1082 && s.LatestAssemblyPath == "Widget/v1082.dll");
 
         // A state CHANGE on the node follows onto the satellite.
         using (accessService.ImpersonateAsSystem())
         {
-            var current = await ReadNode(TypePath).FirstAsync().Timeout(30.Seconds()).Await();
+            var current = await ReadNode(TypePath).FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
             // Assert rather than `!`: the node was created above, so a null here is a real failure
             // (the read gave up, or the create did not land) and must say so instead of NREing on
-            // the `with` below. `.Await()` surfaces the nullability the Rx awaiter inferred away.
+            // the `with` below. `.Await(TestContext.Current.CancellationToken)` surfaces the nullability the Rx awaiter inferred away.
             Assert.NotNull(current);
             var content = current.ContentAs<NodeTypeDefinition>(options)!;
             await meshService.UpdateNode(current with
@@ -80,7 +80,7 @@ public class NodeTypeCompileStateMirrorTest(ITestOutputHelper output) : Monolith
                     LastCompiledVersion = 2026,
                     LatestAssemblyPath = "Widget/v2026.dll",
                 },
-            }).Should().Emit();
+            }).Should(TestContext.Current.CancellationToken).Emit();
         }
 
         await WaitForState(statePath, s =>

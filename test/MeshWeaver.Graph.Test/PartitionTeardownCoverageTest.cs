@@ -200,13 +200,13 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
         var definitionPath = $"{PartitionNodeType.Namespace}/{partition}";
         var persistence = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
 
-        (await persistence.Exists(definitionPath).FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+        (await persistence.Exists(definitionPath).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Should().BeTrue("the fixture writes the definition, so the assertion below can fail");
 
         var response = await DeleteAsSystem(partition);
         response.Success.Should().BeTrue($"the delete itself must succeed: {response.Error}");
 
-        (await persistence.Exists(definitionPath).FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+        (await persistence.Exists(definitionPath).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Should().BeFalse(
                 $"'{definitionPath}' must be removed with the partition it describes — a definition "
                 + "left behind keeps the partition in the routing prime and in every partition "

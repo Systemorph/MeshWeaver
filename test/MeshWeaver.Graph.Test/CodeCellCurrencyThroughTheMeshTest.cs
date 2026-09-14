@@ -82,7 +82,7 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
             .Observe<ExecuteScriptResponse>(new ExecuteScriptRequest(), o => o.WithTarget(new Address(path)))
             .FirstAsync()
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         dispatch.Message.Success.Should().BeTrue(
             "the dispatch must be accepted before its stamp can be asserted on");
 
@@ -102,7 +102,7 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
             })
             .FirstAsync()
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         var edited = await ReadCell(path,
             c => c is { Code: "2 + 2", LastExecutedCodeHash: not null and not "" });
@@ -156,7 +156,7 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
             })
             .FirstAsync()
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         var stampless = await ReadCell(wiped, c => c is
         {
@@ -172,7 +172,7 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
         var recovered = await stampless
             .ResolveOutputCurrency(wiped, viewerHome: null, meshService)
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         recovered.Should().Be(CodeOutputCurrency.Unverified,
             "the Activity node created before the dispatch still names this cell on HubPath, so the "
             + "run is not lost — only the cell's pointer to it is. A run with nothing recording WHAT "
@@ -186,7 +186,7 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
         var untouchedVerdict = await untouchedCell
             .ResolveOutputCurrency(untouched, viewerHome: null, meshService)
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         untouchedVerdict.Should().Be(CodeOutputCurrency.NeverRun,
             "no Activity anywhere names this cell — and the neighbour's run, which lives in the very "
             + "same _Activity namespace, must not be mistaken for it. A verdict that could not come "
@@ -198,7 +198,7 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
         var neighbourVerdict = await neighbourCell
             .ResolveOutputCurrency(neighbour, viewerHome: null, meshService)
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         neighbourVerdict.Should().Be(CodeOutputCurrency.Current,
             "a cell whose stamp landed is judged by the stamp, unchanged and without a query");
     }

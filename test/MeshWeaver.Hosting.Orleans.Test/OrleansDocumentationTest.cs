@@ -102,7 +102,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
     {
         var pathResolver = Cluster.Client.ServiceProvider.GetRequiredService<IPathResolver>();
 
-        var resolution = await pathResolver.ResolvePath("Doc/Architecture/BusinessRules").FirstAsync().Await();
+        var resolution = await pathResolver.ResolvePath("Doc/Architecture/BusinessRules").FirstAsync().Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"Resolution: Prefix={resolution?.Prefix}, Remainder={resolution?.Remainder}");
         resolution.Should().NotBeNull("Doc/Architecture/BusinessRules should resolve");
     }

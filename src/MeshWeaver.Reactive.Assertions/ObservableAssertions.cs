@@ -36,6 +36,30 @@ public static class ObservableAssertionExtensions
     /// <summary>Begins a fluent assertion on <paramref name="instance"/> with an explicit wait timeout.</summary>
     public static ObservableAssertions<T> Should<T>(this IObservable<T> instance, TimeSpan timeout)
         => new(instance, timeout);
+
+    /// <summary>
+    /// Begins a fluent assertion on <paramref name="instance"/> that ALSO ends when
+    /// <paramref name="cancellationToken"/> fires — pass <c>TestContext.Current.CancellationToken</c>
+    /// from a test that declares <c>[Fact(Timeout = …)]</c>.
+    ///
+    /// <para>xunit v3 implements <c>Timeout</c> by firing that token and nothing else: it does not
+    /// abort the test's thread. An assertion that never sees it therefore keeps waiting out its OWN
+    /// bound after the runner has already failed the test and started the next one — with a live
+    /// subscriber still attached to a stream the next test may share. Handing the token in is what
+    /// makes the declared timeout an actual bound rather than a label. This overload is also what
+    /// the xUnit1069 analyzer is asking for at the call site, which is why it is an ENTRY point and
+    /// not a parameter on each terminal: the token belongs to the whole chain, and one reference
+    /// per assertion reads better than one per terminal.</para>
+    /// </summary>
+    public static ObservableAssertions<T> Should<T>(this IObservable<T> instance, CancellationToken cancellationToken)
+        => new(instance, DefaultTimeout, cancellationToken);
+
+    /// <summary>
+    /// Begins a fluent assertion on <paramref name="instance"/> with an explicit wait timeout that
+    /// ALSO ends when <paramref name="cancellationToken"/> fires. See the overload above.
+    /// </summary>
+    public static ObservableAssertions<T> Should<T>(this IObservable<T> instance, TimeSpan timeout, CancellationToken cancellationToken)
+        => new(instance, timeout, cancellationToken);
 }
 
 /// <summary>
@@ -81,13 +105,26 @@ public static class ObservableAssertionExtensions
 public class ObservableAssertions<T>
 {
     private readonly IObservable<T> _subject;
+    private readonly CancellationToken _cancellationToken;
     private TimeSpan _timeout;
 
     /// <summary>Creates assertions over <paramref name="subject"/> with the given wait timeout.</summary>
     public ObservableAssertions(IObservable<T> subject, TimeSpan timeout)
+        : this(subject, timeout, CancellationToken.None)
+    {
+    }
+
+    /// <summary>
+    /// Creates assertions over <paramref name="subject"/> with the given wait timeout, ALSO ended
+    /// by <paramref name="cancellationToken"/> — the test's own
+    /// <c>TestContext.Current.CancellationToken</c>. See
+    /// <see cref="ObservableAssertionExtensions.Should{T}(IObservable{T}, CancellationToken)"/>.
+    /// </summary>
+    public ObservableAssertions(IObservable<T> subject, TimeSpan timeout, CancellationToken cancellationToken)
     {
         _subject = subject ?? throw new ArgumentNullException(nameof(subject));
         _timeout = timeout;
+        _cancellationToken = cancellationToken;
     }
 
     /// <summary>Overrides the wait timeout for the rest of this chain. Synchronous — returns this.</summary>
@@ -140,12 +177,21 @@ public class ObservableAssertions<T>
                 SubscribeHereOffSyncContext(_subject)
                     .IgnoreElements()
                     .Timeout(_timeout, Observable.Defer(() =>
-                        Observable.Throw<T>(new AssertionWaitTimeoutException()))));
+                        Observable.Throw<T>(new AssertionWaitTimeoutException()))),
+                _cancellationToken);
         }
         catch (AssertionWaitTimeoutException)
         {
             throw new ObservableAssertionException(
                 $"Expected the observable to complete within {Describe(_timeout)}{Reason(because)}, but it did not.");
+        }
+        // 🚨 AHEAD of the catch-all. The test's own timeout arrives here as an
+        // OperationCanceledException, and wrapping it in an assertion failure would report a
+        // TIMED-OUT test as a failed EXPECTATION — the reader would go looking for the stream that
+        // "errored: A task was canceled" instead of for the test that ran out of budget.
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -175,8 +221,17 @@ public class ObservableAssertions<T>
             // default — otherwise `emitted` would be set for a stream that emitted nothing and
             // this negative assertion would invert.
             observed = (await ReactiveWait.First(
-                SubscribeHereOffSyncContext(_subject).FirstAsync().Timeout(within)))!;
+                SubscribeHereOffSyncContext(_subject).FirstAsync().Timeout(within),
+                _cancellationToken))!;
             emitted = true;
+        }
+        // 🚨 AHEAD of the catch-all, which is deliberately total ("anything that is not an
+        // emission means nothing was emitted"). The test's own timeout is NOT evidence that
+        // nothing was emitted — it is evidence that nobody was left to look. Swallowed here, a
+        // negative assertion would PASS on a test that never finished observing.
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch
         {
@@ -229,12 +284,19 @@ public class ObservableAssertions<T>
                     .Take(1)
                     .ToList()
                     .Timeout(_timeout, Observable.Defer(() =>
-                        Observable.Throw<IList<T>>(new AssertionWaitTimeoutException())))))!;
+                        Observable.Throw<IList<T>>(new AssertionWaitTimeoutException()))),
+                _cancellationToken))!;
         }
         catch (AssertionWaitTimeoutException)
         {
             throw new ObservableAssertionException(
                 $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it did not. {seen.Describe(predicate is not null)}");
+        }
+        // 🚨 AHEAD of the catch-all — see Complete(). The test's own timeout must reach xunit as a
+        // cancellation, not as "the observable errored".
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

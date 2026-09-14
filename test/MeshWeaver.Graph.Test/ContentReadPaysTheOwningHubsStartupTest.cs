@@ -219,7 +219,7 @@ public class ContentReadPaysTheOwningHubsStartupTest(ITestOutputHelper output)
     {
         var result = await ContentFileResolver.Resolve(
                 Mesh, "__probe_absent__/content/__absent__.svg")
-            .Should().Within(TestTimeouts.Quick)
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Quick)
             .Emit("an unmatched path returns at path resolution and never reaches the collection-"
                 + "config read, so it must answer well inside ReadBudget.Default");
 

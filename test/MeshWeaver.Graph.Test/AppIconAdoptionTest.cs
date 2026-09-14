@@ -190,11 +190,11 @@ public class AppIconAdoptionTest(ITestOutputHelper output) : MonolithMeshTestBas
         await runner.RunFor(
                 new AccessContext { ObjectId = user, Name = user },
                 [new AppIconAdoptionLogonAction()])
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
 
         var record = await Mesh.GetWorkspace().GetMeshNodeStream(AppNodeType.PathFor(user, app))
             .Where(n => n is not null && n.Icon == Real)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
 
         record.Icon.Should().Be(Real, "the record adopted the app's icon");
         // 🚨 The assertion that matters: these are the USER's records, and the platform must not

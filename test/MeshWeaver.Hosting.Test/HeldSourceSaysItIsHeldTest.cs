@@ -163,7 +163,7 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
 
         // ── the delivery the seal does not cover ─────────────────────────────
         var neverFetched = repoClient.FetchedRefs.Where(r => r == UnsealedSha)
-            .Should().NotEmit(within: TestTimeouts.Quick);
+            .Should(TestContext.Current.CancellationToken).NotEmit(within: TestTimeouts.Quick);
 
         await Deliver(UnsealedSha);
         await neverFetched;
@@ -197,7 +197,7 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
 
         // ── the control: the seal DOES cover this one, so it imports and the note clears ──
         var fetched = repoClient.FetchedRefs.Where(r => r == SealedSha)
-            .Should().Within(TestTimeouts.Convergence * 2)
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence * 2)
             .Emit("a green build AT the sealed commit is exactly what the gate waits for");
 
         await Deliver(SealedSha);

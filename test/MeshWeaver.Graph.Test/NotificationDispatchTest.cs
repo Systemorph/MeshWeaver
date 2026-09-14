@@ -50,7 +50,7 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
                 type: NotificationType.AccessGranted,
                 targetNodePath: "TeamSpace",
                 createdBy: "admin")
-            .Timeout(30.Seconds()).Await();
+            .Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
 
         await Mesh.GetWorkspace()
             .GetQuery($"notif|{recipient}", $"path:{recipient}/_Notification scope:children nodeType:Notification")
@@ -78,9 +78,9 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Dispatch a suppressed AccessGranted, then a still-enabled Approvals as the ordered control.
         await NotificationService.Dispatch(Mesh, recipient, recipient,
-                "Access", "granted", NotificationType.AccessGranted, "TeamSpace", "admin").Timeout(30.Seconds()).Await();
+                "Access", "granted", NotificationType.AccessGranted, "TeamSpace", "admin").Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
         await NotificationService.Dispatch(Mesh, recipient, recipient,
-                "Approval Requested", "please approve", NotificationType.ApprovalRequired, "Doc/X", "admin").Timeout(30.Seconds()).Await();
+                "Approval Requested", "please approve", NotificationType.ApprovalRequired, "Doc/X", "admin").Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
 
         // The control (Approvals) bell arrives...
         var nodes = await Mesh.GetWorkspace()

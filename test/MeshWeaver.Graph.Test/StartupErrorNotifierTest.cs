@@ -70,7 +70,7 @@ public class StartupErrorNotifierTest(ITestOutputHelper output) : MonolithMeshTe
         buffer.Record(LogLevel.Critical, "MeshWeaver.Hosting", $"{marker}: hub initialization failed");
 
         await StartupErrorNotifier.ReportToAdmins(Mesh, buffer.CloseAndDrain())
-            .Timeout(30.Seconds()).Await();
+            .Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
 
         // ONE notification, anchored under the Admin partition (RLS scopes it to platform
         // admins), System-typed, carrying both error lines.
@@ -100,7 +100,7 @@ public class StartupErrorNotifierTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Completes without writing: the empty report short-circuits before any dispatch.
         await StartupErrorNotifier.ReportToAdmins(Mesh, buffer.CloseAndDrain())
-            .Timeout(30.Seconds()).Await();
+            .Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
 
         // The Admin notification satellite holds nothing from a clean-boot report: no
         // notification titled as a startup report exists (Initial snapshot read).

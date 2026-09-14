@@ -246,14 +246,14 @@ public class PartitionResurrectionTest(ITestOutputHelper output) : MonolithMeshT
         await CreateAsSystem(Child(partition, "Page"));
 
         await DeletePartitionAsSystem(partition);
-        (await Persistence.Exists(partition).FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+        (await Persistence.Exists(partition).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Should().BeFalse("the delete removed the root — that is the state the heal runs over");
 
         Store.StaleExistenceProbeFor = partition;
 
         await CreateAsSystem(Child(partition, "Recovered"));
 
-        (await Persistence.Exists(partition).FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+        (await Persistence.Exists(partition).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Should().BeFalse(
                 $"'{partition}' was deleted, so no child write may heal a root over it. That is how "
                 + "four deleted partitions came back on the systemorph staff portal as bare Space "
@@ -276,7 +276,7 @@ public class PartitionResurrectionTest(ITestOutputHelper output) : MonolithMeshT
     {
         // A partition mid-teardown: nodes drained, store about to be dropped, no root row.
         var partition = await InstallPartition(withRoot: false);
-        await Store.DeletePartition(partition).Timeout(TestTimeouts.Quick).Await();
+        await Store.DeletePartition(partition).Timeout(TestTimeouts.Quick).Await(TestContext.Current.CancellationToken);
         Store.StaleExistenceProbeFor = partition;
 
         var registry = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
@@ -293,7 +293,7 @@ public class PartitionResurrectionTest(ITestOutputHelper output) : MonolithMeshT
             + "subtree-deletion scope was open for the whole create, and provisioning is the one "
             + "effect that scope never reached (#3451). "
             + $"Provider ledger: {string.Join(", ", Store.Events)}");
-        (await Persistence.Exists(partition).FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+        (await Persistence.Exists(partition).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Should().BeFalse("nor may a Space root be minted for a subtree that is being deleted");
     }
 
@@ -312,7 +312,7 @@ public class PartitionResurrectionTest(ITestOutputHelper output) : MonolithMeshT
         var response = await CreateAsSystem(Child(partition, "First"));
         response.Success.Should().BeTrue($"the child write must succeed: {response.Error}");
 
-        (await Persistence.Exists(partition).FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+        (await Persistence.Exists(partition).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Should().BeTrue(
                 "the partition's backing store is there and nothing deleted it, so the missing root "
                 + "is a half-completed create the bootstrap must repair — that repair is the whole "

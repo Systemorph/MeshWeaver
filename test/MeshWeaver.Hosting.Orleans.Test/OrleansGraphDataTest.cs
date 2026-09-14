@@ -135,7 +135,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         // Check the path resolution (verifies both persistence and catalog are working)
         var pathResolver = siloServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await pathResolver.ResolvePath("app/Kernel").FirstAsync().Await();
+        var resolution = await pathResolver.ResolvePath("app/Kernel").FirstAsync().Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"ResolvePathAsync('app/Kernel'): Prefix={resolution?.Prefix}, Remainder={resolution?.Remainder}");
         resolution.Should().NotBeNull("app/Kernel path should resolve");
     }

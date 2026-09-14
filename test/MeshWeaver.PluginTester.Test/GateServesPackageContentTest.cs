@@ -75,7 +75,7 @@ public class GateServesPackageContentTest(ITestOutputHelper output)
                 SourceSha = "cafebabe",
                 CompileTimeout = TimeSpan.FromMinutes(4),
                 RenderTimeout = TimeSpan.FromMinutes(2),
-            }).FirstAsync().Await();
+            }).FirstAsync().Await(TestContext.Current.CancellationToken);
             output.WriteLine(log.ToString());
             report.WriteSummary(new StringWriterAdapter(output));
 
@@ -129,7 +129,7 @@ public class GateServesPackageContentTest(ITestOutputHelper output)
                 SourceSha = "cafebabe",
                 CompileTimeout = TimeSpan.FromMinutes(4),
                 RenderTimeout = TimeSpan.FromMinutes(2),
-            }).FirstAsync().Await();
+            }).FirstAsync().Await(TestContext.Current.CancellationToken);
             output.WriteLine(log.ToString());
 
             report.FatalError.Should().BeNull();

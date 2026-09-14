@@ -170,7 +170,7 @@ public class InstallTimePrebuiltAdoptionTest(ITestOutputHelper output) : Monolit
             result.Written.Should().BeGreaterThan(0, "the install must have written its nodes");
 
             await Mesh.GetWorkspace().GetMeshNodeStream(CoveredType)
-                .Should().Within(120.Seconds())
+                .Should(TestContext.Current.CancellationToken).Within(120.Seconds())
                 .Match(
                     n => string.Equals(
                         n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.LatestAssemblyMvid,

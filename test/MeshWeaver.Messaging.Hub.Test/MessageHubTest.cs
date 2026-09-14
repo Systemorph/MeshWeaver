@@ -228,7 +228,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         victim.Dispose();
 
         // The phased path queues behind the backlog; disposal completes once it has drained.
-        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(45.Seconds());
+        await victim.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(45.Seconds());
         disposeSw.Stop();
 
         // Sanity: the backlog must genuinely outlast the stall window, or the detector never looked.
@@ -461,18 +461,18 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         {
             // 1) Park the victim's action block so its ShutdownRequest queues behind the turn.
             victim.Post(new BlockTurnRequest(), o => o.WithTarget(victim.Address));
-            await blockHandlerEntered.Should().Within(10.Seconds())
+            await blockHandlerEntered.Should(TestContext.Current.CancellationToken).Within(10.Seconds())
                 .Emit("the block handler must occupy the turn thread before we dispose");
             // 2) Dispose — the phased machine cannot advance until the turn returns.
             var disposeSw = System.Diagnostics.Stopwatch.StartNew();
             victim.Dispose();
             // 3) After one stall budget the detector cancels the turn; the handler returns; the
             //    ordinary phases run: DisposeImpl (own disposables) and DisposeHostedHubs (children).
-            await ownDisposed.Should().Within(25.Seconds())
+            await ownDisposed.Should(TestContext.Current.CancellationToken).Within(25.Seconds())
                 .Emit("once the cancelled turn returns, the ShutDown phase runs DisposeImpl — the hub's own subscriptions must not leak");
-            await childDisposed.Should().Within(25.Seconds())
+            await childDisposed.Should(TestContext.Current.CancellationToken).Within(25.Seconds())
                 .Emit("once the cancelled turn returns, the DisposeHostedHubs phase disposes hosted hubs — their keep-alive heartbeats must not leak");
-            await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(25.Seconds());
+            await victim.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(25.Seconds());
             disposeSw.Stop();
 
             Volatile.Read(ref cancellationObserved).Should().Be(1,

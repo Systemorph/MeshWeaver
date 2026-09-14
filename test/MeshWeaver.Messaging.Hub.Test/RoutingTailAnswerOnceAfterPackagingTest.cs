@@ -86,7 +86,7 @@ public class RoutingTailAnswerOnceAfterPackagingTest(ITestOutputHelper output) :
             "inner failure"));
         var control = Submit("ordinary-payload");
 
-        var answered = await answeredSoFar.Should().Within(30.Seconds())
+        var answered = await answeredSoFar.Should(TestContext.Current.CancellationToken).Within(30.Seconds())
             .Match(a => a.Contains(control.Id),
                 "an ordinary request that fails routing must still be reported to its sender");
 

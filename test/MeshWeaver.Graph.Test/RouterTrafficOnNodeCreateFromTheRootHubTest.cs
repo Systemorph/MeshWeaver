@@ -161,7 +161,7 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
         // ratchet (#2423) is about request/response exchanges a test could have issued elsewhere.
         Mesh.Post(new RouterOriginProbe(), o => o.WithTarget(client.Address));
 
-        await _probeArrived.Should().Within(TestTimeouts.Convergence)
+        await _probeArrived.Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence)
             .Emit("the probe must actually reach the client hub, or nothing was delivered and this "
                 + "control proves nothing");
 

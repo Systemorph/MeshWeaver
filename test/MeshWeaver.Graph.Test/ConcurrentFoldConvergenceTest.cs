@@ -80,7 +80,7 @@ public class ConcurrentFoldConvergenceTest(ITestOutputHelper output) : MonolithM
                 ActivityType = ActivityType.Read,
                 AccessCount = 0,
             },
-        }).Take(1).Should().Within(60.Seconds()).Emit("the node the folds target must exist first");
+        }).Take(1).Should(TestContext.Current.CancellationToken).Within(60.Seconds()).Emit("the node the folds target must exist first");
 
         var stream = workspace.GetMeshNodeStream(path);
 
@@ -115,7 +115,7 @@ public class ConcurrentFoldConvergenceTest(ITestOutputHelper output) : MonolithM
         var settled = await Observable.Merge(terminals)
             .Take(Writers)
             .ToArray()
-            .Should().Within(SettleBudget).Emit(
+            .Should(TestContext.Current.CancellationToken).Within(SettleBudget).Emit(
                 $"all {Writers} concurrent folds must reach a terminal. A writer that reaches none "
                 + "is the #3001 hang: the cross-hub write settles its caller only from inside its "
                 + "base read's onNext/onError, so a base read that completes with NO value settles "
@@ -127,7 +127,7 @@ public class ConcurrentFoldConvergenceTest(ITestOutputHelper output) : MonolithM
             "every fold targets a node that exists on a live owner, so each must land: "
             + string.Join(" | ", failures.Select(f => f.Exception?.Message)));
 
-        var final = await ReadNode(path).Should().Match(n => n is not null,
+        var final = await ReadNode(path).Should(TestContext.Current.CancellationToken).Match(n => n is not null,
             "the folded node must still be readable after every writer has settled");
 
         var record = final!.ContentAs<UserActivityRecord>(Mesh.JsonSerializerOptions);

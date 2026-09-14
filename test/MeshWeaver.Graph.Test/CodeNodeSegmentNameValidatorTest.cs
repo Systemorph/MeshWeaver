@@ -138,7 +138,7 @@ public class CodeNodeSegmentNameValidatorRegistrationTest(ITestOutputHelper outp
         };
         var result = await guard!
             .Validate(new NodeValidationContext { Operation = NodeOperation.Create, Node = node })
-            .Should().Emit();
+            .Should(TestContext.Current.CancellationToken).Emit();
 
         result.IsValid.Should().BeFalse();
         result.Reason.Should().Be(NodeRejectionReason.InvalidPath);
@@ -177,11 +177,11 @@ public class CodeNodeSegmentNameValidatorRegistrationTest(ITestOutputHelper outp
             NodeType = CodeNodeType.NodeType,
             State = MeshNodeState.Active,
             Content = new CodeConfiguration { Code = "public static class Spine { }" }
-        }).Should().Within(30.Seconds()).Emit();
+        }).Should(TestContext.Current.CancellationToken).Within(30.Seconds()).Emit();
 
         var delivery = await ObserveNodeOperation(
                 new MoveNodeRequest(sourcePath, $"{ns}/Model/Source"))
-            .Should().Within(30.Seconds()).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(30.Seconds()).Emit();
 
         delivery.Message.Success.Should().BeFalse(
             "renaming a Code node to a code-table routing segment would make it invisible to every "
@@ -193,7 +193,7 @@ public class CodeNodeSegmentNameValidatorRegistrationTest(ITestOutputHelper outp
         var survivor = await Mesh.GetWorkspace().GetMeshNodeStream(sourcePath)
             .Where(n => n is not null)
             .FirstAsync()
-            .Should().Within(30.Seconds()).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(30.Seconds()).Emit();
         survivor.Path.Should().Be(sourcePath, "a rejected move must not destroy the original");
     }
 }

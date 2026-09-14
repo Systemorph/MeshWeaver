@@ -25,7 +25,34 @@
          turned green test builds RED for every test project at once while src/ stayed a warning. Mirror
          the central src policy here so the test tree tracks it uniformly. Vulnerability handling
          (bump/replace) is a deliberate dependency decision, not a per-build -warnaserror gate. -->
-    <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904;$(WarningsNotAsErrors)</WarningsNotAsErrors>
+    <!-- xUnit1069 (a test declaring `Timeout` must reference TestContext.Current.CancellationToken)
+         is COUNTED DEBT, not a suppression: WarningsNotAsErrors, so every one of the remaining
+         sites prints on every build and the number can only go down. NOT NoWarn — that would hide
+         them, and the burn-down would then be unmeasurable. One line to delete when it reaches 0.
+
+         The rule arrived with the xunit.v3 4.x analyzers and is a GOOD rule: xunit v3 implements
+         `Timeout` by firing that token and by nothing else — it does not abort the test's thread —
+         so a test that never observes it keeps running after the runner has failed it and started
+         the next one, which is the hung-shard shape this repo keeps paying for.
+
+         Measured on the 4.0.1 bump (Doc/Architecture/XunitV3MajorUpgrade carries the census):
+         682 sites across 268 files. 283 were FIXED in that change — every method whose wait was a
+         house wait (`.Await()`, `.Should().Emit()/Match()/NotEmit()/Complete()`) now hands the
+         token in, and both waits honour it. The 399 that remain are the ones the rule's mechanism
+         cannot reach honestly:
+           * 272 await only FOREIGN APIs. 51 of those are the Playwright E2E suite, and
+             Microsoft.Playwright has no CancellationToken parameter anywhere in its API — the only
+             way to write the reference is `.WaitAsync(ct)` around every call, or a bare
+             `_ = TestContext.Current.CancellationToken;`, which is a reference that consumes
+             nothing.
+           * 102 are SYNCHRONOUS test bodies. A sync body cannot observe a token at all, so their
+             `Timeout` is inert — a real finding, tracked for removal, not something a token
+             reference would fix.
+           *  25 already pass a token, just a hand-made `new CancellationTokenSource(N)` one that
+             shadows the test's own. Those waits ARE bounded; relinking them is a separate change.
+         Writing a decorative reference into the first two populations would be a verification step
+         that cannot fail — the thing AGENTS.md forbids — so they are carried visibly instead. -->
+    <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904;xUnit1069;$(WarningsNotAsErrors)</WarningsNotAsErrors>
   </PropertyGroup>
   <ItemGroup>
     <!-- Security override, not a dependency we use: Testcontainers (any published version, incl.

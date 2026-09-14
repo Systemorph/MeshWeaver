@@ -62,7 +62,7 @@ public class ContainerImageRecordingTest(ITestOutputHelper output) : MonolithMes
         var record = Describe("ci.7794", Manifest);
 
         var node = await ContainerImageCatalog.Record(Mesh, ImageRoot, record)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         Assert.Equal($"{ImageRoot}/{ContainerImageCatalog.NodeId(Repository, "ci.7794")}", node!.Path);
         Assert.Equal(ContainerImageCatalog.NodeType, node.NodeType);
@@ -72,7 +72,7 @@ public class ContainerImageRecordingTest(ITestOutputHelper output) : MonolithMes
             .Where(n => n?.Content is not null)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         // 🚨 ContentAs, never a cast: content that crossed a hub boundary can arrive as an
         // untyped JsonElement, and `is ContainerImageRecord` would read that as a silent null.
@@ -105,7 +105,7 @@ public class ContainerImageRecordingTest(ITestOutputHelper output) : MonolithMes
         await CreateImageRoot();
 
         await ContainerImageCatalog.Record(Mesh, ImageRoot, Describe("ci.7794", Manifest))
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         // A consumer that knows only the repository and the tag can name the path.
         var path = $"{ImageRoot}/{ContainerImageCatalog.NodeId(Repository, "ci.7794")}";
@@ -113,7 +113,7 @@ public class ContainerImageRecordingTest(ITestOutputHelper output) : MonolithMes
             .Where(n => n?.Content is not null)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         var closure = stored!.ContentAs<ContainerImageRecord>(Mesh.JsonSerializerOptions);
         Assert.StartsWith("sha256:", closure!.Digest);
@@ -132,9 +132,9 @@ public class ContainerImageRecordingTest(ITestOutputHelper output) : MonolithMes
         var second = Describe("latest", Manifest);
 
         var a = await ContainerImageCatalog.Record(Mesh, ImageRoot, first)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         var b = await ContainerImageCatalog.Record(Mesh, ImageRoot, second)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         Assert.Equal(a!.Path, b!.Path);
 
@@ -143,7 +143,7 @@ public class ContainerImageRecordingTest(ITestOutputHelper output) : MonolithMes
             .Where(c => c is { IsIndex: false })
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         Assert.Equal(2, stored!.Layers.Length);
     }
@@ -162,9 +162,9 @@ public class ContainerImageRecordingTest(ITestOutputHelper output) : MonolithMes
 
         var index = Describe("ci.7794", Index);
         await ContainerImageCatalog.Record(Mesh, ImageRoot, index)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
         await ContainerImageCatalog.Record(Mesh, ImageRoot, Describe(platformDigest, Manifest))
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         Assert.True(index.IsIndex);
         var platform = Assert.Single(index.Platforms);
@@ -177,7 +177,7 @@ public class ContainerImageRecordingTest(ITestOutputHelper output) : MonolithMes
             .Where(c => c is not null)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         Assert.Equal(2, stored!.Layers.Length);
     }
@@ -197,7 +197,7 @@ public class ContainerImageRecordingTest(ITestOutputHelper output) : MonolithMes
             .Where(n => n is not null)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should(TestContext.Current.CancellationToken).Within(TestTimeouts.Convergence).Emit();
 
         Assert.Equal(MeshNode.NodeTypePath, nodeType!.NodeType);
     }

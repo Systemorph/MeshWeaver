@@ -287,7 +287,7 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
         var node = await SeedCorruptAsync("platform-update", "Kappa/Skill", "OtherKappa/platform-update");
         var elsewhere = await SeedRawAsync("bystander", "Lambda", "Lambda/bystander");
 
-        var report = await StaleMainNodeRepair.Repair(Mesh).Timeout(Budget).Await();
+        var report = await StaleMainNodeRepair.Repair(Mesh).Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
         report.Findings.Select(f => f.Path).Should().Contain(node.Path,
             "an unscoped sweep must reach a partition nobody named");

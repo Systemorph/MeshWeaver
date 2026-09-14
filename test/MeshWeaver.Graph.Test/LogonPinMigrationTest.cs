@@ -177,10 +177,10 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
                 UnpinPaths = DocPins,
                 PinPaths = CoursePins,
             },
-        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
+        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(TestContext.Current.CancellationToken);
 
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
-        await runner.RunFor(IdentityFor(user)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+        await runner.RunFor(IdentityFor(user)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
 
         var profile = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(actionId));
         profile.PinnedPaths.Should().Equal(CoursePins);
@@ -195,7 +195,7 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
         await CreateUserAsync(user, new User { PinnedPaths = DocPins });
 
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
-        await runner.RunFor(IdentityFor(user)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+        await runner.RunFor(IdentityFor(user)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
 
         var profile = await ReadProfileAsync(user);
         profile.PinnedPaths.Should().Equal(DocPins);

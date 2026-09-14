@@ -121,7 +121,7 @@ public class EventSubscriptionTypeRegistrationTest(ITestOutputHelper output) : M
                 NodeType = EventSubscriptionNodeType.NodeType,
                 Name = "NodeChange → GrantSpaceAccess",
                 Content = JsonSerializer.Deserialize<JsonElement>(StoredJson(subscriptionId)),
-            }).Should().Emit();
+            }).Should(TestContext.Current.CancellationToken).Emit();
 
         using var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService, runnerLogger);
         await runner.StartAsync(default);
@@ -133,7 +133,7 @@ public class EventSubscriptionTypeRegistrationTest(ITestOutputHelper output) : M
                 NodeType = "User",
                 Name = "Invitee",
                 Content = new User { Email = InviteeEmail, FullName = "Invitee" },
-            }).Should().Emit();
+            }).Should(TestContext.Current.CancellationToken).Emit();
 
         // Wait for the subscription to reach a TERMINAL state FIRST — race-free, because that node
         // already exists so the stream waits for its update, whereas opening a stream on a path that

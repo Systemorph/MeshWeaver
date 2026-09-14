@@ -129,7 +129,7 @@ public class BakeGateSplitTest(ITestOutputHelper output)
                 SourceSha = "deadbeef",
                 CompileTimeout = TimeSpan.FromMinutes(4),
                 RenderTimeout = TimeSpan.FromMinutes(2),
-            }).FirstAsync().Await();
+            }).FirstAsync().Await(TestContext.Current.CancellationToken);
             output.WriteLine("── gate consuming the bake ──");
             output.WriteLine(seededLog.ToString());
             Assert.Null(seeded.FatalError);
@@ -150,7 +150,7 @@ public class BakeGateSplitTest(ITestOutputHelper output)
                 SourceSha = "deadbeef",
                 CompileTimeout = TimeSpan.FromMinutes(4),
                 RenderTimeout = TimeSpan.FromMinutes(2),
-            }).FirstAsync().Await();
+            }).FirstAsync().Await(TestContext.Current.CancellationToken);
             output.WriteLine("── gate compiling for itself (the control) ──");
             output.WriteLine(controlLog.ToString());
             Assert.Null(control.FatalError);

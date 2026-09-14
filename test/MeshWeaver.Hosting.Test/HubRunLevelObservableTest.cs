@@ -45,7 +45,7 @@ public class HubRunLevelObservableTest
         // Subscribing AFTER the hub started must not wait for the next transition — otherwise
         // subscribing in order to observe the disposal window would itself race the window, which
         // is the defect one level down.
-        var current = await mesh.RunLevelChanged.FirstAsync().Await();
+        var current = await mesh.RunLevelChanged.FirstAsync().Await(TestContext.Current.CancellationToken);
 
         current.Should().Be(mesh.RunLevel,
             "the source replays the current level, so a subscription is never behind the property");

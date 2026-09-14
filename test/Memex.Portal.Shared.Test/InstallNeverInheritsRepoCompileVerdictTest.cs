@@ -115,7 +115,7 @@ public class InstallNeverInheritsRepoCompileVerdictTest(ITestOutputHelper output
                     new PackageFile($"{TypePath}.json", RepoFileWithVerdict),
                 ],
                 "HEAD")
-            .Should().Within(180.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(180.Seconds())
             .Emit("the install itself must complete before anything about the type can be read");
         result.WrittenPaths.Should().Contain(TypePath, "the type node is what this test is about");
 
@@ -124,7 +124,7 @@ public class InstallNeverInheritsRepoCompileVerdictTest(ITestOutputHelper output
             .Where(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is not null)
             .FirstAsync()
             .Timeout(60.Seconds())
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         var installedDef = installed!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
         Output.WriteLine(
             $"as installed: status={installedDef.CompilationStatus} framework={installedDef.CompiledFrameworkVersion ?? "(null)"} "
@@ -134,7 +134,7 @@ public class InstallNeverInheritsRepoCompileVerdictTest(ITestOutputHelper output
         // 2. The mesh then reaches its OWN verdict for the type — a build of THIS framework, never
         //    the file's. This is the difference between "stale green" and a type that actually runs.
         await Mesh.GetWorkspace().GetMeshNodeStream(TypePath)
-            .Should().Within(180.Seconds())
+            .Should(TestContext.Current.CancellationToken).Within(180.Seconds())
             .Match(
                 n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is
                     { CompilationStatus: CompilationStatus.Ok, CompiledFrameworkVersion: { Length: > 0 } } def
@@ -144,7 +144,7 @@ public class InstallNeverInheritsRepoCompileVerdictTest(ITestOutputHelper output
                 "the type must compile on THIS mesh and record this mesh's framework and assembly — "
                 + "the file's July verdict claimed a build that did not exist here, which is exactly the "
                 + "\"stale green\" that parks a type on a cold cache");
-        var compiled = (await Mesh.GetWorkspace().GetMeshNodeStream(TypePath).FirstAsync().Timeout(TestTimeouts.Convergence).Await())!
+        var compiled = (await Mesh.GetWorkspace().GetMeshNodeStream(TypePath).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))!
             .ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
         AssertTheFilesVerdictIsAbsent(compiled, "after the mesh compiled it");
     }
