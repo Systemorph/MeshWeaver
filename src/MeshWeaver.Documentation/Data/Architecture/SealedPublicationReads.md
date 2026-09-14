@@ -578,9 +578,12 @@ Stated plainly, because a page that only lists what works is how the next sessio
   resolution rules, the retention rule, and — the part that decides the order — why a *new* writer
   and an *old* writer on one prefix is the half-migration to avoid: the pointer-following reader
   would keep serving its generation and never see the flat writer's newer publication, a stale serve
-  with nothing red anywhere. The writer is behind a per-caller `publication-layout` selector that
-  **defaults to `flat`**, so nothing anywhere writes a generation until a caller opts in and
-  **everything on this page still describes what is live**. **Generation retention — the stated
+  with nothing red anywhere. The writer is behind a `publication-layout` selector whose lane
+  default moved from `flat` to **`generation`** at phase 4 (2026-09-14), so **every producer now
+  writes generations** — core CD's `plugins-bake` by its own explicit input, the six node repos by
+  that default. 🚨 **What still describes what is live on this page is the FLAT COMPATIBILITY COPY**,
+  which every generation publication also writes, in place, exactly as before; the pointer-following
+  reads have moved on. Dropping that copy is phase 5 and is open. **Generation retention — the stated
   precondition on flipping — has landed too**: the portal's own `PrebuiltBundleStore` sweep now
   collects a generation no `_current` names, whose pointer resolved cleanly, whose own seal could be
   read, and that is older than the 30-day window, applying the identity rules' fail-closed discipline
@@ -618,10 +621,10 @@ Stated plainly, because a page that only lists what works is how the next sessio
   boot seeder, the gate's Azure-direct path, and every pinned satellite workflow copy).
 - 🚨 **Two Azure-direct readers still address the PREFIX rather than the publication.**
   `compose-sealed-modules.sh` and `node-repo-gate.yml`'s inline `download-batch` compose their paths
-  under `prebuilt-bundles/<identity>/<source>/` directly, so they read the flat copy whatever the
-  pointer says. Inert while nothing writes a generation, and correct at phase 4 in the ordinary case
-  — but a run whose flat copy is refused leaves them on the previous publication, and phase 5 breaks
-  them outright. They are named as phase 3's precondition on
+  used to compose their paths under `prebuilt-bundles/<identity>/<source>/` directly, so they read
+  the flat copy whatever the pointer says. **Both were fixed in phase 3** and both are executed by
+  `test-publication-pointer-readers.py` (14 cases over the two readers) — which is what made phase
+  4's default move safe for them. They are named as phase 3's precondition on
   [Sealed Publication Generations](../SealedPublicationGenerations); the publish lane's own two
   readers (`bake-scope.sh`, `carry-forward-bundles.sh`) already resolve it.
 - **The Azure-direct read path carries no generation.** `az storage file download-batch` against the

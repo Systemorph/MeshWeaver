@@ -276,7 +276,10 @@ Nothing writes a pointer yet, so this changes nothing observable — which is wh
 suite that *builds the generation layout by hand* and asserts the readers serve it, including the
 arm that catches the compose-under-the-source-directory mistake.
 
-### Phase 2 — the writer LEARNS the layout, selected per caller, defaulting to flat *(landed)*
+### Phase 2 — the writer LEARNS the layout, selected per caller *(landed)*
+
+🚨 **Historical, as this phase shipped: the selector defaulted to `flat`.** Phase 4 moved that
+default to `generation`; everything in this section describes the mechanism, not today's default.
 
 `publish-bake-bundles.sh` gains generation publishing behind an explicit selector: a
 `publication-layout` input on `node-repo-publish-bake.yml`, carried into the script as an environment
@@ -308,10 +311,10 @@ green. (`repository.txt` was added under this rule and says so in place.)
 
 #### What actually shipped, and the one deliberate deviation
 
-- The selector is `publication-layout` on `node-repo-publish-bake.yml`, defaulting to `flat`,
-  carried into the script as `BAKE_PUBLICATION_LAYOUT`. An unrecognised value is **refused**, never
-  silently read as flat: the value decides where a publication is written and which directory every
-  reader resolves.
+- The selector is `publication-layout` on `node-repo-publish-bake.yml`, carried into the script as
+  `BAKE_PUBLICATION_LAYOUT`. It defaulted to `flat` when this phase shipped and defaults to
+  `generation` since phase 4. An unrecognised value is **refused**, never silently read as flat: the
+  value decides where a publication is written and which directory every reader resolves.
 - `bake-scope.sh` and `carry-forward-bundles.sh` resolve the pointer in the SAME commit, by the same
   rules, so the writer and the two readers of the publish lane cannot disagree about which
   publication is live. `carry-forward-bundles.sh` resolves it **itself** rather than being handed the
@@ -428,6 +431,28 @@ direction, and is the same flat-copy residual phase 5 removes.
 What the satellite's own flip buys is therefore **explicitness, not correctness**: it replaces a
 discovered layout (announced by a `::warning::` on every publish) with a declared one. The same is
 true of a per-repo PR on any of the five single-producer prefixes now that the default has moved.
+
+#### 🚨 The residual phase 4 does NOT remove: a flat publication beside a generation one
+
+Raised by the review of the default move, and real. A generation publication writes its generation,
+moves `_current`, and refreshes the flat compatibility copy **last**. A FLAT publication of the same
+prefix writes only the flat directory and never touches the pointer. So if a flat run's whole
+publication lands *after* a generation run's seal, there is no overlap for the byte-level
+postcondition to refuse, and flat readers end on the flat run's bytes while pointer-following readers
+stay on the generation. That is the half-migration in its last surviving form.
+
+**What keeps it at zero is that the flat arm has no reachable writer**, and that is enforced rather
+than observed:
+
+| a run takes the flat arm when | reachable? |
+|---|---|
+| its caller passes `publication-layout: flat` | `NodeRepoLaneHostGuard.NoCallerInThisRepository_PublishesFlat` refuses one in this repository, and no satellite passes the input at all (measured 2026-09-14). A satellite that wanted it would have to write the line in its own `ci.yml` |
+| it resolves a live `_current` while asking for flat | **not the flat arm** — #4249 promotes it to a generation and names the caller |
+| its `publish-bake-bundles.sh` predates #4249 | yes — core's `plugins-bake` on a reconcile at an old `platform-ref`. **No code added to today's script can help this one: it is not running it.** Such a run refreshes the flat copy and does not move the pointer, so pointer-followers stay on the newer generation — the safe direction |
+
+A check on today's flat arm (re-resolve `_current` before the final seal, refuse if one appeared)
+would therefore only ever fire for a population the guard above already keeps empty, which is why
+there is no such check. Phase 5 removes the flat copy and the residual with it.
 
 🚨 **Every reader fails safe to today's behaviour.** `ResolvePublicationPointer` degrades an absent,
 blank, unreadable, escaping or dangling pointer to the source directory, where the flat copy still
@@ -617,11 +642,13 @@ was ever visible instead of silently shipping a mixed set.
   to what it was.
 - **Phase 3's reader half is landed** — `compose-sealed-modules.sh` and `node-repo-gate.yml`'s
   `seed` resolve the pointer, both are executed by `test-publication-pointer-readers.py`, and
-  `bake-scope.sh --self-test` is wired into CI beside it. Its pin half, and **phases 4–5**, are
-  open, tracked on
-  [#3461](https://github.com/Systemorph/MeshWeaver/issues/3461). Until the writer flips, **the window
-  is shrunk, not closed**: the publisher's postcondition still carries the whole load, and the
-  interval between its last verification read and the seal is still live.
+  `bake-scope.sh --self-test` is wired into CI beside it. Its pin half and **phase 5** are open,
+  tracked on [#3461](https://github.com/Systemorph/MeshWeaver/issues/3461); phase 4 is landed (below).
+  🚨 The sentence that stood here — *"until the writer flips, the window is shrunk, not closed"* — was
+  true before phase 4 and is **half true after it**: the window is closed for readers that follow
+  `_current`, and the flat compatibility copy is still replaced in place, so the publisher's
+  postcondition still carries THAT copy and the interval between its last verification read and the
+  seal is still live there.
 - 🚨 **What the postcondition costs while this is open, measured 2026-09-08.** Of 30 core-CD runs,
   9 executed the bake job; of the 9 publications (either lane) that had a same-identity run
   overlapping them in time, **2 failed** — 22%, and both were the two halves of ONE mutual
@@ -684,8 +711,9 @@ was ever visible instead of silently shipping a mixed set.
 
 ## Verification
 
-- `.github/scripts/test-publish-bake-overlap.py` — **90 assertions** (measured 2026-09-14), executing
-  the REAL publish
+- `.github/scripts/test-publish-bake-overlap.py` — **98 assertions, 98 passed / 0 failed**
+  (measured 2026-09-14 on the phase-4 default change; it was 90 at #4249 and gained the
+  pointer-ordering case and its `gh` compare stub in #4273), executing the REAL publish
   script against a stub share (the stub `az` for the per-target decisions, a fake share backend for
   the bulk helper's uploads and read-back) and reading every verdict off the BYTES. The writer half is covered by
   seven generation cases: one publisher writes and seals under its own token and the pointer names it;
@@ -697,12 +725,19 @@ was ever visible instead of silently shipping a mixed set.
   content is already live — assert that the first publishes a GENERATION and moves the pointer to it
   while the earlier generation stays whole, and that the second changes nothing at all. The
   three flat controls are unchanged and are the regression suite for the default.
-  🚨 **Negative control:** run against the pre-change script, **16 of the 67 fail**. For the
-  mixed-layout half specifically, run against `origin/main`'s script on 2026-09-14:
-  **87 passed, 3 failed** — exactly the three assertions about the flat caller publishing a
-  generation, with `generations=['Systemorph-MeshWeaver-3501-1']` and `_current` still naming it.
-  That case's "the earlier generation is untouched" control and the whole never-backwards case
-  passed on main too, which is what makes them regression controls rather than new behaviour.
+  🚨 **Negative controls, each labelled with the change that measured it — a figure quoted without
+  its change is how a verification section goes stale.** *(phase 2)* against the pre-selector script,
+  **16 of the 67 fail**. *(#4249, the prefix-ownership change)* against `origin/main`'s script on
+  2026-09-14, **87 passed / 3 failed** — exactly the three assertions about the flat caller publishing
+  a generation, with `generations=['Systemorph-MeshWeaver-3501-1']` and `_current` still naming it;
+  that case's "the earlier generation is untouched" control and the whole never-backwards case passed
+  on main too, which is what makes them regression controls rather than new behaviour. *(#4273, the
+  pointer-ordering postcondition)* against the merged `77ec6d4c74` publisher, **4 assertions fail and
+  `_current` ends on the older publication**. *(phase 4, the default move)* the script is unchanged
+  apart from comments, so the harness is the **regression control** rather than a negative one:
+  98/0 before and after. The phase-4 default itself is guarded in C#, not here —
+  `NodeRepoLaneHostGuard.ThePublishBakeLane_DefaultsToTheGenerationLayout`, watched failing in both
+  directions (default reverted to `flat`; the step's `BAKE_PUBLICATION_LAYOUT` export removed).
 - `bake-scope.sh --self-test` — four pointer-resolution assertions, and the positive one is
   discriminating by construction: the flat copy and the generation record *different* baselines (a
   diverged commit versus an ancestor), so the verdict itself says which was read. A resolver that
