@@ -2630,7 +2630,7 @@ to a content defect.
 
 ### The pre-prod sweep
 
-`Search('nodeType:NodeType')` → `LspDiagnosticsForNode('@{path}')` per type (reads the *cached*
+`Search('nodeType:NodeType partitions:all')` → `LspDiagnosticsForNode('@{path}')` per type (reads the *cached*
 compilation, no re-emit) → fix roots first, since one red upstream reports as a failure in every
 dependent → re-check until every type reads `Ok`. Warnings are in scope: an unregistered `$type`
 leaves content as an untyped `JsonElement`, which renders **empty** rather than erroring. The full
@@ -2656,5 +2656,5 @@ protocol lives in the `/code` skill.
 | Delete or rename a public framework API | Grep `content` + `samples/*/Data` + **every other node repo, JSON included** and search the live mesh (`searched:false` = failed sweep) — CI never compiles in-mesh source |
 | Delete a symbol published with `cellSurface: true` | You cannot. Installed copies call it and nobody can edit them — leave an `[Obsolete]` forwarder and pin its surface with a test (#1258) |
 | Add a framework API that in-mesh source will call | Ship the framework half FIRST; the content half is safe only once the portal reports the image carrying it (#1386) |
-| Check the mesh is shippable | `Search('nodeType:NodeType')` → `LspDiagnosticsForNode` per type → every one reads `Ok` |
+| Check the mesh is shippable | `Search('nodeType:NodeType partitions:all')` (the bare form is refused, #4274; read its count against the envelope's `coverage.partitions`) → `LspDiagnosticsForNode` per type → every one reads `Ok` |
 | Understand why one bad NodeType took the portal down | `CompileError` → dependents `UpstreamFailed` → readiness refused → 60 s hub-activation faults |

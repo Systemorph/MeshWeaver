@@ -46,8 +46,8 @@ public class SearchRefusesUnanchoredQueriesTest(ITestOutputHelper output) : Mono
             new MeshNode("Deep", Partition) { Name = "Deep", NodeType = "Markdown" },
             new MeshNode("Leaf", $"{Partition}/Deep") { Name = Marker, NodeType = "Markdown" });
 
-    private Task<string> Search(string query, string? basePath = null)
-        => new MeshOperations(Mesh).Search(query, basePath)
+    private Task<string> Search(string query, string? basePath = null, int limit = 50)
+        => new MeshOperations(Mesh).Search(query, basePath, limit)
             .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
     // ————————————————————————— refusal
@@ -146,6 +146,23 @@ public class SearchRefusesUnanchoredQueriesTest(ITestOutputHelper output) : Mono
         envelope.GetProperty("count").GetInt32().Should().Be(1, "the leaf is two levels below the base path");
         envelope.GetProperty("coverage").GetProperty("partitions").EnumerateArray().Select(p => p.GetString())
             .Should().Equal(Partition);
+    }
+
+    /// <summary>
+    /// <c>truncated</c> is a measurement — "a further match exists" — not "the page was full". The
+    /// subtree under the base path holds exactly two Markdown nodes: a limit of 2 returns both and
+    /// is NOT truncated; a limit of 1 returns one and IS.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task TruncatedMeansAFurtherMatchExists_NotThatThePageWasFull()
+    {
+        var full = JsonDocument.Parse(await Search("nodeType:Markdown", $"@{Partition}", limit: 2)).RootElement;
+        full.GetProperty("count").GetInt32().Should().Be(2, "Deep and Leaf are the two Markdown nodes under the base path");
+        full.GetProperty("truncated").GetBoolean().Should().BeFalse("the page is full AND complete — nothing lies beyond it");
+
+        var clipped = JsonDocument.Parse(await Search("nodeType:Markdown", $"@{Partition}", limit: 1)).RootElement;
+        clipped.GetProperty("count").GetInt32().Should().Be(1);
+        clipped.GetProperty("truncated").GetBoolean().Should().BeTrue("a second match exists beyond the page");
     }
 
     /// <summary>

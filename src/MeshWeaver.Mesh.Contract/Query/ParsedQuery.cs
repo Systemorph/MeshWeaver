@@ -174,9 +174,13 @@ public record ParsedQuery(
     /// <c>*</c> and the caller gets an EMPTY result rather than an error.</item>
     /// <item><b>A namespace filter</b> — the <c>namespace:A|B|C</c> membership form and the explicit
     /// wildcard <c>namespace:*/_Thread</c>. The parser keeps both as filters rather than a Path (see
-    /// <c>QueryParser</c>), so Path is null and only <see cref="ExtractNamespacePatterns"/> sees them.
-    /// Missing this case would refuse the satellite browses that are the legitimate spanning
-    /// reads.</item>
+    /// <c>QueryParser</c>), so Path is null and only the filter carries them. Missing this case would
+    /// refuse the satellite browses that are the legitimate spanning reads. 🚨 The filter anchors
+    /// the query only if EVERY <c>OR</c> branch carries one: <c>namespace:*/_Thread OR nodeType:Foo</c>
+    /// is anchored on its left branch alone, and the right branch is exactly the unanchored read
+    /// this predicate exists to name — counting the pattern anywhere in the tree would let it
+    /// through, and a search would then state the pattern as its coverage while the store ran the
+    /// full fan-out for the other branch.</item>
     /// </list>
     ///
     /// <para>🚨 This is THE definition, and there is one: the Postgres planner
@@ -193,7 +197,23 @@ public record ParsedQuery(
         CrossPartition
         || NamesConcretePartition(Path)
         || Paths is { Count: > 0 }
-        || ExtractNamespacePatterns().Count > 0;
+        || AnchoredByNamespaceFilter(Filter);
+
+    /// <summary>
+    /// Whether <paramref name="node"/> anchors the query through a namespace filter on EVERY path
+    /// through it: an <c>OR</c> is anchored only when each branch is, an <c>AND</c> when any
+    /// conjunct is, and a <c>namespace:</c> comparison (<c>Equal</c>, the <c>In</c> membership form,
+    /// the <c>Like</c> wildcard) is the anchor itself. Anything else — a bare filter, a negated
+    /// namespace — is not.
+    /// </summary>
+    private static bool AnchoredByNamespaceFilter(QueryNode? node) => node switch
+    {
+        QueryComparison c => c.Condition.Selector.Equals("namespace", StringComparison.OrdinalIgnoreCase)
+                             && c.Condition.Operator is QueryOperator.Equal or QueryOperator.In or QueryOperator.Like,
+        QueryAnd and => and.Children.Any(AnchoredByNamespaceFilter),
+        QueryOr or => or.Children.Count > 0 && or.Children.All(AnchoredByNamespaceFilter),
+        _ => false,
+    };
 
     /// <summary>
     /// Whether <paramref name="path"/> NAMES a partition — a non-empty path whose first segment is

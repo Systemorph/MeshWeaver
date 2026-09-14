@@ -70,6 +70,23 @@ public class ParsedQueryAnchoringTest
         parsed.NamedPartitions().Should().Equal(new[] { "*/_Thread" }, "a pattern names no partition; it is reported verbatim");
     }
 
+    /// <summary>
+    /// A namespace filter anchors the query only on EVERY branch: an <c>OR</c> whose other branch
+    /// is a bare filter is the unanchored read wearing an anchor on one side. The subtree widening
+    /// the parser performs (<c>namespace:*/X scope:subtree</c> → an OR of two patterns) is the
+    /// positive control — both branches carry a pattern, so it stays specified.
+    /// </summary>
+    [Theory]
+    [InlineData("namespace:*/_Thread OR nodeType:Foo", false)]
+    [InlineData("nodeType:Foo OR namespace:*/_Thread", false)]
+    [InlineData("namespace:*/_Thread OR namespace:*/_Comment", true)]
+    [InlineData("namespace:*/_Thread scope:subtree nodeType:Thread", true)]
+    [InlineData("(namespace:*/_Thread OR nodeType:Foo) nodeType:Thread", false)]
+    public void ANamespaceFilterAnchorsOnlyWhenEveryBranchCarriesOne(string query, bool specified)
+    {
+        Parse(query).IsSufficientlySpecified().Should().Be(specified, $"'{query}'");
+    }
+
     [Fact]
     public void ADeclaredFanOutIsSpecified_AndNamesNothing()
     {

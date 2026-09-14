@@ -1371,14 +1371,16 @@ public class MeshOperations
 
         // Snapshot semantics: Take(1) on Query gives us the Initial change
         // containing every match for this query in one batch — no async enumeration,
-        // no FromAsync bridge.
-        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = fullQuery, Limit = limit })
+        // no FromAsync bridge. ONE row past the limit is asked for, so `truncated` is a
+        // measurement ("a further match exists") rather than "the page happened to be full".
+        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = fullQuery, Limit = limit + 1 })
             .Take(1)
             .Select(change =>
             {
                 // Version + LastModified ride along so remote consumers (the instance-sync
                 // pull sweep) can detect changed nodes from the listing alone.
                 var list = change.Items
+                    .Take(limit)
                     .Select(node => (object)new { node.Path, node.Name, node.NodeType, node.Version, node.LastModified })
                     .ToImmutableList();
                 // Envelope instead of a bare array so truncation is VISIBLE: a result
@@ -1386,7 +1388,7 @@ public class MeshOperations
                 // and the agent under-reports. Composed explicitly via JsonObject —
                 // the hub serializer options drop empty collections, which would strip
                 // the 'results' key from a zero-hit response and break consumers.
-                var truncated = list.Count >= limit;
+                var truncated = change.Items.Count > limit;
                 // The denominator: what the provider says it READ FROM wins (it is post-narrowing);
                 // what the query NAMED is the fallback; a declared fan-out with no report is
                 // explicitly null — unknown, never "all".
