@@ -160,8 +160,63 @@ if [ "$rendered" -lt "${#COMBOS[@]}" ]; then
   report "only $rendered of ${#COMBOS[@]} values combinations rendered — treating as FAILURE rather than reporting 'no contradictions' on partial evidence"
 fi
 
+# ---------------------------------------------------------------------------
+# REFUSALS — shapes the chart must NOT render, and must name why.
+#
+# 🚨 The opposite assertion from the loop above, and the one #3780 needed. A values combination
+# can be internally consistent and still describe a deployment that dies at boot, because a
+# template `default` manufactured a plausible value for an input nobody supplied: two replicas on
+# an external database with NO connection string in values rendered `ConnectionStrings__orleans`
+# pointing at the chart's in-cluster Service, which that release does not render — and every new
+# pod on the control instance failed at silo start, twice (revisions 44 and 55), with `helm
+# template` perfectly happy both times. The invariant checker cannot see it: the rendered Secret
+# carries a key (invariant 4 is satisfied) naming a host (invariant 16 is satisfied) that simply
+# does not exist. So the chart now REFUSES that render, and this is the control that proves the
+# refusal is still there: each entry must FAIL `helm template` AND mention the phrase. A render
+# that succeeds here is the regression.
+#
+# name|values files (colon-separated)|phrase the refusal must carry
+# ---------------------------------------------------------------------------
+REFUSALS=(
+  "AdoNet on an external database with no connection string in values (the #3780 render)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.adonet-external-db-no-connection-string.yaml|MeshWeaver#3780"
+)
+refused=0
+for entry in "${REFUSALS[@]}"; do
+  name="${entry%%|*}"
+  rest="${entry#*|}"
+  files="${rest%%|*}"
+  phrase="${rest#*|}"
+  args=( template release "$CHART" --namespace check )
+  bad_input=0
+  IFS=':' read -r -a paths <<< "$files"
+  for p in "${paths[@]}"; do
+    if [ ! -f "$REPO/$p" ]; then
+      report "refusal '$name' names a values file that does not exist: $p"
+      bad_input=1
+    fi
+    args+=( -f "$REPO/$p" )
+  done
+  [ "$bad_input" -eq 1 ] && continue
+
+  out="$WORK/refusal-$(echo "$name" | tr -c 'a-zA-Z0-9' '-').yaml"
+  if helm "${args[@]}" > "$out" 2> "$out.err"; then
+    report "refusal '$name' RENDERED — the chart manufactured a value for an input nobody supplied instead of refusing (the #3780 shape is back)"
+    continue
+  fi
+  if ! grep -q -- "$phrase" "$out.err"; then
+    report "refusal '$name' failed to render, but not for the stated reason — '$phrase' is not in helm's error:"
+    sed 's/^/    /' "$out.err"
+    continue
+  fi
+  refused=$((refused + 1))
+  ok "$name — refused to render, naming the missing input"
+done
+if [ "$refused" -lt "${#REFUSALS[@]}" ]; then
+  report "only $refused of ${#REFUSALS[@]} refusal controls held — treating as FAILURE"
+fi
+
 if [ "$fail" -eq 0 ]; then
   echo
-  echo "All $rendered values combinations render a self-consistent deployment."
+  echo "All $rendered values combinations render a self-consistent deployment, and all $refused refusal controls hold."
 fi
 exit "$fail"
