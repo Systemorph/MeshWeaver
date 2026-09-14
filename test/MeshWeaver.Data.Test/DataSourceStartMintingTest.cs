@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -20,20 +21,20 @@ namespace MeshWeaver.Data.Test;
 /// configured reduce, hence a second <c>SynchronizationStream</c> and a second hosted <c>sync/</c>
 /// hub per stream opened, reachable by nobody and alive until the owning hub dies.
 /// <c>ReadPathStreamMintingTest.ADataSourceStart_MintsOnlyItsPrimaryStream</c> pins the
-/// unpartitioned type-source path; the three overrides that path does not reach are pinned here,
-/// each by an EXACT count taken after <c>Started</c>, which settles only once the init turn has
-/// run every <c>Initialize()</c>:</para>
+/// unpartitioned type-source path; the TWO PARTITIONED overrides that path does not reach are
+/// pinned here, each by an EXACT count taken after <c>Started</c>, which settles only once the init
+/// turn has run every <c>Initialize()</c>:</para>
 /// <list type="bullet">
 /// <item><description><c>TypeSourceBasedPartitionedDataSource.Initialize</c> opens ONE stream (the
 /// null partition) — measured beside an unpartitioned source on the same host, so the host's
 /// population is the number of sources.</description></item>
 /// <item><description><c>PartitionedHubDataSource.Initialize</c> opens one remote mirror PER
 /// INITIALIZED PARTITION — two partitions, two hubs on the client.</description></item>
-/// <item><description><c>UnpartitionedHubDataSource.Initialize</c> is the same shape with one
-/// partition; it is reached by every fixture in this project that calls <c>AddHubSource</c>, and
-/// its count is the client-side reading of <c>EvictedUnleasedStreamRetentionTest</c>'s
-/// baseline.</description></item>
 /// </list>
+/// <para><c>UnpartitionedHubDataSource.Initialize</c> is NOT pinned by an exact start count
+/// anywhere: the fixtures that call <c>AddHubSource</c> exercise it, and
+/// <c>EvictedUnleasedStreamRetentionTest</c> measures relative to a post-start baseline, which a
+/// spare hub minted at start would not move.</para>
 /// <para>Before the fix each count read DOUBLE (2 → 4, 2 → 4): one primary plus one discarded
 /// reduce per stream opened. A start that opens N streams and leaves N hubs is the whole claim.</para>
 /// </summary>
@@ -52,8 +53,9 @@ public class DataSourceStartMintingTest(ITestOutputHelper output) : HubTestBase(
     }
 
     /// <summary>The two owners the client's partitioned hub source mirrors — both are hosts the
-    /// router builds on demand with <see cref="ConfigureHost"/>, so both serve BusinessUnit.</summary>
-    private static readonly Address[] Partitions = [CreateHostAddress("1"), CreateHostAddress("2")];
+    /// router builds on demand with <see cref="ConfigureHost"/>, so both serve BusinessUnit.
+    /// Instance-owned and immutable: a static array is process-wide mutable state.</summary>
+    private readonly ImmutableArray<Address> partitions = [CreateHostAddress("1"), CreateHostAddress("2")];
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => base.ConfigureHost(configuration)
@@ -72,8 +74,8 @@ public class DataSourceStartMintingTest(ITestOutputHelper output) : HubTestBase(
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration)
             .AddData(data => data.AddPartitionedHubSource<Address>(ds => ds
-                .WithType<BusinessUnit>(_ => Partitions[0])
-                .InitializingPartitions(Partitions.Cast<object>())));
+                .WithType<BusinessUnit>(_ => partitions[0])
+                .InitializingPartitions(partitions.Cast<object>())));
 
     [HubFact]
     public async Task APartitionedTypeSourceStart_MintsOnlyItsPrimaryStream()
@@ -100,9 +102,9 @@ public class DataSourceStartMintingTest(ITestOutputHelper output) : HubTestBase(
         await client.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
 
         var live = LiveSyncHubs(client);
-        Output.WriteLine($"DIAG partitioned-hub-start: partitions={Partitions.Length} clientSyncHubs={live}");
+        Output.WriteLine($"DIAG partitioned-hub-start: partitions={partitions.Length} clientSyncHubs={live}");
 
-        live.Should().Be(Partitions.Length,
+        live.Should().Be(partitions.Length,
             "PartitionedHubDataSource.Initialize opens one remote mirror per initialized partition "
             + "and nothing else — before the fix each partition also left a discarded reduce's hub");
     }
