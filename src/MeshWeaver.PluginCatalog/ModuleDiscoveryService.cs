@@ -723,16 +723,25 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
                 // first import that imports NOTHING leaves an empty Space, and an empty Space is
                 // indistinguishable from a module that simply has no content unless something says
                 // so.
-                // 🚨 And the line says WHEN it will be retried rather than "later". Evaluate's case
-                // (1) re-runs the import on the next scan (a config with no LastSyncCommitSha is the
-                // trigger) — but scans are enqueued at boot and on BuildCompletion emissions, so on
-                // an instance receiving no build webhooks the next scan IS the next boot. A seal
-                // completing mid-process is not noticed until then (MeshWeaver#4063's shape).
+                // 🚨 And the line says WHEN it will be retried rather than "later" — which means it
+                // must name EVERY event that retries it, or an operator waits for the wrong one.
+                // Evaluate's case (1) re-runs the import on the next scan (a config with no
+                // LastSyncCommitSha is the trigger), and scans are enqueued at boot and on
+                // BuildCompletion emissions. Since MeshWeaver#4209 there is a third: the publishing
+                // lane's Hosting/PlatformBuilds/<source> announcement reaches
+                // PublicationSealArrivalService, which runs SealedPublicationSyncReconciler — and
+                // that reconciler's Decide treats a config with NO LastSyncCommitSha as behind the
+                // sealed commit, so a held FIRST import is released by the seal arriving, with no
+                // further green build and no restart. On an instance receiving no build webhooks
+                // none of the three has an event to hear and all of them reduce to the next boot; a
+                // seal completing mid-process is not noticed until then (MeshWeaver#4063's shape).
                 logger?.LogWarning(
                     "[ModuleDiscovery] the first import of '{Space}' is HELD — {Reason}. The Space and "
-                    + "its sync entry are in place; the next scan retries it — that is the next green "
-                    + "build of this repo, or this instance's next start if it receives no build "
-                    + "webhooks (MeshWeaver#4063).", spaceId, plan.HoldReason);
+                    + "its sync entry are in place; it is retried when this repo's publication is "
+                    + "sealed for this instance's framework identity (the seal's own arrival releases "
+                    + "it, MeshWeaver#4209), on the next green build of this repo, or at this "
+                    + "instance's next start — and on an instance that receives no build webhooks, "
+                    + "only the last of those (MeshWeaver#4063).", spaceId, plan.HoldReason);
                 return Observable.Return($"first import held — {plan.HoldReason}");
             }
             // System both as the trigger identity (TriggerAuthorizedAsSystem short-circuits an
