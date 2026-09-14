@@ -623,23 +623,47 @@ public static class DynamicTypePreWarmer
             return;
         var stamps = mesh.ServiceProvider
             .GetService<NodeTypeAdoptionRegistry>()?.AdoptedStamps.Count ?? 0;
-        registry.Record(new BakeReportReading(
+        registry.Record(ReadingOf(report, pass, stamps, DateTimeOffset.UtcNow));
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE REDUCTION STEP — the one call that used to drop the report's identities</b>
+    /// (#4258), extracted as a pure function so a test can hold it directly.
+    ///
+    /// <para>Every <c>NodeTypeBakeEntry</c> carries its <c>TypePath</c>, and this projection kept
+    /// only counts. So <c>previouslybroken=1</c> reached <c>/health</c> saying that exactly one
+    /// NodeType on this replica is broken for good — the only record of that anywhere, because the
+    /// rollout gate skips such a type on purpose — and declined to say which, in the one census
+    /// that can see past RLS. <c>Ownership</c> is the partition each non-baked type lives in; the
+    /// node's own title stays unpublished, because the body this lands on is public.</para>
+    ///
+    /// <para>Pure and <c>internal</c> rather than inlined above, for the reason the census itself
+    /// exists: a test that stages a <see cref="BakeReportReading"/> with <c>Ownership</c> already
+    /// filled in passes whatever this bridge does, so the defect's own site would have had no
+    /// guard. <c>at</c> is injected for the same reason.</para>
+    /// </summary>
+    /// <param name="report">The bake report to publish.</param>
+    /// <param name="pass">Which pass produced it.</param>
+    /// <param name="adoptionStamps">Prebuilt adoptions this process holds, captured at the same instant.</param>
+    /// <param name="at">When the reading was taken.</param>
+    /// <returns>The reading a <c>/health</c> line can carry.</returns>
+    internal static BakeReportReading ReadingOf(
+        NodeTypeBakeReport report, string pass, int adoptionStamps, DateTimeOffset at)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        return new BakeReportReading(
             pass,
             report.FrameworkVersion,
             report.Entries.Count,
             report.Entries.Count(e => !e.NeedsBake),
             report.Pending.Count,
             report.ClassifiedFromLocalAdoption,
-            stamps,
+            adoptionStamps,
             report.Summary,
-            DateTimeOffset.UtcNow)
+            at)
         {
-            // 🚨 #4258 — the entries carry every type's PATH and this call used to drop all of them.
-            // `previouslybroken=1` then said that exactly one NodeType on this replica is broken for
-            // good and declined to say which, in the one census that can see past RLS. Ownership is
-            // the partition each non-baked type lives in; the node title stays unpublished.
             Ownership = report.Ownership,
-        });
+        };
     }
 
     /// <summary>

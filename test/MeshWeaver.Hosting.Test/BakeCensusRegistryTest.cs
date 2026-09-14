@@ -1,4 +1,5 @@
 using System;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using Xunit;
 
@@ -106,6 +107,39 @@ public class BakeCensusRegistryTest
             .And.NotContain("BinaryToggle",
                 "this body is PUBLIC and unauthenticated: the partition routes the finding, a node "
                 + "title is the surface #3890 closed");
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE BRIDGE — the exact call the identity was dropped at</b> (#4258).
+    ///
+    /// <para>Every case above stages a <see cref="BakeReportReading"/> with <c>Ownership</c> already
+    /// populated, so all of them would pass while the projection from the REPORT to the READING kept
+    /// dropping the entries' paths — which is precisely the defect. This holds that projection
+    /// directly: a report carrying a permanently-broken type must produce a reading that names its
+    /// partition, and a sentence that still refuses the node's own title.</para>
+    /// </summary>
+    [Fact]
+    public void TheReportToReadingBridge_CarriesTheIdentity_NotOnlyTheCounts()
+    {
+        var report = new NodeTypeBakeReport(
+            [
+                new NodeTypeBakeEntry("Doc/Architecture/Fine", BakeState.Baked),
+                new NodeTypeBakeEntry("BinaryClickerV2/BinaryToggle", BakeState.PreviouslyBroken),
+            ],
+            "sd608997c1a94e2f8b3d5a6079e4c1b23");
+
+        var reading = DynamicTypePreWarmer.ReadingOf(
+            report, NodeTypeBakeReportRegistry.AdoptOnlyProbe, adoptionStamps: 78,
+            at: DateTimeOffset.UnixEpoch);
+
+        reading.Total.Should().Be(2, "the counts must keep working — this is a widening, not a swap");
+        reading.Ownership.Should().Be(report.Ownership,
+            "the reduction to a /health line is where every entry's TypePath was discarded, so a "
+            + "guard that stages the reading instead of the report checks nothing about it");
+        NodeTypeBakeReportRegistry.Describe(reading).Should()
+            .Contain("previouslybroken in BinaryClickerV2/…")
+            .And.NotContain("BinaryToggle",
+                "and the bridge must not smuggle a node title onto a public body either");
     }
 
     /// <summary>
