@@ -56,6 +56,59 @@ public class HealthCensusTest
     }
 
     /// <summary>
+    /// 🚨 <b>#4258's acceptance criterion, end to end: a reader with NO grant on the partition can
+    /// learn from an instrument they are authorised to call that a NodeType in it is broken.</b>
+    ///
+    /// <para><c>previouslybroken=1</c> is the only record anywhere that a NodeType is permanently
+    /// broken — the rollout gate skips such a type on purpose so one abandoned NodeType cannot
+    /// freeze the platform's deploys — and every probe a session can run (the RLS-filtered sweep,
+    /// the point <c>get</c>, <c>get_diagnostics</c>) answers "I cannot tell" for a partition it
+    /// holds no grant on. <c>/health</c> is composed by the process and is past RLS by
+    /// construction, so it is the one instrument that can answer; it was counting the failure and
+    /// dropping its identity one call before publication.</para>
+    ///
+    /// <para>🚨 <b>Also the disclosure assertion</b>, and it is the half that has to hold: this body
+    /// is public and unauthenticated, so the PARTITION prints and the node's own title does not.
+    /// #3890 closed a narrower version of this surface on exactly that principle.</para>
+    /// </summary>
+    [Fact]
+    public async Task ABrokenNodeTypesPARTITION_IsNamedOnTheUnauthenticatedBody_ButNotItsTitle()
+    {
+        var registry = new NodeTypeBakeReportRegistry();
+        registry.Record(BakeReading(
+            fromLocalAdoption: 0,
+            ownership: "previouslybroken in BinaryClickerV2/…; frameworkstale in Edu/…"));
+        var body = await HealthBodyAsync(services => services.AddSingleton(registry));
+
+        Assert.True(body.Contains("previouslybroken in BinaryClickerV2/…", StringComparison.Ordinal),
+            "the census counted a permanently-broken NodeType and would not say whose it is, so "
+            + "#3883 could not be closed or routed for three months on the ambiguity between "
+            + $"'denied' and 'deleted'. Body was:\n{body}");
+        Assert.False(body.Contains("BinaryToggle", StringComparison.Ordinal),
+            "the NODE's own name must not reach a public, unauthenticated body — a control that "
+            + "works by disclosing other people's node titles is a disclosure surface wearing an "
+            + $"instrument's colours (#3890). Body was:\n{body}");
+        Assert.True(body.Contains($"{NodeTypeBakeReportRegistry.HealthCheckName}: Healthy", StringComparison.Ordinal),
+            "a permanently-broken type must not flip this entry's STATUS — the gate skips it by "
+            + "design — so the census tag is the only reason the reading prints at all. If this "
+            + $"entry ever goes silent when Healthy, the identity is dropped again. Body was:\n{body}");
+    }
+
+    /// <summary>
+    /// The positive control for the case above: with nothing outstanding the body carries no
+    /// ownership clause, so that assertion is reading the reading rather than a constant.
+    /// </summary>
+    [Fact]
+    public async Task ACleanBakeReading_NamesNoPartitionAtAll()
+    {
+        var body = await HealthBodyAsync(services => services.AddSingleton(CleanBakeRegistry()));
+
+        Assert.False(body.Contains("Non-baked types by partition", StringComparison.Ordinal),
+            "an ownership clause printed for a reading with nothing outstanding would make the "
+            + $"assertion above unfalsifiable. Body was:\n{body}");
+    }
+
+    /// <summary>
     /// 🚨 The NEGATIVE half, paired with the case above so neither can go vacuous: the census tag is
     /// opt-in and did NOT turn /health into a wall of green. `self` is Healthy and untagged, and it
     /// must stay silent.
@@ -287,7 +340,7 @@ public class HealthCensusTest
         return registry;
     }
 
-    private static BakeReportReading BakeReading(int fromLocalAdoption) =>
+    private static BakeReportReading BakeReading(int fromLocalAdoption, string ownership = "") =>
         new(
             NodeTypeBakeReportRegistry.AdoptOnlyProbe,
             "sb43f9287dbd6922a7937bd24be103937",
@@ -297,7 +350,10 @@ public class HealthCensusTest
             ClassifiedFromLocalAdoption: fromLocalAdoption,
             AdoptionStamps: 78,
             Summary: "framework=sb43f928 total=209 baked=5 pending=204 frameworkstale=201",
-            At: DateTimeOffset.UnixEpoch);
+            At: DateTimeOffset.UnixEpoch)
+        {
+            Ownership = ownership,
+        };
 
     private static async Task<string> HealthBodyAsync(Action<IServiceCollection>? configure)
         => (await ProbeAsync(ProbeEndpoints.Health, configure)).Body;

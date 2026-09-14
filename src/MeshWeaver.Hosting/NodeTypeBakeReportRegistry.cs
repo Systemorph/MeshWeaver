@@ -35,7 +35,29 @@ public sealed record BakeReportReading(
     int ClassifiedFromLocalAdoption,
     int AdoptionStamps,
     string Summary,
-    DateTimeOffset At);
+    DateTimeOffset At)
+{
+    /// <summary>
+    /// 🚨 <b>WHOSE the non-baked types are — the identity <see cref="Summary"/>'s counts drop</b>
+    /// (#4258).
+    ///
+    /// <para><c>NodeTypeBakeReport.Ownership</c>, carried across the one call that used to reduce the
+    /// report to scalars. <c>previouslybroken=1</c> is the only record in the whole system that a
+    /// NodeType is permanently broken — the rollout gate skips it on purpose — and a count nobody can
+    /// resolve to an owner is not an answer: it is why #3883 failed to close three times on the
+    /// ambiguity between "the type is gone" and "I may not read it".</para>
+    ///
+    /// <para>🚨 It names the PARTITION each non-baked type lives in and stops there
+    /// (<c>BinaryClickerV2/…</c>), because this is published on a PUBLIC, unauthenticated body. That
+    /// routes a finding to an owner without disclosing a node title — the surface #3890 closed a
+    /// narrower version of.</para>
+    ///
+    /// <para>An init-only property rather than a primary-constructor parameter, deliberately: a
+    /// record's arity is its binary contract here (<c>scripts/check-record-signatures.py</c>), and a
+    /// tenth parameter would abort every host serving a module compiled against the ninth.</para>
+    /// </summary>
+    public string Ownership { get; init; } = string.Empty;
+}
 
 /// <summary>
 /// 🚨 <b>The bake verdict, PUBLISHED — so it can be read with <c>curl</c> instead of Loki</b>
@@ -107,9 +129,18 @@ public sealed class NodeTypeBakeReportRegistry
                    + "measured NOTHING about which of its NodeTypes the share already holds. This "
                    + "is an absence of measurement, NOT a clean bake (#3703).";
 
+        // 🚨 #4258 — the counts were the WHOLE publication, and a count nobody can resolve to an
+        // owner cannot close anything. The partition each non-baked type lives in is printed here;
+        // the node's own title deliberately is not, because this body is public.
+        var ownership = string.IsNullOrEmpty(reading.Ownership)
+            ? string.Empty
+            : $" Non-baked types by partition: {reading.Ownership} (the PARTITION each one lives in "
+              + "— this body is public and unauthenticated, so the node's own name is deliberately "
+              + "not printed; a partition routes the finding to an owner, #4258).";
+
         var common =
             $"{reading.Pass} at {reading.At.ToString("O", CultureInfo.InvariantCulture)}: "
-            + $"{reading.Summary}. Adoption stamps held by this process: {reading.AdoptionStamps} "
+            + $"{reading.Summary}.{ownership} Adoption stamps held by this process: {reading.AdoptionStamps} "
             + "(a count of NodeTypes THIS process stamped from a prebuilt adoption — a different "
             + $"population, in different units, from the {reading.Baked} whose record and the share "
             + "agree; the two are not comparable and never were, #3703).";
