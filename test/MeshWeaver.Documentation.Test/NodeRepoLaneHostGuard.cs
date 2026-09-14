@@ -184,6 +184,28 @@ public class NodeRepoLaneHostGuard
         Assert.Contains("platform-image-digest: ${{ needs.plugins-bake-image.outputs.platform_digest }}", body, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// 🚨 <b>The <c>plugins</c> prefix is MIGRATED, and only this caller's own input says so from
+    /// inside this repository</b> (MeshWeaver#3461, phase 4).
+    ///
+    /// <para>The publisher discovers the layout from a live <c>_current</c>, so dropping this line
+    /// would not silently return the prefix to flat — the run would publish a generation anyway and
+    /// warn. What it WOULD do is make every core publication announce that its caller is
+    /// unflipped, for ever, and leave the fleet's most-read prefix with no statement of its layout
+    /// in the repository that owns the lane. The harness
+    /// (<c>test-publish-bake-overlap.py</c>) cannot see this: it supplies
+    /// <c>BAKE_PUBLICATION_LAYOUT</c> to the script directly and never reads a caller.</para>
+    /// </summary>
+    [Fact]
+    public void ThePlatformsPluginsBake_DeclaresTheGenerationLayout()
+    {
+        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), MainCd));
+        var job = Regex.Match(text, @"\n  plugins-bake:\n(?<body>(?:(?:    .*|  #.*)\n|\n)+?)(?=  [a-z][a-z-]*:\n)");
+        Assert.True(job.Success, $"{MainCd} must have a `plugins-bake` job");
+        var body = ExecutableLinesOf(job.Groups["body"].Value);
+        Assert.Contains("publication-layout: generation", body, StringComparison.Ordinal);
+    }
+
     private static string ExecutableLinesOf(string yaml) =>
         string.Join('\n', yaml.Split('\n').Where(l => !l.TrimStart().StartsWith('#')));
 
