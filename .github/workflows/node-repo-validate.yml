@@ -122,6 +122,35 @@ jobs:
         run: python3 "$RUNNER_TEMP/check-content-ci-path.py" --root . --expected .github/workflows/ci.yml
       - name: Validate every node JSON (+ NodeType Source)
         run: python3 scripts/validate-repos.py
+      # ── NO COVER IS A WALL OF TEXT, AND EVERY heroCta PILL IS LEGIBLE ──
+      # 🚨 ONE copy of the cover gate, fetched here (MeshWeaver#4027). It used to be hand-copied into
+      # five repos as `scripts/check-covers.py`, and measured 2026-09-13 the copies had drifted to
+      # THREE variants in 17 days: the heroCta contrast check (WCAG 3:1 surface / 4.5:1 label,
+      # added because twelve covers across two repos shipped an invisible pill) reached exactly one
+      # of them, and nothing said the other four differed. A change to the shared gate cost between
+      # two and five PRs and the answer depended on which copy you happened to open. Fetched at the
+      # lane's SCRIPTS ref like every other guard above: asserted RED when unavailable, never fallen
+      # back to a drifted local copy. The allow-files stay in the CALLER (`cover-prose.allow`,
+      # `cover-contrast.allow`) — they are the repo's debt, the script is not.
+      #
+      # 🚨 This gate is NOT vacuous by construction: a repo with no cover at all fails it ("would
+      # pass vacuously"), so a caller whose plugin roots moved out from under it goes red rather than
+      # green. Every caller measured 2026-09-13 has at least one cover (Crm and Manufacturing: 1;
+      # SocialMedia 5; Education 9; Reinsurance 17; Plugins 69).
+      - name: Fetch the platform's cover gate at the lane's scripts ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the cover gate has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-covers.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-covers.py" \
+            || { echo "::error::could not fetch .github/scripts/check-covers.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-covers.py" | grep -q "check-covers" || { echo "::error::the fetched check-covers.py at ${SCRIPTS_REF} does not look like the cover gate"; exit 1; }
+      - name: "No cover is a wall of text — the gate can fail (self-test)"
+        run: python3 "$RUNNER_TEMP/check-covers.py" --self-test
+      - name: "No cover is a wall of text, and every heroCta pill is legible on the page"
+        run: python3 "$RUNNER_TEMP/check-covers.py" --root .
       # 🚨 THE 45-MINUTE CAP, fleet-wide (maintainer, 2026-09-02: "hard cut CI runs after 45min — we pay all
       # this"). GitHub's default job timeout is 360 minutes; an uncapped job that hangs bills a runner for six
       # hours and, when a required check `needs:` it, blocks every merge behind it (the Plugins Mcp bundle,
