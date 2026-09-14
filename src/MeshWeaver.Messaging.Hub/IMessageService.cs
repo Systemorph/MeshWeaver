@@ -7,7 +7,7 @@ internal interface IMessageService : IDisposable
     IMessageDelivery? Post<TMessage>(TMessage message, PostOptions opt);
     void Start();
     bool OpenGate(string name);
-    bool FailGate(string name, string reason);
+    bool FailGate(string name, string reason, ErrorType errorType);
     /// <summary>
     /// Cancels any in-progress message handlers (e.g. stuck initialization)
     /// to unblock the execution pipeline for shutdown processing.
