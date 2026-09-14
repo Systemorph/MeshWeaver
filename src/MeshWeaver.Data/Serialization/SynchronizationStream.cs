@@ -277,10 +277,16 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     bool IStreamLivenessSource.IsDisposed => isDisposed;
 
     /// <inheritdoc />
-    bool IStreamLivenessSource.IsFaulted => faulted;
+    bool IStreamLivenessSource.IsFaulted => Volatile.Read(ref terminalFault) is not null;
+
+    /// <inheritdoc />
+    Exception? IStreamLivenessSource.TerminalFault => Volatile.Read(ref terminalFault);
 
     /// <summary>
-    /// Set the instant <see cref="Store"/> takes a terminal error, and never cleared.
+    /// The terminal error this stream's <see cref="Store"/> holds, or <c>null</c> while it is
+    /// healthy — written ONCE, before the terminal is published, and never cleared. This field IS
+    /// the liveness flag: "faulted" means "this is not null", so a reader can never learn that the
+    /// stream is dead without also being able to say how it died.
     ///
     /// <para>🚨 A FAULT IS FOREVER on this type. <see cref="Store"/> is a
     /// <see cref="ReplaySubject{T}"/>: once it holds an <c>OnError</c>, the Rx grammar says it can
@@ -289,45 +295,62 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// <c>SubscribeRequest</c>, but the answer lands in a store that is already terminal.</para>
     ///
     /// <para>That makes a faulted stream exactly as dead as a disposed one, which is why
-    /// <see cref="StreamLiveness.IsUsable"/> reads this flag: without it, a cache that keyed a
+    /// <see cref="StreamLiveness.IsUsable"/> reads it: without it, a cache that keyed a
     /// mirror by (owner, reference, identity) kept serving the corpse for the whole process
     /// lifetime, so ONE unanswered SubscribeRequest turned into a permanent failure of that path
     /// (Systemorph/MeshWeaver#2387).</para>
+    ///
+    /// <para>Not <c>volatile</c> because <c>Interlocked.CompareExchange</c> cannot take a
+    /// <c>ref</c> to a volatile field (CS0420, an error under <c>-warnaserror</c>); the write is a
+    /// full fence and every read goes through <see cref="Volatile.Read{T}"/>, which is the same
+    /// guarantee written out longhand.</para>
     /// </summary>
-    private volatile bool faulted;
+    private Exception? terminalFault;
 
     /// <summary>
-    /// The ONE way this stream's store takes a terminal error — it errors the store and then
-    /// records <see cref="faulted"/>. Every <c>Store.OnError</c> in this type goes through here so
-    /// the flag can never drift from the store's actual state.
+    /// The ONE way this stream's store takes a terminal error — it RECORDS the terminal and then
+    /// publishes it. Every <c>Store.OnError</c> in this type goes through here so the liveness
+    /// answer can never drift from the store's actual state.
     ///
-    /// <para>🚨 <b>Terminal FIRST, flag SECOND — the order is the contract.</b> A reader that finds
-    /// this stream unusable (<see cref="StreamLiveness.IsUsable"/> reads the flag) answers with the
-    /// store's terminal notification — <c>LayoutExtensions.GetStream&lt;T&gt;</c> re-delivers a
-    /// faulted store's <c>OnError</c> to its late subscriber — and that is only exact if the
-    /// terminal is already in the store by the time the flag says "dead". Flag-first opened a
-    /// window in which the stream read as faulted while its <see cref="ReplaySubject{T}"/> was still
-    /// open: a subscriber arriving inside it saw an open store, was told "completed", and the
-    /// <c>OnError</c> that followed reached nobody (Systemorph/MeshWeaver.Plugins#1715, Copilot's
-    /// review of MeshWeaver#4151). Store-first closes it: <c>ReplaySubject.OnError</c> marks the
-    /// subject terminal under its own lock before delivering, so any subscribe that observes the
-    /// flag observes the terminal too.</para>
+    /// <para>🚨 <b>ONE WRITE, not an ordering — Systemorph/MeshWeaver#4180.</b> Two facts have to
+    /// hold at the same instant, and a <c>bool</c> beside the store could only ever hold one of
+    /// them at a time:</para>
+    /// <list type="number">
+    /// <item><description><b>A reader that has SEEN the terminal must find the stream refused.</b>
+    /// Reacting to the fault by re-resolving the stream is the whole recovery contract — a cache
+    /// declines to serve a faulted stream so "the next natural caller opens a fresh one" (#2387).
+    /// With the flag written AFTER <c>Store.OnError</c> (MeshWeaver#4151), every consumer reacting
+    /// to the fault ran inside the window where the stream still read as live, and the workspace
+    /// handed it the corpse it had just been told about. <c>StreamResyncGivesUpTest</c> failed on
+    /// exactly that in five pull requests in one evening (#4180/#4244) — rarely, because the
+    /// asynchronous consumer has to win a race against a few microseconds of unwinding, and always
+    /// for a consumer whose <c>OnError</c> arm runs on the delivering thread.</description></item>
+    /// <item><description><b>A reader that finds the stream refused must be able to say HOW it
+    /// ended.</b> With the flag written BEFORE <c>Store.OnError</c> (as it stood before #4151), a
+    /// reader arriving in the window found a refused stream whose <see cref="ReplaySubject{T}"/>
+    /// was still open, answered <i>completed</i>, and the <c>OnError</c> that followed reached
+    /// nobody — a layout area whose node was gone rendered nothing at all where its card belongs
+    /// (Systemorph/MeshWeaver.Plugins#1715).</description></item>
+    /// </list>
     ///
-    /// <para>The flag is written in a <c>finally</c>: a subscriber's <c>OnError</c> arm that throws
-    /// must not leave a terminally-errored store behind a flag that still reads "live" — that is
-    /// the corpse-serving cache of #2387 again. <see cref="OnError"/> already catches what escapes.</para>
+    /// <para>Recording the EXCEPTION rather than a bit satisfies both, and stops depending on an
+    /// ordering at all: the refusal and the terminal become one published value. A reader that is
+    /// refused reads <c>TerminalFault</c> and forwards that exact instance
+    /// (<c>LayoutExtensions.GetStream&lt;T&gt;</c> does), instead of probing a store that may not
+    /// have terminated yet. <c>CompareExchange</c> keeps the FIRST error, which is the one the
+    /// <see cref="ReplaySubject{T}"/> keeps and replays, so the record and the store can never name
+    /// different exceptions.</para>
+    ///
+    /// <para>The record is written OUTSIDE the try: a subscriber's <c>OnError</c> arm that throws
+    /// must not leave a terminally-errored store behind a liveness answer that still reads "live" —
+    /// that is the corpse-serving cache of #2387 again. <see cref="OnError"/> already catches what
+    /// escapes <c>Store.OnError</c>.</para>
     /// </summary>
     /// <param name="error">The terminal error to publish to subscribers.</param>
     private void FaultStore(Exception error)
     {
-        try
-        {
-            Store.OnError(error);
-        }
-        finally
-        {
-            faulted = true;
-        }
+        Interlocked.CompareExchange(ref terminalFault, error, null);
+        Store.OnError(error);
     }
 
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below

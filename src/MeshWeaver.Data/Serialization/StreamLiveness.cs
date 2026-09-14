@@ -45,6 +45,16 @@ namespace MeshWeaver.Data.Serialization;
 /// and a stream that is BORN dead is handed back rather than re-created, so create → fault → create
 /// cannot spin.</para>
 ///
+/// <para>🚨 <b>"Faulted" starts when the terminal is RECORDED, not when it has finished being
+/// delivered (Systemorph/MeshWeaver#4180).</b> Recovery from a fault is a SUBSCRIBER's move: it is
+/// told, and it asks for a fresh stream. So the instant a subscriber can see the terminal, this
+/// predicate must already be refusing — otherwise the caches hand that very subscriber the corpse
+/// it was just told about, which is the #2387 failure arriving through the door #2387 built. A
+/// <c>SynchronizationStream</c> therefore publishes its terminal ONCE, as
+/// <see cref="IStreamLivenessSource.TerminalFault"/>, before <c>Store.OnError</c> runs — and a
+/// reader this predicate turns away reads that same value (<see cref="FaultOf"/>) to learn how the
+/// stream ended, rather than probing a store that may not have terminated yet.</para>
+///
 /// <para><b>The verdict.</b> A stream is usable when it and every ancestor in its reduce chain is
 /// undisposed, unfaulted, and owns a hub that has not begun winding down.
 /// <see cref="MessageHub.IsDisposing"/> is checked as well as <see cref="IMessageHub.RunLevel"/>
@@ -120,6 +130,27 @@ internal static class StreamLiveness
     /// <returns><c>true</c> only when this exact stream's store holds a terminal error.</returns>
     public static bool HasFaulted(ISynchronizationStream? stream)
         => stream is IStreamLivenessSource { IsFaulted: true };
+
+    /// <summary>
+    /// The terminal error <paramref name="stream"/> ITSELF took, or <c>null</c> when it has not
+    /// faulted — the answer that makes refusing a faulted stream SAFE, Systemorph/MeshWeaver#4180.
+    ///
+    /// <para>🚨 A reader that is refused a stream still owes its own subscriber a terminal, and
+    /// manufacturing one is the Plugins#1715 swallow (a completion where a fault belongs, so the
+    /// view never enters its error branch). Probing the store for it is not exact — a fault is
+    /// RECORDED before it is published, so there is an instant where the stream is refused and the
+    /// <c>ReplaySubject</c> has not terminated yet — which is precisely why the record exists. Read
+    /// this instead: it is the same exception instance the store holds, published in the same write
+    /// that made the stream read as dead.</para>
+    ///
+    /// <para>Deliberately does NOT walk the source chain, for the same reason
+    /// <see cref="HasFaulted"/> does not: an ancestor's terminal is the ancestor's business, and a
+    /// child of a faulted parent takes its own terminal through the reduce chain.</para>
+    /// </summary>
+    /// <param name="stream">The stream to read the terminal from, or <c>null</c>.</param>
+    /// <returns>The stream's own terminal error, or <c>null</c>.</returns>
+    public static Exception? FaultOf(ISynchronizationStream? stream)
+        => (stream as IStreamLivenessSource)?.TerminalFault;
 }
 
 /// <summary>
@@ -156,6 +187,23 @@ internal interface IStreamLivenessSource
     /// Whether this stream's store took a terminal error. It will never emit again either, and —
     /// unlike a completed store — every later subscriber replays that error the instant it
     /// subscribes, so serving it from a cache turns one transient failure into a permanent one.
+    ///
+    /// <para>True from the instant the terminal is RECORDED, which is before it is published: a
+    /// subscriber receiving the fault therefore already finds the stream dead, which is what lets
+    /// it recover by asking for a fresh one (Systemorph/MeshWeaver#4180). Exactly equivalent to
+    /// <c><see cref="TerminalFault"/> is not null</c> — they are one field.</para>
     /// </summary>
     bool IsFaulted { get; }
+
+    /// <summary>
+    /// The terminal error this stream took, or <c>null</c> when <see cref="IsFaulted"/> is false —
+    /// the SAME field, read as a value rather than as a bit.
+    ///
+    /// <para>It exists so that "this stream is refused" and "here is why it ended" are one
+    /// published fact rather than two states that an ordering has to reconcile: a reader turned
+    /// away by <see cref="StreamLiveness.IsUsable"/> forwards this exact instance instead of
+    /// probing a store that may not have terminated yet (Systemorph/MeshWeaver#4180,
+    /// Systemorph/MeshWeaver.Plugins#1715).</para>
+    /// </summary>
+    Exception? TerminalFault { get; }
 }
