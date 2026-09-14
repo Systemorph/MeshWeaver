@@ -773,6 +773,13 @@ class Plan:
     # AXIS 3: the installations, and whether the inventory of them is COMPLETE.
     instances: list[Instance] = field(default_factory=list)
     inventory_complete: bool = False
+    # 🚨 THE SECOND REGISTRY'S PROTECTED SET (#4230). Every reference the fleet's COMMITTED overlays
+    # make to a host this lane cannot lock — (registry host, repository, tag, where). Nothing here
+    # is ever locked; it is collected so the nightly run can PRINT what a cleanup on that registry
+    # would have to keep. That printout IS the dry run: a registry with no lock has no object to
+    # write a protected set into, so the only artifact available is the derivation itself.
+    # Doc/Architecture/FleetRegistryRetention.
+    foreign_references: list[tuple[str, str, str, str]] = field(default_factory=list)
 
 
 # ── Planning: pure over its inputs, so the self-test can falsify it with no network ─────────────
@@ -801,6 +808,11 @@ def build_plan(axis1: list, axis2: list[OverlayScan]) -> Plan:
                 f"{scan.gh_repo}: its deployment overlays could not be read, so its TAG pins were "
                 f"NOT looked for — {scan.unreadable}"
             )
+        # The committed half of the OTHER registry's protected set, collected here rather than
+        # re-derived at report time so the number the report prints and the set it lists are the
+        # same object (#4230).
+        plan.foreign_references.extend(
+            (host, repo, tag, f"{scan.gh_repo} {where}") for host, repo, tag, where in scan.foreign)
 
     # ---- axis 1: a classified digest pin ------------------------------------------------------
     by_key: dict[tuple[str, str], Wanted] = {}
@@ -1539,6 +1551,36 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
                  "in its closure")
         else:
             emit(f"        {instance.id:<18} 🚨 NOT ACCOUNTED FOR — {instance.error}")
+    # 🚨 THE OTHER REGISTRY'S PROTECTED SET, PRINTED — the dry run, and the only artifact a
+    # lock-less registry can have (#4230). `distribution` has no `deleteEnabled`, so nothing can be
+    # written INTO that registry ahead of a deleter; the derivation itself is the whole of the
+    # protection, and a derivation nobody can read is not one. This deletes nothing, locks nothing
+    # and needs no credential it does not already hold — it says what a cleanup there would have to
+    # KEEP. Doc/Architecture/FleetRegistryRetention.
+    if plan.foreign_references:
+        emit("")
+        emit("    PROTECTED SET — registries this lane cannot lock (dry run; nothing is written)")
+        by_host: dict[str, list[tuple[str, str, str]]] = {}
+        for host, repo, tag, where in plan.foreign_references:
+            by_host.setdefault(host, []).append((repo, tag, where))
+        for host in sorted(by_host):
+            references = sorted(set(by_host[host]))
+            emit(f"      {host}: {len(references)} committed reference(s) a cleanup must KEEP")
+            for repo, tag, where in references:
+                emit(f"        {repo}:{tag}")
+                emit(f"          pinned by {where}")
+        # 🚨 ITS OWN INCOMPLETENESS, ON ITS OWN LINE. This is the COMMITTED axis only. The set an
+        # installation is RUNNING is derivable the same way it is here (the mirror pushes the
+        # identical manifest under the identical tag and proves it by read-back), and the PLUGIN
+        # BUNDLE family — plugins/<source>/<package> — is not derivable at all today: nothing
+        # enumerates what that registry holds as data, and nothing records a last-pulled signal.
+        # A protected set complete for one artifact family and empty for the other, reported as one
+        # number, is this whole mechanism's failure mode committed by its own report (#4066).
+        emit("      🚨 COMMITTED PINS ONLY. The running set is derivable and not derived here; the")
+        emit("         PLUGIN BUNDLE family (plugins/<source>/<package>) is NOT derivable today —")
+        emit("         nothing enumerates what that registry HOLDS as data (#4066). So this is a")
+        emit("         floor, never a complete protected set, and no cleanup may run against it.")
+
     emit("")
     emit("    UNION — fleet pins and official release manifests")
     emit(f"      distinct manifests wanted                {len(plan.wanted)}")
@@ -2257,6 +2299,356 @@ def check_retention_record(root: str) -> int:
     print(f"  every recorded step retains for at least {MINIMUM_PURGE_AGE_DAYS} days by age with "
           "no --keep build-count quota (#3842), and the record's pause declaration agrees with "
           "the statuses it is recorded beside.")
+    return 0
+
+
+# ── The SECOND question about a registry: what DELETES from it (#4230) ─────────────────────────
+#
+# `disposition` answers "can THIS lane lock that registry". It says nothing whatever about whether
+# anything deletes from it, and for `cr.meshweaver.cloud` — the fleet's OWN registry, the default
+# for newly provisioned instances — the answer to the second question was *established by nothing*
+# until 2026-09-14. The `registries` table is the unit that can be shown COMPLETE, so it is where
+# the second question is asked too: every entry carries a `retention` block, and a registry joining
+# the fleet cannot enter without answering it.
+#
+# 🚨 AND THE ANSWER IS STRUCTURALLY DIFFERENT FROM THE ACR'S, which is why this is a separate gate
+# rather than the same one pointed at another host. `distribution` HAS NO LOCK: ACR's
+# `changeableAttributes.deleteEnabled` is an ACR feature, so there is no object a protected set can
+# be written INTO ahead of a deleter. On the ACR an incomplete nightly run merely writes fewer locks
+# and last night's still hold; on a registry with no lock, a cleanup's derivation IS the entire
+# safety margin and an incomplete one deletes what it could not see, in the same act.
+# Design: Doc/Architecture/FleetRegistryRetention.
+
+RETENTION_RULES = {"nothing-deletes", "derived-protected-set", "not-ours"}
+
+# Which rules a disposition may carry, and the pairing is checked BOTH ways. `third-party` means the
+# images were never ours, so the only honest statement is that there is nothing of ours to keep;
+# `fleet-unlockable` means our images live there and something has to say what keeps them — a
+# `not-ours` on one of those would be a blanket exemption wearing a retention statement's clothes.
+RULES_FOR_DISPOSITION = {
+    "fleet-unlockable": {"nothing-deletes", "derived-protected-set"},
+    "third-party": {"not-ours"},
+}
+
+# Every spelling of "delete something from a registry" this fleet could plausibly acquire.
+# 🚨 `acr purge` is DELIBERATELY ABSENT: it is legitimately present in `.github/acr-retention/`, it
+# addresses `meshweaver.azurecr.io`, and it cannot reach the fleet registry at all — the record
+# declares it `present: false` with that reason, and `--check-retention-record` is the gate that
+# reads it. Including it here would red on the other registry's own record.
+DELETER_PATTERNS = (
+    (r"-X\s+DELETE", "an HTTP DELETE"),
+    (r"--request\s+DELETE", "an HTTP DELETE"),
+    (r"\bcrane\s+delete\b", "a crane deletion"),
+    (r"\bskopeo\s+delete\b", "a skopeo deletion"),
+    (r"\bregctl\s+manifest\s+delete\b", "a regctl manifest deletion"),
+    (r"\boras\s+manifest\s+delete\b", "an oras manifest deletion"),
+    (r"\bacr\s+repository\s+delete\b", "an az acr repository deletion"),
+    (r"\bgarbage-collect\b", "a blob garbage collection"),
+)
+
+# What can actually RUN a command against a registry: workflow and chart YAML, shell, Python,
+# Helm templates, bicep. `.md` is prose and `.json` is data — a record naming a deleter is not one.
+DELETER_SWEEP_EXTENSIONS = {".yml", ".yaml", ".sh", ".py", ".tpl", ".bicep"}
+DELETER_SWEEP_ROOTS = ("deploy", ".github")
+
+
+def sweep_for_deleters(root: str) -> tuple[list[tuple[str, int, str, str]], int, int]:
+    """Every deleter spelling that appears on an EXECUTABLE, non-comment line. Returns the hits and
+    the denominator — files scanned and files deliberately skipped.
+
+    🚨 TWO SKIPS, BOTH PRINCIPLED, BOTH NAMED. This script itself carries every pattern above as a
+    literal, and `.github/acr-retention/` is the RECORD — a file whose job is to name deleters is
+    not one, and its two purge YAMLs are the other gate's subject (`--check-retention-record`).
+    Skipping either silently would be the trapdoor this repository keeps paying for, so both are
+    counted and printed.
+
+    🚨 WHOLE-LINE COMMENTS ARE STRIPPED, and that is load-bearing rather than tidy: the registry's
+    own ConfigMap explains in a comment that blobs are removed only by `registry garbage-collect`.
+    A sweep that fired on the sentence saying a thing does not happen is the shape this file already
+    learned once, on 2026-09-07, over a trailing newline."""
+    base = Path(root)
+    compiled = [(re.compile(pattern), description) for pattern, description in DELETER_PATTERNS]
+    myself = (base / ".github" / "scripts" / "lock-pinned-digests.py").resolve()
+    record = (base / ".github" / "acr-retention").resolve()
+    hits: list[tuple[str, int, str, str]] = []
+    scanned = skipped = 0
+    for sweep_root in DELETER_SWEEP_ROOTS:
+        if not base.joinpath(sweep_root).is_dir():
+            continue
+        for path in sorted(base.joinpath(sweep_root).rglob("*")):
+            if not path.is_file() or path.suffix not in DELETER_SWEEP_EXTENSIONS:
+                continue
+            resolved = path.resolve()
+            if resolved == myself or record in resolved.parents:
+                skipped += 1
+                continue
+            scanned += 1
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                # 🚨 UNREADABLE IS NOT CLEAN. R3 in the design page: what the derivation could not
+                # SEE is protected, not skipped — and here that means named as a hit.
+                hits.append((str(path.relative_to(base)), 0, "unreadable",
+                             "this file could not be read, so it was never swept"))
+                continue
+            for number, line in enumerate(text.splitlines(), 1):
+                if line.strip().startswith("#"):
+                    continue
+                for pattern, description in compiled:
+                    if pattern.search(line):
+                        hits.append((str(path.relative_to(base)), number, description,
+                                     line.strip()[:120]))
+    return hits, scanned, skipped
+
+
+def maintenance_stanza(chart_dir: Path) -> tuple[dict[str, str], list[str]]:
+    """The `maintenance:` keys the registry's rendered config carries, and the `age:` under each.
+
+    Read off the committed template rather than a live pod, because this gate runs on a pull request
+    with no credential and no cluster — and the pull request is the half that can BREAK it. The
+    stanza is plain YAML inside the `config.yml: |` block, so it is read by indentation rather than
+    by a YAML parser that would choke on the Helm expressions elsewhere in the same file."""
+    found: dict[str, str] = {}
+    problems: list[str] = []
+    configmaps = sorted(chart_dir.glob("configmap*.yaml")) + sorted(chart_dir.glob("configmap*.yml"))
+    if not configmaps:
+        return found, [f"{chart_dir}: no configmap template — the registry's own configuration is "
+                       "what says whether anything in it deletes, and it could not be found."]
+    for configmap in configmaps:
+        lines = configmap.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            opener = re.match(r"^(\s*)maintenance:\s*$", line)
+            if not opener:
+                continue
+            depth = len(opener.group(1))
+            child: str | None = None
+            for following in lines[index + 1:]:
+                if not following.strip() or following.strip().startswith("#"):
+                    continue
+                indent = len(following) - len(following.lstrip())
+                if indent <= depth:
+                    break
+                key = re.match(r"^\s*([A-Za-z0-9_.-]+):", following)
+                if indent == depth + 2 and key:
+                    child = key.group(1)
+                    found.setdefault(child, "")
+                elif child is not None:
+                    age = re.match(r"^\s*age:\s*(\S+)\s*$", following)
+                    if age:
+                        found[child] = age.group(1)
+    return found, problems
+
+
+def check_registry_retention(root: str) -> int:
+    """Does every registry the fleet's overlays name still say what — if anything — DELETES from it,
+    and does the committed chart still agree with what the record says?
+
+    No credential, no network, no registry call. What it covers is the half a pull request can
+    break: the declaration, and the chart the declaration is a statement ABOUT.
+
+    🚨 THE POINT IS THAT THE DECLARATION IS FALSIFIABLE. A `reason` field alone is a comment: it
+    reads exactly the same on the day a `CronJob` running `registry garbage-collect` lands beside it.
+    So a `nothing-deletes` rule names the chart it was derived from, and this re-derives the chart's
+    own deleters and reds when the two disagree — naming what changed, and saying that the record
+    has to be re-derived before the change lands rather than after."""
+    path = Path(root) / ".github" / "acr-retention" / ROSTER_PATH
+    if not path.is_file():
+        print(f"::error::{path} does not exist — the `registries` table is where every registry the "
+              "fleet pins in is accounted for, both for what locks it and for what deletes from it.")
+        return 1
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"::error::{path} is not readable JSON: {exc}")
+        return 1
+    registries = document.get("registries")
+    if not isinstance(registries, dict) or not registries:
+        print(f"::error::{ROSTER_PATH}: `registries` is missing or empty, so ZERO registries were "
+              "asked what deletes from them. An empty table and a clean one read identically.")
+        return 1
+
+    problems: list[str] = []
+    charts_checked = 0
+    swept_files = swept_skipped = 0
+    declaring_nothing_deletes: list[str] = []
+    for host, entry in sorted(registries.items()):
+        where = f"{ROSTER_PATH}: `registries.{host}`"
+        if not isinstance(entry, dict):
+            problems.append(f"{where} is not an object.")
+            continue
+        disposition = str(entry.get("disposition", "")).strip()
+        retention = entry.get("retention")
+        if retention is None or not isinstance(retention, dict):
+            problems.append(
+                f"{where} has no `retention` block. `disposition` says whether THIS lane can lock "
+                f"{host}; it says nothing about whether anything DELETES from it, and that second "
+                "question went unasked about the fleet's own registry until #4230. Write "
+                "`retention` with a `rule` (" + ", ".join(sorted(RETENTION_RULES)) + ") and a "
+                "`reason`. Doc/Architecture/FleetRegistryRetention.")
+            continue
+        rule = str(retention.get("rule", "")).strip()
+        if rule not in RETENTION_RULES:
+            problems.append(f"{where}.retention.rule is {rule!r}; expected one of "
+                            + ", ".join(sorted(RETENTION_RULES)) + ".")
+            continue
+        if not str(retention.get("reason", "")).strip():
+            problems.append(f"{where}.retention has no `reason`. A rule with no reasoning is a "
+                            "word, and the next reader cannot tell a decision from a default.")
+        allowed = RULES_FOR_DISPOSITION.get(disposition)
+        if allowed is not None and rule not in allowed:
+            problems.append(
+                f"{where} is `{disposition}` and declares retention `{rule}`, which that "
+                f"disposition may not carry (allowed: {', '.join(sorted(allowed))}). A "
+                "`third-party` registry holds nothing of ours to keep; a `fleet-unlockable` one "
+                "holds our images, so `not-ours` there would be a blanket exemption wearing a "
+                "retention statement's clothes.")
+
+        if rule == "not-ours":
+            if retention.get("deleters") is not None:
+                problems.append(
+                    f"{where}.retention is `not-ours` and still enumerates `deleters`. Nothing of "
+                    "ours is stored there, so listing somebody else's deleters would read as a "
+                    "verdict about OUR artifacts — which is the false reassurance this table "
+                    "exists to refuse.")
+            continue
+
+        if rule == "derived-protected-set":
+            axes = ((retention.get("protectedSet") or {}).get("axes")
+                    if isinstance(retention.get("protectedSet"), dict) else None)
+            if not isinstance(axes, list) or not axes:
+                problems.append(
+                    f"{where}.retention is `derived-protected-set` and names no "
+                    "`protectedSet.axes`. A cleanup that deletes the complement of a set nobody "
+                    "wrote down deletes the complement of nothing.")
+                continue
+            for position, axis in enumerate(axes):
+                if not isinstance(axis, dict):
+                    problems.append(f"{where}.retention.protectedSet.axes[{position}] is not an object.")
+                    continue
+                for required in ("axis", "derivedFrom"):
+                    if not str(axis.get(required, "")).strip():
+                        problems.append(f"{where}.retention.protectedSet.axes[{position}] has no "
+                                        f"`{required}`.")
+                if axis.get("onIncomplete") != "refuse":
+                    problems.append(
+                        f"{where}.retention.protectedSet.axes[{position}] declares "
+                        f"`onIncomplete: {axis.get('onIncomplete')!r}`. On a registry with no lock "
+                        "the ONLY safe answer is `refuse`: an incomplete derivation there does not "
+                        "protect less, it DELETES what it could not see, in the same act.")
+            continue
+
+        # rule == "nothing-deletes" — the enumeration, and then the chart it was derived from.
+        deleters = retention.get("deleters")
+        if not isinstance(deleters, list) or not deleters:
+            problems.append(
+                f"{where}.retention is `nothing-deletes` and enumerates no `deleters`. The claim "
+                "IS the enumeration: without one, 'nothing deletes' and 'nobody looked' are the "
+                "same sentence.")
+            continue
+        present = 0
+        for position, deleter in enumerate(deleters):
+            if not isinstance(deleter, dict):
+                problems.append(f"{where}.retention.deleters[{position}] is not an object.")
+                continue
+            for required in ("mechanism", "verdict"):
+                if not str(deleter.get(required, "")).strip():
+                    problems.append(f"{where}.retention.deleters[{position}] has no `{required}`.")
+            if not isinstance(deleter.get("present"), bool):
+                problems.append(
+                    f"{where}.retention.deleters[{position}].present is "
+                    f"{deleter.get('present')!r}, not a boolean. Every `is True` reader in this "
+                    "file treats a string or a null as absent, so a typed quote mark would "
+                    "silently move a mechanism out of the enumeration.")
+            elif deleter["present"]:
+                present += 1
+        if deleters and present == 0:
+            problems.append(
+                f"{where}.retention.deleters lists {len(deleters)} mechanism(s) and NOT ONE is "
+                "`present: true`. An enumeration in which nothing is present is an enumeration "
+                "that inspected nothing, and it reads exactly like a clean one — the confusion "
+                "#3438 is made of. `cr.meshweaver.cloud` has one: `maintenance.uploadpurging`.")
+
+        chart = str(retention.get("chart", "")).strip()
+        if not chart:
+            problems.append(
+                f"{where}.retention is `nothing-deletes` and names no `chart`. Without the "
+                "committed source the claim was derived from, this gate can only re-read the "
+                "claim — and a claim that checks itself passes on the day it stops being true.")
+            continue
+        chart_dir = Path(root) / chart
+        if not chart_dir.is_dir():
+            problems.append(f"{where}.retention.chart names {chart!r}, which is not a directory in "
+                            "this repository. A record pointing at a moved chart checks nothing.")
+            continue
+        charts_checked += 1
+
+        # (a) no Job or CronJob — a blob GC would be one, and it is the deletion that never returns.
+        for rendered in sorted(chart_dir.rglob("*.yaml")) + sorted(chart_dir.rglob("*.yml")):
+            for number, line in enumerate(rendered.read_text(encoding="utf-8").splitlines(), 1):
+                if line.strip().startswith("#"):
+                    continue
+                if re.match(r'^\s*kind:\s*"?(Job|CronJob)"?\s*$', line):
+                    problems.append(
+                        f"{rendered.relative_to(Path(root))}:{number} renders a "
+                        f"{line.split(':', 1)[1].strip()} under {host}'s chart, and the record "
+                        "says nothing deletes there. A scheduled job beside a registry is how a "
+                        "`registry garbage-collect` arrives. Re-derive "
+                        f"`{ROSTER_PATH}` → `registries.{host}.retention.deleters` in THIS diff.")
+
+        # (b) the maintenance stanza still says what the record says it says.
+        found, stanza_problems = maintenance_stanza(chart_dir)
+        problems.extend(stanza_problems)
+        declared = retention.get("maintenance")
+        if not isinstance(declared, dict):
+            problems.append(
+                f"{where}.retention declares no `maintenance` map. `maintenance:` is the ONE place "
+                "in a distribution configuration where something deletes on a timer, so an "
+                "undeclared stanza is the arm of this gate that would matter most.")
+        elif set(declared) != set(found):
+            problems.append(
+                f"{where}: the chart's `maintenance:` stanza carries {sorted(found) or 'nothing'} "
+                f"and the record declares {sorted(declared)}. Every key there is a timer that can "
+                "delete; one the record has not seen is exactly the deletion nobody can name.")
+        else:
+            for key, age in sorted(declared.items()):
+                if str(age) != found.get(key, ""):
+                    problems.append(
+                        f"{where}: `maintenance.{key}` retains for {found.get(key) or '<no age>'} "
+                        f"in the chart and {age!r} in the record. A window that moved without the "
+                        "record moving is a deletion nobody decided.")
+
+        declaring_nothing_deletes.append(host)
+
+    # (c) Nothing anywhere executes a deletion against a registry. ONE sweep, after the loop: it
+    # reads the whole repository, so running it per host would re-read every file and — worse —
+    # leave the printed denominator describing whichever host happened to be last.
+    if declaring_nothing_deletes:
+        hits, swept_files, swept_skipped = sweep_for_deleters(root)
+        for hit_path, number, description, line in hits:
+            problems.append(
+                f"{hit_path}:{number} executes {description} — `{line}` — while "
+                f"{', '.join(declaring_nothing_deletes)} record(s) that nothing deletes. Whichever "
+                "registry that command addresses, the enumeration has to name it and say what "
+                "protects what it can reach, in THIS diff. "
+                "Doc/Architecture/FleetRegistryRetention.")
+
+    # 🚨 THE DENOMINATOR, printed whatever the verdict. "No deleter found" and "nothing was swept"
+    # are the same output without it, and that is the confusion this whole family is made of.
+    print(f"registry retention: {len(registries)} registry(ies) declared "
+          f"({', '.join(sorted(registries))}); {charts_checked} chart(s) re-derived; "
+          f"{swept_files} executable file(s) swept for a deleter, {swept_skipped} skipped "
+          "(this script, which carries every pattern as a literal, and the ACR record, whose job "
+          "is to name deleters).")
+    for problem in problems:
+        print(f"::error::{problem}")
+    if problems:
+        return 1
+    print("  every declared registry says what deletes from it, the pairing with its disposition "
+          "holds, and a `nothing-deletes` enumeration names at least one mechanism that IS "
+          "present — so it inspected something.")
+    print("  the committed chart still agrees: no Job or CronJob beside the registry, the "
+          "`maintenance:` stanza carries exactly the declared keys and windows, and no executable "
+          "line anywhere runs a deletion against a registry.")
     return 0
 
 
@@ -3163,6 +3555,247 @@ ingress:
     check(set(dispositions) >= {"cr.meshweaver.cloud", "ghcr.io"},
           f"ARM 32: the two hosts measured across the fleet's overlays on 2026-09-13 are not both "
           f"declared: {sorted(dispositions)}")
+
+    # ── ARM 33a: the DRY RUN — the other registry's protected set is DERIVED and PRINTED ────────
+    # 🚨 A lock-less registry has no object to write a protected set INTO, so the derivation itself
+    # is the entire artifact — and a derivation nobody can read is not one. The nightly run already
+    # extracts these references; without this it discards them. The arm drives the REAL `report()`
+    # over the real `build` overlay shape and reads what an operator would read.
+    plan, _, _ = _drive(clean1, clean2 + [foreign_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(), dispositions=FLEET_UNLOCKABLE)
+    check(len(plan.foreign_references) == 2,
+          f"ARM 33a: the committed references to a registry this lane cannot lock were extracted "
+          f"and then DISCARDED, so the one artifact a lock-less registry can have is never "
+          f"produced: {plan.foreign_references}")
+    _printed = io.StringIO()
+    with contextlib.redirect_stdout(_printed):
+        report(plan, clean1, clean2 + [foreign_scan], REGISTRY_DEFAULT, _inventory(),
+               apply=False, release_enabled=False, root=str(HERE.parent.parent))
+    _dry_run = _printed.getvalue()
+    check("PROTECTED SET — registries this lane cannot lock" in _dry_run,
+          f"ARM 33a: the run printed NO protected set for a registry it cannot lock, so what a "
+          f"cleanup there must keep is derivable and unread: {_dry_run[-1500:]}")
+    check("cr.meshweaver.cloud: 2 committed reference(s)" in _dry_run,
+          f"ARM 33a: the protected set did not name the host and its count: {_dry_run[-1500:]}")
+    check("memex-portal-ai:3.0.0-ci.8411" in _dry_run,
+          f"ARM 33a: the protected set printed a COUNT and not the references themselves. A "
+          f"number nobody can check against the registry is not a dry run: {_dry_run[-1500:]}")
+    # 🚨 AND IT MUST SAY WHAT IT IS NOT. A set complete for images and empty for plugin bundles,
+    # reported as one number, is this whole mechanism's failure mode committed by its own report.
+    check("PLUGIN BUNDLE family" in _dry_run and "floor, never a complete protected set" in _dry_run,
+          f"ARM 33a: the protected set did not print its own INCOMPLETENESS, so a reader would "
+          f"take a committed-pins floor for a complete answer: {_dry_run[-1500:]}")
+    # …and a fleet with no foreign reference prints no such section, rather than an empty one that
+    # reads as "nothing needs protecting there".
+    plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers())
+    _printed = io.StringIO()
+    with contextlib.redirect_stdout(_printed):
+        report(plan, clean1, clean2, REGISTRY_DEFAULT, _inventory(),
+               apply=False, release_enabled=False, root=str(HERE.parent.parent))
+    check("PROTECTED SET — registries this lane cannot lock" not in _printed.getvalue(),
+          "ARM 33a: a fleet pinning in NO other registry still printed a protected-set section, "
+          "which would read as an empty set rather than an absent question")
+
+    # ── ARM 33: the SECOND question — what DELETES from a registry (#4230) ──────────────────────
+    # 🚨 The arm that matters most is the LAST one, and it is the only one that is not about JSON:
+    # a `reason` field reads exactly the same on the day a `CronJob` running a blob collection
+    # lands beside the registry it describes. So the gate re-derives the CHART, and this drives a
+    # sabotaged chart through it. Every arm is falsified in both directions — a good record passes
+    # over a non-zero denominator, and each break fires on its own.
+    _CHART = "deploy/helm/templates/registry"
+    _GOOD_MAINTENANCE = "    maintenance:\n      uploadpurging:\n        enabled: true\n        age: 168h\n"
+
+    def _registry_root(scratch: str, registries: dict, *,
+                       chart_body: str | None = _GOOD_MAINTENANCE,
+                       extra_chart: tuple[str, str] | None = None,
+                       extra_workflow: str | None = None) -> str:
+        root = Path(scratch)
+        record = root / ".github" / "acr-retention"
+        record.mkdir(parents=True, exist_ok=True)
+        (record / ROSTER_PATH).write_text(
+            json.dumps({"registries": registries, "instances": []}), encoding="utf-8")
+        if chart_body is not None:
+            chart = root / _CHART
+            chart.mkdir(parents=True, exist_ok=True)
+            (chart / "configmap.yaml").write_text(
+                "data:\n  config.yml: |\n    storage:\n      delete:\n        enabled: true\n"
+                + chart_body, encoding="utf-8")
+        if extra_chart:
+            (root / _CHART / extra_chart[0]).write_text(extra_chart[1], encoding="utf-8")
+        if extra_workflow:
+            workflows = root / ".github" / "workflows"
+            workflows.mkdir(parents=True, exist_ok=True)
+            (workflows / "x.yml").write_text(extra_workflow, encoding="utf-8")
+        return scratch
+
+    def _fleet(**overrides) -> dict:
+        entry = {
+            "disposition": "fleet-unlockable",
+            "reason": "ours, and this lane cannot lock it",
+            "retention": {
+                "rule": "nothing-deletes",
+                "reason": "measured; nothing deletes",
+                "chart": _CHART,
+                "maintenance": {"uploadpurging": "168h"},
+                "deleters": [
+                    {"mechanism": "uploadpurging", "present": True, "verdict": "incomplete uploads only"},
+                    {"mechanism": "blob GC", "present": False, "verdict": "no job anywhere"},
+                ],
+            },
+        }
+        entry["retention"].update(overrides.pop("retention", {}))
+        entry.update(overrides)
+        return {"cr.example": entry}
+
+    def _verdict(registries: dict, **kwargs) -> tuple[int, str]:
+        with tempfile.TemporaryDirectory() as scratch:
+            root = _registry_root(scratch, registries, **kwargs)
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = check_registry_retention(root)
+            return code, stdout.getvalue()
+
+    # The CONTROL: a well-formed record over a chart that agrees passes, and says what it inspected.
+    code, output = _verdict(_fleet())
+    check(code == 0, f"ARM 33: a well-formed retention declaration was REJECTED — the gate would "
+                     f"red on the fix, which is how a gate stops being read: {output}")
+    check("1 chart(s) re-derived" in output,
+          f"ARM 33: the passing run re-derived ZERO charts, so the chart arm inspected nothing "
+          f"while reporting success: {output}")
+
+    code, output = _verdict({"cr.example": {"disposition": "fleet-unlockable", "reason": "r"}})
+    check(code == 1 and "has no `retention` block" in output,
+          f"ARM 33: a registry declaring nothing about what DELETES from it passed. That is the "
+          f"exact state cr.meshweaver.cloud was in until #4230: {output}")
+
+    code, output = _verdict({})
+    check(code == 1 and "ZERO registries were" in output,
+          f"ARM 33: an EMPTY registries table passed — zero asked and zero problems read "
+          f"identically, which is the confusion this family is made of: {output}")
+
+    code, output = _verdict(_fleet(retention={"rule": "nothing-deletes", "deleters": [
+        {"mechanism": "uploadpurging", "present": False, "verdict": "v"},
+        {"mechanism": "blob GC", "present": False, "verdict": "v"}]}))
+    check(code == 1 and "NOT ONE is `present: true`" in output,
+          f"ARM 33: an enumeration in which NOTHING is present passed. It reads exactly like a "
+          f"clean one and it inspected nothing: {output}")
+
+    code, output = _verdict(_fleet(retention={"deleters": [
+        {"mechanism": "uploadpurging", "present": "true", "verdict": "v"}]}))
+    check(code == 1 and "not a boolean" in output,
+          f"ARM 33: `present` as the STRING \"true\" passed. Every `is True` reader in this file "
+          f"treats it as absent, so one typed quote mark empties the enumeration: {output}")
+
+    code, output = _verdict(_fleet(retention={"chart": ""}))
+    check(code == 1 and "names no `chart`" in output,
+          f"ARM 33: a `nothing-deletes` claim with no committed source to re-derive it FROM "
+          f"passed — a claim that checks itself passes the day it stops being true: {output}")
+
+    code, output = _verdict(_fleet(retention={"chart": "deploy/helm/templates/moved"}))
+    check(code == 1 and "not a directory" in output,
+          f"ARM 33: a record pointing at a chart that has MOVED passed, having checked nothing: "
+          f"{output}")
+
+    # 🚨 THE ONE THAT IS NOT ABOUT JSON. A blob GC arrives as a scheduled job beside the registry,
+    # and the record beside it still reads "nothing deletes".
+    code, output = _verdict(_fleet(), extra_chart=("gc.yaml", 'kind: "CronJob"\n'))
+    check(code == 1 and "CronJob" in output and "Re-derive" in output,
+          f"ARM 33: a CronJob rendered beside a registry the record says nothing deletes from "
+          f"passed. That is how `registry garbage-collect` arrives: {output}")
+    code, output = _verdict(_fleet(), extra_chart=("gc.yaml", "kind: Job\n"))
+    check(code == 1 and "Job" in output,
+          f"ARM 33: an UNQUOTED `kind: Job` escaped the chart arm — the chart writes `kind:` both "
+          f"ways: {output}")
+
+    # …and the timer that IS there must keep saying what the record says it says.
+    code, output = _verdict(_fleet(), chart_body=_GOOD_MAINTENANCE.replace("168h", "24h"))
+    check(code == 1 and "retains for 24h" in output,
+          f"ARM 33: the deletion window MOVED in the chart and the record did not, and it passed. "
+          f"A window that moved without a decision is the whole of #3438: {output}")
+    code, output = _verdict(_fleet(), chart_body=_GOOD_MAINTENANCE + "      readonly:\n        enabled: true\n")
+    check(code == 1 and "maintenance" in output,
+          f"ARM 33: a NEW key under `maintenance:` — the one stanza where a distribution deletes "
+          f"on a timer — was accepted without the record ever seeing it: {output}")
+    code, output = _verdict(_fleet(), chart_body="    storage:\n      redirect:\n        disable: false\n")
+    check(code == 1 and "carries nothing" in output,
+          f"ARM 33: the `maintenance:` stanza VANISHING from the chart passed. The record then "
+          f"declares a timer that is not there, and nobody learns which: {output}")
+
+    # …and nothing anywhere executes a deletion against a registry.
+    code, output = _verdict(_fleet(), extra_workflow="jobs:\n  x:\n    steps:\n      - run: crane delete cr.example/x@sha256:aa\n")
+    check(code == 1 and "a crane deletion" in output,
+          f"ARM 33: an executable deletion landed in a workflow while the record said nothing "
+          f"deletes, and it passed: {output}")
+    code, output = _verdict(_fleet(), extra_workflow="jobs:\n  x:\n    steps:\n      - run: curl -X DELETE https://cr.example/v2/x/manifests/sha256:aa\n")
+    check(code == 1 and "an HTTP DELETE" in output,
+          f"ARM 33: a raw HTTP DELETE against a registry passed: {output}")
+    # 🚨 …and the sweep must NOT fire on PROSE. The registry's own ConfigMap explains, in a comment,
+    # that blobs go only by `registry garbage-collect`. A sweep that reds on the sentence saying a
+    # thing does not happen is the defect this file already paid for on 2026-09-07.
+    code, output = _verdict(_fleet(), extra_workflow="# blobs are removed only by `registry garbage-collect`\njobs: {}\n")
+    check(code == 0,
+          f"ARM 33: a deleter named inside a COMMENT was read as a deleter, so the sentence saying "
+          f"a thing does not happen would red the lane: {output}")
+
+    # The disposition and the rule are checked against EACH OTHER, in both directions.
+    code, output = _verdict({"x.io": {"disposition": "third-party", "reason": "r", "retention": {
+        "rule": "not-ours", "reason": "nothing of ours is there",
+        "deleters": [{"mechanism": "m", "present": True, "verdict": "v"}]}}})
+    check(code == 1 and "still enumerates `deleters`" in output,
+          f"ARM 33: a third-party registry enumerated somebody else's deleters, which reads as a "
+          f"verdict about OUR artifacts: {output}")
+    code, output = _verdict(_fleet(retention={"rule": "not-ours", "deleters": None}))
+    check(code == 1 and "may not carry" in output,
+          f"ARM 33: a `fleet-unlockable` registry — one holding OUR images — declared `not-ours`, "
+          f"a blanket exemption wearing a retention statement's clothes: {output}")
+
+    # A derived protected set must refuse on incomplete, and the gate holds that rather than review.
+    _derived = {"rule": "derived-protected-set", "reason": "a cleanup exists",
+                "protectedSet": {"axes": [
+                    {"axis": "overlay pins", "derivedFrom": "Systemorph/Memex overlays",
+                     "onIncomplete": "refuse"}]}}
+    code, output = _verdict(_fleet(retention=dict(_derived)))
+    check(code == 0, f"ARM 33: a well-formed derived protected set was rejected: {output}")
+    _loose = json.loads(json.dumps(_derived))
+    _loose["protectedSet"]["axes"][0]["onIncomplete"] = "warn"
+    code, output = _verdict(_fleet(retention=_loose))
+    check(code == 1 and "DELETES what it could not see" in output,
+          f"ARM 33: an axis that merely WARNS when its derivation is incomplete passed. On a "
+          f"registry with no lock that is not 'protects less', it is 'deletes more': {output}")
+    _empty = json.loads(json.dumps(_derived))
+    _empty["protectedSet"]["axes"] = []
+    code, output = _verdict(_fleet(retention=_empty))
+    check(code == 1 and "names no `protectedSet.axes`" in output,
+          f"ARM 33: a cleanup deleting the complement of a set nobody wrote down passed: {output}")
+
+    # 🚨 THE SWEEP IS ONLY EVIDENCE ONCE IT HAS BEEN SHOWN ABLE TO MATCH. Every pattern, over a
+    # synthetic file carrying each spelling — the control that a zero over the real repository is
+    # a measurement rather than a broken regex.
+    with tempfile.TemporaryDirectory() as scratch:
+        workflows = Path(scratch) / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        (workflows / "all.yml").write_text(
+            "a: curl -X DELETE https://r/v2/x/manifests/sha256:aa\n"
+            "b: curl --request DELETE https://r/v2/x\n"
+            "c: crane delete r/x\n"
+            "d: skopeo delete docker://r/x\n"
+            "e: regctl manifest delete r/x\n"
+            "f: oras manifest delete r/x\n"
+            "g: az acr repository delete --name r\n"
+            "h: registry garbage-collect /etc/config.yml\n", encoding="utf-8")
+        hits, scanned, _ = sweep_for_deleters(scratch)
+        check(scanned == 1, f"ARM 33: the deleter sweep scanned {scanned} file(s), not 1 — the "
+                            f"denominator it prints would describe nothing")
+        check({description for _, _, description, _ in hits} == {
+                  description for _, description in DELETER_PATTERNS},
+              f"ARM 33: the deleter sweep did not match every spelling it claims to — a zero over "
+              f"the real repository would then be a broken regex, not a measurement. Matched: "
+              f"{sorted({d for _, _, d, _ in hits})}")
+
+    # And this repository's own declaration validates, over a non-zero denominator.
+    check(check_registry_retention(str(HERE.parent.parent)) == 0,
+          "ARM 33: this repository's own `registries` retention declaration does not validate")
+
     # ── ARM 31: the decided WINDOW is asserted on the record, and the assertion can fail ────────
     # 🚨 The control that matters is the one this repository's own record FAILED on 2026-09-13:
     # `--ago 7d --keep 10` over `memex-portal-ai`, the image both production portals run. It is
@@ -3454,7 +4087,7 @@ env:
           "unresolved tag / indeterminate / unreadable registry all RED with nothing released, "
           "release arm off by default and live when enabled, report-only writes nothing, a lock "
           "write that exits 0 without taking and one whose read-back cannot answer are both RED "
-          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), an UNDECLARED registry REDS wherever it appears, a declared `fleet-unlockable` one is counted on its own line saying protection there is UNVERIFIED, pinning in BOTH is RED because half covered is not covered, a `*.azurecr.io` that is not this registry is foreign, helm's split repository/tag shape is read, and a reference inside a COMMENT is prose.")
+          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), an UNDECLARED registry REDS wherever it appears, a declared `fleet-unlockable` one is counted on its own line saying protection there is UNVERIFIED, pinning in BOTH is RED because half covered is not covered, a `*.azurecr.io` that is not this registry is foreign, helm's split repository/tag shape is read, and a reference inside a COMMENT is prose. WHAT DELETES FROM IT (#4230, the SECOND question about the same unit): every declared registry must say what deletes from it or go RED, an empty table is zero-asked rather than clean, a `nothing-deletes` enumeration in which NOTHING is `present` inspected nothing, a `present` written as the STRING \"true\" is RED, the rule and the disposition are checked against EACH OTHER in both directions, a `derived-protected-set` axis that merely WARNS on an incomplete derivation is RED because on a registry with NO LOCK that deletes more rather than protecting less — and the arm that is not about JSON: the committed CHART is re-derived, so a `kind: Job`/`kind: CronJob` rendered beside the registry (quoted or bare), a `maintenance:` window that MOVED, a NEW key in that stanza, the stanza VANISHING, and an executable deletion anywhere in `deploy/`/`.github/` each go RED while the record still reads 'nothing deletes' — with the sweep's every spelling PROVEN to match on a synthetic control, and a deleter named inside a COMMENT proven NOT to.")
     return 0
 
 
@@ -3476,6 +4109,10 @@ def main() -> int:
     parser.add_argument("--check-retention-record", metavar="ROOT",
                         help="assert the committed .github/acr-retention record still describes a "
                              "purge the lock can protect against; no credential, no network")
+    parser.add_argument("--check-registry-retention", metavar="ROOT",
+                        help="assert every registry the fleet pins in says what DELETES from it, "
+                             "and that the committed chart still agrees (#4230); "
+                             "no credential, no network")
     parser.add_argument("--self-test", action="store_true",
                         help="prove every arm fires and stays silent; no network")
     args = parser.parse_args()
@@ -3486,6 +4123,8 @@ def main() -> int:
         return describe_purge_file(args.describe_purge_file)
     if args.check_retention_record:
         return check_retention_record(args.check_retention_record)
+    if args.check_registry_retention:
+        return check_registry_retention(args.check_registry_retention)
     if args.root:
         repos = [args.repos or "local"]
     elif bool(args.repos) == bool(args.discover):

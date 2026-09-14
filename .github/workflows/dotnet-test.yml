@@ -2228,6 +2228,24 @@ jobs:
     - name: "…and the recorded purge still skips locked manifests"
       run: python3 .github/scripts/lock-pinned-digests.py --check-retention-record .
 
+    # 🚨 THE SECOND QUESTION ABOUT THE SAME REGISTRIES, AND IT HAD NO GATE AT ALL (MeshWeaver#4230).
+    # Everything above is about `meshweaver.azurecr.io`. `cr.meshweaver.cloud` — the fleet's OWN
+    # registry, the default for newly provisioned instances and already serving a live one — is a
+    # store `acr purge` cannot reach and this lane cannot lock, and what KEEPS or DELETES what is in
+    # it was established by nothing. The `registries` table now has to say, per registry, and this
+    # is the half a pull request can break.
+    #
+    # 🚨 The arm that is not about JSON is the one worth the step: `distribution` has NO LOCK, so a
+    # `reason` field reads exactly the same on the day a CronJob running `registry garbage-collect`
+    # lands beside it. The gate re-derives the committed CHART — no Job/CronJob beside the registry,
+    # the `maintenance:` stanza carrying exactly the declared keys and windows, and no executable
+    # line anywhere running a deletion against a registry — and reds naming what changed. It needs
+    # no credential and no cluster, and it prints its denominator (registries declared, charts
+    # re-derived, files swept, files skipped and why) because "no deleter found" and "nothing was
+    # swept" are the same output without one. Doc/Architecture/FleetRegistryRetention.
+    - name: "…and every registry the fleet pins in still says what DELETES from it"
+      run: python3 .github/scripts/lock-pinned-digests.py --check-registry-retention .
+
     # 🚨 THE GAP actionlint CLOSES (MeshWeaver#3228): every check above reads a workflow with
     # `yaml.safe_load`, and **PyYAML accepts a duplicate mapping key and silently keeps the last
     # one**. So a STRUCTURAL defect — the kind GitHub itself refuses — parses cleanly here, every
