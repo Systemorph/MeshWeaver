@@ -83,6 +83,10 @@ public static class NodeTypeOperationalContent
         "adoptedSourceFingerprint",
         "currentSourceFingerprint",
         "buildProvenance",
+        // #4280 — the source paths the adopted bytes were built from, i.e. what makes a differing
+        // live fingerprint a measurement rather than an install in flight. Operational for the
+        // same reason the fingerprint is: an authored list would hold an adoption unjudged.
+        "adoptedSourcePaths",
         // #3583 — the two module versions the compatibility rule compares. Operational for the
         // same reason the fingerprints are: an authored adopted version would let a repo file
         // declare its own build compatible.

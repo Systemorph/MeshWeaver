@@ -754,7 +754,10 @@ public sealed class PluginBundleClient
                         a.SourceFingerprint,
                         // #3583 — the module's released SemVer, for the compatibility rule the
                         // owner applies when the source later moves past these bytes.
-                        manifest.Version))
+                        manifest.Version,
+                        // #4280 — WHICH sources the bytes were built from, so the owner can tell a
+                        // live set still arriving from one that moved.
+                        a.SourcePaths))
                     .Concat()
                     .Count(adopted => adopted)
                     .Do(count =>
