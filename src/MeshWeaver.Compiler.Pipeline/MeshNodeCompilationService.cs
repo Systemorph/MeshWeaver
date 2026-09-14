@@ -1238,6 +1238,13 @@ internal class MeshNodeCompilationService(
         => GetAssemblyLocationWithLog(node, sourcesOverride).SelectMany(attempt =>
         {
             var (assemblyLocation, _, log, sources) = attempt;
+            // The per-source version snapshot folds the SAME set the compile consumed
+            // (attempt.Sources) — see GetAssemblyLocationWithLog: one snapshot per compile,
+            // so CompiledSources records what was compiled instead of a second, independently
+            // raced observation. Compose via SelectMany so the observable chain stays
+            // reactive (no Task bridges, no .Result deadlocks).
+            var ntDef = node.ContentAs<NodeTypeDefinition>(JsonOptions);
+            var selfPath = ntDef != null ? node.Path : node.NodeType ?? node.Path;
             if (string.IsNullOrEmpty(assemblyLocation))
                 // Failed compile: capture the per-source-file Roslyn diagnostics (one
                 // LSP-style per-file-tree compilation of all this NodeType's src+test) so
@@ -1249,17 +1256,21 @@ internal class MeshNodeCompilationService(
                 // Diagnosed against the SNAPSHOT THAT FAILED, not a fresh discovery: a
                 // re-read could return a different set and then report diagnostics for code
                 // the failing compile never saw (and pay the discovery a second time).
+                //
+                // 🚨 #4280 — and the failure result CARRIES that snapshot as CompiledSources.
+                // The terminal stamp compares the set Roslyn was handed against the node's
+                // live set to tell "the code is wrong" from "the sources moved while it
+                // compiled" (NodeTypeCompileParkRegistry.SourcesMovedSince); a failure result
+                // that dropped the set it had in hand answered that question with null, so
+                // the re-drive could never fire on the ordinary CS0246 path it exists for —
+                // the exact failure Reinsurance#209 and Plugins#1823 showed (Copilot on
+                // #4293). Same fold, same set, no second discovery: `sources` is the override,
+                // so SnapshotSources returns it verbatim and reads nothing.
                 return BuildFailureDiagnostics(node, sources)
-                    .Select(diags => (NodeCompilationResult?)new NodeCompilationResult(
-                        null, [], log, Diagnostics: diags));
+                    .Zip(DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "", sources),
+                        (diags, consumed) => (NodeCompilationResult?)new NodeCompilationResult(
+                            null, [], log, CompiledSources: consumed, Diagnostics: diags));
 
-            // The per-source version snapshot folds the SAME set the compile consumed
-            // (attempt.Sources) — see GetAssemblyLocationWithLog: one snapshot per compile,
-            // so CompiledSources records what was compiled instead of a second, independently
-            // raced observation. Compose via SelectMany so the observable chain stays
-            // reactive (no Task bridges, no .Result deadlocks).
-            var ntDef = node.ContentAs<NodeTypeDefinition>(JsonOptions);
-            var selfPath = ntDef != null ? node.Path : node.NodeType ?? node.Path;
             return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "", sources)
                 // 🚨 Assembly load + GetTypes() + MeshNodeProviderAttribute reflection +
                 // config instantiation is heavy, synchronous, blocking work. Run it on the
