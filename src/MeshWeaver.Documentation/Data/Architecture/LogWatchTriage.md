@@ -258,16 +258,52 @@ being resent — so it is dropped with an ERROR log rather than retried until th
 ## The watcher tickets its own blind spots
 
 🚨 **A watcher that cannot see is worse than no watcher, because it still reports "all quiet".** So
-every way this one can fail to read a window is itself a `LogIncidentReport` travelling the normal
-ingest path — landing in Postgres, which survives Loki being gone. All three dedup per namespace and
-carry no timestamps in their fingerprint, so a repeat raises an occurrence count instead of opening
-another ticket.
+every way this one can fail to read a window — or to deliver what it read — is itself a
+`LogIncidentReport` travelling the normal ingest path, landing in Postgres, which survives Loki being
+gone. All of them dedup per namespace and carry no timestamps in their fingerprint, so a repeat
+raises an occurrence count instead of opening another ticket.
 
 | Condition | Detected by | Severity | What it means |
 |---|---|---|---|
 | Loki answered a long, continuously-watched window with **zero lines** | `LogPipelineGap.IsLostWindow` | Critical | the store lost that stretch — the query is unfiltered, so a running portal cannot be that quiet |
 | The query came back **at `QueryLimit`** | `LogPipelineGap.IsTruncated` | Error | the window was NOT fully read; the remainder is **deferred**, and while it lasts a noisy source crowds quieter errors out of the prefix that gets read |
-| The cursor was **floored by `MaxCatchUp`** | `WatcherState.CursorFor` returns the skipped stretch | Critical | the only path that LOSES evidence outright — that stretch will never be read |
+| The cursor was **floored by `MaxCatchUp`** | `WatcherState.CursorFor` returns the skipped stretch | Critical | one of the two paths that LOSE evidence outright — that stretch will never be read |
+| Red bursts arrived as a console **header and nothing else** | `BurstAggregator` → `LogPipelineGap.HeaderOnlyReport` | Error | a capture with no body; never fingerprinted, because `(category, eventId)` names a component and no defect |
+| The portal **permanently rejected** a report | `LogIncidentDelivery.IsPermanent` → `LogPipelineGap.RejectedReport` | Critical | the other path that loses outright — that report is gone from the queue and its red log will never be ticketed |
+
+### 🚨 A rejected report is DESTROYED, so the destruction is a finding
+
+`LogWatchWorker.Deliver` removes a permanently-rejected report from the durable queue exactly as it
+removes an accepted one. That is correct — a payload the portal will not take cannot be fixed by
+resending it, and keeping it would block every report behind it forever. What was **not** correct is
+what the removal used to leave behind: one `LogError` in the watcher's own pod, in namespace
+`monitoring`, which this watcher does not read, which no `Hosting/InstanceAction` can target (there
+is no `Deployments/mw-log-watcher` record — see the vintage section below), and which nothing else in
+the fleet reads either. **A red log that reached the pipeline and then fell out of it produced the
+same observable result as a red log that never happened.** That is this subsystem's worst failure
+shape — *the absence of a ticket reading as the absence of a fault* — sitting on the one path whose
+job is to make faults visible.
+
+Three properties make the finding sound, and each is pinned by `RejectedReportIsTicketedTest`:
+
+- **It is not subject to the cause it reports.** It copies none of the rejected payload's samples
+  forward (so a 413 cannot recur), and it carries a fingerprint and a category by construction (so
+  the 400 for a missing one cannot recur).
+- **It stops at one.** `LogPipelineGap.IsRejectionFinding` is a guard, not a budget: a finding about
+  a rejected finding would be refused for the same reason and mint its own successor, growing the
+  queue fastest exactly when the portal refuses everything.
+- **The residual is covered from the other side.** When the watcher's report *shape* has diverged
+  from the contract, the finding is as unbindable as what it reports. So the portal logs **every**
+  permanent refusal at `Error` (`LogIncidentEndpoints.PermanentRefusal`) — and the portal's log is
+  precisely what `mw-log-watcher` reads, so that line becomes a burst, an incident and a ticket
+  through the pipeline that is otherwise broken.
+
+🚨 **The permanence rule itself lives in the contract** (`LogIncidentDelivery.IsPermanent`), not on
+either side. The consequence of a status is a *joint* fact: the portal picks the number, the watcher
+decides from it whether to keep the report or destroy it. Two copies drift in the one direction that
+costs data — and since the watcher is a separately shipped image with its own cadence, that drift is
+this subsystem's normal operating condition, not a hypothetical. Same argument as
+`LogIncidentReportSanity`: a classification only one side enforces is not enforced.
 
 **🚨 Raising `QueryLimit` is not the fix for truncation.** The number in the watcher's log is a *cap*,
 not a count: on 2026-08-17 several consecutive `memex-cloud` windows reported exactly `5000` and
@@ -321,6 +357,68 @@ reading [#2681](https://github.com/Systemorph/MeshWeaver/issues/2681) turns on.
 current" and "the watcher stopped reporting" — and telling those apart is the entire point of a
 capture-gap incident. Require the message-ending AND the sample shape together; either one alone can
 be produced by a stale node nobody has folded into recently.
+
+### 🚨 The exact instrument: RECOMPUTE the fingerprint, and the binary dates itself
+
+The textual discriminator above says *which side* filed the fold. It does not say *how old* the
+watcher is, and it only works on a capture-gap incident. **The fingerprint does both, exactly**, and
+it works on any incident that carries one.
+
+`StructuralLogIncidentIdentity.Compute` is a pure function of the burst, so its payload is a dated
+artefact of the binary that computed it. Take the fingerprint out of a refused report's evidence line
+— `refused undiagnosable report <fp> for category <cat> …` — and test the candidate payloads:
+
+| payload hashed (`sha256`, first 8 bytes, lower hex) | in force |
+|---|---|
+| `{category}\n{eventId}\n` | 2026-08-09 (core `8115e39425`, "Stop deriving incident identity from prose") |
+| `{category}\n{eventId}\n{exceptionType}` | same change, when the burst carried an exception |
+| `site\n{category}\n{eventId}\n{fault}\n{detail}` — or `frame\n{frame}\n{fault}\n{detail}` | current |
+
+Measured 2026-09-14 against `Admin/_LogIncident/log-burst-header-only-{memex,memex-cloud}` on the
+control instance, every refused fingerprint on both namespaces reproduced from the **first** row:
+
+```
+SHA256("Orleans.Messaging\n100071\n")[..8]                                       = ce8d2e8715bf9aa0
+SHA256("MeshWeaver.Hosting.PostgreSql.PostgreSqlPartitionedMeshQuery\n0\n")[..8]  = 5d52ad4396af9a59
+SHA256("MeshWeaver.Hosting.PostgreSql.PostgreSqlChangeListener\n0\n")[..8]        = fc4f22eb5cffabd0
+SHA256("MeshWeaver.Hosting.Orleans.RoutingGrain\n0\n")[..8]                       = e4a97855ab595beb
+```
+
+4 of 4, across two namespaces and three weeks — while the current payload would have produced
+`199e5a2f690b9c89`, `4e297103d4d86c81`, `bddb036580fac948`, `4ec310c5270ddb0e`, none of which appears
+anywhere. **So the reporting binary predates every identity change since 2026-08-09, and therefore
+predates the 2026-08-25 header-only holdback** — a dated conclusion, from data the portal already
+holds, with no cluster read and no image tag.
+
+Two things this is good for beyond dating:
+
+- **Settling a reopen without re-investigating.** An auto-filed incident issue reopens on every fold.
+  If the newest sample's fingerprint still reproduces from an *old* payload, the reopen is the stale
+  binary and there is nothing to investigate. If it does **not**, that is a genuine regression.
+- **Telling a fingerprint FOLD from a recurrence** — the same job the
+  [reopen section](#-a-reopen-is-not-a-recurrence--read-samples-before-you-believe-it) describes, done
+  arithmetically instead of by eye.
+
+### 🚨 A bodyless capture can SWALLOW diagnosable bursts — `occurrences` is not a count of bodyless lines
+
+Under the 2026-08-09 payload the message is not in the key, so **every** burst from one category
+shares a fingerprint whether it has a body or not. The report then takes its `normalizedMessage` from
+whichever burst came *first*; if that one was bodyless, the whole report is undiagnosable and the
+portal refuses all of it — bodies included.
+
+That is not a theory. `log-burst-header-only-memex` (2026-09-14) carries `occurrences: 4` whose
+samples are **one** bare `crit: …RoutingGrain[0]` header and **three** full `[ROUTE] Routing
+back-pressure` bodies: three diagnosable red logs that got no ticket of their own. The
+`memex-cloud` sibling shows the same thing from one pod 33 ms apart on 2026-09-08 — which also
+falsifies the "multi-pod interleaving cut the burst" reading both issues were filed with, since
+per-pod versus merged grouping cannot explain two lines from a single pod.
+
+> **So read a capture-gap incident's `samples[]` before quoting its `occurrences` as a count of
+> bodyless captures.** Some of them may be fully-formed faults that were folded into it, and those
+> are the ones still owed a ticket. Under the current identity this cannot happen — the message is in
+> the key and a bodyless burst is never fingerprinted at all — and
+> `RedLogBurstReconstructionTest.A_bodyless_burst_never_swallows_a_diagnosable_one_from_the_same_pod`
+> pins it on that incident's own lines.
 
 ## The incident lifecycle
 
