@@ -475,12 +475,44 @@ class Gh:
                 shard = m.group(1)
                 steps = tuple(s["name"] for s in job.get("steps", []) if s.get("conclusion") == "failure")
                 target = workdir / f"shard{shard}"
-                present = self.download_artifact(run["id"], f"testResults-shard{shard}", target)
+                name = self.shard_artifact_name(run["id"], shard)
+                present = bool(name) and self.download_artifact(run["id"], name, target)
                 failures, markers = read_shard_artifact(target, shard) if present else ((), ())
                 shards.append(Shard(shard, steps, present, failures, markers))
             elif job["name"] != REQUIRED_CHECK and not is_derived_test_report(job, failed_shards):
                 failed_jobs.append(job["name"])
         return RunEvidence(run["id"], run["html_url"], tuple(failed_jobs), tuple(shards))
+
+    def shard_artifact_name(self, run_id: int, shard: str) -> str | None:
+        """The artefact carrying THIS shard's newest attempt, chosen by attempt NUMBER.
+
+        Shard artefacts are attempt-scoped since #4303 (`testResults-shard<N>-attempt<A>`): a run
+        holds every attempt's uploads at once, the artefacts API carries no attempt field, and
+        resolving a duplicated name by artefact ID picks the wrong one — IDs are not monotonic
+        across attempts (measured on run 34823051999, where attempt 2's ID was the lower). The
+        steward reads a shard's trx to decide whether a queue failure is a catalogued flake, so
+        reading the attempt that is no longer the shard's outcome would re-queue (or refuse to
+        re-queue) on evidence the run has superseded.
+
+        A run built before #4303 named its artefacts without the attempt; that legacy name is the
+        last candidate, never the first, so it can only be read when no attempt-scoped upload
+        exists at all. Returns None when the run holds no artefact for this shard — the caller
+        then records `present=False`, which is already the safe direction (no attribution, no
+        re-queue), not a silent pass."""
+        artifacts = (self.api(f"actions/runs/{run_id}/artifacts?per_page=100") or {}).get("artifacts", [])
+        scoped = re.compile(rf"testResults-shard{re.escape(shard)}-attempt(\d+)")
+        best: tuple[int, str] | None = None
+        legacy: str | None = None
+        for artifact in artifacts:
+            name = artifact.get("name") or ""
+            m = scoped.fullmatch(name)
+            if m:
+                attempt = int(m.group(1))
+                if best is None or attempt > best[0]:
+                    best = (attempt, name)
+            elif name == f"testResults-shard{shard}":
+                legacy = name
+        return best[1] if best else legacy
 
     def download_artifact(self, run_id: int, name: str, target: Path) -> bool:
         target.mkdir(parents=True, exist_ok=True)
@@ -831,6 +863,35 @@ def self_test() -> int:
           "a requeue comment carries the marker and the catalogue issue")
     body = render_comment(classify(ctx(), ev(shards=(shard(honest),)), cat), ctx(), ev(shards=(shard(honest),)), None)
     check("<!-- steward: requeued" not in body and "Expected value to be 3" in body, "a reject comment names the assertion and spends no attempt")
+
+    # ── which ATTEMPT's trx the steward reads (#4303) ──────────────────────────────────────────
+    # The run holds every attempt's uploads at once and the artefacts API carries no attempt, so
+    # the attempt lives in the NAME and the pick is by that number — never by artefact id, which
+    # is not monotonic across attempts, and never by list order.
+    class FakeGh(Gh):
+        # Ids DESCEND with list position, so the first-listed artefact also holds the highest id:
+        # every artefact here reproduces run 34823051999, where the superseded attempt was both
+        # listed first and had the higher id. A pick by list order or by id fails these rows.
+        def __init__(self, names):  # noqa: D107 - test double
+            self.repo, self.write_token, self.read_token = "o/r", None, None
+            self._names = names
+
+        def api(self, path, *a, **kw):
+            return {"artifacts": [{"name": n, "id": len(self._names) - i} for i, n in enumerate(self._names)]}
+
+    print("shard artefact attribution:")
+    gh = FakeGh(["testResults-shard2-attempt1", "testResults-shard2-attempt2", "testResults-shard1-attempt1"])
+    check(gh.shard_artifact_name(1, "2") == "testResults-shard2-attempt2", "the newest attempt wins, whatever the order or id")
+    check(gh.shard_artifact_name(1, "1") == "testResults-shard1-attempt1", "a shard that was not re-run keeps its own attempt")
+    check(FakeGh(["testResults-shard0-attempt9", "testResults-shard0-attempt10"]).shard_artifact_name(1, "0")
+          == "testResults-shard0-attempt10", "the attempt is a number: 10 supersedes 9")
+    check(FakeGh(["testResults-shard11-attempt3"]).shard_artifact_name(1, "1") is None,
+          "shard 1 never reads shard 11's artefact — the shard index is matched whole, not as a prefix")
+    check(FakeGh(["testResults-shard3"]).shard_artifact_name(1, "3") == "testResults-shard3",
+          "a run built before #4303 still has its unscoped artefact read")
+    check(FakeGh(["testResults-shard3", "testResults-shard3-attempt2"]).shard_artifact_name(1, "3")
+          == "testResults-shard3-attempt2", "an attempt-scoped upload always wins over the legacy name")
+    check(FakeGh(["build-output-0"]).shard_artifact_name(1, "0") is None, "no shard artefact at all is None, not a guess")
 
     print("self-test " + ("PASSED" if ok else "FAILED"))
     return 0 if ok else 1

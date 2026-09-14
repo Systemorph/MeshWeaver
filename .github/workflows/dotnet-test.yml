@@ -742,24 +742,39 @@ jobs:
     # One artifact per shard. Six near-identical steps because a step cannot be
     # generated in a loop — keep them in sync with SHARD_TOTAL above and with the
     # test job's matrix.
+    #
+    # 🚨 `overwrite: true` is the OTHER half of #4303, and it is deliberately the opposite remedy
+    # from the shard RESULTS. Both families can hold two artefacts under one name in one run (a
+    # re-run uploads beside the attempt it replaces), and `download-artifact` then resolves the
+    # name by highest artefact ID, which is not the newest upload. The difference is what the
+    # artefact IS: a shard's trx is EVIDENCE, so the older attempt must survive and be
+    # attributable — hence the attempt in its name. A build output is TRANSPORT, superseded the
+    # moment it is rebuilt, and a consumer that reads the previous attempt's bins would test code
+    # this attempt did not build, silently. So the upload deletes the name it is replacing and the
+    # ambiguity cannot arise; consumers keep downloading by the plain name.
+    # Measured 2026-09-14 over 700 `dotnet-test.yml` runs (2026-09-12T07:33Z → 2026-09-14T16:32Z):
+    # 15 ran a second attempt, 9 of them carry a duplicate `testResults-shard*` name and 1 of
+    # those 9 resolves to the stale upload; ZERO carry a duplicate `build-output-*`, because
+    # `rerun-failed-jobs` re-ran only shards. Latent, not hypothetical: a whole-workflow re-run
+    # re-runs `build` too.
     - name: "Upload artifact: shard 0"
       uses: actions/upload-artifact@v7
-      with: { name: build-output-0, path: build-output-0.tar.zst, retention-days: 1, compression-level: 0 }
+      with: { name: build-output-0, path: build-output-0.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
     - name: "Upload artifact: shard 1"
       uses: actions/upload-artifact@v7
-      with: { name: build-output-1, path: build-output-1.tar.zst, retention-days: 1, compression-level: 0 }
+      with: { name: build-output-1, path: build-output-1.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
     - name: "Upload artifact: shard 2"
       uses: actions/upload-artifact@v7
-      with: { name: build-output-2, path: build-output-2.tar.zst, retention-days: 1, compression-level: 0 }
+      with: { name: build-output-2, path: build-output-2.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
     - name: "Upload artifact: shard 3"
       uses: actions/upload-artifact@v7
-      with: { name: build-output-3, path: build-output-3.tar.zst, retention-days: 1, compression-level: 0 }
+      with: { name: build-output-3, path: build-output-3.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
     - name: "Upload artifact: shard 4"
       uses: actions/upload-artifact@v7
-      with: { name: build-output-4, path: build-output-4.tar.zst, retention-days: 1, compression-level: 0 }
+      with: { name: build-output-4, path: build-output-4.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
     - name: "Upload artifact: shard 5"
       uses: actions/upload-artifact@v7
-      with: { name: build-output-5, path: build-output-5.tar.zst, retention-days: 1, compression-level: 0 }
+      with: { name: build-output-5, path: build-output-5.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
 
   # ───────────────────────────── TEST ──────────────────────────────
   # Matrix-sharded: the ~45 test projects are split across SHARD_TOTAL parallel
@@ -1536,9 +1551,24 @@ jobs:
       uses: actions/upload-artifact@v7
       if: always()
       with:
-        # Unique per shard so the parallel matrix legs don't clobber each
-        # other; collect-results downloads them all by the testResults-shard* glob.
-        name: testResults-shard${{ matrix.shard }}
+        # Unique per shard so the parallel matrix legs don't clobber each other, AND per ATTEMPT
+        # so a re-run's results can be told from the attempt it replaces; collect-results downloads
+        # them all by the testResults-shard* glob and resolve-shard-attempts.py keeps, per shard,
+        # the highest attempt.
+        #
+        # 🚨 WHY THE ATTEMPT IS IN THE NAME (#4303, measured on run 34823051999). A run holds every
+        # attempt's artefacts at once: `rerun-failed-jobs` re-runs the failing shard and its upload
+        # lands BESIDE the failing one, under the same name. `download-artifact` de-duplicates per
+        # NAME keeping the highest artefact ID — and IDs are not monotonic across attempts:
+        #     id 10338854604 (08:38:28Z) = attempt 1, one failing test   ← the one it kept
+        #     id 10338734845 (08:49:55Z) = attempt 2, 1454/1454 green
+        # so the consolidate re-declared a failure the re-run had just cleared, on attempt 2 and
+        # again on attempt 3. The required check could not be made green by ANY re-run.
+        # The artefacts API carries id, name, size, created_at, digest and head_sha — and NO
+        # attempt — so the producer has to say which attempt it is, and the name is its only
+        # channel. Same remedy as node-repo-module-pack.yml's lane key (Plugins#1077): when two
+        # producers can land one name in one run, the discriminator goes INTO the name.
+        name: testResults-shard${{ matrix.shard }}-attempt${{ github.run_attempt }}
         path: |
           test/**/*.trx
           test/test-results.log
@@ -3139,8 +3169,34 @@ jobs:
       with:
         # No merge-multiple: keep each shard under its own dir so same-named
         # files (test-results.log) from different shards don't overwrite.
+        # The names are attempt-scoped (`testResults-shard<N>-attempt<A>`, #4303), so a re-run's
+        # upload no longer collides with the attempt it replaces — every attempt of every shard
+        # arrives under its own directory and the next step picks the newest per shard.
         pattern: testResults-shard*
         path: all-results
+    # 🚨 #4303: WHICH ATTEMPT'S RESULTS THIS JOB CONSOLIDATES, decided by attempt number.
+    #
+    # Before the names carried the attempt, `download-artifact` resolved the collision per NAME by
+    # highest artefact ID — and IDs are not monotonic across attempts, so on run 34823051999 the
+    # consolidate downloaded attempt 1's failing trx over attempt 2's green one, and re-declared
+    # the failure the re-run had just cleared. It did the same on attempt 3. A required check that
+    # cannot go green on a re-run turns every unattributed or infrastructure failure into a forced
+    # new push — the recovery path #2921 and the steward's re-queues exist to avoid.
+    #
+    # Not `if:`-guarded on anything but the run mode: a partial re-run legitimately mixes attempts
+    # (five shards still on attempt 1, the re-run one on attempt 2), so this is not "take the
+    # current attempt" — it is "take each shard's newest attempt, by number". Every refusal it
+    # makes (an unattributable name, an attempt newer than this run's, a shard outside the matrix)
+    # is RED; a shard that reported nothing is left to the coverage gate below, which says it
+    # better and names which sixth is missing.
+    - name: "Prove the attempt resolution can fail (self-test)"
+      if: always() && needs.precheck.outputs.skip != 'true'
+      run: python3 .github/scripts/resolve-shard-attempts.py --self-test
+    - name: "Each shard's results come from its newest attempt"
+      if: always() && needs.precheck.outputs.skip != 'true'
+      run: |
+        python3 .github/scripts/resolve-shard-attempts.py \
+          --dir all-results --shards "${CI_SHARD_TOTAL}" --attempt "${{ github.run_attempt }}"
     - name: Summarize test failures
       # Parse every shard's trx and echo each failed test as an ::error::
       # annotation + into the job step summary, so failing tests are visible

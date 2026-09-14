@@ -372,6 +372,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [In-Mesh Build and Test](InMeshBuildAndTest)
 - [Orleans Test Routing Pattern](OrleansTestRoutingPattern)
 - [Reading CI Signals](ReadingCiSignals)
+- [Which Attempt an Artefact Belongs To](ArtifactAttemptAttribution) — a run holds every attempt's artefacts and the API names no attempt; how the required check consolidated attempt 1 over attempt 2's green and could not be re-run to green
 - [Workflow Permission Pairing](WorkflowPermissionPairing) — a job-level `permissions:` in a shared lane is a requirement on every caller; an unpaired one is `startup_failure` with zero jobs
 
 ### Deployment & ops
