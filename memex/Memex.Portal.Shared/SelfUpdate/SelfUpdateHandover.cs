@@ -93,7 +93,9 @@ public class SelfUpdateHandover
     /// <summary>The inbox route appended to <see cref="ReportToKey"/> when no <see cref="UrlKey"/> is set.</summary>
     public const string InboxRoute = "/api/hooks/" + InboxTarget;
 
-    /// <summary>The control instance's own inbox secret — the key a listed local target verifies with.</summary>
+    /// <summary>The fleet's name for the control instance's own inbox secret — what a listed
+    /// <c>Hosting/PlatformBuilds</c> target DECLARES as its <c>SecretConfigKey</c>. Informational: the
+    /// local route reads the key the target actually declares and never assumes this one.</summary>
     public const string LocalSecretKey = "Hosting:PlatformWebhookSecret";
 
     /// <summary>The named HttpClient the POST goes through when a factory is registered.</summary>
@@ -126,10 +128,26 @@ public class SelfUpdateHandover
         Local,
     }
 
+    /// <summary>Where the resolved inbox URL came from — so a refusal names the key that was actually read.</summary>
+    public enum UrlSource
+    {
+        /// <summary>Neither <see cref="UrlKey"/> nor <see cref="ReportToKey"/> named one.</summary>
+        None,
+
+        /// <summary><see cref="UrlKey"/>, verbatim.</summary>
+        Declared,
+
+        /// <summary><see cref="ReportToKey"/> with <see cref="InboxRoute"/> appended.</summary>
+        Derived,
+    }
+
     /// <summary>
-    /// The hand-over's configuration as read — loggable: it carries whether each secret is PRESENT,
-    /// never a secret. <see cref="Url"/> is the resolved inbox URL (declared or derived), null when
-    /// neither key names one.
+    /// The hand-over's configuration as read — loggable: it carries whether each secret is PRESENT
+    /// and the NAMES of the keys involved, never a secret. <see cref="Url"/> is the resolved inbox
+    /// URL (declared or derived, <see cref="UrlFrom"/> says which), null when neither key names one.
+    /// <see cref="LocalSecretKey"/> is the configuration key the listed local target DECLARES
+    /// (<c>SecretConfigKey</c>), null when the target is not listed or declares none — a target
+    /// without one is an unsigned target by the inbox's own contract (#3312), never "the default".
     /// </summary>
     public sealed record Settings(
         string Deployment,
@@ -137,7 +155,17 @@ public class SelfUpdateHandover
         bool SecretPresent,
         bool LocalTargetListed,
         bool LocalSecretPresent,
-        string? Instance);
+        string? Instance)
+    {
+        /// <summary>Which key <see cref="Url"/> came from. An init-only PROPERTY, not a seventh
+        /// positional parameter: adding one to a public record's primary constructor — even with a
+        /// default — replaces the signature every compiled caller binds to (the #2274 shape).</summary>
+        public UrlSource UrlFrom { get; init; } = UrlSource.None;
+
+        /// <summary>The <c>SecretConfigKey</c> the listed local target declares; null when it is not
+        /// listed or declares none. A property for the same reason as <see cref="UrlFrom"/>.</summary>
+        public string? LocalSecretKey { get; init; }
+    }
 
     /// <summary>The wire body of one announcement — the control plane's inbox contract.</summary>
     public sealed record Announcement
@@ -195,8 +223,11 @@ public class SelfUpdateHandover
     /// <summary>
     /// The route the settings admit: <see cref="Route.Post"/> needs a record id, an inbox URL and
     /// the signing secret; <see cref="Route.Local"/> needs a record id, the target listed on this
-    /// instance and the target's secret present. A POST is preferred when both are possible — an
-    /// instance that declares a control inbox is a consumer, whatever it also lists. Pure.
+    /// instance, the target's DECLARED <c>SecretConfigKey</c> and that key's secret present — the
+    /// key is required by the route itself, not only by the reader, so a caller that assembles
+    /// <see cref="Settings"/> by hand cannot reach local delivery without one. A POST is preferred
+    /// when both are possible — an instance that declares a control inbox is a consumer, whatever
+    /// it also lists. Pure.
     /// </summary>
     public static Route RouteFor(Settings settings)
     {
@@ -204,7 +235,7 @@ public class SelfUpdateHandover
             return Route.None;
         if (settings.Url is { Length: > 0 } && settings.SecretPresent)
             return Route.Post;
-        if (settings.LocalTargetListed && settings.LocalSecretPresent)
+        if (settings.LocalTargetListed && settings.LocalSecretKey is { Length: > 0 } && settings.LocalSecretPresent)
             return Route.Local;
         return Route.None;
     }
@@ -219,10 +250,17 @@ public class SelfUpdateHandover
             return null;
         if (settings.Deployment.Length == 0)
             return $"no control inbox: {DeploymentKey} is not set, so no record on the control instance could be named";
+        if (settings.Url is not null && !settings.SecretPresent)
+            return settings.UrlFrom == UrlSource.Derived
+                ? $"no control inbox: {ReportToKey} names the control instance but {SecretKey} is empty, so nothing could be signed"
+                : $"no control inbox: {UrlKey} is set but {SecretKey} is empty, so nothing could be signed";
+        if (settings.LocalTargetListed && settings.LocalSecretKey is null)
+            return $"no control inbox: {InboxTarget} is a listed webhook target without a {WebhookInbox.SecretConfigKeyName}, "
+                + "so this inbox would store the event unverified";
+        if (settings.LocalTargetListed && !settings.LocalSecretPresent)
+            return $"no control inbox: {InboxTarget} is a listed webhook target but its {settings.LocalSecretKey} is empty, so nothing could be signed";
         if (settings.Url is null)
             return $"no control inbox: neither {UrlKey} nor {ReportToKey} names the control instance";
-        if (!settings.SecretPresent)
-            return $"no control inbox: {UrlKey} is set but {SecretKey} is empty, so nothing could be signed";
         return "no control inbox is configured";
     }
 
@@ -231,15 +269,19 @@ public class SelfUpdateHandover
     /// with <see cref="InboxRoute"/> appended; null when neither is set. Only absolute http(s) URLs
     /// count — anything else declares no inbox rather than half of one. Pure.
     /// </summary>
-    public static string? ResolveUrl(string? controlInboxUrl, string? reportTo)
+    public static string? ResolveUrl(string? controlInboxUrl, string? reportTo) =>
+        ResolveUrlAndSource(controlInboxUrl, reportTo).Url;
+
+    /// <summary>The resolved inbox URL together with which key it came from. Pure.</summary>
+    public static (string? Url, UrlSource Source) ResolveUrlAndSource(string? controlInboxUrl, string? reportTo)
     {
         var declared = (controlInboxUrl ?? "").Trim();
         if (declared.Length > 0)
-            return IsHttpUrl(declared) ? declared : null;
+            return IsHttpUrl(declared) ? (declared, UrlSource.Declared) : (null, UrlSource.None);
         var control = (reportTo ?? "").Trim().TrimEnd('/');
         if (control.Length == 0)
-            return null;
-        return IsHttpUrl(control) ? control + InboxRoute : null;
+            return (null, UrlSource.None);
+        return IsHttpUrl(control) ? (control + InboxRoute, UrlSource.Derived) : (null, UrlSource.None);
     }
 
     private static bool IsHttpUrl(string value) =>
@@ -260,21 +302,31 @@ public class SelfUpdateHandover
     public static Settings ReadSettings(IConfiguration? configuration, PluginCatalogOptions? catalog = null)
     {
         string Setting(string key) => configuration?[key]?.Trim() ?? "";
-        var targets = WebhookInbox.ReadTargets(configuration);
-        var local = targets.FirstOrDefault(t => string.Equals(
-            WebhookInbox.NormalizeTarget(t.Path), InboxTarget, StringComparison.Ordinal));
-        var localSecretKey = local?.SecretConfigKey ?? LocalSecretKey;
+        var local = LocalTarget(configuration);
+        // 🚨 The target's OWN SecretConfigKey, never a default: a listed target that declares none
+        // is an unsigned target by the inbox's contract (#3312), and delivering to it would store
+        // the event with its signature never checked — the pairing degrading silently.
+        var localSecretKey = local?.SecretConfigKey is { Length: > 0 } key ? key : null;
         var instance = catalog?.HomeUrl;
         if (string.IsNullOrWhiteSpace(instance))
             instance = Setting("PluginCatalog:HomeUrl");
+        var (url, source) = ResolveUrlAndSource(Setting(UrlKey), Setting(ReportToKey));
         return new Settings(
             Setting(DeploymentKey),
-            ResolveUrl(Setting(UrlKey), Setting(ReportToKey)),
+            url,
             Setting(SecretKey).Length > 0,
             local is not null,
-            local is not null && Setting(localSecretKey).Length > 0,
-            string.IsNullOrWhiteSpace(instance) ? null : instance.Trim());
+            localSecretKey is not null && Setting(localSecretKey).Length > 0,
+            string.IsNullOrWhiteSpace(instance) ? null : instance.Trim())
+        {
+            UrlFrom = source,
+            LocalSecretKey = localSecretKey,
+        };
     }
+
+    private static WebhookInbox.WebhookTarget? LocalTarget(IConfiguration? configuration) =>
+        WebhookInbox.ReadTargets(configuration).FirstOrDefault(t => string.Equals(
+            WebhookInbox.NormalizeTarget(t.Path), InboxTarget, StringComparison.Ordinal));
 
     /// <summary>The settings of the hub this hand-over serves. Virtual: a test presents a configured control inbox without standing up a second mesh.</summary>
     public virtual Settings ReadSettings() =>
@@ -327,15 +379,23 @@ public class SelfUpdateHandover
                         ? $" — {SecretKey} and the control instance's {LocalSecretKey} are not byte-identical"
                         : ""));
             }
-            // 🚨 The BODY says whether the signature was exercised (#3312): "not-required" means the
-            // control instance declares no secret for the target and verified nothing — a pairing
-            // that silently stopped being checked, said here rather than nowhere.
-            var verified = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            var detail = verified.Contains("\"not-required\"", StringComparison.Ordinal)
-                ? $"accepted ({(int)response.StatusCode}) — the inbox verified NO signature: the control "
-                  + $"instance declares no SecretConfigKey for {InboxTarget}"
-                : $"accepted ({(int)response.StatusCode})";
-            return new Outcome(Route.Post, url, detail);
+            // 🚨 The BODY says whether the signature was exercised (#3312), and only "verified" is a
+            // hand-over. "not-required" means the control instance declares no SecretConfigKey for
+            // the target and checked nothing — the pairing degraded silently, and the consumer may
+            // still drop the event; an unparseable body is an inbox this sender does not know. Both
+            // are FAILED hand-overs that name what came back, never a recorded success.
+            var answer = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            var (status, verdict) = InboxAnswerOf(answer);
+            if (status != "accepted" || verdict != "verified")
+                throw new SelfUpdateHandoverRejectedException(
+                    $"the control inbox at {url} answered {(int)response.StatusCode} but did not report an ACCEPTED, "
+                    + $"VERIFIED delivery (status: {status ?? "unreadable"}, signature: {verdict ?? "unreadable"}) — "
+                    + (verdict == "not-required"
+                        ? $"the control instance declares no {WebhookInbox.SecretConfigKeyName} for {InboxTarget}, so the event was stored unverified"
+                        : status is null && verdict is null
+                            ? "the answer is not the inbox contract"
+                            : "the inbox did not accept the event as a verified delivery"));
+            return new Outcome(Route.Post, url, $"accepted ({(int)response.StatusCode}), signature verified");
         });
     }
 
@@ -343,20 +403,53 @@ public class SelfUpdateHandover
     {
         var configuration = hub.ServiceProvider.GetService<IConfiguration>();
         var targets = WebhookInbox.ReadTargets(configuration);
-        var local = targets.FirstOrDefault(t => string.Equals(
-            WebhookInbox.NormalizeTarget(t.Path), InboxTarget, StringComparison.Ordinal));
-        var secret = configuration?[local?.SecretConfigKey ?? LocalSecretKey]?.Trim() ?? "";
-        if (local is null || secret.Length == 0)
+        var local = LocalTarget(configuration);
+        // The target's DECLARED key only (see ReadSettings) — read at delivery, never captured.
+        var secretKey = local?.SecretConfigKey is { Length: > 0 } key ? key : null;
+        var secret = secretKey is null ? "" : configuration?[secretKey]?.Trim() ?? "";
+        if (local is null || secretKey is null || secret.Length == 0)
             return Observable.Throw<Outcome>(new InvalidOperationException(
-                $"{InboxTarget} is not a listed webhook target with a present secret on this instance"));
+                $"{InboxTarget} is not a listed webhook target declaring a {WebhookInbox.SecretConfigKeyName} whose secret is present on this instance"));
         var headers = new[] { new KeyValuePair<string, string>(WebhookInbox.SignatureHeader, Sign(body, secret)) };
         return WebhookInbox.Deliver(hub, targets, InboxTarget, "application/json", headers, body)
             .Take(1)
             .Timeout(DeliveryBudget)
             .Select(result => result.Status == WebhookInbox.DeliveryStatus.Accepted
-                ? new Outcome(Route.Local, InboxTarget, $"stored at {result.NodePath}")
+                ? result.SignatureVerified
+                    ? new Outcome(Route.Local, InboxTarget, $"stored at {result.NodePath}, signature verified")
+                    : throw new SelfUpdateHandoverRejectedException(
+                        $"the local inbox {InboxTarget} stored the event WITHOUT verifying its signature — "
+                        + $"the target declares no {WebhookInbox.SecretConfigKeyName} this instance can resolve")
                 : throw new SelfUpdateHandoverRejectedException(
                     $"the local inbox {InboxTarget} answered {result.Status}"));
+    }
+
+    /// <summary>
+    /// The inbox's answer, both halves (<c>{"status":"accepted","signature":"verified"}</c>): the
+    /// <c>status</c> and the <c>signature</c> fields, each null when absent or when the body is not
+    /// that contract. A hand-over needs BOTH — <c>accepted</c> AND <c>verified</c>: a verified
+    /// signature on a delivery the inbox did not accept is not a delivery. Pure.
+    /// </summary>
+    public static (string? Status, string? Signature) InboxAnswerOf(string? answer)
+    {
+        if (string.IsNullOrWhiteSpace(answer))
+            return (null, null);
+        try
+        {
+            using var doc = JsonDocument.Parse(answer);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return (null, null);
+            return (Field(doc.RootElement, "status"), Field(doc.RootElement, "signature"));
+        }
+        catch (JsonException)
+        {
+            return (null, null);
+        }
+
+        static string? Field(JsonElement root, string name) =>
+            root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
     }
 }
 

@@ -56,7 +56,11 @@ already carries `Hosting__ControlInbox__Url` (for the Feedback hand-over), and a
 could route the event.
 
 The manual **Apply available update now** button on Settings → Updates takes the same decision and
-sends the same event (trigger `Manual`), so the control plane cannot tell a click from a check.
+sends the same event (trigger `Manual`), so the control plane cannot tell a click from a check — and
+it now honours the **combo gate** as the poller does (#2274): a candidate whose recorded verdict says
+a module this install runs fails against it is refused from the button too, naming the reason. The
+tab renders where a handed-over release WENT (`HandedOverTag/At/To`, in the viewer's zone) instead
+of "update available" for ever.
 
 ## The channel — the one every portal already has
 
@@ -71,11 +75,29 @@ The instance → control-instance channel is the pair the Feedback hand-over int
 | `Hosting:ControlInbox:Secret` | the HMAC secret the inbox verifies — byte-identical to the control instance's `Hosting:PlatformWebhookSecret`; read at delivery time, never captured, never logged |
 
 Routes (`SelfUpdateHandover.RouteFor`, pure): **`Post`** — record id + URL + secret; **`Local`** —
-this IS the control instance: `Hosting/PlatformBuilds` is a listed `WebhookInbox:Targets` entry and
-its `SecretConfigKey` (default `Hosting:PlatformWebhookSecret`) is present, so the event is delivered
-into its own inbox in-process through `WebhookInbox.Deliver`; **`None`** otherwise. A URL that
-carries userinfo or is not `http(s)` declares **no** inbox rather than half of one — the same
-whole-value rule the registry pairing uses (`SelfUpdateRegistryCredential`).
+this IS the control instance: `Hosting/PlatformBuilds` is a listed `WebhookInbox:Targets` entry that
+**declares** a `SecretConfigKey` whose secret is present, so the event is delivered into its own
+inbox in-process through `WebhookInbox.Deliver`; **`None`** otherwise. 🚨 A listed target that
+declares no `SecretConfigKey` is an **unsigned** target by the inbox's own contract (#3312), never
+"the default key": delivering to it would store the event with its signature never checked, so it
+is `None`, and the missing sentence says so. A URL that carries userinfo or is not `http(s)`
+declares **no** inbox rather than half of one — the same whole-value rule the registry pairing uses
+(`SelfUpdateRegistryCredential`). The missing sentence names the key that was actually read: a URL
+derived from `Hosting:ReportTo` is blamed on `ReportTo`, a listed local target on its own declared
+secret key.
+
+🚨 **Only an answer that says the delivery was ACCEPTED and the signature VERIFIED is a
+hand-over — both halves.** The inbox answers `{"status":"accepted","signature":"verified"|"not-required"}`
+(#3312); `not-required` means the control instance declares no `SecretConfigKey` for the target and
+checked nothing — the pairing degraded silently, and the consumer may still drop the event — a
+verified signature on a status other than `accepted` is a delivery the inbox did not take, and a
+body that is not that contract is an inbox this sender does not know. All are `HandoverFailed`,
+naming what came back (`SelfUpdateHandover.InboxAnswerOf`); the local route requires
+`DeliveryResult.SignatureVerified` the same way, and `RouteFor` itself requires the local target's
+declared key, so settings assembled by hand cannot reach local delivery without one. A recorded hand-over is therefore
+always a delivery the receiver checked. (`WebhookInbox.Deliver` itself was moved off the #1790
+`Observable.Using(ImpersonateAsSystem)` shape onto `RunAsSystem` in the same change: an in-process
+caller on a pool thread must not stay latched as System after delivering.)
 
 **What the fleet's records carry today** (read on the control instance, 2026-09-14): `memex-cloud`
 declares `Hosting__ControlInbox__Url` and mounts `Hosting__ControlInbox__Secret`; `build` declares
@@ -112,7 +134,9 @@ announces a landed module generation waiting for its activation restart (#3650):
 the pods the record declares — the **unattended** class on the control lane — so a module still
 activates without a person, exactly as an install that patched itself did it. A check that handed a
 release over considers no restart: the Roll it becomes restarts the pods, and a second request for
-the same instance would only race it (`SelfUpdateVerdict.MayRestartAfter`).
+the same instance would only race it (`SelfUpdateVerdict.MayRestartAfter`). A hand-over that
+**failed** handed nothing to anyone, so the pending restart is still considered — on the same
+broken inbox it is reported as unavailable naming the cause, never silently skipped.
 
 🚨 **Idempotency lives on the control plane, not on the instance.** Every check that selects a target
 announces it — the safety net makes that at most hourly — and the control plane treats
