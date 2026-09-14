@@ -64,8 +64,19 @@ public record DeploymentContent
     [Description("Image pull Secret name in the instance namespace — required when the image registry is not ACR")]
     public string? ImagePullSecret { get; init; }
 
-    /// <summary>Self-update policy: Continuous (default), Stable, or None.</summary>
+    /// <summary>The PLATFORM image self-update policy: Continuous (default), Stable, or None. Governs the image roll only.</summary>
     public string? UpdatePolicy { get; init; }
+
+    /// <summary>
+    /// The DEFAULT per-package (module) update policy this instance seeds onto every install
+    /// record it creates — <c>Auto</c> (track the registry unattended), <c>Notify</c> (remind,
+    /// a person clicks Update) or <c>None</c> (pinned). Renders as
+    /// <c>PluginCatalog__DefaultUpdatePolicy</c>. Separate from <see cref="UpdatePolicy"/> on
+    /// purpose: an instance may pin its platform and still track its modules, or the reverse.
+    /// A package's own record stays the runtime authority once installed.
+    /// </summary>
+    [Description("Default per-module update policy seeded at install: Auto, Notify or None")]
+    public string? ModuleUpdatePolicy { get; init; }
 
     /// <summary>Who this deployment is for — a customer name, or "Systemorph" for our own.</summary>
     public string? Owner { get; init; }

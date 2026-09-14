@@ -17,6 +17,12 @@ still describes the older mechanism, it says so in a banner that names the imple
 
 ## The three rules
 
+> **Who may adopt unattended is a PER-PACKAGE choice** since 2026-09-14 — `updatePolicy` on the
+> install record (`Auto` / `Notify` / `None`), seeded from `PluginCatalog:DefaultUpdatePolicy`, and
+> independent of the platform's image policy on `Admin/UpdatePolicy`. The rules below say WHAT an
+> installation runs once a version is adopted; [Plugin Update on Green Build](@/Doc/Architecture/PluginUpdateOnGreenBuild)
+> says whether the adoption happens by itself.
+
 **Maintainer clarification, 2026-09-09: compatibility follows the used API, not a platform pin.**
 Keep a module usable across platform and dependency releases when the contracts it uses remain
 compatible. A different version, build commit or MVID is not evidence of incompatibility. A

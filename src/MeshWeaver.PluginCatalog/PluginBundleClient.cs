@@ -340,11 +340,16 @@ public sealed class PluginBundleClient
     /// <param name="moduleName">The module's entry-assembly name (the package manifest's
     /// <see cref="PackageManifest.Module"/> declaration).</param>
     /// <param name="packagePath">The install record's mesh path, recorded on the activation entry.</param>
-    /// <param name="unattended">True on the reconciler's background lane — gates the landing on
-    /// <see cref="IModuleUpdatePolicy"/> (the deployment's existing update-policy surface; absent =
-    /// allowed, the platform default). An explicit install passes false: the operator asked.</param>
+    /// <param name="unattended">True on the reconciler's background lane. An explicit install
+    /// passes false: the operator asked, and the module is part of what they asked for.</param>
+    /// <param name="policyDecline">On the unattended lane, why THIS package's own update policy
+    /// declines an unattended landing (<see cref="PackageUpdatePolicy.Notify"/> / <c>None</c> on
+    /// its install record — <see cref="PackageManifest.EffectiveUpdatePolicy"/>), or null when it
+    /// is <see cref="PackageUpdatePolicy.Auto"/>. Per package, never the platform's image policy:
+    /// the two are separate since 2026-09-14. Ignored when <paramref name="unattended"/> is false.</param>
     public IObservable<int> AdoptModule(
-        string pluginId, string moduleName, string? packagePath = null, bool unattended = false)
+        string pluginId, string moduleName, string? packagePath = null, bool unattended = false,
+        string? policyDecline = null)
     {
         var landing = _hub.ServiceProvider.GetService<ModuleLandingService>();
         if (landing is null)
@@ -355,14 +360,12 @@ public sealed class PluginBundleClient
             return Observable.Return(0);
         }
 
-        var policy = unattended ? _hub.ServiceProvider.GetService<IModuleUpdatePolicy>() : null;
-        var policyDecline = policy?.DeclineUnattendedLanding().Take(1)
-                            ?? Observable.Return<string?>(null);
+        var declineOnLane = Observable.Return<string?>(unattended ? policyDecline : null);
 
         return _index.GetOrCreate(FetchIndex)
             .Take(1)
             .SelectMany(index => landing.GetActivation().Take(1)
-                .SelectMany(activation => policyDecline
+                .SelectMany(activation => declineOnLane
                     .SelectMany(declined =>
                     {
                         var bundle = index.Bundles?.FirstOrDefault(b =>

@@ -2,28 +2,6 @@ using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.PluginCatalog;
 
-/// <summary>
-/// The platform's gate on UNATTENDED module landing — the seam through which the module lane rides
-/// the EXISTING update-policy surface instead of growing a knob of its own (#1664).
-///
-/// <para>The memex portals implement this over the admin-editable <c>Admin/UpdatePolicy</c> node
-/// (Continuous / Stable / None — the same single policy that governs the platform image roll):
-/// <c>Continuous</c>, the platform default, allows unattended module landing; <c>Stable</c> and
-/// <c>None</c> decline it, because a deployment that pins its image has chosen to take updates
-/// deliberately, and its modules must not run ahead of that choice. A host that registers NO
-/// implementation is the platform default: unattended landing is ALLOWED.</para>
-///
-/// <para>The gate covers only the RECONCILER's unattended lane. An explicit install (the Store's
-/// Provision funnel, the default-install seed) lands its module regardless — the operator asked
-/// for the package, and the module is part of what they asked for.</para>
-/// </summary>
-public interface IModuleUpdatePolicy
-{
-    /// <summary>Why unattended module landing is currently declined, or null when it is allowed.
-    /// Cold; emits exactly once per subscription.</summary>
-    IObservable<string?> DeclineUnattendedLanding();
-}
-
 /// <summary>What the module-update reconcile decided for one installed module package.</summary>
 public enum ModuleUpdateAction
 {
@@ -44,7 +22,7 @@ public enum ModuleUpdateAction
     /// </summary>
     SkipPlatformBelowFloor,
 
-    /// <summary>The deployment's update policy declines unattended landing (Stable/None).</summary>
+    /// <summary>The package's own update policy declines unattended landing (Notify / None).</summary>
     SkipPolicy,
 
     /// <summary>The registry serves no bundle for this package.</summary>
@@ -143,9 +121,10 @@ public static class ModuleUpdateDecision
     /// <param name="landed">This deployment's activation entry for the module, or null when it was
     /// never landed (which includes "installed before the module lane existed" — those heal by
     /// landing).</param>
-    /// <param name="policyDecline">Why the deployment's update policy declines unattended landing,
-    /// or null when it allows it (<see cref="IModuleUpdatePolicy"/>; null when no policy is
-    /// registered — the platform default is auto-update).</param>
+    /// <param name="policyDecline">Why THIS package's own update policy declines unattended
+    /// landing (<see cref="PackageManifest.EffectiveUpdatePolicy"/> is Notify or None — production
+    /// passes <c>RegistryUpdateReconciler.PolicyDecline</c>), or null when it is Auto. Per package
+    /// since 2026-09-14; the platform's image policy on <c>Admin/UpdatePolicy</c> plays no part.</param>
     /// <param name="landedBytesPresent">
     /// 🚨 Whether the entry's landed assembly is actually ON DISK — production passes
     /// <see cref="ModuleActivationBoot.LandedModuleDllExists"/> bound to the module root, the same
