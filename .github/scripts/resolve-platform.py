@@ -332,12 +332,24 @@ def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
         release = SET_NAME.fullmatch(fields.get("release", ""))
         counts = [fields.get(key, "") for key in
                   ("bundles", "targets-published", "targets-converged", "release-markers")]
+        # 🚨 A TARGET THAT ALREADY HELD THIS PUBLICATION REACHED IT (#4247). `targets-already` counts
+        # the targets that were already sealed ON THIS CONTENT when the bake asked — the ordinary
+        # shape when two runs bake one commit, and of any re-bake. It used to be recorded NOWHERE,
+        # so such a receipt read `targets-published=0 targets-converged=0` — byte-identical to a
+        # publication that reached nothing — and this check PASSED THE SET OVER as unattributable.
+        # Measured on main-cd #8457 and #8459 (both cdb2878bb): the bake log says twice "holds a
+        # COMPLETE publication of THIS content … already published; skipping", and two otherwise
+        # sealed sets were skipped for it. OPTIONAL, defaulting to 0: a receipt written before
+        # #4247 does not carry the field, and must keep parsing exactly as it did.
+        already = fields.get("targets-already", "0")
         if (fields.get("source") != "meshweaver-content" or not SHA.fullmatch(sha)
                 or not release or int(release.group(2)) != run_number
                 or fields.get("arch") not in ("linux-x64", "linux-arm64")
                 or not fields.get("identity") or fields["identity"] == "unknown"
                 or not all(re.fullmatch(r"[0-9]+", value) for value in counts)
-                or int(counts[0]) == 0 or int(counts[1]) + int(counts[2]) == 0 or int(counts[3]) == 0):
+                or not re.fullmatch(r"[0-9]+", already)
+                or int(counts[0]) == 0 or int(counts[1]) + int(counts[2]) + int(already) == 0
+                or int(counts[3]) == 0):
             raise ProvenanceUnavailable(
                 f"platform-bake job {job_id} has an incomplete or inconsistent final publication receipt")
         version = release.group(1)
@@ -1876,6 +1888,44 @@ def self_test() -> int:
                                           id_8203: _receipt() + _receipt()}, jobs=with_ids),
                         _registry(full), tester, portal, log=logs.append, verify_source=True),
          lambda message: "no sealed platform set" in message)
+
+    # 🚨 #4247 — "EVERY TARGET ALREADY HELD IT" IS A REACHED PUBLICATION, NOT A FAILED ONE. A bake
+    # whose targets were already sealed on this content publishes nothing and is nonetheless the
+    # publication: main-cd #8457 and #8459 (both cdb2878bb) each logged "holds a COMPLETE
+    # publication of THIS content … already published; skipping" twice, wrote their two release
+    # markers, and were passed over here as unattributable. The three rows below are the whole
+    # distinction — reached-because-already, reached-nothing, and the pre-#4247 receipt that does
+    # not carry the field at all.
+    already = _receipt(**{"targets-published": "0", "targets-converged": "0", "targets-already": "2"})
+    case("a receipt whose targets ALREADY held this publication is VERIFIED, not passed over", True,
+         lambda: choose(_fetch_with_logs({id_8207: already,
+                                          id_8203: _receipt(RECEIPT_SHA, "3.0.0-ci.8203")},
+                                         jobs=with_ids),
+                        _registry(full), tester, portal, log=logs.append, verify_source=True),
+         lambda c: c.set_name == "3.0.0-ci.8207" and c.sha == RECEIPT_SHA and "source verified" in c.source)
+    nothing = _receipt(**{"targets-published": "0", "targets-converged": "0", "targets-already": "0"})
+    case("…while a receipt that reached NOTHING is still passed over", True,
+         lambda: choose(_fetch_with_logs({id_8207: nothing,
+                                          id_8203: _receipt(RECEIPT_SHA, "3.0.0-ci.8203")},
+                                         jobs=with_ids),
+                        _registry(full), tester, portal, log=logs.append, verify_source=True),
+         lambda c: c.set_name == "3.0.0-ci.8203")
+    case("…and a receipt written before the field existed reads exactly as it did", True,
+         lambda: choose(_fetch_with_logs({id_8207: _receipt(), id_8203: _receipt(RECEIPT_SHA, "3.0.0-ci.8203")},
+                                         jobs=with_ids),
+                        _registry(full), tester, portal, log=logs.append, verify_source=True),
+         lambda c: c.set_name == "3.0.0-ci.8207" and "source verified" in c.source)
+    # The DEFAULT is load-bearing, so it is asserted rather than assumed: a pre-#4247 receipt that
+    # reached nothing carries no `targets-already` at all, and must still be passed over. Absent has
+    # to read as ZERO — any other default would turn every old receipt into a verified one.
+    old_and_empty = _receipt(**{"targets-published": "0", "targets-converged": "0"})
+    assert "targets-already" not in old_and_empty
+    case("…and a PRE-#4247 receipt that reached nothing is still passed over (absent reads as zero)", True,
+         lambda: choose(_fetch_with_logs({id_8207: old_and_empty,
+                                          id_8203: _receipt(RECEIPT_SHA, "3.0.0-ci.8203")},
+                                         jobs=with_ids),
+                        _registry(full), tester, portal, log=logs.append, verify_source=True),
+         lambda c: c.set_name == "3.0.0-ci.8203")
 
     # 🚨 #4242 — AN ABSENT RECEIPT IS NOT A DISAGREEMENT, and telling them apart is the whole
     # value of the sentence. A run with no successful platform bake used to answer "successful

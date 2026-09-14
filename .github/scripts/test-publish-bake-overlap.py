@@ -740,6 +740,18 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
     check("the same content is skipped, not republished",
           r.returncode == 0 and s.sealed() and "already published; skipping" in r.stdout,
           f"rc={r.returncode}, {denominator(s)}")
+    # 🚨 …AND THE RECEIPT SAYS SO (#4247). The skip above used to record NO outcome, so the run's
+    # final receipt read `targets-published=0 targets-converged=0` — byte-identical to a
+    # publication that reached NOTHING. Both readers got it wrong on main-cd #8457/#8459: a human
+    # filed two release markers written for "a publication that reached ZERO targets" (the log
+    # says twice "holds a COMPLETE publication of THIS content … already published; skipping"),
+    # and `resolve-platform.py --verify-source`, which refuses a receipt whose
+    # published+converged is zero, passed both sealed sets over as unattributable. `already` is
+    # the word that separates "the set is live at this target" from "this reached no target".
+    check("…and the receipt COUNTS it as already-published, not as a publication that reached nothing",
+          "targets-published=0 targets-converged=0 targets-already=1" in r.stdout,
+          "receipt: " + (next((line for line in r.stdout.splitlines() if line.startswith("bake published:")),
+                              "<no final receipt>")))
 
     # ── AN OWN-EMPTY MODULE SET is sealed when the workflow SAYS so, and refused when it does not. ──
     # MeshWeaver#3732: a downstream composes its upstream's modules for the compile surface and
