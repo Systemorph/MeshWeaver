@@ -289,3 +289,17 @@ jobs:
       - name: The purge still skips locked manifests
         if: ${{ !cancelled() }}
         run: python3 .github/scripts/lock-pinned-digests.py --check-retention-record .
+
+      # 🚨 …and the OTHER registry, which this lane cannot lock and `acr purge` cannot reach
+      # (MeshWeaver#4230). The step above is entirely about `meshweaver.azurecr.io`. This one asks
+      # every registry the fleet's overlays name what DELETES from it, and re-derives the committed
+      # chart so the answer cannot go stale silently — a Job rendered beside the registry, a moved
+      # `maintenance:` window, or an executable deletion anywhere reds while the record still reads
+      # "nothing deletes". It runs HERE as well as on every pull request because the chart and the
+      # record can also move on `main` without either being in a diff this lane saw.
+      #
+      # Same `!cancelled()` reasoning as above, and for the same reason: it is a question about the
+      # RUN, never about an input, so it is not a skip-trapdoor. No credential, no network.
+      - name: Every registry the fleet pins in still says what DELETES from it
+        if: ${{ !cancelled() }}
+        run: python3 .github/scripts/lock-pinned-digests.py --check-registry-retention .
