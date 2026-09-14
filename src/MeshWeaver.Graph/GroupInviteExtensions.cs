@@ -89,8 +89,10 @@ public static class GroupInviteExtensions
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var normalizedEmail = email.Trim();
 
-        // Look up an existing account by email (one-shot initial snapshot).
-        return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:User content.email:{normalizedEmail}"))
+        // Look up an existing account by email (one-shot initial snapshot) — as System, see
+        // SpaceInviteService.AccountLookup (#4309): as the inviting admin the mirror-pinned read answers
+        // 0 for an account that exists, and the flow invites a person who is already here.
+        return meshService.Query<MeshNode>(SpaceInviteService.AccountLookup(normalizedEmail))
             .Where(c => c.ChangeType == QueryChangeType.Initial)
             .Select(c => c.Items)
             .Take(1)

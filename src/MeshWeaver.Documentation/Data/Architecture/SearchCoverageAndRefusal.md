@@ -192,10 +192,27 @@ Two things the declared sweep still cannot see, and no query form can:
   revisit in the same half: a caller that wrote `partitions:all` asked for the fan-out, and the
   `Auth` pin is for the callers that did not say where to look.
 - **`nodeType:User` for a signed-in caller** stays 0 through the mirror on a deployment whose
-  `auth` partition carries no `Public` read grant (the control instance measured that way). Any code
-  path that issues that shape as the user rather than as System (an invite-by-email lookup, for
-  instance) resolves nobody there; that is its own issue, and the envelope now at least names
-  `Auth` as the partition the zero was read against.
+  `auth` partition carries no `Public` read grant (the control instance measured that way). The
+  envelope names `Auth` as the partition the zero was read against, and the zero is the mirror
+  working as designed: a signed-in user may read a User node they can address by path
+  (`UserNodeType`'s access rule admits every authenticated caller on a root User node), but the
+  mirror is an enumeration, and enumeration is the disclosure surface #3890 closed. **Code that
+  resolves a PERSON from that shape must therefore not issue it as the caller** (#4309). The
+  callers in core were the invite-by-email lookups — `SpaceInviteService.GrantOrScheduleAccess`
+  (Space invites and Access Control's grant-by-email) and `GroupInviteExtensions.InviteToGroup` —
+  which read the zero as "no account" and invited a person who was already here; both now issue
+  `SpaceInviteService.AccountLookup(email)`, a request stamped `AsSystem()`, the same
+  infrastructure identity `UserIdentityCache.DirectoryQuery` and the developer-login page
+  (MeshWeaver.Plugins#712) use. Stamping the REQUEST keeps the identity on the read alone; the
+  grant composed on its result still runs as the inviter. The rest of the corpus was already
+  system-side (`UserIdentityCache`, `DeviceSeed`, the inbound mail/Teams processors) or is a
+  listing that is genuinely the caller's own view (the recipient picker in `SendDocumentLayoutArea`,
+  the Access Control subject picker's `AccessSubjectQueries.Users`), where 0 means "not visible to
+  you" and the grant-by-email path is the way to reach a person the picker does not show. 🚨 The
+  in-memory provider cannot reproduce this zero — it re-decides each row through the type's C#
+  access rule, which the mirror's SQL filter never consults — which is why the identical code was
+  green on every unit test and is why `InviteResolvesTheInviteeAsSystemTest` pins the lookup's
+  viewer as a property of the request through `QueryIdentityResolver`, not as a listing count.
 
 ## Tests
 
