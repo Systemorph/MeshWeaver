@@ -154,6 +154,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Static Repo Import](StaticRepoImport)
 - [The Prune Requires a Complete Listing](PruneRequiresACompleteListing) — an import prunes on "absent from the source ⇒ deleted"; a truncated GitHub tree arrives as HTTP 200 and turns every unread file into a deletion
 - [Import Write Ordering](ImportWriteOrdering) — a NodeType lands before the instances that name it
+- [Import-Side Content Degradation](ImportSideContentDegradation) — a typed file whose own parser is absent on the importing host lands as Markdown with its configuration discarded, and the read-side degradation instrument is blind to it by construction, because the content it wrote types perfectly (#4319)
 - [Vector Search](VectorSearch)
 - [Durable But Unreadable](DurableButUnreadable) — a write that is acknowledged, versioned and invisible
 - [Instance-Key Resolution](InstanceKeyResolution) — the registry reads an instance key through live mirrors, never a per-request point read
@@ -268,6 +269,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Build Server](BuildServer)
 - [The Compile Program — State of Record](CompileProgramStateOfRecord)
 - [Content-Type Registration](ContentTypeRegistration)
+- [Import-Side Content Degradation](ImportSideContentDegradation) — the OTHER half: content degraded at IMPORT rather than at read. The `/health` `content-types` census cannot see it, because an import-degraded node holds a plain `MarkdownContent` whose `$type` resolves perfectly on every replica
 - [NodeType Catalogs (shipping instances of a NodeType)](NodeTypeCatalogs)
 - [NodeType Release Redesign](Postmortems/NodeTypeReleaseRedesign)
 

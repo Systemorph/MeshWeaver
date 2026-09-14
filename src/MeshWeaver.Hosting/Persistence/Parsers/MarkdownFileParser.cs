@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Text;
+using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
@@ -39,6 +41,96 @@ public partial class MarkdownFileParser : IFileFormatParser
         .WithCaseInsensitivePropertyMatching()
         .IgnoreUnmatchedProperties()
         .Build();
+
+    /// <summary>
+    /// The front-matter keys this parser BINDS — every property declared on
+    /// <see cref="MarkdownFrontMatter"/>, read from the type itself so the set cannot drift the
+    /// day a property is added. Case-insensitive, exactly like
+    /// <see cref="YamlDeserializer"/>'s own matching.
+    ///
+    /// <para><c>static readonly</c> is the sanctioned shape here: an immutable lookup computed
+    /// once from a compiled type and never written at runtime.</para>
+    /// </summary>
+    private static readonly ImmutableHashSet<string> BoundFrontMatterKeys =
+        typeof(MarkdownFrontMatter).GetProperties()
+            .Select(p => p.Name)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A TOP-LEVEL YAML key — a <c>key:</c> starting at column 0. A nested mapping and the body of
+    /// a block scalar are both INDENTED, so neither can be mistaken for one.
+    ///
+    /// <para>🚨 This grammar is NARROWER than YAML's and is the FALLBACK only, never the primary
+    /// reader: it matches an unquoted ASCII identifier, so a quoted key (<c>"displayName":</c>) or
+    /// one carrying a dot is a key YamlDotNet binds, this pattern misses, and the record would then
+    /// omit — a detector seeing less than the loss it exists to name. The primary reader is
+    /// <see cref="TopLevelYamlKeys"/>, which asks the same parser that did the discarding.</para>
+    /// </summary>
+    [GeneratedRegex(@"^(?<key>[A-Za-z_][\w\-]*)[ \t]*:", RegexOptions.Multiline)]
+    private static partial Regex TopLevelFrontMatterKey();
+
+    /// <summary>
+    /// The root mapping's keys, read with the SAME deserializer that bound
+    /// <see cref="MarkdownFrontMatter"/> — so a key it accepted and discarded is a key this sees,
+    /// whatever its spelling (quoted, dotted, non-ASCII). Quotes are resolved by the parser, so the
+    /// reported name is the key as YAML means it rather than as the file spells it.
+    ///
+    /// <para>Returns <c>null</c> when this text is not a YAML mapping the parser can read — a
+    /// duplicate key, an unresolvable alias, a block the defensive extractor recovered from
+    /// malformed input. That is NOT swallowing a fault: the front matter has already been bound (or
+    /// regex-recovered) by the time this runs, so the parse state is known; the caller falls back
+    /// to the narrower <see cref="TopLevelFrontMatterKey"/> pattern, exactly as
+    /// <c>Parse</c> already falls back when YamlDotNet throws on the same text.</para>
+    /// </summary>
+    /// <param name="yaml">The raw front-matter block.</param>
+    private static IEnumerable<string>? TopLevelYamlKeys(string yaml)
+    {
+        try
+        {
+            return YamlDeserializer.Deserialize<Dictionary<string, object?>>(yaml)?.Keys;
+        }
+        catch (YamlDotNet.Core.YamlException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 🚨 <b>The keys this parse DISCARDED</b> — the record that turns a silently lossy import
+    /// into a visible one (Systemorph/MeshWeaver#4319). See
+    /// <see cref="MarkdownContent.UnboundFrontMatter"/> for what it is and is not.
+    ///
+    /// <para>Gated on the file DECLARING a <c>nodeType</c>, and that gate is the whole point: a
+    /// declared type is a claim that some parser knows how to build this node's configuration, so
+    /// a key this fallback cannot bind is that configuration going missing. An untyped markdown
+    /// page makes no such claim — its extra keys are the author's own metadata and are not a
+    /// degradation — which is also what keeps the record null for all but a handful of files
+    /// (measured over this repo's 1,637 front-matter <c>.md</c> files: one).</para>
+    ///
+    /// <para>The keys are read with the SAME parser that discarded them
+    /// (<see cref="TopLevelYamlKeys"/>) rather than with a key grammar of this method's own: a
+    /// detector that recognises fewer key spellings than the deserializer accepts would report a
+    /// SHORTER list than the loss, which is the one failure this record must not have. The regex is
+    /// the fallback for text the parser cannot read at all.</para>
+    /// </summary>
+    /// <param name="nodeType">The declared node type, after the defensive extractor has run.</param>
+    /// <param name="yaml">The raw front-matter block.</param>
+    /// <returns>The unbound keys in the order they appear, or <c>null</c> when nothing was lost.</returns>
+    private static IReadOnlyList<string>? UnboundFrontMatterKeys(string? nodeType, string? yaml)
+    {
+        if (string.IsNullOrEmpty(nodeType) || string.IsNullOrEmpty(yaml))
+            return null;
+
+        var keys = TopLevelYamlKeys(yaml)
+                   ?? TopLevelFrontMatterKey().Matches(yaml).Select(m => m.Groups["key"].Value);
+
+        var unbound = keys
+            .Where(key => !BoundFrontMatterKeys.Contains(key))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToImmutableList();
+
+        return unbound.Count == 0 ? null : unbound;
+    }
 
     private static readonly ISerializer YamlSerializer = new SerializerBuilder()
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitDefaults)
@@ -203,7 +295,13 @@ public partial class MarkdownFileParser : IFileFormatParser
             Authors = frontMatter?.Authors,
             Tags = frontMatter?.Tags,
             Thumbnail = frontMatter?.Thumbnail,
-            Abstract = frontMatter?.Abstract
+            Abstract = frontMatter?.Abstract,
+            // 🚨 #4319: this parser accepts EVERY .md file, so it is also what a typed node falls
+            // back to when its own parser is not registered on this host — and then the type's
+            // configuration keys are discarded with nothing thrown and nothing logged. Naming them
+            // on the node is what makes that degradation findable instead of silent.
+            UnboundFrontMatter = UnboundFrontMatterKeys(
+                frontMatter?.NodeType, rawYaml ?? ExtractLeadingFrontmatter(content))
         };
 
         var nodeType = frontMatter?.NodeType ?? "Markdown";
