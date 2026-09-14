@@ -308,12 +308,30 @@ which builds the merged branch and runs the same job, so there is no path to `ma
 gate does not block. It is deliberately **not** duplicated onto the nightly lock lane: that would
 add no coverage and one new way to red the lane whose green is `pause.reEnableWhen`.
 
-**The dry run** is the nightly protection run's report, which now prints, per fleet-unlockable
-registry, every reference the fleet's committed files make to it — repository, tag and the file that
-pins it. That output **is** the deliverable: it says what a cleanup on that registry would have to
-keep, it deletes nothing, it needs no new credential, and it prints its own incompleteness (the
-image family is covered by the committed axes; the bundle family is named as NOT COVERED, per §4.2,
-rather than silently omitted).
+**The dry run** is the nightly protection run's report, which now prints, per foreign registry,
+every reference the fleet's committed files make to it — repository, tag and the file that pins it,
+**with the host's declared disposition beside it**. That output **is** the deliverable: it says what
+a cleanup on that registry would have to keep, it deletes nothing, it needs no new credential, and it
+prints its own incompleteness (the image family is covered by the committed axes; the bundle family
+is named as NOT COVERED, per §4.2, rather than silently omitted).
+
+🚨 **The disposition is part of the label, and LISTING rather than counting is the point — both
+because of what the first live run found** ([run 34852827116](https://github.com/Systemorph/MeshWeaver/actions/runs/34852827116), #4323):
+
+- It printed *"a cleanup must KEEP"* over **`ghcr.io`**, a host declared `third-party`, where this
+  fleet runs no cleanup at all. One sentence cannot be right about both a store we retain and a
+  store somebody else retains, so a `third-party` host now gets its own — *declared NOT ours to
+  retain … listed so the declaration can be checked against what is really pinned*.
+- And that listing immediately earned itself: **two of `ghcr.io`'s five references are
+  `systemorph/*`** — our own images — on a host whose declaration reads *"never published by this
+  fleet"*, while `release.yml` mirrors three repositories there on every official release. **A count
+  alone would have hidden it.** Filed as #4323; the disposition is not changed here, because
+  `third-party` → `fleet-unlockable` is a *loosening* (an installation pinning only there stops
+  being red) and that is a decision, not a correction.
+- A **moving tag** is flagged where it appears. Two of those references are
+  `ghcr.io/systemorph/…:latest`, and they are the CHART'S OWN DEFAULTS — so the unconfigured install
+  pulls the platform from GHCR. #3438 carries *"a moving tag is named by no file and is outside this
+  model"*; it is named by a file now.
 
 ## 7. What is the maintainer's
 

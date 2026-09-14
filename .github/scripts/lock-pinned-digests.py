@@ -1563,11 +1563,33 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
         by_host: dict[str, list[tuple[str, str, str]]] = {}
         for host, repo, tag, where in plan.foreign_references:
             by_host.setdefault(host, []).append((repo, tag, where))
+        # Read off the same record the planner classified from, so the label the reader sees and the
+        # verdict the run reached cannot disagree.
+        dispositions, _ = read_registry_dispositions(root)
+        # 🚨 THE DISPOSITION IS PRINTED BESIDE EACH HOST, AND THE SENTENCE DIFFERS (#4323). The
+        # first live run of this section said "a cleanup must KEEP" over `ghcr.io` — a host declared
+        # `third-party`, where this fleet runs no cleanup at all. A report that asserts the same
+        # thing about a store we retain and a store somebody else retains is wrong about one of them
+        # whichever way the declaration reads.
+        #
+        # 🚨 And LISTING is what caught the deeper one, so it is stated as the reason: the same run
+        # showed two of ghcr.io's five references are `systemorph/*` — OUR images, on a host whose
+        # declaration says "never published by this fleet", while release.yml mirrors three
+        # repositories there on every official release (#4323). A count alone would have hidden it.
         for host in sorted(by_host):
             references = sorted(set(by_host[host]))
-            emit(f"      {host}: {len(references)} committed reference(s) a cleanup must KEEP")
+            disposition = dispositions.get(host, ("undeclared", ""))[0]
+            if disposition == "third-party":
+                emit(f"      {host} (declared third-party): {len(references)} committed "
+                     "reference(s) — declared NOT ours to retain, so no cleanup of ours protects "
+                     "them. Listed so the declaration can be checked against what is really pinned")
+            else:
+                emit(f"      {host} (declared {disposition}): {len(references)} committed "
+                     "reference(s) a cleanup must KEEP")
             for repo, tag, where in references:
-                emit(f"        {repo}:{tag}")
+                moving = ":latest" if tag == "latest" else ""
+                emit(f"        {repo}:{tag}"
+                     + ("   🚨 a MOVING tag — outside this model (#3438)" if moving else ""))
                 emit(f"          pinned by {where}")
         # 🚨 ITS OWN INCOMPLETENESS, ON ITS OWN LINE. This is the COMMITTED axis only. The set an
         # installation is RUNNING is derivable the same way it is here (the mirror pushes the
@@ -3701,8 +3723,13 @@ ingress:
     check("PROTECTED SET — registries this lane cannot lock" in _dry_run,
           f"ARM 33a: the run printed NO protected set for a registry it cannot lock, so what a "
           f"cleanup there must keep is derivable and unread: {_dry_run[-1500:]}")
-    check("cr.meshweaver.cloud: 2 committed reference(s)" in _dry_run,
-          f"ARM 33a: the protected set did not name the host and its count: {_dry_run[-1500:]}")
+    # 🚨 THE DISPOSITION IS PART OF THE LABEL (#4323). The first live run said "a cleanup must
+    # KEEP" over `ghcr.io`, a host declared `third-party` where this fleet runs no cleanup at all —
+    # the same sentence about a store we retain and a store somebody else retains.
+    check("cr.meshweaver.cloud (declared fleet-unlockable): 2 committed reference(s) a cleanup "
+          "must KEEP" in _dry_run,
+          f"ARM 33a: the protected set did not name the host, its DISPOSITION and its count: "
+          f"{_dry_run[-1500:]}")
     check("memex-portal-ai:3.0.0-ci.8411" in _dry_run,
           f"ARM 33a: the protected set printed a COUNT and not the references themselves. A "
           f"number nobody can check against the registry is not a dry run: {_dry_run[-1500:]}")
@@ -3711,6 +3738,32 @@ ingress:
     check("PLUGIN BUNDLE family" in _dry_run and "floor, never a complete protected set" in _dry_run,
           f"ARM 33a: the protected set did not print its own INCOMPLETENESS, so a reader would "
           f"take a committed-pins floor for a complete answer: {_dry_run[-1500:]}")
+    # 🚨 A `third-party` host gets a DIFFERENT SENTENCE, and the reason is printed with it (#4323).
+    # This is the arm that would have caught the first live run: `ghcr.io` was labelled "a cleanup
+    # must KEEP" over images this fleet runs no cleanup on — and two of the five turned out to be
+    # OURS, on a host declared "never published by this fleet".
+    _third_party_scan = _scan2("Systemorph/Memex", FIXTURE_OVERLAY_FOREIGN.replace(
+        "cr.meshweaver.cloud", "ghcr.io"),
+        "deployments/aks/memex-cloud/values.memexcloud.public.yaml")
+    plan, _, _ = _drive(clean1, clean2 + [_third_party_scan],
+                        FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                        dispositions={"ghcr.io": ("third-party", "somebody else's")})
+    _printed = io.StringIO()
+    with contextlib.redirect_stdout(_printed):
+        report(plan, clean1, clean2 + [_third_party_scan], REGISTRY_DEFAULT, _inventory(),
+               apply=False, release_enabled=False, root=str(HERE.parent.parent))
+    _tp = _printed.getvalue()
+    check("(declared third-party)" in _tp and "NOT ours to retain" in _tp,
+          f"ARM 33a: a THIRD-PARTY host was reported with the same 'a cleanup must KEEP' sentence "
+          f"as a store this fleet actually retains: {_tp[-1200:]}")
+    check("a cleanup must KEEP" not in _tp.split("(declared third-party)")[-1].split("🚨")[0],
+          f"ARM 33a: the third-party block still claims a cleanup must keep its references: "
+          f"{_tp[-1200:]}")
+    check("so the declaration can be checked against what is really pinned" in _tp,
+          "ARM 33a: the third-party block does not say WHY it is listed. Listing is what caught "
+          "#4323 — two `systemorph/*` images on a host declared 'never published by this fleet' — "
+          "and a count alone would have hidden it")
+
     # …and a fleet with no foreign reference prints no such section, rather than an empty one that
     # reads as "nothing needs protecting there".
     plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers())
