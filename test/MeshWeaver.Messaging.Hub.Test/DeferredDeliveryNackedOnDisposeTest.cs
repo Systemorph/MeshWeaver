@@ -303,6 +303,63 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             + "renders as a blank reads to the next person as 'there was nothing to report'");
     }
 
+    private static readonly Address BlankReasonAddress = new("blank-reason", "1");
+
+    /// <summary>
+    /// The third state, and the one a `null` check misses. <c>DisposeRequest.Reason</c> is FREE TEXT
+    /// written by the poster, and only <c>null</c> was ever treated as "not stated" — so a poster
+    /// that supplied an empty or whitespace string rendered a literal <c>why: </c> with nothing
+    /// after it.
+    ///
+    /// <para>That is this page's own defect in a new costume: an absent answer that renders as
+    /// nothing reads to the next person as "there was nothing to report". The normalisation lives
+    /// at the single capture point, so every reader of the field inherits it rather than each
+    /// having to remember — and this test is what stops the next reader adding one that does not.</para>
+    /// </summary>
+    [Fact]
+    public async Task ATeardownWhoseReasonIsBlank_ReportsItAsUNSTATED_NotAsNothing()
+    {
+        var host = GetHost();
+
+        var gated = host.GetHostedHub(
+            BlankReasonAddress,
+            c => c.WithTypes(typeof(GatedRequest), typeof(GatedResponse))
+                .WithInitializationGate("blank-gate-never-opens", _ => false)
+                .WithHandler<GatedRequest>((h, d) =>
+                {
+                    h.Post(new GatedResponse(), o => o.ResponseFor(d));
+                    return d.Processed();
+                }));
+        gated.Should().NotBeNull();
+
+        var response = host
+            .Observe<GatedResponse>(new GatedRequest(), o => o.WithTarget(BlankReasonAddress))
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        await WaitForDeferredBacklog(host);
+
+        // Whitespace, not empty string: an empty one is the obvious case and a `Length > 0` check
+        // would pass it. Whitespace is what a poster writing $"{maybeEmpty} " actually produces.
+        host.Post(new DisposeRequest { Reason = "   " },
+            o => o.WithTarget(BlankReasonAddress));
+
+        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
+
+        failure.Failure!.Message.Should().Contain("reason not stated by the caller",
+            "a poster that supplied only whitespace stated nothing, and 'stated nothing' is a "
+            + "NAMED answer — the whole subject of this change is that an unset value must never "
+            + "render the same as an absent one");
+        failure.Failure.Message.Should().NotContain("why:  ",
+            "the negative control: the defect is a literal 'why: ' with nothing after it, which is "
+            + "exactly what a null-only check produces and what a reader takes for a blank field");
+
+        // POSITIVE CONTROL — the WHO half is still there, so 'the reason came out named' cannot be
+        // satisfied by the attribution having been dropped altogether.
+        failure.Failure.Message.Should().Contain(host.Address.ToString(),
+            "normalising the reason must not cost the sender the attribution it travels with");
+    }
+
     /// <summary>
     /// Polls the public disposal diagnostics (which report <c>deferred=&lt;N&gt;</c> per hub,
     /// walking hosted hubs) until something is parked. The gated hub is the only hub in this test

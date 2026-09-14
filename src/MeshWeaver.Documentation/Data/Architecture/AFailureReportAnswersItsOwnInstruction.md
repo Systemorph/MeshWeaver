@@ -73,19 +73,44 @@ that removed the generic disposal sentence from the sibling path in
 
 ### Attribution must VARY, or it is decoration
 
-`DisposalAttribution` renders three distinguishable answers, and the absence of a routed request is
+`DisposalAttribution` renders four distinguishable answers, and the absence of a routed request is
 itself one of them:
 
 | what happened | what the report says |
 |---|---|
 | a routed `DisposeRequest` that stated a reason | `requested by <sender>; why: <the reason>` |
-| a routed `DisposeRequest` with no reason | `requested by <sender>; why: reason not stated by the caller` |
-| no routed request (host teardown, a `using`, an owner cascade) | `requested by a direct Dispose() (no routed DisposeRequest)` |
+| a routed `DisposeRequest` posted by the hub to ITSELF (a rebind, a self-heal) | `requested by itself — a self-posted DisposeRequest (<address>), i.e. a rebind or self-heal recycle; why: …` |
+| a routed `DisposeRequest` with no reason, or a blank one | `requested by <sender>; why: reason not stated by the caller` |
+| **an owner's cascade** — this hub is going down because its owner is | `requested by a cascade from its owner <owner>; why: the owner's own teardown — <the ORIGINATING cause, propagated unchanged down the chain>` |
+| no routed request and no cascade (host teardown, a `using`) | `requested by a direct Dispose() (no routed DisposeRequest)` |
 
-The third rules the message path out, which is exactly what the production incident needed and could
-not get. A rendering that printed a blank there would have been the defect again in a new costume:
-an absent answer that renders as nothing reads to the next person as *"there was nothing to
-report"*.
+Three of those distinctions are load-bearing and none of them can be inferred from the others:
+
+- **The cascade form is not the direct-dispose form.** A cascaded child IS disposed by a direct
+  `Dispose()` call from `HostedHubsCollection`, so before `cascadeOwner` existed every child in a
+  wave reported `a direct Dispose()` — indistinguishable from host teardown, and reading the child
+  told you nothing about the root. That was #3510's wedge one level down. The cascade carries the
+  **originating** cause, not merely the immediate parent, so a leaf names the event that started it
+  however deep the tree is.
+- **The last row rules the message path out**, which is exactly what the production incident needed
+  and could not get.
+- **A blank reason is an unstated one.** `Reason` is free text from the poster; `null` was once the
+  only value treated as "not stated", so an empty string rendered a literal `why: ` with nothing
+  after it — the defect again in a new costume. It is normalised at the single capture point, so
+  every reader inherits it rather than each having to remember.
+
+### One cause, claimed once
+
+Two writers can record the cause — the `DisposeRequest` handler on the action block, and the owning
+collection's cascade note on whatever thread is disposing the owner — so "first cause wins" has to
+be a **claim**, not a pair of reads. It is one `Interlocked.CompareExchange`, and the handler
+additionally declines to claim at all when the teardown has already begun: `Dispose()` sets its
+shutting-down flag and only then posts its first `ShutdownRequest`, so a routed request arriving in
+that window still sees `RunLevel=Started`, is admitted, and its turn runs *after* the teardown
+started. Without the check it would overwrite a true `a direct Dispose()` reading with its own.
+
+**A report that names the WRONG cause is worse than one that names none** — it is this same defect,
+pointing somewhere else.
 
 **Corollary, and it is the reason this section names a poster:** the rendering is only as good as
 what posters supply. `MeshOperations.Recycle` — the operations / MCP `recycle` verb, the one
