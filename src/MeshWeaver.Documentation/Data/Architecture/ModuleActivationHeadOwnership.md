@@ -127,6 +127,27 @@ the whole design rests on. Two answers, and they are not equivalent:
 The unique landing key is the one that keeps the claim; the trade is named here so it is a decision
 rather than an oversight. (Raised by Copilot's review of this page.)
 
+🚨 **And `<landing>` has to be collision-free ACROSS REPLICAS, or it is the shared cell again with
+extra steps.** A per-replica counter, a sequence number or a timestamp can collide — two replicas
+landing in the same second is the normal shape here, not a rarity — and a collision under an
+ordinary atomic replace puts the lost update back exactly where it was. The key that needs no
+coordination and keeps idempotence is **the content address of the RECORD**:
+
+```
+modules/activation.d/<Name>/<generation>.<16 hex of SHA-256 over the record's canonical bytes>.json
+```
+
+Two landings writing the **same** record collide **benignly** — same name, same bytes, a no-op —
+which is the property #3656 already relies on one level up; two writing **different** records get
+different names and neither is replaced. A random 128-bit id would also be collision-free but is
+strictly worse: identical re-landings would each mint a record, so the common idempotent case would
+accumulate files for ever. 🚨 It rests on the record being a **deterministic function of the
+landing**, which today it is — `ModuleActivationEntry` carries no timestamp and no per-process field
+(`Name`, `Source`, `PackagePath`, `Directory`, `Version`, `FrameworkMvid`, `MinMeshVersion`,
+`SourceCommit`, `Enabled` and the four `Previous*`). **Adding a non-deterministic field later would
+silently break the addressing**, so such a field must be excluded from the address or kept out of
+the record — which is a rule to write beside the type, not a note on a page.
+
 Two replicas then write disjoint files and nothing is ever replaced, so there is no lost update to
 have. It is [#2090](https://github.com/Systemorph/MeshWeaver/issues/2090)'s move — *remove the shared
 cell rather than guard it* — one level down: that change split one shared `activation.json` into a
@@ -188,13 +209,27 @@ platform-aware resolution step. What is genuinely not local is the rest:
 2. **Enabled / uninstalled state is per MODULE, not per generation.** `RemoveModule` needs a marker
    of its own; the existing `.unloadable` / `.refused` / `.tier-refused` marker pattern fits, but it
    is another file and another thing `Read` must union.
-3. **A migration for BOTH legacy formats, not one.** `ModuleActivationSidecar.Read`
-   (`ModuleActivation.cs:258-329`) unions the legacy AGGREGATE `modules/activation.json` — still read
-   for deployments that carry one, never written by the landing lane — with the per-module
-   `activation.d/<Name>.json`, the per-module file winning by name. A derivation that kept only the
+3. **A migration for BOTH legacy formats, and they are LAYERED, not ranked.**
+   `ModuleActivationSidecar.Read` (`ModuleActivation.cs:308-329`) unions the legacy AGGREGATE
+   `modules/activation.json` — still read for deployments that carry one, never written by the
+   landing lane — with the per-module `activation.d/<Name>.json`. A derivation that kept only the
    per-module file as a candidate would **boot an older deployment without its stored modules**.
-   Both stay candidates, which costs nothing and needs no rewrite pass. (Copilot's review; the page
-   named only the per-module file.)
+
+   🚨 **But "both are candidates" is not "both are rankable", and conflating them would reverse an
+   uninstall.** The union is a PRECEDENCE, stated in the code: the per-module files are applied LAST
+   and win by name, *"an uninstall must beat a stale enabled row"*. Rank a stale enabled aggregate
+   row against a disabled per-module record and the disabled one can lose — a module the operator
+   removed comes back. So the derivation is layered first and ranked second:
+
+   | layer, lowest precedence first | ranked within the layer? |
+   |---|---|
+   | the legacy aggregate `modules/activation.json` | no — one row per name, as today |
+   | the legacy per-module `activation.d/<Name>.json` | no — it REPLACES the aggregate's row for that name |
+   | the per-landing records `activation.d/<Name>/…` | **yes** — this is the only layer the ranking applies to |
+
+   A name with any per-landing record ignores the two legacy layers for that name entirely; a name
+   with none keeps today's answer, byte for byte. That is what makes the migration cost nothing and
+   need no rewrite pass. (Both halves raised by Copilot's reviews of this page.)
 
 ### What does NOT have to change
 
