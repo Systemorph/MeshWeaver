@@ -206,6 +206,71 @@ public class NodeRepoLaneHostGuard
         Assert.Contains("publication-layout: generation", body, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// 🚨 <b>THE LANE'S OWN DEFAULT IS THE FLEET'S PUBLICATION LAYOUT</b> (MeshWeaver#3461, phase 4),
+    /// and reverting it to <c>flat</c> is the one change in this area that nothing else would notice.
+    ///
+    /// <para>None of the six node repositories passes <c>publication-layout</c> (measured
+    /// 2026-09-14 over <c>ci.yml</c> on <c>main</c> of Plugins, Crm, Education, Reinsurance,
+    /// SocialMedia and Manufacturing), so this <c>default:</c> is what decides where every
+    /// satellite's publication is written. Ask the question that catches this class: <i>if this
+    /// default were <c>flat</c> right now, would anything else go red?</i> No — the overlap harness
+    /// supplies <c>BAKE_PUBLICATION_LAYOUT</c> to the script directly and never reads a caller, and
+    /// <see cref="ThePlatformsPluginsBake_DeclaresTheGenerationLayout"/> covers core's own explicit
+    /// input only. Every satellite lane would silently return to in-place publication, which is the
+    /// republish window #3461 exists to close. Raised by Copilot on the pull request that moved it.</para>
+    ///
+    /// <para>The second assertion is the other half of the same property: the step must pass the
+    /// input THROUGH to <c>BAKE_PUBLICATION_LAYOUT</c>. The script's own fallback is deliberately
+    /// <c>flat</c> — it is the direct-invocation default — so a lane that stopped exporting the
+    /// variable would reach that fallback and publish flat with this default still reading
+    /// <c>generation</c>.</para>
+    /// </summary>
+    [Fact]
+    public void ThePublishBakeLane_DefaultsToTheGenerationLayout()
+    {
+        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), PublishBake));
+        var input = Regex.Match(text, @"\n      publication-layout:\n(?<body>(?:        .*\n|\n)+?)(?=      [a-z][a-z-]*:\n)");
+        Assert.True(input.Success, $"{PublishBake} must declare a `publication-layout` input — the fleet's publication layout.");
+        Assert.Contains("default: 'generation'", input.Groups["body"].Value, StringComparison.Ordinal);
+
+        Assert.Contains(
+            "BAKE_PUBLICATION_LAYOUT: ${{ inputs.publication-layout }}",
+            ExecutableLinesOf(text),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 <b>NO caller in this repository publishes FLAT, and that is the mitigation — not a
+    /// coincidence worth measuring once</b> (MeshWeaver#3461).
+    ///
+    /// <para>The residual the generation layout still has is a FLAT publication and a GENERATION
+    /// publication on one prefix: the generation run writes its own directory, moves
+    /// <c>_current</c>, and refreshes the flat compatibility copy LAST, so a flat run whose whole
+    /// publication lands after that seal leaves flat readers on its bytes while pointer-following
+    /// readers stay on the generation — with no overlap for the byte-level postcondition to refuse.
+    /// #4249 makes it unreachable for a run that RESOLVES a live pointer (it publishes a generation
+    /// instead, loudly), so what is left needs a writer that takes the flat arm: a caller passing
+    /// <c>flat</c>, or a run whose <c>publish-bake-bundles.sh</c> predates #4249 — and the second
+    /// cannot be helped by any code added to today's script, because it is not running it.</para>
+    ///
+    /// <para>So the reachable half is kept at zero HERE. Measured 2026-09-14: no caller in the
+    /// fleet passes the input at all. This asserts the repository's own callers never introduce one
+    /// on the flat arm; a satellite that wanted <c>flat</c> would have to say so in its own
+    /// <c>ci.yml</c>, which is a visible act rather than a default.</para>
+    /// </summary>
+    [Fact]
+    public void NoCallerInThisRepository_PublishesFlat()
+    {
+        foreach (var workflow in Directory.EnumerateFiles(
+                     Path.Combine(FindRepoRoot(), ".github", "workflows"), "*.yml"))
+        {
+            var lines = ExecutableLinesOf(File.ReadAllText(workflow));
+            Assert.DoesNotContain("publication-layout: flat", lines, StringComparison.Ordinal);
+            Assert.DoesNotContain("publication-layout: 'flat'", lines, StringComparison.Ordinal);
+        }
+    }
+
     private static string ExecutableLinesOf(string yaml) =>
         string.Join('\n', yaml.Split('\n').Where(l => !l.TrimStart().StartsWith('#')));
 

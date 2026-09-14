@@ -303,19 +303,31 @@ on:
           Where a publication is written under
           `<base>/prebuilt-bundles/<framework-identity>/<bake-source>/` (MeshWeaver#3461).
 
-          `flat` (the default, and today's behaviour everywhere): that directory IS the
-          publication, replaced IN PLACE — unseal, upload over the live files, re-seal. Two
-          publishers interleaved on one prefix can therefore leave a sentinel over bytes from two
-          bakes; the publisher's byte-level postcondition refuses to seal that, which makes an
-          overlap a loud red rather than a silent mix, but it is a postcondition and not mutual
-          exclusion.
+          `generation` (THE DEFAULT since MeshWeaver#3461 phase 4): each publication is written
+          into its OWN directory named by the publisher's run-unique token, sealed there, and a
+          one-line `_current` pointer — written after the seal — says which one applies. Two
+          publishers never write the same bytes, so a mix becomes unrepresentable rather than
+          merely detectable. The flat copy is still written for readers that predate pointer
+          resolution, and THAT copy still races: this layout closes the window for
+          pointer-following readers only.
 
-          `generation`: each publication is written into its OWN directory named by the publisher's
-          run-unique token, sealed there, and a one-line `_current` pointer — written after the
-          seal — says which one applies. Two publishers never write the same bytes, so a mix
-          becomes unrepresentable rather than merely detectable. The flat copy is still written
-          for readers that predate pointer resolution, and THAT copy still races: flipping a
-          prefix closes the window for pointer-following readers only.
+          `flat` (the historical layout): that directory IS the publication, replaced IN PLACE —
+          unseal, upload over the live files, re-seal. Two publishers interleaved on one prefix can
+          therefore leave a sentinel over bytes from two bakes; the publisher's byte-level
+          postcondition refuses to seal that, which makes an overlap a loud red rather than a
+          silent mix, but it is a postcondition and not mutual exclusion. Passing it on a prefix
+          that already has a live `_current` does NOT take that prefix back — see below.
+
+          🚨 THE DEFAULT IS THE FLEET'S LAYOUT, AND IT IS DELIBERATELY NOT A PER-REPO OPT-IN.
+          Phases 1-3 left every reader resolving the pointer and falling back to the flat copy, and
+          #4249 made the layout belong to the PREFIX, so the half-migration this input's old
+          `flat` default guarded against is unreachable rather than merely forbidden. What the
+          per-caller opt-in cost instead was a silent default: a node repo that says nothing — and
+          every node repo that will ever be created — published in place. Measured 2026-09-14 over
+          the `ci.yml` on `main` of all six node repos (Plugins, Crm, Education, Reinsurance,
+          SocialMedia, Manufacturing): every `uses:` of a `node-repo-*.yml` lane is `@main`, every
+          `scripts-ref:` is `main`, and NONE passes this input — so flipping the default here is
+          what flips the five single-producer prefixes, with no change in their repositories.
 
           🚨 THE LAYOUT BELONGS TO THE PREFIX, NOT TO THIS INPUT — so a prefix may be flipped ONE
           PRODUCER AT A TIME. A live `_current` means some producer already writes generations, and
@@ -326,9 +338,9 @@ on:
           generation and never sees the old writer's NEWER publication — a stale serve with
           nothing red anywhere. `plugins` is the only prefix with two producers (core CD's
           `plugins-bake` and this repo's own `publish-bake`), they live in two repositories that
-          cannot merge atomically, and they may now be flipped in either order; every other prefix
-          flips in its own repository's PR. Setting this input to `generation` is still what you
-          should do on both — it makes the prefix's layout explicit instead of discovered.
+          cannot merge atomically, and they may now be flipped in either order. Every other prefix
+          has ONE producer and is flipped by the default above, not by a PR in its own repository —
+          which is the reason the default moved rather than five one-line PRs being opened.
 
           🚨 A flat caller on a migrated prefix NEVER takes the prefix back. Retiring or
           re-pointing would move consumers backwards: the pointer is moved BEFORE the flat
@@ -342,7 +354,7 @@ on:
           Full reference: Doc/Architecture/SealedPublicationGenerations.
         required: false
         type: string
-        default: 'flat'
+        default: 'generation'
       platform-ref:
         description: >-
           Ref of Systemorph/MeshWeaver to take the canonical publish script from. Default main;
@@ -1725,8 +1737,11 @@ jobs:
           # for a repository baking its own content the expression falls through to github.token
           # as before.
           GH_TOKEN: ${{ steps.content-token.outputs.token || github.token }}
-          # flat (the default) or generation — see the `publication-layout` input. At `flat` the
-          # script behaves byte-identically to before this input existed.
+          # generation (the default since #3461 phase 4) or flat — see the `publication-layout`
+          # input. At `flat` the script behaves byte-identically to before this input existed.
+          # 🚨 ALWAYS SET EXPLICITLY HERE, so the script's own `${BAKE_PUBLICATION_LAYOUT:-flat}`
+          # fallback is never what a lane run takes: that fallback is the DIRECT-INVOCATION default
+          # (the overlap harness, a manual run) and is deliberately the conservative one.
           BAKE_PUBLICATION_LAYOUT: ${{ inputs.publication-layout }}
           # The exact publication, materialised locally AFTER every share sealed — the directory
           # the fleet-registry push below publishes (Doc/Architecture/PluginBundlesInTheRegistry).

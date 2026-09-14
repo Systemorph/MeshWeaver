@@ -165,15 +165,21 @@ SENTINEL="_complete"
 #               and a one-line `_current` pointer — moved as soon as that directory is SEALED, and
 #               before the flat compatibility copy — says which one applies.
 #
-# 🚨 IT DEFAULTS TO `flat` AND MUST STAY THAT WAY until every producer of a prefix can write
-# generations. A NEW writer and an OLD writer on one prefix is the half-migration to avoid: the new
-# one moves the pointer, the old one replaces the flat copy in place and never touches it, so a
-# pointer-following reader keeps serving its generation and never sees the old writer's NEWER
-# publication. A stale serve, silent, with nothing red anywhere. `plugins` is the only prefix with
-# two producers (core CD's `plugins-bake` and the MeshWeaver.Plugins satellite's own `publish-bake`),
-# and core CD pins nothing — it checks the platform out at its own gate sha — so a writer that was on
-# by default would flip that prefix the day it merged, against a satellite hundreds of commits
-# behind. Hence a per-caller selector, and hence the flip is a separate one-line change per producer.
+# 🚨 THE FLEET'S DEFAULT IS `generation`, AND IT IS SET BY THE LANE, NOT HERE. `node-repo-publish-
+# bake.yml`'s `publication-layout` input defaults to `generation` (#3461 phase 4) and is always
+# passed through to `BAKE_PUBLICATION_LAYOUT`, so no lane run ever reaches the fallback below.
+# The fallback stays `flat` on purpose: it is the DIRECT-INVOCATION default — the overlap harness
+# and a manual run — and the conservative value is the right one for an invocation that named no
+# layout at all. Reading this line as "the fleet publishes flat" is the mistake it used to invite.
+#
+# The half-migration this used to guard against — a NEW writer and an OLD writer on one prefix, the
+# new one moving the pointer while the old one replaces the flat copy in place and never touches it,
+# so a pointer-following reader keeps serving its generation and never sees the old writer's NEWER
+# publication — is now UNREACHABLE rather than forbidden: the layout belongs to the PREFIX (#4249,
+# `pointer_moved_past_us` and the `$PUBLICATION_LAYOUT=generation` assignment below), so a flat
+# caller that resolves a live `_current` publishes a generation anyway and says so. `plugins` is the
+# only prefix with two producers (core CD's `plugins-bake` and the MeshWeaver.Plugins satellite's own
+# `publish-bake`); every other prefix has one, and the lane default is what flips it.
 #
 # 🚨 WHY A POINTER AND NOT AN ATOMIC DIRECTORY RENAME, measured rather than assumed. The obvious
 # design — stage the publication, then rename it over the live one — is NOT AVAILABLE on this store
@@ -398,24 +404,24 @@ fi
 # falls back to this flat layout when there is none (ShippedPrebuiltBundles.PublicationDirectoryOf),
 # so the reader side is already deployed and inert.
 #
-# 🚨 WHAT MUST NOT HAPPEN BEFORE THE WRITER MOVES, and it is an ORDERING rule, not a code one: a new
-# writer and an old writer on one prefix is the half-migration to avoid. The new one moves the
-# pointer; the old one replaces the flat copy in place and never touches it — so a pointer-following
-# reader keeps serving its generation and never sees the old writer's NEWER publication. A stale
-# serve, silent, with nothing red anywhere. (bake-scope.sh and carry-forward-bundles.sh are fetched
-# at the SAME platform-ref as this file, so those three move together and no pin can carry half of
-# it.)
+# 🚨 THE HALF-MIGRATION THAT USED TO BE AN ORDERING RULE IS NOW UNREACHABLE. A new writer and an old
+# writer on one prefix was the state to avoid: the new one moves the pointer; the old one replaces
+# the flat copy in place and never touches it — so a pointer-following reader keeps serving its
+# generation and never sees the old writer's NEWER publication. A stale serve, silent, with nothing
+# red anywhere. #4249 made the layout belong to the PREFIX rather than to the caller, so a flat
+# caller that resolves a live `_current` publishes a generation too, and the state cannot be entered
+# from this file. (bake-scope.sh and carry-forward-bundles.sh are fetched at the SAME platform-ref as
+# this file, so those three move together and no pin can carry half of it.)
 #
-# 🚨 "PAST THE READER PHASE" IS NOT THE PRECONDITION — measured 2026-09-07, and this comment used to
-# say it was. The reader phase (a4109d422) changed `src/` and documentation only; a producer whose
+# 🚨 "PAST THE READER PHASE" WAS NEVER THE PRECONDITION — measured 2026-09-07, and this comment used
+# to say it was. The reader phase (a4109d422) changed `src/` and documentation only; a producer whose
 # `platform-ref` moves past it runs THIS FILE byte-identically, so that condition can be satisfied
 # fleet-wide without moving the migration one step. What a producer must be past is the WRITER
-# commit — which is unreachable for a writer that is on by default, because it takes effect the
-# moment a pin reaches it, and core CD's `plugins-bake` pins nothing at all (it checks the platform
-# out at its own gate sha, so it would flip the day the writer merged, against a MeshWeaver.Plugins
-# 231 commits behind). Hence the writer lands behind a per-caller `publication-layout` selector
-# defaulting to `flat`, every producer's pin reaches it, and only then does each prefix flip — the
-# `plugins` prefix in ONE change set because it is the only one with two producers.
+# commit. That is why the writer landed behind a per-caller `publication-layout` selector, and why
+# the selector's LANE default is now `generation` (#3461 phase 4): the residual precondition — that
+# every producer of a prefix RUNS a publisher carrying #4249 — was measured on 2026-09-14 across all
+# six node repos, every one of which floats at `@main` with `scripts-ref: main`, so no pinned
+# publisher and no pinned reader of these prefixes exists in the fleet.
 # Doc/Architecture/SealedPublicationGenerations carries the table and the ordered phases.
 #
 # Cost: every published file is read back per target, at seal time — deliberately paid in full:

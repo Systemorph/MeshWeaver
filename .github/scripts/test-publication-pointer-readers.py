@@ -7,10 +7,11 @@ and were therefore not covered: `compose-sealed-modules.sh` on its `--storage-ta
 fallback) path, and `node-repo-gate.yml`'s `seed` step `download-batch`. Both composed their paths
 under the bare `prebuilt-bundles/<identity>/<source>/` prefix.
 
-That is harmless only while nothing writes a generation. The moment a prefix is flipped to
-`publication-layout: generation` these two are left on the flat compatibility copy while every
-pointer-following reader has moved on — and at phase 5, when the flat copy is dropped, they break
-outright. `SealedPublicationGenerations.md` names both by name as a PRECONDITION on flipping any
+That was harmless only while nothing wrote a generation. Since #3461 phase 4 the lane's
+`publication-layout` defaults to `generation`, so EVERY prefix carries a pointer from its next
+publication on: an unfixed reader here would be left on the flat compatibility copy while every
+pointer-following reader has moved on — and at phase 5, when the flat copy is dropped, it would
+break outright. `SealedPublicationGenerations.md` names both by name as a PRECONDITION on flipping any
 prefix, and NOTHING executed either of their Azure paths before this file: `test-sealed-module-
 compose.py` runs the script with `--registry-url` only, and its gate case runs the `seed` step with
 `TARGETS=""`, so the whole `download-batch` block was dead to every harness in the repository.
