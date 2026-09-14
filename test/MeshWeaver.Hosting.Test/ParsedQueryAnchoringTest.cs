@@ -97,6 +97,67 @@ public class ParsedQueryAnchoringTest
     }
 
     /// <summary>
+    /// 🚨 A NEGATED path is a FILTER, never an anchor (#4296). `-path:A` and `-path:A|B` say
+    /// "everywhere EXCEPT A" — the one statement that cannot be served by pinning to A. The parser
+    /// used to drop the operator and keep the value: the single form fell through to
+    /// <c>path = value</c> and the alternation set <c>Paths = Values</c> alongside
+    /// <c>Path = Values[0]</c>, so every consumer read the exclusion as a positive anchor,
+    /// <c>ResolvePinnedPartition</c> pinned the query to A's schema and the per-schema route applied
+    /// <c>path IN (A, B)</c> — returning rows from exactly the paths the caller excluded, or
+    /// nothing, with no error. Same class as the ordered comparisons carved out in #2186.
+    /// </summary>
+    [Theory]
+    [InlineData("-path:Acme/Secret nodeType:User")]
+    [InlineData("-path:Acme/Secret|Acme/Draft nodeType:User")]
+    public void ANegatedPathIsNeverAnAnchor(string query)
+    {
+        var parsed = Parse(query);
+
+        parsed.Path.Should().BeNull("an exclusion names no base path to walk from");
+        parsed.Paths.Should().BeNull("Paths is pushed down as `path IN (...)`, which is the opposite of the exclusion");
+        parsed.NamedPartitions().Should().BeEmpty("the excluded partition is not the partition to read");
+        parsed.IsSufficientlySpecified().Should().BeFalse(
+            $"'{query}' says where NOT to look, which never says where TO look — it needs an anchor or {ParsedQuery.CrossPartitionQualifier}");
+    }
+
+    /// <summary>
+    /// The other half: the exclusion must still be APPLIED. Dropping the token instead of filing it
+    /// as a filter would trade a wrong anchor for a query that quietly returns the excluded rows.
+    /// </summary>
+    [Theory]
+    [InlineData("-path:Acme/Secret namespace:Acme", QueryOperator.NotEqual, 1)]
+    [InlineData("-path:Acme/Secret|Acme/Draft namespace:Acme", QueryOperator.NotIn, 2)]
+    public void ANegatedPathSurvivesAsAFilterCondition(string query, QueryOperator expected, int values)
+    {
+        var parsed = Parse(query);
+
+        var condition = Conditions(parsed.Filter)
+            .Should().ContainSingle(c => c.Selector.Equals("path", StringComparison.OrdinalIgnoreCase))
+            .Subject;
+        condition.Operator.Should().Be(expected);
+        condition.Values.Should().HaveCount(values);
+        parsed.IsSufficientlySpecified().Should().BeTrue("namespace:Acme is what anchors this one");
+    }
+
+    /// <summary>A positive path is unaffected — the carve-out is for negation only.</summary>
+    [Fact]
+    public void APositivePathStillAnchors()
+    {
+        var parsed = Parse("path:Acme/Docs nodeType:User");
+
+        parsed.Path.Should().Be("Acme/Docs");
+        parsed.NamedPartitions().Should().Equal("Acme");
+    }
+
+    private static IEnumerable<QueryCondition> Conditions(QueryNode? node) => node switch
+    {
+        QueryComparison c => [c.Condition],
+        QueryAnd a => a.Children.SelectMany(Conditions),
+        QueryOr o => o.Children.SelectMany(Conditions),
+        _ => []
+    };
+
+    /// <summary>
     /// The fixture's shared classifier reads the same definition — so the corpus tests that pin
     /// the planner's verdict in MeshWeaver.Plugins pin this method, not a copy of it.
     /// </summary>

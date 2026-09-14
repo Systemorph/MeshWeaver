@@ -505,19 +505,33 @@ public partial class QueryParser
                     // reported success). It also re-routed a mesh-wide query onto a single
                     // partition. Left as a filter token it becomes `n.path > 'm'` against the
                     // real, indexed `path` column and the walk pages properly.
+                    // 🚨 AND SO IS A NEGATED ONE (#4296) — for the same reason, one step worse.
+                    // `-path:A` / `-path:A|B` says "everywhere EXCEPT A", which is the one
+                    // statement that can never be served by pinning to A. The single form fell
+                    // through to `path = value` and the alternation set `Paths = Values` beside
+                    // `Path = Values[0]`: the operator was dropped and the exclusion became a
+                    // positive ANCHOR. `IsSufficientlySpecified()` then counted it as anchored,
+                    // `ResolvePinnedPartition` pinned the query to A's schema, and the per-schema
+                    // route applied `path IN (A, B)` — so the query returned rows from exactly the
+                    // paths it meant to exclude, or nothing, with no error. Left as a filter token
+                    // it becomes `n.path <> 'A'` / `n.path NOT IN (...)` against the real, indexed
+                    // `path` column, and the query stays UNANCHORED unless something else anchors
+                    // it — which is the truth about what it asked for.
                     if (token.Condition.Operator is QueryOperator.GreaterThan
                         or QueryOperator.GreaterOrEqual
                         or QueryOperator.LessThan
-                        or QueryOperator.LessOrEqual)
+                        or QueryOperator.LessOrEqual
+                        or QueryOperator.NotEqual
+                        or QueryOperator.NotIn)
                     {
                         filterTokens.Add(token);
                         continue;
                     }
 
-                    // Multi-value `path:a|b|c` — `In`/`NotIn` carries the
-                    // alternation list. Backends use the list to push down
-                    // `WHERE path IN (...)`. Single-value form sets only Path.
-                    if (token.Condition.Operator is QueryOperator.In or QueryOperator.NotIn
+                    // Multi-value `path:a|b|c` — `In` carries the alternation list. Backends use
+                    // the list to push down `WHERE path IN (...)`. Single-value form sets only
+                    // Path. `NotIn` never arrives here: it is a filter, carved out above.
+                    if (token.Condition.Operator is QueryOperator.In
                         && token.Condition.Values.Length > 1)
                     {
                         paths = token.Condition.Values;
