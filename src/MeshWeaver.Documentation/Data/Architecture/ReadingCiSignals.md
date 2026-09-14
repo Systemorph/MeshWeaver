@@ -289,6 +289,10 @@ producer runs, decides it has nothing to hand over, **skips its upload step**, a
 green — while every consumer computes the opposite answer and dies on `Artifact not found`. The
 failing job is not the job that is wrong, and its message names a file, not a predicate.
 
+🚨 **The two share a symptom and need opposite fixes**, so the reading below starts by telling
+them apart rather than assuming this one. `Artifact not found` is a *symptom of at least four*
+faults; what follows is ONE measured incident of ONE of them.
+
 Measured on Plugins#1853, run `34842094978`, on a **docs-only diff** that reddened 14 jobs across
 five required gates:
 
@@ -311,11 +315,25 @@ matrix from the annotated list.
 
 **How to read one of these, in order:**
 
-1. **Read the FAILING step's own annotation first.** `Artifact not found for name: X` is never a
-   statement about the consumer — it is "whoever produces `X` did not". Do not re-run.
-2. **Find the producer and read its STEP LIST, not its conclusion.** A `skipped` upload under a
-   `success` job is the whole bug, and the job summary will not mention it. Read
-   `actions/jobs/<id>` and look at `steps[].conclusion`.
+1. **Read the FAILING step's own annotation first, and do not skip to a cause.**
+   `Artifact not found for name: X` says only that *this download did not resolve `X`* — it is not
+   by itself evidence that an upload was skipped. **Four different faults print it**, and they need
+   opposite fixes:
+
+   | cause | how to tell | fix |
+   |---|---|---|
+   | the producer **skipped** its upload | producer job green, its upload step `skipped` | make the two guards read one list (this section) |
+   | the producer **failed** before uploading | producer job red | triage the producer's own failure |
+   | the name is **scoped to the wrong call** | the artifact EXISTS in the run under a name that differs — or two artifacts share one name | derive the key per call (the section above) |
+   | it **expired or was deleted** | the artifact is absent from the run and `retention-days` has passed, or the run is old | re-run the producing lane; do not chase the consumer |
+
+   Answer that first with `gh api repos/{o}/{r}/actions/runs/<id>/artifacts --jq '.artifacts[].name'`
+   — the run's own artifact list separates "never produced" from "produced under another name"
+   in one call. Only the first row is the shape documented here. Do not re-run before you know
+   which row you are in.
+2. **Once it is row 1 or 2: find the producer and read its STEP LIST, not its conclusion.** A
+   `skipped` upload under a `success` job is the whole bug, and the job summary will not mention
+   it. Read `actions/jobs/<id>` and look at `steps[].conclusion`.
 3. **Then compare the two `if:` expressions.** Here: `if: steps.build.outputs.built == 'true'` on
    the upload against `if: steps.plan.outputs.fetch_workspace == 'true'` on the download. Two
    independently computed guards over one fact is the defect; making both read the same list is
