@@ -122,3 +122,37 @@ the resolved set predated. **Break it by pinning the newest sealed set, never by
 So: setting a freeze, moving it and clearing it all need two things in view at once — the colour of
 `main` and the set the mount carries. A cleared freeze is not a neutral state; it is a decision to
 follow whatever `main` last passed.
+
+## Draft is the hold — until the PR is IN the merge queue
+
+`auto-arm.yml` arms auto-merge on every non-draft PR whose base is `main`, so **draft is the opt-out**
+and the way any session holds a PR after a late finding. It stops being a hold the moment the entry
+is admitted to the merge queue, and that is not obvious from either UI.
+
+Measured twice on 2026-09-13/14, the second time with the conversion landing mid-flight
+(core #4269):
+
+```
+05:18:19  auto_merge_enabled          meshweaver-cloud[bot]
+05:29:16  added_to_merge_queue        meshweaver-cloud[bot]
+05:30:17  convert_to_draft            (a session holding it on a defect it had just found)
+05:33:18  merged                      + removed_from_merge_queue   github-merge-queue[bot]
+```
+
+The PR reads `draft: true` and `auto_merge: false` **after** the merge: the conversion did disable
+auto-merge and did not touch the admitted queue entry, which GitHub then completed. Nothing in the
+fleet's lanes decided this and no lane can prevent it.
+
+**So the hold depends on where the PR is:**
+
+| state | how to hold it |
+|---|---|
+| open, not queued | convert to draft — that is the whole mechanism |
+| **in the merge queue** | **dequeue FIRST** (GraphQL `dequeuePullRequest` — REST cannot express it), then draft |
+
+Check before assuming, because the window is a minute wide:
+
+```bash
+gh api graphql -f query='{repository(owner:"Systemorph",name:"MeshWeaver"){
+  mergeQueue(branch:"main"){entries(first:20){nodes{pullRequest{number} state}}}}}'
+```
