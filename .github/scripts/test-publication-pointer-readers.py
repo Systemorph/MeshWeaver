@@ -2,10 +2,12 @@
 """The two Azure-direct readers of a sealed publication, against a share that HAS a generation.
 
 🚨 WHY THIS HARNESS EXISTS (MeshWeaver#3461, phase 3). Phase 1 routed every reader the PORTAL IMAGE
-carries through `ShippedPrebuiltBundles.PublicationDirectoryOf`. Two readers are not in that image
+carries through `ShippedPrebuiltBundles.PublicationDirectoryOf`. THREE readers are not in that image
 and were therefore not covered: `compose-sealed-modules.sh` on its `--storage-target` (OIDC
-fallback) path, and `node-repo-gate.yml`'s `seed` step `download-batch`. Both composed their paths
-under the bare `prebuilt-bundles/<identity>/<source>/` prefix.
+fallback) path, `node-repo-gate.yml`'s `seed` step `download-batch`, and — found on 2026-09-14, after
+this file had said "two" for a week — `check-release-availability.sh`, the upstream gate every
+publishing repo runs. All three composed their paths under the bare
+`prebuilt-bundles/<identity>/<source>/` prefix.
 
 That was harmless only while nothing wrote a generation. Since #3461 phase 4 the lane's
 `publication-layout` defaults to `generation`, so EVERY prefix carries a pointer from its next
@@ -48,6 +50,7 @@ except ImportError:  # pragma: no cover — the CI step installs PyYAML
 
 HERE = Path(__file__).resolve().parent
 COMPOSE = HERE / "compose-sealed-modules.sh"
+AVAILABILITY = HERE / "check-release-availability.sh"
 GATE = HERE.parent / "workflows" / "node-repo-gate.yml"
 SEED_STEP_ID = "seed"
 
@@ -170,6 +173,25 @@ def run_compose(workdir: Path, root: Path, *, upstreams: str = SOURCE, packages:
     proc = subprocess.run(argv, capture_output=True, text=True, timeout=180, check=False,
                           env=environment(workdir, root))
     return proc, out / MODULE
+
+
+def run_availability(workdir: Path, root: Path, *, sources: str = SOURCE
+                     ) -> subprocess.CompletedProcess[str]:
+    """The upstream gate every publishing repo runs, asked about ONE identity.
+
+    🚨 It is the THIRD Azure-direct reader of this prefix, and until #4341's follow-up the page and
+    this harness both said there were two. It probes a sentinel rather than composing bytes, so its
+    discriminating fixture is the opposite of the other two readers': same NAME in both places is
+    no good — what tells a resolving reader from a non-resolving one is a prefix whose own sentinel
+    is ABSENT while the pointed-at generation's is present.
+    """
+    workdir.mkdir(parents=True, exist_ok=True)
+    env = environment(workdir, root)
+    env.update(BAKE_PUBLISH_TARGETS=f"{ACCOUNT}/{SHARE}")
+    env.pop("GITHUB_STEP_SUMMARY", None)
+    return subprocess.run(
+        [str(AVAILABILITY), "--identity", IDENTITY, *sources.split()],
+        capture_output=True, text=True, timeout=180, check=False, env=env)
 
 
 def seed_step() -> str:
@@ -387,13 +409,63 @@ def main() -> int:
               "source's generation — which is not there, so the gate reds on a publication that "
               "is perfectly fine", proc)
 
+        # ── 7. THE THIRD AZURE-DIRECT READER: the upstream availability gate ─────────────
+        # 🚨 THE WINDOW THIS CLOSES, and why it is a live defect rather than phase-5 preparation.
+        # `publish_publication` at `generation` seals the generation, moves `_current`, and only
+        # THEN refreshes the flat compatibility copy — and `publish_one_target` begins that refresh
+        # by DELETING the flat `_complete` (the unseal that stops a reader seeding a mid-replace
+        # mix). For that whole upload-and-verify interval the PREFIX has no sentinel while the
+        # publication is sealed, live and pointed at. A gate that probes the prefix answers `false`
+        # and reports "no sealed publication under …" — the one message that means "an upstream has
+        # not published yet", for a publication that is perfectly fine. That message held
+        # MeshWeaver.Reinsurance 23 times in 24 hours (#3583), so a false one is expensive.
+        #
+        # The fixture IS that window: generation sealed, `_current` naming it, prefix sentinel
+        # REMOVED. A reader that ignores the pointer says ABSENT; one that follows it says sealed.
+        print("the availability gate, during the window in which the flat copy is unsealed:")
+        root = base / "avail-window" / "remote"
+        stage(root, pointer=GENERATION)
+        (root / ACCOUNT / SHARE / "prebuilt-bundles" / IDENTITY / SOURCE / "_complete").unlink()
+        proc = run_availability(base / "avail-window" / "run", root)
+        check("check-release-availability.sh reads the POINTED-AT publication, not the prefix",
+              proc.returncode == 0 and "sealed:" in proc.stdout
+              and "no sealed publication" not in proc.stdout,
+              "a reader that probes the prefix answers ABSENT here and holds every publishing "
+              "repo's build on a publication that is sealed and live", proc)
+
+        # The control that keeps the case above from passing by never refusing: same reader, same
+        # fixture shape, NOTHING sealed anywhere. It must still say ABSENT, and say it in the
+        # wording #3583 pinned.
+        print("the availability gate with nothing sealed anywhere:")
+        root = base / "avail-absent" / "remote"
+        stage(root, pointer=GENERATION)
+        prefix = root / ACCOUNT / SHARE / "prebuilt-bundles" / IDENTITY / SOURCE
+        (prefix / "_complete").unlink()
+        (prefix / GENERATION / "_complete").unlink()
+        proc = run_availability(base / "avail-absent" / "run", root)
+        check("…and it still REFUSES when the publication really is not sealed",
+              proc.returncode == 1 and "no sealed publication" in proc.stdout + proc.stderr,
+              "a gate that cannot refuse is not a gate — this is what stops the case above from "
+              "passing because the script always exits 0", proc)
+
+        # The flat control: no pointer at all, prefix sealed — the layout every prefix had before
+        # #4269/#4341, which must answer exactly as it did.
+        print("the availability gate on a flat prefix (the pre-generation layout):")
+        root = base / "avail-flat" / "remote"
+        stage(root, pointer=None, generation=False)
+        proc = run_availability(base / "avail-flat" / "run", root)
+        check("…and a flat prefix with no pointer answers sealed, exactly as before",
+              proc.returncode == 0 and "sealed:" in proc.stdout,
+              "the fallback is this gate's previous behaviour and must be byte-for-byte intact",
+              proc)
+
     print("")
     if FAILURES:
         print(f"::error title=publication-pointer readers::{len(FAILURES)} case(s) failed — "
               "an Azure-direct reader that ignores `_current` serves a publication nobody points "
               "at, silently (MeshWeaver#3461).")
         return 1
-    print(f"test-publication-pointer-readers: {len(EXECUTED)} case(s) executed over 2 readers — all green.")
+    print(f"test-publication-pointer-readers: {len(EXECUTED)} case(s) executed over 3 readers — all green.")
     return 0
 
 

@@ -82,6 +82,66 @@ SOURCES=("$@")
 RELEASES_DIR="_releases"
 SENTINEL="_complete"
 
+# ══════════════ THE PUBLICATION POINTER (MeshWeaver#3461) ══════════════
+#
+# A source directory MAY hold `_current`: one line naming the SUBDIRECTORY that holds the
+# publication which currently applies. Absent, the source directory IS its own publication
+# directory — the flat layout, which every generation publication also writes as a compatibility
+# copy.
+#
+# 🚨 THIS GATE ASKS ABOUT THE PUBLICATION THAT IS LIVE, AND BEFORE THIS IT ASKED ABOUT THE
+# COMPATIBILITY COPY. Those are the same answer only while the copy is intact, and there is a
+# window on every generation publish where it is not: `publish_publication` seals the generation,
+# moves `_current`, and only THEN refreshes the flat copy — which `publish_one_target` begins by
+# DELETING its `_complete` (the unseal that keeps a reader from seeding a mid-replace mix). For
+# that whole upload-and-verify interval the prefix's own sentinel is absent while the publication
+# is sealed, live and pointed at. Probing the prefix answered `false` and this gate reported
+# `no sealed publication under …` — a FALSE HOLD, wearing the one message that means "an upstream
+# has not published yet" (the message that held MeshWeaver.Reinsurance 23 times in 24 h, #3583),
+# for a publication that is perfectly fine. Before #4269/#4341 nothing wrote a generation and the
+# question could not arise; it arises for `plugins` from #4269 and for every other prefix from
+# #4341, which is why this lands with them rather than with phase 5.
+#
+# 🚨 THE RULES ARE THE READER'S, EXACTLY (ShippedPrebuiltBundles.PublicationDirectoryOf, and the
+# resolvers in publish-bake-bundles.sh, bake-scope.sh, carry-forward-bundles.sh and
+# compose-sealed-modules.sh). Absent, blank, unreadable, not a single path segment, or naming a
+# directory that is not there ⇒ the source directory, i.e. exactly this gate's previous behaviour.
+# A pointer is a NAME: it must never be able to address bytes outside its own source directory.
+POINTER="_current"
+RESOLVED_DIR=""
+resolve_publication_dir() { # <account> <share> <source-dir>
+  _rp_account="$1"; _rp_share="$2"; _rp_source="$3"
+  RESOLVED_DIR="$_rp_source"
+  _rp_exists=$(az storage file exists --account-name "$_rp_account" --share-name "$_rp_share" \
+    --path "$_rp_source/$POINTER" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  [ "$_rp_exists" = "true" ] || return 0
+  _rp_local="$(mktemp)"
+  if ! az storage file download --account-name "$_rp_account" --share-name "$_rp_share" \
+      --path "$_rp_source/$POINTER" --dest "$_rp_local" \
+      --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
+    rm -f "$_rp_local"
+    return 0
+  fi
+  _rp_named=$(sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' "$_rp_local" | grep -m1 '[^[:space:]]' || true)
+  rm -f "$_rp_local"
+  [ -n "$_rp_named" ] || return 0
+  case "$_rp_named" in
+    .|..|*/*|*\\*)
+      echo "::warning::$_rp_source/$POINTER names '$_rp_named', which is not a single directory name — reading $_rp_source as its own publication directory."
+      return 0 ;;
+  esac
+  _rp_exists=$(az storage directory exists --account-name "$_rp_account" --share-name "$_rp_share" \
+    --name "$_rp_source/$_rp_named" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  if [ "$_rp_exists" != "true" ]; then
+    echo "::warning::$_rp_source/$POINTER names generation '$_rp_named', which is not on the share (exists=$_rp_exists) — reading $_rp_source as its own publication directory."
+    return 0
+  fi
+  RESOLVED_DIR="$_rp_source/$_rp_named"
+  return 0
+}
+
 summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "$1" >> "$GITHUB_STEP_SUMMARY"; return 0; }
 die() { echo "::error::$1"; summary "- ❌ $1"; exit 1; }
 
@@ -138,15 +198,20 @@ summary "- 🎯 asking about framework identity \`$IDENTITY\` — from $ORIGIN_T
 ABSENT=()       # asked, and the answer was NO
 UNDETERMINED=() # could not ask — a REFUSAL, never a smaller number
 for source in "${SOURCES[@]}"; do
+  # 🚨 THE PUBLICATION, not the prefix. `_current` decides which directory this source's
+  # publication is; an unusable pointer degrades to the prefix, which is this gate's own previous
+  # behaviour, so the resolution can only ever ADD an answer it used to get wrong.
+  resolve_publication_dir "$ACCOUNT" "$SHARE" "$ROOT/$IDENTITY/$source"
+  publication="$RESOLVED_DIR"
   exists=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
-    --path "$ROOT/$IDENTITY/$source/$SENTINEL" --auth-mode login --backup-intent \
+    --path "$publication/$SENTINEL" --auth-mode login --backup-intent \
     --query exists -o tsv --only-show-errors 2>/dev/null || echo "unknown")
   case "$exists" in
-    true)  echo "sealed: $source (identity $IDENTITY)"; summary "- ✅ \`$source\` is published for \`$IDENTITY\`";;
-    false) ABSENT+=("$source — no sealed publication under $ROOT/$IDENTITY/$source");;
+    true)  echo "sealed: $source (identity $IDENTITY) at $publication"; summary "- ✅ \`$source\` is published for \`$IDENTITY\`";;
+    false) ABSENT+=("$source — no sealed publication under $publication");;
     # 🚨 An errored probe is NOT an absent one, and it is NOT a present one either. Both readings
     # would be a lie; the honest answer is a hold naming the unreadability.
-    *)     UNDETERMINED+=("$source — the share could not be queried at $ROOT/$IDENTITY/$source");;
+    *)     UNDETERMINED+=("$source — the share could not be queried at $publication");;
   esac
 done
 

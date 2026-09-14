@@ -321,17 +321,14 @@ green. (`repository.txt` was added under this rule and says so in place.)
   directory — its caller may be pinned to a workflow copy that knows nothing about generations, and
   the one-publication postcondition it already carries is what pins it to a single generation if the
   pointer moves between the listing and the downloads.
-- 🚨 **TWO Azure-direct readers still read the PREFIX, and they are part of phase 3's precondition,
-  not of this change.** `compose-sealed-modules.sh` (the module-set index and each module, on the
-  OIDC fallback path) and `node-repo-gate.yml`'s inline `download-batch` both compose their paths
-  under `prebuilt-bundles/<identity>/<source>/` directly. This is harmless while nothing writes a
-  generation, and it stays harmless at phase 4 in the ordinary case — the flat compatibility copy is
-  written by the same run, from the same bytes, so reading it gives the same content the pointer
-  names. It stops being harmless in exactly two places, and both are worth knowing before flipping:
-  a run whose flat copy is REFUSED (the compatibility copy still races) leaves those two readers on
-  the previous publication while pointer-following readers have moved on; and at phase 5, when the
-  flat copy is dropped, they break outright. **Route them through the same resolution before any
-  prefix flips.** Neither is a reader the portal image carries, so neither was covered by phase 1.
+- 🚨 **THREE Azure-direct readers composed their paths under the bare PREFIX — not two, which is
+  what this page said for a week.** `compose-sealed-modules.sh` (the module-set index and each
+  module, on the OIDC fallback path) and `node-repo-gate.yml`'s inline `download-batch` were routed
+  in phase 3. The third, found on 2026-09-14 **after** phase 4 had landed, is
+  `check-release-availability.sh` — the upstream gate `main-cd`, `release.yml` and every node repo's
+  `publish-bake` run — and it is the one that was already producing a false red. See
+  "[The third reader, and the false hold it was already producing](#the-third-reader-and-the-false-hold-it-was-already-producing)"
+  below. None of the three is a reader the portal image carries, so none was covered by phase 1.
 - 🚨 **The pointer moves BEFORE the flat compatibility copy, not after it.** "Last" in this page is
   about the *generation*: a reader must never be pointed at a directory still being filled in, and
   moving the pointer straight after the seal satisfies that exactly. The flat copy is a different
@@ -432,7 +429,38 @@ What the satellite's own flip buys is therefore **explicitness, not correctness*
 discovered layout (announced by a `::warning::` on every publish) with a declared one. The same is
 true of a per-repo PR on any of the five single-producer prefixes now that the default has moved.
 
-#### 🚨 The residual phase 4 does NOT remove: a flat publication beside a generation one
+#### The third reader, and the false hold it was already producing
+
+🚨 **Phase 4 did not only expose a phase-5 problem; for one reader it created a live false red, and
+it had been live for `plugins` since #4269 before this page noticed.**
+
+`check-release-availability.sh` answers *"is this upstream published for the identity I am about to
+build against?"* by probing one file: `prebuilt-bundles/<identity>/<source>/_complete`. That is the
+**prefix's** sentinel — the flat compatibility copy's — and under the generation layout the two
+answers come apart on **every publish**:
+
+| | |
+|---|---|
+| `publish_publication` seals the generation | the publication is complete |
+| … moves `_current` | the publication is **live** to every pointer-following reader |
+| … then refreshes the flat copy, which `publish_one_target` begins by **deleting** its `_complete` | the prefix has **no sentinel** for the whole upload-and-verify interval |
+
+So for ~90 seconds per target per publish, a gate probing the prefix answers `false` and reports
+`no sealed publication under …` — the one message that means *an upstream has not published yet*,
+for a publication that is sealed, live and pointed at. That message is not a neutral one: it is the
+wording that held MeshWeaver.Reinsurance **23 times in 24 hours** (#3583), so a false instance of it
+costs a reader the same investigation as a true one.
+
+**Fixed by routing it through the same resolution as its three siblings**, with the same fall-back:
+an absent, blank, unreadable, escaping or dangling pointer means the source directory, which is
+exactly this gate's previous behaviour — so the change can only ever add an answer it used to get
+wrong. `test-publication-pointer-readers.py` now executes **three** readers, and the fixture for this
+one is the window itself: the generation sealed, `_current` naming it, and the prefix's own sentinel
+**removed**. Against the pre-fix script that case fails with the false-hold message; its two siblings
+(nothing sealed anywhere ⇒ still refuses; a flat prefix with no pointer ⇒ still sealed) pass on both,
+which is what makes them controls rather than new behaviour.
+
+### 🚨 The residual phase 4 does NOT remove: a flat publication beside a generation one
 
 Raised by the review of the default move, and real. A generation publication writes its generation,
 moves `_current`, and refreshes the flat compatibility copy **last**. A FLAT publication of the same

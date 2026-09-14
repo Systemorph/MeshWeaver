@@ -619,7 +619,11 @@ Stated plainly, because a page that only lists what works is how the next sessio
 - **The window itself remains.** In this layout it cannot be removed — in-place replacement means
   unsealed time, and the alternative is a layout migration every reader must land first (the portal
   boot seeder, the gate's Azure-direct path, and every pinned satellite workflow copy).
-- 🚨 **Two Azure-direct readers still address the PREFIX rather than the publication.**
+- 🚨 **THREE Azure-direct readers addressed the PREFIX rather than the publication**, and this
+  entry said two until 2026-09-14. The third is `check-release-availability.sh`, the upstream gate
+  every publishing repo runs, which probed the prefix's own sentinel and therefore answered
+  *"no sealed publication"* for the ~90 s of every publish in which the flat copy is unsealed —
+  routed through the same resolution now.
   `compose-sealed-modules.sh` and `node-repo-gate.yml`'s inline `download-batch` compose their paths
   used to compose their paths under `prebuilt-bundles/<identity>/<source>/` directly, so they read
   the flat copy whatever the pointer says. **Both were fixed in phase 3** and both are executed by
