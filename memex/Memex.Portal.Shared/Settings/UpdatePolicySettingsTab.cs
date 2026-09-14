@@ -69,26 +69,35 @@ public static class UpdatePolicySettingsTab
                     h.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId())))
             .StartWith((UiControl?)Controls.Markdown("")));
 
-        // Manual apply (installs that can self-patch). Reads the latest tag, then patches via the Http pool.
+        // Manual apply — by WHOEVER applies on this install (#4098): a control-lane install hands the
+        // latest tag to the control instance (the same event the poller sends, trigger "Manual"),
+        // a self-patching one patches via the Http pool, anything else says what is missing.
         stack = stack.WithView(Controls.Button(host.Localize("ui.applyUpdateNow"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
                 var h = ctx.Host;
                 var updater = h.Hub.ServiceProvider.GetService<IDeploymentUpdater>();
-                if (updater is null || !updater.CanPatch)
+                var options = h.Hub.ServiceProvider.GetService<SelfUpdateOptions>() ?? new SelfUpdateOptions();
+                var handover = new SelfUpdateHandover(h.Hub);
+                var settings = handover.ReadSettings();
+                var apply = SelfUpdateHandover.ApplyModeFor(
+                    options.CanPatch, updater?.CanPatch == true, SelfUpdateHandover.RouteFor(settings));
+                if (apply == SelfUpdateApply.DetectOnly)
                 {
-                    h.UpdateData(ResultId, "This install cannot self-patch (not running in Kubernetes).");
+                    h.UpdateData(ResultId, h.Localize("ui.updateCannotSelfPatch",
+                        SelfUpdateHandover.Missing(settings) ?? "no control inbox is configured"));
                     return Task.CompletedTask;
                 }
                 var pool = h.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
                            ?? IoPool.Unbounded;
                 h.Hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath).Take(1).Subscribe(node =>
                 {
-                    var tag = UpdatePolicyNodeType.Parse(node, h.Hub.JsonSerializerOptions).LatestAvailableTag;
+                    var content = UpdatePolicyNodeType.Parse(node, h.Hub.JsonSerializerOptions);
+                    var tag = content.LatestAvailableTag;
                     if (string.IsNullOrEmpty(tag))
                     {
-                        h.UpdateData(ResultId, "No newer version has been detected yet.");
+                        h.UpdateData(ResultId, h.Localize("ui.updateNoneDetected"));
                         return;
                     }
                     // 🚨 The manual roll honours the SAME release-availability gate as the poller
@@ -128,9 +137,31 @@ public static class UpdatePolicySettingsTab
                                 h.Localize("ui.updateHeldManual", tag) + "\n\n> " + verdict.HoldReason);
                             return;
                         }
-                        pool.Invoke(ct => updater.PatchToVersionAsync(tag, ct)).Subscribe(
-                            _ => h.UpdateData(ResultId, $"Rolling the platform to {tag}…"),
-                            ex => h.UpdateData(ResultId, $"Update failed: {ex.Message}"));
+                        if (apply == SelfUpdateApply.ControlLane)
+                        {
+                            // The same announcement the poller makes, so the control plane cannot
+                            // tell a click from a check — and dedupes both the same way.
+                            var installed = ShippedReleaseSeed.InstalledPlatformVersion;
+                            handover.Announce(new SelfUpdateHandover.Announcement
+                                {
+                                    Event = SelfUpdateHandover.ReleaseEvent,
+                                    CurrentVersion = installed,
+                                    NewVersion = tag,
+                                    CurrentImage = options.PortalImage(installed.Split('+')[0]),
+                                    NewImage = options.PortalImage(tag),
+                                    Policy = content.Policy.ToString(),
+                                    Pattern = UpdateChannelPattern.Normalize(content.Pattern),
+                                    Trigger = "Manual",
+                                    DetectedAt = SelfUpdateHandover.Stamp(DateTimeOffset.UtcNow),
+                                })
+                                .Subscribe(
+                                    outcome => h.UpdateData(ResultId, h.Localize("ui.updateHandedOver", tag, outcome.Destination)),
+                                    ex => h.UpdateData(ResultId, h.Localize("ui.updateHandoverFailed", ex.Message)));
+                            return;
+                        }
+                        pool.Invoke(ct => updater!.PatchToVersionAsync(tag, ct)).Subscribe(
+                            _ => h.UpdateData(ResultId, h.Localize("ui.updateRolling", tag)),
+                            ex => h.UpdateData(ResultId, h.Localize("ui.updateApplyFailed", ex.Message)));
                     });
                 });
                 return Task.CompletedTask;

@@ -23,8 +23,11 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// <summary>
 /// The platform self-update poller. Reactively (no async/await; the network/IO leaves route through
 /// the <c>Http</c> <see cref="IIoPool"/>) polls the registry a few times a day, picks the update
-/// target per the live <c>Admin/UpdatePolicy</c>, and — when the install runs in Kubernetes — patches
-/// its own portal + migration Deployments to the new version so k8s rolls them. Outside Kubernetes it
+/// target per the live <c>Admin/UpdatePolicy</c>, and APPLIES it by whoever applies on this install
+/// (<see cref="SelfUpdateApply"/>, #4098): a fleet instance HANDS the release to the control lane —
+/// one signed event into the control instance's inbox, from which the control plane opens the
+/// <c>Roll</c> (<see cref="SelfUpdateHandover"/>); an install whose chart still renders the
+/// self-patch Role patches its own portal + migration Deployments so k8s rolls them; anything else
 /// records the available version for detect-and-notify. Mirrors <c>ShippedReleaseSeedHostedService</c>
 /// (raw <see cref="IHostedService"/>, <c>SubscribeOn(TaskPoolScheduler.Default)</c>, one subscription).
 /// Not sealed: <see cref="ReadPolicyStream"/> and <see cref="RecordAvailable"/> are the
@@ -97,9 +100,16 @@ public class SelfUpdateHostedService : IHostedService
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        // 🚨 WHO APPLIES is decided once here for the boot line and again at every apply (the
+        // configuration is rotatable). Effective canPatch is the chart's declaration AND the
+        // updater's: a chart that renders no self-patch Role renders SelfUpdate__CanPatch=false,
+        // so the two can never disagree about whether a PATCH would be answered 403 (#4098).
+        var handoverSettings = ResolveHandover().ReadSettings();
+        var route = SelfUpdateHandover.RouteFor(handoverSettings);
+        var apply = SelfUpdateHandover.ApplyModeFor(_options.CanPatch, _updater.CanPatch, route);
         _logger?.LogInformation(
             "[SelfUpdate] starting (event-driven, with a {SafetyNet} safety net); version={Version}, "
-            + "registry={Registry}/{Repo} listed as {RegistryKind}, canPatch={CanPatch}, retryInterval={Interval}.",
+            + "registry={Registry}/{Repo} listed as {RegistryKind}, canPatch={CanPatch}, apply={Apply}, retryInterval={Interval}.",
             _options.SafetyNetCheckInterval > TimeSpan.Zero
                 ? _options.SafetyNetCheckInterval.ToString()
                 : "disabled",
@@ -128,14 +138,31 @@ public class SelfUpdateHostedService : IHostedService
                           + "is presented only if this host is itself a configured plugin registry, else "
                           + "every check refuses; see SelfUpdate:RegistryValidationUrl)"
                 : "an Azure Container Registry",
-            _updater.CanPatch, _options.RetryInterval);
+            _options.CanPatch && _updater.CanPatch,
+            // Where a detected release GOES, in one word plus its destination — the whole of
+            // #4098 from an operator's chair: a control-lane install names the inbox it hands to,
+            // a detect-only one names the key that would make it a control-lane install.
+            apply switch
+            {
+                SelfUpdateApply.SelfPatch => "self-patch (this install patches its own workloads)",
+                SelfUpdateApply.ControlLane =>
+                    $"control-lane (a detected release is handed to {DescribeRoute(route, handoverSettings)}; the control plane rolls)",
+                _ => $"detect-only ({SelfUpdateHandover.Missing(handoverSettings)})",
+            },
+            _options.RetryInterval);
 
         // 🚨 #4097 — canPatch=False used to be the whole story, and it pointed at
         // Modules:Assemblies. When the patcher's package was refused by the instance's PLAN, the
         // startup log now says so — the tier it needs and the plan the instance is on — as the
         // next [SelfUpdate] line, read off the activation record on the FileSystem pool so the
-        // hosted-service startup thread never waits on the module volume.
-        if (!_updater.CanPatch)
+        // hosted-service startup thread never waits on the module volume. When it is the CHART
+        // that switched self-patch off (#4098), that is the reason and no record is read.
+        if (!_options.CanPatch)
+            _logger?.LogInformation(
+                "[SelfUpdate] canPatch=False (self-patch is switched off by {Section}:{Key} — the chart renders "
+                + "no self-patch Role for this install; the control lane rolls it)",
+                SelfUpdateOptions.SectionName, nameof(SelfUpdateOptions.CanPatch));
+        else if (!_updater.CanPatch)
             CannotPatchReason()
                 .Subscribe(
                     reason => _logger?.LogInformation("[SelfUpdate] canPatch=False{Reason}", reason),
@@ -214,7 +241,7 @@ public class SelfUpdateHostedService : IHostedService
             // conclusion is not a check. See IsDecisionPoint: this is a rate decision, NOT the
             // silence #2553 removed, and the two are one line apart.
             .Where(check => IsDecisionPoint(check.trigger, check.content))
-            .SelectMany(check => RunOnce(check.content)
+            .SelectMany(check => RunOnce(check.trigger, check.content)
                 // wedges-to-zero: a check error (ACR outage, k8s 403) is a VERDICT, not a silence,
                 // and the watch stays live. No outer .Retry — that would be a resubscribe storm.
                 .Catch((Exception ex) => Observable.Return(SelfUpdateVerdict.CheckFailed(ex)))
@@ -396,9 +423,37 @@ public class SelfUpdateHostedService : IHostedService
     private IObservable<SelfUpdateVerdict> Restart(SelfUpdateVerdict platform)
     {
         var installed = ShippedReleaseSeed.InstalledPlatformVersion;
-        if (!_updater.CanPatch)
-            return CannotPatchReason().Select(reason => SelfUpdateVerdict.RestartUnavailable(
-                platform, installed, "this install does not self-patch" + reason));
+        var handover = ResolveHandover();
+        var settings = handover.ReadSettings();
+        var route = SelfUpdateHandover.RouteFor(settings);
+        switch (SelfUpdateHandover.ApplyModeFor(_options.CanPatch, _updater.CanPatch, route))
+        {
+            case SelfUpdateApply.ControlLane:
+                // 🚨 A restart re-creates the pods the record declares — the unattended class on
+                // the control lane (a restore of an approved state) — so a landed module is
+                // activated without a person, exactly as an install that patched itself did it.
+                // Announced on every check while the marker stands; the control plane dedupes.
+                _logger?.LogInformation(
+                    "[SelfUpdate] a landed module generation is pending activation — handing the restart to the "
+                    + "control lane ({Destination}); this install does not roll its own pods.",
+                    DescribeRoute(route, settings));
+                return handover.Announce(RestartAnnouncement(installed))
+                    .Select(outcome => SelfUpdateVerdict.RestartHandedOver(
+                        platform, installed, outcome.Destination, outcome.Detail))
+                    .Catch((Exception ex) =>
+                    {
+                        _logger?.LogWarning(ex,
+                            "[SelfUpdate] the restart hand-over to the control lane FAILED; the next check announces it again.");
+                        return Observable.Return(SelfUpdateVerdict.RestartHandoverFailed(platform, installed, ex.Message));
+                    });
+            case SelfUpdateApply.DetectOnly when !_options.CanPatch:
+                return Observable.Return(SelfUpdateVerdict.RestartUnavailable(
+                    platform, installed,
+                    "this install does not self-patch, and " + (SelfUpdateHandover.Missing(settings) ?? "no control inbox is configured")));
+            case SelfUpdateApply.DetectOnly:
+                return CannotPatchReason().Select(reason => SelfUpdateVerdict.RestartUnavailable(
+                    platform, installed, "this install does not self-patch" + reason));
+        }
 
         // The same floor read Apply makes, and skipped for the same reason when the floor is off:
         // LastRolledAtAsync is a Kubernetes GET whose answer cannot change a decision the floor
@@ -480,6 +535,9 @@ public class SelfUpdateHostedService : IHostedService
                      or SelfUpdateOutcome.InstalledTagWithdrawn
                      // A landed module nothing will ever activate is a state an operator must see (#3650).
                      or SelfUpdateOutcome.RestartUnavailable
+                     // A release this install could neither apply nor hand over is a delivery that
+                     // stopped (#4098) — the pairing or the inbox is what an operator has to look at.
+                     or SelfUpdateOutcome.HandoverFailed
                      || verdict.UnresolvedInstalledTag is not null)
                 _logger?.LogWarning("[SelfUpdate] check ({Trigger}): {Verdict}", trigger, verdict.Message);
             else
@@ -707,7 +765,7 @@ public class SelfUpdateHostedService : IHostedService
     /// were both bare Rx <c>Where</c> clauses upstream — and an empty completion is
     /// indistinguishable from a check that never ran. Every exit now names its outcome, so the
     /// caller has something to log and something to record.</para></summary>
-    private IObservable<SelfUpdateVerdict> RunOnce(UpdatePolicyContent policy)
+    private IObservable<SelfUpdateVerdict> RunOnce(SelfUpdateTrigger trigger, UpdatePolicyContent policy)
     {
         // 🚨 `None` means never update, and it used to be a `Where` in the trigger pipeline: the
         // single most silent path in the service. An install deliberately pinned by an
@@ -783,7 +841,7 @@ public class SelfUpdateHostedService : IHostedService
                         // and the Select below is unreachable by construction.
                         .IgnoreElements()
                         .Select(_ => SelfUpdateVerdict.NoOutcome())
-                        .Concat(GateThenApply(policy, target!)))
+                        .Concat(GateThenApply(trigger, policy, target!)))
                     // A roll taken on the recovery path says so — on the verdict, not only in a log
                     // line, because that is the field the Updates tab and the next session read.
                     .Select(verdict => selection.IsRecovery
@@ -925,12 +983,12 @@ public class SelfUpdateHostedService : IHostedService
             ? candidates[0]
             : candidates.FirstOrDefault(tag => condemned(tag) is null) ?? candidates[0];
 
-    private IObservable<SelfUpdateVerdict> GateThenApply(UpdatePolicyContent policy, string target) =>
+    private IObservable<SelfUpdateVerdict> GateThenApply(SelfUpdateTrigger trigger, UpdatePolicyContent policy, string target) =>
         Observable.Defer(() =>
         {
             var gate = ResolveAvailabilityGate();
             if (gate is null)
-                return GateNotWired(policy, target);
+                return GateNotWired(trigger, policy, target);
 
             return gate.IsUpdatable(target)
                 .SelectMany(verdict =>
@@ -958,7 +1016,7 @@ public class SelfUpdateHostedService : IHostedService
                         // The combo gate answers the question the bytes on the shelf cannot:
                         // whether the candidate's assemblies can still serve the module content
                         // this instance has landed. Both have to clear before anything is patched.
-                        return ComboThenApply(policy, target, verdict);
+                        return ComboThenApply(trigger, policy, target, verdict);
                     }
 
                     return RecordHold(target, verdict).Catch(HoldWriteFailed(target))
@@ -1002,7 +1060,7 @@ public class SelfUpdateHostedService : IHostedService
     /// on the policy node beside the (cleared) hold so its advisories reach the Updates tab
     /// (#3651); null when no availability gate ran.</param>
     private IObservable<SelfUpdateVerdict> ComboThenApply(
-        UpdatePolicyContent policy, string target, UpdatabilityVerdict? availability = null)
+        SelfUpdateTrigger trigger, UpdatePolicyContent policy, string target, UpdatabilityVerdict? availability = null)
     {
         var combo = ResolveComboGate();
         return (combo is null
@@ -1036,7 +1094,7 @@ public class SelfUpdateHostedService : IHostedService
                 return RecordHold(target, availability).Catch(HoldWriteFailed(target))
                     .IgnoreElements()
                     .Select(_ => SelfUpdateVerdict.NoOutcome())
-                    .Concat(Apply(target).Select(verdict => Qualify(verdict, clearance)));
+                    .Concat(Apply(trigger, policy, target).Select(verdict => Qualify(verdict, clearance)));
             });
     }
 
@@ -1101,7 +1159,7 @@ public class SelfUpdateHostedService : IHostedService
     /// set it in configuration, where it is visible, and the roll proceeds while saying so at
     /// Warning on every tick. It can never waive a gate that DID run.</para>
     /// </summary>
-    private IObservable<SelfUpdateVerdict> GateNotWired(UpdatePolicyContent policy, string target) =>
+    private IObservable<SelfUpdateVerdict> GateNotWired(SelfUpdateTrigger trigger, UpdatePolicyContent policy, string target) =>
         Observable.Defer(() =>
         {
             // 🚨 "CANNOT VERIFY" AND "VERIFIED AS NOTHING TO VERIFY" ARE DIFFERENT STATES, and only
@@ -1127,7 +1185,7 @@ public class SelfUpdateHostedService : IHostedService
                 // the availability question and nothing else: an instance can carry landed modules
                 // whose content the candidate cannot serve whatever its bundle root says, which is
                 // precisely the state #2274 was filed about.
-                return ComboThenApply(policy, target);
+                return ComboThenApply(trigger, policy, target);
             }
 
             if (_options.AllowUnverifiedRoll)
@@ -1142,7 +1200,7 @@ public class SelfUpdateHostedService : IHostedService
                 // a waiver of a gate that DID run, and the combo gate's Red is exactly that — so it
                 // still refuses here. A key that could wave away a produced refusal would be the
                 // skip-trapdoor this whole area exists to keep out.
-                return ComboThenApply(policy, target);
+                return ComboThenApply(trigger, policy, target);
             }
 
             var verdict = UpdatabilityVerdict.Unavailable(
@@ -1192,6 +1250,79 @@ public class SelfUpdateHostedService : IHostedService
     /// </summary>
     protected virtual IConfiguration? ResolveConfiguration() =>
         _hub.ServiceProvider.GetService<IConfiguration>();
+
+    /// <summary>
+    /// The control-lane hand-over (#4098) — the fifth documented injection seam, so a test can pin
+    /// what the poller DOES with a configured control inbox (announces, patches nothing, records
+    /// the hand-over) against an in-process inbox rather than the fleet's. Never null: an
+    /// unconfigured hand-over answers <see cref="SelfUpdateHandover.Route.None"/>, which is the
+    /// detect-only state, not an error.
+    /// </summary>
+    protected virtual SelfUpdateHandover ResolveHandover() =>
+        _handover ??= new SelfUpdateHandover(_hub, _logger);
+
+    private SelfUpdateHandover? _handover;
+
+    /// <summary>The destination a verdict or a log line names — the inbox URL, or the local target.</summary>
+    private static string DescribeRoute(SelfUpdateHandover.Route route, SelfUpdateHandover.Settings settings) =>
+        route switch
+        {
+            SelfUpdateHandover.Route.Post => settings.Url ?? "(no url)",
+            SelfUpdateHandover.Route.Local => $"this instance's own {SelfUpdateHandover.InboxTarget} inbox",
+            _ => "(no route)",
+        };
+
+    /// <summary>The <c>self-update-available</c> event for <paramref name="target"/>: what runs, what was selected, under which policy, and what woke the check.</summary>
+    private SelfUpdateHandover.Announcement ReleaseAnnouncement(
+        UpdatePolicyContent policy, SelfUpdateTrigger trigger, string target)
+    {
+        var installed = ShippedReleaseSeed.InstalledPlatformVersion;
+        return new SelfUpdateHandover.Announcement
+        {
+            Event = SelfUpdateHandover.ReleaseEvent,
+            CurrentVersion = installed,
+            NewVersion = target,
+            CurrentImage = _options.PortalImage(installed.Split('+')[0]),
+            NewImage = _options.PortalImage(target),
+            Policy = policy.Policy.ToString(),
+            Pattern = UpdateChannelPattern.Normalize(policy.Pattern),
+            Trigger = trigger.ToString(),
+            DetectedAt = SelfUpdateHandover.Stamp(DateTimeOffset.UtcNow),
+        };
+    }
+
+    /// <summary>The <c>self-update-restart-pending</c> event: the image this install runs, and why the pods should be re-created on it.</summary>
+    private SelfUpdateHandover.Announcement RestartAnnouncement(string installed) =>
+        new()
+        {
+            Event = SelfUpdateHandover.RestartEvent,
+            CurrentVersion = installed,
+            CurrentImage = _options.PortalImage(installed.Split('+')[0]),
+            Reason = "a landed module generation is pending activation (restart-as-activation, #3650)",
+            DetectedAt = SelfUpdateHandover.Stamp(DateTimeOffset.UtcNow),
+        };
+
+    /// <summary>
+    /// Stamps a successful hand-over on the policy node, as System — bookkeeping for the Updates
+    /// tab (<see cref="UpdatePolicyContent.HandedOverTag"/>), never a gate: the announcement has
+    /// already left, and a failed stamp is a warning that names itself.
+    /// </summary>
+    protected virtual IObservable<Unit> RecordHandover(string tag, string destination)
+    {
+        var accessService = _hub.ServiceProvider.GetService<AccessService>();
+        return accessService.RunAsSystem(
+            () => _hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                .Update<UpdatePolicyContent>((node, cur) => node with
+                {
+                    Content = (cur ?? new UpdatePolicyContent()) with
+                    {
+                        HandedOverTag = tag,
+                        HandedOverAt = DateTimeOffset.UtcNow,
+                        HandedOverTo = destination,
+                    },
+                })
+                .Select(_ => Unit.Default));
+    }
 
     private Func<Exception, IObservable<Unit>> HoldWriteFailed(string target) =>
         ex =>
@@ -1258,17 +1389,54 @@ public class SelfUpdateHostedService : IHostedService
     }
 
     /// <summary>
-    /// Applies the picked target: patch the workloads where this install is armed, else record-only
-    /// (detect-and-notify). The intent is announced BEFORE the attempt, so a failing apply is
-    /// diagnosable: the tick's error sink logs a generic "check failed", and until #1020 that was the
-    /// ONLY trace a stalled install left — it read like a registry problem while the registry was
-    /// fine. Deferred so the announcement runs per subscription (per tick), not at composition.
+    /// Applies the picked target — by WHOEVER applies on this install (<see cref="SelfUpdateApply"/>,
+    /// #4098): patch the workloads where the chart and the updater both say it may; else hand the
+    /// release to the control lane; else record-only (detect-and-notify), naming what is missing.
+    /// The intent is announced BEFORE the attempt, so a failing apply is diagnosable: the tick's
+    /// error sink logs a generic "check failed", and until #1020 that was the ONLY trace a stalled
+    /// install left — it read like a registry problem while the registry was fine. Deferred so the
+    /// announcement runs per subscription (per tick), not at composition.
     /// </summary>
-    private IObservable<SelfUpdateVerdict> Apply(string target) =>
+    private IObservable<SelfUpdateVerdict> Apply(SelfUpdateTrigger trigger, UpdatePolicyContent policy, string target) =>
         Observable.Defer(() =>
         {
-            if (!_updater.CanPatch)
-                return Observable.Return(SelfUpdateVerdict.DetectOnly(target));
+            var handover = ResolveHandover();
+            var settings = handover.ReadSettings();
+            var route = SelfUpdateHandover.RouteFor(settings);
+            switch (SelfUpdateHandover.ApplyModeFor(_options.CanPatch, _updater.CanPatch, route))
+            {
+                case SelfUpdateApply.ControlLane:
+                    // 🚨 No roll floor here: the floor paces POD RESTARTS, and this install restarts
+                    // nothing — the control plane's Roll does, under its own approval and its own
+                    // unattended rate limit. Every check that selects a target announces it; the
+                    // control plane dedupes by (deployment, image).
+                    _logger?.LogInformation(
+                        "[SelfUpdate] handing {Tag} to the control lane ({Destination}) — this install does not patch itself.",
+                        target, DescribeRoute(route, settings));
+                    return handover.Announce(ReleaseAnnouncement(policy, trigger, target))
+                        .SelectMany(outcome => RecordHandover(target, outcome.Destination)
+                            .Catch((Exception ex) =>
+                            {
+                                _logger?.LogWarning(ex,
+                                    "[SelfUpdate] could not record the hand-over of {Tag} on {Node}; the announcement itself went out.",
+                                    target, UpdatePolicyNodeType.NodePath);
+                                return Observable.Return(Unit.Default);
+                            })
+                            .IgnoreElements()
+                            .Select(_ => SelfUpdateVerdict.NoOutcome())
+                            .Concat(Observable.Return(
+                                SelfUpdateVerdict.HandedOver(target, outcome.Destination, outcome.Detail))))
+                        .Catch((Exception ex) =>
+                        {
+                            _logger?.LogWarning(ex,
+                                "[SelfUpdate] the hand-over of {Tag} to the control lane FAILED; the next check announces it again.",
+                                target);
+                            return Observable.Return(SelfUpdateVerdict.HandoverFailed(target, ex.Message));
+                        });
+                case SelfUpdateApply.DetectOnly:
+                    return Observable.Return(SelfUpdateVerdict.DetectOnly(
+                        target, SelfUpdateHandover.Missing(settings) ?? "no control inbox is configured"));
+            }
 
             // 🚨 The pacing floor. A roll is a POD RESTART, so without it publication frequency is
             // restart frequency and every restart drops the live circuits of everyone using the

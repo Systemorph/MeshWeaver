@@ -193,7 +193,15 @@ to whatever host the catalog advertises with no declaration at all, the same rul
 — one key/host pair currently lives under two trust rules. That is a real alternative to this page's
 design, and it is deliberately NOT part of #4094: it moves where a trust rule lives.
 [#4123](https://github.com/Systemorph/MeshWeaver/issues/4123) carries it, ordered after the
-config-repo declaration that closes #4093.
+config-repo declaration that closes #4093. The design — the render-time derivation in `HelmValues`,
+the bundle-client rule keyed on the registry's OWN declaration rather than on `SelfUpdate:Registry`
+(the control instance pulls from ACR and adopts bundles sealed on `cr.meshweaver.cloud`), and the
+alternative of moving detection to the control plane altogether — is written down in
+[Self-Update on the Control Lane](../SelfUpdateControlLane) → "#4093 and #4123".
+
+Since MeshWeaver#4098 the key this page selects is presented for **detection only**: a fleet
+instance lists the registry with it and hands the selected release to the control instance; it no
+longer patches anything itself ([Self-Update on the Control Lane](../SelfUpdateControlLane)).
 
 ## What the refusal says
 
