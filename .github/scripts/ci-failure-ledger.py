@@ -77,6 +77,19 @@ BOT_LOGIN, BOT_TYPE = "github-actions[bot]", "Bot"   # the only author whose iss
 INBOX_PATH_PREFIX = "/api/hooks/"
 ENTRY_HEAD = "### "              # every ledger entry starts with this at column 0
 FAILED_CONCLUSIONS = ("failure", "timed_out")
+# 🚨 A failed job with ZERO steps never STARTED. Measured 2026-09-11 (Memex#275): an org Actions
+# budget refused 20 jobs across three private repos, each concluding `failure` in ~2 s with no
+# steps, unexpanded matrix names and `BlobNotFound` on /logs — a costume shared by a reusable
+# workflow the runner could not resolve. The reason lives in ONE place, the job's annotation
+# (`GET check-runs/<job id>/annotations`, needs `checks: read`, which this lane does not demand and
+# every caller would have to grant). What the ledger CAN say from the fields it already reads is
+# that nothing ran, so the reader stops treating the job as a failed step and reads the annotation
+# instead — and so the control portal's triage (which holds a credential that CAN read it) knows
+# to. Note the structural limit: while a budget refusal is IN FORCE the reporter job of the same
+# run is refused with the gates (measured: 16 failure / 7 skipped / 0 ran), so a live refusal
+# reaches this ledger only from a run whose window closed before the reporter started.
+NEVER_STARTED_NOTE = ("never started — no step ran, which is a refused job (an org Actions budget) or "
+                      "a workflow the runner could not resolve; the job's annotation says which")
 
 
 class Red(Exception):
@@ -119,7 +132,8 @@ class Verdict:
 
 
 def parse_failed_jobs(raw: str) -> tuple[dict, ...]:
-    """The caller's `failed-jobs` input as a tuple of {name, url, step}. Anything else is refused.
+    """The caller's `failed-jobs` input as a tuple of {name, url, step, neverStarted}. Anything else
+    is refused. `neverStarted` is optional (default false) and must be a boolean when given.
 
     Refused BEFORE any write: an entry that names no job is a ledger that cannot be triaged, and a
     ledger written from garbage looks exactly like one written from evidence.
@@ -144,7 +158,10 @@ def parse_failed_jobs(raw: str) -> tuple[dict, ...]:
             step = ""
         if not isinstance(step, str):
             raise Red(f"failed-jobs[{i}] (`{name}`) has a non-string `step`")
-        out.append({"name": name.strip(), "url": url, "step": step.strip()})
+        never_started = item.get("neverStarted", False)
+        if not isinstance(never_started, bool):
+            raise Red(f"failed-jobs[{i}] (`{name}`) has a non-boolean `neverStarted`")
+        out.append({"name": name.strip(), "url": url, "step": step.strip(), "neverStarted": never_started})
     return tuple(out)
 
 
@@ -209,15 +226,37 @@ def decide(outcome: str, matching: list[Issue], now: datetime, reopen_window_day
     return Verdict("create", None, "no ledger is open or recently closed — filing a fresh one")
 
 
+def never_started(jobs: tuple[dict, ...]) -> tuple[dict, ...]:
+    """The failed jobs that never ran a step. Pure."""
+    return tuple(j for j in jobs if j.get("neverStarted"))
+
+
+def failed_job_entry(job: dict) -> dict:
+    """One `actions/runs/{id}/jobs` item (already known to have failed) as a ledger job. Pure.
+
+    `neverStarted` is `steps == []` on a job that CONCLUDED failure: GitHub records a step for
+    everything a runner executed, so a failed job with none was refused or unresolvable before a
+    runner touched it. A `skipped` job also has zero steps, but it never reaches here — it did not
+    fail. The step count is the only field the job JSON carries about this; WHY it never started is
+    in the annotation, which needs `checks: read` (see NEVER_STARTED_NOTE).
+    """
+    steps = job.get("steps") or []
+    step = next((s.get("name", "") for s in steps if s.get("conclusion") in FAILED_CONCLUSIONS), "")
+    return {"name": job.get("name", "?"), "url": job.get("html_url", ""), "step": step,
+            "neverStarted": len(steps) == 0}
+
+
 def ledger_entry(run: Run, now: datetime) -> str:
     stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     if run.failed_jobs:
         jobs = "<br>".join(
-            f"[{j['name']}]({j['url']})" + (f" — step `{j['step']}`" if j["step"] else "")
+            f"[{j['name']}]({j['url']})"
+            + (f" — step `{j['step']}`" if j["step"] else "")
+            + (f" — ⛔ _{NEVER_STARTED_NOTE}_" if j.get("neverStarted") else "")
             for j in run.failed_jobs)
     else:
         jobs = run.jobs_note or "_(none listed)_"
-    return "\n".join([
+    rows = [
         f"{ENTRY_HEAD}{stamp} — **{run.outcome}** — [run {run.run_id}]({run.run_url})",
         "",
         "| | |",
@@ -226,7 +265,25 @@ def ledger_entry(run: Run, now: datetime) -> str:
         f"| trigger | `{run.trigger}` |",
         f"| platform set | {('`' + run.platform_set + '`') if run.platform_set else '_(none)_'} |",
         f"| failed jobs | {jobs} |",
-    ])
+    ]
+    refused = never_started(run.failed_jobs)
+    if refused:
+        # Said ONCE per entry, above the job list, because the job list is what a reader skims.
+        # The claim is about VERDICTS, never about the whole run: this ledger lists failed jobs
+        # only, so "every failed job never started" is exactly what it can prove — no failing step
+        # executed, hence no failing verdict about the commit — and it says nothing about jobs
+        # that ran green before a window opened.
+        every = len(refused) == len(run.failed_jobs)
+        rows.append(
+            f"| never started | **{len(refused)} of {len(run.failed_jobs)}** failed job(s) ran no step"
+            + (" — EVERY failed job of this run never started, so no failing step executed and this "
+               "red carries no verdict about the commit. " if every
+               else " — those jobs carry no verdict about the commit; the failed jobs that ran do. ")
+            + "Read the annotation on the job page before debugging the diff: `The job was not started "
+            "because an Actions budget is preventing further use.` is an org budget refusal (re-run once "
+            "the window has passed — Doc/Architecture/ReadingCiSignals); anything else names a workflow "
+            "defect. |")
+    return "\n".join(rows)
 
 
 def new_body(repo: str, reopen_window_days: int) -> str:
@@ -277,8 +334,12 @@ def append_entry(body: str, entry: str, max_entries: int = MAX_LEDGER_ENTRIES) -
 def event_body(kind: str, run: Run, issue: Issue) -> str:
     """The EXACT bytes the lane signs and POSTs — one shape per event, field order fixed."""
     if kind == "ci-failure":
+        # `neverStarted` rides on every job entry (a boolean, never absent, so a receiver comparing
+        # shapes sees one shape) and the run-level count says at a glance whether ANY verdict was
+        # reached. A receiver that does not know the fields ignores them (System.Text.Json default).
         obj = {"event": "ci-failure", "repo": run.repo, "sha": run.sha, "run": int(run.run_id),
                "runUrl": run.run_url, "trigger": run.trigger, "failedJobs": list(run.failed_jobs),
+               "neverStarted": len(never_started(run.failed_jobs)),
                "platformSet": run.platform_set, "issueUrl": issue.html_url, "issueNumber": issue.number}
     elif kind == "ci-green":
         obj = {"event": "ci-green", "repo": run.repo, "sha": run.sha, "run": int(run.run_id),
@@ -369,7 +430,7 @@ class GitHub:
         self.call("POST", f"issues/{number}/comments", body={"body": body})
 
     def failed_jobs_of_run(self, run_id: str) -> tuple[dict, ...]:
-        """{name, url, step} for every job of the run that concluded failure/timed_out."""
+        """{name, url, step, neverStarted} for every job of the run that concluded failure/timed_out."""
         found: list[dict] = []
         for page in range(1, 11):
             _, data = self.call("GET", f"actions/runs/{run_id}/jobs", {"per_page": 100, "page": page})
@@ -377,9 +438,7 @@ class GitHub:
             for j in jobs:
                 if j.get("conclusion") not in FAILED_CONCLUSIONS:
                     continue
-                step = next((s.get("name", "") for s in j.get("steps", [])
-                             if s.get("conclusion") in FAILED_CONCLUSIONS), "")
-                found.append({"name": j.get("name", "?"), "url": j.get("html_url", ""), "step": step})
+                found.append(failed_job_entry(j))
             if len(jobs) < 100:
                 break
         return tuple(found)
@@ -565,9 +624,8 @@ class _Fake:
         self.comments.append((number, body))
 
     def failed_jobs_of_run(self, run_id):
-        return tuple({"name": j["name"], "url": j["html_url"],
-                      "step": next((s["name"] for s in j.get("steps", []) if s.get("conclusion") == "failure"), "")}
-                     for j in self.run_jobs if j.get("conclusion") in FAILED_CONCLUSIONS)
+        # The SAME transcription the real client uses, so the self-test proves the rule that runs.
+        return tuple(failed_job_entry(j) for j in self.run_jobs if j.get("conclusion") in FAILED_CONCLUSIONS)
 
 
 def self_test() -> int:
@@ -589,7 +647,8 @@ def self_test() -> int:
         issue, body = apply(gh, r, v, title, label, now, 7)
         return v, issue, body
 
-    job = {"name": "Portal hosts (shard 0)", "url": "https://github.com/o/r/actions/runs/555/job/1", "step": "Run tests"}
+    job = {"name": "Portal hosts (shard 0)", "url": "https://github.com/o/r/actions/runs/555/job/1", "step": "Run tests",
+           "neverStarted": False}
 
     # 1. no issue → create, one entry, a ci-failure event naming the issue
     gh = _Fake()
@@ -602,7 +661,10 @@ def self_test() -> int:
     ev = json.loads(body or "{}")
     check("ci-failure event names repo, run, issue and the failed job",
           ev.get("event") == "ci-failure" and ev.get("run") == 555 and ev.get("issueNumber") == issue.number
-          and ev.get("failedJobs") == [job] and ev.get("platformSet") == "3.0.0-ci.4711" and ev.get("trigger") == "schedule")
+          and ev.get("failedJobs") == [job] and ev.get("platformSet") == "3.0.0-ci.4711" and ev.get("trigger") == "schedule"
+          and ev.get("neverStarted") == 0)
+    check("a job that ran its steps is not marked never-started in the entry",
+          issue is not None and "never started" not in issue.body)
     check("event bytes are compact and field-ordered", (body or "").startswith('{"event":"ci-failure","repo":"o/r","sha":"abc123","run":555,'))
 
     # 2. open issue → append, not duplicate
@@ -744,13 +806,55 @@ def self_test() -> int:
     check("the listed jobs reach the entry and the event",
           issue10 is not None and "[Test (shard 3)]" in issue10.body and "step `Run tests`" in issue10.body
           and len(json.loads(body10 or "{}")["failedJobs"]) == 2)
+    check("`Docs` timed out with no step recorded and is therefore never-started; the test shard is not",
+          listed[0]["neverStarted"] is False and listed[1]["neverStarted"] is True)
+    check("a MIXED run says N of M never started and keeps the others as verdicts",
+          issue10 is not None and "**1 of 2** failed job(s) ran no step" in issue10.body
+          and "the failed jobs that ran do" in issue10.body and json.loads(body10 or "{}")["neverStarted"] == 1)
+
+    # 12. Memex#275 — the measured 2026-09-11 shape: an org Actions budget refused every job of the
+    #     run; each concluded `failure` in ~2 s with ZERO steps (MeshWeaver.Plugins run 34570627805
+    #     attempt 1: 16 failure / 7 skipped / 0 ran). The ledger must say NOTHING ran and point at
+    #     the annotation, never list them as ordinary failed jobs — and a `skipped` job (also zero
+    #     steps) must not be counted, because it did not fail.
+    gh12 = _Fake(run_jobs=[
+        {"name": "Resolve the released platform", "html_url": "https://github.com/o/r/actions/runs/556/job/10",
+         "conclusion": "failure", "steps": []},
+        {"name": "Portal hosts (${{ matrix.shard }})", "html_url": "https://github.com/o/r/actions/runs/556/job/11",
+         "conclusion": "failure", "steps": []},
+        {"name": "Every gate executed", "html_url": "https://github.com/o/r/actions/runs/556/job/12",
+         "conclusion": "skipped", "steps": []},
+    ])
+    listed12 = gh12.failed_jobs_of_run("556")
+    check("a refused run lists its failed jobs, every one never-started, and NOT the skipped one",
+          len(listed12) == 2 and all(j["neverStarted"] for j in listed12)
+          and all(j["step"] == "" for j in listed12))
+    v, issue12, body12 = go(gh12, run("failure", listed12))
+    ev12 = json.loads(body12 or "{}")
+    check("the entry says EVERY failed job never started (no failing verdict) and names the budget sentence",
+          issue12 is not None and "**2 of 2** failed job(s) ran no step" in issue12.body
+          and "carries no verdict about the commit" in issue12.body
+          and "NOTHING in this run executed" not in issue12.body
+          and "Actions budget is preventing further use" in issue12.body
+          and issue12.body.count(NEVER_STARTED_NOTE) == 2)
+    check("the event carries neverStarted on every job and the run-level count",
+          ev12.get("neverStarted") == 2 and all(j.get("neverStarted") is True for j in ev12.get("failedJobs", [])))
+    check("a caller-supplied failed-jobs list may carry neverStarted and defaults it to false",
+          parse_failed_jobs('[{"name":"a","url":"https://x","step":"","neverStarted":true},{"name":"b","url":"https://y"}]')
+          == ({"name": "a", "url": "https://x", "step": "", "neverStarted": True},
+              {"name": "b", "url": "https://y", "step": "", "neverStarted": False}))
+    try:
+        parse_failed_jobs('[{"name":"a","url":"https://x","neverStarted":"yes"}]')
+        check("a non-boolean neverStarted is refused", False, "was accepted")
+    except Red:
+        check("a non-boolean neverStarted is refused", True)
 
     if fails:
         print("::error title=ci-failure-ledger self-test::" + "; ".join(fails), file=sys.stderr)
         return 1
     print("✓ ci-failure-ledger self-test: create / append / reopen-recent / create-after-old / close-with-comment / "
           "noop-when-green / refuse-malformed / cd-ci-failure-untouched / unmarked-ci-main-red-untouched / human-authored-is-foreign / "
-          "never-labelled-ci-failure / inbox-url-validated / bounded-ledger / jobs-listed — every rule fires and stays silent as designed")
+          "never-labelled-ci-failure / inbox-url-validated / bounded-ledger / jobs-listed / never-started-said — every rule fires and stays silent as designed")
     return 0
 
 

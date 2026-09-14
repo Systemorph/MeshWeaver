@@ -608,6 +608,27 @@ nothing was measured that a re-run could paper over. The distinction is the same
 turns on — *"it did not run"* and *"it ran and failed"* are different claims — so **read the
 annotation before you re-run**, and if it names no budget, treat the red as real.
 
+🚨 **No job inside the refused repository can report the refusal while it is in force — the
+reporter is a job too.** Measured on the same window (MeshWeaver.Plugins run 34570627805, attempt
+1): 16 jobs concluded `failure`, 7 `skipped`, **0 ran** — so a `ci-failure` job wired at the end of
+that run, a `workflow_run`-triggered retrier, anything that needs a runner, is refused with the
+gates. A refusal reaches an in-repo reporter only when the window closes between the gates' refusal
+and the reporter's start. Two consequences, both built in now:
+
+- The `ci-main-red` ledger (`node-repo-ci-failure.yml`) marks every failed job that ran **no step**
+  as *never started* — `neverStarted` on the job and a run-level count in the signed event — and
+  its entry says *"N of M failed job(s) ran no step"*, or that **nothing** in the run executed. It
+  does not read the annotation: that needs `checks: read`, which the lane does not demand and every
+  fleet caller would have to grant (the roster in `.github/lane-caller-grants.yml` pairs them). The
+  entry names the budget sentence to look for instead.
+- The instrument that sees a refusal **as it happens** runs outside the refused repository's
+  Actions: the control instance's **Repo Health** scan (`Hosting/RepoHealth` in MeshWeaver.Plugins)
+  reads every fleet repository's `main` runs through the `systemorph-com` App, which holds
+  `actions: write` and `checks: write` on all repositories (measured 2026-09-14,
+  `GET /orgs/Systemorph/installations`) — so it can read the annotation the ledger cannot. Core's
+  own runs are never refused (public repository, free minutes), which is also why the merge-queue
+  steward never meets this shape.
+
 ### A verdict about an unpinned checkout is a function of wall-clock time
 
 The cross-repo gates check core out with **no `ref:`**. Two people therefore measured the same
