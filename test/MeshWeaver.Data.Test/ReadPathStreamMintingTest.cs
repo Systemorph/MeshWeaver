@@ -580,6 +580,15 @@ public class ReadPathStreamMintingTest(ITestOutputHelper output) : HubTestBase(o
             .Should().Within(TestTimeouts.Convergence)
             .Match(x => x.Count > 0, "the data source must have served its initial snapshot");
 
+        // 🚨 The baseline is the host's STEADY STATE, and a frame is not that (Systemorph/MeshWeaver#4300).
+        // GetHost() returns when Build returns; the data sources start on the hub's INIT TURN, on
+        // another thread, and the first frame above is produced by the primary stream's own
+        // initialization on a third. Anything the init turn still mints after that frame lands
+        // inside the measurement and is counted against the five calls below — that was a
+        // discarded full-reference reduce (`ADataSourceStart_MintsOnlyItsPrimaryStream`), and the
+        // count read +6. `Started` settles after the init turn has run and the gate is open.
+        await host.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
+
         var baseline = LiveSyncHubs(host);
         for (var i = 0; i < Reads; i++)
             _ = workspace.GetStream(reference, x => x.WithClientId($"caller-{i}"));
@@ -591,6 +600,43 @@ public class ReadPathStreamMintingTest(ITestOutputHelper output) : HubTestBase(o
             "a CONFIGURED reduce is caller-specific and therefore uncached BY CONTRACT — each call "
             + "constructs a SynchronizationStream and its sync/ hub. This is the metric proving the "
             + "shared arm's flat reading is a real release and not a blind counter");
+    }
+
+    /// <summary>
+    /// 🚨 <b>Starting a data source mints ONE <c>sync/</c> hub — its primary <c>EntityStore</c>
+    /// stream — and nothing else.</b> Systemorph/MeshWeaver#4300.
+    ///
+    /// <para>Every <c>Initialize()</c> override used to call <c>GetStream(GetReference())</c> and
+    /// DISCARD the result. <c>DataSource.GetStream(reference)</c> is
+    /// <c>GetStreamForPartition(…).Reduce(reference)</c>: the first half is the primary stream the
+    /// override wants; the second is an UNCACHED configured reduce of the store to itself, i.e. a
+    /// second <c>SynchronizationStream</c> with a second hosted <c>sync/</c> hub that no caller can
+    /// ever reach and that lives until the node hub dies — one permanent, unused hub per data
+    /// source per partition, on every hub that carries data. It is minted on the hub's init turn a
+    /// few milliseconds AFTER the primary stream, on a thread the test does not control, which is
+    /// how it landed inside <see cref="AnUncachedConfiguredReduce_MintsOneSyncHubPerCall"/>'s
+    /// measurement on CI and made it read +6 for 5 calls.</para>
+    ///
+    /// <para>Deterministic: <c>Started</c> settles only after the init turn has run every
+    /// <c>Initialize()</c>, so whatever a start mints is present at the count. One data source, so
+    /// the expected population is exactly one — before the fix this read 2 every time.</para>
+    /// </summary>
+    [HubFact]
+    public async Task ADataSourceStart_MintsOnlyItsPrimaryStream()
+    {
+        var host = GetHost();
+        await host.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
+
+        var workspace = host.ServiceProvider.GetRequiredService<IWorkspace>();
+        var sources = workspace.DataContext.DataSources.Count();
+        var live = LiveSyncHubs(host);
+        Output.WriteLine($"DIAG start: dataSources={sources} ownerSyncHubs={live}");
+
+        sources.Should().Be(1, "this fixture configures exactly one data source");
+        live.Should().Be(sources,
+            "a data source's start creates its primary EntityStore stream and nothing else — the "
+            + "full-reference reduce Initialize() used to perform and discard is a second, "
+            + "unreachable sync/ hub per source that lives until the owning hub dies");
     }
 
     /// <summary>The poll interval for a convergence wait — not a timeout, so it is not a guessed
