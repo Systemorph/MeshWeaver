@@ -42,7 +42,21 @@ def self_test():
     assert annotate(entries, run, "a" * 40, []) == entries
     assert annotate(entries, run, "a" * 40, [{**artifacts[0], "expired": True}]) == entries
     assert annotate([{**entries[0], "ledger": {"decision": "build"}}], run, "a" * 40, artifacts)[0].get("reuse") is None
-    print("publication reuse: 9 assertions passed")
+    # The wiring, not only the annotation: the lane's "Which selected modules still owe a test
+    # run" step writes final.json — the list the pack legs are cut from — and it MUST read this
+    # step's annotated output. Cut from the pre-annotation list (Plugins#1853), every reused
+    # entry's leg planned BUILD against a global build that had honoured the reuse and emitted
+    # nothing; this pins the env line so that regression cannot return in silence.
+    lane = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "workflows",
+                        "node-repo-module-pack.yml")
+    if os.path.exists(lane):
+        with open(lane, encoding="utf-8") as fh:
+            text = fh.read()
+        head = text.split('> "$RUNNER_TEMP/final.json"', 1)[0]
+        selection = re.findall(r"SELECTION: \$\{\{ (steps\.[a-z-]+\.outputs\.modules) \}\}", head)
+        assert selection and selection[-1] == "steps.reuse.outputs.modules", \
+            f"final.json must be cut from the reuse-annotated list, not {selection}"
+    print("publication reuse: 10 assertions passed")
 
 
 def main():
