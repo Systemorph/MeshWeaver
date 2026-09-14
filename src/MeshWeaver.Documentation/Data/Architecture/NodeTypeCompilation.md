@@ -314,6 +314,38 @@ behaves identically. `CodeQueryResolver` is the single expansion/grouping
 implementation, so the files shown in the GUI are exactly the files that
 compile.
 
+#### 🚨 `@` is ABSOLUTE and never rebases — so a tree carrying one is not relocatable
+
+The grammar has both forms, and the difference is load-bearing:
+
+| entry | `CodeQueryResolver.Expand` yields | addressed against |
+|---|---|---|
+| `namespace:Source scope:subtree` (no `/` in the value) | `namespace:{selfPath}/Source scope:subtree` | **the declaring NodeType** — rebased by `RebaseRelativeNamespace` |
+| `shared=@Other/Type/Source` | `path:Other/Type/Source` **and** `namespace:Other/Type/Source scope:subtree` | **the mesh root** — verbatim, never rebased |
+
+That is deliberate and must stay so. The dominant use of `shared=@…` is a
+genuinely cross-partition include — `Store/Plugin` pulls in
+`shared=@Store/Coupon/Source`, `@Store/Core/Source`, `@Store/Licensing/Source`
+— and rebasing those under the declaring node's prefix would silently redirect
+every one of them.
+
+**The consequence, which is a property to know rather than a bug to fix: a tree
+containing an absolute cross-reference cannot be imported under a prefix.**
+Import `Northwind/Product` — whose `sources` name
+`shared=@Northwind/AnalyticsCatalog/Source/Supplier` — as
+`MeshWeaver/samples/Graph/Data/Northwind/Product`, and the reference still
+resolves against `Northwind/…`, a root that does not exist on that mesh. The
+compile then fails with `CS0246` on the shared types while
+`failedSourceQueries` names the two unresolved entries exactly. Nothing is
+missing; one reference is un-rebased, and nothing in the compiler can rebase it
+without breaking the cross-partition case.
+
+The remedy is at the INSTALL boundary, not in the resolver: **install a package
+at the root its sources were authored for.** MeshWeaver#4174 is the worked
+instance — the mirrored `samples/` subtree was retired and `Northwind` installed
+at its own root as a `Store/Plugin` catalog entry, after which the same
+`shared=@…` values resolve as authored.
+
 ---
 
 ## Watching compile progress
