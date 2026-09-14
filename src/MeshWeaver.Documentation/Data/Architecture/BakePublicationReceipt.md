@@ -8,12 +8,13 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 # Reading a Bake Publication Receipt
 
 `publish-bake-bundles.sh` ends every run with one line, and that line is the only machine-readable
-account of what the bake did:
+account of what the bake did. It is **one physical line** — `resolve-platform.py` matches it only up
+to a newline — so the break below is visual wrapping for this page, never something to copy:
 
 ```
-bake published: identity=s8cea1c45… arch=linux-x64 source=meshweaver-content
-  source-sha=a4d12f6a39… bundles=1 surface=true
-  targets-published=0 targets-converged=0 targets-already=2 targets-superseded=0
+bake published: identity=s8cea1c45… arch=linux-x64 source=meshweaver-content ⏎(wrapped)
+  source-sha=a4d12f6a39… bundles=1 surface=true ⏎(wrapped)
+  targets-published=0 targets-converged=0 targets-already=2 targets-superseded=0 ⏎(wrapped)
   release=3.0.0-ci.8459 release-markers=2
 ```
 
@@ -63,6 +64,17 @@ at all. Both of its readers then got it wrong, on the same two runs:
   unattributable`, PASSED BOTH SETS OVER. That refusal is right for a publication that reached
   nothing and wrong for one that was already everywhere — and it cost two otherwise-sealed sets out
   of 26 in the window that was measured.
+
+🚨 **And the same ambiguity, on a THIRD run, cost a whole repository.** On 2026-09-14
+`MW_PLATFORM_REF` was moved to `3.0.0-ci.8547` — the newest sealed set — and MeshWeaver.Plugins
+`main` and **every open pull request** went red on the first job of every run with *"its
+source/release is unverified: platform-bake job 103845949792 has an incomplete or inconsistent final
+publication receipt"*. That job's log says, twice, once per target: `holds a COMPLETE publication of
+THIS content … (sentinel present, source 1c1d62adf…) — already published; skipping`, and the registry
+said the same. The set was live at both targets; the receipt just had no word for it. The freeze was
+read as naming a bad set, and [Continuous Integration Content Bake](/Doc/Architecture/CiContentBake)
+recorded it as *"the set … had been published to no target at all"* — which is what a receipt that
+cannot say "already" makes a careful reader believe.
 
 **The markers are not the anomaly, and must not be.** `publish_release_marker` runs BEFORE the
 sealed-skip on purpose: the version → identity mapping has to land on every run, including the
