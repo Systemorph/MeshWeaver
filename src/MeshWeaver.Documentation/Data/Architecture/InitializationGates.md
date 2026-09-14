@@ -1,4 +1,4 @@
----
+﻿---
 Name: Initialization Gates
 Description: "Declare, open, and bypass hub initialization gates that defer inbound traffic until reactive data loads complete — without deadlocking via await."
 ---
@@ -449,6 +449,9 @@ public static class MeshNodeExtensions
 
 ## Related
 
+- [Retiring an Activation](/Doc/Architecture/RetiringAnActivation) — the terminal counterpart to opening a
+  gate: `FailGate` answers a backlog behind a gate that can never open, and a retirement must do it
+  BEFORE it disposes.
 - [Asynchronous Calls in MeshWeaver](/Doc/Architecture/AsynchronousCalls) — the broader rule: no `await`
   of hub round-trips anywhere in mesh-reachable code.
 - [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — queries are lagged and

@@ -751,14 +751,17 @@ public sealed class MessageHub : IMessageHub
     /// when, and only when, demand routing will re-create it
     /// (<see cref="MessageHubConfiguration.WithReactivationOnDemand"/>).
     ///
-    /// <para>Order matters and is deliberate: <see cref="Dispose"/> FIRST, so the refusal every
-    /// parked delivery receives is classified <see cref="ErrorType.ShuttingDown"/> (the reporters
-    /// read <see cref="IsShuttingDown"/>) and carries this activation's identity; then
-    /// <see cref="FailGate"/>, which answers the backlog now with the SPECIFIC reason instead of
-    /// leaving it to the teardown's generic "Hub is shutting down" — a reader of the caller's
-    /// error should see the database, not the recycle. Nothing is recorded in
-    /// <see cref="InitializationError"/>: this activation is going away, and the FAILED marker
-    /// exists to describe one that stays.</para>
+    /// <para>🚨 Order matters and is deliberate — and it is the OPPOSITE of what it was (issue
+    /// #4261). <see cref="FailGate(string,string,ErrorType)"/> comes FIRST, carrying both the
+    /// SPECIFIC reason and its classification, so the backlog is answered before any teardown
+    /// exists that could answer it differently; <see cref="Dispose"/> follows. It used to be the
+    /// other way round, to make the drain-time read of <see cref="IsShuttingDown"/> come out
+    /// transient — but <c>Dispose()</c> only POSTS the <c>ShutdownRequest</c> and its drain runs
+    /// later on the action block, so the two ends raced for the same deferred backlog and the
+    /// requester was told "the message was never processed" instead of naming the database.
+    /// Stating the <see cref="ErrorType"/> removes the reason the ordering existed, and with it the
+    /// race. Nothing is recorded in <see cref="InitializationError"/>: this activation is going
+    /// away, and the FAILED marker exists to describe one that stays.</para>
     /// </summary>
     /// <param name="ex">The transient fault the initialization met.</param>
     /// <returns><c>true</c> when the hub was retired; <c>false</c> when it is not re-created on
@@ -776,8 +779,8 @@ public sealed class MessageHub : IMessageHub
             "Hub {Address} initialization met a transient infrastructure fault — retiring this activation "
             + "instead of latching it FAILED; the address reactivates on the next delivery and initializes "
             + "again. {Reason}", Address, reason);
+        FailGate(MessageHubConfiguration.InitializeGateName, reason, ErrorType.ShuttingDown);
         Dispose();
-        FailGate(MessageHubConfiguration.InitializeGateName, reason);
         return true;
     }
 
@@ -977,16 +980,33 @@ public sealed class MessageHub : IMessageHub
     }
 
     /// <summary>
-    /// Declares the named initialization gate DEAD — see <see cref="IMessageHub.FailGate"/> for
-    /// the contract. Everything deferred behind it is answered immediately, and later messages
+    /// Declares the named initialization gate DEAD — see <see cref="IMessageHub.FailGate(string,string,ErrorType)"/>
+    /// for the contract. Everything deferred behind it is answered immediately, and later messages
     /// that would have been deferred are answered too rather than parked.
+    /// </summary>
+    /// <param name="name">The name of the gate that can never open.</param>
+    /// <param name="reason">Why it can never open; becomes the failure message senders receive.</param>
+    /// <param name="errorType">
+    /// How the refusal is classified. Stated by the caller and carried with the reason, never
+    /// re-derived from this hub's run level at drain time (#4261).
+    /// </param>
+    /// <returns><c>true</c> if the gate existed and was failed; <c>false</c> if it was not found.</returns>
+    public bool FailGate(string name, string reason, ErrorType errorType)
+    {
+        return messageService.FailGate(name, reason, errorType);
+    }
+
+    /// <summary>
+    /// The unclassified form — the refusal's <see cref="ErrorType"/> is left to be derived from
+    /// this hub's run level at drain time. Prefer the three-argument overload: a classification
+    /// derived from teardown progress is a race, which is what #4261 removed.
     /// </summary>
     /// <param name="name">The name of the gate that can never open.</param>
     /// <param name="reason">Why it can never open; becomes the failure message senders receive.</param>
     /// <returns><c>true</c> if the gate existed and was failed; <c>false</c> if it was not found.</returns>
     public bool FailGate(string name, string reason)
     {
-        return messageService.FailGate(name, reason);
+        return messageService.FailGate(name, reason, ErrorType.Unknown);
     }
 
 
