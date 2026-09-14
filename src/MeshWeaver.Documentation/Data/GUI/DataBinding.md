@@ -291,6 +291,47 @@ flowchart LR
     Ref --> Path
 ```
 
+## 🚨 An ABSENT `DataContext` does not disable the binding — it RE-ROOTS it
+
+Worth knowing before you read the stack trace in
+[#3711](https://github.com/Systemorph/MeshWeaver/issues/3711), because the exception there names a
+JSON parse and the fault is a lost context.
+
+`LayoutClientExtensions.GetPointer` resolves a relative pointer against the data context — and when
+there is no context it does **not** refuse. It promotes the pointer to an absolute one:
+
+```csharp
+if (pointer.StartsWith('/'))
+    return pointer.TrimEnd('/');
+if (string.IsNullOrWhiteSpace(dataContext))
+    return string.IsNullOrEmpty(pointer) ? "/" : $"/{pointer}";   // ← relative becomes ABSOLUTE
+return $"{dataContext}/{pointer.TrimEnd('/')}";
+```
+
+`LayoutExtensions.GetStream` then reads segment 0 as a COLLECTION and segment 1 as a **JSON-encoded
+id**. So what happens next depends on how many segments the pointer has, and the two cases are
+opposites:
+
+| pointer, context absent | resolves to | outcome |
+|---|---|---|
+| `answers/q1` (2 segments) | `/answers/q1` | `Deserialize<string>("q1")` **throws** — *'q' is an invalid start of a value* |
+| `answers` (1 segment) | `/answers` | `SegmentCount == 1` ⇒ no id decode ⇒ **binds silently against the layout stream's own root** |
+
+🚨 **The crash is the lucky case.** The one-segment form reports nothing and reads — and through
+`BlazorView.UpdatePointer`, writes — to the wrong store: the layout stream's own `/data` replica
+instead of the node the view was meant to be bound to. That is the replicate-then-save outcome this
+page forbids above, reached by accident rather than by design.
+
+Two consequences:
+
+1. **Never "fix" such a crash by making the id decode tolerant.** It converts the loud case into the
+   silent one — for the quiz in #3711 that means a learner's pick written into the layout replica
+   instead of their answer sheet.
+2. **A bind that reads nothing, or reads the wrong thing, with no error, is a `DataContext`
+   question first.** Check that the control's context reached the CLIENT — it is a
+   `[CascadingParameter]` supplied by `DispatchView`, not a property the view reads off the control
+   it renders — before you look at the pointer.
+
 ---
 
 # Updating Data from the Server
