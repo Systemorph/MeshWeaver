@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Compiler;
 using MeshWeaver.Data;
@@ -279,7 +280,7 @@ public static class BakeOutput
                         // than folding def.CompiledSources is the whole point — CompiledSources is
                         // path→ticks, and ticks are the consumer's install clock, not content.
                         return SourceFingerprintOf(workspace, def, typePath)
-                            .SelectMany(fingerprint => pool.InvokeBlocking(_ =>
+                            .SelectMany(computed => pool.InvokeBlocking(_ =>
                             {
                                 // STREAMED, never buffered: the entry carries open-stream
                                 // FACTORIES, so the bytes flow disk → zip inside BundleWriter
@@ -297,7 +298,9 @@ public static class BakeOutput
                                     def.CompiledSources,
                                     def.CompiledDependencies)
                                 {
-                                    SourceFingerprint = fingerprint,
+                                    SourceFingerprint = computed.Fingerprint,
+                                    // #4280 — the include paths the fingerprint folded over.
+                                    SourceIncludes = computed.Includes,
                                 };
                             }));
                     });
@@ -314,7 +317,7 @@ public static class BakeOutput
     /// <c>NodeTypeDefinition.CurrentSourceFingerprint</c>. <c>BakeEquivalenceTest</c> is what pins
     /// the compiler-driven bake to it.</para>
     /// </summary>
-    private static IObservable<string> SourceFingerprintOf(
+    private static IObservable<(string Fingerprint, ImmutableList<string> Includes)> SourceFingerprintOf(
         IWorkspace workspace, NodeTypeDefinition def, string typePath)
     {
         var access = workspace.Hub.ServiceProvider.GetService<AccessService>();
@@ -335,7 +338,7 @@ public static class BakeOutput
             .Take(1)
             .Timeout(ReadBudget)
             .SelectMany(sources =>
-                NodeTypeSourceFingerprint.Compute(sources, typePath, includeReader));
+                NodeTypeSourceFingerprint.ComputeWithIncludes(sources, typePath, includeReader));
     }
 
     /// <summary>Package ids are top-level folder names, but the bundle FILE name must be safe on

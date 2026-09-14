@@ -1218,7 +1218,29 @@ internal static class NodeTypeCompilationHelpers
         NodeTypeDefinition def, IReadOnlyDictionary<string, long>? liveSources)
         => CanJudgeAdoption(
             def.AdoptedSourceFingerprint, def.CurrentSourceFingerprint, liveSources,
-            def.AdoptedSourcePaths);
+            def.AdoptedSourcePaths, def.AdoptedSourceIncludes, def.CurrentSourceIncludes);
+
+    /// <summary>
+    /// 🚨 #4280 (second finding on #4293) — the <c>@@</c>-include paths the adopted bytes were
+    /// compiled with that the owner has NOT resolved as present yet. The include half of
+    /// <see cref="SourcePathsNotYetLive"/>: an include is matched by no source query, lands as
+    /// its own node, and until it does the include reader answers ABSENT — an answer that
+    /// shortens the live fold, so the fingerprints differ for an arrival, not a move. Empty when
+    /// the bundle recorded no includes; ALL of them when the owner has not published
+    /// <see cref="NodeTypeDefinition.CurrentSourceIncludes"/> yet (the fingerprint and the list
+    /// are written together, so "not published" is "not computed", never "none present").
+    /// </summary>
+    internal static IReadOnlyList<string> SourceIncludesNotYetLive(
+        IReadOnlyCollection<string>? adoptedSourceIncludes,
+        IReadOnlyCollection<string>? currentSourceIncludes)
+    {
+        if (adoptedSourceIncludes is not { Count: > 0 })
+            return [];
+        if (currentSourceIncludes is null)
+            return adoptedSourceIncludes.ToList();
+        var present = new HashSet<string>(currentSourceIncludes, StringComparer.OrdinalIgnoreCase);
+        return adoptedSourceIncludes.Where(p => !present.Contains(p)).ToList();
+    }
 
     /// <summary>
     /// 🚨 #4280 — the source paths the adopted bytes were built from that the live snapshot does
@@ -1271,6 +1293,23 @@ internal static class NodeTypeCompilationHelpers
         string? liveFingerprint,
         IReadOnlyDictionary<string, long>? liveSources,
         IReadOnlyCollection<string>? adoptedSourcePaths)
+        => CanJudgeAdoption(adoptedFingerprint, liveFingerprint, liveSources, adoptedSourcePaths,
+            adoptedSourceIncludes: null, currentSourceIncludes: null);
+
+    /// <summary>
+    /// <see cref="CanJudgeAdoption(string, string, IReadOnlyDictionary{string, long}, IReadOnlyCollection{string})"/>
+    /// with the <c>@@</c>-include halves as well (#4280): the includes the bundle was compiled
+    /// with must all be among the includes the owner resolved as present, or the live fold is
+    /// short of an arrival and the judgement waits. Null adopted includes — a legacy producer —
+    /// skip the include witness.
+    /// </summary>
+    internal static bool CanJudgeAdoption(
+        string? adoptedFingerprint,
+        string? liveFingerprint,
+        IReadOnlyDictionary<string, long>? liveSources,
+        IReadOnlyCollection<string>? adoptedSourcePaths,
+        IReadOnlyCollection<string>? adoptedSourceIncludes,
+        IReadOnlyCollection<string>? currentSourceIncludes)
     {
         if (adoptedFingerprint is not { Length: > 0 } adopted)
             return true;
@@ -1281,9 +1320,11 @@ internal static class NodeTypeCompilationHelpers
         if (liveSources is not { Count: > 0 })
             return false;
         // #4280 — the fingerprints differ and something matched: was the live set COMPLETE when
-        // it was measured? Ordered after the equality check for the same reason the empty
-        // witness is — an honest match is an honest match whatever the paths say.
-        return SourcePathsNotYetLive(adoptedSourcePaths, liveSources).Count == 0;
+        // it was measured? Both halves — the query-resolved paths and the include closure —
+        // ordered after the equality check for the same reason the empty witness is: an honest
+        // match is an honest match whatever the lists say.
+        return SourcePathsNotYetLive(adoptedSourcePaths, liveSources).Count == 0
+               && SourceIncludesNotYetLive(adoptedSourceIncludes, currentSourceIncludes).Count == 0;
     }
 
     /// <summary>
@@ -1575,6 +1616,7 @@ internal static class NodeTypeCompilationHelpers
         if (!CanJudgeAdoption(def, snapshot))
         {
             var notYetLive = SourcePathsNotYetLive(def.AdoptedSourcePaths, snapshot);
+            var includesNotYetLive = SourceIncludesNotYetLive(def.AdoptedSourceIncludes, def.CurrentSourceIncludes);
             logger?.LogWarning(
                 "[AdoptedSourceStamp] {HubPath}: the adoption is NOT judged yet ({Issue}) — the "
                 + "bundle records source fingerprint {Adopted}, and there is NOTHING established to "
@@ -1583,7 +1625,7 @@ internal static class NodeTypeCompilationHelpers
                 + "publication judges it. Nothing is wrong with this type — it was activated ahead "
                 + "of the sources it declares.",
                 hubPath,
-                notYetLive.Count > 0 && snapshot is { Count: > 0 } ? "#4280" : "#4208",
+                (notYetLive.Count > 0 || includesNotYetLive.Count > 0) && snapshot is { Count: > 0 } ? "#4280" : "#4208",
                 def.AdoptedSourceFingerprint,
                 def.CurrentSourceFingerprint is not { Length: > 0 }
                     ? "the owner has not published a live fingerprint yet"
@@ -1593,6 +1635,15 @@ internal static class NodeTypeCompilationHelpers
                           + $"landed on this mesh yet — the install is still writing them: "
                           + string.Join(", ", notYetLive.Take(6))
                           + (notYetLive.Count > 6 ? ", …" : "")
+                    : snapshot is { Count: > 0 } && includesNotYetLive.Count > 0
+                        ? $"{includesNotYetLive.Count} of the {def.AdoptedSourceIncludes!.Count} @@-include(s) "
+                          + "the bundle was compiled with "
+                          + (def.CurrentSourceIncludes is null
+                              ? "have not been resolved here yet (no include closure published)"
+                              : "are not present on this mesh yet — an absent include is an "
+                                + "arrival, not a move")
+                          + ": " + string.Join(", ", includesNotYetLive.Take(6))
+                          + (includesNotYetLive.Count > 6 ? ", …" : "")
                         : "not one of its declared source queries has matched a node on this mesh"
                           + (NodeTypeSourceFingerprint.EmptySourceSet.Equals(
                                  def.CurrentSourceFingerprint, StringComparison.Ordinal)
@@ -1949,9 +2000,13 @@ internal static class NodeTypeCompilationHelpers
             // emission (null) and the previously published value stands; the judgement then takes
             // ApplyAdoptedSourceStamp's "nothing has been compared" branch (AdoptedUnverified),
             // which is the honest answer and the same #890 rule the emit canary follows.
+            // #4280 — and the include PATHS the closure resolved as present ride beside the
+            // fingerprint, published in the same write as CurrentSourceIncludes: the hash cannot
+            // say which includes it covered, and the owner's completeness witness needs to know.
             .Select(published => NodeTypeSourceFingerprint
-                .Compute(published.Nodes, hubPath, includeReader, logger)
-                .Select(fingerprint => (published.Snapshot, Fingerprint: (string?)fingerprint))
+                .ComputeWithIncludes(published.Nodes, hubPath, includeReader, logger)
+                .Select(computed => (published.Snapshot, Fingerprint: (string?)computed.Fingerprint,
+                    Includes: (System.Collections.Immutable.ImmutableList<string>?)computed.Includes))
                 .Catch((SourceIncludeUnavailableException ex) =>
                 {
                     logger?.LogWarning(ex,
@@ -1959,14 +2014,15 @@ internal static class NodeTypeCompilationHelpers
                         + "established, so CurrentSourceFingerprint is left at its previous value "
                         + "for this emission — an unreadable include must never read as an absent "
                         + "one", hubPath);
-                    return Observable.Return((published.Snapshot, Fingerprint: (string?)null));
+                    return Observable.Return((published.Snapshot, Fingerprint: (string?)null,
+                        Includes: (System.Collections.Immutable.ImmutableList<string>?)null));
                 })
                 // #3583 — the partition root's module version, read beside the fingerprint so the
                 // compatibility rule always has the CURRENT side when the fingerprint says the
                 // source moved. One safe read (Present / Absent / Unavailable); an unreadable
                 // root keeps the previous value, exactly as an unreadable include does.
                 .SelectMany(p => ReadModuleVersion(hub, accessService, hubPath, logger)
-                    .Select(mv => (p.Snapshot, p.Fingerprint, ModuleVersion: mv))))
+                    .Select(mv => (p.Snapshot, p.Fingerprint, p.Includes, ModuleVersion: mv))))
             .Switch(),
                 published =>
                 {
@@ -2074,6 +2130,10 @@ internal static class NodeTypeCompilationHelpers
                         // null) drops out of the comparison entirely: it has nothing to say about
                         // the field, so it must neither force a write nor block the snapshot's.
                         var moduleVersion = published.ModuleVersion;
+                        // #4280 — the include list is part of the equality for the same reason the
+                        // fingerprint is: a node persisted before the field existed must acquire
+                        // it on its first activation, and an inconclusive emission (null) drops out.
+                        var includes = published.Includes;
                         if (!pendingStamp
                             && def.CurrentSourceVersions is not null
                             && DictEquals(def.CurrentSourceVersions, snapshot)
@@ -2081,6 +2141,9 @@ internal static class NodeTypeCompilationHelpers
                                 || string.Equals(
                                     def.CurrentSourceFingerprint, fingerprint,
                                     StringComparison.Ordinal))
+                            && (includes is null
+                                || (def.CurrentSourceIncludes is not null
+                                    && def.CurrentSourceIncludes.SequenceEqual(includes, StringComparer.Ordinal)))
                             && (!moduleVersion.Established
                                 || string.Equals(
                                     def.CurrentModuleVersion, moduleVersion.Version,
@@ -2091,6 +2154,7 @@ internal static class NodeTypeCompilationHelpers
                         {
                             CurrentSourceVersions = snapshot,
                             CurrentSourceFingerprint = fingerprint ?? def.CurrentSourceFingerprint,
+                            CurrentSourceIncludes = includes ?? def.CurrentSourceIncludes,
                             CurrentModuleVersion = moduleVersion.Established
                                 ? moduleVersion.Version
                                 : def.CurrentModuleVersion,

@@ -200,6 +200,44 @@ public class BundleReaderTest
             only.SourcePaths!);
     }
 
+    /// <summary>#4280 (second finding on #4293) — the manifest's <c>sourceIncludes</c> comes back
+    /// sorted; absent on a legacy bundle.</summary>
+    [Fact]
+    public void TheProducersIncludePathsRideAlongAsASortedList()
+    {
+        var manifestJson = JsonSerializer.Serialize(new
+        {
+            plugin = "ThreeBody",
+            version = "1.3.2",
+            frameworkMvid = "33f2efb8",
+            assemblies = new[]
+            {
+                new
+                {
+                    nodePath = "ThreeBody/X",
+                    assembly = "ThreeBody/X.dll",
+                    sourceFingerprint = "aa82137e45651a6c",
+                    sourceVersions = new Dictionary<string, long> { ["ThreeBody/X/Source/X"] = 0 },
+                    sourceIncludes = new[] { "ThreeBody/Shared/Usings", "ThreeBody/Shared/Header" },
+                },
+            },
+        });
+
+        var buffer = new MemoryStream();
+        NuGetPackageWriter.Write(buffer, Manifest, "3.0.0",
+            [
+                new NuGetPackageWriter.Entry(
+                    $"{NuGetPackageWriter.AssemblyFolder}/ThreeBody/X.dll",
+                    () => new MemoryStream("DLL"u8.ToArray())),
+            ],
+            manifestJson);
+
+        var only = Assert.Single(BundleReader.Read(buffer.ToArray()).Assemblies);
+
+        Assert.Equal(["ThreeBody/Shared/Header", "ThreeBody/Shared/Usings"], only.SourceIncludes!);
+        Assert.Equal(["ThreeBody/X/Source/X"], only.SourcePaths!);
+    }
+
     /// <summary>A legacy producer that recorded no snapshot yields <c>null</c> paths — the owner
     /// then judges on the fingerprint alone, exactly as before #4280.</summary>
     [Fact]
@@ -210,6 +248,7 @@ public class BundleReaderTest
         var only = Assert.Single(BundleReader.Read(bundle).Assemblies);
 
         Assert.Null(only.SourcePaths);
+        Assert.Null(only.SourceIncludes);
     }
 
     // ── the MODULE variant (#1664): one bundle, one reader, a second lane ──

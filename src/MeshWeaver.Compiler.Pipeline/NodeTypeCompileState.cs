@@ -133,6 +133,12 @@ public record NodeTypeCompileState
     /// beside it.</summary>
     public System.Collections.Immutable.ImmutableList<string>? AdoptedSourcePaths { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.AdoptedSourceIncludes"/> (#4280).</summary>
+    public System.Collections.Immutable.ImmutableList<string>? AdoptedSourceIncludes { get; init; }
+
+    /// <summary>See <see cref="NodeTypeDefinition.CurrentSourceIncludes"/> (#4280).</summary>
+    public System.Collections.Immutable.ImmutableList<string>? CurrentSourceIncludes { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.CurrentModuleVersion"/> — the module version of
     /// the source this mesh HOLDS. Mirrored for the same reason as the pair beside it.</summary>
     public string? CurrentModuleVersion { get; init; }
@@ -184,6 +190,8 @@ public record NodeTypeCompileState
                 FailedSourceQueries = definition.FailedSourceQueries,
                 AdoptedSourceFingerprint = definition.AdoptedSourceFingerprint,
                 AdoptedSourcePaths = definition.AdoptedSourcePaths,
+                AdoptedSourceIncludes = definition.AdoptedSourceIncludes,
+                CurrentSourceIncludes = definition.CurrentSourceIncludes,
                 AdoptedModuleVersion = definition.AdoptedModuleVersion,
                 CurrentModuleVersion = definition.CurrentModuleVersion,
                 CurrentSourceFingerprint = definition.CurrentSourceFingerprint,
@@ -205,6 +213,7 @@ public record NodeTypeCompileState
         && CompiledFrameworkVersion is null && FailedBuildInputs is null
         && FailedSourceQueries is null
         && AdoptedSourceFingerprint is null && AdoptedSourcePaths is null
+        && AdoptedSourceIncludes is null && CurrentSourceIncludes is null
         && AdoptedModuleVersion is null
         && CurrentModuleVersion is null
         && CurrentSourceFingerprint is null
