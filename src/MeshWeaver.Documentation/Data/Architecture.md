@@ -269,7 +269,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Build Server](BuildServer)
 - [The Compile Program — State of Record](CompileProgramStateOfRecord)
 - [Content-Type Registration](ContentTypeRegistration)
-- [Import-Side Content Degradation](ImportSideContentDegradation) — the OTHER half: content degraded at import rather than at read, which `/health`'s `content-types` census cannot see because the degraded node types cleanly
+- [Import-Side Content Degradation](ImportSideContentDegradation) — the OTHER half: content degraded at IMPORT rather than at read. The `/health` `content-types` census cannot see it, because an import-degraded node holds a plain `MarkdownContent` whose `$type` resolves perfectly on every replica
 - [NodeType Catalogs (shipping instances of a NodeType)](NodeTypeCatalogs)
 - [NodeType Release Redesign](Postmortems/NodeTypeReleaseRedesign)
 

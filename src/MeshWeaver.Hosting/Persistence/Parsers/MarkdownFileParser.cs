@@ -59,9 +59,41 @@ public partial class MarkdownFileParser : IFileFormatParser
     /// <summary>
     /// A TOP-LEVEL YAML key — a <c>key:</c> starting at column 0. A nested mapping and the body of
     /// a block scalar are both INDENTED, so neither can be mistaken for one.
+    ///
+    /// <para>🚨 This grammar is NARROWER than YAML's and is the FALLBACK only, never the primary
+    /// reader: it matches an unquoted ASCII identifier, so a quoted key (<c>"displayName":</c>) or
+    /// one carrying a dot is a key YamlDotNet binds, this pattern misses, and the record would then
+    /// omit — a detector seeing less than the loss it exists to name. The primary reader is
+    /// <see cref="TopLevelYamlKeys"/>, which asks the same parser that did the discarding.</para>
     /// </summary>
     [GeneratedRegex(@"^(?<key>[A-Za-z_][\w\-]*)[ \t]*:", RegexOptions.Multiline)]
     private static partial Regex TopLevelFrontMatterKey();
+
+    /// <summary>
+    /// The root mapping's keys, read with the SAME deserializer that bound
+    /// <see cref="MarkdownFrontMatter"/> — so a key it accepted and discarded is a key this sees,
+    /// whatever its spelling (quoted, dotted, non-ASCII). Quotes are resolved by the parser, so the
+    /// reported name is the key as YAML means it rather than as the file spells it.
+    ///
+    /// <para>Returns <c>null</c> when this text is not a YAML mapping the parser can read — a
+    /// duplicate key, an unresolvable alias, a block the defensive extractor recovered from
+    /// malformed input. That is NOT swallowing a fault: the front matter has already been bound (or
+    /// regex-recovered) by the time this runs, so the parse state is known; the caller falls back
+    /// to the narrower <see cref="TopLevelFrontMatterKey"/> pattern, exactly as
+    /// <c>Parse</c> already falls back when YamlDotNet throws on the same text.</para>
+    /// </summary>
+    /// <param name="yaml">The raw front-matter block.</param>
+    private static IEnumerable<string>? TopLevelYamlKeys(string yaml)
+    {
+        try
+        {
+            return YamlDeserializer.Deserialize<Dictionary<string, object?>>(yaml)?.Keys;
+        }
+        catch (YamlDotNet.Core.YamlException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// 🚨 <b>The keys this parse DISCARDED</b> — the record that turns a silently lossy import
@@ -74,6 +106,12 @@ public partial class MarkdownFileParser : IFileFormatParser
     /// page makes no such claim — its extra keys are the author's own metadata and are not a
     /// degradation — which is also what keeps the record null for all but a handful of files
     /// (measured over this repo's 1,637 front-matter <c>.md</c> files: one).</para>
+    ///
+    /// <para>The keys are read with the SAME parser that discarded them
+    /// (<see cref="TopLevelYamlKeys"/>) rather than with a key grammar of this method's own: a
+    /// detector that recognises fewer key spellings than the deserializer accepts would report a
+    /// SHORTER list than the loss, which is the one failure this record must not have. The regex is
+    /// the fallback for text the parser cannot read at all.</para>
     /// </summary>
     /// <param name="nodeType">The declared node type, after the defensive extractor has run.</param>
     /// <param name="yaml">The raw front-matter block.</param>
@@ -83,8 +121,10 @@ public partial class MarkdownFileParser : IFileFormatParser
         if (string.IsNullOrEmpty(nodeType) || string.IsNullOrEmpty(yaml))
             return null;
 
-        var unbound = TopLevelFrontMatterKey().Matches(yaml)
-            .Select(m => m.Groups["key"].Value)
+        var keys = TopLevelYamlKeys(yaml)
+                   ?? TopLevelFrontMatterKey().Matches(yaml).Select(m => m.Groups["key"].Value);
+
+        var unbound = keys
             .Where(key => !BoundFrontMatterKeys.Contains(key))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToImmutableList();

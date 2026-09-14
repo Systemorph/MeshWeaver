@@ -72,7 +72,14 @@ public record MarkdownContent
     /// export's bytes and every existing node are untouched. Set only for a file that DECLARED a
     /// <c>nodeType</c>: an untyped page has no type-specific configuration to lose, and its stray
     /// keys are the author's own.</para>
+    ///
+    /// <para>🚨 <c>[Browsable(false)]</c> for the same reason as <see cref="UnknownMembers"/> below,
+    /// and it is load-bearing here: <c>MeshNodeContentEditorControl.FromType</c> puts EVERY property
+    /// of a content record on the form unless it carries that attribute. Without it a viewer could
+    /// edit — or clear — the record of what was lost while the settings themselves stay lost, which
+    /// is the one way a diagnosis becomes worse than no diagnosis.</para>
     /// </summary>
+    [System.ComponentModel.Browsable(false)]
     public IReadOnlyList<string>? UnboundFrontMatter { get; init; }
 
     /// <summary>

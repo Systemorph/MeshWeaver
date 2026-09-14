@@ -10,9 +10,10 @@ Order: -20260914
 
 A `.md` file says at the top what kind of node it is — an agent, a skill, a lesson — and the rest
 of its heading carries that kind's settings: an agent's display name, its description, the plugins
-it may use, where it should appear. If the part of the portal that understands that kind is not
-loaded when the file is imported, the file still becomes a node, and the node still looks right:
-correct type, correct name, correct icon, correct category, full body. Only the settings are gone.
+it may use, where it should appear. If the part of the portal that understands that kind does not
+produce a node — because it is not loaded, or because the heading is malformed and it refuses the
+file — the file still becomes a node, and the node still looks right: correct type, correct name,
+correct icon, correct category, full body. Only the settings are gone.
 
 Nothing said so. An agent imported that way appeared in the agent picker with no description, no
 tools and no context — and the only way to find out was for somebody to notice, which on the
@@ -27,5 +28,6 @@ Nothing changes for ordinary pages: a page that declares no node type has no set
 gets no such list. And nothing changes about the files themselves — exporting content back to its
 repository produces exactly the same bytes as before.
 
-The fix for an affected node is unchanged and unaffected: import it again on a portal where its
-kind is available, and it comes back complete — at which point the list disappears by itself.
+The fix for an affected node is unchanged and unaffected: correct the file's heading, or import it
+again on a portal where its kind is available, and it comes back complete — at which point the list
+disappears by itself.

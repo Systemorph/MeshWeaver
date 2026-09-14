@@ -9,12 +9,13 @@ namespace MeshWeaver.Hosting.Test;
 /// <summary>
 /// 🚨 Pins Systemorph/MeshWeaver#4319: <b>a typed node that degrades to Markdown must SAY SO.</b>
 ///
-/// <para><see cref="MarkdownFileParser"/> is the fallback for <c>.md</c> and accepts every file.
-/// When the parser that owns a declared <c>nodeType</c> is not registered on the importing host,
-/// the fallback wins by default and the node lands with the right <c>NodeType</c>, the right name
-/// and the instructions body — and <see cref="MarkdownContent"/> where its typed configuration
-/// should be. Every key that type declared is discarded. Nothing throws, nothing logs, and the
-/// node looks complete in a listing.</para>
+/// <para><see cref="MarkdownFileParser"/> is the fallback for <c>.md</c> and accepts every file —
+/// so it is what a TYPED node falls back to whenever the parser that owns its declared
+/// <c>nodeType</c> does not produce a node, whether because it is not registered on this host or
+/// because it REFUSED the file. The node then lands with the right <c>NodeType</c>, the right name
+/// and the instructions body, and <see cref="MarkdownContent"/> where its typed configuration should
+/// be. Every key that type declared is discarded. Nothing throws, nothing logs, and the node looks
+/// complete in a listing.</para>
 ///
 /// <para>The live case is <c>Crm/Agent/crm-assistant</c> on <c>memex.meshweaver.cloud</c>: measured
 /// 2026-09-14, <c>content.$type</c> is <c>MarkdownContent</c> and the node has no description,
@@ -26,9 +27,18 @@ namespace MeshWeaver.Hosting.Test;
 /// structurally blind here: the content's <c>$type</c> is <c>MarkdownContent</c>, which resolves
 /// perfectly. The loss happened at IMPORT.</para>
 ///
-/// <para>These tests are ordered defect → gate → positive control, and the three of them together
-/// are what make the record mean something: the first fails on unmodified <c>main</c>; the second
-/// and third would both flag if the detector were left ungated or fired unconditionally.</para>
+/// <para>🚨 <b>And it is that file's own YAML that does it</b> — not a missing parser. Its
+/// <c>description:</c> value contains <c>PG3: fund reporting pilot</c>, a <c>": "</c> inside a plain
+/// scalar, which YAML does not permit;
+/// <see cref="TheLiveFilesYamlIsRefused_AndTheRescueDoesNotRecoverDescription"/> reproduces the
+/// refusal locally. Its sibling <c>Crm/Skill/crm</c> — read the same day — is degraded IDENTICALLY
+/// (<c>MarkdownContent</c>, no description, name/category/icon/order intact) and its file carries
+/// the same malformed value, so "the type's parser was absent" is not needed to explain either one
+/// and does not explain both.</para>
+///
+/// <para>These tests are ordered defect → live mechanism → gate → positive control. The first fails
+/// on unmodified <c>main</c>; the third and fourth would both flag if the detector were left
+/// ungated or fired unconditionally.</para>
 /// </summary>
 public class ATypedNodeDegradedToMarkdownSaysSoTest
 {
@@ -43,7 +53,8 @@ public class ATypedNodeDegradedToMarkdownSaysSoTest
         nodeType: Agent
         name: CrmAssistant
         displayName: CRM Assistant
-        description: Keeps the client pipeline honest from a conversation.
+        description: Keeps the client pipeline honest from a conversation — "Howden confirmed the workshop for 14 Sept", "new deal at PG3: fund reporting pilot, 45k", "Thomas asked not to be emailed". Reads the client, the deal and the board, makes exactly the record change the process names, and answers pipeline questions from the records rather than from memory.
+        icon: <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor'/></svg>
         category: Crm
         exposedInNavigator: true
         contextMatchPattern: address.nodeType=like=Crm/*
@@ -90,6 +101,43 @@ public class ATypedNodeDegradedToMarkdownSaysSoTest
         Assert.Equal(
             new[] { "displayName", "exposedInNavigator", "contextMatchPattern", "plugins" },
             content.UnboundFrontMatter!);
+    }
+
+    /// <summary>
+    /// 🚨 THE SECOND HALF OF THE LIVE CASE, measured rather than assumed: this file's YAML is
+    /// REFUSED by the deserializer, and the defensive extractor that rescues the parse does not
+    /// rescue <c>description</c>.
+    ///
+    /// <para>The `description:` value contains <c>PG3: fund reporting pilot</c> — a <c>": "</c>
+    /// inside a plain scalar, which YAML does not permit. <c>Parse</c> catches that and falls back
+    /// to its regex recovery, which recovers <c>NodeType</c>, <c>Name</c>/<c>Title</c>,
+    /// <c>Category</c>, <c>Icon</c>/<c>Thumbnail</c>, <c>State</c> and <c>Order</c> — and NOT
+    /// <c>Description</c>/<c>Abstract</c>. That is why the live node shows the right name, icon and
+    /// category with a blank description: not one missing parser, but a REFUSED front matter whose
+    /// rescue is partial.</para>
+    ///
+    /// <para>Measured on the live mesh the same day, BOTH of that space's typed markdown nodes show
+    /// exactly this signature — <c>Crm/Agent/crm-assistant</c> and <c>Crm/Skill/crm</c> are each
+    /// <c>MarkdownContent</c> with no description and with name, category, icon and order intact.
+    /// Only <see cref="MarkdownFileParser"/> has a regex rescue, and it only runs when the
+    /// deserializer failed, so that signature IS the fingerprint of this path.</para>
+    ///
+    /// <para>This test pins what IS, not what should be. If the recovery list is ever extended to
+    /// <c>Description</c>, this test tells the author exactly which behaviour they changed.</para>
+    /// </summary>
+    [Fact]
+    public void TheLiveFilesYamlIsRefused_AndTheRescueDoesNotRecoverDescription()
+    {
+        var node = BuiltIns().TryParse(".md", "Crm/Agent/crm-assistant.md", CrmAgentFile, "Crm/Agent/crm-assistant.md");
+
+        Assert.NotNull(node);
+        // Recovered by the defensive extractor — which is why the node looks right in a listing.
+        Assert.Equal("Agent", node!.NodeType);
+        Assert.Equal("CrmAssistant", node.Name);
+        Assert.Equal("Crm", node.Category);
+        // NOT recovered: Description/Abstract is absent from the extractor's field list.
+        Assert.Null(node.Description);
+        Assert.Null(ContentOf(node)!.Abstract);
     }
 
     /// <summary>
