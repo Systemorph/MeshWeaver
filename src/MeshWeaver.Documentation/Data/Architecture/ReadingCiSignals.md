@@ -282,6 +282,65 @@ answered by different contexts.
 run to run produces single greens by itself; one green run is what it looks like, not evidence it is
 gone.
 
+### 🚨 A green PRODUCER that SKIPPED its upload — the red lands four jobs downstream, naming an artifact
+
+The section above is about a consumer reading the *wrong* evidence. This is its mirror: the
+producer runs, decides it has nothing to hand over, **skips its upload step**, and is painted
+green — while every consumer computes the opposite answer and dies on `Artifact not found`. The
+failing job is not the job that is wrong, and its message names a file, not a predicate.
+
+Measured on Plugins#1853, run `34842094978`, on a **docs-only diff** that reddened 14 jobs across
+five required gates:
+
+```
+select:            scope: narrowed — 7 of 41 module bundle(s) are reachable from this diff
+                   publication reuse: 7 unchanged gate dependencies      ⇒ build-modules = []
+build-workspace:   MODULES: []
+                   ✓ the selection carries no `build: container` entry — nothing to emit
+                   Hand the workspace to the matrix ................... SKIPPED
+                   job conclusion .................................... success        ← green here
+pack (each leg):   plan: BUILD MeshWeaver.AI (ledger off)             ← fetch_workspace = true
+                   ##[error]Unable to download artifact(s): Artifact not found for name:
+                            workspace-build-catalog-f42e4aa2ddd9                      ← red here
+```
+
+The two sides computed the same predicate from two different lists: the global build from
+`steps.reuse.outputs.*` (post-annotation) and the pack matrix from `steps.ledger.outputs.modules`
+(pre-annotation), so a reused entry's leg still planned `BUILD`. Fixed in #4312 by cutting the
+matrix from the annotated list.
+
+**How to read one of these, in order:**
+
+1. **Read the FAILING step's own annotation first.** `Artifact not found for name: X` is never a
+   statement about the consumer — it is "whoever produces `X` did not". Do not re-run.
+2. **Find the producer and read its STEP LIST, not its conclusion.** A `skipped` upload under a
+   `success` job is the whole bug, and the job summary will not mention it. Read
+   `actions/jobs/<id>` and look at `steps[].conclusion`.
+3. **Then compare the two `if:` expressions.** Here: `if: steps.build.outputs.built == 'true'` on
+   the upload against `if: steps.plan.outputs.fetch_workspace == 'true'` on the download. Two
+   independently computed guards over one fact is the defect; making both read the same list is
+   the fix.
+4. **Count the cascade before you believe the blast radius.** One skipped upload produced
+   `All selected bundles built` = red, then `The Tests-area gate's inputs are present`
+   (*"a needed job did not succeed … module result=failure"*), the Tests-area ratchet, four
+   `test-repos / Gate shard N/4` (*"external modules were requested but none were assembled"*),
+   `Compile + render node repos`, `Assemble the compile-check reference set`,
+   `Compile every NodeType` and `Every gate executed`. Nine of the fourteen red jobs were reporting
+   the same fact. Triage the earliest, never the loudest.
+
+**Two things this shape is NOT, and both were guessed before it was measured.** It is not the
+self-hosted pool dropping jobs — that shape is **zero steps and no log**, and this job ran 16 of
+its steps on a named live runner. And it is not the diff: a docs-only change cannot reach a module
+bundle, which is the signal to go measure rather than to re-run. `rerun-failed-jobs` would not have
+helped either, since it reuses the run's original resolution; only a whole-workflow re-run picks up
+a lane fixed on `main`.
+
+**The generalisation.** A producer whose hand-over is conditional owes its consumers a *reason*, not
+a silence. Either the guard is shared (one computed output both sides read), or the consumer's
+failure has to name the predicate — `the workspace build emitted nothing for this lane because the
+selection carried no container entry` beats `Artifact not found` by the whole distance between a
+diagnosis and a symptom.
+
 ## Reading a RED shard: the exit marker classifies it, the log text does not
 
 A red shard says *why* in exactly one place — the **exit marker** printed by "Fail on non-zero
