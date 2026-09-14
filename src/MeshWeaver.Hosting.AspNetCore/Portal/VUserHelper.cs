@@ -44,6 +44,13 @@ public static class VUserHelper
         // it can be.
         var target = hub.NodeOperationTarget();
 
+        // …and ISSUE it off the router as well (#1140): the target moves where the request EXECUTES,
+        // never where it came FROM, and the detector reports the "sender" role on the request and
+        // the "target" role on its reply. `portalApp.Hub` is a portal hub today, for which
+        // NodeOperationIssuingHub is the identity function — so this is a no-op here and a guard
+        // against the next caller that reaches this helper holding the root mesh hub.
+        var issuingHub = hub.NodeOperationIssuingHub();
+
         // Provisioning a guest VUser node is an infrastructure write, so it runs as
         // the well-known system identity — NOT ImpersonateAsHub(hub). For an
         // anonymous session `hub` is `portal/anonymous`, a hub-shaped principal;
@@ -54,7 +61,7 @@ public static class VUserHelper
         // scope so the emission-side context is system, not the leaked hub identity.
         using (accessService.ImpersonateAsSystem())
         {
-            hub.Observe<CreateNodeResponse>(
+            issuingHub.Observe<CreateNodeResponse>(
                     new CreateNodeRequest(userNode),
                     o => o.WithTarget(target))
                 .FirstAsync()

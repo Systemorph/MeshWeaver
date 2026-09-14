@@ -856,7 +856,7 @@ public class CreateNodePermissionAttribute() : RequiresPermissionAttribute(Permi
 /// <c>IObservable&lt;MeshNode&gt;</c> create contract throws.
 ///
 /// <para>🚨 <b>The typed reason used to be discarded at that boundary.</b> Both
-/// <c>MeshService.CreateNode</c> and <c>HubNodePersistence.CreateNode</c> mapped
+/// <c>MeshService.CreateNode</c> and the since-deleted <c>HubNodePersistence.CreateNode</c> mapped
 /// <see cref="NodeCreationRejectionReason.NodeAlreadyExists"/> to a bare
 /// <see cref="InvalidOperationException"/> carrying the reason only in its MESSAGE — so every
 /// caller that needed to tell "this path is already taken" from "validation failed" had to parse
