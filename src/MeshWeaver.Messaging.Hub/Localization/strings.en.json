@@ -106,6 +106,8 @@
   "menu.breadcrumb": "Breadcrumb",
   "menu.mainMenu": "Main menu",
   "menu.expandCollapse": "Menu expand/collapse toggle",
+  "menu.showIndex": "Show the index",
+  "menu.hideIndex": "Hide the index",
   "overview.unresolvedType": "Content type “{0}” is not known here yet",
   "overview.untypedContent": "This content has no type marker",
   "overview.untypedContentHint": "It was stored as free-form JSON, so the platform has no declared property list to build a form from. Open the node's source to see the values.",
