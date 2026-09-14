@@ -499,7 +499,15 @@ class Gh:
         exists at all. Returns None when the run holds no artefact for this shard — the caller
         then records `present=False`, which is already the safe direction (no attribution, no
         re-queue), not a silent pass."""
-        artifacts = (self.api(f"actions/runs/{run_id}/artifacts?per_page=100") or {}).get("artifacts", [])
+        # 🚨 EVERY PAGE. A run holds 12 artefacts per attempt (6 build outputs + 6 shard results), so
+        # a single 100-item page runs out after the eighth — and the artefact it would then drop is
+        # the NEWEST attempt's, since pages are ordered oldest-first. A steward that reads the page
+        # it happens to get would classify a superseded trx, or none, exactly when a pull request
+        # has been re-run the most. `paginate=True` slurps the pages as a list of page objects.
+        pages = self.api(f"actions/runs/{run_id}/artifacts?per_page=100", paginate=True) or []
+        if isinstance(pages, dict):          # a single, unslurped page
+            pages = [pages]
+        artifacts = [a for page in pages for a in ((page or {}).get("artifacts") or [])]
         scoped = re.compile(rf"testResults-shard{re.escape(shard)}-attempt(\d+)")
         best: tuple[int, str] | None = None
         legacy: str | None = None
@@ -872,12 +880,22 @@ def self_test() -> int:
         # Ids DESCEND with list position, so the first-listed artefact also holds the highest id:
         # every artefact here reproduces run 34823051999, where the superseded attempt was both
         # listed first and had the higher id. A pick by list order or by id fails these rows.
-        def __init__(self, names):  # noqa: D107 - test double
+        # The reply is PAGED — a list of page objects, which is what `api(..., paginate=True)`
+        # returns — with `page_size` deciding how many pages, so "reads only the first page" is a
+        # case rather than an assumption.
+        def __init__(self, names, page_size=None):  # noqa: D107 - test double
             self.repo, self.write_token, self.read_token = "o/r", None, None
             self._names = names
+            self._page_size = page_size or max(len(names), 1)
 
         def api(self, path, *a, **kw):
-            return {"artifacts": [{"name": n, "id": len(self._names) - i} for i, n in enumerate(self._names)]}
+            rows = [{"name": n, "id": len(self._names) - i} for i, n in enumerate(self._names)]
+            if not kw.get("paginate"):
+                # The unpaginated call sees ONE page — the shape the API really answers, and the
+                # shape that must NOT be what the resolver asks for.
+                return {"artifacts": rows[:self._page_size]}
+            return [{"artifacts": rows[i:i + self._page_size]}
+                    for i in range(0, len(rows), self._page_size)] or [{"artifacts": []}]
 
     print("shard artefact attribution:")
     gh = FakeGh(["testResults-shard2-attempt1", "testResults-shard2-attempt2", "testResults-shard1-attempt1"])
@@ -892,6 +910,14 @@ def self_test() -> int:
     check(FakeGh(["testResults-shard3", "testResults-shard3-attempt2"]).shard_artifact_name(1, "3")
           == "testResults-shard3-attempt2", "an attempt-scoped upload always wins over the legacy name")
     check(FakeGh(["build-output-0"]).shard_artifact_name(1, "0") is None, "no shard artefact at all is None, not a guess")
+    # 🚨 EVERY PAGE, not the first (Copilot on #4332). A run carries 12 artefacts per attempt, so a
+    # run re-run enough times pushes the NEWEST attempt onto a later page — pages are oldest-first,
+    # so a single-page read drops exactly the artefact that is the shard's outcome. Two pages of
+    # two here: the winner is the last row of the last page.
+    paged = FakeGh(["testResults-shard0-attempt1", "build-output-0",
+                    "build-output-1", "testResults-shard0-attempt2"], page_size=2)
+    check(paged.shard_artifact_name(1, "0") == "testResults-shard0-attempt2",
+          "the newest attempt is read even when it is on a later artefact PAGE")
 
     print("self-test " + ("PASSED" if ok else "FAILED"))
     return 0 if ok else 1
