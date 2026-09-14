@@ -39,8 +39,25 @@ public sealed record GateOptions
     /// <summary>Budget for one NodeType to reach a terminal compile status.</summary>
     public TimeSpan CompileTimeout { get; init; } = TimeSpan.FromMinutes(5);
 
-    /// <summary>Budget for one layout-area render / Tests execution.</summary>
+    /// <summary>Budget for one layout-area RENDER — a view reaching its first frame.</summary>
     public TimeSpan RenderTimeout { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Budget for one Tests area to reach a terminal verdict. Separate from
+    /// <see cref="RenderTimeout"/> since 2026-09-14, because the two measure different things: a
+    /// render is one view reaching its first frame, while a Tests area EXECUTES every case the
+    /// NodeType declares and only then reports. Sharing the render's 2 minutes silently capped
+    /// suite size — the in-mesh migration of core's xunit estate (MeshWeaver#4185) produced suites
+    /// of 185 to 835 cases, and six of eight timed out with `Tests area reported no verdict within
+    /// 120s` on suites that were passing, which reads exactly like a broken gate. A generated suite
+    /// is not an error; a budget chosen for a render is.
+    ///
+    /// 🚨 It is still a BOUND, not an absence of one: a Tests area that reports nothing within it
+    /// is red, never a silent pass. Raise it for suites that legitimately take longer; do not
+    /// remove it, and do not answer a timing-out suite with an allow-list entry — that is the
+    /// `tests=skipped` hole this gate exists to close.
+    /// </summary>
+    public TimeSpan TestsTimeout { get; init; } = TimeSpan.FromMinutes(10);
 
     /// <summary>
     /// Budget for one package fetch or install pass (each of the two installs — the gate proper
@@ -714,7 +731,7 @@ public static class PluginGateRunner
                             ? Observable.Return(new AreaVerdict(
                                 CheckOutcome.Failed, "no host to execute the Tests area on"))
                             : AreaProbe.ExecuteTestsArea(
-                                harness.Client, host.Path, options.RenderTimeout))
+                                harness.Client, host.Path, options.TestsTimeout))
                         .Catch((Exception ex) => Observable.Return(new AreaVerdict(
                             CheckOutcome.Failed,
                             $"could not execute Tests area: {ex.GetType().Name}: {ex.Message}")))
