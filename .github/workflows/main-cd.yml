@@ -2674,6 +2674,29 @@ jobs:
       platform-image-digest: ${{ needs.plugins-bake-image.outputs.platform_digest }}
       bake-publish-targets: ${{ vars.BAKE_PUBLISH_TARGETS }}
       platform-ref: ${{ needs.gate.outputs.sha }}
+      # 🚨 PHASE 4 OF MeshWeaver#3461, core's half. Each publication is written into its own
+      # run-named directory, sealed there, and `_current` — written after the seal — says which one
+      # applies. The prefix is never mutated in place again for a reader that follows the pointer,
+      # which is every portal (`ShippedPrebuiltBundles.PublicationDirectoryOf`) and both Azure-direct
+      # readers. The flat compatibility copy is still written and still sealed, so a reader that
+      # cannot follow a pointer sees exactly what it sees today.
+      #
+      # 🚨 WHY THIS DOES NOT HAVE TO BE CO-ORDINATED WITH MeshWeaver.Plugins, whose `publish-bake`
+      # is the OTHER producer of this prefix. Since MeshWeaver#4249 the layout belongs to the PREFIX:
+      # a run that resolves a live `_current` publishes a generation whatever its caller passed,
+      # warning by name. So the satellite keeps publishing correctly from the merge of this line
+      # onward, with no change in its repository and in whichever order the two repos merge.
+      #
+      # 🚨 And the precondition that makes that true is MEASURED, not assumed: the mechanism lives in
+      # the PUBLISHER, so every producer must be running one that carries it. Measured 2026-09-14
+      # across all six node repos — Plugins, Crm, Education, Reinsurance, SocialMedia, Manufacturing
+      # — every lane is `@main` and every `scripts-ref:` is `main`, so no pinned publisher and no
+      # pinned reader of this prefix exists in the fleet. This lane is the one exception and it
+      # resolves its scripts at `platform-ref` above (`gate.outputs.sha`), i.e. the commit this run
+      # publishes; on a reconcile run that can be older, and a publisher predating #4249 would then
+      # refresh the flat copy without moving the pointer — which leaves pointer-following readers on
+      # the NEWER generation, the direction that is safe. Doc/Architecture/SealedPublicationGenerations.
+      publication-layout: generation
       # Plugins is a ROOT: no upstream to wait for. And it does NOT dispatch its own dependents —
       # on a platform release the job below wakes every repo once; a second, package-shaped wave
       # from here would wake the same satellites twice for the same identity.
