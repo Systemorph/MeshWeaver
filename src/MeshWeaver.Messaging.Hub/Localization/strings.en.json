@@ -668,6 +668,8 @@
   "ui.updateNoneDetected": "No newer version has been detected yet.",
   "ui.updateRolling": "Rolling the platform to `{0}`…",
   "ui.updateApplyFailed": "Update failed: {0}",
+  "ui.updateHandedOverLine": "🛰️ **Handed to the control instance** ({1}) at {2}: it rolls `{0}` — unattended when that is the pinned release, after an approval there otherwise. This install does not patch itself.",
+  "ui.updateComboHeldManual": "⛔ Not applied: the recorded verification says a module this install runs does not work on `{0}`.",
   "ui.updateAdvisories": "ℹ️ **What the release check reported about `{0}` without holding it:** these are costs and unknowns the update accepts, not reasons it is refused — a package with no prebuilt bake for that build compiles when the new build starts; a module whose loadability could not be measured is decided by the platform itself at start-up, which keeps the previous version if the new one cannot load.",
   "ui.updateRefreshHint": "Refresh to continue on the new build.",
   "ui.updateVerifiedAtLine": "_(verified {0}, image `{1}`)_",

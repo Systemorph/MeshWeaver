@@ -668,6 +668,8 @@
   "ui.updateNoneDetected": "Es wurde noch keine neuere Version erkannt.",
   "ui.updateRolling": "Die Plattform wird auf `{0}` umgestellt…",
   "ui.updateApplyFailed": "Update fehlgeschlagen: {0}",
+  "ui.updateHandedOverLine": "🛰️ **An die Kontrollinstanz übergeben** ({1}) um {2}: sie rollt `{0}` aus — unbeaufsichtigt, wenn das das gepinnte Release ist, sonst nach einer Freigabe dort. Diese Installation patcht sich nicht selbst.",
+  "ui.updateComboHeldManual": "⛔ Nicht angewendet: die aufgezeichnete Prüfung sagt, dass ein Modul dieser Installation auf `{0}` nicht funktioniert.",
   "ui.updateAdvisories": "ℹ️ **Was die Release-Prüfung zu `{0}` gemeldet hat, ohne es zurückzuhalten:** das sind Kosten und Unbekannte, die das Update in Kauf nimmt, keine Gründe für eine Ablehnung — ein Paket ohne vorgebauten Bake für diesen Build wird beim Start des neuen Builds kompiliert; ob ein Modul lädt, dessen Ladbarkeit nicht gemessen werden konnte, entscheidet die Plattform selbst beim Start und behält die vorherige Version, wenn die neue nicht lädt.",
   "ui.updateRefreshHint": "Aktualisieren, um auf dem neuen Build weiterzuarbeiten.",
   "ui.updateVerifiedAtLine": "_(verifiziert {0}, Image `{1}`)_",

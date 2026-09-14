@@ -419,15 +419,17 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     /// check that PATCHED nothing has a restart to take: an applied roll IS the restart (the new
     /// pods boot the landed set), a refused migration leaves the image deliberately where it is, a
     /// failed check decided nothing, and a disabled policy means never — an operator who pins the
-    /// image restarts by hand. A release handed to the control lane is a roll in flight there: the
+    /// image restarts by hand. A release HANDED to the control lane is a roll in flight there: the
     /// Roll it becomes restarts the pods, so a second request for the same instance would only race
-    /// it. Pure; pinned by <c>SelfUpdateVerdictTest</c>.
+    /// it. A hand-over that FAILED is not a roll in flight — nothing was handed to anyone — so the
+    /// pending restart is still considered (and, on the same broken inbox, reported as unavailable
+    /// naming the cause rather than silently skipped). Pure; pinned by <c>SelfUpdateVerdictTest</c>.
     /// </summary>
     public static bool MayRestartAfter(SelfUpdateVerdict platform) => platform.Outcome
         is not (SelfUpdateOutcome.Applied or SelfUpdateOutcome.MigrationFailed
             or SelfUpdateOutcome.CheckFailed or SelfUpdateOutcome.UpdatesDisabled
             or SelfUpdateOutcome.NoOutcome
-            or SelfUpdateOutcome.HandedOver or SelfUpdateOutcome.HandoverFailed);
+            or SelfUpdateOutcome.HandedOver);
 
     /// <summary>
     /// The roll floor applied to a pending restart: the <see cref="RestartDeferred"/> verdict when

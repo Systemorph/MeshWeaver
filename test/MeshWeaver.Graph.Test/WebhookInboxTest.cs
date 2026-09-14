@@ -134,6 +134,50 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         content.Headers.ContainsKey("Cookie").Should().BeFalse("credentials are never persisted");
     }
 
+    /// <summary>
+    /// 🚨 The #1790 invariant, pinned on the ONE in-process caller of this method that is not an
+    /// HTTP request thread (the self-update hand-over delivering into the control instance's own
+    /// inbox, MeshWeaver#4098): the write runs as System — an anonymous or ordinary caller has no
+    /// write access anywhere, so a delivery that landed proves the impersonation happened — and the
+    /// caller's OWN ambient identity is exactly what it was once <c>Subscribe</c> returns, and under
+    /// every notification. The former <c>Observable.Using(ImpersonateAsSystem, …)</c> shape passes
+    /// every other assertion in this class and fails these two: it opened the scope on the
+    /// subscribing thread and disposed it wherever the create's response landed, leaving the
+    /// subscriber latched as <c>system-security</c> for everything it did next.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task AnInProcessCaller_KeepsItsOwnIdentity_WhileTheWriteRunsAsSystem()
+    {
+        await CreateTarget("InProcess");
+        var caller = new AccessContext { ObjectId = "user/in-process-caller", Name = "in-process caller" };
+
+        AccessContext? seenOnNotification = null;
+        AccessContext? afterSubscribe;
+        Task<WebhookInbox.DeliveryResult> pending;
+        using (Access.SwitchAccessContext(caller))
+        {
+            // Await() subscribes synchronously, INSIDE the caller's scope — as the poller's pool
+            // thread does — so the ambient read right after it is the one the scope hands back.
+            pending = WebhookInbox.Deliver(Mesh, ["InProcess"], "InProcess", "application/json", [], "{\"n\":1}")
+                .Do(_ => seenOnNotification = Access.Context)
+                .FirstAsync().Timeout(TestTimeouts.Convergence)
+                .Await();
+            afterSubscribe = Access.Context;
+        }
+        var result = await pending;
+
+        result.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted,
+            "the event node is created as System — a caller with no write access anywhere could not have stored it");
+        (await Find(result.NodePath!)).Should().NotBeNull();
+        afterSubscribe.Should().NotBeNull();
+        afterSubscribe!.ObjectId.Should().Be(caller.ObjectId,
+            "the scope must be left on the way out of the same Subscribe that opened it — a latched "
+            + "System identity on the subscribing thread is the #1790 defect");
+        seenOnNotification.Should().NotBeNull();
+        seenOnNotification!.ObjectId.Should().Be(caller.ObjectId,
+            "every notification is delivered under the subscriber's own identity, never System");
+    }
+
     [Fact(Timeout = 120000)]
     public async Task TargetsNotAllowlisted_OrWithoutAnOwnerNode_AreRefused()
     {

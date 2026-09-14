@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using System.Globalization;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -137,6 +138,22 @@ public static class UpdatePolicySettingsTab
                                 h.Localize("ui.updateHeldManual", tag) + "\n\n> " + verdict.HoldReason);
                             return;
                         }
+                        // 🚨 The manual roll honours the COMBO gate as the poller does (#2274): a
+                        // candidate whose recorded verdict says a module this instance runs fails
+                        // against it is refused here too, naming the reason — the button is exactly
+                        // the moment an operator would force what the poller refused for good reason.
+                        // A pure read of what is RECORDED on the policy content, like the poller's
+                        // candidate walk; an unregistered gate grants nothing and refuses nothing.
+                        var combo = h.Hub.ServiceProvider.GetService<ComboVerificationGate>();
+                        var clearance = combo is null
+                            ? ComboVerificationGate.NotRegistered(tag)
+                            : combo.Recorded(content, tag);
+                        if (clearance.Refuses)
+                        {
+                            h.UpdateData(ResultId,
+                                h.Localize("ui.updateComboHeldManual", tag) + "\n\n> " + clearance.Reason);
+                            return;
+                        }
                         if (apply == SelfUpdateApply.ControlLane)
                         {
                             // The same announcement the poller makes, so the control plane cannot
@@ -210,8 +227,25 @@ public static class UpdatePolicySettingsTab
             : localize("ui.updateInstalledTagWithdrawn", [content.UnresolvedInstalledTag!]) + "\n\n")
         + AvailabilityMarkdown(content, localize, zoneId);
 
+    /// <summary>
+    /// The hand-over sentence for <paramref name="tag"/> (#4098): where and when this install handed
+    /// it to the control instance — or null when the tag was never handed over. Pure; pinned by
+    /// <c>PlatformUpdateStatusTest</c>.
+    /// </summary>
+    internal static string? HandedOverLine(
+        UpdatePolicyContent content, string tag, Func<string, object?[], string> localize, string? zoneId)
+    {
+        if (string.IsNullOrEmpty(content.HandedOverTag)
+            || !string.Equals(content.HandedOverTag, tag, StringComparison.OrdinalIgnoreCase))
+            return null;
+        var when = content.HandedOverAt is { } at
+            ? DisplayTimeExtensions.ToDisplayTime(at, zoneId).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
+            : "?";
+        return localize("ui.updateHandedOverLine", [tag, content.HandedOverTo ?? "?", when]);
+    }
+
     /// <summary>The availability half of <see cref="StatusMarkdown"/>: the latest tag, the check
-    /// time, the availability hold and the combo verdict.</summary>
+    /// time, the hand-over state, the availability hold and the combo verdict.</summary>
     private static string AvailabilityMarkdown(
         UpdatePolicyContent content, Func<string, object?[], string> localize, string? zoneId)
     {
@@ -226,14 +260,21 @@ public static class UpdatePolicySettingsTab
             return content.LastCheckedAt is { } checkedAt
                 ? localize("ui.updateNoNewerVersion", [])
                     + " " + localize("ui.updateCheckedAt",
-                        [DisplayTimeExtensions.ToDisplayTime(checkedAt, zoneId).ToString("yyyy-MM-dd HH:mm")])
+                        [DisplayTimeExtensions.ToDisplayTime(checkedAt, zoneId).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)])
                 : localize("ui.updateNeverChecked", []);
 
         var tag = content.LatestAvailableTag!;
         var available = localize("ui.updateLatestAvailable", [tag])
             + (content.CheckedAt is { } at
-                ? " " + localize("ui.updateCheckedAt", [DisplayTimeExtensions.ToDisplayTime(at, zoneId).ToString("yyyy-MM-dd HH:mm")])
-                : "");
+                ? " " + localize("ui.updateCheckedAt", [DisplayTimeExtensions.ToDisplayTime(at, zoneId).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)])
+                : "")
+            // 🚨 Where the release WENT (#4098). On the control lane "latest available" is not a
+            // release waiting for this install to act — it was handed to the control instance, and
+            // the roll is a decision taken there. Without this line the tab reads "update
+            // available" for ever on an install that has done everything it can; the durable
+            // HandedOver* fields exist for exactly this sentence. Rendered only for the tag the
+            // tab is about: a hand-over of an OLDER tag is history, not the current state.
+            + (HandedOverLine(content, tag, localize, zoneId) is { } handedOver ? "\n\n" + handedOver : "");
 
         // 🚨 The availability hold (#1754) is reported BEFORE the combo verdict, because it is the
         // reason this install is not moving RIGHT NOW. A hold that only showed up in the logs would
@@ -257,13 +298,13 @@ public static class UpdatePolicySettingsTab
                         content.HeldIndeterminate ? "ui.updateHeldUnknown" : "ui.updateHeld", [tag])
                     : content.HeldAt is { } recordedAt
                         ? localize("ui.updateHoldHistorical",
-                            [tag, DisplayTimeExtensions.ToDisplayTime(recordedAt, zoneId).ToString("yyyy-MM-dd HH:mm")])
+                            [tag, DisplayTimeExtensions.ToDisplayTime(recordedAt, zoneId).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)])
                         : localize("ui.updateHoldHistoricalUndated", [tag]))
                 + (string.IsNullOrEmpty(content.HeldReason)
                     ? ""
                     : "\n\n> " + Sanitize(content.HeldReason!))
                 + (operative && content.HeldAt is { } heldAt
-                    ? "\n\n" + localize("ui.updateHeldAt", [DisplayTimeExtensions.ToDisplayTime(heldAt, zoneId).ToString("yyyy-MM-dd HH:mm")])
+                    ? "\n\n" + localize("ui.updateHeldAt", [DisplayTimeExtensions.ToDisplayTime(heldAt, zoneId).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)])
                     : "");
         }
 
@@ -282,7 +323,7 @@ public static class UpdatePolicySettingsTab
             return available;
 
         var verifiedAt = localize("ui.updateVerifiedAtLine",
-            [DisplayTimeExtensions.ToDisplayTime(verdict.VerifiedAt, zoneId).ToString("yyyy-MM-dd HH:mm"), verdict.ImageDigest ?? "?"]);
+            [DisplayTimeExtensions.ToDisplayTime(verdict.VerifiedAt, zoneId).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture), verdict.ImageDigest ?? "?"]);
         // 🚨 Caveats are surfaced on EVERY verdict — ComboVerification.Caveats documents them as
         // mandatory-to-surface. A Green over a moving pin, or a Red whose input diverged, must
         // never render as an unqualified answer (Copilot review on #1099).
