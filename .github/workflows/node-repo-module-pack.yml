@@ -1211,13 +1211,20 @@ jobs:
       - name: Which selected modules still owe a test run
         id: suites
         env:
-          SELECTION: ${{ steps.ledger.outputs.modules }}
+          # 🚨 The REUSE-annotated list, never `steps.ledger.outputs.modules`: `final.json` below is
+          # what "Cut the selection into legs" hands the pack matrix, so an entry the `reuse` step
+          # marked unchanged must reach its leg WITH that mark. Plugins#1853 (2026-09-14, the first
+          # run after a sealed publication existed to reuse from): the global build honoured
+          # `build-modules` (`[]`, "every container entry is reused") while every leg, cut from the
+          # pre-annotation list, planned BUILD and died fetching a workspace artifact nobody made.
+          SELECTION: ${{ steps.reuse.outputs.modules }}
           TEST_MODULES: ${{ inputs.test-modules }}
         run: |
           set -euo pipefail
           printf '%s' "${SELECTION:-[]}" > "$RUNNER_TEMP/final.json"
           jq -c '[ .[] | select(
-                    if (.ledger.decision // "build") == "reuse"
+                    if .reuse != null then false
+                    elif (.ledger.decision // "build") == "reuse"
                     then (.ledger.needTest == true)
                     else (.test != false) end) ]' "$RUNNER_TEMP/final.json" > "$RUNNER_TEMP/suites.json"
           # `test-modules` (header, "Which of the selected modules RUN THEIR SUITE"): `*` keeps the
