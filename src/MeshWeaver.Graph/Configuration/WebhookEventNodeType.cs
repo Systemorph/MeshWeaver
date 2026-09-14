@@ -295,9 +295,15 @@ public static class WebhookInbox
                 new InvalidOperationException("The mesh service is not available."));
         var accessService = hub.ServiceProvider.GetService<AccessService>();
 
-        return Observable.Using(
-                () => accessService?.ImpersonateAsSystem() ?? System.Reactive.Disposables.Disposable.Empty,
-                _ => mesh
+        // 🚨 RunAsSystem, never `Observable.Using(access.ImpersonateAsSystem, …)` (#1790): Using opens
+        // the AsyncLocal scope on the SUBSCRIBING thread and disposes it wherever the create's
+        // response lands, so the subscriber stayed latched as System. Tolerable on an HTTP request
+        // thread that ends with the request; not on an in-process caller — the self-update poller's
+        // pool thread delivering into this instance's own inbox (SelfUpdateHandover, #4098) — which
+        // would carry System into everything it did next. The seal enters and leaves inside one
+        // synchronous Subscribe and delivers every notification under the subscriber's own identity.
+        return accessService.RunAsSystem(
+                () => mesh
                     .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{normalized}")).Take(1)
                     .Select(c => c.Items.FirstOrDefault(n => n.Path == normalized))
                     .SelectMany(owner =>
