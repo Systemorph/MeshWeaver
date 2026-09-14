@@ -88,6 +88,112 @@ public static class InstallCompleteness
         DeclaredNodePaths(record, PackageInstaller.BuiltInParsers);
 
     /// <summary>
+    /// 🚨 <b>What an INCREMENTAL update must add back to its delta</b> — the files a candidate
+    /// manifest declares, is not already fetching because their hash did not move, and whose node
+    /// is NOT in the mesh.
+    ///
+    /// <para><b>The defect this closes (MeshWeaver#4259).</b> The incremental path's fetch set is
+    /// <c>newManifest.DiffFrom(record.InstalledFiles)</c> — a comparison of two DECLARATIONS, the
+    /// candidate's lock against the record the installer itself stamped. Nothing in it observes the
+    /// mesh. So a node lost AFTER a previous install is never re-fetched and never re-written: its
+    /// hash is unchanged, so it is not in the delta, so it never reaches
+    /// <c>PackageInstaller.DecideAndWrite</c> — which would have written it, because it writes
+    /// whenever <c>current is null</c>. The presence-awareness exists one layer BELOW a set the
+    /// absent file never enters.</para>
+    ///
+    /// <para>Measured on memex.meshweaver.cloud, 2026-09-14. <c>Plugins/Hosting</c> took the
+    /// incremental path at 2026-09-13T22:03Z (module 1.18 → 1.19) and wrote exactly the two files
+    /// whose content had moved — <c>Hosting/Deployment/Source/AksOpsResult</c> (v1, 22:02:54.601Z)
+    /// and <c>Hosting/Deployment/Source/PlatformBuildInboxWatcher</c> (v16, 22:02:57.255Z). Eleven
+    /// other declared files whose hashes had NOT moved were absent from the mesh and stayed absent,
+    /// among them <c>Hosting/Deployment/Source/TriageIntake.cs</c> and both
+    /// <c>Hosting/TriageStatus/Source/*.cs</c>. Those three had been present that morning — the
+    /// release node <c>Hosting/TriageStatus/Release/20260913081235-bylQeIj_</c> names all three in
+    /// its <c>sourceVersions</c> and its status is <c>Succeeded</c> — so this is the loss-then-update
+    /// shape, not a delivery that never happened.</para>
+    ///
+    /// <para>🚨 <b>Only the hash-EQUAL path could heal it, and that is the path an update never
+    /// takes.</b> MeshWeaver#3485 made the up-to-date exit observe the mesh before skipping, so a
+    /// reinstall at an unchanged module hash repairs. But once the hash has moved, every install
+    /// takes this path — and each new publication moves it again. A package that loses a node can
+    /// therefore stay short across arbitrarily many updates while each one reports success.</para>
+    ///
+    /// <para>🚨 <b>Three answers, never two.</b> A <c>null</c> <paramref name="presentNodePaths"/>
+    /// means the mesh was not read — the batched read faulted, or no storage adapter exists — and
+    /// yields EMPTY. Widening the fetch on an unobserved mesh would re-fetch the whole package every
+    /// time a read hiccups; refusing to widen is the conservative arm, and the caller is obliged to
+    /// say that it could not check rather than proceed as if it had. An empty-but-non-null set is a
+    /// real observation of a partition holding none of the declared nodes.</para>
+    /// </summary>
+    /// <param name="declaredFiles">The CANDIDATE manifest's file map — what the source ships now.
+    /// Deliberately not the record's: the fetch may only ask for files the source still has.</param>
+    /// <param name="alreadyFetching">The delta's own added/changed files, which the caller is
+    /// fetching regardless. Never returned, so the caller can union without de-duplicating.</param>
+    /// <param name="presentNodePaths">The node paths OBSERVED in the mesh, or <c>null</c> when the
+    /// read did not happen — see the remarks.</param>
+    /// <param name="parsers">The parser registry the INSTALL would use; the file→node rule is
+    /// DI-dependent (#3659), so a second implementation here would answer differently.</param>
+    /// <returns>The declared files to add to the fetch, ordinal-sorted; empty when nothing is
+    /// missing, when nothing is declared, or when the mesh was not observed.</returns>
+    public static ImmutableSortedSet<string> FilesToRestore(
+        IReadOnlyDictionary<string, string>? declaredFiles,
+        IReadOnlySet<string>? alreadyFetching,
+        IReadOnlySet<string>? presentNodePaths,
+        FileFormatParserRegistry parsers)
+    {
+        ArgumentNullException.ThrowIfNull(parsers);
+        var empty = ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
+        if (presentNodePaths is null || declaredFiles is not { Count: > 0 })
+            return empty;
+        return declaredFiles.Keys
+            .Where(f => alreadyFetching?.Contains(f) != true)
+            .Select(f => (File: f, Node: PackageInstaller.NodePathForFile(f, parsers)))
+            .Where(x => !string.IsNullOrWhiteSpace(x.Node) && !presentNodePaths.Contains(x.Node!))
+            .Select(x => x.File)
+            .ToImmutableSortedSet(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// The reactive half of <see cref="FilesToRestore"/>: ONE batched
+    /// <see cref="IStorageAdapter.ReadMany"/> over a bounded, KNOWN set of node paths, answering
+    /// which of them the mesh holds.
+    ///
+    /// <para>🚨 <c>null</c> on a fault or a missing adapter, never an empty set — the same rule
+    /// <see cref="Observe(IStorageAdapter, JsonSerializerOptions, string, string, PackageManifest, FileFormatParserRegistry, string)"/>
+    /// keeps. An empty set would say "the mesh holds none of them", which on a Postgres read that
+    /// faulted (a satellite table that does not exist answers <c>42P01</c>, not "absent") would make
+    /// an install re-fetch every file it ships, every time.</para>
+    /// </summary>
+    /// <param name="persistence">The storage adapter; <c>null</c> yields <c>null</c>.</param>
+    /// <param name="options">Serializer options for the read.</param>
+    /// <param name="nodePaths">The paths to look for. Empty yields an empty OBSERVATION — there was
+    /// nothing to ask, which is a real answer and not a failed read.</param>
+    /// <returns>A cold observable emitting exactly once. Subscribe to run.</returns>
+    public static IObservable<IReadOnlySet<string>?> ObservePresent(
+        IStorageAdapter? persistence,
+        JsonSerializerOptions options,
+        IReadOnlyCollection<string> nodePaths)
+    {
+        ArgumentNullException.ThrowIfNull(nodePaths);
+        if (persistence is null)
+            return Observable.Return<IReadOnlySet<string>?>(null);
+        if (nodePaths.Count == 0)
+            return Observable.Return<IReadOnlySet<string>?>(
+                ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal));
+        // 🚨 Defer is load-bearing, not style. ReadMany is a method CALL: without Defer it runs
+        // when this method is called, which is before the Catch below exists — so an adapter that
+        // throws SYNCHRONOUSLY escapes past the null/Warning path and the caller falls back to a
+        // full package re-fetch on every such fault. Inside Defer, a synchronous throw and an
+        // asynchronous OnError reach the same conservative outcome.
+        return Observable.Defer(() => persistence.ReadMany(nodePaths, options))
+            .Select(n => n.Path)
+            .ToList()
+            .Select(paths => (IReadOnlySet<string>?)paths.ToImmutableHashSet(StringComparer.Ordinal))
+            .Catch<IReadOnlySet<string>?, Exception>(_ =>
+                Observable.Return<IReadOnlySet<string>?>(null));
+    }
+
+    /// <summary>
     /// The verdict, computed purely — no mesh, no hub, so the falsification tests can drive every
     /// arm offline.
     /// </summary>

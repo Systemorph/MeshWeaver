@@ -1195,4 +1195,322 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
         public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(
             PackageManifest package, string gitRef) => Observable.Return(files);
     }
+
+    // ── #4259: THE UPDATE PATH, which #3485 did not reach ───────────────────────────────────────
+
+    private const string Incr = "IncrementalPkg";
+    private const string IncrHashV1 = "1111111111111111";
+    private const string IncrHashV2 = "2222222222222222";
+    private const string IncrGuidePath = $"{Incr}/Guide";
+    private const string IncrOtherPath = $"{Incr}/Other";
+
+    private static PackageManifest IncrCandidate(string moduleVersion) => new()
+    {
+        Id = Incr,
+        Name = Incr,
+        Kind = PackageKind.NodeRepo,
+        TargetPartition = Incr,
+        SourceFolder = Incr,
+        Version = "1.0.0",
+        ModuleVersion = moduleVersion,
+    };
+
+    /// <summary>
+    /// The package at one generation. <paramref name="otherHash"/> / <paramref name="otherBody"/>
+    /// are the ONLY things that move between the two generations — <c>Guide.md</c>'s hash is
+    /// deliberately identical in both locks, which is the whole premise: the diff will not name it,
+    /// so only a mesh observation can.
+    /// </summary>
+    private static IReadOnlyList<PackageFile> IncrFiles(
+        string moduleVersion, string otherHash, string otherBody) =>
+    [
+        new PackageFile($"{Incr}/{ModuleManifest.FileName}", $$"""
+            {
+              "module": "{{Incr}}",
+              "moduleVersion": "{{moduleVersion}}",
+              "version": "1.0.0",
+              "files": {
+                "{{Incr}}/index.json": "aaa",
+                "{{Incr}}/Guide.md": "bbb",
+                "{{Incr}}/Other.md": "{{otherHash}}"
+              }
+            }
+            """),
+        new PackageFile($"{Incr}/index.json", $$"""
+            {
+              "id": "{{Incr}}",
+              "path": "{{Incr}}",
+              "nodeType": "Space",
+              "name": "Incremental package",
+              "state": "Active"
+            }
+            """),
+        new PackageFile($"{Incr}/Guide.md", "# Guide\n\nThe node this test deletes. Its hash never "
+            + "moves, so the manifest diff never names it."),
+        new PackageFile($"{Incr}/Other.md", otherBody),
+    ];
+
+    /// <summary>
+    /// 🚨 <b>THE REGRESSION (MeshWeaver#4259).</b> Install, delete one declared node, then run an
+    /// UPDATE — the module hash MOVED, and the deleted node's own file did not. The node must come
+    /// back.
+    ///
+    /// <para><b>Fails on main.</b> There, <c>IncrementalUpdate</c> fetches exactly
+    /// <c>newManifest.DiffFrom(record.InstalledFiles)</c> — a comparison of the candidate's lock
+    /// against the record the installer itself stamped. <c>Guide.md</c>'s hash is identical across
+    /// the two locks, so it is not in the delta, is never fetched, and never reaches
+    /// <c>DecideAndWrite</c> — which would have written it, because it writes whenever
+    /// <c>current is null</c>. The update reports success and the node stays gone.</para>
+    ///
+    /// <para><b>Why this is not covered by <see cref="AReinstallOverAMissingNode_RestoresIt"/>.</b>
+    /// #3485's heal lives on the module-hash-EQUAL exit. An UPDATE never takes that exit, and every
+    /// new publication moves the hash again — so a package that loses a node can stay short across
+    /// arbitrarily many updates, each one green. That is memex.meshweaver.cloud's
+    /// <c>Plugins/Hosting</c> on 2026-09-13T22:03Z: the update wrote the two files whose content had
+    /// moved and left eleven declared-and-absent ones absent.</para>
+    ///
+    /// <para>The changed file is the CONTROL in both directions: it proves the update really ran
+    /// (so a green result cannot come from an install that did nothing) and that the repair did not
+    /// work by rewriting the whole package.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AnIncrementalUpdateOverAMissingNode_RestoresIt()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var logger = Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger<InstallCompletenessTest>();
+
+        await CatalogLayoutAreas.InstallOrUpdate(
+                Mesh, new IncrSource(IncrFiles(IncrHashV1, "ccc", "# Other\n\nGeneration one.")),
+                "HEAD", IncrCandidate(IncrHashV1), logger)
+            .Should().Within(180.Seconds())
+            .Emit("the first install must land before anything about an update can be measured");
+
+        (await WaitForNode(IncrGuidePath, present: true)).Should().BeTrue(
+            "the Guide node is the subject — if the first install never wrote it, the assertion "
+            + "below would pass for the wrong reason");
+        (await WaitForNode(IncrOtherPath, present: true)).Should().BeTrue(
+            "and the control node has to exist before it can be shown to change");
+
+        var record = await ReadRecord(Incr);
+        record.Should().NotBeNull("the installer stamps an install record");
+        record!.ModuleVersion.Should().Be(IncrHashV1);
+        record.InstalledFiles.Should().NotBeNull().And.ContainKey($"{Incr}/Guide.md",
+            "the record's file map is the incremental path's baseline — with no map the installer "
+            + "falls back to a FULL install, which repairs by accident and would make this test "
+            + "vacuous");
+
+        // ── The loss.
+        await meshService.DeleteNode(IncrGuidePath)
+            .Should().Within(60.Seconds()).Emit("the deletion is this test's precondition");
+        (await WaitForNode(IncrGuidePath, present: false)).Should().BeTrue(
+            "the node must actually be gone before the update runs");
+
+        // ── The UPDATE: module hash moves, Other.md's content moves, Guide.md's does NOT.
+        var second = await CatalogLayoutAreas.InstallOrUpdate(
+                Mesh, new IncrSource(IncrFiles(IncrHashV2, "ddd", "# Other\n\nGeneration TWO.")),
+                "HEAD", IncrCandidate(IncrHashV2), logger)
+            .Timeout(180.Seconds())
+            .Await();
+
+        second.Written.Should().BeGreaterThan(0,
+            "the update changed a file, so it must have written something — a zero here would mean "
+            + "the incremental path never ran and this test is measuring the wrong exit");
+
+        (await WaitForNode(IncrGuidePath, present: true)).Should().BeTrue(
+            "THE assertion: an update must restore a declared node that is absent from the mesh, "
+            + "even though its own file hash did not move. On main it does not — the fetch set is "
+            + "the manifest diff, which is a statement about the SOURCE and the RECORD and never "
+            + "about the mesh (MeshWeaver#4259)");
+
+        (await WaitForNode(IncrOtherPath, present: true)).Should().BeTrue(
+            "the control: the node that was never deleted is still there, so the repair did not "
+            + "work by wiping and rewriting the partition");
+
+        var after = await ReadRecord(Incr);
+        after!.ModuleVersion.Should().Be(IncrHashV2,
+            "the update really did move the package forward — if the record still carried the old "
+            + "hash the install would have taken the up-to-date exit, whose heal is #3485's and not "
+            + "the one under test here");
+    }
+
+    /// <summary>
+    /// The pure arms of <see cref="InstallCompleteness.FilesToRestore"/> — every one pinnable with
+    /// no mesh, the same split <c>DescribeLanding</c> and <c>NodeTypeBakeStatus.Classify</c> keep.
+    ///
+    /// <para>🚨 The arm that matters most is the <c>null</c> observation. "The mesh was not read"
+    /// must yield EMPTY and must never be spelled like "nothing is missing" at the call site — an
+    /// unobserved mesh is not a clean one, and widening the fetch on a read that faulted would
+    /// re-fetch a whole package on every hiccup.</para>
+    /// </summary>
+    [Fact]
+    public void FilesToRestore_NamesTheAbsentOnes_AndRefusesToGuessWhenTheMeshWasNotRead()
+    {
+        var parsers = Parsers();
+        var declared = ImmutableSortedDictionary<string, string>.Empty
+            .Add($"{Incr}/index.json", "aaa")
+            .Add($"{Incr}/Guide.md", "bbb")
+            .Add($"{Incr}/Other.md", "ccc")
+            .Add($"{Incr}/README.md", "ddd");
+        var fetching = ImmutableHashSet.Create(StringComparer.Ordinal, $"{Incr}/Other.md");
+
+        // Everything present ⇒ nothing to add back.
+        var allPresent = ImmutableHashSet.Create(
+            StringComparer.Ordinal, Incr, IncrGuidePath, IncrOtherPath, $"{Incr}/README");
+        InstallCompleteness.FilesToRestore(declared, fetching, allPresent, parsers)
+            .Should().BeEmpty("a complete mesh needs no repair — if this were non-empty the "
+                + "assertion below would prove nothing");
+
+        // Guide's node gone ⇒ its FILE comes back, and only it.
+        var guideGone = allPresent.Remove(IncrGuidePath);
+        InstallCompleteness.FilesToRestore(declared, fetching, guideGone, parsers)
+            .Should().Equal([$"{Incr}/Guide.md"],
+                "the absent node's file is what the fetch has to ask for — a node path cannot be "
+                + "fetched, and naming the wrong half is how a repair asks for something the source "
+                + "does not serve");
+
+        // A file already in the delta is never returned twice.
+        var otherGone = allPresent.Remove(IncrOtherPath);
+        InstallCompleteness.FilesToRestore(declared, fetching, otherGone, parsers)
+            .Should().BeEmpty("Other.md is already being fetched by the delta — returning it again "
+                + "would make the caller's union a lie about how much this repair added");
+
+        // 🚨 The read did not happen. EMPTY, and never confusable with "nothing is missing".
+        InstallCompleteness.FilesToRestore(declared, fetching, presentNodePaths: null, parsers)
+            .Should().BeEmpty("a null observation means the mesh was NOT read; widening the fetch "
+                + "from it would re-fetch a whole package every time a read hiccups");
+
+        // Nothing declared ⇒ nothing to restore, whatever the mesh says.
+        InstallCompleteness.FilesToRestore(null, fetching, guideGone, parsers)
+            .Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// <see cref="InstallCompleteness.ObservePresent"/> against the live mesh: it reports what is
+    /// there, it reports an absence as an absence, and with no storage adapter it answers
+    /// <c>null</c> — "not read" — rather than an empty set.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ObservePresent_ReadsTheMesh_AndSaysNullWhenItCannot()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var logger = Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger<InstallCompletenessTest>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+
+        await CatalogLayoutAreas.InstallOrUpdate(
+                Mesh, new FixedSource(Files()), "HEAD", Candidate(), logger)
+            .Should().Within(180.Seconds()).Emit("the install is the precondition");
+        (await WaitForNode(GuidePath, present: true)).Should().BeTrue();
+
+        var paths = new[] { GuidePath, OtherPath };
+        var present = await InstallCompleteness
+            .ObservePresent(persistence, Mesh.JsonSerializerOptions, paths)
+            .Timeout(60.Seconds()).Await();
+        present.Should().NotBeNull("the adapter is registered and the paths exist, so this is a "
+            + "real observation and not a failed read");
+        present!.Should().Contain(GuidePath).And.Contain(OtherPath);
+
+        await meshService.DeleteNode(GuidePath).Should().Within(60.Seconds()).Emit("precondition");
+        (await WaitForNode(GuidePath, present: false)).Should().BeTrue();
+
+        var afterLoss = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .SelectMany(_ => InstallCompleteness
+                .ObservePresent(persistence, Mesh.JsonSerializerOptions, paths))
+            .Where(p => p is not null && !p.Contains(GuidePath))
+            .FirstAsync().Timeout(120.Seconds()).Await();
+        afterLoss!.Should().Contain(OtherPath,
+            "the control: the surviving node is still observed, so the absence above is about "
+            + "Guide and not about a read that stopped working");
+
+        // 🚨 No adapter ⇒ null, NEVER an empty set. An empty set says "the mesh holds none of
+        // them", which would make every declared file look absent and re-fetch the package.
+        (await InstallCompleteness
+                .ObservePresent(null, Mesh.JsonSerializerOptions, paths)
+                .Timeout(TestTimeouts.Convergence).Await())
+            .Should().BeNull("'there is no adapter' and 'the mesh holds nothing' are different "
+                + "facts, and spelling them alike is what this whole type exists to prevent");
+    }
+
+    /// <summary>
+    /// A package source serving one fixed generation — the same shape as
+    /// <see cref="FixedSource"/>, but listing the INCREMENTAL package so a listing read cannot
+    /// silently answer about the other fixture's package.
+    /// </summary>
+    private sealed class IncrSource(IReadOnlyList<PackageFile> files) : IPackageSource
+    {
+        public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
+            Observable.Return<IReadOnlyList<PackageManifest>>([IncrCandidate(IncrHashV1)]);
+
+        public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(
+            PackageManifest package, string gitRef) => Observable.Return(files);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  A fetch shortfall must never reach the record
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 🚨 The shortfall FAILS the incremental update; it does not merely report it.
+    /// <c>InstallNodeRepoDelta</c> stamps the new manifest as the next baseline unconditionally, so
+    /// a file that never travelled — while its OLD node is still present, which is the ordinary
+    /// case — would leave the record claiming the NEW hash over OLD content and every later update
+    /// of that module diffing clean and skipping it forever. The caller turns this throw into a
+    /// full install, so the user still gets the package.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public void AFileThatDidNotTravel_FailsTheIncrementalUpdate_RatherThanStampingTheRecord()
+    {
+        var wanted = new[] { "Guide/index.json", "Guide/Overview.md" }
+            .ToImmutableHashSet(StringComparer.Ordinal);
+        var fetched = new List<PackageFile> { new("Guide/index.json", "{}") };
+
+        var act = () => CatalogLayoutAreas.EnsureFetchComplete("Acme.Guide", wanted, fetched, null);
+
+        act.Should().Throw<InvalidOperationException>(
+                "a requested file that did not travel must not reach WriteInstalledRecord — the "
+                + "record would declare content nothing ever wrote, and the next update would "
+                + "diff clean and skip it permanently")
+            .WithMessage("*full install required*")
+            .And.WithMessage("*Guide/Overview.md*",
+                "the operator has to be told WHICH file did not travel; a shortfall that names "
+                + "nothing sends them to the whole package");
+    }
+
+    /// <summary>
+    /// The control for the case above: when everything asked for arrives, the incremental update
+    /// proceeds. Without this, a guard that threw unconditionally would pass the test above and
+    /// turn every update into a full install.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public void AFetchThatReturnedEverythingAskedFor_LetsTheIncrementalUpdateProceed()
+    {
+        var wanted = new[] { "Guide/index.json" }.ToImmutableHashSet(StringComparer.Ordinal);
+        var fetched = new List<PackageFile> { new("Guide/index.json", "{}") };
+
+        var act = () => CatalogLayoutAreas.EnsureFetchComplete("Acme.Guide", wanted, fetched, null);
+
+        act.Should().NotThrow(
+            "the incremental path is the fast path; it must stay available when the source served "
+            + "every file that was asked for");
+    }
+
+    /// <summary>
+    /// 🚨 The shortfall is computed with NO logger. Gating the detection on a logger existing would
+    /// make the guard vanish exactly where diagnostics are off — which is where a silently stale
+    /// install record is least likely to be noticed.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public void TheShortfallIsDetected_EvenWithNoLogger()
+    {
+        var wanted = new[] { "Guide/index.json", "Guide/Gone.md" }
+            .ToImmutableHashSet(StringComparer.Ordinal);
+        var fetched = new List<PackageFile> { new("Guide/index.json", "{}") };
+
+        var act = () => CatalogLayoutAreas.EnsureFetchComplete("Acme.Guide", wanted, fetched, logger: null);
+
+        act.Should().Throw<InvalidOperationException>(
+            "detection must not depend on someone listening");
+    }
+
 }
