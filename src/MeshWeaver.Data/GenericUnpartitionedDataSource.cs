@@ -746,8 +746,8 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
 {
     /// <summary>
     /// Initializes the data source and eagerly opens its primary <see cref="EntityStore"/> stream.
-    /// The primary stream only — the discarded full-reference reduce this used to perform minted
-    /// a second, unreachable <c>sync/</c> hub per source (Systemorph/MeshWeaver#4300); see the
+    /// The primary stream only — the full-reference reduce this method used to perform and discard
+    /// minted a second, unreachable <c>sync/</c> hub per source (Systemorph/MeshWeaver#4300); see the
     /// unpartitioned sibling's <c>Initialize</c> for the mechanism.
     /// </summary>
     public override void Initialize()
