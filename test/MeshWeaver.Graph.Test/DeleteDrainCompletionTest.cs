@@ -41,6 +41,17 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
     /// </summary>
     public MeshNode? InjectOnFirstDelete { get; set; }
 
+    /// <summary>
+    /// After this many deletes under <see cref="LatencyRoot"/> have been SERVED, every further
+    /// delete under it never answers — the store took the call and went silent. That is the
+    /// production shape behind the commit stage's no-progress watchdog: a drain that removed some
+    /// rows and then stopped removing any (issue #1198). <c>null</c> ⇒ never stall, which is what
+    /// every other test in this file relies on.
+    /// </summary>
+    public int? StallAfterDeletes { get; set; }
+
+    private int _deletesServed;
+
     private int _injected;
 
     private bool UnderLatencyRoot(string path)
@@ -55,6 +66,12 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
 
         return Observable.Defer(() =>
         {
+            // The store accepted the call and never answers. Never a Task.Delay and never a long
+            // timer: silence IS the subject, so the watchdog's own budget is what ends the wait.
+            if (StallAfterDeletes is { } stallAfter
+                && Interlocked.Increment(ref _deletesServed) > stallAfter)
+                return Observable.Never<T>();
+
             if (InjectOnFirstDelete is { } node && Interlocked.Exchange(ref _injected, 1) == 0)
                 // Straight into the store of record: the guard decorators above this adapter refuse
                 // in-process writes under a subtree being deleted, and a CROSS-process writer is the
