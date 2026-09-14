@@ -1059,10 +1059,20 @@ public static class CatalogLayoutAreas
                     .Select(_ => result));
 
         IObservable<InstallResult> Full() =>
-            WithModule(source.FetchPackageFiles(pkg, sourceRef)
+            Verified(WithModule(source.FetchPackageFiles(pkg, sourceRef)
                 .SelectMany(files => PackageInstaller.Install(
                     hub, pkg, files, sourceRef, logger,
-                    authorizingUserId: authorizingUserId)));
+                    authorizingUserId: authorizingUserId))));
+
+        // 🚨 #2387 — EVERY WRITING EXIT IS READ BACK. The verdict that decides the severity is the
+        // one taken AFTER the write; the pre-check below only decides whether to skip. Attached
+        // here rather than at each call site so no lane can acquire an unverified exit later: the
+        // three writing paths (full install, incremental update, and the heal the pre-check
+        // triggers — which calls Full) all funnel through this. The three SKIPPING exits do not,
+        // and must not: they just observed, and observing twice would cost a second batched read
+        // per package on every boot to re-learn what it already said.
+        IObservable<InstallResult> Verified(IObservable<InstallResult> install) =>
+            install.SelectMany(result => VerifyLanded(hub, pkg, logger).Select(_ => result));
 
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (pkg.Kind != PackageKind.NodeRepo || string.IsNullOrEmpty(pkg.ModuleVersion) || persistence is null)
@@ -1116,7 +1126,10 @@ public static class CatalogLayoutAreas
 
                 if (record?.InstalledFiles is not { Count: > 0 })
                     return Full();
-                return WithModule(IncrementalUpdate(hub, source, sourceRef, pkg, record, logger, authorizingUserId))
+                // Verified INSIDE the Catch, never around it: a fall-back to Full() is itself
+                // verified, and wrapping the whole thing would report the landing twice.
+                return Verified(WithModule(
+                        IncrementalUpdate(hub, source, sourceRef, pkg, record, logger, authorizingUserId)))
                     .Catch<InstallResult, Exception>(ex =>
                     {
                         // A REFUSAL is not a failure to fall back from — the full install would be
@@ -1128,6 +1141,76 @@ public static class CatalogLayoutAreas
                             "Incremental update of {Id} failed; falling back to full install.", pkg.Id);
                         return Full();
                     });
+            });
+    }
+
+    /// <summary>
+    /// 🚨 <b>READ BACK WHAT THE INSTALL WROTE</b> — the half MeshWeaver#3485 left out.
+    ///
+    /// <para>#3485 added a completeness verdict, but only on the SKIP path: the module hash matched,
+    /// so before believing "nothing to sync" the gate looked at the mesh. An install that actually
+    /// WROTE was never compared against what landed — so a half-landed install stamps a record
+    /// claiming every file, and nothing asks again until the module version moves. Measured on
+    /// memex.meshweaver.cloud 2026-09-13: <c>Plugins/Hosting</c> stamped a 224-file record at
+    /// 22:03:03Z; <c>Hosting/Deployment/Source/TriageIntake.cs</c> and both
+    /// <c>Hosting/TriageStatus/Source/*.cs</c> never arrived; eight Hosting NodeTypes sat at
+    /// <c>compilationStatus: Error</c> with <c>MISSING SOURCES: N of N</c> twelve hours later, and
+    /// the only trace anywhere was the compiler's complaint about a type it could not find.</para>
+    ///
+    /// <para>One record read plus one batched <see cref="IStorageAdapter.ReadMany"/> over a bounded,
+    /// KNOWN set — the same cost the pre-check already pays, and only on the paths that wrote.</para>
+    ///
+    /// <para>🚨 It can never fail the install it is verifying. An install that landed and a check
+    /// that could not run are different facts, and collapsing them would make the check a new way
+    /// for a working install to fail. A check that could not run says so, at Warning, and is
+    /// explicitly not a pass.</para>
+    /// </summary>
+    /// <param name="hub">The hub the install ran on.</param>
+    /// <param name="pkg">The package that was installed.</param>
+    /// <param name="logger">Where the outcome is reported.</param>
+    /// <returns>A cold observable emitting exactly once, after the outcome has been reported.</returns>
+    private static IObservable<InstallCompletenessVerdict?> VerifyLanded(
+        IMessageHub hub, PackageManifest pkg, ILogger? logger)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        // Nothing to compare: a package that installs no nodes declares no node paths, and a host
+        // with no storage adapter cannot read any. Silent — the pre-check is silent here too, and a
+        // line per module-only package on every boot would be noise with no reader.
+        if (persistence is null || pkg.Kind != PackageKind.NodeRepo)
+            return Observable.Return<InstallCompletenessVerdict?>(null);
+
+        var recordPath = $"{PackageInstaller.InstalledPartition}/{pkg.Id}";
+        return persistence.Read(recordPath, hub.JsonSerializerOptions)
+            .Take(1)
+            .Select(n => n?.ContentAs<PackageManifest>(hub.JsonSerializerOptions))
+            // A record that cannot be read yields the Undeclared verdict below, which reports at
+            // Warning as "NOT verified" — never as a pass, and never as a shortfall.
+            .Catch<PackageManifest?, Exception>(_ => Observable.Return<PackageManifest?>(null))
+            .SelectMany(record => InstallCompleteness.Observe(
+                persistence, hub.JsonSerializerOptions, pkg.Id,
+                // No record read ⇒ fall back to the CANDIDATE's own target partition. The verdict
+                // is Undeclared either way (there is no file map to compare), but a partition
+                // string still has to be a real one for the line to name where it looked.
+                PackageInstaller.TargetPartitionOf(pkg.Id, record ?? pkg), record,
+                // The INSTALL's own parser registry — the declared population must be the files
+                // this install would write, never a superset (#3659).
+                new FileFormatParserRegistry(
+                    hub.JsonSerializerOptions,
+                    hub.ServiceProvider.GetServices<IFileFormatParser>()),
+                recordPath))
+            .Do(verdict =>
+            {
+                var report = InstallCompleteness.DescribeLanding(verdict, pkg.ModuleVersion);
+                logger?.Log(report.Level, "{Landing}", report.Message);
+            })
+            .Select(verdict => (InstallCompletenessVerdict?)verdict)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "Package {Id} installed, but the post-install completeness check could NOT "
+                    + "run: {Cause}. This is not a pass — nothing here says the install landed "
+                    + "whole (MeshWeaver#3485).", pkg.Id, ex.Message);
+                return Observable.Return<InstallCompletenessVerdict?>(null);
             });
     }
 
@@ -1145,14 +1228,24 @@ public static class CatalogLayoutAreas
     {
         if (verdict.Kind is InstallCompletenessKind.Incomplete)
         {
-            logger?.LogError(
+            // 🚨 WARNING, NOT ERROR — and the trade-off is deliberate (MeshWeaver#2387). This line
+            // describes a DETECTION followed immediately by a repair, and the repair usually works:
+            // measured on memex.meshweaver.cloud 2026-09-13, Feedback/Feedback/Source/
+            // FeedbackHandover was named here at 22:02:37Z and was present at 22:02:45Z. Logged at
+            // Error it shipped a SUCCESS to Loki, where the watcher minted an incident from it and
+            // — incident identity folding per log CATEGORY — re-opened #2387, an issue about the
+            // [DefaultInstall] summary line in this same class. The Error now sits on the OUTCOME
+            // (VerifyLanded → InstallCompleteness.DescribeLanding), where it can only fire when the
+            // repair did NOT restore the nodes, which is the fact worth waking someone for.
+            logger?.LogWarning(
                 "Package {Id} records module {ModuleVersion} as installed, but {Missing} of "
                 + "{Declared} declared node(s) are ABSENT from the mesh: [{Paths}]. Counted over: "
                 + "{Population}. The content hash cannot see this — it describes the SOURCE, not "
-                + "what landed — so the install is being REPAIRED rather than skipped "
-                + "(MeshWeaver#3485).",
+                + "what landed — so the install is being REPAIRED rather than skipped. Whether the "
+                + "repair worked is reported separately, once it has (MeshWeaver#3485).",
                 pkg.Id, pkg.ModuleVersion, verdict.Missing.Count, verdict.Declared,
-                string.Join(", ", verdict.Missing.Take(20)), verdict.Population);
+                string.Join(", ", verdict.Missing.Take(InstallCompleteness.MaxNamedInALine)),
+                verdict.Population);
             return full();
         }
 

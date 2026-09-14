@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
@@ -944,6 +945,242 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
             .FirstAsync()
             .Timeout(120.Seconds())
             .Await();
+
+    // ── #2387 / #3485 second half: THE SEVERITY BELONGS TO THE OUTCOME ─────────────────────────
+
+    /// <summary>
+    /// 🚨 <b>A REPAIR THAT WORKED IS NOT A FAILURE.</b> Install, lose a declared node, re-run the
+    /// same install path — and read the LOG, because the defect is the severity and no assertion
+    /// about behaviour can see it.
+    ///
+    /// <para><b>Fails on main.</b> There, the only completeness line is written BEFORE the repair,
+    /// at <c>LogError</c>, and nothing is written after it. So on main this test finds an Error
+    /// naming an absence that was healed eight seconds later, and finds no outcome line at all.
+    /// Measured on memex.meshweaver.cloud 2026-09-13: <c>Feedback/Feedback/Source/FeedbackHandover</c>
+    /// named ABSENT at 22:02:37Z, present at 22:02:45Z — and that Error re-opened MeshWeaver#2387,
+    /// an issue about a different call site, because incident identity folds per log CATEGORY.</para>
+    ///
+    /// <para>🚨 The second assertion is the control that stops the first passing vacuously: the
+    /// detection must still HAPPEN, at Warning. Without it, deleting the detection entirely would
+    /// make "no Error mentioning ABSENT" true for the wrong reason.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ARepairThatRestoredTheNode_IsReportedAsASuccess_NotAsAnError()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var source = new FixedSource(Files());
+        var log = new RecordingLogger();
+
+        await CatalogLayoutAreas.InstallOrUpdate(Mesh, source, "HEAD", Candidate(), log)
+            .Should().Within(180.Seconds())
+            .Emit("the first install is the precondition");
+        (await WaitForNode(GuidePath, present: true)).Should().BeTrue(
+            "the node this test deletes has to be there first");
+
+        await meshService.DeleteNode(GuidePath).Should().Within(60.Seconds()).Emit("the loss");
+        (await WaitForNode(GuidePath, present: false)).Should().BeTrue(
+            "the node must really be gone, or the repair below repairs nothing");
+
+        log.Clear();
+        await CatalogLayoutAreas.InstallOrUpdate(Mesh, source, "HEAD", Candidate(), log)
+            .Should().Within(180.Seconds())
+            .Emit("the repairing install");
+        (await WaitForNode(GuidePath, present: true)).Should().BeTrue(
+            "the repair must actually restore the node — this is #3485's own assertion, repeated "
+            + "here so the log assertions below cannot be about a repair that never happened");
+
+        log.Entries(LogLevel.Warning).Should().Contain(m => m.Contains("ABSENT", StringComparison.Ordinal),
+            "THE CONTROL: the detection must still fire, at Warning. If it did not fire at all, the "
+            + "assertion below would pass having measured nothing — which is the same defect as a "
+            + "gate that skips on missing input");
+
+        log.Entries(LogLevel.Error).Should().NotContain(m => m.Contains("ABSENT", StringComparison.Ordinal),
+            "THE ASSERTION: this install REPAIRED the mesh, so nothing about it is an Error. On main "
+            + "the pre-repair detection logs at Error, that line ships to Loki, the watcher mints an "
+            + "incident from it and re-opens MeshWeaver#2387 — for a success");
+
+        log.Entries(LogLevel.Information).Should().Contain(m => m.Contains("landed whole", StringComparison.Ordinal),
+            "and the outcome has to be SAID: 'the install is being repaired' with no follow-up is a "
+            + "claim nothing ever checks. On main there is no post-install verdict at all");
+    }
+
+    /// <summary>
+    /// 🚨 <b>AN INSTALL THAT DID NOT LAND WHOLE HAS TO SAY SO — and on main nothing does.</b>
+    ///
+    /// <para>#3485 compares the record against the mesh only on the SKIP path (module hash
+    /// unchanged). An install that actually WRITES is never read back, so a half-landed install
+    /// stamps a record claiming every file and nothing asks again until the module version moves.
+    /// Measured on memex.meshweaver.cloud 2026-09-13: <c>Plugins/Hosting</c> stamped a 224-file
+    /// record at 22:03:03Z; <c>Hosting/Deployment/Source/TriageIntake.cs</c> and both
+    /// <c>Hosting/TriageStatus/Source/*.cs</c> never arrived; eight Hosting NodeTypes sat at
+    /// <c>compilationStatus: Error</c> with <c>MISSING SOURCES</c> twelve hours later, and the only
+    /// trace anywhere was the compiler complaining about a type it could not find.</para>
+    ///
+    /// <para>The fixture is that condition exactly: a <c>manifest.lock</c> declaring a file the
+    /// source does not serve — which is how the record acquires a declaration nothing satisfies,
+    /// since <c>InstalledFiles</c> is stamped from the LOCK, not from what was fetched.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AnInstallThatDidNotLandWhole_SaysSoAtError_NamingWhatIsStillAbsent()
+    {
+        var log = new RecordingLogger();
+
+        await CatalogLayoutAreas
+            .InstallOrUpdate(Mesh, new FixedSource(ShortFiles()), "HEAD", ShortCandidate(), log)
+            .Should().Within(180.Seconds())
+            .Emit("the install itself must complete — a half-landed install is not a failed one, "
+                  + "which is exactly why nothing noticed");
+
+        (await WaitForNode(ShortOtherPath, present: true)).Should().BeTrue(
+            "THE CONTROL: the file the source DID serve landed, so the install really ran and the "
+            + "assertion below is about a shortfall, not about an install that never happened");
+        (await WaitForNode(ShortGuidePath, present: false)).Should().BeTrue(
+            "the declared-but-unserved file is the subject: it must genuinely be absent");
+
+        var record = await ReadRecord(Short);
+        record.Should().NotBeNull("the install stamps a record even though it did not land whole — "
+                                  + "that is the defect: the record is a claim nobody re-reads");
+        InstallCompleteness.DeclaredNodePaths(record, Parsers()).Should().Contain(ShortGuidePath,
+            "the record DECLARES the node that never arrived, stamped from the lock rather than "
+            + "from what was fetched — without this the shortfall would be undetectable by "
+            + "construction and the assertion below would be vacuous");
+
+        log.Entries(LogLevel.Error).Should().Contain(
+            m => m.Contains("STILL ABSENT", StringComparison.Ordinal)
+                 && m.Contains(ShortGuidePath, StringComparison.Ordinal),
+            "THE ASSERTION: an install that finished with a declared node missing must say so, at "
+            + "Error, NAMING it. On main the completeness check never runs after a write, so this "
+            + "produces no line at any level — which is how eight Hosting NodeTypes were dead for "
+            + "twelve hours with nothing in the log about the install that did it");
+    }
+
+    /// <summary>
+    /// The pure arm: the severity is a VALUE, so all three outcomes can be pinned without a host —
+    /// and a check whose only output is a side effect could only ever be tested by observing it.
+    /// </summary>
+    [Fact]
+    public void DescribeLanding_PutsTheErrorOnTheOutcome_AndNeverOnAnUnverifiedOne()
+    {
+        var missing = ImmutableSortedSet.Create(StringComparer.Ordinal, GuidePath);
+
+        var incomplete = InstallCompleteness.DescribeLanding(
+            new InstallCompletenessVerdict(Package, Package, InstallCompletenessKind.Incomplete,
+                3, 2, missing, "because"),
+            ModuleHash);
+        incomplete.Level.Should().Be(LogLevel.Error,
+            "an install that ran, stamped its record and left a declared node missing is the one "
+            + "arm that deserves to wake someone");
+        incomplete.Message.Should().Contain("STILL ABSENT").And.Contain(GuidePath).And.Contain(ModuleHash,
+            "naming the path is the difference between eleven days and one boot");
+
+        var complete = InstallCompleteness.DescribeLanding(
+            new InstallCompletenessVerdict(Package, Package, InstallCompletenessKind.Complete,
+                3, 3, ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal), "ok"),
+            ModuleHash);
+        complete.Level.Should().Be(LogLevel.Information,
+            "a repair that worked is a success, and logging it at Error is what manufactures an "
+            + "incident out of the platform healing itself (MeshWeaver#2387)");
+        complete.Message.Should().Contain("landed whole");
+
+        foreach (var kind in new[] { InstallCompletenessKind.NotObserved, InstallCompletenessKind.Undeclared })
+        {
+            var unverified = InstallCompleteness.DescribeLanding(
+                new InstallCompletenessVerdict(Package, Package, kind, 3, 0,
+                    ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
+                    "the mesh could not be read"),
+                ModuleHash);
+            unverified.Level.Should().Be(LogLevel.Warning,
+                $"{kind} is neither a pass nor a shortfall — nothing was shown to be missing, only "
+                + "that nothing was shown at all");
+            unverified.Message.Should().Contain("NOT verified").And.Contain("not a pass",
+                "'not checked' must never be spelled like 'clean' — the rule this whole type is "
+                + "built on");
+        }
+    }
+
+    // ── The half-landing fixture: a lock that declares a file the source does not serve ─────────
+
+    private const string Short = "ShortLandingPkg";
+    private const string ShortHash = "abcdef0123456789";
+    private const string ShortGuidePath = $"{Short}/Guide";
+    private const string ShortOtherPath = $"{Short}/Other";
+
+    private static PackageManifest ShortCandidate() => new()
+    {
+        Id = Short,
+        Name = Short,
+        Kind = PackageKind.NodeRepo,
+        TargetPartition = Short,
+        SourceFolder = Short,
+        Version = "1.0.0",
+        ModuleVersion = ShortHash,
+    };
+
+    private static IReadOnlyList<PackageFile> ShortFiles() =>
+    [
+        // The lock DECLARES Guide.md …
+        new PackageFile($"{Short}/{ModuleManifest.FileName}", $$"""
+            {
+              "module": "{{Short}}",
+              "moduleVersion": "{{ShortHash}}",
+              "version": "1.0.0",
+              "files": {
+                "{{Short}}/index.json": "aaa",
+                "{{Short}}/Guide.md": "bbb",
+                "{{Short}}/Other.md": "ccc"
+              }
+            }
+            """),
+        new PackageFile($"{Short}/index.json", $$"""
+            {
+              "id": "{{Short}}",
+              "path": "{{Short}}",
+              "nodeType": "Space",
+              "name": "Short landing package",
+              "state": "Active"
+            }
+            """),
+        // … and the source serves everything EXCEPT it. Plugins/Hosting, 2026-09-13, in a fixture.
+        new PackageFile($"{Short}/Other.md", "# Other\n\nThe node that does land — the control."),
+    ];
+
+    /// <summary>
+    /// A real <see cref="ILogger"/> that keeps what was written, so a test can assert on the
+    /// SEVERITY. Not a mock of a core interface — <c>ILogger</c> is the framework's own sink
+    /// abstraction, and the thing under test here is which level a line is written at.
+    ///
+    /// <para>The queue is an INSTANCE field, never static: the install writes from whichever thread
+    /// the reactive pipeline lands on, and process-wide state would bleed across tests.</para>
+    /// </summary>
+    private sealed class RecordingLogger : ILogger
+    {
+        private readonly ConcurrentQueue<(LogLevel Level, string Message)> entries = new();
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            entries.Enqueue((logLevel, formatter(state, exception)));
+
+        /// <summary>Every message written at <paramref name="level"/>, in order.</summary>
+        public IReadOnlyList<string> Entries(LogLevel level) =>
+            entries.Where(e => e.Level == level).Select(e => e.Message).ToList();
+
+        /// <summary>Drops everything recorded so far, so an assertion is about ONE install.</summary>
+        public void Clear()
+        {
+            while (entries.TryDequeue(out _)) { }
+        }
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
+    }
 
     /// <summary>
     /// A package source that always serves the same files — the local-checkout shape, standing in
