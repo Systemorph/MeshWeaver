@@ -244,7 +244,7 @@
     <!-- The memex test container package (src/MeshWeaver.Testcontainers): a real memex from the
          platform build as a test substrate, the way Testcontainers.PostgreSql gives a test a real
          Postgres. Same version as the test tree pins. -->
-    <PackageVersion Include="Testcontainers" Version="4.14.0" />
+    <PackageVersion Include="Testcontainers" Version="4.15.0" />
     <PackageVersion Include="SSH.NET" Version="2026.0.0" /> <!-- High GHSA-q939-rpr3-3284; transitive via Testcontainers, direct-ref override in test/Directory.Build.props -->
     <!-- 🚨 THESE TWO ARE ONE FAMILY AND MUST MOVE TOGETHER — they were SPLIT, and the split was
          invisible because both halves were green.
@@ -309,7 +309,7 @@
     <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.4.6" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.4.6" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
     <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
     <PackageVersion Include="Verify.XunitV3" Version="31.28.0" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
