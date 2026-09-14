@@ -147,7 +147,7 @@ while the index is under concurrent writes.
 
 ## The three rules the index now keeps
 
-The fix ([PR #4290](https://github.com/Systemorph/MeshWeaver/pull/4290)) rewrites the index's
+The fix ([PR #4295](https://github.com/Systemorph/MeshWeaver/pull/4295)) rewrites the index's
 concurrency contract in `InMemoryStorageAdapter`:
 
 1. **The store and the index move together.** Every adapter write path mutates `_nodes` and the
