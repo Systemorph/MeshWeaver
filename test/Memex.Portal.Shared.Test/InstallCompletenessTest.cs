@@ -1427,7 +1427,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
         // them", which would make every declared file look absent and re-fetch the package.
         (await InstallCompleteness
                 .ObservePresent(null, Mesh.JsonSerializerOptions, paths)
-                .Timeout(30.Seconds()).Await())
+                .Timeout(TestTimeouts.Convergence).Await())
             .Should().BeNull("'there is no adapter' and 'the mesh holds nothing' are different "
                 + "facts, and spelling them alike is what this whole type exists to prevent");
     }
@@ -1445,4 +1445,72 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
         public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(
             PackageManifest package, string gitRef) => Observable.Return(files);
     }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  A fetch shortfall must never reach the record
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 🚨 The shortfall FAILS the incremental update; it does not merely report it.
+    /// <c>InstallNodeRepoDelta</c> stamps the new manifest as the next baseline unconditionally, so
+    /// a file that never travelled — while its OLD node is still present, which is the ordinary
+    /// case — would leave the record claiming the NEW hash over OLD content and every later update
+    /// of that module diffing clean and skipping it forever. The caller turns this throw into a
+    /// full install, so the user still gets the package.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public void AFileThatDidNotTravel_FailsTheIncrementalUpdate_RatherThanStampingTheRecord()
+    {
+        var wanted = new[] { "Guide/index.json", "Guide/Overview.md" }
+            .ToImmutableHashSet(StringComparer.Ordinal);
+        var fetched = new List<PackageFile> { new("Guide/index.json", "{}") };
+
+        var act = () => CatalogLayoutAreas.EnsureFetchComplete("Acme.Guide", wanted, fetched, null);
+
+        act.Should().Throw<InvalidOperationException>(
+                "a requested file that did not travel must not reach WriteInstalledRecord — the "
+                + "record would declare content nothing ever wrote, and the next update would "
+                + "diff clean and skip it permanently")
+            .WithMessage("*full install required*")
+            .And.WithMessage("*Guide/Overview.md*",
+                "the operator has to be told WHICH file did not travel; a shortfall that names "
+                + "nothing sends them to the whole package");
+    }
+
+    /// <summary>
+    /// The control for the case above: when everything asked for arrives, the incremental update
+    /// proceeds. Without this, a guard that threw unconditionally would pass the test above and
+    /// turn every update into a full install.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public void AFetchThatReturnedEverythingAskedFor_LetsTheIncrementalUpdateProceed()
+    {
+        var wanted = new[] { "Guide/index.json" }.ToImmutableHashSet(StringComparer.Ordinal);
+        var fetched = new List<PackageFile> { new("Guide/index.json", "{}") };
+
+        var act = () => CatalogLayoutAreas.EnsureFetchComplete("Acme.Guide", wanted, fetched, null);
+
+        act.Should().NotThrow(
+            "the incremental path is the fast path; it must stay available when the source served "
+            + "every file that was asked for");
+    }
+
+    /// <summary>
+    /// 🚨 The shortfall is computed with NO logger. Gating the detection on a logger existing would
+    /// make the guard vanish exactly where diagnostics are off — which is where a silently stale
+    /// install record is least likely to be noticed.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public void TheShortfallIsDetected_EvenWithNoLogger()
+    {
+        var wanted = new[] { "Guide/index.json", "Guide/Gone.md" }
+            .ToImmutableHashSet(StringComparer.Ordinal);
+        var fetched = new List<PackageFile> { new("Guide/index.json", "{}") };
+
+        var act = () => CatalogLayoutAreas.EnsureFetchComplete("Acme.Guide", wanted, fetched, logger: null);
+
+        act.Should().Throw<InvalidOperationException>(
+            "detection must not depend on someone listening");
+    }
+
 }

@@ -1371,6 +1371,16 @@ public static class CatalogLayoutAreas
                     .Select(p => p!)
                     .ToImmutableSortedSet(StringComparer.Ordinal);
 
+                // 🚨 COST, stated rather than hidden: this preflight is a SECOND full-manifest
+                // ReadMany per incremental update — VerifyLanded still runs its own after
+                // InstallNodeRepoDelta. The two are not redundant and neither can be dropped: this
+                // one asks "which declared nodes are ABSENT so the delta must re-fetch them"
+                // BEFORE the write (the whole of #4259), and VerifyLanded asks "did what we just
+                // wrote land" AFTER it. Collapsing them would mean either re-fetching on a verdict
+                // computed before the install, or discovering a lost node only on the NEXT update.
+                // The added cost is one ReadMany over declaredNodePaths — bounded by the manifest,
+                // not by mesh size — and it is paid only on the incremental path, which exists to
+                // avoid re-fetching whole packages.
                 return InstallCompleteness
                     .ObservePresent(
                         hub.ServiceProvider.GetService<IStorageAdapter>(),
@@ -1419,7 +1429,7 @@ public static class CatalogLayoutAreas
                         return (wanted.Count == 0
                                 ? Observable.Return((IReadOnlyList<PackageFile>)[])
                                 : source.FetchPackageFiles(pkg, sourceRef, wanted))
-                            .Do(fetched => ReportFetchShortfall(pkg.Id, wanted, fetched, logger))
+                            .Do(fetched => EnsureFetchComplete(pkg.Id, wanted, fetched, logger))
                             .SelectMany(changedFiles => PackageInstaller.InstallNodeRepoDelta(
                                 hub, pkg, newManifest, changedFiles, removedNodePaths, sourceRef,
                                 logger, authorizingUserId));
@@ -1438,31 +1448,59 @@ public static class CatalogLayoutAreas
     /// and <c>WriteInstalledRecord</c> then stamps the FULL declared map — a record asserting a file
     /// nothing ever wrote.
     ///
-    /// <para>Reports only; it never fails the update. The install that did run is a fact, and
-    /// collapsing "landed short" into "failed" would make a working update a new way to break —
-    /// <see cref="VerifyLanded"/> carries the outcome verdict on this same exit.</para>
+    /// <para>🚨 <b>It fails the incremental update rather than reporting it</b>, and the earlier
+    /// "reports only" reading of this method was wrong. The objection to failing — that the install
+    /// which did run is a fact, and collapsing "landed short" into "failed" makes a working update a
+    /// new way to break — does not survive what happens NEXT: <c>InstallNodeRepoDelta</c> stamps
+    /// <c>newManifest</c> as the next <c>InstalledFiles</c> baseline unconditionally, so a file that
+    /// never travelled while its OLD node is still present leaves <see cref="VerifyLanded"/> seeing
+    /// a present node and reporting completeness. The record then claims the NEW hash over OLD
+    /// content, and every later update of that module diffs clean and skips it — permanently. The
+    /// failure is not "landed short", it is "landed short and then lied about it".</para>
+    ///
+    /// <para>Nor does throwing cost the user the update. This is the same mechanism the
+    /// absent-shared-source arm uses a few lines above: the caller catches it and falls back to a
+    /// FULL install, which rewrites everything and writes a record that is true. The user gets an
+    /// updated package either way; only the silent-stale path is removed.</para>
     /// </summary>
     /// <param name="packageId">The package being updated.</param>
     /// <param name="wanted">The paths the fetch asked for.</param>
     /// <param name="fetched">What came back.</param>
     /// <param name="logger">Where the shortfall is named.</param>
-    private static void ReportFetchShortfall(
+    // Internal for the FetchShortfallFailsClosedTest pin (InternalsVisibleTo): a guard that only
+    // the incremental-update path can reach is a guard nothing can falsify.
+    internal static void EnsureFetchComplete(
         string packageId, IReadOnlySet<string> wanted, IReadOnlyList<PackageFile> fetched,
         ILogger? logger)
     {
-        if (logger is null || wanted.Count == 0)
+        // 🚨 NOT gated on the logger. Computing the shortfall only when someone is listening makes
+        // the guard disappear exactly where diagnostics are off, which is where a silent stale
+        // record is least likely to be noticed.
+        if (wanted.Count == 0)
             return;
         var missing = wanted
             .Except(fetched.Select(f => f.RelativePath), StringComparer.Ordinal)
             .ToImmutableSortedSet(StringComparer.Ordinal);
         if (missing.Count == 0)
             return;
-        logger.LogError(
+        logger?.LogError(
             "Updating {Id} incrementally: the source returned {Fetched} of the {Wanted} file(s) "
-            + "asked for — [{Missing}] did NOT travel, so their nodes cannot be written, and the "
-            + "install record will still declare them (MeshWeaver#4259).",
+            + "asked for — [{Missing}] did NOT travel, so their nodes cannot be written. Falling "
+            + "back to a full install rather than stamping a record that declares them "
+            + "(MeshWeaver#4259).",
             packageId, fetched.Count, wanted.Count,
             string.Join(", ", missing.Take(InstallCompleteness.MaxNamedInALine)));
+        // 🚨 THROW, do not merely report. InstallNodeRepoDelta stamps `newManifest` as the next
+        // InstalledFiles baseline unconditionally. If a requested file is missing while its OLD
+        // node is still present, VerifyLanded sees a present node and reports completeness — so
+        // the record would claim the new hash over old content, and the next update of this module
+        // would diff clean and skip it FOREVER. A shortfall must therefore never reach the write.
+        // The same mechanism the absent-shared-source arm above uses: the caller catches this and
+        // falls back to a full install, whose release-all rewrites everything.
+        throw new InvalidOperationException(
+            $"Package '{packageId}' asked its source for {wanted.Count} file(s) and received "
+            + $"{fetched.Count} ([{string.Join(", ", missing.Take(InstallCompleteness.MaxNamedInALine))}] "
+            + "did not travel); full install required.");
     }
 
     private static ILogger? Logger(LayoutAreaHost host) =>

@@ -180,7 +180,12 @@ public static class InstallCompleteness
         if (nodePaths.Count == 0)
             return Observable.Return<IReadOnlySet<string>?>(
                 ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal));
-        return persistence.ReadMany(nodePaths, options)
+        // 🚨 Defer is load-bearing, not style. ReadMany is a method CALL: without Defer it runs
+        // when this method is called, which is before the Catch below exists — so an adapter that
+        // throws SYNCHRONOUSLY escapes past the null/Warning path and the caller falls back to a
+        // full package re-fetch on every such fault. Inside Defer, a synchronous throw and an
+        // asynchronous OnError reach the same conservative outcome.
+        return Observable.Defer(() => persistence.ReadMany(nodePaths, options))
             .Select(n => n.Path)
             .ToList()
             .Select(paths => (IReadOnlySet<string>?)paths.ToImmutableHashSet(StringComparer.Ordinal))
