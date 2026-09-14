@@ -1386,14 +1386,27 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
       publish_publication "$ACCOUNT" "$SHARE" "$DEST" true
       return 0
     fi
+    # 🚨 A TARGET THAT ALREADY HOLDS THIS PUBLICATION IS AN OUTCOME, AND IT HAS TO BE COUNTED
+    # (#4247). These two branches skip because the target is ALREADY SEALED ON THIS CONTENT — the
+    # publication reached it, just not in this run — and they used to record NOTHING. The receipt
+    # then read `targets-published=0 targets-converged=0 release-markers=2`, which is
+    # indistinguishable from "this publication reached no target at all", and both readers got it
+    # wrong: a human read two such receipts (main-cd #8457 and #8459, both on cdb2878bb, where the
+    # log says twice "holds a COMPLETE publication of THIS content … already published; skipping")
+    # as a bake that wrote release markers for a publication that reached zero targets, and
+    # `resolve-platform.py --verify-source` — which refuses a receipt whose published+converged is
+    # zero — PASSED BOTH SETS OVER as unattributable. A correct skip must not render as a failed
+    # publication; `already` is what tells them apart.
     if [ -n "${SOURCE_SHA:-}" ] && [ "$published_sha" = "$SOURCE_SHA" ]; then
       echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication of THIS content under $LIVE (sentinel present, source $published_sha) — already published; skipping."
+      echo already >> "$OUTCOMES"
       return 0
     fi
     if [ -z "${SOURCE_SHA:-}" ]; then
       # No content identity given (framework-repo producer): the framework identity IS the
       # content key, so a sealed directory is already this publication.
       echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication under $LIVE ($SENTINEL present) — surface unchanged, bake already published; skipping."
+      echo already >> "$OUTCOMES"
       return 0
     fi
     # 🚨 NEVER SEAL BACKWARDS (per-module deploy, maintainer 2026-09-11). A repo on per-module deploy
@@ -1415,6 +1428,11 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
       fi
       if [ "$order" = "ahead" ]; then
         echo "::notice::$ACCOUNT/$SHARE: the sealed publication under $LIVE is from $published_sha, which is NEWER than this bake's $SOURCE_SHA and contains it — a later run sealed first. Not sealing backwards; skipping."
+        # SUPERSEDED, not `already`: the target holds a NEWER publication, so THIS content is not
+        # what it serves. That is the same state the upload-time race records below, and the
+        # distinction is load-bearing for the receipt's reader — `already` says the set is live
+        # there, `superseded` says a newer one is.
+        echo superseded >> "$OUTCOMES"
         return 0
       fi
       [ -n "$order" ] || echo "::warning::could not order the sealed $published_sha against this bake's $SOURCE_SHA (no GH_TOKEN / BAKE_CONTENT_REPOSITORY, or the compare API refused) — republishing as before."
@@ -1442,6 +1460,12 @@ MARKERS=$(awk '/^marker$/ { c++ } END { print c + 0 }' "$OUTCOMES")
 # claims a seal this run did not write — and printed on every run, including zero, so the number
 # is a denominator rather than an occasional line.
 CONVERGED=$(awk '/^converged$/ { c++ } END { print c + 0 }' "$OUTCOMES")
+# Targets that ALREADY held this exact publication, sealed, when this run asked (#4247) — the
+# common shape when two runs bake the same content, and the ordinary shape of a re-run. Counted
+# separately and printed on every run, including zero, for the same reason the two below are: a
+# skip that records nothing is indistinguishable from a publication that reached nothing, and a
+# reader that must tell them apart was deciding on that ambiguity.
+ALREADY=$(awk '/^already$/ { c++ } END { print c + 0 }' "$OUTCOMES")
 # Targets where a NEWER publication became live while this run was uploading, so this run's sealed
 # generation was deliberately not pointed at (MeshWeaver#3461, phase 4). Counted separately and
 # printed on every run, including zero, for the same reason `converged` is: the summary must never
@@ -1488,4 +1512,4 @@ if [ -n "${BAKE_PUBLICATION_DIR:-}" ]; then
   materialise_publication "$BAKE_PUBLICATION_DIR"
 fi
 
-echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} surface=$HAS_SURFACE targets-published=$PUBLISHED targets-converged=$CONVERGED targets-superseded=$SUPERSEDED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"
+echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} surface=$HAS_SURFACE targets-published=$PUBLISHED targets-converged=$CONVERGED targets-already=$ALREADY targets-superseded=$SUPERSEDED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"

@@ -740,6 +740,64 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
     check("the same content is skipped, not republished",
           r.returncode == 0 and s.sealed() and "already published; skipping" in r.stdout,
           f"rc={r.returncode}, {denominator(s)}")
+    # 🚨 …AND THE RECEIPT SAYS SO (#4247). The skip above used to record NO outcome, so the run's
+    # final receipt read `targets-published=0 targets-converged=0` — byte-identical to a
+    # publication that reached NOTHING. Both readers got it wrong on main-cd #8457/#8459: a human
+    # filed two release markers written for "a publication that reached ZERO targets" (the log
+    # says twice "holds a COMPLETE publication of THIS content … already published; skipping"),
+    # and `resolve-platform.py --verify-source`, which refuses a receipt whose
+    # published+converged is zero, passed both sealed sets over as unattributable. `already` is
+    # the word that separates "the set is live at this target" from "this reached no target".
+    check("…and the receipt COUNTS it as already-published, not as a publication that reached nothing",
+          "targets-published=0 targets-converged=0 targets-already=1" in r.stdout,
+          "receipt: " + (next((line for line in r.stdout.splitlines() if line.startswith("bake published:")),
+                              "<no final receipt>")))
+
+    # ── THE SECOND `already` BRANCH: a producer that gives NO content sha. ─────────────────────
+    # 🚨 Copilot on #4335, and it was right: every case above publishes WITH a source sha
+    # (`h.publish` passes `bake.source_sha`), so the framework-producer branch — where the
+    # framework identity IS the content key, so any sealed directory is already this publication —
+    # writes the new outcome with nothing exercising it. Two production paths, two cases, or the
+    # uncovered one regresses to the old uncounted skip unnoticed.
+    h.reset()
+    sourceless = Bake(work, "framework-identity", "")
+    r = h.publish(sourceless, "Systemorph/MeshWeaver", "4001")
+    s = h.shelf()
+    check("a source-less (framework-identity) publication seals",
+          r.returncode == 0 and s.sealed(), f"rc={r.returncode}, {denominator(s)}")
+    r = h.publish(sourceless, "Systemorph/MeshWeaver", "4002")
+    check("…and the same one again is skipped as already published",
+          r.returncode == 0 and "surface unchanged, bake already published; skipping" in r.stdout,
+          f"rc={r.returncode}")
+    check("…and THAT branch counts it too — the receipt is not silent about the source-less skip",
+          "targets-already=1" in r.stdout,
+          "receipt: " + (next((line for line in r.stdout.splitlines() if line.startswith("bake published:")),
+                              "<no final receipt>")))
+
+    # ── AND THE THIRD SKIP, which is NOT `already`: the decision-time never-seal-backwards. ────
+    # The target holds a SEALED publication from a commit that is NEWER and contains this one, so
+    # this content is not what it serves — `superseded`, never `already`. (The pointer-time repeat
+    # of the same question is covered further down, under the generation layout; this is the one
+    # taken before a single byte is uploaded.)
+    h.reset()
+    older_seal = Bake(work, "older-seal", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1")
+    newer_seal = Bake(work, "newer-seal", "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2")
+    r = h.publish(newer_seal, "Systemorph/MeshWeaver", "4101")
+    check("the newer content sealed first (the case is not vacuous)",
+          r.returncode == 0 and h.shelf().sealed(), f"rc={r.returncode}, {denominator(h.shelf())}")
+    r = h.publish(older_seal, "Systemorph/MeshWeaver", "4102", {
+        "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+        "GH_TOKEN": "stub", "MOCK_GH_AHEAD": newer_seal.source_sha,
+    })
+    s = h.shelf()
+    check("a target sealed on NEWER content is left alone, and the run still succeeds",
+          r.returncode == 0 and "Not sealing backwards; skipping" in r.stdout
+          and set(s.bakes_present()) - {"<marker>"} == {"newer-seal"},
+          f"rc={r.returncode}, {denominator(s)}")
+    check("…and it is counted as SUPERSEDED, never as already-published — the set is NOT live there",
+          "targets-superseded=1" in r.stdout and "targets-already=0" in r.stdout,
+          "receipt: " + (next((line for line in r.stdout.splitlines() if line.startswith("bake published:")),
+                              "<no final receipt>")))
 
     # ── AN OWN-EMPTY MODULE SET is sealed when the workflow SAYS so, and refused when it does not. ──
     # MeshWeaver#3732: a downstream composes its upstream's modules for the compile surface and
