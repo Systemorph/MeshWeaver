@@ -158,8 +158,8 @@ namespace MeshWeaver.Data.Persistence
         /// <summary>
         /// Initializes the data source by eagerly opening a stream for each partition registered
         /// via <see cref="InitializingPartitions"/>. The partition's primary stream only — the
-        /// discarded full-reference reduce this used to perform minted a second, unreachable
-        /// <c>sync/</c> hub per partition (Systemorph/MeshWeaver#4300); see
+        /// full-reference reduce this method used to perform and discard minted a second,
+        /// unreachable <c>sync/</c> hub per partition (Systemorph/MeshWeaver#4300); see
         /// <c>TypeSourceBasedUnpartitionedDataSource.Initialize</c> for the mechanism.
         /// </summary>
         public override void Initialize()
