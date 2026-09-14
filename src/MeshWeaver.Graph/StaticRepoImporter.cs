@@ -3293,8 +3293,15 @@ public static class StaticRepoImporter
         return Observable.Defer(() =>
             {
                 Interlocked.Increment(ref tally.Requests);
-                return AsSystem(hub, () => hub.Observe<CreateNodesResponse>(
-                    new CreateNodesRequest(chunk.ToImmutableList())));
+                // Off-router issuing (#1140). This request is TARGET-LESS, so the hub it is posted
+                // on both SENDS it and EXECUTES it. For a caller holding the DI-injected root hub
+                // — which the importers do — that is a bulk create running on the ROUTER's action
+                // block, the exact case the ROUTER_TRAFFIC line names ("import hub for bulk
+                // imports"). NodeOperationIssuingHub is the identity function for every other
+                // caller, so a portal/session/import-hub importer is byte-for-byte unchanged.
+                return AsSystem(hub, () => hub.NodeOperationIssuingHub()
+                    .Observe<CreateNodesResponse>(
+                        new CreateNodesRequest(chunk.ToImmutableList())));
             })
             .FirstAsync()
             .Select(d => d.Message)
@@ -3354,7 +3361,10 @@ public static class StaticRepoImporter
     /// put in place first — and names it in the import activity when it does.</param>
     private static IObservable<int> Upsert(
         IMessageHub hub, MeshNode node, bool allowUnresolvableNodeType = false) =>
-        AsSystem(hub, () => hub.Observe<CreateOrUpdateNodeResponse>(
+        // Off-router issuing (#1140) — same reasoning as WriteBulk: target-less, so the posting hub
+        // executes it, and the importer's hub may be the root mesh hub (the ROUTER).
+        AsSystem(hub, () => hub.NodeOperationIssuingHub()
+            .Observe<CreateOrUpdateNodeResponse>(
                 new CreateOrUpdateNodeRequest(node)
                 {
                     AllowUnresolvableNodeType = allowUnresolvableNodeType,

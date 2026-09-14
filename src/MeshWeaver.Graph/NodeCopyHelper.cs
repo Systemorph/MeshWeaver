@@ -189,6 +189,14 @@ public static class NodeCopyHelper
         // the root mesh hub otherwise.
         var operationTarget = hub.NodeOperationTarget();
 
+        // 🚨 And ISSUE them off the router too (#1140). NodeOperationTarget moves where the request
+        // EXECUTES; it says nothing about where it came FROM, and the detector reports the "sender"
+        // role on the request and the "target" role on its reply. A copy driven from a caller
+        // holding the DI-injected root hub (a mesh-singleton, an MCP/agent surface constructed with
+        // it) therefore still put mesh/{id} on both ends. NodeOperationIssuingHub is the identity
+        // function for every hub that is not the router, so a portal/session-hub copy is unchanged.
+        var issuingHub = hub.NodeOperationIssuingHub();
+
         // Shared post options for both verbs: route to that target and stamp the
         // eagerly-captured caller identity (mirrors MeshService.ConfigurePost).
         PostOptions ConfigurePost(PostOptions o)
@@ -340,7 +348,7 @@ public static class NodeCopyHelper
                 new(node.Path, newPath, disposition) { Error = error };
 
             var attempt = force
-                ? hub.Observe<CreateOrUpdateNodeResponse>(
+                ? issuingHub.Observe<CreateOrUpdateNodeResponse>(
                         new CreateOrUpdateNodeRequest(copiedNode), ConfigurePost)
                     .FirstAsync()
                     .Select(d => d.Message)
@@ -355,7 +363,7 @@ public static class NodeCopyHelper
                             ? NodeCopyDisposition.Created
                             : NodeCopyDisposition.Updated);
                     })
-                : hub.Observe<CreateNodeResponse>(new CreateNodeRequest(copiedNode), ConfigurePost)
+                : issuingHub.Observe<CreateNodeResponse>(new CreateNodeRequest(copiedNode), ConfigurePost)
                     .FirstAsync()
                     .Select(d => d.Message)
                     .Select(resp =>

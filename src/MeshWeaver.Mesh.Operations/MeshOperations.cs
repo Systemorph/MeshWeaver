@@ -3038,7 +3038,13 @@ public class MeshOperations
                 // McpNegativeOperationsTest.DeletedNode_EveryVerb_FailsCleanly (line 105,
                 // the MOVE verb) CI flake on PR #500 (run 29571004819 shard 0; locally
                 // the round-trip never beat the registration, hence 646ms green).
-                innerSubscription = hub.Observe(
+                // 🚨 Off-router ISSUING (#1140). The target below is already the source node's own
+                // hub, so the move never executed on the router — but the request left stamped
+                // `Sender = mesh/{id}` whenever this facade was constructed with the DI-injected
+                // root hub, and its MoveNodeResponse was addressed straight back at it. That is the
+                // "sender"/"target" pair the ROUTER_TRAFFIC detector reports. The target is
+                // deliberately unchanged: retargeting would move the permission check.
+                innerSubscription = hub.NodeOperationIssuingHub().Observe(
                         new MoveNodeRequest(resolvedSource, resolvedTarget),
                         o => o.WithTarget(new Address(resolvedSource)))
                     .Subscribe(

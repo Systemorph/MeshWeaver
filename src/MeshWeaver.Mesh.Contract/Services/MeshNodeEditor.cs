@@ -101,14 +101,22 @@ public sealed class MeshNodeEditor : IMeshNodeEditor
 
         return Observable.Create<MoveNodeResponse>(observer =>
         {
-            var delivery = hub.Post(new MoveNodeRequest(CurrentPath, targetPath),
-                o => o.WithTarget(hub.Address));
+            // 🚨 Off-router issuing (#1140). This exchange is deliberately SELF-targeted — posted
+            // and handled on one hub, with the reply observed on the delivery it returns — so the
+            // hop has to move both ends together or it would break that pairing. When `hub` is the
+            // root mesh hub (the ROUTER) the move used to run on the routing action block and be
+            // stamped `mesh/{id}` at both ends; it now runs on the mesh's off-router node-operation
+            // hub, which carries the same permission evaluator and type registry. For every other
+            // hub NodeOperationIssuingHub is the identity function, so nothing moves.
+            var issuingHub = hub.NodeOperationIssuingHub();
+            var delivery = issuingHub.Post(new MoveNodeRequest(CurrentPath, targetPath),
+                o => o.WithTarget(issuingHub.Address));
             if (delivery == null)
             {
                 observer.OnError(new InvalidOperationException("Move: hub.Post returned null."));
                 return Disposable.Empty;
             }
-            hub.Observe(delivery)
+            issuingHub.Observe(delivery)
                 .Subscribe(
                     response =>
                     {
