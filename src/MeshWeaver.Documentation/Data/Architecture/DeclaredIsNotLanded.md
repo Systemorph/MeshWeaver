@@ -172,10 +172,16 @@ the third exit stayed open through two fixes aimed at the same defect.
 
 ## What this does NOT do
 
-- **It does not explain why the nodes went missing.** The release node proves they were written and
-  compiled; something removed them between 2026-09-13T08:12:35Z and 21:56:07Z, and no instrument a
-  session can run names it. This change makes the loss *self-correcting on the next update* instead
-  of permanent — it is not a diagnosis of the loss.
+- **It does not explain why the nodes went missing — that was found the same day, and it is the
+  other half of the fix.** The loss was `Hosting/_GitSync` re-importing the partition at the commit
+  SEALED for the running framework (`627fb3cd`, a 2026-09-12 tree) at 21:56:05Z, on the boot after
+  the default install had put a 2026-09-13 tree there from `Plugins@main`: the bake declined the
+  Hosting bundles on their source fingerprint, `SealedSyncReconcile` read that — correctly — as "the
+  live sources have drifted from the commit they claim", and the re-import pruned the eleven nodes
+  only the newer tree has. Two unattended writers of one partition, two commit policies. The
+  restore on this page alone would have made that an every-boot flap; the boot install now lands on
+  the sealed commit too, so the writers agree. Timeline, evidence and the rule:
+  [The Sync-Ref Contract](../SyncRefContract) → "The lane the closure missed".
 - **It does not re-arm a PARKED NodeType.** A type that failed a compile serves its cache and does
   not re-drive itself when sources arrive; that is MeshWeaver#4208's subject. Restoring the content
   and recycling the type are two steps, and on an image without #4208 they stay two steps.

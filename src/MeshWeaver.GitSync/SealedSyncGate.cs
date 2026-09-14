@@ -152,7 +152,7 @@ public static class SealedSyncGate
         if (mine.Count == 0)
             return new FirstImportPlan(null, null,
                 $"no publication of {repo} is sealed for identity {identity} — this instance runs none, "
-                + "so the first import keeps today's behaviour and resolves the branch");
+                + "so an unattended import keeps today's behaviour and resolves the branch");
 
         // 🚨 EVERY attributable publication must be usable, not merely ONE of them. Selecting the
         // sealed ones first and deciding on those would let a good seal OVERRIDE a torn sibling of
@@ -178,9 +178,9 @@ public static class SealedSyncGate
             var others = unusable.Count > 1 ? $" (and {unusable.Count - 1} more of {repo})" : "";
             return Hold(witness.IsSealed
                 ? $"this instance's publication of '{witness.Source}' ({repo}) is sealed at an unknown "
-                  + $"commit (identity {identity}){others} — the first import has no commit to land on"
+                  + $"commit (identity {identity}){others} — an unattended import has no commit to land on"
                 : $"this instance's publication of '{witness.Source}' ({repo}) is not sealed "
-                  + $"(identity {identity}: {witness.Refusal}){others} — the first import waits for it");
+                  + $"(identity {identity}: {witness.Refusal}){others} — an unattended import waits for it");
         }
 
         // 🚨 Several sealed publications of ONE repository that disagree about the commit is a state
@@ -193,11 +193,11 @@ public static class SealedSyncGate
                 + string.Join(", ", mine
                     .OrderBy(s => s.Source, StringComparer.Ordinal)
                     .Select(s => $"'{s.Source}' at {Short(s.SourceCommit!)}"))
-                + ") — the first import cannot choose between them");
+                + ") — an unattended import cannot choose between them");
 
         return new FirstImportPlan(commit, null,
             $"'{mine[0].Source}' ({repo}) is sealed at {Short(commit)} for identity {identity} — "
-            + "the first import lands on the commit whose bytes this instance runs");
+            + "an unattended import lands on the commit whose bytes this instance runs");
     }
 
     /// <summary>Whether a sealed source is the repository's — by its repository marker, or by commit
