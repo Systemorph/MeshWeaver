@@ -117,7 +117,7 @@ name: Node repo gate (reusable)
 # edge: the refresh is a CronJob on a timer while this run was triggered by the SEAL. So an absent
 # set is not automatically a refusal — `resolve-gate-platform.sh` WAITS, bounded, when the install
 # is in flight or the volume simply has not reached the set, and is RED at once only when no future
-# refresh can ever install it (#4283).
+# refresh can ever install it (#4281).
 #
 # So this lane has TWO MODES, and `.github/scripts/resolve-gate-platform.sh` decides which by
 # MEASURING whether that mount exists — never by reading a label or an input:
@@ -1015,11 +1015,17 @@ jobs:
           # `inputs.*`, which are empty for a caller that pins nothing (MeshWeaver#4099).
           TESTER_DIGEST: ${{ steps.platform.outputs.image-digest }}
           PLATFORM_DIGEST: ${{ steps.platform.outputs.platform-image-digest }}
-          # 🚨 The SET NAME is what lets the script tell the three absences apart (#4283): a set the
+          # 🚨 The SET NAME is what lets the script tell the three absences apart (#4281): a set the
           # volume has not REACHED yet is waited out, one it has moved PAST is red at once. Without
           # it only "an install is in flight" is visible and the other two are indistinguishable —
           # which is how a message came to assert a retention miss for eight runs that had none.
-          PLATFORM_SET: ${{ steps.platform.outputs.set }}
+          # 🚨 `platform-set`, NOT `set`. The step at `id: platform` prints `platform-set=…`
+          # (beside `image-digest=` and `platform-image-digest=`), so `outputs.set` reads EMPTY —
+          # and an empty --set is silently DEGRADING, not failing: the script can still see an
+          # in-flight install but can no longer tell "the volume has not reached this set" from
+          # "the volume has moved past it", so the AHEAD case goes red at once and the wait this
+          # change exists to add never happens for it.
+          PLATFORM_SET: ${{ steps.platform.outputs.platform-set }}
           RUNNER_LABEL: ${{ inputs.runner }}
           PLATFORM_VOLUME: /opt/platform
         run: |

@@ -36,14 +36,17 @@
 #   <root>/sha256-<hex>/.complete        the tester digest — the set is COMPLETE only with it
 #   <root>/sha256-<hex>.tmp.<pod>/       an install IN FLIGHT, being extracted by that refresh pod
 #
-# 🚨 A SET CAN BE ABSENT FOR THREE REASONS, AND THEY HAVE OPPOSITE REMEDIES (#4283). Until
+# 🚨 A SET CAN BE ABSENT FOR THREE REASONS, AND THEY HAVE OPPOSITE REMEDIES (#4281). Until
 # 2026-09-14 this script named two of them — "older than the three kept, or never sealed" — and
-# sent the reader to bump the caller's digest. Measured that morning across six satellites, the
-# newest failed gate run of each: 8 refusals, and **not one** of them was either of those. Four had
-# the wanted digest present as `<digest>.tmp.<refresh pod>` — the install was ARRIVING as the shard
-# looked — and four wanted a set NEWER than everything installed, which arrived later. The remedy
-# the message gave (bump the caller's digest) was wrong in all eight: the digest was right and
-# merely early. The three cases:
+# sent the reader to bump the caller's digest. Two refusals measured that morning were NEITHER:
+#   • Education run 34809613064 (05:42Z) wanted sha256:cda259b4… and the volume listing printed
+#     INSIDE that very refusal contained `sha256-cda259b4….tmp.ci-platform-refresh-29822740-7x7xb`
+#     — the exact digest, being extracted as the shard looked. ARRIVING.
+#   • Manufacturing PR#89 (~06:5xZ) wanted sha256:0860c392… while the volume held 4c327117,
+#     cda259b4 and ce95ac38 — by then cda259b4 had finished, so the volume had advanced and the
+#     wanted set had advanced past it. AHEAD.
+# In both the caller's digest was RIGHT and merely early, so the remedy the message gave would have
+# pinned a gate to an older platform to work around a wait. The three cases:
 #
 #   ARRIVING     `<SET_DIR>.tmp.<pod>` exists, or `<SET_DIR>` exists without `.complete`. A refresh
 #                pod is extracting exactly this digest right now (~200 s on the share).
@@ -174,7 +177,7 @@ if [ "${1:-}" = "--self-test" ]; then
   "$self" --volume-root "$good" --tester-digest "$D1" --wait-seconds later > /dev/null 2>&1 \
     && fail "a non-numeric --wait-seconds must be refused"
 
-  # ── 5. THE WAIT (#4283). The measured failure was a shard refusing a set that was ARRIVING. ────
+  # ── 5. THE WAIT (#4281). The measured failure was a shard refusing a set that was ARRIVING. ────
   # 🚨 Each of these has a "could it fail?" partner: 5a would go red if the wait were removed, 5b
   # and 5c would go red if the wait were UNBOUNDED or blind, and 5d proves the classification is
   # what decides — not the clock.
