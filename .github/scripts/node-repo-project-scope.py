@@ -60,6 +60,15 @@ def select(root, policy, files):
         return answer(policy, "content classifier unavailable — full validation")
     relevant = []
     for path in files:
+        # 🚨 `<Package>/manifest.lock` is GENERATED — a function of the package's other files, so
+        # whatever really changed is in this same diff under its own path, and the lock alone
+        # selects nothing. Every trunk merge regenerates the locks of every module main touched
+        # (the caller's post-merge hook), so without this a PR that never touched Store/ handed
+        # `Store/` — the declared input of MeshWeaver.PluginCatalog.Test — a changed path, the
+        # caller's classifier (which already treats locks as no-op) expected no such suite, and
+        # the reconcile went red on every trunk-merged pull request (Plugins#1857, #1859).
+        if path.rsplit("/", 1)[-1] == "manifest.lock":
+            continue
         if path in scope.NOOP_FILES or path.split("/", 1)[0] in noop_dirs:
             relevant.append(path)  # explicit runtime inputs can still consume documentation
             continue
@@ -115,6 +124,10 @@ def forward(seed, graph): return {seed} | graph.get(seed, set())
         for path in ["src/Directory.Build.props", "scripts/gate.py", "Gone/index.json", ".github/workflows/ci.yml"]:
             assert select(root, policy, [path])["count"] == 2
         assert select(root, policy, ["README.md"])["count"] == 0
+        # A generated lock under a declared input selects nothing on its own; beside a real
+        # change it neither adds nor hides anything.
+        assert select(root, policy, ["Beta/manifest.lock"])["count"] == 0
+        assert select(root, policy, ["Beta/manifest.lock", "Beta/Lesson.md"])["test"] == [b["project"]]
         assert select(root, policy, None)["count"] == 2
         project = root / a["project"]
         project.write_text('<Project><Content Include="../../Alpha/**" /></Project>')
@@ -136,7 +149,7 @@ def forward(seed, graph): return {seed} | graph.get(seed, set())
         assert fallback.select(root, policy, ["Alpha/Lesson.md"])["count"] == 2
         (isolated / "node-repo-scope.py").write_text("this is invalid Python !")
         assert fallback.select(root, policy, ["Alpha/Lesson.md"])["count"] == 2
-    print("compiled project scope: 16 assertions passed")
+    print("compiled project scope: 18 assertions passed")
 
 
 def main():
