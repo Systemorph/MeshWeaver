@@ -119,15 +119,23 @@ public static class SealedSyncGate
     /// first import leaves a Space with a sync entry and no content, never live content going dark.</para>
     ///
     /// <para>🚨 <b>How a hold releases, stated exactly, because the loose version of this is wrong.</b>
-    /// Two paths re-run the import: the discovery scan's next pass (a config with no
-    /// <c>LastSyncCommitSha</c> is its re-import trigger) and <c>SealedPublicationSyncReconciler</c>
-    /// when the seal is next read. But <c>ModuleDiscoveryService</c> enqueues a scan at boot and on
-    /// <c>BuildCompletion</c> emissions, and the reconciler runs from
-    /// <c>ShippedPrebuiltBundles.SeedPublishedRoot</c>, which is boot-time — so on an instance that
-    /// receives no build webhooks, <b>both reduce to the next process start</b>. A seal that
-    /// completes while the process runs is not noticed until then. That is
-    /// <c>Systemorph/MeshWeaver#4063</c>'s shape and this hold inherits it; saying "self-releasing"
-    /// without that qualification claims a watcher nothing here implements.</para>
+    /// Three paths re-run the import: the discovery scan's next pass (a config with no
+    /// <c>LastSyncCommitSha</c> is its re-import trigger); <c>SealedPublicationSyncReconciler</c>
+    /// from <c>ShippedPrebuiltBundles.SeedPublishedRoot</c>, which is boot-time; and — since
+    /// <c>Systemorph/MeshWeaver#4209</c> — that same reconciler from
+    /// <c>PublicationSealArrivalService</c>, when the publishing lane's
+    /// <c>Hosting/PlatformBuilds/&lt;source&gt;</c> announcement arrives. The third one releases a
+    /// held FIRST import too, and that is not obvious: <c>SealedPublicationSyncReconciler.Decide</c>
+    /// treats a config with NO <c>LastSyncCommitSha</c> as behind the sealed commit, so the gate
+    /// proceeds and <c>ImportAtSealedCommit</c> fires.</para>
+    ///
+    /// <para>🚨 <b>The residual is the WEBHOOK-LESS instance, and it is inherent rather than
+    /// missing.</b> There, no announcement arrives and no <c>BuildCompletion</c> is emitted, so the
+    /// first and third paths are dead and <b>all of them reduce to the next process start</b> — a
+    /// seal completing mid-process is not noticed until then. That is
+    /// <c>Systemorph/MeshWeaver#4063</c>'s shape and this hold inherits it. Saying "self-releasing"
+    /// without that qualification claims a watcher that, on such an instance, has no event to hear;
+    /// saying "only a restart" without #4209 understates it everywhere else.</para>
     /// </summary>
     /// <param name="repo">The repository the module's Space syncs from.</param>
     /// <param name="sealedForThisIdentity">What the registry sealed under this instance's identity.</param>

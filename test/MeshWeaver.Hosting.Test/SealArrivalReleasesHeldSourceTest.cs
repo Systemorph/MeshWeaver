@@ -54,7 +54,9 @@ namespace MeshWeaver.Hosting.Test;
 /// <para>One seam is substituted, the GitHub transport, exactly as in
 /// <c>HeldSourceSaysItIsHeldTest</c>, whose scaffolding this mirrors. The published bundle root is a
 /// REAL directory carrying the markers <c>publish-bake-bundles.sh</c> writes, and the announcement
-/// is a REAL storage write, so the post-commit invalidation feed the watcher subscribes to is the
+/// is a REAL node write, so the post-commit LOGICAL feed the watcher subscribes to
+/// (<see cref="IMeshChangeFeed"/>, not <c>IMeshInvalidationFeed</c> — see
+/// <see cref="AnnouncePublication"/> for why that distinction is the load-bearing one) is the
 /// production one rather than a stand-in.</para>
 /// </summary>
 public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
