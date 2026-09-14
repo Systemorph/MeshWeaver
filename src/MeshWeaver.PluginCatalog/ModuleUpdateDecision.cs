@@ -1,6 +1,22 @@
+using System;
 using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.PluginCatalog;
+
+/// <summary>
+/// RETIRED (2026-09-14): the module-update policy is PER PACKAGE — <see cref="PackageManifest.UpdatePolicy"/>
+/// (<see cref="PackageUpdatePolicy"/>), seeded from <c>PluginCatalog:DefaultUpdatePolicy</c> — and no
+/// longer a host-wide gate read off the platform's <c>Admin/UpdatePolicy</c> image policy. Nothing
+/// registers or consumes this interface any more; it stays as a public type because a module
+/// compiled against an earlier platform may still hold the TypeRef (Systemorph/MeshWeaver#2370),
+/// and a removed public type is binary-breaking for it the moment the platform rolls.
+/// </summary>
+[Obsolete("The module-update policy is per package (PackageManifest.UpdatePolicy); this host-wide gate is no longer registered or consulted.")]
+public interface IModuleUpdatePolicy
+{
+    /// <summary>Why unattended module landing is currently declined, or null when it is allowed. Cold; emits exactly once per subscription.</summary>
+    IObservable<string?> DeclineUnattendedLanding();
+}
 
 /// <summary>What the module-update reconcile decided for one installed module package.</summary>
 public enum ModuleUpdateAction
