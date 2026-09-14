@@ -270,6 +270,7 @@ raises an occurrence count instead of opening another ticket.
 | The cursor was **floored by `MaxCatchUp`** | `WatcherState.CursorFor` returns the skipped stretch | Critical | one of the two paths that LOSE evidence outright — that stretch will never be read |
 | Red bursts arrived as a console **header and nothing else** | `BurstAggregator` → `LogPipelineGap.HeaderOnlyReport` | Error | a capture with no body; never fingerprinted, because `(category, eventId)` names a component and no defect |
 | The portal **permanently rejected** a report | `LogIncidentDelivery.IsPermanent` → `LogPipelineGap.RejectedReport` | Critical | the other path that loses outright — that report is gone from the queue and its red log will never be ticketed |
+| …and the **portal's own** record of the same refusal | `LogIncidentEndpoints.PermanentRefusal` → `LogIncidentDelivery.RefusalReport` | Critical | written by the ingest endpoint, not the watcher — the only one that survives a contract skew |
 
 ### 🚨 A rejected report is DESTROYED, so the destruction is a finding
 
@@ -292,11 +293,41 @@ Three properties make the finding sound, and each is pinned by `RejectedReportIs
 - **It stops at one.** `LogPipelineGap.IsRejectionFinding` is a guard, not a budget: a finding about
   a rejected finding would be refused for the same reason and mint its own successor, growing the
   queue fastest exactly when the portal refuses everything.
-- **The residual is covered from the other side.** When the watcher's report *shape* has diverged
-  from the contract, the finding is as unbindable as what it reports. So the portal logs **every**
-  permanent refusal at `Error` (`LogIncidentEndpoints.PermanentRefusal`) — and the portal's log is
-  precisely what `mw-log-watcher` reads, so that line becomes a burst, an incident and a ticket
-  through the pipeline that is otherwise broken.
+- **The swap is ONE durable write** (`WatcherState.Replace`). Removing the report and appending the
+  finding as two persists leaves a gap holding neither, and a crash there loses the red log *and* the
+  record that it was lost — this defect, one level down.
+
+### 🚨 …and the portal files its OWN record, because a log line cannot escape a contract skew
+
+The finding above covers one bad payload. It cannot cover the case worth catching. The watcher ships
+as a separate image on its own cadence — [#2681](https://github.com/Systemorph/MeshWeaver/issues/2681)
+ran **35 days** behind the portal it reported to — so once its report *shape* has drifted from
+`MeshWeaver.Observability.Contract`, it can POST nothing the portal will take, its own finding
+included.
+
+Leaving the fact in a log line does not rescue it either, and this is worth spelling out because it
+looks like it should: the portal's log **is** what the watcher reads, so the obvious move is to log
+loudly and let the pipeline pick it up. Follow it through and it is a loop — the watcher reads the
+line, builds a report from it, and has *that* refused too, forever, persisting nothing.
+
+So `LogIncidentEndpoints.PermanentRefusal` **writes the incident itself**, through the
+`ILogIncidentIngest` seam it has already resolved, on a path that does not travel through the watcher
+at all. It names no field of the refused payload, so it cannot be refused for the reason it is
+reporting, and a failed write degrades to a Warning rather than turning a 400 into a 500. The Error
+log stays — as what a reader of the portal's log sees, not as the mechanism.
+
+🚨 **Its fingerprint is `log-ingest-refused-{ns}`, deliberately NOT the watcher's
+`log-report-rejected-{ns}`.** They are two facts with two observers: the watcher knows *which* report
+it lost, the portal knows it *refused* one, and only the second is obtainable when the watcher cannot
+serialise anything the portal accepts. Folding them would also hand whichever arrived first the
+incident's `normalizedMessage` — the swallowing this subsystem already has a production instance of
+(see the section above).
+
+Both findings state their scope conditionally, for the same reason: **one refusal proves that one
+report is gone and nothing about the rest.** A single occurrence is a payload the portal could not
+take; an occurrence count that keeps climbing is the drift, and red-log ticketing is down for that
+namespace until the images agree. The per-namespace, timestamp-free fingerprint is what puts that
+discriminator in front of the responder.
 
 🚨 **The permanence rule itself lives in the contract** (`LogIncidentDelivery.IsPermanent`), not on
 either side. The consequence of a status is a *joint* fact: the portal picks the number, the watcher
@@ -386,9 +417,39 @@ SHA256("MeshWeaver.Hosting.Orleans.RoutingGrain\n0\n")[..8]                     
 
 4 of 4, across two namespaces and three weeks — while the current payload would have produced
 `199e5a2f690b9c89`, `4e297103d4d86c81`, `bddb036580fac948`, `4ec310c5270ddb0e`, none of which appears
-anywhere. **So the reporting binary predates every identity change since 2026-08-09, and therefore
-predates the 2026-08-25 header-only holdback** — a dated conclusion, from data the portal already
-holds, with no cluster read and no image tag.
+anywhere. **So the binary that COMPUTED these fingerprints predates every identity change since
+2026-08-09, and therefore predates the 2026-08-25 header-only holdback** — from data the portal
+already holds, with no cluster read and no image tag.
+
+🚨 **That dates the PRODUCER, not by itself the running image, and the difference is this watcher's
+own design.** Reports are fingerprinted and queued to disk *before* delivery — deliberately, so a
+crash costs a redelivery rather than an un-ticketed error ("Delivery guarantees" above) — so a
+current watcher draining a pre-update backlog delivers old-format fingerprints while running new
+code. That is one of the three alternatives
+[#2681](https://github.com/Systemorph/MeshWeaver/issues/2681) itself lists, and the hash cannot
+distinguish it.
+
+**What closes the gap is the report's own timestamps, because a report is fingerprinted at QUEUE
+time.** A window is read *after* the lines in it exist, never before, so the binary that fingerprinted
+a report was running **at or after** that report's `lastSeen`.
+
+🚨 That is a **one-sided** bound, and one-sided is all the delivery guarantees support. `IngestLag`
+is the margin the watcher subtracts when choosing a window's upper bound — not a promise that
+Promtail and Loki have delivered by then — and a store backlog or watcher downtime pushes processing
+arbitrarily later, which is exactly what `MaxCatchUp` and the skipped-window finding exist for. So do
+not read it as "processed within a poll interval of the line". One-sided is enough here, because
+later only strengthens the conclusion: whenever that window was read, an old-format binary was doing
+the reading, and that cannot have been before the lines existed.
+
+Measured 2026-09-14: `log-burst-header-only-memex` carries the 2026-08-09 payload over lines stamped
+`14:24:01Z`–`14:24:18Z` that same day — so an old-format binary was running **on or after** that
+instant, about 18 hours after the holdback image was published. A queued backlog cannot account for
+it either: a report cannot be older than the lines it contains.
+
+> **So the instrument is the PAIR — the fingerprint's payload format and the report's own
+> `lastSeen` — never the fingerprint alone.** With a stale `lastSeen` the honest reading stops at
+> "whatever produced this predates 2026-08-09", and dating the running image then needs rollout
+> evidence or the watcher's queue.
 
 Two things this is good for beyond dating:
 
@@ -409,9 +470,20 @@ portal refuses all of it — bodies included.
 That is not a theory. `log-burst-header-only-memex` (2026-09-14) carries `occurrences: 4` whose
 samples are **one** bare `crit: …RoutingGrain[0]` header and **three** full `[ROUTE] Routing
 back-pressure` bodies: three diagnosable red logs that got no ticket of their own. The
-`memex-cloud` sibling shows the same thing from one pod 33 ms apart on 2026-09-08 — which also
-falsifies the "multi-pod interleaving cut the burst" reading both issues were filed with, since
-per-pod versus merged grouping cannot explain two lines from a single pod.
+`memex-cloud` sibling shows the same shape from one pod 33 ms apart on 2026-09-08.
+
+🚨 **Be precise about which half of that the evidence settles, because both issues were filed on the
+other half.** They read the samples as multi-pod interleaving cutting a burst up. Interleaving is a
+perfectly good explanation of why the first burst is **bodyless** — in a merged stream another pod's
+line can land between a header and its body, and a global grouper closes the burst there and orphans
+the rest; that is exactly #2153/#2222, and a same-pod pair does *not* rule it out, because the
+orphaned body is simply dropped and never appears in the samples. What interleaving cannot explain is
+the **fold**: why a bodyless burst and a diagnosable one end up in ONE report under ONE fingerprint.
+Grouping decides where bursts begin and end; it has no say in which bursts share an identity. That is
+the identity function, and the arithmetic above names which one.
+
+> **Grouping explains bodylessness; identity explains the fold.** Ruling a cause in or out needs the
+> matching instrument, and a capture-gap incident carries evidence for the second, not the first.
 
 > **So read a capture-gap incident's `samples[]` before quoting its `occurrences` as a count of
 > bodyless captures.** Some of them may be fully-formed faults that were folded into it, and those
