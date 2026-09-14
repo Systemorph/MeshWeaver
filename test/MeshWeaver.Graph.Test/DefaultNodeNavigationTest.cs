@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -144,6 +145,41 @@ public class DefaultNodeNavigationTest
         hardware.Items.OfType<SuppliedNavigationRail.RailLink>().Single(l => l.IsCurrent).Path.Should().Be(current);
         rail.Items.OfType<SuppliedNavigationRail.RailLink>().Select(l => l.Path)
             .Should().Equal(Root + "/Consumption", Root + "/CapacityModel");
+    }
+
+    // ── the change feed ──────────────────────────────────────────────────────────────────────
+
+    private static QueryResultChange<MeshNode> Change(QueryChangeType type, params MeshNode[] items)
+        => new() { ChangeType = type, Items = items };
+
+    /// <summary>
+    /// The query is a change feed, and only Initial/Reset carry the whole tree. Projecting each
+    /// change's Items straight into the index read as correct on the first emission and rebuilt
+    /// the rail from ONE row at the first live change (Copilot on #4321).
+    /// </summary>
+    [Fact]
+    public void ALiveChangeFoldsIntoTheWholeTreeInsteadOfReplacingIt()
+    {
+        var tree = DefaultNodeNavigation.Fold(ImmutableDictionary<string, MeshNode>.Empty,
+            Change(QueryChangeType.Initial, [.. Tree()]));
+        tree.Should().HaveCount(Tree().Count);
+
+        // One page renamed: the feed carries that one row.
+        var renamed = Node(Root + "/Consumption", "Consumption, revised", 1);
+        tree = DefaultNodeNavigation.Fold(tree, Change(QueryChangeType.Updated, renamed));
+        tree.Should().HaveCount(Tree().Count, "an update replaces a row, it does not shrink the tree");
+        tree[Root + "/Consumption"].Name.Should().Be("Consumption, revised");
+
+        // One page added, one removed.
+        tree = DefaultNodeNavigation.Fold(tree, Change(QueryChangeType.Added, Node(Root + "/Glossary", "Glossary")));
+        tree = DefaultNodeNavigation.Fold(tree, Change(QueryChangeType.Removed, Node(Root + "/CapacityModel")));
+        var nav = DefaultNodeNavigation.Build(Root, tree.Values.ToList(), Root)!;
+        Paths(nav.Entries).Should().Contain(Root + "/Glossary").And.NotContain(Root + "/CapacityModel");
+        nav.Entries.Should().HaveCount(3);
+
+        // A reset starts over from what it carries.
+        tree = DefaultNodeNavigation.Fold(tree, Change(QueryChangeType.Reset, Node(Root, "AI Inference")));
+        tree.Should().HaveCount(1);
     }
 
     private static IEnumerable<string> Paths(IEnumerable<NodeNavigationEntry> entries)

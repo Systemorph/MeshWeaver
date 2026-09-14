@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using MeshWeaver.Layout.Composition;
@@ -50,7 +51,10 @@ public static class DefaultNodeNavigation
     /// entries (a page with nothing beside or below it shows no rail). One <c>scope:subtree
     /// is:main</c> query on the <see cref="IndexRoot"/> through the UNIFIED
     /// <see cref="IMeshService"/> — a hub-scoped query answers from the page's own snapshot on a
-    /// distributed mesh and would never see the siblings.
+    /// distributed mesh and would never see the siblings. The query is a CHANGE FEED — only
+    /// Initial/Reset carry the whole tree; Added/Updated/Removed carry the rows that changed — so
+    /// it is folded into a snapshot first (<see cref="Fold"/>), and every emission rebuilds the
+    /// index from the whole tree: an added, renamed, re-ordered or deleted page re-renders it live.
     /// </summary>
     /// <param name="host">The layout-area host rendering the page; its hub address IS the node path.</param>
     public static IObservable<NodeNavigation?> Observe(LayoutAreaHost host)
@@ -63,7 +67,39 @@ public static class DefaultNodeNavigation
         var root = IndexRoot(currentPath);
         return meshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{root} scope:subtree is:main"))
-            .Select(change => Build(root, (IReadOnlyCollection<MeshNode>)(change.Items ?? []), currentPath));
+            .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
+            .Select(tree => Build(root, tree.Values.ToList(), currentPath));
+    }
+
+    /// <summary>
+    /// One step of the change feed into the tree snapshot, by path: Initial/Reset replace it,
+    /// Added/Updated set the changed rows, Removed drops them. Pure — pinned by the tests, since
+    /// projecting <c>change.Items</c> straight to the rail read as correct and rebuilt the index
+    /// from ONE changed row after the first live change.
+    /// </summary>
+    /// <param name="tree">The snapshot so far.</param>
+    /// <param name="change">The next change.</param>
+    public static ImmutableDictionary<string, MeshNode> Fold(
+        ImmutableDictionary<string, MeshNode> tree, QueryResultChange<MeshNode> change)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(change);
+        var items = change.Items ?? [];
+        if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            return items.Where(n => !string.IsNullOrEmpty(n.Path))
+                .ToImmutableDictionary(n => n.Path, StringComparer.Ordinal);
+        foreach (var item in items)
+        {
+            if (string.IsNullOrEmpty(item.Path))
+                continue;
+            tree = change.ChangeType switch
+            {
+                QueryChangeType.Added or QueryChangeType.Updated => tree.SetItem(item.Path, item),
+                QueryChangeType.Removed => tree.Remove(item.Path),
+                _ => tree,
+            };
+        }
+        return tree;
     }
 
     /// <summary>
