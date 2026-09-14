@@ -160,6 +160,33 @@ public sealed class MessageHub : IMessageHub
     private volatile string? cascadeOrigin;
 
     /// <summary>
+    /// 🚨 <b>The ONE claim on this hub's teardown cause — FIRST CAUSE WINS, atomically.</b>
+    /// <c>0</c> until somebody records why this hub is going down; <c>1</c> forever after.
+    ///
+    /// <para>Two writers race for it and they run on different threads: <see cref="HandleDispose"/>
+    /// on the action block, and <see cref="NoteCascadeFrom"/> on whatever thread the owning
+    /// <c>HostedHubsCollection</c> is disposing from. <see cref="NoteCascadeFrom"/> always had a
+    /// first-cause-wins rule, but it was a read-then-write over two volatile fields — which is a
+    /// rule, not a guarantee — and <see cref="HandleDispose"/> had none at all: it wrote its
+    /// attribution unconditionally, so a routed <see cref="DisposeRequest"/> whose turn ran AFTER a
+    /// direct <c>Dispose()</c> had already begun the teardown overwrote the truthful
+    /// <see cref="DirectDisposeSource"/> reading with its own.</para>
+    ///
+    /// <para>That mattered little while the attribution appeared only on <c>[QUIESCE-START]</c>.
+    /// It matters now that it rides the <c>[DISPOSE-DISCARD]</c> Error and the NACK a stranded
+    /// sender receives (<a href="https://github.com/Systemorph/MeshWeaver/issues/3712">#3712</a>):
+    /// a report that names the WRONG cause is worse than one that names none — it is the defect
+    /// that issue was filed on, pointing somewhere else.</para>
+    /// </summary>
+    private int teardownCauseClaimed;
+
+    /// <summary>
+    /// Claims the right to record this hub's teardown cause. Exactly one caller ever wins.
+    /// </summary>
+    private bool TryClaimTeardownCause() =>
+        Interlocked.CompareExchange(ref teardownCauseClaimed, 1, 0) == 0;
+
+    /// <summary>
     /// What <c>[QUIESCE-START]</c> prints when no routed <see cref="DisposeRequest"/> brought this
     /// hub down and no owner claimed the cascade — host teardown or a <c>using</c>. Spelled once so
     /// a log reader and a log QUERY agree on the token.
@@ -181,6 +208,27 @@ public sealed class MessageHub : IMessageHub
         cascadeOwner is not null
             ? $"the owner's own teardown — {cascadeOrigin ?? DisposeRequest.ReasonNotStated}"
             : disposeReason ?? DisposeRequest.ReasonNotStated;
+
+    /// <summary>
+    /// 🚨 WHO and WHY as ONE sentence, for the teardown reports that have room for a clause and
+    /// not for two structured parameters — and for the NACK text a stranded sender reads
+    /// (<a href="https://github.com/Systemorph/MeshWeaver/issues/3712">#3712</a>).
+    ///
+    /// <para><b>Why this exists.</b> <c>[QUIESCE-START]</c> is the only line that carried the
+    /// attribution, it is <c>Information</c>, and the red-log pipeline files <c>Error</c>s. So the
+    /// <c>[DISPOSE-DISCARD]</c> Error — the one that becomes an ISSUE — ended with <i>"find why
+    /// this hub disposed before its deferred work could run"</i> while the hub holding that line
+    /// already knew the answer and printed it on a different line, at a level the incident never
+    /// captures. Measured on <c>Admin/_LogIncident/d2249f800ffc2577</c> (364 occurrences,
+    /// 2026-09-08 → 2026-09-14, 13 pods): every captured discard names the message, its sender and
+    /// the gates it sat behind, and NONE of them says which teardown threw it away.</para>
+    ///
+    /// <para>Never empty and never merely absent: a poster that stated nothing is reported as
+    /// having stated nothing, and a hub nobody asked about over the bus is reported as
+    /// <see cref="DirectDisposeSource"/>. Both are answers.</para>
+    /// </summary>
+    internal string DisposalAttribution =>
+        $"requested by {DisposalRequestedBy}; why: {DisposalReason}";
 
     /// <summary>
     /// What this hub's hosted children are told when they go down with it. A hub that is itself
@@ -206,7 +254,11 @@ public sealed class MessageHub : IMessageHub
     /// <see cref="DisposalOriginForChildren"/>.</param>
     internal void NoteCascadeFrom(Address owner, string originatingCause)
     {
-        if (disposeRequestedBy is not null || cascadeOwner is not null)
+        // FIRST CAUSE WINS, and now as a CLAIM rather than a read-then-write over two volatile
+        // fields: the other writer (HandleDispose) runs on the action block while this runs on the
+        // disposing owner's thread, so the old pair of reads could both see "unset". See
+        // teardownCauseClaimed.
+        if (!TryClaimTeardownCause())
             return;
         cascadeOrigin = originatingCause;
         cascadeOwner = owner.ToString();
@@ -3815,7 +3867,12 @@ public sealed class MessageHub : IMessageHub
         // frozen this subtree): there the address is NOT coming back, telling subscribers to re-ask
         // is exactly the resurrection the suppression above exists to prevent, and the carrier
         // (our parent) is going down with us.
-        if (!IsShuttingDown)
+        // 🚨 Read ONCE. The same fact answers two questions — may this recycle announce itself, and
+        // is this request the CAUSE of the teardown — and two reads of a flag another thread can
+        // flip would let them disagree.
+        var startsTheTeardown = !IsShuttingDown;
+
+        if (startsTheTeardown)
             AnnounceRecycle();
 
         // Recorded BEFORE Dispose(), because Dispose() is what logs [QUIESCE-START] (#3510). Set
@@ -3834,13 +3891,41 @@ public sealed class MessageHub : IMessageHub
         // post to their own hub — and #3510's leading hypothesis was precisely "which of those
         // was it?". The poster always knew; the request had nowhere to carry it. It does now, and
         // an omission is reported as an omission rather than as silence.
-        disposeReason = request.Message.Reason;
-        disposeRequestedBy = request.Sender is null
-            ? "an unnamed sender (routed DisposeRequest)"
-            : Equals(request.Sender, Address)
-                ? $"itself — a self-posted DisposeRequest ({request.Sender}), i.e. a rebind or "
-                  + "self-heal recycle"
-                : $"{request.Sender} (routed DisposeRequest)";
+        //
+        // 🚨 ONLY IF THIS REQUEST IS ACTUALLY THE CAUSE. Two conditions, and both are needed:
+        //
+        //   `startsTheTeardown` — a teardown already under way was started by somebody else (a
+        //     direct Dispose() from host teardown or a `using`, or an owner's cascade). This
+        //     request did not cause it, and claiming it would replace a TRUE reading
+        //     (DirectDisposeSource, which rules the message path out) with a false one. Reachable:
+        //     Dispose() sets IsShuttingDown and only then posts ShutdownRequest(Quiescing), so a
+        //     DisposeRequest arriving in that window still sees RunLevel=Started, is admitted by
+        //     RefusesIntake, and its turn runs after the teardown has begun.
+        //
+        //   `TryClaimTeardownCause()` — the atomic half, against NoteCascadeFrom on another thread.
+        //
+        // What remains is a genuinely SIMULTANEOUS pair — a direct Dispose() and a routed request
+        // landing within the same instant — where both really happened and either attribution is
+        // true. That is the honest residue; it is not an overwrite of an earlier cause.
+        if (startsTheTeardown && TryClaimTeardownCause())
+        {
+            // 🚨 A BLANK REASON IS AN UNSTATED ONE. `DisposeRequest.Reason` is free text from the
+            // poster, and `null` was the only value the renderers treated as "not stated" — so an
+            // empty or whitespace string produced a literal `why: ` with nothing after it, which
+            // is precisely the "renders as nothing, reads as nothing to report" failure this whole
+            // change exists to remove. Normalised HERE, at the single capture point, so every
+            // reader of the field (DisposalReason AND DisposalOriginForChildren) inherits it
+            // instead of each having to remember.
+            disposeReason = string.IsNullOrWhiteSpace(request.Message.Reason)
+                ? null
+                : request.Message.Reason;
+            disposeRequestedBy = request.Sender is null
+                ? "an unnamed sender (routed DisposeRequest)"
+                : Equals(request.Sender, Address)
+                    ? $"itself — a self-posted DisposeRequest ({request.Sender}), i.e. a rebind or "
+                      + "self-heal recycle"
+                    : $"{request.Sender} (routed DisposeRequest)";
+        }
 
         Dispose();
         return request.Processed();

@@ -4080,7 +4080,23 @@ public class MeshOperations
                         Timestamp: DateTimeOffset.UtcNow));
                 }
 
-                hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(resolvedPath)));
+                // 🚨 NAMED, never anonymous (#3712). This was the ONE production poster of a
+                // DisposeRequest that stated no Reason, so every hub it recycled printed
+                // "reason not stated by the caller" — and an operator recycle is exactly the
+                // cause a reader of a [QUIESCE-START] or a [DISPOSE-DISCARD] cannot otherwise
+                // distinguish from a NodeType rebind or an owner's cascade. #3510 lists this
+                // call site as an ungated disposer for the same reason: it is the one teardown
+                // that comes from OUTSIDE the framework's own lifecycle, so it is the one whose
+                // attribution a log cannot reconstruct.
+                hub.Post(
+                    new DisposeRequest
+                    {
+                        Reason = $"MeshOperations.Recycle: an operator asked for '{resolvedPath}' "
+                                 + "to be recycled (the Recycle tool / Compile button), which "
+                                 + "stamps a release request and then tears the hub down so the "
+                                 + "next access reactivates it",
+                    },
+                    o => o.WithTarget(new Address(resolvedPath)));
                 return JsonSerializer.Serialize(
                     new
                     {
