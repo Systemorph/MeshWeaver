@@ -159,24 +159,63 @@ stream still completes (the value replay off a frozen store is not live data —
 `TornDownStreamCallSitesTest` pin from step 2 stands), a faulted stream faults with the same
 exception instance, and a stream whose hub has merely begun winding down while its store is still
 open keeps the immediate completion — nothing `GetStream<T>` could wait for will ever arrive on it.
-Whether the store has terminated is known synchronously, because a `ReplaySubject` replays its
-terminal inside `Subscribe` — **and for the faulted shape it is known to have terminated, because
-of an ordering that is now part of the contract**: `FaultStore` errors the store *before* it raises
-the flag `IsUsable` reads (in a `finally`, so a throwing subscriber cannot leave the store terminal
-behind a flag that still reads live — #2387's corpse again). Flag-first, as it stood, left a
-window in which the stream read as faulted while its store was still open; a reader arriving in it
-found an open store, answered "completed", and the fault that landed a moment later reached nobody —
-the same swallow one interleaving over, named by Copilot's review of #4151. Store-first closes it:
-`ReplaySubject.OnError` marks the subject terminal under its own lock before delivering, so any
-subscribe that observes the flag observes the terminal. Pinned from inside the delivery by
-`AFaultingStream_PublishesItsTerminal_BeforeItReadsAsDead` — an observer receiving the fault reads
-`IsUsable()` as still true, and false once `OnError` has returned; flag-first fails it. Pinned by
+Whether the store has *completed* is known synchronously, because a `ReplaySubject` replays its
+terminal inside `Subscribe`. The **faulted** shape is not read off the store at all — see the next
+section for why. Pinned by
 `TornDownStreamCallSitesTest.GetControlStream_OnAFaultedStream_ReDeliversTheFault` (identity of the
 re-delivered fault) and, in MeshWeaver.Plugins, by
 `NodeGoneIsBenignGuard.TheNodeGoneArea_StillDrawsTheCard_WhenTheFaultLandedBeforeTheViewBound`,
 which renders the real view against a real routing miss in the fault-first order and asserts the
 card is in the markup. Both were run against the pre-fix code and both went red — the view guard
 with an empty string where the card belongs.
+
+### 🚨 A fault is ONE published value, not a flag plus an ordering
+
+`GetStream<T>` asks two questions about a dead stream and needs both answered at the same instant:
+**should I serve this?** and **how did it end?** While the answer to the first was a `bool` beside
+the store, *no* ordering of the two writes could answer both — each order opened the other's window:
+
+| order | what it bought | what it broke |
+|---|---|---|
+| flag first, store second (until #4151) | a reader that has seen the terminal finds the stream refused | a reader arriving *between* the two found a refused stream with an **open** store, answered `completed`, and the fault reached nobody — Plugins#1715 |
+| store first, flag second (#4151, `72c2ee2a56`) | the probe above became exact | the flag trailed the **whole synchronous delivery**, so every consumer *reacting* to the fault was handed the corpse by the workspace cache — #4180/#4244 |
+
+The second window is the larger one by construction, because it is not an interleaving: it is the
+delivery itself, which is exactly when consumers act. Recovery from a fault is a **subscriber's**
+move — it is told, and `StreamLiveness.IsUsable` refusing the corpse is what makes its
+`GetRemoteStream` open a fresh stream (#2387). Handing that subscriber the stream it was just told
+about is #2387's failure arriving through the door #2387 built. It cost five pull requests in the
+evening of 2026-09-13: `StreamResyncGivesUpTest` dequeued #4215 and #4227 from the merge queue and
+reddened #4239, #4241 and #4191, at roughly 1 run in 46 — the asynchronous consumer has to win a
+race against a few microseconds of unwinding, so it looked like a flake and was not one. (The test's
+assertion helper settles its `TaskCompletionSource` with `RunContinuationsAsynchronously` from
+*inside* the delivery, which is what queues the awaiting test thread into that window.)
+
+`FaultStore` therefore publishes the terminal **itself**, once, before `Store.OnError`:
+
+```csharp
+private void FaultStore(Exception error)
+{
+    Interlocked.CompareExchange(ref terminalFault, error, null);
+    Store.OnError(error);
+}
+```
+
+`terminalFault` *is* the liveness answer — `IsFaulted` is `terminalFault is not null` — so "this
+stream is refused" and "here is why it ended" are one write and cannot disagree in either
+direction. A reader turned away by `IsUsable` reads `stream.TerminalFault()` and forwards that exact
+instance instead of probing a store that may not have terminated yet; `CompareExchange` keeps the
+FIRST error, which is the one the `ReplaySubject` keeps and replays, so the record and the store can
+never name different exceptions.
+
+Pinned from inside the delivery — the one instant where the two used to contradict each other — by
+`TornDownStreamCallSitesTest.AFaultingStream_ReadsAsDead_AndNamesItsTerminal_FromTheFirstDelivery`
+(refused **and** naming its terminal, at that instant), and by
+`MeshWeaver.Data.Test.FaultedStreamEvictionOrderingTest`, which reproduces #4180 deterministically:
+a consumer's `OnError` arm re-resolves the stream and must get a new one. Against store-first the
+last of those fails on every run with the verbatim words `StreamResyncGivesUpTest` failed with under
+load — *"a faulted mirror must be evicted from the stream cache, not replayed to the next caller,
+but found True"*.
 
 ## What step 3 did
 

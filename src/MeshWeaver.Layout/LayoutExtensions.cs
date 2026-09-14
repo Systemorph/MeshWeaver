@@ -367,23 +367,41 @@ public static class LayoutExtensions
     /// all in the place of its node-gone card. The same-process second miss on a path is answered
     /// in a few milliseconds, which is exactly the window a render's first frame takes.</para>
     ///
-    /// <para>The replay of a terminated store is SYNCHRONOUS, inside <c>Subscribe</c>, so whether
-    /// the store has terminated is known by the time the probe subscription returns — and for the
-    /// faulted shape it is KNOWN to have terminated: <c>SynchronizationStream.FaultStore</c> errors
-    /// the store BEFORE it raises the flag <c>IsUsable</c> reads, so a stream that reads as faulted
-    /// has its fault in the store already (the reverse order left a window in which this probe saw
-    /// an open store and answered "completed" a moment before the fault arrived — Copilot's finding
-    /// on MeshWeaver#4151). A store that is still open under a hub that has merely begun winding
-    /// down (the third way <see cref="SynchronizationStreamLiveness.IsUsable"/> says no) keeps
-    /// today's answer — an immediate completion — because nothing this method can wait for will
-    /// ever arrive on it: its hub is gone, and its store is completed only by a <c>Dispose()</c>
-    /// nobody may ever call. The value replay is dropped on purpose: a frame off a frozen store is
+    /// <para>🚨 <b>The faulted shape is answered from the RECORD, not from the store</b> —
+    /// MeshWeaver#4180. A stream publishes its terminal as
+    /// <see cref="SynchronizationStreamLiveness.TerminalFault"/> in the same write that makes it
+    /// read as dead, and only then pushes it through its <c>ReplaySubject</c>. That order is what
+    /// lets a subscriber RECEIVING the fault recover — it finds the stream already refused and
+    /// opens a fresh one — but it means "reads as dead" briefly precedes "the store has
+    /// terminated", and a probe landing in that instant would see an open store and answer
+    /// <i>completed</i>: Plugins#1715's swallow, one interleaving over. (MeshWeaver#4151 tried to
+    /// close it by erroring the store first; that bought this probe its exactness at the price of
+    /// serving the corpse to everyone who reacted to the fault — five reddened pull requests,
+    /// #4180/#4244.) Reading the record has no window in either direction, and hands back the same
+    /// exception instance the store replays.</para>
+    ///
+    /// <para>The other two shapes still come from the probe, which is exact for them: the replay of
+    /// a terminated store is SYNCHRONOUS, inside <c>Subscribe</c>, so whether the store has
+    /// completed is known by the time the probe subscription returns. A store that is still open
+    /// under a hub that has merely begun winding down (the third way
+    /// <see cref="SynchronizationStreamLiveness.IsUsable"/> says no) keeps today's answer — an
+    /// immediate completion — because nothing this method can wait for will ever arrive on it: its
+    /// hub is gone, and its store is completed only by a <c>Dispose()</c> nobody may ever call.
+    /// The value replay is dropped on purpose: a frame off a frozen store is
     /// not live data, which is what <c>TornDownStreamCallSitesTest</c> pinned when this guard was
     /// introduced (#3321).</para>
     /// </summary>
     private static IObservable<T> TerminalOf<T>(ISynchronizationStream<JsonElement> stream)
         => Observable.Create<T>(observer =>
         {
+            // The fault the stream RECORDED — available from the instant it reads as dead, which is
+            // strictly before its store terminates. See the remarks above.
+            if (stream.TerminalFault() is { } recorded)
+            {
+                observer.OnError(recorded);
+                return System.Reactive.Disposables.Disposable.Empty;
+            }
+
             var terminated = false;
             var probe = stream.Subscribe(
                 _ => { },

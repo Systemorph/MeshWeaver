@@ -64,6 +64,31 @@ public static class SynchronizationStreamLiveness
         => StreamLiveness.IsUsable(stream);
 
     /// <summary>
+    /// The terminal error <paramref name="stream"/> took, or <c>null</c> when it has not faulted —
+    /// the answer that lets a reader REFUSED by <see cref="IsUsable"/> still tell its own
+    /// subscriber how the stream ended (Systemorph/MeshWeaver#4180).
+    ///
+    /// <para>🚨 <b>Use this instead of subscribing to find out.</b> A faulted stream publishes its
+    /// terminal as a recorded value BEFORE it pushes it through its store, so that a subscriber
+    /// receiving the fault already finds the stream refused and can recover by opening a fresh one.
+    /// The consequence is that "refused" briefly precedes "the <c>ReplaySubject</c> has terminated",
+    /// and a reader that probes the store in that instant sees an open one and answers
+    /// <i>completed</i> — the swallow that left a layout area with no error branch to enter
+    /// (Systemorph/MeshWeaver.Plugins#1715). This accessor has no such window: it is the same
+    /// exception instance the store will replay, published in the same write that made
+    /// <see cref="IsUsable"/> say no.</para>
+    ///
+    /// <para>Answers <c>null</c> for a <c>null</c> stream, and for a stream that is unusable for
+    /// any OTHER reason (disposed, or hub winding down) — those did not fault and have no terminal
+    /// error to give. It reports this stream's OWN terminal only; an ancestor's is the ancestor's,
+    /// and a child of a faulted parent takes its own through the reduce chain.</para>
+    /// </summary>
+    /// <param name="stream">The stream to read the terminal from, or <c>null</c>.</param>
+    /// <returns>The stream's own terminal error, or <c>null</c>.</returns>
+    public static Exception? TerminalFault(this ISynchronizationStream? stream)
+        => StreamLiveness.FaultOf(stream);
+
+    /// <summary>
     /// The stream's hub if the stream is still usable, otherwise <c>null</c> — the accessor that
     /// can answer "no", and the migration target for a <c>stream.Hub.Something</c> dereference.
     ///

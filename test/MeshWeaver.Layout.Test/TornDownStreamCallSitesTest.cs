@@ -188,41 +188,57 @@ public class TornDownStreamCallSitesTest(ITestOutputHelper output) : HubTestBase
     }
 
     /// <summary>
-    /// 🚨 THE ORDER THAT MAKES THE TEST ABOVE EXACT, and the interleaving Copilot's review of
-    /// MeshWeaver#4151 named. <c>GetStream&lt;T&gt;</c> decides "dead" from
-    /// <see cref="SynchronizationStreamLiveness.IsUsable"/> and then forwards whatever terminal the
-    /// store holds. That is only correct if a stream that READS as faulted already HAS its fault in
-    /// the store. <c>FaultStore</c> used to raise the flag first and error the store second, which
-    /// opened a window: a subscriber arriving between the two found an open store, was answered
-    /// "completed", and the <c>OnError</c> that landed a moment later reached nobody — the same
-    /// swallow, one interleaving over.
+    /// 🚨 WHAT MAKES THE TEST ABOVE EXACT — and it is a single published fact, not an ordering
+    /// (MeshWeaver#4180, which replaced MeshWeaver#4151's ordering).
     ///
-    /// <para>Pinned from inside the delivery: an observer that is receiving the fault is, by
-    /// construction, inside <c>Store.OnError</c>, so what it reads there is the flag's state during
-    /// the transition. Store-first means the stream still reads usable at that instant and reads dead
-    /// only once the call has returned. Flag-first fails the first assertion. A subscriber arriving
-    /// during the delivery therefore always subscribes to a store that is already terminal.</para>
+    /// <para><c>GetStream&lt;T&gt;</c> decides "dead" from
+    /// <see cref="SynchronizationStreamLiveness.IsUsable"/> and then owes its subscriber the
+    /// stream's terminal. Both orderings of a <c>bool</c> flag beside the store failed one half of
+    /// that: flag-first let a reader find a dead stream whose store was still open and answer
+    /// "completed" (Plugins#1715, the swallow the test above exists for); store-first let the flag
+    /// trail the whole delivery, so every consumer REACTING to the fault — the documented recovery
+    /// path — was handed the corpse by the workspace cache (#4180/#4244, five reddened pull
+    /// requests). The stream now publishes the terminal itself as <c>TerminalFault</c>, in the same
+    /// write that makes it read as dead, so neither window exists.</para>
+    ///
+    /// <para>Pinned from inside the delivery, which is the one instant where the two used to
+    /// disagree: an observer receiving the fault is, by construction, inside <c>Store.OnError</c>.
+    /// It must find the stream ALREADY refused (or it cannot recover by opening a fresh one) AND
+    /// the terminal already readable (or a reader refused in that instant has nothing to forward).
+    /// Store-first fails the first assertion; a flag with no recorded exception makes the second
+    /// unanswerable.</para>
     /// </summary>
     [HubFact]
-    public async Task AFaultingStream_PublishesItsTerminal_BeforeItReadsAsDead()
+    public async Task AFaultingStream_ReadsAsDead_AndNamesItsTerminal_FromTheFirstDelivery()
     {
         var stream = OpenStream();
         await stream.GetControlStream(TestArea)
             .Should().Within(TestTimeouts.Quick).Match(x => x is HtmlControl);
 
+        var fault = new InvalidOperationException("owner gone");
         bool? usableWhileTheFaultWasBeingDelivered = null;
+        Exception? terminalWhileTheFaultWasBeingDelivered = null;
         using var observer = stream.Subscribe(
             _ => { },
-            _ => usableWhileTheFaultWasBeingDelivered = stream.IsUsable());
+            _ =>
+            {
+                usableWhileTheFaultWasBeingDelivered = stream.IsUsable();
+                terminalWhileTheFaultWasBeingDelivered = stream.TerminalFault();
+            });
 
-        stream.OnError(new InvalidOperationException("owner gone"));
+        stream.OnError(fault);
 
-        usableWhileTheFaultWasBeingDelivered.Should().BeTrue(
-            "the store takes the terminal BEFORE the liveness flag flips, so a reader that finds the "
-            + "stream dead finds the fault already in the store — flag-first is the window in which a "
-            + "late subscriber was told 'completed' and the fault reached nobody");
+        usableWhileTheFaultWasBeingDelivered.Should().BeFalse(
+            "a subscriber that is BEING TOLD the fault must already find the stream refused — "
+            + "re-resolving is the only recovery it has (#2387), and a cache that still serves the "
+            + "corpse at that instant hands it straight back (#4180)");
+        terminalWhileTheFaultWasBeingDelivered.Should().BeSameAs(fault,
+            "…and at that same instant the terminal is readable, so a reader turned away by the "
+            + "refusal forwards the stream's OWN fault instead of manufacturing a completion "
+            + "(Plugins#1715) — refusing earlier is only safe because this is published first");
         stream.IsUsable().Should().BeFalse(
-            "…and once the fault is delivered the stream is dead to every cache (#2387)");
+            "…and it stays dead to every cache afterwards (#2387)");
+        stream.TerminalFault().Should().BeSameAs(fault, "…and keeps naming the same terminal");
     }
 
     /// <summary>
