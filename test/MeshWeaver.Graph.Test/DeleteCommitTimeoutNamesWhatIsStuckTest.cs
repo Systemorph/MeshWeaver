@@ -151,5 +151,20 @@ public class DeleteCommitTimeoutNamesWhatIsStuckTest(ITestOutputHelper output)
         reported.Message.Should().NotContain($"{rootPath}/l0/l1/l2/l3",
             "the two deepest nodes were removed before the stall — an 'owed' set that still names "
             + "them is the whole plan under a new label, which identifies nothing");
+
+        // 🚨 And the report is checked against the STORE OF RECORD, not only against itself. Both
+        // assertions above read the message; a message can be internally consistent and still
+        // describe a state that never happened. These two read the backing store: the path the
+        // report names is really still there, and the ones it does not name are really gone.
+        (await storage.Inner.Exists(stalledOn).Should().Within(TestTimeouts.Convergence).Emit())
+            .Should().BeTrue(
+                "the report claims this path is still owed — if the store says it is gone, the "
+                + "report is naming the wrong node, which is worse than naming none");
+        (await storage.Inner.Exists($"{rootPath}/l0/l1/l2/l3/l4")
+                .Should().Within(TestTimeouts.Convergence).Emit())
+            .Should().BeFalse(
+                "the deepest node was one of the two the store served before it went silent — so "
+                + "progress really was PARTIAL, which is the production shape (partial-deleted=3) "
+                + "and the only shape in which a count without names identifies nothing");
     }
 }
