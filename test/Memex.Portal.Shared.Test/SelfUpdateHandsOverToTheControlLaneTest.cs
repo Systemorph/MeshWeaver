@@ -157,6 +157,26 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
         content.HandedOverTag.Should().BeNull("a refused announcement is not a hand-over");
     }
 
+    /// <summary>🚨 An inbox that ACCEPTS but did not verify the signature ("not-required": the control
+    /// instance declares no secret key for the target) is a failed hand-over too — the receiver may
+    /// still drop the event, and a recorded success would be a delivery nobody checked (#3312).</summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AnInboxThatAcceptsWithoutVerifying_IsAFailedHandover()
+    {
+        await Seed(UpdatePolicyKind.Continuous);
+        var inbox = new FakeControlInbox(HttpStatusCode.OK, "{\"status\":\"accepted\",\"signature\":\"not-required\"}");
+        var updater = new RecordingUpdater();
+
+        var content = await RunOneCheck(updater, inbox, chartCanPatch: false, PostSettings());
+
+        updater.Tags.Should().BeEmpty();
+        inbox.Deliveries.Should().HaveCount(1);
+        content.LastCheckVerdict.Should().Contain("hand-over to the control lane FAILED")
+            .And.Contain("not-required")
+            .And.Contain(WebhookInbox.SecretConfigKeyName);
+        content.HandedOverTag.Should().BeNull("an unverified delivery is not a hand-over");
+    }
+
     /// <summary>No control inbox and no self-patch: detect-only, and the verdict names the KEY that
     /// would make this a control-lane install — the state build sat in on 2026-09-12 with nothing
     /// saying why.</summary>
@@ -208,7 +228,7 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
             "https://unit.example");
 
     /// <summary>The network, substituted: records every delivery and answers one status.</summary>
-    private sealed class FakeControlInbox(HttpStatusCode status) : HttpMessageHandler
+    private sealed class FakeControlInbox(HttpStatusCode status, string? answer = null) : HttpMessageHandler
     {
         private ImmutableList<Delivery> deliveries = ImmutableList<Delivery>.Empty;
 
@@ -224,9 +244,9 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
                 new Delivery(request.RequestUri!.ToString(), body, signatures?.FirstOrDefault())));
             return new HttpResponseMessage(status)
             {
-                Content = new StringContent(status == HttpStatusCode.OK
+                Content = new StringContent(answer ?? (status == HttpStatusCode.OK
                     ? "{\"status\":\"accepted\",\"signature\":\"verified\"}"
-                    : ""),
+                    : "")),
             };
         }
     }

@@ -247,9 +247,10 @@ public class SelfUpdateVerdictTest
     [InlineData(SelfUpdateOutcome.UpdatesDisabled, false)]
     [InlineData(SelfUpdateOutcome.NoOutcome, false)]
     // A release handed to the control lane is a roll in flight there — its Roll restarts the pods,
-    // and a second request for the same instance would only race it (#4098).
+    // and a second request for the same instance would only race it (#4098). A hand-over that
+    // FAILED handed nothing to anyone: the pending restart is still considered, never skipped.
     [InlineData(SelfUpdateOutcome.HandedOver, false)]
-    [InlineData(SelfUpdateOutcome.HandoverFailed, false)]
+    [InlineData(SelfUpdateOutcome.HandoverFailed, true)]
     public void MayRestartAfter_OnlyWhenTheCheckPatchedNothing(SelfUpdateOutcome outcome, bool expected)
         => Assert.Equal(expected, SelfUpdateVerdict.MayRestartAfter(new SelfUpdateVerdict(outcome, "…")));
 

@@ -65,15 +65,27 @@ public class SelfUpdateHandoverTest
         SelfUpdateHandover.RouteFor(new(Deployment, null, false, false, true, null)).Should().Be(Route.None);
     }
 
-    /// <summary>The missing sentence names KEYS, never values, and is null once a route exists.</summary>
+    /// <summary>The missing sentence names the KEY that was actually read — never a value, and never
+    /// a key the operator did not use: a URL derived from ReportTo is blamed on ReportTo, a listed
+    /// local target on its own declared secret key. Null once a route exists.</summary>
     [Fact]
-    public void WhatIsMissing_NamesTheKey()
+    public void WhatIsMissing_NamesTheKeyThatWasRead()
     {
         SelfUpdateHandover.Missing(new(Deployment, InboxUrl, true, false, false, null)).Should().BeNull();
         SelfUpdateHandover.Missing(new(Deployment, null, false, false, false, null))
             .Should().Contain(SelfUpdateHandover.UrlKey).And.Contain(SelfUpdateHandover.ReportToKey);
-        SelfUpdateHandover.Missing(new(Deployment, InboxUrl, false, false, false, null))
-            .Should().Contain(SelfUpdateHandover.SecretKey).And.NotContain(InboxUrl.Substring(8, 5), "no value is repeated, only keys");
+        SelfUpdateHandover.Missing(new(Deployment, InboxUrl, false, false, false, null, SelfUpdateHandover.UrlSource.Declared))
+            .Should().Contain(SelfUpdateHandover.UrlKey).And.Contain(SelfUpdateHandover.SecretKey)
+            .And.NotContain(InboxUrl.Substring(8, 5), "no value is repeated, only keys");
+        SelfUpdateHandover.Missing(new(Deployment, InboxUrl, false, false, false, null, SelfUpdateHandover.UrlSource.Derived))
+            .Should().Contain(SelfUpdateHandover.ReportToKey).And.Contain(SelfUpdateHandover.SecretKey)
+            .And.NotContain(SelfUpdateHandover.UrlKey, "the operator never set the declared URL key — blaming it sends them to the wrong line");
+        SelfUpdateHandover.Missing(new(Deployment, null, false, true, false, null, SelfUpdateHandover.UrlSource.None, "Hosting:PlatformWebhookSecret"))
+            .Should().Contain("Hosting:PlatformWebhookSecret").And.Contain(SelfUpdateHandover.InboxTarget)
+            .And.NotContain(SelfUpdateHandover.UrlKey, "a listed local target is the control instance's shape; the URL keys are not what is missing");
+        SelfUpdateHandover.Missing(new(Deployment, null, false, true, false, null))
+            .Should().Contain(WebhookInbox.SecretConfigKeyName).And.Contain("unverified",
+                "a listed target that declares no secret key would store the event unverified — that is the defect to name");
     }
 
     // ── the URL ─────────────────────────────────────────────────────────────
@@ -173,7 +185,7 @@ public class SelfUpdateHandoverTest
 
         settings.Should().Be(new SelfUpdateHandover.Settings(
             Deployment, InboxUrl, SecretPresent: true, LocalTargetListed: false, LocalSecretPresent: false,
-            "https://build.meshweaver.cloud"));
+            "https://build.meshweaver.cloud", SelfUpdateHandover.UrlSource.Derived));
         settings.ToString().Should().NotContain(secret, "the record is what a log line would print");
         SelfUpdateHandover.RouteFor(settings).Should().Be(Route.Post);
     }
@@ -193,9 +205,57 @@ public class SelfUpdateHandoverTest
         var settings = SelfUpdateHandover.ReadSettings(config);
 
         settings.LocalTargetListed.Should().BeTrue();
+        settings.LocalSecretKey.Should().Be(SelfUpdateHandover.LocalSecretKey, "the key the target DECLARES, read back for the diagnostic");
         settings.LocalSecretPresent.Should().BeTrue();
         settings.Url.Should().BeNull();
         SelfUpdateHandover.RouteFor(settings).Should().Be(Route.Local);
+    }
+
+    /// <summary>🚨 A listed target that declares NO SecretConfigKey is an unsigned target by the inbox's
+    /// contract (#3312) — never "the default key". The local route must not be selected for it, or the
+    /// event is stored with its signature never checked.</summary>
+    [Fact]
+    public void ABareLocalTarget_IsNotALocalRoute()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [SelfUpdateHandover.DeploymentKey] = "memex",
+            ["WebhookInbox:Targets:0"] = SelfUpdateHandover.InboxTarget,
+            [SelfUpdateHandover.LocalSecretKey] = "fleet-secret",
+        }).Build();
+
+        var settings = SelfUpdateHandover.ReadSettings(config);
+
+        settings.LocalTargetListed.Should().BeTrue();
+        settings.LocalSecretKey.Should().BeNull();
+        settings.LocalSecretPresent.Should().BeFalse("a secret that happens to exist under the fleet's usual name is not one the target declares");
+        SelfUpdateHandover.RouteFor(settings).Should().Be(Route.None);
+        SelfUpdateHandover.Missing(settings).Should().Contain(WebhookInbox.SecretConfigKeyName);
+    }
+
+    /// <summary>A URL derived from ReportTo is recorded as derived — the diagnostic reads it.</summary>
+    [Fact]
+    public void ADerivedUrl_IsRecordedAsDerived()
+    {
+        SelfUpdateHandover.ResolveUrlAndSource(null, "https://memex.systemorph.com").Source
+            .Should().Be(SelfUpdateHandover.UrlSource.Derived);
+        SelfUpdateHandover.ResolveUrlAndSource(InboxUrl, null).Source
+            .Should().Be(SelfUpdateHandover.UrlSource.Declared);
+        SelfUpdateHandover.ResolveUrlAndSource("", "").Source
+            .Should().Be(SelfUpdateHandover.UrlSource.None);
+    }
+
+    /// <summary>🚨 Only an inbox answer that says the signature was VERIFIED is a hand-over. "not-required"
+    /// (the target declares no secret key, so nothing was checked) and a body that is not the inbox
+    /// contract are refusals — the sender must not record a delivery the receiver may drop.</summary>
+    [Fact]
+    public void OnlyAVerifiedSignatureIsAHandover()
+    {
+        SelfUpdateHandover.SignatureStatusOf("{\"status\":\"accepted\",\"signature\":\"verified\"}").Should().Be("verified");
+        SelfUpdateHandover.SignatureStatusOf("{\"status\":\"accepted\",\"signature\":\"not-required\"}").Should().Be("not-required");
+        SelfUpdateHandover.SignatureStatusOf("").Should().BeNull();
+        SelfUpdateHandover.SignatureStatusOf("OK").Should().BeNull();
+        SelfUpdateHandover.SignatureStatusOf("{\"status\":\"accepted\"}").Should().BeNull();
     }
 
     [Fact]
@@ -216,8 +276,54 @@ public class SelfUpdateHandoverTest
         var failed = SelfUpdateVerdict.HandoverFailed("3.0.0-ci.9", "401 Unauthorized");
         failed.FoundNewerRelease.Should().BeTrue();
         failed.Message.Should().Contain("FAILED").And.Contain("401");
+        SelfUpdateVerdict.MayRestartAfter(failed).Should().BeTrue(
+            "a hand-over that failed handed nothing to anyone — a pending module restart is still considered, never skipped");
         var detect = SelfUpdateVerdict.DetectOnly("3.0.0-ci.9", "no control inbox: Hosting:Deployment is not set");
         detect.Outcome.Should().Be(SelfUpdateOutcome.DetectOnly);
         detect.Message.Should().Contain("Hosting:Deployment");
+    }
+
+    // ── the Updates tab ────────────────────────────────────────────────────
+
+    private static string Echo(string key, object?[] args) => key + "[" + string.Join(",", args) + "]";
+
+    /// <summary>🚨 A release handed to the control instance must not read as "update available" for
+    /// ever on the Updates tab: the durable HandedOver* fields render as WHERE and WHEN it went, in
+    /// the viewer's zone, for the tag the tab is about.</summary>
+    [Fact]
+    public void TheUpdatesTab_SaysWhereAHandedOverReleaseWent()
+    {
+        var content = new UpdatePolicyContent
+        {
+            LatestAvailableTag = "3.0.0-ci.9",
+            CheckedAt = new DateTimeOffset(2026, 9, 14, 8, 0, 0, TimeSpan.Zero),
+            HandedOverTag = "3.0.0-ci.9",
+            HandedOverAt = new DateTimeOffset(2026, 9, 14, 8, 1, 0, TimeSpan.Zero),
+            HandedOverTo = InboxUrl,
+        };
+
+        var markdown = Memex.Portal.Shared.Settings.UpdatePolicySettingsTab.StatusMarkdown(content, Echo, "Europe/Zurich");
+
+        markdown.Should().Contain("ui.updateLatestAvailable[3.0.0-ci.9]");
+        markdown.Should().Contain($"ui.updateHandedOverLine[3.0.0-ci.9,{InboxUrl},2026-09-14 10:01]",
+            "the tag, the destination and the instant in the viewer's zone");
+    }
+
+    /// <summary>A hand-over of an OLDER tag is history: the current tag renders without the line.</summary>
+    [Fact]
+    public void TheUpdatesTab_DoesNotAttributeAnOldHandoverToANewTag()
+    {
+        var content = new UpdatePolicyContent
+        {
+            LatestAvailableTag = "3.0.0-ci.10",
+            HandedOverTag = "3.0.0-ci.9",
+            HandedOverAt = DateTimeOffset.UtcNow,
+            HandedOverTo = InboxUrl,
+        };
+
+        var markdown = Memex.Portal.Shared.Settings.UpdatePolicySettingsTab.StatusMarkdown(content, Echo);
+
+        markdown.Should().Contain("ui.updateLatestAvailable[3.0.0-ci.10]");
+        markdown.Should().NotContain("ui.updateHandedOverLine");
     }
 }
