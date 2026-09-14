@@ -420,13 +420,27 @@ public record PackageManifest
     public PackageUpdatePolicy? UpdatePolicy { get; init; }
 
     /// <summary>
-    /// The policy this package actually follows: <see cref="UpdatePolicy"/> when declared, else
-    /// the legacy <see cref="AutoUpdate"/> flag read as Auto / Notify. Every reconciler branches on
-    /// THIS, never on the flag. Pure.
+    /// The policy this package actually follows. Every reconciler branches on THIS, never on a
+    /// field. Pure.
+    ///
+    /// <para><see cref="UpdatePolicy"/> when declared, else the legacy <see cref="AutoUpdate"/> flag
+    /// read as Auto / Notify — and when BOTH are present and DISAGREE, the flag wins. Every writer
+    /// that knows the policy (<c>PackageInstaller.SetUpdatePolicy</c>, the install re-stamp) writes
+    /// the two in step, so a disagreement can only come from a writer that knows the flag alone —
+    /// an administrator's <c>patch autoUpdate: true</c> over MCP, an older module, a test — AFTER
+    /// the stamp, and that later write is the operator's most recent decision. Reading the declared
+    /// policy over it re-pinned every such record on its next update (Plugins'
+    /// <c>AnOptedInRecordStaysOptedInThroughAnUpdate</c>, red on 3.0.0-ci.8601): install stamps
+    /// <c>Notify</c>, the flag is flipped, the re-stamp read Notify and rebuilt the flag as false.</para>
     /// </summary>
     [JsonIgnore]
-    public PackageUpdatePolicy EffectiveUpdatePolicy =>
-        UpdatePolicy ?? (AutoUpdate ? PackageUpdatePolicy.Auto : PackageUpdatePolicy.Notify);
+    public PackageUpdatePolicy EffectiveUpdatePolicy => UpdatePolicy switch
+    {
+        null => AutoUpdate ? PackageUpdatePolicy.Auto : PackageUpdatePolicy.Notify,
+        PackageUpdatePolicy.Auto when !AutoUpdate => PackageUpdatePolicy.Notify,
+        PackageUpdatePolicy.Notify or PackageUpdatePolicy.None when AutoUpdate => PackageUpdatePolicy.Auto,
+        var declared => declared.Value,
+    };
 
     /// <summary>
     /// The candidate <see cref="ModuleVersion"/> this installation has ALREADY told the user
