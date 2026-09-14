@@ -48,6 +48,34 @@ public record MarkdownContent
     public string? Abstract { get; init; }
 
     /// <summary>
+    /// 🚨 <b>The front-matter keys the FALLBACK markdown parser could not bind</b> — the
+    /// IMPORT-side twin of <see cref="UnknownMembers"/>, and the record that makes a lossy
+    /// import visible instead of silent (Systemorph/MeshWeaver#4319).
+    ///
+    /// <para>A <c>.md</c> file that declares a <c>nodeType</c> whose own parser is not registered
+    /// on the importing host falls through to <c>MarkdownFileParser</c>, which accepts EVERY
+    /// <c>.md</c> file. The node then carries the right <c>NodeType</c>, the right name and the
+    /// instructions body — and <c>MarkdownContent</c> where its typed configuration should be, with
+    /// every key that type declared discarded. Nothing throws, nothing logs, and the node looks
+    /// complete in a listing: <c>Crm/Agent/crm-assistant</c> served for twelve days as an agent
+    /// with no description, no plugins and no context match, because
+    /// <c>displayName</c>/<c>exposedInNavigator</c>/<c>contextMatchPattern</c>/<c>plugins</c> went
+    /// nowhere.</para>
+    ///
+    /// <para>🚨 This does NOT restore the values, and it must not be read as data. It names the
+    /// keys that were dropped, so the degradation is a fact ON the node — visible in <c>get</c>,
+    /// reachable from a query — rather than something a human notices months later. The repair is
+    /// to import again on a host that registers the type's parser; the record then disappears
+    /// because the fallback no longer wins.</para>
+    ///
+    /// <para>Null whenever nothing was discarded, which is every ordinary markdown page — so an
+    /// export's bytes and every existing node are untouched. Set only for a file that DECLARED a
+    /// <c>nodeType</c>: an untyped page has no type-specific configuration to lose, and its stray
+    /// keys are the author's own.</para>
+    /// </summary>
+    public IReadOnlyList<string>? UnboundFrontMatter { get; init; }
+
+    /// <summary>
     /// 🚨 Round-trip buffer for content members this compiled shape does not declare
     /// (schema evolution: written by a newer build, or removed since the JSON was
     /// persisted). <c>[JsonExtensionData]</c> captures them on read and re-emits them on

@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Text;
+using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
@@ -39,6 +41,56 @@ public partial class MarkdownFileParser : IFileFormatParser
         .WithCaseInsensitivePropertyMatching()
         .IgnoreUnmatchedProperties()
         .Build();
+
+    /// <summary>
+    /// The front-matter keys this parser BINDS — every property declared on
+    /// <see cref="MarkdownFrontMatter"/>, read from the type itself so the set cannot drift the
+    /// day a property is added. Case-insensitive, exactly like
+    /// <see cref="YamlDeserializer"/>'s own matching.
+    ///
+    /// <para><c>static readonly</c> is the sanctioned shape here: an immutable lookup computed
+    /// once from a compiled type and never written at runtime.</para>
+    /// </summary>
+    private static readonly ImmutableHashSet<string> BoundFrontMatterKeys =
+        typeof(MarkdownFrontMatter).GetProperties()
+            .Select(p => p.Name)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A TOP-LEVEL YAML key — a <c>key:</c> starting at column 0. A nested mapping and the body of
+    /// a block scalar are both INDENTED, so neither can be mistaken for one.
+    /// </summary>
+    [GeneratedRegex(@"^(?<key>[A-Za-z_][\w\-]*)[ \t]*:", RegexOptions.Multiline)]
+    private static partial Regex TopLevelFrontMatterKey();
+
+    /// <summary>
+    /// 🚨 <b>The keys this parse DISCARDED</b> — the record that turns a silently lossy import
+    /// into a visible one (Systemorph/MeshWeaver#4319). See
+    /// <see cref="MarkdownContent.UnboundFrontMatter"/> for what it is and is not.
+    ///
+    /// <para>Gated on the file DECLARING a <c>nodeType</c>, and that gate is the whole point: a
+    /// declared type is a claim that some parser knows how to build this node's configuration, so
+    /// a key this fallback cannot bind is that configuration going missing. An untyped markdown
+    /// page makes no such claim — its extra keys are the author's own metadata and are not a
+    /// degradation — which is also what keeps the record null for all but a handful of files
+    /// (measured over this repo's 1,637 front-matter <c>.md</c> files: one).</para>
+    /// </summary>
+    /// <param name="nodeType">The declared node type, after the defensive extractor has run.</param>
+    /// <param name="yaml">The raw front-matter block.</param>
+    /// <returns>The unbound keys in the order they appear, or <c>null</c> when nothing was lost.</returns>
+    private static IReadOnlyList<string>? UnboundFrontMatterKeys(string? nodeType, string? yaml)
+    {
+        if (string.IsNullOrEmpty(nodeType) || string.IsNullOrEmpty(yaml))
+            return null;
+
+        var unbound = TopLevelFrontMatterKey().Matches(yaml)
+            .Select(m => m.Groups["key"].Value)
+            .Where(key => !BoundFrontMatterKeys.Contains(key))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToImmutableList();
+
+        return unbound.Count == 0 ? null : unbound;
+    }
 
     private static readonly ISerializer YamlSerializer = new SerializerBuilder()
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitDefaults)
@@ -203,7 +255,13 @@ public partial class MarkdownFileParser : IFileFormatParser
             Authors = frontMatter?.Authors,
             Tags = frontMatter?.Tags,
             Thumbnail = frontMatter?.Thumbnail,
-            Abstract = frontMatter?.Abstract
+            Abstract = frontMatter?.Abstract,
+            // 🚨 #4319: this parser accepts EVERY .md file, so it is also what a typed node falls
+            // back to when its own parser is not registered on this host — and then the type's
+            // configuration keys are discarded with nothing thrown and nothing logged. Naming them
+            // on the node is what makes that degradation findable instead of silent.
+            UnboundFrontMatter = UnboundFrontMatterKeys(
+                frontMatter?.NodeType, rawYaml ?? ExtractLeadingFrontmatter(content))
         };
 
         var nodeType = frontMatter?.NodeType ?? "Markdown";
