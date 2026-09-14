@@ -378,20 +378,42 @@ edit, so neither is evidence of equal content. It is the same reason
 an unversioned partition instead of a version number, and why `ModuleLandingService.GenerationIdOf`
 appends each file's bytes and not only its length.
 
-## 🚨 Reminder by default; unattended on opt-in — seeded per deployment
+## 🚨 One policy PER PACKAGE — separate from the platform's image policy (2026-09-14)
 
-The **platform default is explicit opt-in**: a changed module raises a `Notification` satellite on
-the install record (the bell surfaces it, the catalog card offers **Update**) and nothing installs
-until a human acts. A record whose `AutoUpdate` flag is set installs the delta unattended instead.
+> **Maintainer, 2026-09-14:** *"continuous update is set globally — it should be separate for the
+> platform and for each module."* Until that day `Admin/UpdatePolicy` — the record that decides
+> whether the platform IMAGE rolls — also gated every module's unattended landing
+> (`PlatformModuleUpdatePolicy`, the retired `IModuleUpdatePolicy` seam): a deployment that pinned
+> its image to a clean release silently stopped every module from tracking its registry, and one
+> that followed continuous builds could not pin a single module. The two are now independent.
 
-The opt-in is **stamped at install time from the deployment's policy**:
-`PluginCatalog:AutoUpdateByDefault` (default `false`) seeds every fresh install record. A
-deployment that wants plugins tracking their repos continuously sets it `true` — **our Helm
-deployments do**, so a plugin repo's green build reaches those portals with nobody clicking
-anything — while an installation that configures nothing stays review-first. Install-time seed
-only: the record's own flag is the runtime authority thereafter, in both directions — an update
-re-stamp carries it forward, and flipping the deployment default later changes nothing for
-already-installed packages.
+**Every install record carries its own `updatePolicy`** — `PackageManifest.UpdatePolicy`, one of:
+
+| `updatePolicy` | Content (this page's lane) | Compiled module (the registry's bundle lane) |
+|---|---|---|
+| **`Auto`** | the delta installs unattended | the newer bundle lands unattended (restart-as-activation) |
+| **`Notify`** | a `Notification` satellite on the record, told once per candidate; the catalog card offers **Update** | declined with the reason on the log; the card's **Update** lands it |
+| **`None`** (pinned) | nothing — no install, no reminder | nothing |
+
+Both lanes read the SAME value (`PackageManifest.EffectiveUpdatePolicy`), so a package never
+lands one half without the other. **The platform's own policy on `Admin/UpdatePolicy`
+(Continuous / Stable / None + the version pattern) governs the image roll and nothing else.**
+
+**The platform default is `Notify`** — explicit opt-in. The policy is **stamped at install time
+from the deployment's default**, `PluginCatalog:DefaultUpdatePolicy` (`Auto` | `Notify` | `None`;
+unset → the legacy `PluginCatalog:AutoUpdateByDefault` decides, `true` → `Auto`), seeds every
+fresh install record. **Our Helm deployments seed `Auto`**, so a plugin repo's green build reaches
+those portals with nobody clicking anything, while an installation that configures nothing stays
+review-first. Install-time seed only: the record's own policy is the runtime authority
+thereafter — an update re-stamp carries it forward (`PackageInstaller.SeedUpdatePolicy`), and
+flipping the deployment default later changes nothing for already-installed packages.
+
+**A global administrator changes ONE package's policy on its catalog card** (Auto · Notify ·
+Pinned, the current one accented — `PackageInstaller.SetUpdatePolicy`, a System write authorized by
+the card's admin gate) — and nowhere else: the record is System-owned, so a `patch` over MCP is
+refused by design. A record written before this field existed (`updatePolicy` absent) reads its
+legacy `autoUpdate` flag as `Auto` / `Notify`; the flag is kept consistent on every write for
+older readers.
 
 An opted-in, unattended update is still fenced three ways, none of which depend on a human being
 present:
@@ -474,12 +496,15 @@ is what associates a repository with a catalog, and the same value resolves the 
 a `workflow_run` payload carries the same `repository` object a `push` does. A catalog whose source
 is a **local path** never matches a webhook, by construction.
 
-### 3. Opting in to unattended updates
+### 3. Choosing the per-package policy
 
-Per deployment: `PluginCatalog:AutoUpdateByDefault=true` seeds every FUTURE install record opted
-in (the Helm chart sets this for our portals). Per package: set `AutoUpdate` on an installed
-package's record. Both are edits to the record's own flag — the deployment key is only the
-install-time seed.
+Per deployment: `PluginCatalog:DefaultUpdatePolicy` = `Auto` | `Notify` | `None` seeds every FUTURE
+install record (the Helm chart's `PluginCatalog__DefaultUpdatePolicy`; a Hosting/Deployment record's
+`moduleUpdatePolicy` renders it). Legacy: `PluginCatalog:AutoUpdateByDefault=true` still reads as
+`Auto` when the new key is unset. Per package: the catalog card's **Updates** row (global
+administrators) — `Auto` · `Notify` · `Pinned`. The deployment key is only the install-time seed;
+the record's own `updatePolicy` is the authority. The platform's image policy on
+`Admin/UpdatePolicy` is a different knob and does not touch modules.
 
 ### 4. Receiving the module-published broadcast (consumers, #3650)
 

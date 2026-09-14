@@ -513,7 +513,75 @@ public static class PackageInstaller
     /// </summary>
     // Internal for the BuildCompletionSubscriptionTest pin (InternalsVisibleTo).
     internal static bool SeedAutoUpdate(PackageManifest? existingRecord, PluginCatalogOptions? options) =>
-        existingRecord?.AutoUpdate ?? options?.AutoUpdateByDefault ?? false;
+        SeedUpdatePolicy(existingRecord, options) == PackageUpdatePolicy.Auto;
+
+    /// <summary>
+    /// THE per-package policy seed: an existing record's own policy wins (declared, or its legacy
+    /// flag read as Auto / Notify), else the deployment's <see cref="PluginCatalogOptions.DefaultUpdatePolicy"/>,
+    /// else the legacy <see cref="PluginCatalogOptions.AutoUpdateByDefault"/> (true → Auto, else
+    /// Notify), else Notify — the platform default is reminder-only. Pure; pinned in
+    /// <c>MeshWeaver.PluginCatalog.Test</c>. An update re-stamp therefore never resets a policy an
+    /// administrator chose, and flipping the deployment default later changes nothing for
+    /// already-installed packages.
+    /// </summary>
+    internal static PackageUpdatePolicy SeedUpdatePolicy(PackageManifest? existingRecord, PluginCatalogOptions? options) =>
+        existingRecord?.EffectiveUpdatePolicy
+        ?? options?.DefaultUpdatePolicy
+        ?? (options?.AutoUpdateByDefault == true ? PackageUpdatePolicy.Auto : PackageUpdatePolicy.Notify);
+
+    /// <summary>
+    /// Sets ONE installed package's update policy — the catalog card's per-package control for a
+    /// global administrator. Reads the record, writes it back with <see cref="PackageManifest.UpdatePolicy"/>
+    /// (and the legacy <see cref="PackageManifest.AutoUpdate"/> flag kept consistent for older
+    /// readers) under the SYSTEM identity: the install-records partition denies every user
+    /// identity a write by design, so the AUTHORIZATION is the global-admin gate on the surface
+    /// that offered the control, and the write runs as System — the same division the install
+    /// path uses. Cold; emits the written record; faults when the record does not exist.
+    /// </summary>
+    public static IObservable<MeshNode> SetUpdatePolicy(
+        IMessageHub hub, string packageId, PackageUpdatePolicy policy, ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        if (string.IsNullOrWhiteSpace(packageId))
+            return Observable.Throw<MeshNode>(new ArgumentException(
+                "A package id is required to set an update policy.", nameof(packageId)));
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        if (persistence is null || accessService is null)
+            return Observable.Throw<MeshNode>(new InvalidOperationException(
+                "No storage adapter / AccessService is registered — cannot set an update policy: "
+                + "the write must run as System because Plugins/_Policy denies it to every ordinary caller."));
+        var recordPath = $"{InstalledPartition}/{packageId}";
+        var serializerOptions = hub.JsonSerializerOptions;
+        return persistence.Read(recordPath, serializerOptions)
+            .Take(1)
+            .SelectMany(node =>
+            {
+                var manifest = node?.ContentAs<PackageManifest>(serializerOptions);
+                if (node is null || manifest is null)
+                    return Observable.Throw<MeshNode>(new InvalidOperationException(
+                        $"No install record at '{recordPath}' — the package is not installed here."));
+                var updated = node with
+                {
+                    Content = manifest with
+                    {
+                        UpdatePolicy = policy,
+                        AutoUpdate = policy == PackageUpdatePolicy.Auto,
+                        // A new policy is a new question for the reminder path: forget what was
+                        // told under the old one, so a switch back to Notify reminds again.
+                        NotifiedModuleVersion = null,
+                    },
+                };
+                logger?.LogInformation(
+                    "Package {Id}: update policy set to {Policy} (was {Previous}).",
+                    packageId, policy, manifest.EffectiveUpdatePolicy);
+                // RunAsSystem, never Observable.Using (#1790).
+                return accessService.RunAsSystem(() => hub.NodeOperationIssuingHub()
+                        .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(updated)))
+                    .Take(1)
+                    .Select(_ => updated);
+            });
+    }
 
     /// <summary>How long one root gets to activate before the warm gives up on it.</summary>
     private static readonly TimeSpan WarmTimeout = TimeSpan.FromSeconds(90);
@@ -2278,6 +2346,11 @@ public static class PackageInstaller
                     // alone, exactly as ManifestFiles' own doc promises (Copilot catch: a full
                     // install passes the catalog manifest through, so without this it leaked in).
                     ManifestFiles = null,
+                    // The per-package policy (Auto / Notify / None) — seeded once, carried
+                    // forward on every re-stamp; the legacy flag is kept consistent for readers
+                    // that still branch on it.
+                    UpdatePolicy = SeedUpdatePolicy(
+                        existingRecord, hub.ServiceProvider.GetService<PluginCatalogOptions>()),
                     AutoUpdate = SeedAutoUpdate(
                         existingRecord, hub.ServiceProvider.GetService<PluginCatalogOptions>()),
                     // WHO authorized this install — what an unattended update of a commercial

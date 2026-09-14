@@ -160,6 +160,7 @@ configures no container.
 | `WithImage(repository, tag, pullSecret, migrationRepository)` | `ImageRepository`, `PinnedImageTag`, `ImagePullSecret`, `MigrationImageRepository` | `portal.image`, `portal.imagePullSecret`, `migration.image`, `selfUpdate.registry` | — |
 | `WithPinnedImageTag(tag)` | `PinnedImageTag` | `portal.image` (the tag; the pin IS the roll) | — |
 | `WithUpdatePolicy(policy)` | `UpdatePolicy` | — (the self-updater reads the record) | — |
+| `WithModuleUpdatePolicy(policy)` | `ModuleUpdatePolicy` | — (rendered into the portal's config) | `PluginCatalog__DefaultUpdatePolicy` |
 | `WithMinRollInterval(interval)` | `MinRollInterval` | `config.memex_portal.SelfUpdate__MinRollInterval` | `SelfUpdate__MinRollInterval` |
 | `WithAutoRecycleOnStaleBuild(enabled)` | `AutoRecycleOnStaleBuild` | `config.memex_portal.Modules__AutoRecycleOnStaleBuild` | `Modules__AutoRecycleOnStaleBuild` |
 | `WithPluginRepo(name, url, gitRef, isRegistrySource, secretName)` | `PluginRepos[].Name`, `PluginRepos[].Url`, `PluginRepos[].Ref`, `PluginRepos[].IsRegistrySource`, `PluginRepos[].SecretName` | `pluginCatalog.sources` (the operator's catalog file) | `PluginCatalog__*` (Aspire only) |
