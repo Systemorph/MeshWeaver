@@ -193,16 +193,115 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     ///
     /// <para>Static, with the mirror and the scheduler as seams, so the rule is asserted
     /// deterministically — no hub, no cluster, no wall clock.</para>
+    ///
+    /// <para>🚨 <b>And it says WHICH silence it timed out on — issue #1174.</b> Two completely
+    /// different faults end this wait, and until now they raised the SAME bare
+    /// <c>TimeoutException("The operation has timed out.")</c>:</para>
+    /// <list type="number">
+    ///   <item><description><b>No emission at all.</b> The owner never answered the subscribe —
+    ///     its activation never happened, the delivery never reached it, or its action block is
+    ///     saturated. The node's content and its RLS grants are IRRELEVANT here: a node that does
+    ///     not exist, or one the reader may not see, still produces an emission carrying no
+    ///     node.</description></item>
+    ///   <item><description><b>Emissions that never carry the node.</b> The owner IS answering and
+    ///     its view of this path is EMPTY — the initial read was refused or its
+    ///     <c>MeshDataSource</c> did not load the node.</description></item>
+    /// </list>
+    /// <para>The caller's sentence lists four suspects and cannot pick between them, which is why
+    /// #1174 cycled between "RLS rejected the create" and "the silo is starved" for five weeks over
+    /// 414 production occurrences without either being testable. The census is one interlocked
+    /// counter per SUBSCRIPTION (hence the <c>Observable.Defer</c> — <c>RebaseSource</c>/<c>Take(1)</c>
+    /// may resubscribe, and a shared counter would report a previous attempt's traffic), so it
+    /// costs one increment per mirror emission and nothing else.
+    /// It changes no bound, retries nothing, and swallows nothing.</para>
+    ///
+    /// <para>🚨 The counter sits UPSTREAM of the null-filter and the <c>Timeout</c> stays
+    /// DOWNSTREAM of it — that order is #2543's fix and must not move. Counting downstream would
+    /// make every timeout read "no emission at all", i.e. report case 1 for case 2, which is the
+    /// exact confusion this exists to end.</para>
     /// </summary>
     /// <param name="mirror">This hub's view of the node.</param>
     /// <param name="scheduler">Timer seam for tests.</param>
     internal static IObservable<MeshNode> BaseStateSource(
         IObservable<ChangeItem<MeshNode>> mirror,
         IScheduler? scheduler = null)
-        => mirror
-            .Where(change => change.Value is not null)
-            .Select(change => change.Value!)
-            .Timeout(BaseStateWaitBound, scheduler ?? Scheduler.Default);
+        => Observable.Defer(() =>
+        {
+            var seen = 0;
+            var lastVersion = -1L;
+            return mirror
+                // Census BEFORE the filter: "did the owner say anything at all" is a different
+                // question from "did anything it said carry the node", and only the pair of
+                // answers narrows the caller's four suspects to one half.
+                .Do(change =>
+                {
+                    System.Threading.Interlocked.Increment(ref seen);
+                    System.Threading.Interlocked.Exchange(ref lastVersion, change.Version);
+                })
+                .Where(change => change.Value is not null)
+                .Select(change => change.Value!)
+                // Timeout(bound, other, scheduler): `other` is subscribed when the bound elapses,
+                // so the exception is built THEN and reads the census as it stands at that moment.
+                .Timeout(
+                    BaseStateWaitBound,
+                    Observable.Defer(() => Observable.Throw<MeshNode>(
+                        new BaseStateTimeoutException(
+                            System.Threading.Volatile.Read(ref seen),
+                            System.Threading.Interlocked.Read(ref lastVersion)))),
+                    scheduler ?? Scheduler.Default);
+        });
+
+    /// <summary>
+    /// 🚨 The terminal of a base read that ran out its <see cref="BaseStateWaitBound"/>, carrying
+    /// the one measurement that separates "the owner never answered" from "the owner answered and
+    /// had nothing" — issue #1174. A <see cref="TimeoutException"/> so every existing
+    /// <c>ex is TimeoutException</c> branch keeps behaving exactly as it did.
+    /// </summary>
+    /// <param name="mirrorEmissions">How many change items the mirror produced inside the bound,
+    /// counted upstream of the null-filter. <c>0</c> ⇒ the owner said nothing at all.</param>
+    /// <param name="lastVersion">The <c>Version</c> of the last change item seen, or <c>-1</c>
+    /// when there was none.</param>
+    internal sealed class BaseStateTimeoutException(int mirrorEmissions, long lastVersion)
+        : TimeoutException(Describe(mirrorEmissions, lastVersion))
+    {
+        /// <summary>How many change items the mirror produced inside the bound.</summary>
+        public int MirrorEmissions { get; } = mirrorEmissions;
+
+        /// <summary>The <c>Version</c> of the last change item seen, or <c>-1</c> for none.</summary>
+        public long LastVersion { get; } = lastVersion;
+
+        /// <summary>
+        /// The half of the fork the caller is in, in one sentence — appended to the caller's own
+        /// message so a log line names a DIRECTION to look in rather than four suspects.
+        /// </summary>
+        internal static string Describe(int mirrorEmissions, long lastVersion)
+            => mirrorEmissions == 0
+                ? "The mirror produced NO change item at all inside the bound: the owning per-node "
+                  + "hub never answered the subscribe. Look at its ACTIVATION and ROUTING (a "
+                  + "saturated owner action block, a delivery that never arrived), not at the "
+                  + "node's content or its grants — an absent node, and one the reader may not "
+                  + "see, both still produce a change item that carries no node."
+                : $"The mirror produced {mirrorEmissions} change item(s) inside the bound (last "
+                  + $"Version={lastVersion}) and NONE of them carried the node: the owner IS "
+                  + "answering and its view of this path is EMPTY. Look at the node's readability "
+                  + "FROM THE OWNER — the initial read's identity/RLS, or a MeshDataSource that "
+                  + "did not load it — not at routing.";
+    }
+
+    /// <summary>
+    /// 🚨 The census sentence to append to a caller-facing abort message, or the empty string.
+    ///
+    /// <para>Empty is the POINT for every other terminal. A base read is bounded at
+    /// <see cref="BaseStateWaitBound"/>, but the terminal that ends it is routinely something
+    /// else — an owner that never answered the <c>SubscribeRequest</c> inside the REQUEST budget
+    /// raises a <see cref="TimeoutException"/> of its own, and #2387 is the record of what
+    /// happens when such a terminal is described in the language of the 30 s wait. Only the
+    /// exception <see cref="BaseStateSource"/> itself raised carries a census, so only that one
+    /// gets a sentence; everything else keeps the message it has always had, byte for byte.</para>
+    /// </summary>
+    /// <param name="ex">The terminal that ended the base read.</param>
+    internal static string BaseStateObservation(Exception ex)
+        => ex is BaseStateTimeoutException census ? " " + census.Message : string.Empty;
 
     /// <summary>
     /// 🚨 The emission a (re)attempt rebuilds its patch from — and the whole of the #1910 fix.
@@ -1745,7 +1844,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // as a TimeoutException too, and flattening it to this sentence is
                             // what made the boot-install failures unreadable (#2387).
                             observer.OnError(new TimeoutException(
-                                $"Update aborted: no initial state arrived for '{_path}' within {BaseStateWaitBound.TotalSeconds:0}s.", ex));
+                                $"Update aborted: no initial state arrived for '{_path}' within {BaseStateWaitBound.TotalSeconds:0}s."
+                                + BaseStateObservation(ex), ex));
                         else observer.OnError(ex);
                     });
             composite.Add(initialSub);
@@ -2691,7 +2791,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 "Likely causes — (1) RLS silently rejected the prior CreateNode, " +
                                 "(2) the path is misspelled / points at a namespace no NodeType claims, " +
                                 "(3) the node was deleted between create and update, or (4) the per-node " +
-                                "hub activated but its MeshDataSource didn't load the node from persistence.",
+                                "hub activated but its MeshDataSource didn't load the node from persistence."
+                                + BaseStateObservation(ex),
                                 ex));
                         }
                         else
