@@ -173,6 +173,79 @@ public class NodeTypeBakeStatusTest
         summary.Should().Contain("bytesmissing=1").And.Contain("frameworkstale=1");
     }
 
+    /// <summary>
+    /// 🚨 <b>The count resolves to an OWNER</b> (#4258). <c>previouslybroken=1</c> is the only
+    /// record in the system that a NodeType is broken for good — the rollout gate skips it by
+    /// design — and the RLS-filtered sweep a session can run cannot name it, because the type is in
+    /// a partition that sweep holds no grant on. The paths were on every entry and were dropped one
+    /// call before publication.
+    /// </summary>
+    [Fact]
+    public void Ownership_NamesThePartitionOfEveryNonBakedState()
+    {
+        var ownership = Report(
+            new NodeTypeBakeEntry("Doc/Architecture/Fine", BakeState.Baked),
+            new NodeTypeBakeEntry("BinaryClickerV2/BinaryToggle", BakeState.PreviouslyBroken),
+            new NodeTypeBakeEntry("Edu/Course/Kernel", BakeState.FrameworkStale),
+            new NodeTypeBakeEntry("Store/Plugin", BakeState.FrameworkStale)).Ownership;
+
+        ownership.Should()
+            .Contain("previouslybroken in BinaryClickerV2/…",
+                "a count nobody can resolve to an owner closed nothing — #3883 failed three times "
+                + "on exactly the ambiguity between 'the type is gone' and 'I may not read it'")
+            .And.Contain("frameworkstale in Edu/…, Store/…",
+                "pending/frameworkstale have the same shape as previouslybroken: 58 pending types "
+                + "nobody could enumerate is the same defect one state over");
+    }
+
+    /// <summary>
+    /// 🚨 The DISCLOSURE half, and the control that keeps the assertion above honest: <c>/health</c>
+    /// is public and unauthenticated, so the partition is named and the node's own title is NOT.
+    /// #3890 closed a narrower version of this surface on the principle that a control which works
+    /// by disclosing other people's node titles is a disclosure surface wearing an instrument's
+    /// colours.
+    /// </summary>
+    [Fact]
+    public void Ownership_NamesThePartition_AndNeverTheNodeTitle()
+    {
+        var ownership = Report(
+            new NodeTypeBakeEntry("BinaryClickerV2/BinaryToggle", BakeState.PreviouslyBroken))
+            .Ownership;
+
+        ownership.Should().NotContain("BinaryToggle",
+            "the node's own name is what #3890 refused to publish; naming the PARTITION routes the "
+            + "finding to an owner, which is all #3883 ever needed");
+    }
+
+    /// <summary>
+    /// The positive control for both cases above: a fully baked report names nobody, so the
+    /// assertions are reading the entries rather than a constant.
+    /// </summary>
+    [Fact]
+    public void Ownership_OfAFullyBakedReport_NamesNobody() =>
+        Report(
+            new NodeTypeBakeEntry("Store/Plugin", BakeState.Baked),
+            new NodeTypeBakeEntry("Edu/Course", BakeState.Baked)).Ownership
+            .Should().BeEmpty(
+                "nothing needs a bake, so there is no owner to route to — and a clause that "
+                + "appeared anyway would make the assertions above unfalsifiable");
+
+    /// <summary>
+    /// A mesh-wide state must not turn a one-line health body into a partition listing: past the
+    /// cap the rest are COUNTED, which still says "this is fleet-wide" without printing 122 names.
+    /// </summary>
+    [Fact]
+    public void Ownership_CapsTheNamedPartitions_AndCountsTheRest()
+    {
+        var ownership = Report(Enumerable.Range(0, 20)
+            .Select(i => new NodeTypeBakeEntry($"P{i:00}/Type", BakeState.FrameworkStale))
+            .ToArray()).Ownership;
+
+        ownership.Should().Contain("P00/…").And.Contain("P11/…")
+            .And.NotContain("P12/…")
+            .And.Contain("(+8 more partition(s))");
+    }
+
     // ---- Probe: against a store ---------------------------------------------------------------
 
     /// <summary>The whole point: a wiped share re-bakes, even though every record still says Ok.</summary>

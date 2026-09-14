@@ -1,4 +1,5 @@
 using System;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using Xunit;
 
@@ -13,7 +14,8 @@ namespace MeshWeaver.Hosting.Test;
 /// </summary>
 public class BakeCensusRegistryTest
 {
-    private static BakeReportReading Reading(int fromLocalAdoption, int stamps = 0) =>
+    private static BakeReportReading Reading(
+        int fromLocalAdoption, int stamps = 0, string ownership = "") =>
         new(
             NodeTypeBakeReportRegistry.AdoptOnlyProbe,
             "sb43f9287dbd6922a7937bd24be103937",
@@ -23,7 +25,10 @@ public class BakeCensusRegistryTest
             ClassifiedFromLocalAdoption: fromLocalAdoption,
             AdoptionStamps: stamps,
             Summary: "framework=sb43f928 total=209 baked=5 pending=204 frameworkstale=201",
-            At: DateTimeOffset.UnixEpoch);
+            At: DateTimeOffset.UnixEpoch)
+        {
+            Ownership = ownership,
+        };
 
     [Fact]
     public void NoReportIsNotACleanReport_AndTheSentenceSaysSo()
@@ -75,6 +80,77 @@ public class BakeCensusRegistryTest
             .Contain("PREDATED this replica's own prebuilt adoptions for 73 of 209 type(s)")
             .And.Contain("#3703");
     }
+
+    /// <summary>
+    /// 🚨 <b>The count resolves to an owner in the SENTENCE</b> (#4258). <c>/health</c> prints a
+    /// description and nothing else, so an identity that reaches the registry and not the sentence
+    /// is still dropped. <c>previouslybroken=1</c> is the one record anywhere that a NodeType is
+    /// broken for good — the rollout gate skips it on purpose — and the RLS-filtered sweep a reader
+    /// can run cannot name it.
+    /// </summary>
+    [Fact]
+    public void TheSentenceResolvesTheCountToAPartition_WithoutNamingTheNode()
+    {
+        var registry = new NodeTypeBakeReportRegistry();
+        registry.Record(Reading(
+            fromLocalAdoption: 0, stamps: 78,
+            ownership: "previouslybroken in BinaryClickerV2/…; frameworkstale in Edu/…, Store/…"));
+
+        NodeTypeBakeReportRegistry.IsClean(registry.Latest).Should().BeTrue(
+            "a permanently-broken type must NOT flip the verdict — the gate skips it so one "
+            + "abandoned NodeType cannot freeze the platform's deploys, and the census tag is what "
+            + "prints this reading although it is Healthy");
+
+        NodeTypeBakeReportRegistry.Describe(registry.Latest).Should()
+            .Contain("previouslybroken in BinaryClickerV2/…",
+                "the whole point is that the number can be routed to an owner")
+            .And.NotContain("BinaryToggle",
+                "this body is PUBLIC and unauthenticated: the partition routes the finding, a node "
+                + "title is the surface #3890 closed");
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE BRIDGE — the exact call the identity was dropped at</b> (#4258).
+    ///
+    /// <para>Every case above stages a <see cref="BakeReportReading"/> with <c>Ownership</c> already
+    /// populated, so all of them would pass while the projection from the REPORT to the READING kept
+    /// dropping the entries' paths — which is precisely the defect. This holds that projection
+    /// directly: a report carrying a permanently-broken type must produce a reading that names its
+    /// partition, and a sentence that still refuses the node's own title.</para>
+    /// </summary>
+    [Fact]
+    public void TheReportToReadingBridge_CarriesTheIdentity_NotOnlyTheCounts()
+    {
+        var report = new NodeTypeBakeReport(
+            [
+                new NodeTypeBakeEntry("Doc/Architecture/Fine", BakeState.Baked),
+                new NodeTypeBakeEntry("BinaryClickerV2/BinaryToggle", BakeState.PreviouslyBroken),
+            ],
+            "sd608997c1a94e2f8b3d5a6079e4c1b23");
+
+        var reading = DynamicTypePreWarmer.ReadingOf(
+            report, NodeTypeBakeReportRegistry.AdoptOnlyProbe, adoptionStamps: 78,
+            at: DateTimeOffset.UnixEpoch);
+
+        reading.Total.Should().Be(2, "the counts must keep working — this is a widening, not a swap");
+        reading.Ownership.Should().Be(report.Ownership,
+            "the reduction to a /health line is where every entry's TypePath was discarded, so a "
+            + "guard that stages the reading instead of the report checks nothing about it");
+        NodeTypeBakeReportRegistry.Describe(reading).Should()
+            .Contain("previouslybroken in BinaryClickerV2/…")
+            .And.NotContain("BinaryToggle",
+                "and the bridge must not smuggle a node title onto a public body either");
+    }
+
+    /// <summary>
+    /// The positive control for the case above: a reading with nothing outstanding carries no
+    /// ownership clause at all, so that assertion is reading the reading and not a constant.
+    /// </summary>
+    [Fact]
+    public void AReadingWithNothingOutstanding_CarriesNoOwnershipClause() =>
+        NodeTypeBakeReportRegistry.Describe(Reading(fromLocalAdoption: 0, stamps: 78))
+            .Should().NotContain("Non-baked types by partition",
+                "an empty clause printed anyway would make the ownership assertion unfalsifiable");
 
     [Fact]
     public void TheLastReadingWins_SoTheCheckAnswersAboutThisReplicaNow()
