@@ -159,6 +159,19 @@ sweep you inherit from an older note still reads `search 'nodeType:NodeType
 content.compilationStatus:Error'` with no `partitions:all`, the note predates this change; the
 refusal names the fix.
 
+🚨 **A tool wearing this refusal must re-house it in its OWN container.** The `Error: …` string is
+the surface-wide failure convention of `MeshOperations` and the MCP `search` tool keeps it
+(`McpRemoteMeshClient` recognises a refusal by that prefix). But the chat agents' tool answers a
+JSON envelope, and its consumers parse it — so handing the prose through threw
+`JsonReaderException: 'E' is an invalid start of a value` in every one of them, on the platform's
+own release bake: main-cd **#8577** and **#8581** (2026-09-14) each failed the AI module's tests on
+it and each skipped the Plugins publication for its platform identity. `MeshPlugin.Search` now
+answers `{success: false, refused: <bool>, error: <the operation's text>}` — `success:false` because
+the engine's `ThreadExecution.ExtractToolResult` records a JSON object WITHOUT it as a successful
+call, and no `count`/`results` because an empty result list would let a consumer read a refusal as
+"none exist", which is the misreading this refusal exists to stop. The design record is
+`AI/ToolFailureContainer.md` in MeshWeaver.Plugins (Plugins#1852).
+
 Two things the declared sweep still cannot see, and no query form can:
 
 - **A NodeType in a system partition.** The fan-out never enumerates `admin`, `auth`, `kernel`,
