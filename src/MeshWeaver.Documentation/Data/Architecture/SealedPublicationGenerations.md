@@ -385,17 +385,32 @@ nowhere else. There is no downstream copy left to fall back on, which makes
 **The pin half is still open.** A producer past phase 2 *can* write generations and is still writing
 flat. Core CD needs no pin move; the satellites move theirs the way they always do.
 
-### Phase 4 — flip, one prefix at a time *(core's half of `plugins` landed; the satellite's is explicitness, not correctness)*
+### Phase 4 — flip *(landed: core's half of `plugins`, then the lane default for every prefix)*
 
 Set `publication-layout: generation` on every producer of one prefix. The multi-producer prefix is
-`plugins` and nothing else: core CD's `plugins-bake` and MeshWeaver.Plugins' `publish-bake`. The
-single-producer prefixes each flip in their own repository's PR.
+`plugins` and nothing else: core CD's `plugins-bake` and MeshWeaver.Plugins' `publish-bake`. Every
+other prefix has exactly one producer.
 
 #### What is landed, and the precondition that was measured before it was
 
 `main-cd.yml`'s `plugins-bake` passes `publication-layout: generation`. From that merge, core's
 publications of `prebuilt-bundles/<identity>/plugins` are written into their own run-named
 directory, sealed there, and pointed at.
+
+🚨 **And then the LANE DEFAULT moved, which is what flipped the other five.** The five
+single-producer prefixes — `crm`, `education`, `reinsurance`, `socialmedia`, `manufacturing` — were
+described here as "one PR each, in its own repository". They are not, and treating them that way
+was leaving the more important half undone: the thing that decided their layout was the
+`publication-layout` **default**, and while that default was `flat`, a node repo that said nothing
+published in place — *including every node repo that will ever be created*. The default is
+`generation` from this change; none of the six callers passes the input, so all six prefixes are
+flipped by it and no satellite PR is involved. What a per-repo PR would still buy is the same thing
+the MeshWeaver.Plugins caller buys: a declared layout rather than an inherited one.
+
+The script's own `${BAKE_PUBLICATION_LAYOUT:-flat}` fallback deliberately stays `flat`. It is the
+**direct-invocation** default — the overlap harness, a manual run — and the lane always passes the
+input through explicitly, so no lane run ever reaches it. Reading that line as "the fleet publishes
+flat" is the mistake it used to invite, and the comment above it now says so.
 
 🚨 **The prefix-ownership mechanism lives in the PUBLISHER, so "either order" is a claim about
 which publisher each producer is RUNNING** — a producer resolving a `publish-bake-bundles.sh` that
@@ -411,7 +426,8 @@ moving the pointer — which leaves pointer-following readers on the **newer** g
 direction, and is the same flat-copy residual phase 5 removes.
 
 What the satellite's own flip buys is therefore **explicitness, not correctness**: it replaces a
-discovered layout (announced by a `::warning::` on every publish) with a declared one.
+discovered layout (announced by a `::warning::` on every publish) with a declared one. The same is
+true of a per-repo PR on any of the five single-producer prefixes now that the default has moved.
 
 🚨 **Every reader fails safe to today's behaviour.** `ResolvePublicationPointer` degrades an absent,
 blank, unreadable, escaping or dangling pointer to the source directory, where the flat copy still
@@ -504,6 +520,36 @@ Once no deployed portal predates phase 1. From here the mix is unrepresentable a
 window is gone; what remains is the sub-second pointer write described above, and an atomic rename
 removes even that.
 
+#### What the precondition actually needs, and what was measured for it on 2026-09-14
+
+| | reading |
+|---|---|
+| `memex` (memex.systemorph.com) | `/api/version` → `3.0.0+c84c6c05503228860df03c4a8b596e497e6d218c`, and `a4109d422` (phase 1) is an ancestor of it. **Past phase 1.** |
+| `memex-cloud` (memex.meshweaver.cloud) | the same commit. **Past phase 1.** |
+| `build` | `Ops/Status/build` carries a `/health` body (framework `sd608997`, bake sweep 2026-09-12) — so it is live and recent, but **no commit is readable through it**. Not established. |
+| `pearl` | `Ops/Status/pearl` has `replicas: []`, `health: Unknown`, and `pearl.meshweaver.cloud` does not resolve. Not established — and possibly not a live instance at all. |
+
+🚨 **State the denominator: that is 2 of the 4 `Hosting/Deployment` records on the control
+instance, and the records are not provably the whole population** — an install that self-updates
+from the registry and has stopped doing so appears in no record here. The instrument that would
+name a running image per replica is `Sample`, and on this cluster it is blind
+([#4218](https://github.com/Systemorph/MeshWeaver/issues/4218): kube-state-metrics returns no
+series, so `replicas` comes back empty rather than wrong).
+
+#### The argument that the precondition may be self-satisfying — an inference, NOT a measurement
+
+A publication is written under the framework identity **the bake resolved**, i.e. the current
+platform's. A portal image that predates phase 1 resolves a *different* identity (phase 1 changed
+`src/`, so the reference set moved), and nothing publishes under that identity any more — its flat
+publication simply sits on the share, untouched by a phase-5 writer. On that reading, dropping the
+flat copy from NEW publications cannot reach a pre-phase-1 reader at all, because such a reader
+never resolves a prefix a phase-5 publisher writes.
+
+It is written down because it is the argument someone will make, and it is written down as an
+**inference**: it rests on "phase 1 moved the identity", which nobody has measured, and a single
+counter-example — an old image whose reference set happens to hash the same — is a fleet-wide dark
+serve. Measure it before it is used to close anything.
+
 🚨 **Until then the flat copy is still replaced IN PLACE, so it still races.** Phase 4 removes the
 window for readers that follow the pointer; the compatibility copy the writer keeps making for
 pre-phase-1 images is unsealed, rewritten and re-sealed exactly as today, and can still be sealed as
@@ -564,10 +610,11 @@ was ever visible instead of silently shipping a mixed set.
 
 - **Phase 1 is landed** (`a4109d422`) — the readers resolve the pointer, and the fallback is the
   previous behaviour exactly.
-- **Phase 2 is landed** — the writer can publish generations, behind `publication-layout`, which
-  defaults to `flat`. Nothing anywhere writes a generation until a caller opts in, and the three
-  control cases in `test-publish-bake-overlap.py` are the regression suite proving the default path
-  is byte-identical to what it was.
+- **Phase 2 is landed** — the writer can publish generations, behind `publication-layout`. The
+  lane's default is `generation` since phase 4; the SCRIPT's `BAKE_PUBLICATION_LAYOUT` fallback is
+  still `flat` and is the direct-invocation default, which is why the three control cases in
+  `test-publish-bake-overlap.py` remain the regression suite proving the flat path is byte-identical
+  to what it was.
 - **Phase 3's reader half is landed** — `compose-sealed-modules.sh` and `node-repo-gate.yml`'s
   `seed` resolve the pointer, both are executed by `test-publication-pointer-readers.py`, and
   `bake-scope.sh --self-test` is wired into CI beside it. Its pin half, and **phases 4–5**, are
@@ -589,10 +636,24 @@ was ever visible instead of silently shipping a mixed set.
   to 1 on that incident. The **residual is a sibling that has not sealed yet when this run's sweep
   ends** (21 seconds, measured), and that is not shrinkable by any amount of checking: it is what
   phases 2–5 exist for.
-- **Phase 4's core half is landed** (2026-09-14) — `main-cd.yml`'s `plugins-bake` passes
-  `publication-layout: generation`, so `prebuilt-bundles/<identity>/plugins` is on the generation
-  layout and every reader that follows `_current` stops reading a directory mutated in place. The
-  satellite's own flip is explicitness, not correctness (phase 4 above). **Phase 5 is open.**
+- **Phase 4 is landed** (2026-09-14) — first `main-cd.yml`'s `plugins-bake` passing
+  `publication-layout: generation`, then the lane input's own default moving to `generation`, which
+  is what flips the five single-producer prefixes (`crm`, `education`, `reinsurance`, `socialmedia`,
+  `manufacturing`) with no change in their repositories. Every reader that follows `_current` stops
+  reading a directory mutated in place, on every prefix. The satellite's own flip is explicitness,
+  not correctness (phase 4 above). **Phase 5 is open.**
+- **The precondition on moving the default, measured 2026-09-14 rather than inherited.** The
+  prefix-ownership mechanism (#4249) lives in `publish-bake-bundles.sh`, so it is a claim about the
+  publisher each producer RUNS. Across `ci.yml` on `main` of all six node repos every `uses:` of a
+  `node-repo-*.yml` lane is `@main` and every `scripts-ref:` is `main`; none of the six passes
+  `publication-layout`; and `publish-bake-bundles.sh` is named in exactly one satellite file, in a
+  comment — nothing in the fleet invokes it outside the lane. So there is no pinned publisher and no
+  pinned reader of any of these prefixes, and moving the default reaches all six producers at once.
+- **Moving the default is safe for a portal of ANY age, which is what separates phase 4 from phase
+  5.** A generation publication still writes the flat compatibility copy, so a reader that cannot
+  resolve `_current` — a portal image predating phase 1, or a torn pointer read on any image — is
+  served exactly what it was served before. Phase 5 is the change that has a portal-age
+  precondition; phase 4 does not.
 - **The measurement the flip waited on.** Measured over
   2026-09-12T08:00Z → 09-13T08:00Z, every `plugins` publish job of both lanes: core `plugins-bake`
   **25** executed (23 sealed), Plugins `publish-bake` **10** (8 sealed); **62 of 62** target

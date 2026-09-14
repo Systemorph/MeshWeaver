@@ -96,8 +96,9 @@ work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 #
 # A source directory MAY hold `_current`: one line naming the SUBDIRECTORY that holds the
 # publication which currently applies. Absent, the source directory IS its own publication
-# directory — the flat layout, and the only one anything has written until a caller opts in to
-# `publication-layout: generation`.
+# directory — the flat layout, which every publication ALSO writes as a compatibility copy. Since
+# #3461 phase 4 the lane's `publication-layout` defaults to `generation`, so an absent pointer means
+# "this prefix has not been published since the flip", not "the fleet is flat".
 #
 # 🚨 WHY THIS FILE NEEDED IT. Phase 1 routed every reader the PORTAL IMAGE carries through
 # `ShippedPrebuiltBundles.PublicationDirectoryOf`; this script is not one of them — it is fetched
