@@ -1412,6 +1412,70 @@ eviction IS the supersede rule, applied by GitHub in arrival order. The one thin
 check is ancestry: if Build and Test ever completed out of commit order, an older commit's run
 could evict a newer one's — and the reconcile's next tick covers that hour.
 
+### 🚨 Count the SEALS, not the cancellations — the eviction rate answers no question you have
+
+The rule above has now been re-derived as a defect a third time (#4322, 2026-09-14: *"half of
+today's 30 CD runs were cancelled … every one is a seal that did not happen"*). The reading survives
+because **the cancellation count is easy to get and answers nothing**, while the question behind it —
+*is delivery happening?* — has its own instrument that nobody reaches for.
+
+**The census, run the same day the claim was filed** (snapshot 2026-09-14T17:43Z — a day still in
+progress, which is why the totals are stated with their clock). Every `main-cd` run created since
+00:00Z, each one's `…/runs/<id>/jobs` read:
+
+| | |
+|---|---|
+| runs | **58** (not 30 — the claim's window missed the schedule lane) |
+| cancelled | 25 — **every single one with `jobs.total_count == 0` and `run_attempt: 1`** |
+| cancelled runs holding a `Promote` job in ANY state | **0** |
+| runs that reached `Register the publication with memex = success` | **17** |
+
+So no seal was lost: not one evicted run had reached — or even started — the job that seals. And the
+claim's second half (*"the last non-schedule run that could seal was #8584 at 12:30Z"*) was already
+stale when it was written: **#8587 sealed at 13:27Z** and **#8596 at 14:50Z**, both `workflow_run`.
+
+**The instrument for "is delivery happening" is the seal**, and it fits on a screen:
+
+```bash
+day=2026-09-14; repo=Systemorph/MeshWeaver
+gh api --paginate "repos/$repo/actions/workflows/main-cd.yml/runs?per_page=100&created=%3E%3D$day" \
+  --jq '.workflow_runs[] | "\(.run_number) \(.id)"' \
+| while read -r number id; do
+    sealed=$(gh api --paginate "repos/$repo/actions/runs/$id/jobs?per_page=100" \
+               --jq '.jobs[] | select(.name | test("Register the publication")) | .conclusion' \
+             < /dev/null)
+    printf '%s %s\n' "$number" "${sealed:-—}"
+  done
+```
+
+🚨 **Three ways this very recipe under-reports, all of them silent, and this section is about
+exactly that — so they are named rather than trusted:**
+
+- **`--paginate` on BOTH calls.** A day busier than 100 runs, or a run with more than 100 jobs,
+  otherwise drops rows and the seal count comes out low with nothing saying so.
+- **`created=%3E%3D$day` bounds the first call** so `--paginate` walks the day rather than the
+  workflow's entire history.
+- **`< /dev/null` on the inner call.** Without it the inner `gh` reads the LOOP's stdin and eats the
+  remaining run lines. Measured while writing this: **51 of 58 runs listed**, exit 0, no error
+  anywhere — the seal count silently 2 short. (Same shape as the harness case
+  "the read-back loop cannot be truncated by something eating its stdin".)
+
+Read the OUTPUT, not the exit code: `—` for a run that sealed nothing is the common, healthy line
+(a reconcile that found the set complete), and a run whose overall conclusion is `failure` can still
+show `success` here — #8593 did, red on a later step, with its publication registered. The seal is
+the question; the run's colour is not.
+
+A day with seals every 30–90 minutes is a healthy lane however many evictions it shows, because the
+eviction rate rises with the MERGE rate and the seal rate does not fall with it.
+
+**And when there IS a gap, the cause is on a run that executed.** The longest gap that same day was
+08:40Z → 11:28Z, and it was not eviction: `#8577` (09:12Z) and `#8581` (09:53Z) both promoted their
+image set and baked the platform content successfully, then went red on
+`Plugins: pack the module bundles … / Module tests` → `Run the module's tests`. The two hourly
+reconciles in between (`#8580`, `#8582`) ran three jobs each and correctly declined to publish — the
+image set for the target commit was complete, because those two runs HAD promoted it. Eviction
+explains none of that, and the module-test failure explains all of it.
+
 ### The other direction: a CD red on main that means nothing
 
 The section above is delivery stopping behind green ticks. The inverse cost the same evening: the
