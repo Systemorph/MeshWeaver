@@ -106,7 +106,7 @@ is **per user** and is stored **nowhere but on the records themselves**:
 
 | Field | Meaning |
 |---|---|
-| `App.Group` | the section the tile sits in. `null` = never grouped (the Store stamps the package's `category` at install, and its tile refresh fills a *missing* group from it); `""` = the viewer deliberately ungrouped the tile — a value no heal may overwrite. A group exists exactly while a tile carries its name; renaming a group rewrites its members. |
+| `App.Group` | the section the tile sits in. `null` = never grouped (the Store stamps the package's `category` at install); `""` = the viewer deliberately ungrouped the tile — a value no heal may overwrite. A group exists exactly while a tile carries its name; renaming a group rewrites its members. **The group is a stamped COPY of the category, like the tile's name and icon, and converges the same way** (Plugins, 2026-09-14): the Store's tile refresh fills a missing group AND moves a machine-stamped one when the package is re-categorized; a group the viewer chose is declared by `content.customGroup: true`, which every drag, drop and rename writes — declared, never inferred. |
 | `App.Order` | the position inside the group, `1..n`. `0` = never placed: such tiles paint **behind** the placed ones, in the grid's own most-recently-used order, so a freshly installed app lands at the end of its group the way a phone appends a new icon. |
 
 This repo holds the CONTRACT: `BuildAppsBand` declares it — `WithGroupBy(nameof(App.Group))` +
@@ -117,6 +117,18 @@ handled by Blazor (`dragstart` / `dragenter` / `drop`), **no JS interop**, so th
 to dispose and nothing that can throw *Cannot access a disposed object: JSObjectReference* when a
 circuit goes away mid-drag. A platform without that GUI module simply paints the plain Icons grid;
 the declaration is inert until a view reads it.
+
+**The view has two LEVELS (Plugins, 2026-09-14).** With a dozen groups the sectioned grid was a
+wall of icons and no overview, so the band opens on **categories first**: the overview is one
+folder tile per group (a 2×2 miniature of its first apps, its name, its count), an *All* folder, and
+the ungrouped tiles loose beside them; a folder opens to that group's tiles alone; *All* is the
+full sectioned grid where tiles move between groups. A path above the grid (`Apps › Daily work`) is
+the way up, and the **last place is remembered per launcher in the browser** (`localStorage`,
+keyed by the band's query so two users on one browser never share it) — read on first render,
+before the tiles' query answers, so the viewer returns to where they were with no jump. Nothing of
+this is stored on the mesh, and the contract above is unchanged: the folders are the same groups,
+the same records, the same writes. The rules and the category taxonomy that motivated it (*Daily
+work*, *Administration*) are in the Plugins doc `Store/HomeSurface`.
 
 What the contract asks of any such view: a drop computes the target group's new sequence, renumbers
 it `1..n`, and writes **only the records whose `group` or `order` changed** through
