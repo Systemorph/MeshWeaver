@@ -58,8 +58,14 @@ act, days later, never part of the same operation.
 **The declaration is committed and checked.** Every registry the fleet uses now has to state what
 deletes from it, and the check does not simply re-read that statement — it re-reads the registry's
 own configuration and says so when the two disagree. A scheduled cleanup job added beside the
-registry, or a deletion window quietly moved, now fails a check that names what changed, rather than
-sitting next to a sentence that says nothing deletes.
+registry, a deletion window quietly moved, or **the single permission rule that lets anything delete
+at all being widened beyond the one account that has it**, each now fails a check that names what
+changed, rather than sitting next to a sentence that says nothing deletes.
+
+That last one is the reason the check reads the configuration rather than the statement. Who may
+delete is not something a search through the code can answer — it is one rule in the registry's own
+permission list, and a sentence saying "only the publisher can delete" reads exactly the same on the
+day that rule is changed to say "anyone".
 
 **The nightly protection run now prints what it works out.** It has always been able to see which
 images the fleet's committed files pin in this registry; it used to throw that away. It now lists
