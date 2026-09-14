@@ -460,6 +460,26 @@ one is the window itself: the generation sealed, `_current` naming it, and the p
 (nothing sealed anywhere ⇒ still refuses; a flat prefix with no pointer ⇒ still sealed) pass on both,
 which is what makes them controls rather than new behaviour.
 
+#### 🚨 THREE places print "no sealed publication", and their remedies are OPPOSITE
+
+This is the half that matters more than the fix, because conflating these makes a genuine outage
+look transient — and the sentences differ by a preposition.
+
+| the message | who prints it | what it means | does re-running help? |
+|---|---|---|---|
+| `no sealed publication **under** <path on the share>` | `check-release-availability.sh` | may be the window above: the flat copy's `_complete` deleted during its refresh while the generation is sealed, live and pointed at | **yes** — and since the fix above the window is gone |
+| `no SEALED publication **at** <registry URL> … (404)` | `node-repo-gate.yml`'s `upstream_not_ready`, from the registry probe — a **definite** 404, refused immediately on purpose (a 404 is a decision the registry has already made; only 5xx and `000` are treated as no answer) | the upstream genuinely has **not published** for that framework identity | **no.** Look at whether the upstream's own seal is blocked |
+| `no SEALED publication **under** <account>/<share>/<dir>` | `compose-sealed-modules.sh` | the resolved publication carries no sentinel — pointer-resolved since phase 3 | depends; not this window |
+
+A live instance of the middle row on 2026-09-14: MeshWeaver.Education `main` asking for identity
+`s3b3fb865f…` (platform set 8596) while the last MeshWeaver.Plugins publication was `s6b704cd02…`
+(set 8581, 12:53Z), its seal blocked on a broken suite. Reading that as the share window would send
+a reader to re-run a job that cannot pass, which is strictly worse than not diagnosing it at all.
+
+🚨 **The identity in the message is the tell.** A share-window red names an identity the fleet is
+currently publishing for; a registry 404 names one nothing has published for yet. Read the identity
+before the verb.
+
 ### 🚨 The residual phase 4 does NOT remove: a flat publication beside a generation one
 
 Raised by the review of the default move, and real. A generation publication writes its generation,
@@ -577,31 +597,36 @@ removes even that.
 
 | | reading |
 |---|---|
-| `memex` (memex.systemorph.com) | `/api/version` → `3.0.0+c84c6c05503228860df03c4a8b596e497e6d218c`, and `a4109d422` (phase 1) is an ancestor of it. **Past phase 1.** |
+| `memex` (memex.systemorph.com) | `/api/version` → `3.0.0+c84c6c05503228860df03c4a8b596e497e6d218c`; `a4109d422` (phase 1) is an ancestor. **Past phase 1.** |
 | `memex-cloud` (memex.meshweaver.cloud) | the same commit. **Past phase 1.** |
-| `build` | `Ops/Status/build` carries a `/health` body (framework `sd608997`, bake sweep 2026-09-12) — so it is live and recent, but **no commit is readable through it**. Not established. |
-| `pearl` | `Ops/Status/pearl` has `replicas: []`, `health: Unknown`, and `pearl.meshweaver.cloud` does not resolve. Not established — and possibly not a live instance at all. |
+| `build` | `Ops/Status/build` carries a `/health` body reporting framework `sd608997` — the same identity `memex` and `memex-cloud` report. No commit is readable through it, so this rests on identity equality rather than a commit read (see the churn argument below, which is what makes identity equality say something). |
+| `pearl` | **not a deployed portal.** `content.status` is `Provisioning`, `Ops/Status/pearl` reports `replicas: []`, and `pearl.meshweaver.cloud` does not resolve; the record's own notes say the two 2026-09-09 provision runs stopped at step 3 and the next step is still a fresh `Provision` action. Its `pinnedImageTag` is `3.0.0-ci.8080` = `67cbbe0ee` (2026-09-08), which **contains phase 1** — so even once it exists it does not predate it. |
 
-🚨 **State the denominator: that is 2 of the 4 `Hosting/Deployment` records on the control
-instance, and the records are not provably the whole population** — an install that self-updates
-from the registry and has stopped doing so appears in no record here. The instrument that would
-name a running image per replica is `Sample`, and on this cluster it is blind
-([#4218](https://github.com/Systemorph/MeshWeaver/issues/4218): kube-state-metrics returns no
-series, so `replicas` comes back empty rather than wrong).
+🚨 **State the denominator: those are the four `Hosting/Deployment` records on the control instance, and the records are not provably the whole population** — an install that self-updates from the registry and has stopped doing so appears in none of them. The instrument that would name a running image per replica is `Sample`, and on this cluster it is blind ([#4218](https://github.com/Systemorph/MeshWeaver/issues/4218)).
 
-#### The argument that the precondition may be self-satisfying — an inference, NOT a measurement
+#### Why an install that is NOT in the records still cannot be reached — and it is a mechanism, not an inference
 
-A publication is written under the framework identity **the bake resolved**, i.e. the current
-platform's. A portal image that predates phase 1 resolves a *different* identity (phase 1 changed
-`src/`, so the reference set moved), and nothing publishes under that identity any more — its flat
-publication simply sits on the share, untouched by a phase-5 writer. On that reading, dropping the
-flat copy from NEW publications cannot reach a pre-phase-1 reader at all, because such a reader
-never resolves a prefix a phase-5 publisher writes.
+A publication is written under the framework identity **the bake resolved**, i.e. the current platform's. The question is therefore whether a pre-phase-1 image can resolve the *same* identity as a current one, because only then would a phase-5 publisher write where such a reader looks.
 
-It is written down because it is the argument someone will make, and it is written down as an
-**inference**: it rests on "phase 1 moved the identity", which nobody has measured, and a single
-counter-example — an old image whose reference set happens to hash the same — is a fleet-wide dark
-serve. Measure it before it is used to close anything.
+It cannot, and [Framework Identity Churn](../FrameworkIdentityChurn) is why: `Directory.Build.props` deliberately lets the SDK append the commit to `AssemblyInformationalVersion`, so **the identity moves on every core commit** — measured at ≥ 18 distinct identities across 43 merges, of which only 5 touched the full-MVID set by design. The churn that page treats as a cost is, for this question, a guarantee: an image predating `a4109d422` carries a different commit, therefore different assembly bytes, therefore a different identity, and **nothing publishes under it**. Its flat publication stays on the share, untouched by any phase-5 writer, until retention collects it — and retention already treats a registered instance's own reports as references.
+
+So phase 5 cannot dark-serve an old install by writing somewhere it does not look. What it *can* do is the next section.
+
+#### 🚨 Phase 5 is NOT "stop writing the flat copy" — the copy already on the share is the hazard
+
+This is the part the phase's one-line description hides, and it inverts the failure the design table assumes.
+
+The table above says a torn pointer read with the **flat copy gone** finds a directory with no `_complete`, i.e. *"being republished right now"* → `503` + `Retry-After`, which every consumer already waits out. That is correct **only if the copy is actually gone**. A phase 5 that merely stops refreshing it leaves the last flat publication sitting at the prefix, **sealed and complete**, while `_current` keeps moving past it. From then on a torn pointer read resolves to a publication frozen at the day phase 5 landed — self-consistent, sealed, and older every hour. That is a *stale serve with nothing red anywhere*: this issue's own failure mode, reached from the third side, and permanent rather than bounded by one publication.
+
+**So phase 5 has to dispose of the existing copy, and the cheap disposal is the publisher's own, incremental and per prefix:** on a generation publish, instead of refreshing the flat copy, **delete the flat `_complete` first** and then its files. Removing the sentinel is what turns the prefix from *"a complete older publication"* into *"being republished"*, which is the state every reader already handles and the one the design table assumes. It needs no bulk sweep of the share, it happens once per prefix on that prefix's next publication, and a prefix that is never published again keeps its flat copy — which is exactly right, because it is the one an old identity's reader still needs.
+
+Ordering matters and is the same argument as the pointer's: the sentinel goes **after** `_current` has moved, so a reader that resolved early is never left with neither.
+
+#### What remains before phase 5 can be attempted
+
+1. **A commit read for `build`** — today it rests on identity equality.
+2. **A decision on the disposal above**, which is a change to a live delivery path and deletes bytes from the production share.
+3. Nothing else: no pinned publisher and no pinned reader of these prefixes exists in the fleet (measured 2026-09-14), and every reader in `src/` degrades an unusable pointer to the source directory.
 
 🚨 **Until then the flat copy is still replaced IN PLACE, so it still races.** Phase 4 removes the
 window for readers that follow the pointer; the compatibility copy the writer keeps making for
