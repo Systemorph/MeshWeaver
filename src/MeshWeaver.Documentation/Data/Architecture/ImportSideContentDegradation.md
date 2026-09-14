@@ -104,7 +104,7 @@ that reading was wrong, and measuring the sibling's content is what falsified it
 🚨 **`Crm` having no `_GitSync` entry is not the cause and not a defect either.** That space is
 populated by the PLUGIN CATALOG — `memex-cloud`'s deployment record lists `Crm` under both
 `pluginRepos[].isRegistrySource` and `preInstall` — and a package-installed space has no `_GitSync`
-by design. Nor is its content stale: 12 of the space's 29 children were rewritten on 2026-09-14, and
+by design. Nor is its content stale: 15 of the space's 29 children carry a 2026-09-14 timestamp, and
 `Crm/Incidents` reached the mesh 38 minutes after it was committed. Only the two malformed files are
 stuck, and they are stuck because their bytes have not changed since 2026-08-30, so every
 incremental update correctly skipped them.
