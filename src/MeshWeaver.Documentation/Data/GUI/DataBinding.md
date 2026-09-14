@@ -318,9 +318,17 @@ opposites:
 | `answers` (1 segment) | `/answers` | `SegmentCount == 1` ⇒ no id decode ⇒ **binds silently against the layout stream's own root** |
 
 🚨 **The crash is the lucky case.** The one-segment form reports nothing and reads — and through
-`BlazorView.UpdatePointer`, writes — to the wrong store: the layout stream's own `/data` replica
-instead of the node the view was meant to be bound to. That is the replicate-then-save outcome this
-page forbids above, reached by accident rather than by design.
+`BlazorView.UpdatePointer`, writes — against a ROOT path of the layout stream's own document
+(`/answers`, treated as a root collection) instead of the node the view was meant to be bound to.
+
+Be precise about which wrong place that is: it is **not** the area's `/data/{id}` replica.
+`LayoutAreaReference.GetDataPointer` builds `/data/"{id}"/…`, so a value in the data section is two
+segments deeper and JSON-encoded. A context-less relative pointer lands beside `/areas` and `/data`,
+at a root key the layout stream does not define — which is why the read yields nothing and the write
+creates a sibling of the document's real sections. Same class as the replicate-then-save outcome
+this page forbids above (a write that leaves the node it was bound to untouched), reached by
+accident rather than by design — but a different address, and diagnosing it against the `/data`
+storage model sends the reader to the wrong place.
 
 Two consequences:
 
