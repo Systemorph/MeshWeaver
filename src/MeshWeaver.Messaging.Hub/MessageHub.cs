@@ -183,6 +183,27 @@ public sealed class MessageHub : IMessageHub
             : disposeReason ?? DisposeRequest.ReasonNotStated;
 
     /// <summary>
+    /// 🚨 WHO and WHY as ONE sentence, for the teardown reports that have room for a clause and
+    /// not for two structured parameters — and for the NACK text a stranded sender reads
+    /// (<a href="https://github.com/Systemorph/MeshWeaver/issues/3712">#3712</a>).
+    ///
+    /// <para><b>Why this exists.</b> <c>[QUIESCE-START]</c> is the only line that carried the
+    /// attribution, it is <c>Information</c>, and the red-log pipeline files <c>Error</c>s. So the
+    /// <c>[DISPOSE-DISCARD]</c> Error — the one that becomes an ISSUE — ended with <i>"find why
+    /// this hub disposed before its deferred work could run"</i> while the hub holding that line
+    /// already knew the answer and printed it on a different line, at a level the incident never
+    /// captures. Measured on <c>Admin/_LogIncident/d2249f800ffc2577</c> (364 occurrences,
+    /// 2026-09-08 → 2026-09-14, 13 pods): every captured discard names the message, its sender and
+    /// the gates it sat behind, and NONE of them says which teardown threw it away.</para>
+    ///
+    /// <para>Never empty and never merely absent: a poster that stated nothing is reported as
+    /// having stated nothing, and a hub nobody asked about over the bus is reported as
+    /// <see cref="DirectDisposeSource"/>. Both are answers.</para>
+    /// </summary>
+    internal string DisposalAttribution =>
+        $"requested by {DisposalRequestedBy}; why: {DisposalReason}";
+
+    /// <summary>
     /// What this hub's hosted children are told when they go down with it. A hub that is itself
     /// part of a cascade passes the ORIGIN along unchanged, so the chain names the event that
     /// started it however deep the tree is — and the string cannot grow with depth.

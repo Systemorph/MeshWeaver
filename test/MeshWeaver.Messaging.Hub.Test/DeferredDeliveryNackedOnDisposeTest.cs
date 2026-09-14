@@ -178,6 +178,131 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             + "it as sender-is-self — an Error here alleges stranded work that has no waiter (#4178)");
     }
 
+    private static readonly Address AttributedAddress = new("attributed", "1");
+
+    private static readonly Address UnattributedAddress = new("unattributed", "1");
+
+    /// <summary>The sentence an operator-style recycle writes onto its <see cref="DisposeRequest"/>.</summary>
+    private const string TheStatedReason =
+        "MeshOperations.Recycle: an operator asked for this hub to be recycled";
+
+    /// <summary>
+    /// Systemorph/MeshWeaver#3712 — the discard Error ends with an instruction to <i>"find why this
+    /// hub disposed before its deferred work could run"</i>, and could not answer its own question.
+    ///
+    /// <para><b>The production shape.</b> <c>Admin/_LogIncident/d2249f800ffc2577</c>: 364
+    /// occurrences between 2026-09-08 and 2026-09-14 across 13 pods. Every captured line names the
+    /// message, its sender and the gates it sat behind — and not one says which teardown threw it
+    /// away, so a reader given the incident cannot tell an operator recycle from a NodeType rebind
+    /// from an owner's cascade. The hub HAS the answer: <c>disposeRequestedBy</c> /
+    /// <c>disposeReason</c> are recorded one frame earlier so <c>[QUIESCE-START]</c> can print them
+    /// (#3510's <i>"[QUIESCE-START] on a root should name who asked"</i>) — but that line is
+    /// <c>Information</c> and the red-log pipeline files <c>Error</c>s, so the one line that becomes
+    /// an ISSUE was the one line without the attribution.</para>
+    ///
+    /// <para><b>Both readers, not one.</b> The stranded SENDER is in another process as often as
+    /// not and can see no line of this hub's log at all, so the same clause goes into the NACK it
+    /// receives.</para>
+    /// </summary>
+    [Fact]
+    public async Task ADiscardedDeferredDelivery_NamesTheTeardownThatDiscardedIt()
+    {
+        var host = GetHost();
+
+        var gated = host.GetHostedHub(
+            AttributedAddress,
+            c => c.WithTypes(typeof(GatedRequest), typeof(GatedResponse))
+                .WithInitializationGate("attributed-gate-never-opens", _ => false)
+                .WithHandler<GatedRequest>((h, d) =>
+                {
+                    h.Post(new GatedResponse(), o => o.ResponseFor(d));
+                    return d.Processed();
+                }));
+        gated.Should().NotBeNull();
+
+        var response = host
+            .Observe<GatedResponse>(new GatedRequest(), o => o.WithTarget(AttributedAddress))
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        await WaitForDeferredBacklog(host);
+
+        // A routed DisposeRequest that STATES its reason — the shape every framework recycler
+        // uses, and, since this change, the shape MeshOperations.Recycle uses too.
+        host.Post(new DisposeRequest { Reason = TheStatedReason },
+            o => o.WithTarget(AttributedAddress));
+
+        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
+
+        // THE SUBJECT, reader 1 — the stranded sender.
+        failure.Failure!.Message.Should().Contain(host.Address.ToString(),
+            "the NACK must name WHO asked for the teardown: the sender cannot see this hub's log, "
+            + "so an answer that says only 'the hub went away' sends it to the wrong layer");
+        failure.Failure.Message.Should().Contain(TheStatedReason,
+            "and WHY, as the poster stated it — that sentence is the whole reason "
+            + "DisposeRequest.Reason exists");
+
+        // THE SUBJECT, reader 2 — the incident the red-log pipeline files.
+        log.At(LogLevel.Error).Should().Contain(
+            m => m.Contains(TheStatedReason, StringComparison.Ordinal)
+                 && m.Contains(host.Address.ToString(), StringComparison.Ordinal),
+            "event 7301 is the line that BECOMES the issue, and it told the reader to find a cause "
+            + "the same hub had already recorded");
+
+        // POSITIVE CONTROL — the gate name is still there. A rewrite that swapped one fact for
+        // another would otherwise read as a fix (#3789 put the gate names on this line).
+        log.At(LogLevel.Error).Should().Contain(
+            m => m.Contains("attributed-gate-never-opens", StringComparison.Ordinal),
+            "the attribution is ADDED to the report, never traded against the gate names");
+    }
+
+    /// <summary>
+    /// The control arm, and the reason the assertion above cannot be satisfied by a constant: a hub
+    /// taken down by a DIRECT <c>Dispose()</c> — host teardown, an owner's cascade, a <c>using</c> —
+    /// has no routed request to attribute, and that ABSENCE is itself the answer. It rules the
+    /// message path out, which is exactly what a reader of the production incident needed and could
+    /// not get. A rendering that printed a blank here, or that printed the same clause as the arm
+    /// above, would fail this.
+    /// </summary>
+    [Fact]
+    public async Task ADiscardWithNoRoutedRequest_SaysSO_RatherThanSayingNothing()
+    {
+        var host = GetHost();
+
+        var gated = host.GetHostedHub(
+            UnattributedAddress,
+            c => c.WithTypes(typeof(GatedRequest), typeof(GatedResponse))
+                .WithInitializationGate("unattributed-gate-never-opens", _ => false)
+                .WithHandler<GatedRequest>((h, d) =>
+                {
+                    h.Post(new GatedResponse(), o => o.ResponseFor(d));
+                    return d.Processed();
+                }));
+        gated.Should().NotBeNull();
+
+        var response = host
+            .Observe<GatedResponse>(new GatedRequest(), o => o.WithTarget(UnattributedAddress))
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        await WaitForDeferredBacklog(host);
+
+        // No routed DisposeRequest at all — the other half of the discriminator.
+        gated!.Dispose();
+
+        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
+
+        failure.Failure!.Message.Should().Contain("a direct Dispose()",
+            "no routed DisposeRequest brought this hub down, and saying so is what rules the "
+            + "message path out — the attribution must VARY with the cause, or it is decoration");
+        failure.Failure.Message.Should().NotContain(TheStatedReason,
+            "the negative control: if the clause were a constant, the arm above would pass having "
+            + "measured nothing");
+        failure.Failure.Message.Should().Contain("reason not stated by the caller",
+            "a poster that said nothing is reported as having said nothing — an absent answer that "
+            + "renders as a blank reads to the next person as 'there was nothing to report'");
+    }
+
     /// <summary>
     /// Polls the public disposal diagnostics (which report <c>deferred=&lt;N&gt;</c> per hub,
     /// walking hosted hubs) until something is parked. The gated hub is the only hub in this test
