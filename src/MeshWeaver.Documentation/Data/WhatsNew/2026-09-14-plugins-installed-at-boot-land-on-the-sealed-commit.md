@@ -26,7 +26,8 @@ The boot install now asks the seal first, exactly as the content sync does:
 - **Not sealed here** (a repository this portal runs no compiled module of) — it keeps installing
   from the configured branch, as before.
 - **Sealed but incomplete** — nothing is installed from that repository this boot. The portal says
-  so, and picks it up once the seal is whole; it never falls back to the branch.
+  so, and picks it up at the next restart after the seal is whole; it never falls back to the
+  branch.
 
 The symptom this removes: plugin content that appears, disappears and reappears across restarts,
 and node types that fail to compile because sources their record lists are not on the mesh.

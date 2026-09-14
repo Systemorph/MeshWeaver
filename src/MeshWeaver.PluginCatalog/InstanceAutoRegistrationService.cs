@@ -1399,20 +1399,44 @@ public sealed class InstanceAutoRegistrationService(
     /// nor reported as failed (a retry cannot change a seal; the seal landing can), and the pass
     /// says so at Warning and marks the listing incomplete so its silence is not read as "that
     /// source refuses nothing" (#4097).</para>
+    ///
+    /// <para>🚨 <b>A hold releases at the NEXT PROCESS START, everywhere.</b> This lane runs once
+    /// per boot, after the bake settles, and subscribes to neither
+    /// <c>PublicationSealArrivalService</c> nor <c>SealedPublicationSyncReconciler</c> —
+    /// deliberately (no timer, no retry, no watchdog). The sync side of the same partition DOES
+    /// follow a seal that arrives mid-process (MeshWeaver#4209); the two do not fight in between,
+    /// because this lane writes nothing again until it runs again, and then both are on the new
+    /// seal.</para>
     /// </summary>
     /// <param name="configured">The source as configured.</param>
     /// <returns>The candidates listed at the proven ref, or an empty, FAILED listing for a held
     /// source; the tuple shape every other listing outcome uses.</returns>
     private IObservable<(List<InstallCandidate> Candidates, bool Failed)> ListAtProvenRef(
         ConfiguredPackageSource configured)
+        => ProvenRef(configured)
+            .Catch((Exception exception) =>
+            {
+                // An unobserved seal is not a clean one: a read that faulted holds the source,
+                // exactly as a torn seal does — never a fall-through to the branch.
+                logger.LogWarning(exception,
+                    "[DefaultInstall] the seal for {Name} could not be read — its packages are "
+                    + "held this boot and re-attempted at the next process start; an unattended "
+                    + "install never resolves the branch instead (Doc/Architecture/SyncRefContract).",
+                    configured.Name);
+                return Observable.Return(new ProvenSource(configured, exception.Message, exception.Message));
+            })
+            .SelectMany(proven => ListAtProvenRef(configured, proven));
+
+    private IObservable<(List<InstallCandidate> Candidates, bool Failed)> ListAtProvenRef(
+        ConfiguredPackageSource configured, ProvenSource proven)
     {
-        var proven = ProvenRef(configured);
         if (proven.HoldReason is { } hold)
         {
             logger.LogWarning(
                 "[DefaultInstall] {Name} is HELD this boot — {Reason}. Its packages are not "
-                + "asserted until the seal lands; an unattended install never resolves the branch "
-                + "instead (Doc/Architecture/SyncRefContract).",
+                + "asserted this boot; this lane runs once per boot, so they are re-attempted at "
+                + "the next process start after the seal lands — an unattended install never "
+                + "resolves the branch instead (Doc/Architecture/SyncRefContract).",
                 configured.Name, hold);
             return Observable.Return((Candidates: new List<InstallCandidate>(), Failed: true));
         }
@@ -1449,30 +1473,49 @@ public sealed class InstanceAutoRegistrationService(
 
     /// <summary>
     /// The seal's answer for one configured source, as the source to list — pinned to the sealed
-    /// commit, left as configured, or held. Pure over its inputs once the seal is read; the read
-    /// itself is the same inline local-disk read every other caller of
-    /// <see cref="SealedPublicationIndex.ReadFor"/> makes (see
-    /// <c>ModuleDiscoveryService.FirstImportPlan</c> for why it is not pooled).
+    /// commit, left as configured, or held. Cold; the decision is pure once the seal is read.
+    ///
+    /// <para>🚨 The seal is read on the FileSystem <see cref="IIoPool"/>, never inline. The
+    /// published-bundle root is a mounted share, and a read of it that is not on the pool is
+    /// invisible to <see cref="IoPoolRegistry"/>'s teardown drain — it can still be running after
+    /// the mesh scope is gone, the straggler the pool exists to prevent — and would block whatever
+    /// thread the install chain happens to be on while the share is slow. Same shape, same pool as
+    /// <c>PublicationSealArrivalService</c>. A mesh with a published root but no pool registry is
+    /// not composed the way this needs; it keeps the configured ref and says so, rather than
+    /// running untracked I/O.</para>
     /// </summary>
     /// <param name="source">The source as configured.</param>
-    internal ProvenSource ProvenRef(ConfiguredPackageSource source)
+    /// <returns>A cold observable emitting exactly once.</returns>
+    internal IObservable<ProvenSource> ProvenRef(ConfiguredPackageSource source)
     {
         // A local checkout is a working tree this portal MIRRORS — there is no commit to pin and
         // the operator is the authority (MeshWeaver#3359). A source with no repository path (a
         // registered IPackageSource, a remote registry) names no repository a seal could be
         // attributed to. Both keep today's behaviour, by construction rather than by fall-through.
         if (source.LocalCheckout || string.IsNullOrWhiteSpace(source.RepoPath))
-            return new ProvenSource(source, null, "no repository to attribute a seal to");
+            return Observable.Return(new ProvenSource(source, null, "no repository to attribute a seal to"));
         var (owner, name) = ModuleDiscovery.SplitRepo(source.RepoPath);
         if (owner.Length == 0 || name.Length == 0)
-            return new ProvenSource(source, null,
-                $"'{source.RepoPath}' is not an owner/name repository, so no seal is attributable");
+            return Observable.Return(new ProvenSource(source, null,
+                $"'{source.RepoPath}' is not an owner/name repository, so no seal is attributable"));
+        var publishedRoot = hub.ServiceProvider.GetService<IConfiguration>()?[ShippedPrebuiltBundles.PublishedRootConfigKey];
+        if (string.IsNullOrWhiteSpace(publishedRoot))
+            return Observable.Return(new ProvenSource(source, null,
+                "this installation has no published bundle root, so no publication is sealed here"));
+        if (hub.ServiceProvider.GetService<IoPoolRegistry>() is not { } pools)
+        {
+            logger.LogWarning(
+                "[DefaultInstall] no IoPoolRegistry is registered, so the seal under {Root} cannot be "
+                + "read on a drained pool — not reading it; {Name} is listed at its configured ref "
+                + "'{Ref}'.", publishedRoot, source.Name, source.GitRef);
+            return Observable.Return(new ProvenSource(source, null, "the seal was not read: no IoPoolRegistry"));
+        }
         var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
-        var sealedForThisIdentity = SealedPublicationIndex.ReadFor(
-            hub.ServiceProvider.GetService<IConfiguration>()?[ShippedPrebuiltBundles.PublishedRootConfigKey],
-            identity, logger);
-        return ApplyPlan(source, SealedSyncGate.DecideFirstImport(
-            new RepoIdentity(owner, name), sealedForThisIdentity, identity));
+        var repo = new RepoIdentity(owner, name);
+        return pools.Get(IoPoolNames.FileSystem)
+            .InvokeBlocking(_ => SealedPublicationIndex.ReadFor(publishedRoot, identity, logger))
+            .Select(sealedForThisIdentity =>
+                ApplyPlan(source, SealedSyncGate.DecideFirstImport(repo, sealedForThisIdentity, identity)));
     }
 
     /// <summary>

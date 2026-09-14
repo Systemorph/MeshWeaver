@@ -342,10 +342,22 @@ rolls, and when it rolls the seal moves them together. A registry still *serves*
 configured ref over `/api/plugins` — that is a listing for a person to install from, and the
 consumer's own boot lane applies this rule on its side when it can attribute a seal.
 
-🚨 **A hold here has the same release condition as the first import's**, stated above: on an
-instance receiving no build webhooks it reduces to the next process start. It is deliberately not a
-failure — a retry cannot change a seal, the seal landing can — so it is neither ledgered as failed
-nor re-attempted in a loop.
+🚨 **A hold here releases at the NEXT PROCESS START — everywhere, not only on a webhook-less
+instance.** That is a narrower condition than the first import's: the boot lane runs once per boot,
+after the bake settles, and subscribes to neither `PublicationSealArrivalService` nor
+`SealedPublicationSyncReconciler`, deliberately (no timer, no retry, no watchdog — the class's own
+rule). A seal that completes mid-process is therefore installed at the next boot, and the log line
+says so in those words. The sync side of the same partition *does* follow that mid-process arrival
+(#4209), and the two do not fight in between: the boot lane writes nothing again until it runs
+again, and then both are on the new seal. The hold is deliberately not a failure — a retry cannot
+change a seal, the seal landing can — so it is neither ledgered as failed nor re-attempted in a loop.
+
+🚨 **The seal is read on the FileSystem `IIoPool`, never inline** — the published root is a mounted
+share, and a read of it off the pool is invisible to the registry's teardown drain and blocks
+whatever thread the install chain is on while the share is slow; `PublicationSealArrivalService`
+reads it the same way. A read that faults holds the source — an unobserved seal is not a clean one —
+and a mesh that has a published root but no pool registry keeps the configured ref and says so,
+rather than running untracked I/O.
 
 **Out-of-order builds can move a Space backwards.** Two green builds of one branch can finish out of
 order, so a later webhook may name an earlier commit — and it is imported, not skipped: GitHub's
