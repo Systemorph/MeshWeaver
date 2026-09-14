@@ -4,6 +4,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.Serialization;
 using MeshWeaver.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -527,6 +528,15 @@ public static class EditorExtensions
         }
 
 
+        if (PickableEnumType(propertyInfo.PropertyType) is { } enumType)
+            return editor.WithView((host, _) =>
+            {
+                // #4284: an enum had no branch here and the method returned `editor` unchanged —
+                // the property was silently DROPPED from the generated form.
+                var id = Guid.NewGuid().AsString();
+                host.UpdateData(id, ConvertEnumToOptions(enumType, ViewerLocaleOf(host)));
+                return RenderListControl(host, Controls.Select, jsonPointerReference, id);
+            });
         if (propertyInfo.PropertyType.IsNumber())
             return editor.WithView((host, _) => RenderControl(host, typeof(NumberFieldControl), propertyInfo, label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)));
         if (propertyInfo.PropertyType == typeof(string))
@@ -601,6 +611,14 @@ public static class EditorExtensions
         }
 
 
+        if (PickableEnumType(propertyInfo.PropertyType) is { } enumType)
+            return editor.WithView((host, _) =>
+            {
+                // #4284: same gap as the unskinned dispatch above — no branch, property dropped.
+                var id = Guid.NewGuid().AsString();
+                host.UpdateData(id, ConvertEnumToOptions(enumType, viewerLocale));
+                return RenderListControl(host, Controls.Select, jsonPointerReference, id).WithAriaLabel(propertySkinLabel);
+            }, skinConfiguration);
         if (propertyInfo.PropertyType.IsNumber())
             return editor.WithView((host, _) => RenderControl(host, typeof(NumberFieldControl), propertyInfo, label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(string))
@@ -1372,6 +1390,24 @@ public static class EditorExtensions
                 DefaultToFirst = meshNodeAttr.DefaultToFirst
             };
         }
+        else if (PickableEnumType(propType) is { } enumType)
+        {
+            // #4284: an enum matched none of the branches and landed in the TextFieldControl
+            // fallthrough — a free-text box for a closed set, where a typo binds to nothing and
+            // nothing shows the valid values. The same shape as #777, one property type over.
+            // MeshNodeContentEditorControl.FromType already renders an enum as a picker; this
+            // path now agrees with it. Options are stable-keyed like the dimension select so a
+            // rebuild of the control re-uses the same data slot instead of leaking one per edit.
+            var optionsId = $"enumOpts_{dataId}_{jsonPointer.Pointer}";
+            host.UpdateData(optionsId, ConvertEnumToOptions(enumType, ViewerLocaleOf(host)));
+            var selectCtrl = new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
+            {
+                Required = isRequired
+            };
+            editCtrl = isToggleable
+                ? selectCtrl.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId))
+                : selectCtrl;
+        }
         else if (propType.IsIntegerType() || propType.IsRealType())
         {
             var numCtrl = new NumberFieldControl(jsonPointer, typeRegistry.GetOrAddType(propType))
@@ -2009,6 +2045,34 @@ public static class EditorExtensions
             return opts.ToArray();
         return Array.Empty<Option>();
     }
+
+    /// <summary>
+    /// The enum behind a property type, nullable-unwrapped, when it should render as a picker; else
+    /// <c>null</c>. A <c>[Flags]</c> enum is a bit SET, not a closed list of one value, so a
+    /// single-select would be wrong for it — it keeps whatever the caller renders otherwise.
+    /// </summary>
+    private static Type? PickableEnumType(Type propType)
+    {
+        var t = Nullable.GetUnderlyingType(propType) ?? propType;
+        return t.IsEnum && !t.IsDefined(typeof(FlagsAttribute), inherit: false) ? t : null;
+    }
+
+    /// <summary>
+    /// One <see cref="Option"/> per enum member (#4284). The ITEM is the member's WIRE name — what
+    /// <c>EnumMemberJsonStringEnumConverter</c> writes for it, i.e. <c>[EnumMember(Value = …)]</c>
+    /// when declared, else the C# name — so the select binds to exactly the string the property
+    /// serializes to. The TEXT is the member's label through the same <c>[Display]</c> /
+    /// <c>[Translation]</c> / <c>[Description]</c> seam the field caption uses, so members read
+    /// localized rather than as raw identifiers, falling back to the name word-split.
+    /// </summary>
+    private static IReadOnlyCollection<Option> ConvertEnumToOptions(Type enumType, string? locale)
+        => enumType.GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Select(f => (Option)new Option<string>(
+                f.GetCustomAttribute<EnumMemberAttribute>()?.Value ?? f.Name,
+                f.GetCustomAttribute<DisplayAttribute>()?.Name
+                ?? f.LocalizedDescription(locale)
+                ?? f.Name.Wordify()))
+            .ToArray();
 
     private static IReadOnlyCollection<Option> ConvertDimensionToOptionsForToggle(InstanceCollection instances, ITypeDefinition dimType)
     {

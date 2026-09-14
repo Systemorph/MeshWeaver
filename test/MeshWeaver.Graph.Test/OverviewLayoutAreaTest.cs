@@ -3,6 +3,8 @@ using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Runtime.Serialization;
+using System.Collections.Generic;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -40,6 +42,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
                 .WithView(nameof(MarkdownOverviewView), MarkdownOverviewView)
                 .WithView(nameof(EditToggleView), EditToggleView)
                 .WithView(nameof(CollectionEditView), CollectionEditView)
+                .WithView(nameof(EnumEditView), EnumEditView)
                 .WithView(nameof(PreRenderedHtmlView), PreRenderedHtmlView)
                 .WithView(nameof(NoPreRenderedHtmlView), NoPreRenderedHtmlView));
     }
@@ -97,6 +100,20 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
 
         var prop = typeof(TestWithTags).GetProperty(nameof(TestWithTags.Tags))!;
         // isToggleable:false → renders directly in edit mode, so the EDIT control is what shows.
+        return host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit: true, host, isToggleable: false);
+    }
+
+    /// <summary>
+    /// An enum property in EDIT mode — the #4284 seam: its edit control must be a picker over the
+    /// members, never the free-text TextFieldControl fallthrough.
+    /// </summary>
+    private static UiControl EnumEditView(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var entity = new TestWithStatus { Id = "s1", Status = TestStatus.Answered };
+        var dataId = "enumEditData";
+        host.UpdateData(dataId, entity);
+
+        var prop = typeof(TestWithStatus).GetProperty(nameof(TestWithStatus.Status))!;
         return host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit: true, host, isToggleable: false);
     }
 
@@ -218,6 +235,45 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
 
         editControl.Should().BeOfType<LabelControl>(
             "a collection edit must be read-only; a bound text field would let one keystroke destroy the list");
+    }
+
+    [HubFact]
+    public async Task EnumProperty_EditControl_IsSelect_OverTheMembersWireNames()
+    {
+        var reference = new LayoutAreaReference(nameof(EnumEditView));
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), reference);
+
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Should().Within(5.Seconds()).Match(x => x != null);
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        var editAreaName = stack.Areas.Last().Area?.ToString();
+        editAreaName.Should().NotBeNullOrEmpty();
+
+        // isToggleable:false renders the EDIT control directly. #4284: an enum is a closed set, so
+        // the edit control is a picker — the TextFieldControl fallthrough let a typo bind to nothing
+        // and showed the user none of the valid values.
+        var editControl = await stream
+            .GetControlStream(editAreaName!)
+            .Should().Within(5.Seconds()).Match(c => c is not null);
+
+        var select = editControl.Should().BeOfType<SelectControl>(
+            "an enum edit is a choice among its members, not free text").Subject;
+        var optionsPointer = select.Options.Should().BeOfType<JsonPointerReference>().Subject;
+
+        var options = await stream
+            .GetDataStream<IReadOnlyCollection<Option>>(optionsPointer)
+            .Should().Within(5.Seconds()).Match(o => o is { Count: > 0 });
+
+        // The ITEM is the wire name — what the enum serializes to — so the select binds to the
+        // stored value: the [EnumMember] value where declared, the C# name otherwise.
+        options.Select(o => ((Option<string>)o).Item).Should().Equal("Open", "Answered", "on-hold");
+        // The TEXT is the localized label through the same seam as the field caption, falling back
+        // to the wordified member name.
+        options.Select(o => o.Text).Should().Equal("Open", "Answered (done)", "Deferred");
     }
 
     [HubFact]
@@ -381,6 +437,32 @@ public record TestDocument
 
     [UiControl<MarkdownEditorControl, MarkdownControl>(SeparateEditView = true)]
     public string Content { get; init; } = "";
+}
+
+/// <summary>The closed set behind <see cref="TestWithStatus.Status"/> — one member per label
+/// source the picker must honour: bare name, <c>[Description]</c>, and an <c>[EnumMember]</c>
+/// wire name that differs from the C# name.</summary>
+public enum TestStatus
+{
+    Open = 1,
+
+    [Description("Answered (done)")]
+    Answered,
+
+    [EnumMember(Value = "on-hold")]
+    Deferred,
+}
+
+/// <summary>
+/// Test entity with an enum property — the #4284 regression seam: its Edit control must be a
+/// picker over the members, never the free-text fallthrough.
+/// </summary>
+public record TestWithStatus
+{
+    [Key]
+    public string Id { get; init; } = "";
+
+    public TestStatus Status { get; init; }
 }
 
 /// <summary>
