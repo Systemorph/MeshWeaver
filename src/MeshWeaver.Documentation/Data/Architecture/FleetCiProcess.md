@@ -72,7 +72,7 @@ into plain rows and drops the superseded gate rows (the roster is a measurement,
 is NOT converged: the admission front door is still Plugins' own `admission` job; the satellites
 have no build-queue admission until `node-repo-admission.yml` exists.
 
-## Two rules learned the same day
+## The freeze is a POSITIONAL instrument — four rules, each paid for once
 
 **The pack receipt and the tests matrix must agree.** The module-pack lane's `test-modules` input
 narrows which selected modules run their suite. The `select` job cut the tests-lane matrix by that
@@ -82,7 +82,7 @@ rightly refused "the suite ran in NEITHER lane". Core #4203: the plan step narro
 in the same order (the ledger's REUSE answer first), and the receipt says `tests: none` for a module
 the caller did not name.
 
-**A freeze is not a pin, and lifting it can move pull requests BACKWARDS.** Plugins'
+**1. A freeze is not a pin, and lifting it can move pull requests BACKWARDS.** Plugins'
 `MW_PLATFORM_REF` selects one sealed set for every lane. With it unset, a `push` or `pull_request`
 run resolves *the newest sealed set this repository's `main` has passed* — measured 2026-09-13
 18:01Z: "3.0.0-ci.8484 … 25 newer run(s) passed over" while 8506 was sealed, because Plugins' main
@@ -93,3 +93,32 @@ an explicit set in the freeze and move it forward by hand; lift only once main i
 newest set. The twin-parity guard (`TeardownTwinParityTest`) adds the ordering: the set carrying the
 core change seals → the freeze moves → the Plugins port lands under it; every other branch that runs
 in between reds once on the guard and re-runs after merging main.
+
+**2. The value must name the NEWEST SEALED set, because that is what the runners hold.** The CI
+runners mount `/opt/platform` read-only, and a CronJob refreshes it every ten minutes with *the
+newest sealed set* (Memex `deployments/aks/ci-runners/ci-platform-refresh.py`). Pin anything else
+and every heavy leg misses the mount, falls back to pulling the image, and that pull fails:
+`could not pull meshweaver.azurecr.io/memex-portal-ai@sha256:… for the registry fallback`, with
+`the platform mount at /opt/platform holds no COMPLETE set for the run's tester digest` beside it.
+That is what held Plugins `main` red on the evening of 2026-09-13 while the freeze named `8506`.
+
+**3. Until Plugins#1809 a freeze had to be a git REF.** The three image lanes handed
+`MW_PLATFORM_REF` straight to `actions/checkout`, so a set name died on
+`+refs/heads/3.0.0-ci.8506*:… exit 1` and every image lane was down from the moment the variable
+was set. The core sha of the set satisfied both readers; since #1809 the lanes translate a set name
+through `resolve-platform.py` themselves.
+
+**4. `rerun-failed-jobs` REUSES the run's original platform resolution.** After a newer set seals,
+re-running the failed jobs changes nothing — measured on Plugins#1816, which failed the same three
+catalog assertions twice across a seal. Re-run the WHOLE workflow so `Resolve the released platform`
+runs again.
+
+**The deadlock they produce, and how to break it.** `main` red → no green main run → every pull
+request resolves an old set → the pull request that would FIX main is itself red on that old set.
+Measured 2026-09-13 23:44Z: Plugins#1822 (the one-line fix restoring publication) died on
+`KeyVaultSecretRef.CopyFrom` — a symbol `main` had required since #1541 merged at 22:24Z and which
+the resolved set predated. **Break it by pinning the newest sealed set, never by waiting for main.**
+
+So: setting a freeze, moving it and clearing it all need two things in view at once — the colour of
+`main` and the set the mount carries. A cleared freeze is not a neutral state; it is a decision to
+follow whatever `main` last passed.
