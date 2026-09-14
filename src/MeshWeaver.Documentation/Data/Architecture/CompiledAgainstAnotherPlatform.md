@@ -44,7 +44,10 @@ The gap is narrower, and it is a gap of *target*, not of coverage:
 
 Both portals answered `3.0.0+c84c6c05503228860df03c4a8b596e497e6d218c` to ten `/api/version` samples
 that day (six on memex.meshweaver.cloud, four on memex.systemorph.com), so this was not one unlucky
-replica.
+replica. And the direction was settled on the **surface**, not on ancestry, exactly as the procedure
+below asks: `PlanTierRefusal.cs` is a file `00fa2b69f9` ADDED, and `git cat-file -e
+c84c6c055:src/MeshWeaver.Mesh.Contract/Security/PlanTierRefusal.cs` reports it **absent** at the
+running commit.
 
 **Blast radius**, from the incident's retained samples (ten, against `occurrences: 68`, between
 06:59:28Z and 11:26:05Z, across three pods): `Store/Catalog`, `Store/Plugin`, `Store/Enrollment`,
