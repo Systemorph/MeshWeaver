@@ -215,8 +215,10 @@ public class DefaultNodeNavigationTest
         var faults = new List<Exception>();
         var boom = new InvalidOperationException("the provider refused the query");
 
-        var seen = DefaultNodeNavigation.Guard(Observable.Throw<NodeNavigation?>(boom), faults.Add)
-            .ToList().Wait();
+        // Observable.Throw faults synchronously on subscribe, so a plain subscription collects the
+        // whole sequence — no blocking bridge (the test ratchet refuses .Wait()/.Result on an observable).
+        var seen = new List<NodeNavigation?>();
+        using var _ = DefaultNodeNavigation.Guard(Observable.Throw<NodeNavigation?>(boom), faults.Add).Subscribe(seen.Add);
 
         seen.Should().Equal([null, null], "the immediate null, then 'no index' for the fault — never an error into the page");
         faults.Should().Equal([boom], "the fault is seen (logged) before it is swallowed");
