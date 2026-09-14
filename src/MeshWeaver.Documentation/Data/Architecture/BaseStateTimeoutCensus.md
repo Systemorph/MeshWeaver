@@ -1,7 +1,7 @@
 ---
 Name: Reading a Base-State Timeout
 Category: Architecture
-Description: "no initial state arrived for '…' within 30s" has two completely different causes with two completely different fixes, and until #1174 the log could not tell them apart. The census that does, and how to read one in production.
+Description: "no initial state arrived for '…' within 30s" has two shapes with two different fixes, and until #1174 the log could not tell them apart. The census that does, what its zero branch deliberately does NOT claim, and how to read one in production.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M3.5 8.5h3"/></svg>
 ---
 
@@ -27,20 +27,30 @@ There are exactly two shapes of silence, and they are different defects:
 
 | what the mirror did | what it means | where to look |
 |---|---|---|
-| **produced NO change item at all** | the owning per-node hub never answered the subscribe | its ACTIVATION and ROUTING — a saturated owner action block, a delivery that never arrived |
-| **produced N change items, none carrying the node** | the owner IS answering; its view of this path is EMPTY | the node's readability FROM THE OWNER — the initial read's identity/RLS, or a `MeshDataSource` that did not load it |
+| **NO change item at all** | no snapshot ever hydrated into the mirror | still BOTH — the owner's activation/routing AND its initial read |
+| **N change items, none carrying the node** | frames ARE arriving, so the subscription is established and producing, and the owner's view of this path is EMPTY | the node's readability FROM THE OWNER — the initial read's identity/RLS, or a `MeshDataSource` that did not load it |
 
-🚨 **The first row rules the node's content and its grants OUT, not in.** An absent node, and one the
-reader may not see, both still produce a change item that carries no node — that is what the
-null-filter exists for. So "no emission at all" is never suspects (1)–(3); it is the owner not being
-reachable, or not getting a turn.
+🚨 **The zero branch does NOT mean "the owner never answered", and the message must not say it
+does.** This seam observes `ChangeItem` frames, not the subscribe acknowledgement — and a FRESH
+stream `Ack()`s immediately and deliberately, BEFORE its first `Full` comes out of the reduce's own
+hydration (`JsonSynchronizationStream`, #3058, whose comment says so in as many words: *"its first
+Full comes out of the reduce's own hydration, which is IO-bound and unbounded (a cold data source, a
+per-node hub activating)"*). So an owner that acknowledged and then produced no frame is
+indistinguishable here from one that never answered at all, and an initial read that yielded nothing
+looks the same again.
+
+**Branch two is the one that EXCLUDES something.** Frames arriving is positive evidence that the
+subscription is established and producing, which takes routing and activation off the table and
+leaves readability at the owner. Branch one narrows nothing away — it only says the mirror stayed
+empty, which is worth knowing precisely because branch two is then ruled out.
 
 The base read now measures which row it is in and says so, appended to the caller's sentence:
 
 ```
 … or (4) the per-node hub activated but its MeshDataSource didn't load the node from persistence.
-The mirror produced 4 change item(s) inside the bound (last Version=0) and NONE of them carried
-the node: the owner IS answering and its view of this path is EMPTY. …
+4 change item(s) reached the mirror inside the bound (last Version=0) and NONE of them carried the
+node: frames ARE arriving, so the subscription is established and producing, and the owner's view
+of this path is EMPTY. …
 ```
 
 The census is one counter per **subscription**, incremented UPSTREAM of the null-filter while the
@@ -102,7 +112,9 @@ load. Measured 2026-09-14 on `memex-cloud`: 414 occurrences of this abort since 
   Cold paths do not appear.
 
 Which half of the fork that population is in was not decidable from any line the portal emitted,
-which is why this page exists. The next occurrence says so in its own message.
+which is why this page exists. The next occurrence says so in its own message — and, if it is the
+zero branch, says in the same sentence that it has not decided between an unreachable owner and one
+whose hydration produced nothing.
 
 ## Related
 

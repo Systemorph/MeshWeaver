@@ -133,17 +133,24 @@ public class BaseReadBoundIsReachableTest
     }
 
     /// <summary>
-    /// 🚨 ISSUE #1174 — THE FORK. The two faults above are completely different defects with
-    /// completely different fixes, and until now they raised the SAME bare
-    /// <c>TimeoutException("The operation has timed out.")</c> as the inner of the same
-    /// four-suspect caller sentence. 414 production occurrences over five weeks on
-    /// <c>{user}/_UserActivity/*</c> could therefore not be attributed to either half: triage
-    /// cycled between "RLS rejected the create" (case 2's shape) and "the silo is starved"
-    /// (case 1's shape) with nothing in the log able to decide.
+    /// 🚨 ISSUE #1174 — THE FORK. The two faults above are different shapes with different fixes,
+    /// and until now they raised the SAME bare <c>TimeoutException("The operation has timed
+    /// out.")</c> as the inner of the same four-suspect caller sentence. 414 production
+    /// occurrences over five weeks on <c>{user}/_UserActivity/*</c> could therefore not be
+    /// attributed: triage cycled between "RLS rejected the create" and "the silo is starved" with
+    /// nothing in the log able to separate "the mirror carried nothing at all" from "the mirror
+    /// carried frames, none of them the node".
+    ///
+    /// <para>🚨 It also asserts the HONESTY of the zero branch. This seam observes
+    /// <c>ChangeItem</c> frames, NOT the subscribe acknowledgement, and a fresh stream
+    /// <c>Ack()</c>s immediately — before its first <c>Full</c> comes out of hydration
+    /// (<c>JsonSynchronizationStream</c>, #3058). So zero frames does not mean the owner was
+    /// silent, and a message that said so would rule out exactly the causes a reader must still
+    /// consider.</para>
     ///
     /// <para>This asserts the two messages DISAGREE and that each names its own half. If the
     /// census were removed, or counted downstream of the null-filter, both would read "no change
-    /// item at all" and this test goes red on the <c>NotBe</c> and on the second
+    /// item at all" and this test goes red on the <c>NotBe</c> and on the count
     /// <c>Contain</c>.</para>
     /// </summary>
     [Fact]
@@ -163,18 +170,21 @@ public class BaseReadBoundIsReachableTest
         chatty.Error.Should().BeAssignableTo<TimeoutException>();
 
         silent.Error!.Message.Should().Contain("NO change item at all",
-            "a mirror that never spoke means the OWNER never answered the subscribe — the node's "
-            + "content and its grants cannot be the cause, because an absent node and an "
-            + "unreadable one both still produce a change item carrying no node");
-        silent.Error.Message.Should().Contain("ACTIVATION and ROUTING",
-            "naming the fault is only half of it; the message has to name the direction to look in");
+            "a mirror that carried nothing is the fact the census reports for this branch");
+        silent.Error.Message.Should().Contain("does NOT establish",
+            "🚨 and it must SAY it cannot decide. A fresh subscribe is ACKNOWLEDGED BEFORE "
+            + "hydration (JsonSynchronizationStream, #3058), so an owner that acked and then "
+            + "produced no frame is indistinguishable here from one that never answered — this "
+            + "seam sees ChangeItem frames, not acknowledgements. Claiming 'the owner never "
+            + "answered' would send a reader away from a cold data source, an activating per-node "
+            + "hub, or a refused initial read");
 
         chatty.Error!.Message.Should().Contain("4 change item(s)",
-            "the census is the measurement — four emissions landed inside the bound, and the "
-            + "number is what tells a reader the owner was alive and talking");
+            "the census is the measurement — four frames landed inside the bound, and the number "
+            + "is what tells a reader the subscription was established and producing");
         chatty.Error.Message.Should().Contain("view of this path is EMPTY",
-            "an owner that answers with nothing is a READABILITY fault at the owner, not a "
-            + "routing or activation one");
+            "THIS is the branch that excludes something: frames are arriving, so the fault is the "
+            + "node's readability at the owner, not routing or activation");
 
         chatty.Error.Message.Should().NotBe(silent.Error.Message,
             "🚨 this is the whole of #1174: the two faults used to be indistinguishable in the "

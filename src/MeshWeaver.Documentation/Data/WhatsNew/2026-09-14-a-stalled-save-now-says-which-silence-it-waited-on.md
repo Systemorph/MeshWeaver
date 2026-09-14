@@ -12,18 +12,21 @@ A save to a node this part of the portal does not own begins by reading the node
 from its owner. When that read runs out its 30-second budget, the save is abandoned and reported —
 and until now the report listed four possible causes and could not tell you which one it was.
 
-There are really only two, and they are opposites:
+There are really only two shapes:
 
-- **The owner never said anything.** It was not reachable, or it never got a turn. The node's
-  content and who may read it are then irrelevant — a node that does not exist, and one the reader
-  is not allowed to see, both still produce an answer that carries nothing.
-- **The owner answered, repeatedly, and its view of that node was empty.** Now it *is* about the
-  node — whether the owner could read it at all.
+- **Nothing came back at all.** No snapshot of the node ever arrived.
+- **Answers came back, repeatedly, and none of them carried the node.** The connection to the
+  owner is working and producing — so the question is whether the owner could read that node at all.
 
 The message now says which, in one sentence, with the number of answers it saw:
 
-> The mirror produced 4 change item(s) inside the bound and NONE of them carried the node: the owner
-> IS answering and its view of this path is EMPTY.
+> 4 change item(s) reached the mirror inside the bound and NONE of them carried the node: frames ARE
+> arriving, so the subscription is established and producing, and the owner's view of this path is
+> EMPTY.
+
+The second shape is the one that narrows the search. The first deliberately says that it has *not*
+decided anything further — an owner that is unreachable and one that answered and then had nothing
+to send look the same from here, and a message that picked one would send the reader the wrong way.
 
 Nothing about the wait itself changed — the same budget, no retry, no extra work on the normal path.
 Only the report is different, and only when it is the wait itself that ran out: an error that came

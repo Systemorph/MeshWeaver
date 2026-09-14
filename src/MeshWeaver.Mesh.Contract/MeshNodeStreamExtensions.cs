@@ -194,22 +194,29 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// <para>Static, with the mirror and the scheduler as seams, so the rule is asserted
     /// deterministically — no hub, no cluster, no wall clock.</para>
     ///
-    /// <para>🚨 <b>And it says WHICH silence it timed out on — issue #1174.</b> Two completely
-    /// different faults end this wait, and until now they raised the SAME bare
+    /// <para>🚨 <b>And it says WHICH silence it timed out on — issue #1174.</b> Two different
+    /// shapes end this wait, and until now they raised the SAME bare
     /// <c>TimeoutException("The operation has timed out.")</c>:</para>
     /// <list type="number">
-    ///   <item><description><b>No emission at all.</b> The owner never answered the subscribe —
-    ///     its activation never happened, the delivery never reached it, or its action block is
-    ///     saturated. The node's content and its RLS grants are IRRELEVANT here: a node that does
-    ///     not exist, or one the reader may not see, still produces an emission carrying no
+    ///   <item><description><b>No change item at all</b> — no snapshot ever hydrated into the
+    ///     mirror.</description></item>
+    ///   <item><description><b>Change items that never carry the node</b> — frames ARE arriving,
+    ///     so the subscription is established and producing, and the owner's view of this path is
+    ///     EMPTY: the initial read was refused, or its <c>MeshDataSource</c> did not load the
     ///     node.</description></item>
-    ///   <item><description><b>Emissions that never carry the node.</b> The owner IS answering and
-    ///     its view of this path is EMPTY — the initial read was refused or its
-    ///     <c>MeshDataSource</c> did not load the node.</description></item>
     /// </list>
-    /// <para>The caller's sentence lists four suspects and cannot pick between them, which is why
-    /// #1174 cycled between "RLS rejected the create" and "the silo is starved" for five weeks over
-    /// 414 production occurrences without either being testable. The census is one interlocked
+    /// <para>🚨 <b>What the FIRST branch does NOT say.</b> It is not "the owner never answered the
+    /// subscribe", and the message must not claim it is. A FRESH stream <c>Ack()</c>s IMMEDIATELY
+    /// and deliberately, BEFORE its first <c>Full</c> comes out of the reduce's own hydration
+    /// (<c>JsonSynchronizationStream</c>, #3058) — so an owner that acknowledged and then produced
+    /// no frame (a cold data source, a per-node hub still activating, an initial read that yielded
+    /// nothing) is indistinguishable HERE from one that never answered at all. This seam observes
+    /// <c>ChangeItem</c> frames, not acknowledgements. The census NARROWS the caller's four
+    /// suspects; branch two is the one that excludes something.</para>
+    /// <para>That is still the distinction #1174 needed and did not have: it cycled between "RLS
+    /// rejected the create" and "the silo is starved" for five weeks over 414 production
+    /// occurrences with nothing in the log able to separate "the mirror carried nothing at all"
+    /// from "the mirror carried frames, none of them the node". The census is one interlocked
     /// counter per SUBSCRIPTION (hence the <c>Observable.Defer</c> — <c>RebaseSource</c>/<c>Take(1)</c>
     /// may resubscribe, and a shared counter would report a previous attempt's traffic), so it
     /// costs one increment per mirror emission and nothing else.
@@ -276,16 +283,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         /// </summary>
         internal static string Describe(int mirrorEmissions, long lastVersion)
             => mirrorEmissions == 0
-                ? "The mirror produced NO change item at all inside the bound: the owning per-node "
-                  + "hub never answered the subscribe. Look at its ACTIVATION and ROUTING (a "
-                  + "saturated owner action block, a delivery that never arrived), not at the "
-                  + "node's content or its grants — an absent node, and one the reader may not "
-                  + "see, both still produce a change item that carries no node."
-                : $"The mirror produced {mirrorEmissions} change item(s) inside the bound (last "
-                  + $"Version={lastVersion}) and NONE of them carried the node: the owner IS "
-                  + "answering and its view of this path is EMPTY. Look at the node's readability "
-                  + "FROM THE OWNER — the initial read's identity/RLS, or a MeshDataSource that "
-                  + "did not load it — not at routing.";
+                ? "NO change item at all reached the mirror inside the bound — no snapshot ever "
+                  + "hydrated. This does NOT establish that the owner never answered: a fresh "
+                  + "subscribe is ACKNOWLEDGED BEFORE hydration, so an owner that acked and then "
+                  + "produced no frame (a cold data source, a per-node hub still activating, an "
+                  + "initial read that yielded nothing) reads identically here. Both the owner's "
+                  + "activation/routing AND its initial read are still in scope."
+                : $"{mirrorEmissions} change item(s) reached the mirror inside the bound (last "
+                  + $"Version={lastVersion}) and NONE of them carried the node: frames ARE "
+                  + "arriving, so the subscription is established and producing, and the owner's "
+                  + "view of this path is EMPTY. Look at the node's readability FROM THE OWNER — "
+                  + "the initial read's identity/RLS, or a MeshDataSource that did not load it — "
+                  + "not at routing.";
     }
 
     /// <summary>
