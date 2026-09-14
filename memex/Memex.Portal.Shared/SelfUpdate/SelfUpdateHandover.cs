@@ -155,9 +155,17 @@ public class SelfUpdateHandover
         bool SecretPresent,
         bool LocalTargetListed,
         bool LocalSecretPresent,
-        string? Instance,
-        UrlSource UrlFrom = UrlSource.None,
-        string? LocalSecretKey = null);
+        string? Instance)
+    {
+        /// <summary>Which key <see cref="Url"/> came from. An init-only PROPERTY, not a seventh
+        /// positional parameter: adding one to a public record's primary constructor — even with a
+        /// default — replaces the signature every compiled caller binds to (the #2274 shape).</summary>
+        public UrlSource UrlFrom { get; init; } = UrlSource.None;
+
+        /// <summary>The <c>SecretConfigKey</c> the listed local target declares; null when it is not
+        /// listed or declares none. A property for the same reason as <see cref="UrlFrom"/>.</summary>
+        public string? LocalSecretKey { get; init; }
+    }
 
     /// <summary>The wire body of one announcement — the control plane's inbox contract.</summary>
     public sealed record Announcement
@@ -215,8 +223,11 @@ public class SelfUpdateHandover
     /// <summary>
     /// The route the settings admit: <see cref="Route.Post"/> needs a record id, an inbox URL and
     /// the signing secret; <see cref="Route.Local"/> needs a record id, the target listed on this
-    /// instance and the target's secret present. A POST is preferred when both are possible — an
-    /// instance that declares a control inbox is a consumer, whatever it also lists. Pure.
+    /// instance, the target's DECLARED <c>SecretConfigKey</c> and that key's secret present — the
+    /// key is required by the route itself, not only by the reader, so a caller that assembles
+    /// <see cref="Settings"/> by hand cannot reach local delivery without one. A POST is preferred
+    /// when both are possible — an instance that declares a control inbox is a consumer, whatever
+    /// it also lists. Pure.
     /// </summary>
     public static Route RouteFor(Settings settings)
     {
@@ -224,7 +235,7 @@ public class SelfUpdateHandover
             return Route.None;
         if (settings.Url is { Length: > 0 } && settings.SecretPresent)
             return Route.Post;
-        if (settings.LocalTargetListed && settings.LocalSecretPresent)
+        if (settings.LocalTargetListed && settings.LocalSecretKey is { Length: > 0 } && settings.LocalSecretPresent)
             return Route.Local;
         return Route.None;
     }
@@ -306,9 +317,11 @@ public class SelfUpdateHandover
             Setting(SecretKey).Length > 0,
             local is not null,
             localSecretKey is not null && Setting(localSecretKey).Length > 0,
-            string.IsNullOrWhiteSpace(instance) ? null : instance.Trim(),
-            source,
-            localSecretKey);
+            string.IsNullOrWhiteSpace(instance) ? null : instance.Trim())
+        {
+            UrlFrom = source,
+            LocalSecretKey = localSecretKey,
+        };
     }
 
     private static WebhookInbox.WebhookTarget? LocalTarget(IConfiguration? configuration) =>
@@ -372,14 +385,16 @@ public class SelfUpdateHandover
             // still drop the event; an unparseable body is an inbox this sender does not know. Both
             // are FAILED hand-overs that name what came back, never a recorded success.
             var answer = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            var verdict = SignatureStatusOf(answer);
-            if (verdict != "verified")
+            var (status, verdict) = InboxAnswerOf(answer);
+            if (status != "accepted" || verdict != "verified")
                 throw new SelfUpdateHandoverRejectedException(
-                    $"the control inbox at {url} answered {(int)response.StatusCode} but did not VERIFY the "
-                    + $"signature (signature: {verdict ?? "unreadable"}) — "
+                    $"the control inbox at {url} answered {(int)response.StatusCode} but did not report an ACCEPTED, "
+                    + $"VERIFIED delivery (status: {status ?? "unreadable"}, signature: {verdict ?? "unreadable"}) — "
                     + (verdict == "not-required"
                         ? $"the control instance declares no {WebhookInbox.SecretConfigKeyName} for {InboxTarget}, so the event was stored unverified"
-                        : "the answer is not the inbox contract"));
+                        : status is null && verdict is null
+                            ? "the answer is not the inbox contract"
+                            : "the inbox did not accept the event as a verified delivery"));
             return new Outcome(Route.Post, url, $"accepted ({(int)response.StatusCode}), signature verified");
         });
     }
@@ -410,26 +425,31 @@ public class SelfUpdateHandover
     }
 
     /// <summary>
-    /// The <c>signature</c> field of the inbox's answer (<c>{"status":"accepted","signature":"verified"}</c>),
-    /// or null when the body is not that contract. Pure.
+    /// The inbox's answer, both halves (<c>{"status":"accepted","signature":"verified"}</c>): the
+    /// <c>status</c> and the <c>signature</c> fields, each null when absent or when the body is not
+    /// that contract. A hand-over needs BOTH — <c>accepted</c> AND <c>verified</c>: a verified
+    /// signature on a delivery the inbox did not accept is not a delivery. Pure.
     /// </summary>
-    public static string? SignatureStatusOf(string? answer)
+    public static (string? Status, string? Signature) InboxAnswerOf(string? answer)
     {
         if (string.IsNullOrWhiteSpace(answer))
-            return null;
+            return (null, null);
         try
         {
             using var doc = JsonDocument.Parse(answer);
-            return doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("signature", out var signature)
-                && signature.ValueKind == JsonValueKind.String
-                    ? signature.GetString()
-                    : null;
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return (null, null);
+            return (Field(doc.RootElement, "status"), Field(doc.RootElement, "signature"));
         }
         catch (JsonException)
         {
-            return null;
+            return (null, null);
         }
+
+        static string? Field(JsonElement root, string name) =>
+            root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
     }
 }
 

@@ -177,6 +177,22 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
         content.HandedOverTag.Should().BeNull("an unverified delivery is not a hand-over");
     }
 
+    /// <summary>🚨 A verified signature on a delivery the inbox did NOT accept is not a delivery: both
+    /// halves of the answer are required before a hand-over is recorded.</summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AnInboxThatVerifiesButDoesNotAccept_IsAFailedHandover()
+    {
+        await Seed(UpdatePolicyKind.Continuous);
+        var inbox = new FakeControlInbox(HttpStatusCode.OK, "{\"status\":\"rejected\",\"signature\":\"verified\"}");
+        var updater = new RecordingUpdater();
+
+        var content = await RunOneCheck(updater, inbox, chartCanPatch: false, PostSettings());
+
+        updater.Tags.Should().BeEmpty();
+        content.LastCheckVerdict.Should().Contain("hand-over to the control lane FAILED").And.Contain("rejected");
+        content.HandedOverTag.Should().BeNull();
+    }
+
     /// <summary>No control inbox and no self-patch: detect-only, and the verdict names the KEY that
     /// would make this a control-lane install — the state build sat in on 2026-09-12 with nothing
     /// saying why.</summary>

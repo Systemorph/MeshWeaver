@@ -58,11 +58,18 @@ public class SelfUpdateHandoverTest
     }
 
     [Fact]
-    public void TheControlInstanceDeliversLocally_OnlyWithItsTargetListedAndItsSecretPresent()
+    public void TheControlInstanceDeliversLocally_OnlyWithItsTargetListedDeclaringAKeyWhoseSecretIsPresent()
     {
-        SelfUpdateHandover.RouteFor(new(Deployment, null, false, true, true, null)).Should().Be(Route.Local);
-        SelfUpdateHandover.RouteFor(new(Deployment, null, false, true, false, null)).Should().Be(Route.None);
-        SelfUpdateHandover.RouteFor(new(Deployment, null, false, false, true, null)).Should().Be(Route.None);
+        SelfUpdateHandover.RouteFor(new(Deployment, null, false, true, true, null) { LocalSecretKey = "Hosting:PlatformWebhookSecret" })
+            .Should().Be(Route.Local);
+        SelfUpdateHandover.RouteFor(new(Deployment, null, false, true, false, null) { LocalSecretKey = "Hosting:PlatformWebhookSecret" })
+            .Should().Be(Route.None);
+        SelfUpdateHandover.RouteFor(new(Deployment, null, false, false, true, null) { LocalSecretKey = "Hosting:PlatformWebhookSecret" })
+            .Should().Be(Route.None);
+        // 🚨 The route itself requires the DECLARED key: settings assembled by hand as "listed and
+        // present" with no key must not reach local delivery either.
+        SelfUpdateHandover.RouteFor(new(Deployment, null, false, true, true, null)).Should().Be(Route.None,
+            "a listed target without a declared SecretConfigKey is an unsigned target — the route, not only the reader, refuses it");
     }
 
     /// <summary>The missing sentence names the KEY that was actually read — never a value, and never
@@ -74,13 +81,13 @@ public class SelfUpdateHandoverTest
         SelfUpdateHandover.Missing(new(Deployment, InboxUrl, true, false, false, null)).Should().BeNull();
         SelfUpdateHandover.Missing(new(Deployment, null, false, false, false, null))
             .Should().Contain(SelfUpdateHandover.UrlKey).And.Contain(SelfUpdateHandover.ReportToKey);
-        SelfUpdateHandover.Missing(new(Deployment, InboxUrl, false, false, false, null, SelfUpdateHandover.UrlSource.Declared))
+        SelfUpdateHandover.Missing(new(Deployment, InboxUrl, false, false, false, null) { UrlFrom = SelfUpdateHandover.UrlSource.Declared })
             .Should().Contain(SelfUpdateHandover.UrlKey).And.Contain(SelfUpdateHandover.SecretKey)
             .And.NotContain(InboxUrl.Substring(8, 5), "no value is repeated, only keys");
-        SelfUpdateHandover.Missing(new(Deployment, InboxUrl, false, false, false, null, SelfUpdateHandover.UrlSource.Derived))
+        SelfUpdateHandover.Missing(new(Deployment, InboxUrl, false, false, false, null) { UrlFrom = SelfUpdateHandover.UrlSource.Derived })
             .Should().Contain(SelfUpdateHandover.ReportToKey).And.Contain(SelfUpdateHandover.SecretKey)
             .And.NotContain(SelfUpdateHandover.UrlKey, "the operator never set the declared URL key — blaming it sends them to the wrong line");
-        SelfUpdateHandover.Missing(new(Deployment, null, false, true, false, null, SelfUpdateHandover.UrlSource.None, "Hosting:PlatformWebhookSecret"))
+        SelfUpdateHandover.Missing(new(Deployment, null, false, true, false, null) { LocalSecretKey = "Hosting:PlatformWebhookSecret" })
             .Should().Contain("Hosting:PlatformWebhookSecret").And.Contain(SelfUpdateHandover.InboxTarget)
             .And.NotContain(SelfUpdateHandover.UrlKey, "a listed local target is the control instance's shape; the URL keys are not what is missing");
         SelfUpdateHandover.Missing(new(Deployment, null, false, true, false, null))
@@ -185,7 +192,7 @@ public class SelfUpdateHandoverTest
 
         settings.Should().Be(new SelfUpdateHandover.Settings(
             Deployment, InboxUrl, SecretPresent: true, LocalTargetListed: false, LocalSecretPresent: false,
-            "https://build.meshweaver.cloud", SelfUpdateHandover.UrlSource.Derived));
+            "https://build.meshweaver.cloud") { UrlFrom = SelfUpdateHandover.UrlSource.Derived });
         settings.ToString().Should().NotContain(secret, "the record is what a log line would print");
         SelfUpdateHandover.RouteFor(settings).Should().Be(Route.Post);
     }
@@ -245,17 +252,21 @@ public class SelfUpdateHandoverTest
             .Should().Be(SelfUpdateHandover.UrlSource.None);
     }
 
-    /// <summary>🚨 Only an inbox answer that says the signature was VERIFIED is a hand-over. "not-required"
-    /// (the target declares no secret key, so nothing was checked) and a body that is not the inbox
-    /// contract are refusals — the sender must not record a delivery the receiver may drop.</summary>
+    /// <summary>🚨 Only an inbox answer that says the delivery was ACCEPTED and the signature VERIFIED
+    /// is a hand-over. "not-required" (the target declares no secret key, so nothing was checked), a
+    /// status other than accepted, and a body that is not the inbox contract are refusals — the sender
+    /// must not record a delivery the receiver may drop.</summary>
     [Fact]
-    public void OnlyAVerifiedSignatureIsAHandover()
+    public void OnlyAnAcceptedVerifiedAnswerIsAHandover()
     {
-        SelfUpdateHandover.SignatureStatusOf("{\"status\":\"accepted\",\"signature\":\"verified\"}").Should().Be("verified");
-        SelfUpdateHandover.SignatureStatusOf("{\"status\":\"accepted\",\"signature\":\"not-required\"}").Should().Be("not-required");
-        SelfUpdateHandover.SignatureStatusOf("").Should().BeNull();
-        SelfUpdateHandover.SignatureStatusOf("OK").Should().BeNull();
-        SelfUpdateHandover.SignatureStatusOf("{\"status\":\"accepted\"}").Should().BeNull();
+        SelfUpdateHandover.InboxAnswerOf("{\"status\":\"accepted\",\"signature\":\"verified\"}").Should().Be(("accepted", "verified"));
+        SelfUpdateHandover.InboxAnswerOf("{\"status\":\"accepted\",\"signature\":\"not-required\"}").Should().Be(("accepted", "not-required"));
+        SelfUpdateHandover.InboxAnswerOf("{\"status\":\"rejected\",\"signature\":\"verified\"}").Should().Be(("rejected", "verified"),
+            "a verified signature on a delivery the inbox did not accept is not a delivery — the caller requires both halves");
+        SelfUpdateHandover.InboxAnswerOf("{\"signature\":\"verified\"}").Should().Be(((string?)null, (string?)"verified"));
+        SelfUpdateHandover.InboxAnswerOf("").Should().Be(((string?)null, (string?)null));
+        SelfUpdateHandover.InboxAnswerOf("OK").Should().Be(((string?)null, (string?)null));
+        SelfUpdateHandover.InboxAnswerOf("{\"status\":\"accepted\"}").Should().Be(((string?)"accepted", (string?)null));
     }
 
     [Fact]

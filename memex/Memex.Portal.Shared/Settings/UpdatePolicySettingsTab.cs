@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using System.Globalization;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -238,7 +239,7 @@ public static class UpdatePolicySettingsTab
             || !string.Equals(content.HandedOverTag, tag, StringComparison.OrdinalIgnoreCase))
             return null;
         var when = content.HandedOverAt is { } at
-            ? DisplayTimeExtensions.ToDisplayTime(at, zoneId).ToString("yyyy-MM-dd HH:mm")
+            ? DisplayTimeExtensions.ToDisplayTime(at, zoneId).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
             : "?";
         return localize("ui.updateHandedOverLine", [tag, content.HandedOverTo ?? "?", when]);
     }
@@ -259,13 +260,13 @@ public static class UpdatePolicySettingsTab
             return content.LastCheckedAt is { } checkedAt
                 ? localize("ui.updateNoNewerVersion", [])
                     + " " + localize("ui.updateCheckedAt",
-                        [DisplayTimeExtensions.ToDisplayTime(checkedAt, zoneId).ToString("yyyy-MM-dd HH:mm")])
+                        [DisplayTimeExtensions.ToDisplayTime(checkedAt, zoneId).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)])
                 : localize("ui.updateNeverChecked", []);
 
         var tag = content.LatestAvailableTag!;
         var available = localize("ui.updateLatestAvailable", [tag])
             + (content.CheckedAt is { } at
-                ? " " + localize("ui.updateCheckedAt", [DisplayTimeExtensions.ToDisplayTime(at, zoneId).ToString("yyyy-MM-dd HH:mm")])
+                ? " " + localize("ui.updateCheckedAt", [DisplayTimeExtensions.ToDisplayTime(at, zoneId).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)])
                 : "")
             // 🚨 Where the release WENT (#4098). On the control lane "latest available" is not a
             // release waiting for this install to act — it was handed to the control instance, and
@@ -297,13 +298,13 @@ public static class UpdatePolicySettingsTab
                         content.HeldIndeterminate ? "ui.updateHeldUnknown" : "ui.updateHeld", [tag])
                     : content.HeldAt is { } recordedAt
                         ? localize("ui.updateHoldHistorical",
-                            [tag, DisplayTimeExtensions.ToDisplayTime(recordedAt, zoneId).ToString("yyyy-MM-dd HH:mm")])
+                            [tag, DisplayTimeExtensions.ToDisplayTime(recordedAt, zoneId).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)])
                         : localize("ui.updateHoldHistoricalUndated", [tag]))
                 + (string.IsNullOrEmpty(content.HeldReason)
                     ? ""
                     : "\n\n> " + Sanitize(content.HeldReason!))
                 + (operative && content.HeldAt is { } heldAt
-                    ? "\n\n" + localize("ui.updateHeldAt", [DisplayTimeExtensions.ToDisplayTime(heldAt, zoneId).ToString("yyyy-MM-dd HH:mm")])
+                    ? "\n\n" + localize("ui.updateHeldAt", [DisplayTimeExtensions.ToDisplayTime(heldAt, zoneId).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)])
                     : "");
         }
 
@@ -322,7 +323,7 @@ public static class UpdatePolicySettingsTab
             return available;
 
         var verifiedAt = localize("ui.updateVerifiedAtLine",
-            [DisplayTimeExtensions.ToDisplayTime(verdict.VerifiedAt, zoneId).ToString("yyyy-MM-dd HH:mm"), verdict.ImageDigest ?? "?"]);
+            [DisplayTimeExtensions.ToDisplayTime(verdict.VerifiedAt, zoneId).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture), verdict.ImageDigest ?? "?"]);
         // 🚨 Caveats are surfaced on EVERY verdict — ComboVerification.Caveats documents them as
         // mandatory-to-surface. A Green over a moving pin, or a Red whose input diverged, must
         // never render as an unqualified answer (Copilot review on #1099).

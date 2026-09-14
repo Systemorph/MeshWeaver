@@ -86,12 +86,15 @@ declares **no** inbox rather than half of one — the same whole-value rule the 
 derived from `Hosting:ReportTo` is blamed on `ReportTo`, a listed local target on its own declared
 secret key.
 
-🚨 **Only an answer that says the signature was VERIFIED is a hand-over.** The inbox answers
-`{"status":"accepted","signature":"verified"|"not-required"}` (#3312); `not-required` means the
-control instance declares no `SecretConfigKey` for the target and checked nothing — the pairing
-degraded silently, and the consumer may still drop the event — and a body that is not that contract
-is an inbox this sender does not know. Both are `HandoverFailed`, naming what came back; the local
-route requires `DeliveryResult.SignatureVerified` the same way. A recorded hand-over is therefore
+🚨 **Only an answer that says the delivery was ACCEPTED and the signature VERIFIED is a
+hand-over — both halves.** The inbox answers `{"status":"accepted","signature":"verified"|"not-required"}`
+(#3312); `not-required` means the control instance declares no `SecretConfigKey` for the target and
+checked nothing — the pairing degraded silently, and the consumer may still drop the event — a
+verified signature on a status other than `accepted` is a delivery the inbox did not take, and a
+body that is not that contract is an inbox this sender does not know. All are `HandoverFailed`,
+naming what came back (`SelfUpdateHandover.InboxAnswerOf`); the local route requires
+`DeliveryResult.SignatureVerified` the same way, and `RouteFor` itself requires the local target's
+declared key, so settings assembled by hand cannot reach local delivery without one. A recorded hand-over is therefore
 always a delivery the receiver checked. (`WebhookInbox.Deliver` itself was moved off the #1790
 `Observable.Using(ImpersonateAsSystem)` shape onto `RunAsSystem` in the same change: an in-process
 caller on a pool thread must not stay latched as System after delivering.)
