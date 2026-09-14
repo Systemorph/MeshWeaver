@@ -107,30 +107,14 @@ public static class QueryRouteClassifier
 
     /// <summary>
     /// The planner's <c>IsSufficientlySpecified</c>: whether the query text itself says where to
-    /// look. Three ways, and a query needs exactly one — a concrete anchor, the explicit
-    /// <c>partitions:all</c>, or a wildcard namespace pattern (which the parser keeps as a filter,
-    /// leaving <see cref="ParsedQuery.Path"/> null — a Path-only check would refuse exactly the
-    /// satellite browses that are the legitimate spanning reads).
+    /// look. Since MeshWeaver #4274 this is <see cref="ParsedQuery.IsSufficientlySpecified"/> on the
+    /// query model itself — the definition <c>MeshOperations.Search</c> refuses on before any
+    /// backend sees the query — so this mirror no longer carries a copy of the rule; it carries the
+    /// corpus that pins it (and the planner's own copy in MeshWeaver.Plugins against the same rows).
     /// </summary>
     /// <param name="parsed">The parsed query.</param>
     /// <returns>True when the text names a partition or declares the fan-out.</returns>
-    public static bool IsSufficientlySpecified(ParsedQuery parsed) =>
-        parsed.CrossPartition
-        || IsConcreteAnchor(parsed.Path)
-        || parsed.Paths is { Count: > 0 }
-        || parsed.ExtractNamespacePatterns().Count > 0;
-
-    private static bool IsConcreteAnchor(string? path)
-    {
-        if (string.IsNullOrEmpty(path))
-            return false;
-        var trimmed = path.Trim('/');
-        if (trimmed.Length == 0)
-            return false;
-        var slash = trimmed.IndexOf('/');
-        var first = slash < 0 ? trimmed : trimmed[..slash];
-        return first.Length > 0 && first != "*";
-    }
+    public static bool IsSufficientlySpecified(ParsedQuery parsed) => parsed.IsSufficientlySpecified();
 
     /// <summary>
     /// The planner's decision for <paramref name="query"/> under <paramref name="configuration"/>'s

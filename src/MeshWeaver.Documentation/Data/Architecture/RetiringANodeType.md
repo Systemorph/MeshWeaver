@@ -157,7 +157,7 @@ Three reads, in this order. All are read-only.
 
 1. **`get_diagnostics @{Type}`** — `status: Error` with `Matched Code nodes (0)`.
 2. **`search namespace:{Type} scope:subtree`** — only `Release/**` comes back; no `Code` nodes.
-3. **`search nodeType:{Type}`** — how many instances would be affected by removing it.
+3. **`search nodeType:{Type} partitions:all`** — how many instances would be affected by removing it.
 
 Two false passes to refuse:
 
@@ -175,7 +175,7 @@ the product deliberately deleted. Reconstruction is almost never possible anyway
 layout areas usually reference an equally retired supporting cast, and a fresh look-alike nobody can
 diff against the original is worse than leaving the node alone.
 
-1. **Establish the instance count is zero** (`search nodeType:{Type}`). If it is not, the instances
+1. **Establish the instance count is zero** (`search nodeType:{Type} partitions:all` — the bare form is refused, #4274). If it is not, the instances
    must be migrated to the replacement type first — retiring a type under live instances leaves
    pages with no renderer, which is exactly why the import refuses to do it and holds the type
    (`pendingRetirement`) until you have.

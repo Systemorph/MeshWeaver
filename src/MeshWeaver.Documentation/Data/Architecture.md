@@ -130,6 +130,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Mesh Graph Architecture](MeshGraph)
 - [MeshNode Versioning](MeshNodeVersioning)
 - [Query Provider Parity](QueryProviderParity)
+- [Search Coverage and Refusal](SearchCoverageAndRefusal) — the `search` tool answered an unanchored query with a clean 0 for nodes it returned when anchored; it now refuses a query that names no partition and declares no fan-out, and every envelope carries `coverage.partitions` — the denominator a zero is read against
 - [Query Result Scoring](QueryResultScoring)
 - [Reading a Write Verdict](ReadingAWriteVerdict)
 - [Satellite Entity Patterns](SatelliteEntityPatterns)

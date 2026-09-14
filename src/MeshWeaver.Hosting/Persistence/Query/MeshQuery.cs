@@ -546,6 +546,11 @@ public class MeshQuery : IMeshQueryCore
             // overlapping providers both saw the change).
             var liveItems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            // The partitions each provider's Initial said it READ FROM (QueryResultChange.Partitions),
+            // unioned onto the merged Initial. Null throughout when no provider reported — the
+            // merged change then says "unknown", which is the honest answer, never "all".
+            IReadOnlyList<string>?[] providerPartitions = new IReadOnlyList<string>?[observables.Count];
+
             var subscriptions = new List<IDisposable>();
 
             // Emits the merged Initial once the gate is satisfied. Must be called under `gate`.
@@ -564,7 +569,7 @@ public class MeshQuery : IMeshQueryCore
                 var parsed = lastQuery
                     ?? new QueryParser().Parse(request.EffectiveQueries.FirstOrDefault() ?? "");
                 var clipped = ClipMergedInitial<T>(ordered, template, parsed, request);
-                observer.OnNext(clipped);
+                observer.OnNext(clipped with { Partitions = UnionReportedPartitions(providerPartitions) });
             }
 
             for (var i = 0; i < observables.Count; i++)
@@ -602,6 +607,7 @@ public class MeshQuery : IMeshQueryCore
                                     }
                                 }
                                 lastQuery ??= change.Query;
+                                providerPartitions[idx] ??= change.Partitions;
                                 if (!initialSeen[idx])
                                 {
                                     initialSeen[idx] = true;
@@ -899,6 +905,30 @@ public class MeshQuery : IMeshQueryCore
             scores.Add(score);
         }
         return change with { Items = items, Scores = scores };
+    }
+
+    /// <summary>
+    /// The union of the partitions the providers reported reading from
+    /// (<see cref="QueryResultChange{T}.Partitions"/>), in first-seen order; <see langword="null"/>
+    /// when NO provider reported. The distinction is the point: a merged Initial from one
+    /// reporting provider and one silent one carries the reporting provider's set — a partial
+    /// denominator the caller can still read a zero against — while a merge of only silent
+    /// providers says nothing rather than an empty list that would read as "no partitions".
+    /// </summary>
+    private static IReadOnlyList<string>? UnionReportedPartitions(IReadOnlyList<string>?[] reported)
+    {
+        List<string>? union = null;
+        HashSet<string>? seen = null;
+        foreach (var list in reported)
+        {
+            if (list is null) continue;
+            union ??= new List<string>();
+            seen ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var partition in list)
+                if (seen.Add(partition))
+                    union.Add(partition);
+        }
+        return union;
     }
 
     /// <summary>

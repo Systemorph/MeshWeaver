@@ -2402,10 +2402,13 @@ never proven. It cannot waive a real regression.
 
 ### 🚨 The pre-prod sweep is ACCESS-FILTERED — it agrees with the gate only over what the sweeper can read
 
-`search 'nodeType:NodeType content.compilationStatus:Error'` reads the same field
-`ClassifyDetailed` branches on, so its VERDICT per row matches the gate's. Its **denominator does
-not**. The sweep runs as the person typing it and the gate runs as the system, and those see
-different sets of rows:
+`search 'nodeType:NodeType content.compilationStatus:Error partitions:all' limit:200` reads the
+same field `ClassifyDetailed` branches on, so its VERDICT per row matches the gate's. Its
+**denominator does not**. The sweep runs as the person typing it and the gate runs as the system,
+and those see different sets of rows (the bare form without `partitions:all` is refused since
+#4274 — it used to be served from whichever partitions the fan-out enumerated and answer a clean 0;
+the envelope now carries `coverage.partitions`, the list it actually read — see
+[Search Coverage and Refusal](/Doc/Architecture/SearchCoverageAndRefusal)):
 
 | | runs as | rows considered |
 |---|---|---|
@@ -2627,7 +2630,7 @@ to a content defect.
 
 ### The pre-prod sweep
 
-`Search('nodeType:NodeType')` → `LspDiagnosticsForNode('@{path}')` per type (reads the *cached*
+`Search('nodeType:NodeType partitions:all')` → `LspDiagnosticsForNode('@{path}')` per type (reads the *cached*
 compilation, no re-emit) → fix roots first, since one red upstream reports as a failure in every
 dependent → re-check until every type reads `Ok`. Warnings are in scope: an unregistered `$type`
 leaves content as an untyped `JsonElement`, which renders **empty** rather than erroring. The full
@@ -2653,5 +2656,5 @@ protocol lives in the `/code` skill.
 | Delete or rename a public framework API | Grep `content` + `samples/*/Data` + **every other node repo, JSON included** and search the live mesh (`searched:false` = failed sweep) — CI never compiles in-mesh source |
 | Delete a symbol published with `cellSurface: true` | You cannot. Installed copies call it and nobody can edit them — leave an `[Obsolete]` forwarder and pin its surface with a test (#1258) |
 | Add a framework API that in-mesh source will call | Ship the framework half FIRST; the content half is safe only once the portal reports the image carrying it (#1386) |
-| Check the mesh is shippable | `Search('nodeType:NodeType')` → `LspDiagnosticsForNode` per type → every one reads `Ok` |
+| Check the mesh is shippable | `Search('nodeType:NodeType partitions:all')` (the bare form is refused, #4274; read its count against the envelope's `coverage.partitions`) → `LspDiagnosticsForNode` per type → every one reads `Ok` |
 | Understand why one bad NodeType took the portal down | `CompileError` → dependents `UpstreamFailed` → readiness refused → 60 s hub-activation faults |

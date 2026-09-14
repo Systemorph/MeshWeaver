@@ -57,9 +57,12 @@ public sealed class HttpMeshStorageAdapter : IStorageAdapter
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
     {
         // Immediate children only — search by exact namespace, not by subtree.
-        // Empty parent means root-level children: nodes whose namespace is empty.
+        // Empty parent means root-level children: nodes whose namespace is empty — which on a
+        // partitioned remote is the ROOT OF EVERY PARTITION, a read that spans them by nature. Say
+        // so: the remote's `search` refuses a query that names no partition and does not declare
+        // the fan-out (MeshWeaver #4274), and a bare `namespace:` names none.
         var query = string.IsNullOrEmpty(parentPath)
-            ? "namespace:"
+            ? $"namespace: {ParsedQuery.CrossPartitionQualifier}"
             : $"namespace:{parentPath}";
         // Remote-backed adapters have no notion of "directories without nodes" —
         // every container is also a node. Always return empty for DirectoryPaths.

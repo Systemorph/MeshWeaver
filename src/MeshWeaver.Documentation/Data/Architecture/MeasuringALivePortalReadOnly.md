@@ -54,10 +54,11 @@ reading the wrong one and concluding "the sync is frozen" cost two sessions an h
 
 ### What makes it strictly better than a `search` sweep
 
-The NodeType sweep (`search 'nodeType:NodeType content.compilationStatus:Error'`) runs **as you**, so
-it is RLS-filtered: a type parked at `Error` in a partition you hold no grant on is silently not
-counted, and `get` answers `Not found` for it — the same string an absent node gets. The sweep
-returns a smaller number, never an error.
+The NodeType sweep (`search 'nodeType:NodeType content.compilationStatus:Error partitions:all'`)
+runs **as you**, so it is RLS-filtered: a type parked at `Error` in a partition you hold no grant on
+is silently not counted, and `get` answers `Not found` for it — the same string an absent node gets.
+The sweep returns a smaller number, never an error — its envelope's `coverage.partitions` is the
+list it did read ([Search Coverage and Refusal](/Doc/Architecture/SearchCoverageAndRefusal)).
 
 **`/health` is composed by the process, as the system.** It is past RLS by construction, so its
 denominator is *this replica*, whole, whoever is reading. That is the property, and it is why the
@@ -141,16 +142,21 @@ instance is where the store is, and it covers the other portals — the `nodetyp
 memex-cloud pod names. So *"I searched the portal that had the problem and found nothing"* is the
 expected outcome of looking in the wrong place, not evidence.
 
-**2 · It is invisible to an unscoped query.** Measured the same day on memex.systemorph.com:
+**2 · It is invisible to an unscoped query — which is now refused rather than answered.** Measured
+2026-09-11 on memex.systemorph.com:
 
 ```text
 search 'nodeType:LogIncident'                              → count 0
 search 'namespace:Admin/_LogIncident scope:subtree'        → truncated at the limit
 ```
 
-Same portal, same moment, same nodes. The Admin partition is not in an unscoped query's reach, so
-**the namespace is load-bearing** — exactly like the `content.` prefix on the NodeType sweep. A zero
-from the first form is a statement about the query, not about the mesh.
+Same portal, same moment, same nodes. The Admin partition is not in an unscoped query's reach —
+the fan-out never enumerates the system schemas — so **the namespace is load-bearing**, exactly like
+the `content.` prefix on the NodeType sweep. A zero from the first form was a statement about the
+query, not about the mesh, and since #4274 the first form answers `Error: Query is not sufficiently
+specified …` instead of that zero; `partitions:all` does NOT reach `Admin` either (same registry),
+only the anchor does. [Search Coverage and Refusal](/Doc/Architecture/SearchCoverageAndRefusal)
+has the mechanism.
 
 **3 · 🚨 A frozen `occurrences` count can mean RENAMED, not FIXED.** The node id *is* the
 fingerprint, and the fingerprint's third part is the masked **message** — the exception's, or the log
