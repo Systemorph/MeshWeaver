@@ -563,12 +563,22 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
     where TTypeSource : ITypeSource
 {
     /// <summary>
-    /// Initializes the data source and eagerly creates the stream for its full reference.
+    /// Initializes the data source and eagerly opens its primary <see cref="EntityStore"/> stream.
+    ///
+    /// <para>🚨 The PRIMARY stream only — never <c>GetStream(GetReference())</c>
+    /// (Systemorph/MeshWeaver#4300). That call is <c>GetStreamForPartition(null).Reduce(reference)</c>,
+    /// and the second half is an UNCACHED configured reduce of the store to its own full reference:
+    /// a second <c>SynchronizationStream</c> with a second hosted <c>sync/</c> hub, registered for
+    /// disposal on the hub-lifetime primary stream, that no caller can ever reach. Discarding its
+    /// result left one permanent, unused hub per data source per partition on every hub that
+    /// carries data — and, minted on the init turn a few milliseconds after the primary stream, it
+    /// is what a hub census counts as a sixth hub where it expected five. <c>Initialized</c>
+    /// waits on the partition map, which never held the reduced stream, so the gate is unchanged.</para>
     /// </summary>
     public override void Initialize()
     {
         base.Initialize();
-        GetStream(GetReference());
+        GetStreamForPartition(null);
     }
 
 
@@ -735,12 +745,15 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
     where TTypeSource : IPartitionedTypeSource
 {
     /// <summary>
-    /// Initializes the data source and eagerly creates the stream for its full reference.
+    /// Initializes the data source and eagerly opens its primary <see cref="EntityStore"/> stream.
+    /// The primary stream only — the discarded full-reference reduce this used to perform minted
+    /// a second, unreachable <c>sync/</c> hub per source (Systemorph/MeshWeaver#4300); see the
+    /// unpartitioned sibling's <c>Initialize</c> for the mechanism.
     /// </summary>
     public override void Initialize()
     {
         base.Initialize();
-        GetStream(GetReference());
+        GetStreamForPartition(null);
     }
 
 
