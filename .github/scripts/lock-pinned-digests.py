@@ -1579,15 +1579,31 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
         for host in sorted(by_host):
             references = sorted(set(by_host[host]))
             disposition = dispositions.get(host, ("undeclared", ""))[0]
-            if disposition == "third-party":
+            if disposition == "fleet-unlockable":
+                emit(f"      {host} (declared fleet-unlockable): {len(references)} committed "
+                     "reference(s) a cleanup must KEEP")
+            elif disposition == "third-party":
                 emit(f"      {host} (declared third-party): {len(references)} committed "
                      "reference(s) — declared NOT ours to retain, so no cleanup of ours protects "
                      "them. Listed so the declaration can be checked against what is really pinned")
             else:
-                emit(f"      {host} (declared {disposition}): {len(references)} committed "
-                     "reference(s) a cleanup must KEEP")
+                # 🚨 THE FALLBACK IS NOT A KEEP SENTENCE (#4324 review). An UNDECLARED, malformed or
+                # unreadable entry has already BLOCKED this run (`classify_foreign_registries`), so
+                # the one thing the report must not do is print a verdict over it — an unknown that
+                # reads as actionable is the whole failure mode of this family, and it would be the
+                # shape a reader is most likely to act on: a list of references under "must KEEP",
+                # produced by a run that refused.
+                emit(f"      {host} (UNCLASSIFIED — {disposition}): {len(references)} committed "
+                     "reference(s), and NO verdict about them. This host is not declared in "
+                     f"`{ROSTER_PATH}`'s `registries` table, so the run is BLOCKED and nothing here "
+                     "says whether anything retains these — declare it before reading this list as "
+                     "anything")
             for repo, tag, where in references:
-                moving = ":latest" if tag == "latest" else ""
+                # 🚨 The floating set, not the string `latest` (#4324 review). `extract_foreign_pins`
+                # PRESERVES a moving tag, and `main`/`master`/`edge`/`stable`/`nightly` move exactly
+                # as `latest` does — checking one spelling reports the other five as ordinary pins.
+                # One set, shared with the ACR path, so the two cannot drift apart.
+                moving = tag.strip().lower() in FLOATING_TAGS
                 emit(f"        {repo}:{tag}"
                      + ("   🚨 a MOVING tag — outside this model (#3438)" if moving else ""))
                 emit(f"          pinned by {where}")
@@ -3763,6 +3779,47 @@ ingress:
           "ARM 33a: the third-party block does not say WHY it is listed. Listing is what caught "
           "#4323 — two `systemorph/*` images on a host declared 'never published by this fleet' — "
           "and a count alone would have hidden it")
+
+    # 🚨 AN UNDECLARED HOST GETS NO VERDICT AT ALL (#4324 review). It has already BLOCKED the run;
+    # printing its references under "a cleanup must KEEP" hands the reader an actionable-looking
+    # list produced by a run that refused — the unknown-reads-as-clean shape, one layer up.
+    plan, _, _ = _drive(clean1, clean2 + [foreign_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers())          # no dispositions ⇒ undeclared ⇒ blocked
+    check(plan.blockers, "ARM 33a: an UNDECLARED registry did not block the run, so the fallback "
+                         "arm below would be testing a state that cannot happen")
+    _printed = io.StringIO()
+    with contextlib.redirect_stdout(_printed):
+        report(plan, clean1, clean2 + [foreign_scan], REGISTRY_DEFAULT, _inventory(),
+               apply=False, release_enabled=False, root=str(tempfile.gettempdir()))
+    _undeclared = _printed.getvalue()
+    check("UNCLASSIFIED" in _undeclared and "NO verdict about them" in _undeclared,
+          f"ARM 33a: an UNDECLARED host was reported without saying so: {_undeclared[-1200:]}")
+    check("a cleanup must KEEP" not in _undeclared,
+          f"ARM 33a: an UNDECLARED host's references were printed under 'a cleanup must KEEP'. The "
+          f"run REFUSED; a list that reads as actionable is the worst thing it can emit: "
+          f"{_undeclared[-1200:]}")
+
+    # 🚨 EVERY floating tag, not the string `latest` (#4324 review). `main`, `master`, `edge`,
+    # `stable` and `nightly` move exactly as `latest` does and are PRESERVED by the extractor.
+    for _moving in sorted(FLOATING_TAGS):
+        _scan = _scan2("Systemorph/Memex",
+                       FIXTURE_OVERLAY_FOREIGN.replace("3.0.0-ci.8411", _moving),
+                       "deployments/aks/build/values.build.public.yaml")
+        plan, _, _ = _drive(clean1, clean2 + [_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                            probe=_answers(), dispositions=FLEET_UNLOCKABLE)
+        _printed = io.StringIO()
+        with contextlib.redirect_stdout(_printed):
+            report(plan, clean1, clean2 + [_scan], REGISTRY_DEFAULT, _inventory(),
+                   apply=False, release_enabled=False, root=str(HERE.parent.parent))
+        _out = _printed.getvalue()
+        # 🚨 THE CONTROL FIRST, then the check. `check(tag not in out or flagged)` passes VACUOUSLY
+        # the day the fixture stops producing that reference — an arm that cannot fail.
+        check(f":{_moving}" in _out,
+              f"ARM 33a: the fixture produced NO reference tagged `{_moving}`, so the assertion "
+              f"below would pass having checked nothing")
+        check("a MOVING tag" in _out,
+              f"ARM 33a: the floating tag `{_moving}` was printed as an ordinary protected pin. It "
+              f"moves exactly as `latest` does, and checking one spelling misses the other five")
 
     # …and a fleet with no foreign reference prints no such section, rather than an empty one that
     # reads as "nothing needs protecting there".

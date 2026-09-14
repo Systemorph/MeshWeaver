@@ -328,10 +328,16 @@ because of what the first live run found** ([run 34852827116](https://github.com
   alone would have hidden it.** Filed as #4323; the disposition is not changed here, because
   `third-party` → `fleet-unlockable` is a *loosening* (an installation pinning only there stops
   being red) and that is a decision, not a correction.
-- A **moving tag** is flagged where it appears. Two of those references are
-  `ghcr.io/systemorph/…:latest`, and they are the CHART'S OWN DEFAULTS — so the unconfigured install
-  pulls the platform from GHCR. #3438 carries *"a moving tag is named by no file and is outside this
-  model"*; it is named by a file now.
+- A **moving tag** is flagged where it appears — against the shared `FLOATING_TAGS` set
+  (`latest`, `main`, `master`, `edge`, `stable`, `nightly`), case-insensitively, **not** the string
+  `latest`: the extractor preserves whichever one an overlay wrote, and the other five move exactly
+  as `latest` does. Two of those references are `ghcr.io/systemorph/…:latest`, and they are the
+  CHART'S OWN DEFAULTS — so the unconfigured install pulls the platform from GHCR. #3438 carries
+  *"a moving tag is named by no file and is outside this model"*; it is named by a file now.
+- 🚨 **An UNDECLARED host gets no verdict at all.** It has already BLOCKED the run, so the one thing
+  the report must not emit is a list of its references under *"a cleanup must KEEP"* — an
+  actionable-looking answer produced by a run that refused. It prints `UNCLASSIFIED … and NO verdict
+  about them`, and says to declare the host before reading the list as anything.
 
 ## 7. What is the maintainer's
 
