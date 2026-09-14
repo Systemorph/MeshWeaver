@@ -42,6 +42,13 @@ namespace MeshWeaver.Graph;
 ///   <see cref="RailLink"/> or a <see cref="RailGroup"/>, and <see cref="Render"/> walks it once.
 ///   Both container renderers emit a container's areas in declaration order, so preserving the order
 ///   here is the whole fix.</item>
+///   <item><b>A group nests: an entry's child that has children of its own is a group INSIDE the
+///   group.</b> The plan used to flatten a group to its links, so a page three levels down the
+///   index — every sub-page of a sub-page in a documentation tree — had no line to stand on, and
+///   the page above it showed a link where a folder was (2026-09-14, the default index that core
+///   now derives for every markdown tree). A <see cref="RailGroup"/> therefore carries
+///   <see cref="RailGroup.Items"/>, the same ordered sequence as the rail itself, and
+///   <see cref="Render"/> walks it recursively.</item>
 /// </list>
 ///
 /// <para>Only the group the reader is inside is expanded, so a long index stays a scannable list of
@@ -72,10 +79,20 @@ public static class SuppliedNavigationRail
     /// <param name="Label">The group heading (never a link — it toggles).</param>
     /// <param name="Path">The node the group stands for.</param>
     /// <param name="Expanded">Open only when the reader is at or below <paramref name="Path"/>.</param>
-    /// <param name="Links">The entry's own link first, then its children.</param>
+    /// <param name="Items">The entry's own link first, then its children IN THE SUPPLIED ORDER —
+    /// a childless child as a <see cref="RailLink"/>, one with children as a nested
+    /// <see cref="RailGroup"/> (defect 5 in the class remarks).</param>
     /// <param name="Icon">The entry's icon, if it has one — the heading shows it, so a group reads
     /// like the links beside it instead of losing its icon by having children.</param>
-    public sealed record RailGroup(string Label, string Path, bool Expanded, IReadOnlyList<RailLink> Links, string? Icon = null) : RailItem;
+    public sealed record RailGroup(string Label, string Path, bool Expanded, IReadOnlyList<RailItem> Items, string? Icon = null) : RailItem
+    {
+        /// <summary>
+        /// The group's direct links, in order — its own link first, then its childless children.
+        /// <b>A filter over <see cref="Items"/>, never the render order</b>: a nested group's lines
+        /// are not in it. Walk <see cref="Items"/> for the whole subtree.
+        /// </summary>
+        public IReadOnlyList<RailLink> Links => [.. Items.OfType<RailLink>()];
+    }
 
     /// <summary>The whole rail: the heading link, then the supplied entries in the supplied order.</summary>
     /// <param name="Home">The index root — a link, not a collapsible heading.</param>
@@ -130,19 +147,27 @@ public static class SuppliedNavigationRail
         // then Name, for a course) is the reading order, and re-grouping by kind silently discarded
         // it (#3406).
         var items = supplied.Entries
-            .Select(entry => entry.Children.Count == 0
-                ? (RailItem)Link(entry)
-                : new RailGroup(
-                    entry.Label,
-                    entry.Path,
-                    IsAtOrBelow(currentPath, entry.Path),
-                    // The entry's own link first, then its children.
-                    [Link(entry), .. entry.Children.Select(Link)],
-                    entry.Icon))
+            .Select(entry => Project(entry, currentPath))
             .ToList();
 
         return new Rail(home, items);
     }
+
+    /// <summary>
+    /// One entry as a rail item, recursively: a childless entry is a link; one with children is a
+    /// group whose items are its own link followed by each child projected the same way — so a
+    /// child with children becomes a group inside the group, however deep the tree goes (defect 5).
+    /// </summary>
+    private static RailItem Project(NodeNavigationEntry entry, string currentPath)
+        => entry.Children.Count == 0
+            ? Link(entry)
+            : new RailGroup(
+                entry.Label,
+                entry.Path,
+                IsAtOrBelow(currentPath, entry.Path),
+                // The entry's own link first, then its children.
+                [Link(entry), .. entry.Children.Select(child => Project(child, currentPath))],
+                entry.Icon);
 
     /// <summary>
     /// Renders a plan as the nav menu: the heading link, then every supplied entry in the order the
@@ -186,8 +211,16 @@ public static class SuppliedNavigationRail
         var rendered = new NavGroupControl(group.Label).WithSkin(s => s.WithExpanded(group.Expanded));
         if (group.Icon is not null)
             rendered = rendered.WithIcon(group.Icon);
-        foreach (var link in group.Links)
-            rendered = rendered.WithView(RenderLink(link));
+        // The same one walk as the rail's own: a nested group renders as a group INSIDE this one
+        // (NavGroupView indents and guides its items, whatever they are), a link as a link.
+        foreach (var item in group.Items)
+            rendered = item switch
+            {
+                RailGroup nested => rendered.WithView(RenderGroup(nested)),
+                RailLink link => rendered.WithView(RenderLink(link)),
+                _ => throw new NotSupportedException(
+                    $"Unknown rail item '{item.GetType().Name}' — extend {nameof(RenderGroup)} when adding a {nameof(RailItem)} case."),
+            };
         return rendered;
     }
 
