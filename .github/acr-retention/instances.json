@@ -104,7 +104,7 @@
           {
             "mechanism": "maintenance.uploadpurging (distribution config.yml)",
             "present": true,
-            "verdict": "ENABLED — age 168h, interval 24h, dryrun false. The one automatic deletion in this registry, and it reaches INCOMPLETE UPLOAD SESSIONS only (the `_uploads/` scratch state of a push that never finished). It can never reach a manifest, a tag or a referenced blob."
+            "verdict": "ENABLED — age 168h, interval 24h, dryrun false. The one automatic deletion in this registry, and it reaches INCOMPLETE UPLOAD SESSIONS only (the `_uploads/` scratch state of a push that never finished). It can never reach a manifest, a tag or a referenced blob. 🚨 PROVENANCE: the KEY and its window are read off the committed chart; what the key DELETES is distribution's own documented behaviour, not something measured here — it is an off-the-shelf component we render rather than extend. It is the one row a distribution major version could change without any file in this repo moving, which is why both images are pinned BY DIGEST; a bump is the moment to re-read it."
           },
           {
             "mechanism": "registry garbage-collect (blob GC)",

@@ -50,6 +50,16 @@ able to match something.
 | anything authenticating as a non-publisher account | **NO** — by the ACL, not by a grep | — | `docker_auth`'s ACL grants `delete` to **exactly one account**, the publisher. Every other authenticated account matches a `pull`-only rule, and anonymous matches no rule at all. An installation holding an instance key **cannot** delete, whatever it asks |
 | an Azure blob lifecycle / management policy on the registry's storage container | **UNVERIFIED** — and that is a state of its own in the record, not a `false` | any blob, including a referenced one | 🚨 **the one remaining unknown, and it is a maintainer read.** The storage account is `registry.storage.accountName`, provisioned outside this chart; `storage.bicep` in this repo is pgBackRest's, not the registry's. See §7 |
 
+🚨 **One row's PROVENANCE is different from the rest, and it is load-bearing.** Everything above is
+read off committed files except the *meaning* of `maintenance.uploadpurging`: what that key deletes
+is `distribution`'s own behaviour (the `_uploads` scratch tree of pushes that never completed), not
+something this repository measured. It is the configuration of an off-the-shelf component we render
+rather than extend, so upstream's contract is the right source — but it is the one line here that a
+`distribution` major version could change under us without any file in this repo moving. What would
+falsify it: that key reaching a tagged manifest or a referenced blob. The chart pins the image by
+digest (`ghcr.io/distribution/distribution:3.1.1@sha256:…`), so the version this statement is true
+of is pinned beside it; a bump is the moment to re-read it.
+
 **So both of #4230's dangerous readings are answered, and it is the second one.** This is not
 silent deletion — it is unbounded growth. The registry keeps every image and every bundle ever
 pushed to it, plus the blobs of everything ever pushed, and nothing has ever collected either.
