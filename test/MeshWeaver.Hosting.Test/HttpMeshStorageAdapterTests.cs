@@ -147,7 +147,9 @@ public class HttpMeshStorageAdapterTests
         var (nodes, _) = await adapter.ListChildPaths(null).Should().Emit();
 
         nodes.Should().BeEquivalentTo(new[] { "rbuergi", "Doc" }, JsonSerializerOptions.Default);
-        stub.SearchCalls.Should().ContainSingle().Which.Should().Be("namespace:");
+        stub.SearchCalls.Should().ContainSingle().Which.Should().Be($"namespace: {ParsedQuery.CrossPartitionQualifier}",
+            because: "root-level children are the roots of EVERY partition, and a query that spans partitions says so — "
+                     + "the remote's search refuses a bare `namespace:` as unanchored (MeshWeaver #4274)");
     }
 
     [Fact]

@@ -9,9 +9,9 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 `/health` is composed by the process, so it is **past row-level security by construction** and needs
 no grant to read. That makes it the one instrument that can answer *"can THIS replica load NodeType
-X"* when the sweep a session can run — `search 'nodeType:NodeType content.compilationStatus:Error'`
-— cannot, because the sweep is RLS-filtered and the broken type is in a partition the reader holds
-no grant on.
+X"* when the sweep a session can run —
+`search 'nodeType:NodeType content.compilationStatus:Error partitions:all'` — cannot, because the
+sweep is RLS-filtered and the broken type is in a partition the reader holds no grant on.
 
 Measured on memex.systemorph.com, 2026-09-14:
 
@@ -119,13 +119,15 @@ Neither instrument answers the other's question, and each has its own denominato
 
 | instrument | runs as | denominator | a zero means |
 |---|---|---|---|
-| `search 'nodeType:NodeType content.compilationStatus:Error'` | **you** | the NodeTypes in partitions you hold a grant on | "none of the N I can see" — never "none exist" |
+| `search 'nodeType:NodeType content.compilationStatus:Error partitions:all'` | **you** | the NodeTypes in the searchable partitions you hold a grant on — the envelope's `coverage.partitions` names them | "none of the N I can see, over M partitions" — never "none exist" |
 | `/health` → `bake-report` | **the process** | every dynamic NodeType on **this replica** | "this replica's report has no such entry" |
 | `/health` → `content-types` | the process | every type whose content a read on this replica actually degraded | "nothing has degraded **yet** here" |
 
 Two consequences that have each cost a session:
 
-- **State the denominator with every zero.** "0 of N over M readable partitions", never "0".
+- **State the denominator with every zero.** "0 of N over M readable partitions", never "0" — N
+  from `search 'nodeType:NodeType partitions:all'`'s `count`, M from the sweep envelope's
+  `coverage.partitions` ([Search Coverage and Refusal](/Doc/Architecture/SearchCoverageAndRefusal)).
 - **Repeated `/health` calls sample different replicas.** Measured 2026-09-11 on
   memex.meshweaver.cloud: 10 calls returned 2 disjoint bodies. One call answers about one replica you
   did not choose; the per-replica form with no guesswork is the `Sample` instance action, which

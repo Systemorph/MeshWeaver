@@ -173,6 +173,13 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
                     progress: null, options: null, cancellationToken: ct).ConfigureAwait(false);
                 var text = ExtractText(result);
                 if (string.IsNullOrEmpty(text)) return new RemoteSearchResult([], Truncated: false);
+                // The remote REFUSES an unanchored query (MeshOperations.Search, MeshWeaver #4274)
+                // with an "Error: …" string in the text block. Surface that as the refusal it is —
+                // the query that was sent, and the remote's remedy — rather than letting the JSON
+                // parse below fault the stream with a JsonException that names neither.
+                if (text.StartsWith("Error:", StringComparison.Ordinal))
+                    throw new InvalidOperationException(
+                        $"Remote MeshWeaver MCP call failed (search('{query}')): {text}");
 
                 // The search tool returns the envelope {count, limit, truncated, results:[...]}
                 // (MeshOperations.Search); a bare array is tolerated for older remotes.

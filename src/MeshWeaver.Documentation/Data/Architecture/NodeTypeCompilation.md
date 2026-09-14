@@ -2402,10 +2402,13 @@ never proven. It cannot waive a real regression.
 
 ### 🚨 The pre-prod sweep is ACCESS-FILTERED — it agrees with the gate only over what the sweeper can read
 
-`search 'nodeType:NodeType content.compilationStatus:Error'` reads the same field
-`ClassifyDetailed` branches on, so its VERDICT per row matches the gate's. Its **denominator does
-not**. The sweep runs as the person typing it and the gate runs as the system, and those see
-different sets of rows:
+`search 'nodeType:NodeType content.compilationStatus:Error partitions:all' limit:200` reads the
+same field `ClassifyDetailed` branches on, so its VERDICT per row matches the gate's. Its
+**denominator does not**. The sweep runs as the person typing it and the gate runs as the system,
+and those see different sets of rows (the bare form without `partitions:all` is refused since
+#4274 — it used to be served from whichever partitions the fan-out enumerated and answer a clean 0;
+the envelope now carries `coverage.partitions`, the list it actually read — see
+[Search Coverage and Refusal](/Doc/Architecture/SearchCoverageAndRefusal)):
 
 | | runs as | rows considered |
 |---|---|---|

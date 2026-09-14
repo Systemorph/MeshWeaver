@@ -119,7 +119,7 @@ owner's listings and re-scopes its grants (they project at `COALESCE(main_node, 
   imported with `MainNode = "Skill/{id}"`. **Seven** live nodes on `memex.meshweaver.cloud`
   (`Hosting/Skill/{deployment,deployment-activity,instance,platform-update}`, `Essentials/Skill/email`,
   `RemoteControl/Skill/remote`, `Store/Skill/ci-policy`) were `Active` and absent from
-  `search nodeType:Skill scope:subtree` — the documented way to find skills. A reachability sweep
+  `search nodeType:Skill partitions:all` — the documented way to find skills. A reachability sweep
   across all 53 packages, reading the mesh by two independent paths (`get` vs `search`) and reporting
   the disagreement, found the unreachable set to be **exactly** the set where `main_node != path`,
   with no false positives.

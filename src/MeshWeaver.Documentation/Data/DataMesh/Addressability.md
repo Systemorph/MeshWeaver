@@ -139,7 +139,7 @@ Change the C# record and the schema *and* the persisted shape move together — 
 > **The operation:** resolve the dimension by searching — `search region APAC`.
 > **What's addressed:** the **set of valid values** for a referenced dimension.
 
-The `Region` field above is a *dimension* — it references other nodes rather than holding a free string. You do not guess its value; you **address the value space and search it.** Type `@` in an editor and autocomplete lists the candidates; an agent runs `search nodeType:Region APAC` and gets the matching node back. The value stored is the referenced node's path, so the reference stays valid and navigable. Dimensions turn "APAC" from a fragile literal into a resolved, addressable reference. See [Query Syntax](/Doc/DataMesh/QuerySyntax).
+The `Region` field above is a *dimension* — it references other nodes rather than holding a free string. You do not guess its value; you **address the value space and search it.** Type `@` in an editor and autocomplete lists the candidates; an agent runs `search nodeType:Region APAC partitions:all` and gets the matching node back. The value stored is the referenced node's path, so the reference stays valid and navigable. Dimensions turn "APAC" from a fragile literal into a resolved, addressable reference. See [Query Syntax](/Doc/DataMesh/QuerySyntax).
 
 ---
 

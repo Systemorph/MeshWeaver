@@ -137,7 +137,7 @@ After the node is created, the `PermissionEvaluator`'s synced query picks it up 
 
 ### Fixing an existing assignment with empty `mainNode`
 
-If an assignment already exists but `mainNode` is empty (the node shows up in `mcp search nodeType:AccessAssignment` yet permissions still fail), patch it with a full update:
+If an assignment already exists but `mainNode` is empty (the node shows up in `mcp search nodeType:AccessAssignment partitions:all` yet permissions still fail), patch it with a full update:
 
 ```bash
 mcp update --nodes '[{

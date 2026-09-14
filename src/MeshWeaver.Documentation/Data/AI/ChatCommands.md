@@ -153,7 +153,7 @@ This guidance lives in the shared agent base prompt (`AgentChatClient`); the age
   owned by the harness (`IHarness.Commands`) and route to its connect flow; they take priority in dispatch.
 - **`Instructions`** (no `Action`) — a pure-instruction skill (its how-to is the markdown body). Skills are
   **read from the mesh on demand**, never materialised to disk: the MeshWeaver agent finds them with
-  `search nodeType:Skill` and injects one with the `load_skill` tool; the CLI harnesses (Claude Code /
+  `search nodeType:Skill partitions:all` and injects one with the `load_skill` tool; the CLI harnesses (Claude Code /
   Copilot) discover + read them through the `meshweaver` MCP server. A `LaunchesSubThread` skill runs in
   its own sub-thread when loaded (the generic `StartThread` launcher).
 

@@ -156,6 +156,96 @@ public record ParsedQuery(
     }
 
     /// <summary>
+    /// Whether this query says WHERE to look — it names a partition, or it explicitly asks to span
+    /// them. The negation is an UNANCHORED query: one that a partitioned backend can answer only by
+    /// a UNION over every partition it knows, and that it therefore refuses (the CI invariant) or
+    /// serves from the partitions it happens to enumerate (a production host under
+    /// <c>ServeAndReport</c>) — a partial answer with nothing on it to say so (MeshWeaver #4274).
+    ///
+    /// <para>Four ways to be specified, and a query needs exactly one:</para>
+    /// <list type="bullet">
+    /// <item><b>A concrete anchor</b> — <c>path:X/…</c>, or <c>namespace:X/…</c>, which the parser
+    /// folds into the same <see cref="Path"/>. Pins to one partition.</item>
+    /// <item><b>A multi-path anchor</b> — <c>path:A|B|C</c>, i.e. <see cref="Paths"/>. Pins to the
+    /// set.</item>
+    /// <item><b>The explicit request</b> — <c>partitions:all</c>, i.e. <see cref="CrossPartition"/>.
+    /// 🚨 It is a FLAG, and <c>path:*</c> is NOT a synonym: partition resolution reads a path's first
+    /// segment as a partition NAME, so <c>path:*</c> pins the query to a partition literally called
+    /// <c>*</c> and the caller gets an EMPTY result rather than an error.</item>
+    /// <item><b>A namespace filter</b> — the <c>namespace:A|B|C</c> membership form and the explicit
+    /// wildcard <c>namespace:*/_Thread</c>. The parser keeps both as filters rather than a Path (see
+    /// <c>QueryParser</c>), so Path is null and only <see cref="ExtractNamespacePatterns"/> sees them.
+    /// Missing this case would refuse the satellite browses that are the legitimate spanning
+    /// reads.</item>
+    /// </list>
+    ///
+    /// <para>🚨 This is THE definition, and there is one: the Postgres planner
+    /// (<c>PostgreSqlPartitionedMeshQuery.IsSufficientlySpecified</c>, MeshWeaver.Plugins) decides
+    /// whether to refuse on it, and <c>MeshOperations.Search</c> — the MCP <c>search</c> tool and the
+    /// agents' <c>Search</c> — refuses on it BEFORE the query reaches any backend, so the two cannot
+    /// drift the way the two executors of the query language once did (#3511). A routing rule
+    /// (<c>nodeType:User</c> → the auth mirror) can still name a partition for a query this method
+    /// calls unspecified; that resolution lives on <c>MeshConfiguration.ResolveRoutingHints</c>, and
+    /// callers that honour it check it after this.</para>
+    /// </summary>
+    /// <returns>True when the query names where to look; false when it is unanchored.</returns>
+    public bool IsSufficientlySpecified() =>
+        CrossPartition
+        || NamesConcretePartition(Path)
+        || Paths is { Count: > 0 }
+        || ExtractNamespacePatterns().Count > 0;
+
+    /// <summary>
+    /// Whether <paramref name="path"/> NAMES a partition — a non-empty path whose first segment is
+    /// not the wildcard. <c>path:*</c> looks like an anchor to a null-check and is not one (see
+    /// <see cref="IsSufficientlySpecified"/>); counting it as specified would let exactly the
+    /// silent-empty shape through the refusal built to stop it.
+    /// </summary>
+    private static bool NamesConcretePartition(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        var trimmed = path.Trim('/');
+        if (trimmed.Length == 0) return false;
+        var slash = trimmed.IndexOf('/');
+        var first = slash < 0 ? trimmed : trimmed[..slash];
+        return first.Length > 0 && first != "*";
+    }
+
+    /// <summary>
+    /// The partition(s) this query names, as written — the first path segment of the anchor, every
+    /// distinct first segment of a multi-path anchor, or the namespace filter values verbatim
+    /// (a <c>namespace:*/_Thread</c> pattern is reported as the pattern, because it does not name a
+    /// partition). Empty for an unanchored query and for <c>partitions:all</c>, whose coverage only
+    /// the backend that ran it can state. What <c>MeshOperations.Search</c> puts in its envelope's
+    /// <c>coverage</c> when no provider reported the partitions it actually read.
+    /// </summary>
+    /// <returns>The named partitions or namespace patterns, in query order, distinct.</returns>
+    public IReadOnlyList<string> NamedPartitions()
+    {
+        var named = new List<string>();
+        if (Paths is { Count: > 0 })
+        {
+            foreach (var p in Paths)
+                if (FirstSegmentOrNull(p) is { } seg) named.Add(seg);
+        }
+        else if (FirstSegmentOrNull(Path) is { } seg)
+        {
+            named.Add(seg);
+        }
+        foreach (var pattern in ExtractNamespacePatterns())
+            named.Add(pattern);
+        return named.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static string? FirstSegmentOrNull(string? path)
+    {
+        if (!NamesConcretePartition(path)) return null;
+        var trimmed = path!.Trim('/');
+        var slash = trimmed.IndexOf('/');
+        return slash < 0 ? trimmed : trimmed[..slash];
+    }
+
+    /// <summary>
     /// Projects an item down to only the requested properties.
     /// Returns a dictionary with the selected property names and their values.
     /// </summary>

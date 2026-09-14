@@ -108,6 +108,77 @@ public class MeshQueryMergeContractTest
         change.Items.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// The denominator rides the merge (MeshWeaver #4274): the partitions each provider says it
+    /// READ FROM are unioned onto the merged Initial, in first-seen order, deduplicated. A merge
+    /// where one provider reports and one does not carries the reporting one's set — a partial
+    /// denominator a caller can still read a zero against.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task ReportedPartitions_AreUnionedOntoTheMergedInitial()
+    {
+        var reporting = new FakeProvider("reporting",
+            () => Observable.Return(Initial(Node("acme/one")) with { Partitions = ["acme", "shared"] }));
+        var alsoReporting = new FakeProvider("alsoReporting",
+            () => Observable.Return(Initial(Node("shared/two")) with { Partitions = ["shared", "docs"] }));
+        var silent = new FakeProvider("silent", () => Observable.Return(Initial()));
+
+        var query = new MeshQuery([reporting, alsoReporting, silent], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown partitions:all", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Await();
+
+        change.Partitions.Should().Equal(new[] { "acme", "shared", "docs" },
+            "the union of what the reporting providers read, deduplicated, and a silent provider adds nothing");
+    }
+
+    /// <summary>
+    /// The negative control that keeps the union honest: when NO provider reports, the merged
+    /// Initial's <see cref="QueryResultChange{T}.Partitions"/> is null — unknown — never an empty
+    /// list that would read as "read from no partition" or be mistaken for a complete denominator.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task NoProviderReporting_LeavesPartitionsNull()
+    {
+        var a = new FakeProvider("a", () => Observable.Return(Initial(Node("p/one"))));
+        var b = new FakeProvider("b", () => Observable.Return(Initial(Node("q/two"))));
+
+        var query = new MeshQuery([a, b], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown partitions:all", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Await();
+
+        change.Partitions.Should().BeNull("an unreported denominator is unknown, not empty");
+    }
+
+    /// <summary>
+    /// The single-provider fast path clips through <c>ClipMergedInitial</c> with a <c>with</c>
+    /// expression, so the provider's report must survive it unchanged.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task SingleProvider_ReportedPartitionsSurviveTheClip()
+    {
+        var a = new FakeProvider("a",
+            () => Observable.Return(Initial(Node("p/one"), Node("p/two")) with { Partitions = ["p"] }));
+
+        var query = new MeshQuery([a], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "namespace:p", Limit = 1 }, Options)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Await();
+
+        change.Items.Should().HaveCount(1, "the Limit clip applied");
+        change.Partitions.Should().Equal("p");
+    }
+
     [Fact(Timeout = 30_000)]
     public async Task HealthyProviders_MergeUnchanged()
     {

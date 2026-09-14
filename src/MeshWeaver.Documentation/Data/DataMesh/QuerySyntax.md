@@ -280,6 +280,30 @@ path:foo/bar/baz scope:ancestorsandself sort:length(path)-desc limit:1
 
 `scope:ancestorsandself` expands the candidate set to self and ancestors; `sort:length(path)-desc limit:1` collapses it to the deepest match. Both clauses are required. Callers that want the full ancestor chain (breadcrumbs, parent navigation) simply omit `limit:1`.
 
+### `partitions` — say where to look
+
+Every partition is its own store. A query that names no partition (`path:`/`namespace:` with a
+concrete first segment, or the `namespace:A|B` membership and `namespace:*/X` wildcard forms) would
+have to UNION every partition schema — the lock-bomb shape behind the 2026-08-31 outage — so a
+partitioned backend **refuses** it unless the query declares that spanning partitions is what it
+means:
+
+```
+nodeType:NodeType content.compilationStatus:Error partitions:all   # every partition the caller can read
+```
+
+`partitions:all` is a FLAG. `path:*` is not a synonym: partition resolution reads a path's first
+segment as a partition NAME, so `path:*` pins the query to a partition literally called `*` and
+answers empty. A declared fan-out still reaches only the *searchable* partitions — the system
+schemas (`Admin`, `Auth`, `Kernel`, `Portal`, …) are never enumerated by a fan-out; anchor to reach
+them — and only those the caller holds a read grant on.
+
+**The `search` tool refuses the unanchored form outright** (MCP `search`, the agents' `Search`) —
+`Error: Query is not sufficiently specified …` naming both remedies — and every envelope it returns
+carries `coverage: { scope, partitions }`, the partitions the answer was read from. A `count: 0` is
+read against that list, never on its own. Full account:
+[Search Coverage and Refusal](/Doc/Architecture/SearchCoverageAndRefusal).
+
 ### `sort`
 
 Specifies sort order. Default is ascending; append `-desc` for descending:

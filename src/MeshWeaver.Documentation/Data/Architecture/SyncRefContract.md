@@ -331,8 +331,9 @@ about in its own words — *"The CONTENT commit, not `$GITHUB_SHA`. They differ 
   `lastSyncCommitSha`, which is now the same value the webhook filtered on, so
   `GitHubWebhookProcessor.SkipReason`'s "already at this commit" compares like with like.
 - After any wave that moves plugin sources, the readiness sweep is one call:
-  `search 'nodeType:NodeType content.compilationStatus:Error'`. A `searched: false` envelope is a
-  FAILED sweep, not a clean one.
+  `search 'nodeType:NodeType content.compilationStatus:Error partitions:all' limit:200`, read
+  against its envelope's `coverage.partitions` (the bare form is refused, #4274). A
+  `searched: false` envelope is a FAILED sweep, not a clean one.
 - `.github/scripts/test-publish-bake-overlap.py` EXECUTES the publish script and reads the marker off
   the resulting bytes, in both directions: a bake of another repository's content records that
   repository, and a lane baking its own content still records itself. Run it against the pre-fix
