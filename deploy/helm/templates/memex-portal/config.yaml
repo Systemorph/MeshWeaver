@@ -466,6 +466,16 @@ data:
   # inferred from name resemblance. It may be set through an overlay's config.memex_portal or a
   # record's extraPortalConfig; the values path below is what the instance record renders.
   SelfUpdate__RegistryValidationUrl: "{{ (.Values.selfUpdate).registryValidationUrl | default .Values.config.memex_portal.SelfUpdate__RegistryValidationUrl | default "" }}"
+  # 🚨 WHETHER THIS INSTALL MAY PATCH ITS OWN WORKLOADS (MeshWeaver#4098) — rendered from the SAME
+  # value that renders (or, by default, does NOT render) the memex-portal-self-update Role in
+  # rbac.yaml, so the right and the intent to use it are one declaration. "false" (the chart's
+  # default): the self-updater DETECTS a newer release and HANDS it to the control instance's
+  # inbox (Hosting__ControlInbox__Url / __Secret, or Hosting__ReportTo + the PlatformBuilds route,
+  # plus Hosting__Deployment) and never issues a PATCH; the control plane opens the Roll. "true":
+  # the pre-#4098 in-pod roll, for a standalone Kubernetes install with no control instance. A
+  # bool, always rendered — the image's own default is TRUE (an image under an older chart, which
+  # renders no key, keeps behaving as before), so this line is what moves an install.
+  SelfUpdate__CanPatch: "{{ if (.Values.selfUpdate).canPatch }}true{{ else }}false{{ end }}"
   # ---- Container image mirror (MeshWeaver#3353, src/MeshWeaver.ContainerImages) --------------
   # The /v2 pull surface THIS installation serves. Rendered only when containerImages.upstream is
   # set — an absent block reaches no container and the mirror stays OFF (every /v2 route 404s).

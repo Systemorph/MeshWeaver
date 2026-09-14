@@ -153,8 +153,9 @@ applies the update.
 
 | Target | What "update" does |
 |---|---|
-| **AKS** (`memex` portal) | The portal **patches its own Deployment image from inside the pod** (Kubernetes API, projected service-account token). It rolls the **portal AND migration** deployments to the new tag together; k8s does the rolling update. |
-| **Local k3s on Mac** | Same Helm chart as AKS → same in-pod patch. (A version-specific tag pulls even under `imagePullPolicy: IfNotPresent` because the tag isn't cached. A pure local-build dev loop without ACR is effectively `None`.) See [LocalColimaMac](/Doc/Architecture/LocalColimaMac). |
+| **AKS** (the fleet) | The portal **detects** the release and **hands it to the control instance** — one signed `self-update-available` event into `memex.systemorph.com`'s inbox — and the control plane opens the `Roll` that `aks-ops.yml` executes: unattended when the record already pins that tag, behind an approval in the mesh otherwise. The portal holds NO right on the cluster (MeshWeaver#4098; [Self-Update on the Control Lane](../SelfUpdateControlLane)). |
+| **A standalone Kubernetes install** (`selfUpdate.canPatch: true`) | The pre-#4098 shape: the portal **patches its own Deployment image from inside the pod** (Kubernetes API, projected service-account token), rolling the **portal AND migration** deployments to the new tag together; k8s does the rolling update. Only with a chart that renders the self-patch Role. |
+| **Local k3s on Mac** | `memex-local` rolls host-side (`autoroll`, `deploy/homebrew/README.md`); the in-pod patch is not used. (A version-specific tag pulls even under `imagePullPolicy: IfNotPresent` because the tag isn't cached. A pure local-build dev loop without ACR is effectively `None`.) See [LocalColimaMac](/Doc/Architecture/LocalColimaMac). |
 | **Monolith** (non-k8s) | No self-patch (no service-account token) → detect-only: records `LatestAvailableTag` for visibility; the operator updates the binary. |
 | **MAUI app** | **Detect + notify.** A sandboxed app can't replace its own binary, so on connecting to a remote mesh that runs a newer platform version it shows an in-app alert: update from the store and relaunch. |
 
@@ -195,14 +196,18 @@ an availability incident to fix, not an incompatible release to re-bake.
 
 ---
 
-## 6. AKS prerequisites (for the in-pod patch + ACR polling)
+## 6. AKS prerequisites (ACR polling; the in-pod patch only where it is still allowed)
 
-The Helm chart (`deploy/helm/templates/memex-portal/`) ships these so the portal **can** update itself:
+The Helm chart (`deploy/helm/templates/memex-portal/`) ships these:
 
-- **`serviceaccount.yaml`** — `memex-portal-sa` (the pod runs as it).
-- **`rbac.yaml`** — a `Role` granting `get,patch` on the portal + migration Deployments **only**
-  (scoped by `resourceNames`), bound to the SA. Without it the PATCH is `403`; the poller logs and
-  keeps ticking (no crash).
+- **`serviceaccount.yaml`** — `memex-portal-sa` (the pod runs as it). It carries **no** Kubernetes
+  right by default.
+- **`rbac.yaml`** — rendered **only with `selfUpdate.canPatch: true`**: a `Role` granting `get,patch`
+  on the portal + migration Deployments **only** (scoped by `resourceNames`), bound to the SA. The
+  same value renders `SelfUpdate__CanPatch` into the ConfigMap, so with the default (`false`) the
+  poller never attempts the PATCH — it hands the release to the control instance instead
+  ([Self-Update on the Control Lane](../SelfUpdateControlLane)). A `helm upgrade` with the default
+  DELETES a Role a previous release created.
 - **`deployment.yaml`** — sets `serviceAccountName`, and (when `selfUpdate.azureClientId` is set) the
   `azure.workload.identity/use` label + `AZURE_CLIENT_ID`.
 
@@ -222,7 +227,9 @@ in-cluster Deployment PATCH works without this; it only authenticates the tag-li
   (`kubectl rollout status`).
 - **Pin an environment:** set the policy to `None`. `Stable` (the default) is releases-only; a
   `Continuous` install follows only the line its `pattern` names.
-- **Manual apply:** Settings → Updates → *Apply available update now* (installs that can self-patch).
+- **Manual apply:** Settings → Updates → *Apply available update now* — on the fleet it hands the
+  latest tag to the control instance (the same event the poller sends); on a standalone install
+  that may self-patch it patches.
 
 The decision logic (which tag each policy picks; "is newer") is unit-pinned in
 `VersionSelectTest` (ordering, and the three-valued "does my own tag still exist" check) and

@@ -1,0 +1,234 @@
+---
+Name: Self-Update on the Control Lane
+Category: Architecture
+Description: Where the update decision is made and who may act on it once no portal holds a credential that changes the cluster — detection stays on the instance, the apply becomes one signed event to the control instance, the chart's one declaration binds the self-patch Role to the poller's intent, and the transition runs namespace by namespace through the maintainer's Reconcile. With the design for deriving the registry pairing at render time and one trust rule for the bundle client.
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6"/><path d="m4.93 10.93 4.24 4.24"/><path d="M2 18h6"/><path d="M19.07 10.93l-4.24 4.24"/><path d="M22 18h-6"/><circle cx="12" cy="18" r="3"/></svg>
+---
+
+# Self-Update on the Control Lane
+
+**Maintainer decisions (2026-09-12, verbatim, MeshWeaver.Plugins `Hosting/AksOperationsViaActions`):**
+*"let's see that the only place to alter aks is the systemorph-com app"*, *"take rights away from me
+as well"*, *"approval in mesh is good"*. This page is the core half of phase **P3b** of that design
+([MeshWeaver#4098](https://github.com/Systemorph/MeshWeaver/issues/4098)): every portal loses its
+`memex-portal-self-update` Role, and self-update becomes **detect → control inbox → Roll**. It also
+settles the two issues that share the question *where is the update decision made, and who may act
+on it* — [#4093](https://github.com/Systemorph/MeshWeaver/issues/4093) (an instance on the fleet
+registry cannot self-update) and [#4123](https://github.com/Systemorph/MeshWeaver/issues/4123)
+(derive the registry/validator pairing once, on the control instance).
+
+## The model in one paragraph
+
+The instance keeps **detecting** exactly as before: the registry watch, `Admin/UpdatePolicy`, the
+release-availability gate and the combo gate all still decide *which* tag is worth rolling to
+(`Doc/Architecture/ReleaseStrategy`, `SelfUpdateTargetSelection`). What changes is the **apply**.
+Instead of a Kubernetes `PATCH` of its own Deployments, the instance sends **one signed event** into
+the control instance's inbox — `self-update-available`, naming its record, the image it runs and the
+image it selected — and the control plane turns that into a `Hosting/InstanceAction` **`Roll`** on
+the instance's record, executed by `aks-ops.yml` through the `systemorph-com` App. A Roll to the tag
+the record already pins is an **unattended restore**; a Roll to a newer tag **waits for an approval
+in the mesh**. So a `Continuous` policy means *one approval per release*, and a merge to
+`Systemorph/Memex` that moves `pinnedImageTag` is what makes a roll unattended. **A portal that
+cannot patch itself is the correct state, not a degraded one.**
+
+## Who applies — three states, one pure rule
+
+`SelfUpdateHandover.ApplyModeFor(chartCanPatch, updaterCanPatch, route)`:
+
+| `SelfUpdateApply` | When | What the check does with a selected tag |
+|---|---|---|
+| **`SelfPatch`** | the chart says `SelfUpdate:CanPatch=true` **and** the updater can patch (`IDeploymentUpdater.CanPatch`) | the pre-P3b roll: migration Job, then `PATCH` — kept only while a chart still renders the Role |
+| **`ControlLane`** | not both of the above, and a route to the control inbox exists | announces the release; patches nothing; records `HandedOverTag/At/To` on `Admin/UpdatePolicy`; verdict `HandedOver` |
+| **`DetectOnly`** | neither | records the release for a person; the verdict **names the missing key** (`Hosting:Deployment`, `Hosting:ControlInbox:Url`/`Hosting:ReportTo`, `Hosting:ControlInbox:Secret`) |
+
+🚨 **Both halves of the right are required for a self-patch, and the chart's half is the one that
+moves.** `SelfUpdateOptions.CanPatch` is rendered by the chart from the SAME value that renders — or,
+by default, does not render — the self-patch Role (`selfUpdate.canPatch`), so the right and the
+intent to use it are one declaration: an install whose chart renders no Role also renders
+`SelfUpdate__CanPatch=false` and never issues a `PATCH` the cluster would answer `403` to. The C#
+default is `true` — deliberately the opposite of the chart's `false` — so an image carrying this
+member under an **older** chart, which renders no key, behaves exactly as before. The fleet moves
+when the **chart** moves, namespace by namespace, through the maintainer's Reconcile — the same act
+that deletes the Role (a `helm upgrade` removes what the previous release created). That ordering
+is what keeps a `Continuous` instance from freezing on the image that introduced this: `memex-cloud`
+already carries `Hosting__ControlInbox__Url` (for the Feedback hand-over), and a C# default of
+`false` would have flipped it to the control lane on its next self-roll — before any control plane
+could route the event.
+
+The manual **Apply available update now** button on Settings → Updates takes the same decision and
+sends the same event (trigger `Manual`), so the control plane cannot tell a click from a check.
+
+## The channel — the one every portal already has
+
+The instance → control-instance channel is the pair the Feedback hand-over introduced
+(MeshWeaver.Plugins#1713), so a portal declares its control inbox **once**:
+
+| key | meaning |
+|---|---|
+| `Hosting:Deployment` | this instance's `Hosting/Deployment` record id — **required on every route**; the control plane routes by it, and an event naming no record is not a hand-over |
+| `Hosting:ControlInbox:Url` | the inbox URL, `https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds` |
+| `Hosting:ReportTo` | the control instance the inventory report goes to; when `ControlInbox:Url` is absent the inbox URL is **derived** from it (`+ /api/hooks/Hosting/PlatformBuilds`) — one declaration of "who is my control instance" |
+| `Hosting:ControlInbox:Secret` | the HMAC secret the inbox verifies — byte-identical to the control instance's `Hosting:PlatformWebhookSecret`; read at delivery time, never captured, never logged |
+
+Routes (`SelfUpdateHandover.RouteFor`, pure): **`Post`** — record id + URL + secret; **`Local`** —
+this IS the control instance: `Hosting/PlatformBuilds` is a listed `WebhookInbox:Targets` entry and
+its `SecretConfigKey` (default `Hosting:PlatformWebhookSecret`) is present, so the event is delivered
+into its own inbox in-process through `WebhookInbox.Deliver`; **`None`** otherwise. A URL that
+carries userinfo or is not `http(s)` declares **no** inbox rather than half of one — the same
+whole-value rule the registry pairing uses (`SelfUpdateRegistryCredential`).
+
+**What the fleet's records carry today** (read on the control instance, 2026-09-14): `memex-cloud`
+declares `Hosting__ControlInbox__Url` and mounts `Hosting__ControlInbox__Secret`; `build` declares
+`Hosting__ReportTo` + `Hosting__Deployment` and mounts the fleet secret **as** `Hosting__PlatformWebhookSecret`
+(its own inbox), not under the `ControlInbox` key; `pearl` declares `Hosting__ReportTo` +
+`Hosting__Deployment` and mounts no secret; `memex` is the control instance (`Local`). So `build` and
+`pearl` need one Key Vault mapping each — `Hosting__ControlInbox__Secret` → the vault object holding
+the fleet webhook secret — before they can hand over; until then they are `DetectOnly` and their
+verdict says exactly that.
+
+## The event — the inbox contract the control plane routes
+
+```json
+{
+  "event": "self-update-available",
+  "deployment": "build",
+  "instance": "https://build.meshweaver.cloud",
+  "currentVersion": "3.0.0-ci.8411+c84c6c0",
+  "newVersion": "3.0.0-ci.8460",
+  "currentImage": "cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411",
+  "newImage": "cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8460",
+  "policy": "Continuous",
+  "pattern": "3.0.0-ci*",
+  "trigger": "SafetyNet",
+  "detectedAt": "2026-09-14T08:00:00Z",
+  "reporter": "self-update"
+}
+```
+
+Signed GitHub-style — `X-Hub-Signature-256: sha256=<hex HMAC-SHA256 of the raw body>` — with the
+inventory report's own signer (`DeploymentReportService.Sign`), camelCase, nulls omitted, `event`
+first. A second event, **`self-update-restart-pending`** (no `newVersion`/`newImage`, a `reason`),
+announces a landed module generation waiting for its activation restart (#3650): a restart re-creates
+the pods the record declares — the **unattended** class on the control lane — so a module still
+activates without a person, exactly as an install that patched itself did it. A check that handed a
+release over considers no restart: the Roll it becomes restarts the pods, and a second request for
+the same instance would only race it (`SelfUpdateVerdict.MayRestartAfter`).
+
+🚨 **Idempotency lives on the control plane, not on the instance.** Every check that selects a target
+announces it — the safety net makes that at most hourly — and the control plane treats
+`(deployment, newImage)` as ONE request while an action for it is open or done. Re-delivery is what
+closes a lost event without a watchdog: an event the control instance accepted and could not route
+(the router not yet live) is announced again by the next check, and the first control plane that
+can route it does. The instance owns detection; the roller owns pacing — which is why the roll floor
+(`MinRollInterval`) does not apply to a hand-over: the floor paces pod restarts, and this install
+restarts nothing.
+
+**A failed hand-over is its own verdict** (`HandoverFailed`, Warning): the check succeeded, the
+release is known and recorded, nothing was patched, the next check announces again — and a `401`
+names the pairing to check (`Hosting:ControlInbox:Secret` vs the control instance's
+`Hosting:PlatformWebhookSecret`), never a value. The inbox's `signature: "not-required"` body is
+carried into the verdict too: it means the control instance declares no `SecretConfigKey` for the
+target and verified nothing (#3312).
+
+**Threat, stated.** The secret authenticates POSSESSION, not identity: any instance holding the
+fleet secret could announce a release for another deployment. What bounds it is the control plane's
+class rule, not the signature — a Roll to a newer tag waits for an approval in the mesh, a restore to
+the pinned tag is unattended but rate-limited (3 per deployment per hour) and re-applies a state a
+reviewed PR already declared. The control plane must still refuse an event whose `deployment` names
+no record it holds.
+
+## The chart — one declaration, one `helm upgrade`
+
+| | default (`selfUpdate.canPatch: false`) | `selfUpdate.canPatch: true` |
+|---|---|---|
+| `rbac.yaml` | renders **nothing** — a `helm upgrade` DELETES the Role and RoleBinding a previous release created | the Role (`get,patch` on the two Deployments, `create,get,list,delete` on jobs) and its binding |
+| `config.yaml` | `SelfUpdate__CanPatch: "false"` | `SelfUpdate__CanPatch: "true"` |
+| `serviceaccount.yaml` | `memex-portal-sa` — the pod runs as it; workload identity for ACR listing only | unchanged |
+
+Verified with `helm template deploy/helm` (no Role, `"false"`) and `--set selfUpdate.canPatch=true`
+(Role + RoleBinding, `"true"`). `HelmValues` (MeshWeaver.Plugins) renders nothing for
+`selfUpdate.canPatch`, so every fleet record takes the default. Set it `true` ONLY on a standalone
+Kubernetes install that has no control instance to hand to; `memex-local` does not need it — its
+auto-roll is host-side (`deploy/homebrew/README.md`), it never used the in-pod patch.
+
+**The acceptance evidence #4098 asks for** — `kubectl auth can-i patch deployment/memex-portal-deployment
+-n <ns> --as=system:serviceaccount:<ns>:memex-portal-sa` → `no` on every namespace — is produced by
+a Reconcile of each namespace against a chart pin that carries this change. That is a cluster read,
+so it is the maintainer's to take (break-glass otherwise); the portal-side reading that agrees with
+it is the boot line: `[SelfUpdate] starting … canPatch=False, apply=control-lane (a detected release
+is handed to https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds; the control plane rolls)`.
+
+## What is left, in order — and who owns each step
+
+1. **Core (this change).** The poller hands over; the chart's default renders no Role and
+   `SelfUpdate__CanPatch=false`; the Updates tab hands over on the button; the verdicts, the policy
+   node's `HandedOver*` fields and the boot line say which of the three states an install is in.
+2. **MeshWeaver.Plugins — the router.** `PlatformBuildInboxWatcher.PlanFor` gains a route for
+   `self-update-available` → a `Hosting/InstanceAction` `Roll` on `Deployments/<deployment>` with
+   `imageTag = newVersion` (refusing a `deployment` that names no record; idempotent on
+   `(deployment, newImage)` against open or done actions), and for `self-update-restart-pending` →
+   `Restart`. Today the watcher verifies the event, logs `ignoring non-build event` and deletes it —
+   so **until the router is live on memex.systemorph.com, an instance switched to the control lane
+   detects and announces but nothing rolls**; visible on both ends, never silent. The Hosting
+   package's pre-install of `MeshWeaver.SelfUpdate.Aks` keeps the ACR tag lister (detection on an
+   ACR-based instance needs it) and its `KubernetesDeploymentUpdater` becomes inert by the chart's
+   declaration; retiring the patcher half is that repo's call.
+3. **Systemorph/Memex — declarations, then the roll.** `Deployments/build` and `Deployments/pearl`
+   gain the `Hosting__ControlInbox__Secret` vault mapping (and, for #4093,
+   `SelfUpdate__RegistryValidationUrl` — see below); the chart pin moves to a core commit carrying
+   this change; the maintainer Reconciles each namespace, which deletes the Role and renders the
+   key. Order: the router (2) first, or accept that `Continuous` deliveries on the switched
+   namespaces wait for it.
+4. **Then #4093 closes** on its restated condition — `build` detects a newer image, hands it to the
+   control instance, a Roll is opened and executed — and #4098 on the `can-i … no` reading.
+
+## #4093 and #4123 — the pairing, and where the decision about it lives
+
+Detection on a fleet-registry instance still needs the instance key presented to
+`cr.meshweaver.cloud`, and `SelfUpdateRegistryCredential` is unchanged: the pairing is a
+**declaration** (`SelfUpdate:RegistryValidationUrl`), never host resemblance, and an absent
+declaration refuses. #4094 made the declaration possible; the config-repo declaration on `build` and
+`pearl` is step 3 above. What #4123 adds — *design, recorded here; not implemented in this change,
+which was scoped to P3b* — is **who writes it**:
+
+- **Derive at render time, on the control instance.** `HelmValues` (MeshWeaver.Plugins) already
+  derives `selfUpdate.registry` from the image host. The same render can derive
+  `selfUpdate.registryValidationUrl`: given the hosting records the control instance holds, the one
+  whose `registry.host` equals the consumer's image host carries the `validationUrl`
+  (`Deployments/memex-cloud` → `https://memex.meshweaver.cloud/api/instances/token`). That needs
+  `HelmValues.Render` to receive the registry records (or the resolved pairing) from
+  `InstanceActionPlan`, which reads them on the control instance — a Plugins change, pure at the
+  render, no network in the update path. The consumer-side key stays the wire; a hand-written
+  `SelfUpdate__RegistryValidationUrl` on a record keeps winning, so nothing already declared changes.
+- **One trust rule for the bundle client.** `PluginBundleClient.DownloadArtifact` presents the plugin
+  registry's key to whatever host the catalog's bundle index advertises. The same pairing, read from
+  the mount's side, is: the key held for registry mount **M** may go to artifact host **H** only when
+  **H is M's own host, or M itself declares H as its artifact registry**. The declaration belongs to
+  the party whose key it is — the registry — and is best carried on the **bundle index** (an
+  index-level `artifactRegistry`, sourced from the registry record's `registry.host`, not from a
+  publisher's bundle entry), so a compromised publisher lane cannot redirect consumer keys by
+  writing a foreign artifact URL into one bundle. 🚨 It must **not** be keyed on
+  `SelfUpdate:Registry`: the control instance `memex` pulls its image from ACR and still adopts
+  bundles sealed on `cr.meshweaver.cloud`, so a rule tied to the image registry would refuse its
+  every bundle and turn adoption into boot-time compiles. Scope: core (`PluginBundleClient`, the
+  index shape) plus the registry's index endpoint — a scope call the maintainer has not made, and
+  the reason #4123 stays open past this change.
+
+**An alternative that would retire both issues — recorded, not taken.** Detection could move to the
+control plane altogether: every instance already reports its `platformVersion` and `updatePolicy`
+hourly (`DeploymentInventory`), the control instance holds the registry's record, and a FleetWatch
+tick comparing each instance's version with the newest tag its policy admits could open the Roll
+with no per-instance registry credential at all — no pairing to declare, nothing to derive. It
+changes the maintainer's decision that *"SelfUpdate keeps detect"*, so it is a scope call for him,
+not a follow-up.
+
+## Related
+
+- `Hosting/AksOperationsViaActions` (MeshWeaver.Plugins) — the whole design, phases P1–P3c.
+- [Release & Self-Update Strategy](../ReleaseStrategy) · [Self-Update Target Selection](../SelfUpdateTargetSelection)
+  · [The Self-Update Registry Credential](../SelfUpdateRegistryCredential) · [The Self-Update Schema Wall](../SelfUpdateSchemaWall).
+- [DeploymentInventory](../DeploymentInventory) — the sibling channel (`Hosting:ReportTo`, `Hosting:Deployment`).
+- `deploy/helm/templates/memex-portal/rbac.yaml`, `config.yaml`, `values.yaml` — the chart half.
+- `memex/Memex.Portal.Shared/SelfUpdate/SelfUpdateHandover.cs`, `SelfUpdateHostedService.Apply` — the code;
+  `test/Memex.Portal.Shared.Test/SelfUpdateHandoverTest.cs` (the pure rules),
+  `SelfUpdateHandsOverToTheControlLaneTest.cs` (against a real mesh and an in-process inbox).

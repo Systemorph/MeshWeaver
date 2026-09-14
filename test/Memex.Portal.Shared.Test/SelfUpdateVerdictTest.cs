@@ -40,6 +40,11 @@ public class SelfUpdateVerdictTest
     [InlineData(SelfUpdateOutcome.Restarted, false)]
     [InlineData(SelfUpdateOutcome.RestartDeferred, false)]
     [InlineData(SelfUpdateOutcome.RestartUnavailable, false)]
+    // A release handed to the control lane WAS waiting (#4098) — the report must fire for it as for
+    // an applied roll; a hand-over that failed is still a release nobody announced to this install.
+    [InlineData(SelfUpdateOutcome.HandedOver, true)]
+    [InlineData(SelfUpdateOutcome.HandoverFailed, true)]
+    [InlineData(SelfUpdateOutcome.RestartHandedOver, false)]
     public void FoundNewerRelease_IsTrueExactlyWhenAReleaseWasWaiting(
         SelfUpdateOutcome outcome, bool expected)
         => Assert.Equal(expected, new SelfUpdateVerdict(outcome, "…").FoundNewerRelease);
@@ -69,6 +74,10 @@ public class SelfUpdateVerdictTest
                 SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "3.0.0", TimeSpan.FromMinutes(5), TimeSpan.FromHours(1)),
             SelfUpdateVerdict.RestartUnavailable(
                 SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "3.0.0", "this install does not self-patch"),
+            SelfUpdateVerdict.HandedOver("3.0.1", "https://control.example/api/hooks/Hosting/PlatformBuilds", "accepted (200)"),
+            SelfUpdateVerdict.HandoverFailed("3.0.1", "401 Unauthorized"),
+            SelfUpdateVerdict.RestartHandedOver(
+                SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "3.0.0", "https://control.example/api/hooks/Hosting/PlatformBuilds", "accepted (200)"),
         ];
 
         Assert.Equal(
@@ -237,6 +246,10 @@ public class SelfUpdateVerdictTest
     [InlineData(SelfUpdateOutcome.CheckFailed, false)]
     [InlineData(SelfUpdateOutcome.UpdatesDisabled, false)]
     [InlineData(SelfUpdateOutcome.NoOutcome, false)]
+    // A release handed to the control lane is a roll in flight there — its Roll restarts the pods,
+    // and a second request for the same instance would only race it (#4098).
+    [InlineData(SelfUpdateOutcome.HandedOver, false)]
+    [InlineData(SelfUpdateOutcome.HandoverFailed, false)]
     public void MayRestartAfter_OnlyWhenTheCheckPatchedNothing(SelfUpdateOutcome outcome, bool expected)
         => Assert.Equal(expected, SelfUpdateVerdict.MayRestartAfter(new SelfUpdateVerdict(outcome, "…")));
 
