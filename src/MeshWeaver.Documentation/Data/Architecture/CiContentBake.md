@@ -1510,10 +1510,33 @@ Refusing to substitute another set.
 ```
 
 That job reported `completed success`, and emitted one well-formed receipt — carrying
-`targets-published=0`. The set was sealed and had been published to **no target at all**. The
-resolver's `--verify-source` is the instrument that answers the second question, and refusing was
-correct: compiling against a set whose content reached no target is how a run goes green against
-bytes nobody can load.
+`targets-published=0`.
+
+🚨 **That refusal was WRONG, and the reading that explained it was wrong with it (#4247).** The set
+had NOT "reached no target": job `103845949792`'s own log says, twice — once per target —
+
+```
+##[notice]…/pvc-f3e4220c… holds a COMPLETE publication of THIS content under
+prebuilt-bundles/s05687ed8a28c3094f8a6034ff20f611f/meshweaver-content
+(sentinel present, source 1c1d62adf…) — already published; skipping.
+```
+
+and the registry said the same a moment later. A sibling run of the same commit had published it
+first, and this bake correctly declined to republish — but the skip recorded NO outcome, so the
+receipt was indistinguishable from a publication that reached nothing. `--verify-source` refused on
+that ambiguity, and **a whole satellite repository — `main` and every open pull request — was red on
+a set that was fine.**
+
+The receipt now carries `targets-already`, and the reach test is
+**`published + converged + already > 0`** — the three outcomes that all mean *the set is live at
+that target*; only `targets-superseded` means it is not. Full field-by-field reading:
+[Reading a Bake Publication Receipt](/Doc/Architecture/BakePublicationReceipt).
+
+What stays true is the SHAPE of the lesson: `--verify-source` is the instrument that answers the
+second question, and a set whose content genuinely reached no target must still be refused —
+compiling against one is how a run goes green against bytes nobody can load. A receipt from before
+2026-09-14 carries no `targets-already`, so an old already-published run still reads as
+unattributable; that is history, not a live defect.
 
 So a freeze set under pressure needs **both** tests, and only one of them is visible from a set's
 name or its run's colour. Before setting `MW_PLATFORM_REF`, resolve the candidate with the same
