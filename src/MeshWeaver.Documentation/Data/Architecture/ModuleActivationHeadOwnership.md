@@ -106,25 +106,58 @@ rather than re-derives:
 Stop storing the decision and store the **facts**, one file per landing, never replaced:
 
 ```
-modules/activation.d/<Name>/<generation>.json      one landing's own record — disjoint by construction
-modules/activation.d/<Name>.json                   the legacy single record, read as one more candidate
+modules/activation.d/<Name>/<generation>.<landing>.json   one landing's own record
+modules/activation.d/<Name>.json                          the legacy per-module record, read as a candidate
+modules/activation.json                                   the legacy AGGREGATE, read as candidates too
 ```
 
-`ModuleActivationSidecar.Read` then ranks the candidates and returns the same
-`ModuleActivationEntry` it returns today — head plus fallback — by the ranking the code **already
-implements**: loadability on THIS platform first (`ModulePlatformLink.Check`), then version
-(`NuGetVersionComparer`), which is `keepsNewerHead` and `KeepsRecordedFallback` turned inside out.
+🚨 **`<generation>` alone is NOT a unique path, and assuming it was is the first thing to get wrong.**
+The generation is a CONTENT hash (#3656), so two landings of the same bytes deliberately resolve to
+the same name — which is exactly the property that makes them idempotent — while their *records* can
+differ, because a version LABEL is not part of the content. A rebuild of unchanged source republished
+at a higher version is a real case the head rule already handles. So a bare `<generation>.json` is a
+shared cell again, one level down, and an ordinary atomic replace there would break the immutability
+the whole design rests on. Two answers, and they are not equivalent:
+
+| | |
+|---|---|
+| **a unique landing key** in the file name (above) | keeps *never replaced* literally true; the reader dedupes by generation and ranks the labels. Costs several small records per generation and a dedup rule |
+| **exclusive-create with canonical metadata** — the first landing of these bytes writes the record, later ones leave it | one file per generation, but it **loses a higher version label for identical bytes**, and that is a case the head rule exists to serve |
+
+The unique landing key is the one that keeps the claim; the trade is named here so it is a decision
+rather than an oversight. (Raised by Copilot's review of this page.)
 
 Two replicas then write disjoint files and nothing is ever replaced, so there is no lost update to
 have. It is [#2090](https://github.com/Systemorph/MeshWeaver/issues/2090)'s move — *remove the shared
 cell rather than guard it* — one level down: that change split one shared `activation.json` into a
 file per module; this one splits a file per module into a file per landing.
 
+### 🚨 The derivation is TWO steps, not one, and the head rule is VERSION-first
+
+An earlier draft of this page said the ranking is *"loadability on this platform first, then
+version"* and that it lives in `ModuleActivationSidecar.Read`. **Both halves were wrong, and the
+first would roll a registry backwards** — Copilot's review of this page caught it.
+
+- **The HEAD rule is version-first and deliberately platform-blind.** `keepsNewerHead`
+  (`ModuleLandingService.cs:861`) compares versions and asserts the head's bytes are present; nothing
+  about loading enters it. [Module Adoption Policy](../ModuleAdoptionPolicy) states the reason: *"a
+  newer head that does not link on the registry's own platform — the head STAYS"*, because the shelf
+  warehouses modules for newer platforms and boot runs the fallback. Ranking the head by loadability
+  would take an older loadable shelf entry as the head the moment a newer one did not link here,
+  which is #3996 by another road.
+- **Loadability-first is the FALLBACK rule** (`KeepsRecordedFallback`), and that distinction must
+  survive the derivation intact.
+- **And `Read` cannot apply the platform half as it stands.** It takes only a root and a corruption
+  callback; the platform surface is built by `ModuleLandingService` from the entries *after* reading.
+  So the derivation splits in two: `Read` enumerates and ranks by the **pure** rules (version, bytes
+  present, enabled) — where the 82 call sites already are — and a separate, explicitly platform-aware
+  step resolves the fallback. That is a real increase on the estimate below, not a rewording.
+
 🚨 **A second property falls out, and it is an improvement rather than a side effect.** Today one
-shared file records a head chosen by whichever replica happened to write last, including its
-*loadability verdict*, measured against that replica's platform. A derived head is computed by each
-reader against its own platform. Every replica of a deployment runs one image, so the two agree in
-the normal case — but the abnormal case (a rolling update, two images live) stops being a shared
+shared file records a fallback chosen by whichever replica happened to write last, including its
+*loadability verdict*, measured against that replica's platform. A derived fallback is computed by
+each reader against its own platform. Every replica of a deployment runs one image, so the two agree
+in the normal case — but the abnormal case (a rolling update, two images live) stops being a shared
 file's coin toss.
 
 ### What it costs — measured, not estimated
@@ -132,11 +165,18 @@ file's coin toss.
 | | measured on `main`, 2026-09-14 |
 |---|---|
 | `ModuleActivationSidecar.Read(` call sites | **82 occurrences in 19 files** — 5 under `src/` + `memex/`, 14 test files |
-| `ModuleActivationSidecar.WriteEntry(` call sites | **6 occurrences in 4 files, and exactly ONE in production**: `ModuleLandingService.cs` |
+| `ModuleActivationSidecar.WriteEntry(` call sites | 6 occurrences in 4 files — **TWO in production**, both in `ModuleLandingService.cs`: the landing at `:1068` and `RemoveCore` at `:1269` |
 | `.PreviousDirectory` readers | 27 occurrences in 6 files |
 
-So the write surface is one call site and the read surface is one method — the 82 call sites go
-through `Read`, which is where the derivation lives. What is genuinely not local is the rest:
+🚨 **That second row read "exactly ONE in production" until Copilot's review, and the error is worth
+keeping visible because of its shape**: the census counted FILES and the conclusion was drawn about
+CALL SITES, so one file holding two calls was reported as one call. The one it hid is
+`RemoveCore` — **the uninstall path**, which is precisely the path item 2 below says needs a
+module-level marker of its own. A measurement whose denominator is a different unit from its claim
+is the fleet's dominant defect, committed here in a page about measuring.
+
+So the write surface is two call sites and the read surface is one method plus a new
+platform-aware resolution step. What is genuinely not local is the rest:
 
 1. **The GC's reference set.** `CollectGarbage` reclaims a generation no entry references. If the
    head is derived FROM the present generations, "unreferenced" stops existing as a concept and
@@ -148,9 +188,13 @@ through `Read`, which is where the derivation lives. What is genuinely not local
 2. **Enabled / uninstalled state is per MODULE, not per generation.** `RemoveModule` needs a marker
    of its own; the existing `.unloadable` / `.refused` / `.tier-refused` marker pattern fits, but it
    is another file and another thing `Read` must union.
-3. **A migration** for every deployment already carrying `activation.d/<Name>.json` — met by reading
-   the legacy file as one more ranking candidate, which costs nothing and never needs a rewrite
-   pass.
+3. **A migration for BOTH legacy formats, not one.** `ModuleActivationSidecar.Read`
+   (`ModuleActivation.cs:258-329`) unions the legacy AGGREGATE `modules/activation.json` — still read
+   for deployments that carry one, never written by the landing lane — with the per-module
+   `activation.d/<Name>.json`, the per-module file winning by name. A derivation that kept only the
+   per-module file as a candidate would **boot an older deployment without its stored modules**.
+   Both stay candidates, which costs nothing and needs no rewrite pass. (Copilot's review; the page
+   named only the per-module file.)
 
 ### What does NOT have to change
 
