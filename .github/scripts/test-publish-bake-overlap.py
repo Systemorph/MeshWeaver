@@ -245,6 +245,45 @@ die("unmodelled file action %r" % action)
 '''
 
 
+# ────────────────────────────── the stub `gh` (the compare API only) ──────────────────────────────
+# The publisher orders two source commits through `gh api repos/<repo>/compare/<base>...<head>` in
+# TWO places: the decision-time never-seal-backwards guard, and the pointer-move guard that repeats
+# it ~90 seconds later (MeshWeaver#3461 phase 4). Without a stub, `gh` is either absent or the real
+# CLI against a real repository, so both guards took their "could not order" arm and the cases below
+# would have measured the fallback rather than the guard.
+#
+# MOCK_GH_AHEAD holds the HEAD-side shas that are to be reported as NEWER than (and containing) the
+# base — i.e. `.status == "ahead"`, the real API's answer. MOCK_GH_FAIL makes the call fail the way
+# a token without access to a private repository does, which is the arm that measured 5 of 25 core
+# re-seals on 2026-09-13.
+STUB_GH = r'''#!/usr/bin/env python3
+import os, sys
+
+argv = sys.argv[1:]
+if not argv or argv[0] != "api":
+    sys.stderr.write("stub gh: only `gh api` is implemented\n")
+    sys.exit(2)
+if os.environ.get("MOCK_GH_FAIL"):
+    sys.stderr.write("gh: Not Found (HTTP 404)\n")
+    sys.exit(1)
+path = argv[1] if len(argv) > 1 else ""
+if "/compare/" not in path:
+    sys.stderr.write(f"stub gh: unsupported api path {path!r}\n")
+    sys.exit(2)
+pair = path.split("/compare/", 1)[1]
+base, _, head = pair.partition("...")
+ahead = os.environ.get("MOCK_GH_AHEAD", "").split()
+if head in ahead and head != base:
+    print("ahead")
+elif base in ahead and head != base:
+    print("behind")
+elif head == base:
+    print("identical")
+else:
+    print("diverged")
+'''
+
+
 # ────────────────────────────── the fake share backend ──────────────────────────────
 # Loaded by publish-bake-files.py from PUBLISH_BAKE_FAKE_SHARE_BACKEND, over the SAME filesystem
 # share and the SAME `.meta` sidecars the stub `az` reads and writes. Every second-publisher hook
@@ -457,6 +496,9 @@ class Harness:
         az = self.bin / "az"
         az.write_text(STUB_AZ)
         az.chmod(0o755)
+        gh = self.bin / "gh"
+        gh.write_text(STUB_GH)
+        gh.chmod(0o755)
         self.backend = workdir / "fake_share_backend.py"
         self.backend.write_text(FAKE_BACKEND)
 
@@ -1086,6 +1128,72 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
               s.under(s.pointer()).sealed()
               and len(s.under(s.pointer()).files()) == EXPECTED_FILES,
               f"_current={s.pointer()!r}: {denominator(s.under(s.pointer()))}")
+
+    # ── 🚨 AND THE POINTER MUST NOT MOVE BACKWARDS WHEN THE FINISH ORDER INVERTS THE CONTENT ORDER.
+    # ── The case above deliberately tolerates either generation winning, because for two runs of
+    # ── UNORDERED content either answer is whole and correct. This one is the ordered pair, and it
+    # ── is the one thing the generation layout can get silently wrong that the flat layout could
+    # ── not: under `flat` an overlap writes ONE directory, so the byte-level postcondition finds
+    # ── the other run's bytes and refuses; under `generation` the two write disjoint directories,
+    # ── there is no mix to refuse, and whichever run finishes LAST moves `_current` — which, when
+    # ── that is the run carrying OLDER content, hands every reader a complete, sealed publication
+    # ── of older bytes with nothing red anywhere.
+    # ──
+    # ── The decision-time never-seal-backwards guard cannot see it: it reads the publication that
+    # ── was live ~90 seconds earlier, before the newer run sealed. So the question is asked again
+    # ── immediately before the pointer write.
+    print("\ngeneration layout — the pointer never moves BACKWARDS (the newer run sealed first):")
+    h.reset()
+    older = Bake(work, "older-content", "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1")
+    newer = Bake(work, "newer-content", "f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2")
+    tok_old, tok_new = "Systemorph-MeshWeaver-3701-1", "Systemorph-MeshWeaver-3702-1"
+    # The NEWER content publishes (and moves the pointer) while the OLDER run is still uploading.
+    inner = h.publish_command(newer, "Systemorph/MeshWeaver", "3702", {
+        **gen,
+        "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+        "GH_TOKEN": "stub", "MOCK_GH_AHEAD": newer.source_sha,
+    })
+    r = h.publish(older, "Systemorph/MeshWeaver", "3701", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/{tok_old}/{BUNDLES[1]}",
+        "MOCK_AZ_HOOK_WHEN": "before",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-backwards",
+        "MOCK_AZ_HOOK_CMD": inner,
+        "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+        "GH_TOKEN": "stub", "MOCK_GH_AHEAD": newer.source_sha,
+        **gen,
+    })
+    s = h.shelf()
+    check("the fixture really did invert the order (both generations exist — not vacuous)",
+          sorted(s.generations()) == sorted([tok_old, tok_new]),
+          f"generations={s.generations()}")
+    check("…and the newer run really did seal first, so there was something to take back",
+          s.under(tok_new).sealed(), f"{tok_new}: {denominator(s.under(tok_new))}")
+    if expect_defect:
+        check("PRE-FIX: the older run moved the pointer onto its own publication, so every reader "
+              "serves a COMPLETE, SEALED publication of older bytes and nothing is red",
+              r.returncode == 0 and s.pointer() == tok_old,
+              f"rc={r.returncode}, _current={s.pointer()!r}")
+    else:
+        check("the pointer is left on the NEWER publication",
+              s.pointer() == tok_new and s.under(tok_new).sealed()
+              and len(s.under(tok_new).files()) == EXPECTED_FILES,
+              f"_current={s.pointer()!r}: {denominator(s.under(tok_new))}")
+        check("…and the older run still SUCCEEDS — its content is contained in what is live, so "
+              "this is not a failure to report",
+              r.returncode == 0, f"rc={r.returncode}")
+        check("…and says so, naming both commits rather than leaving a silent no-op",
+              "Not moving the pointer backwards" in r.stdout
+              and older.source_sha in r.stdout and newer.source_sha in r.stdout,
+              "a pointer that was deliberately not moved must be readable as a decision")
+        check("…and the summary counts it, on every run, as its own denominator",
+              "targets-superseded=1" in r.stdout,
+              "a run that published nothing readers see must never be counted as having published")
+        check("the older run's generation is sealed and complete, just named by nothing",
+              s.under(tok_old).sealed() and len(s.under(tok_old).files()) == EXPECTED_FILES,
+              f"{tok_old}: {denominator(s.under(tok_old))} — retention collects it once it is past the window")
+        check("the FLAT compatibility copy was not refreshed with the older bytes either",
+              set(s.bakes_present()) - {"<marker>"} != {"older-content"},
+              f"flat: {denominator(s)} — pre-pointer readers must not be handed what the pointer refused")
 
     # ── The writer must decide "already published" from the POINTED-TO directory, not the prefix.
     # Getting this wrong is the silent one: the writer would read the flat compatibility copy while

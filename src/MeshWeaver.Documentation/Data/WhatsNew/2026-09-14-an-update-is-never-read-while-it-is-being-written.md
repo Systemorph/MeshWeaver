@@ -1,12 +1,12 @@
 ---
-Name: An update is never read while it is being written
+Name: An update is published whole, then pointed at
 Category: Fix
-Description: Installations read the platform's prepared plugin content out of a folder that was being overwritten in place while they read it. Each update is now written into its own folder and only pointed at once it is complete, so a read can no longer catch an update half-finished.
+Description: Installations read the platform's prepared plugin content out of a folder that was being overwritten in place while they read it. Each update is now written into its own folder and only pointed at once it is complete and is not older than what is already live. Installations that predate the change still read a compatibility copy, which is replaced in place as before.
 Icon: Checkmark
 Order: -20260914
 ---
 
-# An update is never read while it is being written
+# An update is published whole, then pointed at
 
 When the platform prepares plugin content for an installation, it publishes a set of files —
 several dozen of them — that every installation running that platform version then reads. Until
@@ -32,21 +32,29 @@ but it is a check performed *after* the fact. It cannot stop the overwrite; it c
 A one-line pointer says which folder currently applies, and it is moved as the very last step —
 after everything in the new folder is verified complete.
 
-So a reader never looks inside a folder that is still being filled in. It follows the pointer,
-which either names the previous complete set or the new complete set, and never anything in
-between. Two pipelines publishing at the same time now write to two different folders, so there is
-no longer a mixture to produce.
+So a reader **that follows the pointer** never looks inside a folder that is still being filled
+in. It follows the pointer, which either names the previous complete set or the new complete set,
+and never anything in between. Two pipelines publishing at the same time now write to two different
+folders, so there is no longer a mixture for them to produce.
 
-**Nothing has to be upgraded to benefit.** A copy in the old flat layout is still published beside
-the new one, so an installation that predates this change reads exactly what it read before. If the
-pointer is ever missing or unreadable, every reader falls back to that copy — the worst case is the
-behaviour of the day before yesterday, not a failure.
+**And the pointer only ever moves forward.** Two updates can finish out of order — the newer one
+first — and the older one must not then take the pointer back, because that would hand every reader
+a set that is complete, correct-looking and out of date. Before moving the pointer, a publication
+re-checks what is live: if something newer arrived while it was working, it leaves the pointer
+alone, says so by name, and its own set stays on the shelf unused.
+
+**Nothing has to be upgraded, and nothing older is left worse off.** A copy in the old flat layout
+is still published beside the new one, so an installation that predates this change reads exactly
+what it read before — **including the in-place overwrite, which it still sees**. If the pointer is
+ever missing or unreadable, every reader falls back to that copy: the worst case is the behaviour of
+the day before yesterday, not a failure.
 
 ## What this does not change
 
 **Older folders are kept.** Nothing is removed until it has been superseded, is named by no
 pointer, and is more than a month old.
 
-**One copy still races.** The compatibility copy kept for installations that predate the pointer is
-still written in place, so an overlap still costs that copy and is still reported. Retiring it is
-the next step, once no installation needs it.
+**One copy still races, so this is not "the problem is gone".** The compatibility copy kept for
+installations that predate the pointer is still written in place, so for those installations the
+original overlap is exactly as it was — an overlap still costs that copy and is still reported.
+Retiring it, once no installation needs it, is what removes the race for everyone.
