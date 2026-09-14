@@ -118,8 +118,19 @@ is the list of partitions the answer was read from — a `count: 0` is read agai
 
 A query must say WHERE to look: a `namespace:`/`path:` anchor, a `basePath`, or `partitions:all` to
 declare a read over every partition the caller can read. A query with none of these is refused
-(`Error: Query is not sufficiently specified …`) rather than answered from whichever partitions the
-store happened to enumerate — see [Search Coverage and Refusal](/Doc/Architecture/SearchCoverageAndRefusal).
+rather than answered from whichever partitions the store happened to enumerate — see
+[Search Coverage and Refusal](/Doc/Architecture/SearchCoverageAndRefusal).
+
+**The refusal arrives in this tool's own container.** `MeshPlugin.Search` answers JSON on every arm,
+because its callers parse it: a refusal is
+`{"success": false, "refused": true, "error": "Query is not sufficiently specified … <the remedy>"}`,
+and any other failure is the same shape with `refused: false`. It carries **no** `count` and **no**
+`results` — it answers nothing, so it can never be read as "none found". Re-issue the query with an
+anchor or `partitions:all`; never report a refusal as "no matches".
+
+The operation underneath (`MeshOperations.Search`) and the MCP `search` tool still answer the prose
+`Error: Query is not sufficiently specified …` — that is the surface-wide failure convention, and
+`McpRemoteMeshClient` keys on the `Error:` prefix. Only the agent tool re-houses it.
 
 ### Parameters
 
