@@ -1285,7 +1285,37 @@ public static class CatalogLayoutAreas
         return withModule(Observable.Return(new InstallResult(0, 0)));
     }
 
-    // The manifest-diff fast path: fetch only manifest.lock, diff, fetch only the changed files.
+    /// <summary>
+    /// The manifest-diff fast path: fetch only <c>manifest.lock</c>, diff, fetch only the changed
+    /// files — <b>plus the declared files whose node is ABSENT from the mesh</b> (MeshWeaver#4259).
+    ///
+    /// <para>🚨 <b>The diff alone is a comparison of two DECLARATIONS.</b>
+    /// <c>newManifest.DiffFrom(record.InstalledFiles)</c> asks what the source changed since the
+    /// record the installer itself stamped; nothing in it observes the mesh. A node lost AFTER a
+    /// previous install therefore has an unchanged hash, never enters
+    /// <c>delta.AddedOrChangedFiles</c>, is never fetched, and never reaches
+    /// <c>PackageInstaller.DecideAndWrite</c> — which would have restored it, because it writes
+    /// whenever <c>current is null</c>. The presence-awareness sits one layer below a set the absent
+    /// file never enters.</para>
+    ///
+    /// <para>🚨 <b>And only the hash-EQUAL path could heal it.</b> #3485 made the up-to-date exit
+    /// observe the mesh before skipping, so a reinstall at an unchanged module hash repairs. But an
+    /// UPDATE never takes that exit, and every new publication moves the hash again — so a package
+    /// that loses a node stays short across arbitrarily many updates, each reporting success.
+    /// Measured on memex.meshweaver.cloud: <c>Plugins/Hosting</c> took this path at
+    /// 2026-09-13T22:03Z and wrote exactly the two files whose content had moved
+    /// (<c>…/Source/AksOpsResult</c> v1 22:02:54.601Z, <c>…/Source/PlatformBuildInboxWatcher</c> v16
+    /// 22:02:57.255Z) while eleven declared-and-absent files stayed absent — among them the three
+    /// the release node <c>Hosting/TriageStatus/Release/20260913081235-bylQeIj_</c> had compiled
+    /// from that same morning.</para>
+    ///
+    /// <para>The repair costs ONE batched <see cref="IStorageAdapter.ReadMany"/> over the candidate
+    /// manifest's own declared node paths — the same read <see cref="VerifyLanded"/> already pays on
+    /// this exit, moved to where it can still change the outcome instead of only reporting it. A
+    /// read that could not run does NOT widen the fetch and says so at Warning: an unobserved mesh
+    /// is not a clean one, and re-fetching a whole package on every read hiccup would be a new cost
+    /// nobody asked for.</para>
+    /// </summary>
     private static IObservable<InstallResult> IncrementalUpdate(
         IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg,
         PackageManifest record, ILogger? logger, string? authorizingUserId)
@@ -1330,17 +1360,109 @@ public static class CatalogLayoutAreas
                     .Select(p => p!)
                     .ToHashSet(StringComparer.Ordinal);
 
-                logger?.LogInformation(
-                    "Updating {Id} incrementally: {Changed} changed file(s), {Removed} removed → module {ModuleVersion}.",
-                    pkg.Id, delta.AddedOrChangedFiles.Count, delta.RemovedFiles.Count, newManifest.ModuleVersion);
+                // 🚨 #4259 — the diff is a statement about the SOURCE and the RECORD; ask the MESH
+                // too. The declared node paths of the candidate manifest are a bounded, KNOWN set,
+                // so this is one batched ReadMany, never a query (a stale negative here would
+                // re-fetch a file that is present) and never N point reads of possibly-absent paths
+                // (which is what opens a storm breaker on the owning hub).
+                var declaredNodePaths = newManifest.Files.Keys
+                    .Select(f => PackageInstaller.NodePathForFile(f, parsers))
+                    .Where(p => !string.IsNullOrWhiteSpace(p))
+                    .Select(p => p!)
+                    .ToImmutableSortedSet(StringComparer.Ordinal);
 
-                return (delta.AddedOrChangedFiles.Count == 0
-                        ? Observable.Return((IReadOnlyList<PackageFile>)[])
-                        : source.FetchPackageFiles(pkg, sourceRef, delta.AddedOrChangedFiles))
-                    .SelectMany(changedFiles => PackageInstaller.InstallNodeRepoDelta(
-                        hub, pkg, newManifest, changedFiles, removedNodePaths, sourceRef, logger,
-                        authorizingUserId));
+                return InstallCompleteness
+                    .ObservePresent(
+                        hub.ServiceProvider.GetService<IStorageAdapter>(),
+                        hub.JsonSerializerOptions, declaredNodePaths)
+                    .SelectMany(present =>
+                    {
+                        var restore = InstallCompleteness.FilesToRestore(
+                            newManifest.Files, delta.AddedOrChangedFiles, present, parsers);
+
+                        // 🚨 The SAME rule the changed-file guard above applies, and for the same
+                        // reason: a package's shared Source/Test are compile inputs for EVERY type
+                        // in it, so the delta's owner-derivation would restore the file and
+                        // recompile nothing but its nominal owner. An absent shared source is
+                        // therefore a full install, whose release-all covers the siblings — the
+                        // caller catches this and falls back, exactly as it does for a changed one.
+                        if (restore.Any(p => sharedPrefixes.Any(
+                                s => p.StartsWith(s, StringComparison.Ordinal))))
+                            throw new InvalidOperationException(
+                                $"Package '{pkg.Id}' is missing shared Source/Test node(s) "
+                                + $"([{string.Join(", ", restore.Take(InstallCompleteness.MaxNamedInALine))}]); "
+                                + "full install required.");
+
+                        if (present is null)
+                            logger?.LogWarning(
+                                "Updating {Id} incrementally: the mesh could NOT be read, so the "
+                                + "{Declared} declared node(s) were not checked for absence. This "
+                                + "is not a pass — a node lost since the last install will not be "
+                                + "restored by this update (MeshWeaver#4259).",
+                                pkg.Id, declaredNodePaths.Count);
+                        else if (restore.Count > 0)
+                            logger?.LogWarning(
+                                "Updating {Id} incrementally: {Restore} of {Declared} declared "
+                                + "node(s) are ABSENT from the mesh although their file hash has "
+                                + "not moved, so the diff alone would have skipped them. Re-fetching "
+                                + "them: [{Files}] (MeshWeaver#4259).",
+                                pkg.Id, restore.Count, declaredNodePaths.Count,
+                                string.Join(", ", restore.Take(InstallCompleteness.MaxNamedInALine)));
+
+                        var wanted = delta.AddedOrChangedFiles.Union(restore);
+                        logger?.LogInformation(
+                            "Updating {Id} incrementally: {Changed} changed file(s), {Restored} "
+                            + "restored, {Removed} removed → module {ModuleVersion}.",
+                            pkg.Id, delta.AddedOrChangedFiles.Count, restore.Count,
+                            delta.RemovedFiles.Count, newManifest.ModuleVersion);
+
+                        return (wanted.Count == 0
+                                ? Observable.Return((IReadOnlyList<PackageFile>)[])
+                                : source.FetchPackageFiles(pkg, sourceRef, wanted))
+                            .Do(fetched => ReportFetchShortfall(pkg.Id, wanted, fetched, logger))
+                            .SelectMany(changedFiles => PackageInstaller.InstallNodeRepoDelta(
+                                hub, pkg, newManifest, changedFiles, removedNodePaths, sourceRef,
+                                logger, authorizingUserId));
+                    });
             });
+    }
+
+    /// <summary>
+    /// 🚨 <b>A file the fetch was ASKED for and did not get back is a shortfall with no other
+    /// voice.</b> <see cref="IPackageSource.FetchPackageFiles(PackageManifest, string, IReadOnlyCollection{string})"/>
+    /// filters — locally in the interface default, server-side in
+    /// <see cref="RegistryPackageSource"/> — and its contract is explicit that *"paths absent from
+    /// the package simply don't appear in the result"*. So a requested path the source does not
+    /// serve (a serving-side casing difference, a stale registry cache, a bundle that disagrees with
+    /// its own lock) vanishes with no exception and no line, the delta installs whatever did arrive,
+    /// and <c>WriteInstalledRecord</c> then stamps the FULL declared map — a record asserting a file
+    /// nothing ever wrote.
+    ///
+    /// <para>Reports only; it never fails the update. The install that did run is a fact, and
+    /// collapsing "landed short" into "failed" would make a working update a new way to break —
+    /// <see cref="VerifyLanded"/> carries the outcome verdict on this same exit.</para>
+    /// </summary>
+    /// <param name="packageId">The package being updated.</param>
+    /// <param name="wanted">The paths the fetch asked for.</param>
+    /// <param name="fetched">What came back.</param>
+    /// <param name="logger">Where the shortfall is named.</param>
+    private static void ReportFetchShortfall(
+        string packageId, IReadOnlySet<string> wanted, IReadOnlyList<PackageFile> fetched,
+        ILogger? logger)
+    {
+        if (logger is null || wanted.Count == 0)
+            return;
+        var missing = wanted
+            .Except(fetched.Select(f => f.RelativePath), StringComparer.Ordinal)
+            .ToImmutableSortedSet(StringComparer.Ordinal);
+        if (missing.Count == 0)
+            return;
+        logger.LogError(
+            "Updating {Id} incrementally: the source returned {Fetched} of the {Wanted} file(s) "
+            + "asked for — [{Missing}] did NOT travel, so their nodes cannot be written, and the "
+            + "install record will still declare them (MeshWeaver#4259).",
+            packageId, fetched.Count, wanted.Count,
+            string.Join(", ", missing.Take(InstallCompleteness.MaxNamedInALine)));
     }
 
     private static ILogger? Logger(LayoutAreaHost host) =>
