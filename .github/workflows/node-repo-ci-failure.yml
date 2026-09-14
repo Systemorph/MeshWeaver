@@ -46,7 +46,20 @@ name: Node repo ci-failure ledger (reusable)
 #                      second open issue. Then POST, signed, to `control-webhook-url`:
 #
 #        {"event":"ci-failure","repo":"<owner/name>","sha":"…","run":<id>,"runUrl":"…","trigger":"schedule",
-#         "failedJobs":[{"name":"…","url":"…","step":"…"}],"platformSet":"…","issueUrl":"…","issueNumber":N}
+#         "failedJobs":[{"name":"…","url":"…","step":"…","neverStarted":false}],"neverStarted":0,
+#         "platformSet":"…","issueUrl":"…","issueNumber":N}
+#
+#                      `neverStarted` (Memex#275): a failed job with ZERO steps was refused before a
+#                      runner touched it — an org Actions budget, or a workflow the runner could not
+#                      resolve; the reason is in the job's ANNOTATION, which needs `checks: read`
+#                      and is therefore read by the control portal's triage (whose App holds it),
+#                      not here. The ledger entry says "N of M never started" and, when N == M,
+#                      that NOTHING in the run executed. 🚨 While a budget refusal is IN FORCE this
+#                      lane's own job is refused with the gates (measured 2026-09-11: 16 failure /
+#                      7 skipped / 0 ran in the refused attempt), so a live refusal reaches the
+#                      ledger only from a run whose window closed before this job started; the
+#                      instrument that sees a refusal AS IT HAPPENS is the control instance's
+#                      Repo Health scan, which reads the fleet's runs from outside Actions.
 #
 #   outcome: success   an open matching issue → comment `green again: <run URL>` and CLOSE it, then
 #                      POST {"event":"ci-green","repo","sha","run","runUrl","issueNumber"}. No open
