@@ -40,8 +40,11 @@ public record App
     /// <summary>
     /// The GROUP this tile sits in on the owner's Apps grid — a section the viewer sorts tiles
     /// into by drag and drop, iPhone-style. <c>null</c> = never grouped (the Store stamps the
-    /// package's category on install and its tile refresh fills a missing group from it);
-    /// <c>""</c> = the viewer deliberately ungrouped the tile, which no heal may overwrite. Groups
+    /// package's category on install); <c>""</c> = the viewer deliberately ungrouped the tile,
+    /// which no heal may overwrite. The group is a stamped COPY of the category, like the tile's
+    /// name and icon, and converges the same way: the Store's tile refresh fills a missing group
+    /// and moves a machine-stamped one when the package is re-categorized, unless the record is
+    /// flagged <c>customGroup</c> — which every drag, drop and rename on the grid writes. Groups
     /// are per user and live nowhere but on the records themselves: a group exists exactly while a
     /// tile carries its name.
     /// </summary>
