@@ -273,8 +273,10 @@ case "$REST" in */*) BASE="${REST#*/}";; esac
 #
 # A source directory MAY hold `_current`: one line naming the SUBDIRECTORY that holds the
 # publication which currently applies. Absent, it IS its own publication directory — the flat
-# layout, and the only one anything has written until a caller opts in to `publication-layout:
-# generation`.
+# layout, which every publication ALSO writes as a compatibility copy for readers that predate the
+# pointer. Since #3461 phase 4 the lane's `publication-layout` defaults to `generation`, so a
+# prefix any producer has published since carries a pointer and the resolved directory is a
+# generation; an absent pointer now means "not published since the flip", not "the fleet is flat".
 #
 # 🚨 THE RULES ARE THE READER'S, EXACTLY (ShippedPrebuiltBundles.PublicationDirectoryOf, and the
 # resolver in publish-bake-bundles.sh). This file, bake-scope.sh and publish-bake-bundles.sh are
