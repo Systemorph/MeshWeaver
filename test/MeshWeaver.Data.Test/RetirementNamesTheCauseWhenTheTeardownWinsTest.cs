@@ -41,6 +41,14 @@ namespace MeshWeaver.Data.Test;
 /// <para>That is the mechanism-level statement of the fix — "the backlog is answered before a
 /// teardown exists that could answer it differently" — rather than a re-run of the outcome the
 /// race sometimes produced.</para>
+///
+/// <para><b>The test's own ordering (#4285).</b> The fix this pins is exactly what makes the
+/// refusal arrive BEFORE the teardown: <c>FailGate</c> answers the client, and <c>Dispose()</c>
+/// is the next statement on the settle thread. So the client can observe its refusal — and this
+/// test can reach its assertion — while that statement has not run yet. The snapshot is taken at
+/// the first instant of the teardown, and the test WAITS for it (bounded) rather than assuming
+/// it already exists when the refusal is read; measured as "Expected value not to be &lt;null&gt;"
+/// at 2 in a handful of runs before the wait, on diffs that could not reach this code.</para>
 /// </summary>
 public class RetirementNamesTheCauseWhenTheTeardownWinsTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -68,9 +76,10 @@ public class RetirementNamesTheCauseWhenTheTeardownWinsTest(ITestOutputHelper ou
 
     /// <summary>
     /// The victim's own queue snapshot at the FIRST instant of its teardown, captured on the
-    /// settle thread inside <c>Dispose()</c>. Written once there and read after an awaited fence.
+    /// settle thread inside <c>Dispose()</c>. Emitted once there; the test awaits it, because the
+    /// refusal it is read after is delivered BEFORE the teardown that captures it (#4285).
     /// </summary>
-    private string? diagnosticsAtTeardownEntry;
+    private readonly AsyncSubject<string> diagnosticsAtTeardownEntry = new();
 
     private IObservable<IEnumerable<Item>> FirstAttemptFaults()
         => Observable.Defer(() =>
@@ -110,8 +119,11 @@ public class RetirementNamesTheCauseWhenTheTeardownWinsTest(ITestOutputHelper ou
 
         // Armed before anything can retire the activation. ShuttingDown fires exactly once, at the
         // first instant of this hub's teardown, synchronously on whichever thread called Dispose().
-        using var teardownEntry = victim.ShuttingDown.Subscribe(
-            _ => Volatile.Write(ref diagnosticsAtTeardownEntry, victim.GetPendingRequestDiagnostics()));
+        using var teardownEntry = victim.ShuttingDown.Subscribe(_ =>
+        {
+            diagnosticsAtTeardownEntry.OnNext(victim.GetPendingRequestDiagnostics());
+            diagnosticsAtTeardownEntry.OnCompleted();
+        });
 
         await firstAttemptParked.Should().Within(TestTimeouts.Convergence).Emit(
             "the first initialization attempt must be parked before the request is posted");
@@ -141,15 +153,19 @@ public class RetirementNamesTheCauseWhenTheTeardownWinsTest(ITestOutputHelper ou
 
         var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
         Output.WriteLine($"refused: errorType={failure.Failure!.ErrorType} message={failure.Failure.Message}");
-        Output.WriteLine($"[teardown entry] {Volatile.Read(ref diagnosticsAtTeardownEntry)}");
+
+        // The refusal is the gate failure, which precedes the teardown by construction — so the
+        // teardown's snapshot is awaited here, not assumed. A teardown that never comes fails
+        // this wait by name; without one there is no ordering to assert and the test would be
+        // vacuous, which is why this is a bounded wait and not a null check.
+        var atEntry = await diagnosticsAtTeardownEntry.Should().Within(TestTimeouts.Convergence).Emit(
+            "the retirement disposes the activation right after failing its gate, and the "
+            + "snapshot at the first instant of that teardown is what this test measures");
+        Output.WriteLine($"[teardown entry] {atEntry}");
 
         // 🚨 THE DISCRIMINATOR. The retirement answered the backlog before it started the teardown,
         // so nothing was left for the teardown's generic drain to answer.
-        var atEntry = Volatile.Read(ref diagnosticsAtTeardownEntry);
-        atEntry.Should().NotBeNull(
-            "the retirement must have disposed the activation — without a teardown there is no "
-            + "ordering to assert and this test would be vacuous");
-        Regex.Match(atEntry!, @"deferred=(\d+)").Groups[1].Value.Should().Be("0",
+        Regex.Match(atEntry, @"deferred=(\d+)").Groups[1].Value.Should().Be("0",
             "the gate is failed BEFORE Dispose() is called, so at the first instant of the teardown "
             + "the deferred backlog is already answered with the CAUSE. A non-zero count here is "
             + "the unfixed ordering: the backlog is still parked when the teardown begins, and "
