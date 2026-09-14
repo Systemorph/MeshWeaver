@@ -417,9 +417,30 @@ SHA256("MeshWeaver.Hosting.Orleans.RoutingGrain\n0\n")[..8]                     
 
 4 of 4, across two namespaces and three weeks — while the current payload would have produced
 `199e5a2f690b9c89`, `4e297103d4d86c81`, `bddb036580fac948`, `4ec310c5270ddb0e`, none of which appears
-anywhere. **So the reporting binary predates every identity change since 2026-08-09, and therefore
-predates the 2026-08-25 header-only holdback** — a dated conclusion, from data the portal already
-holds, with no cluster read and no image tag.
+anywhere. **So the binary that COMPUTED these fingerprints predates every identity change since
+2026-08-09, and therefore predates the 2026-08-25 header-only holdback** — from data the portal
+already holds, with no cluster read and no image tag.
+
+🚨 **That dates the PRODUCER, not by itself the running image, and the difference is this watcher's
+own design.** Reports are fingerprinted and queued to disk *before* delivery — deliberately, so a
+crash costs a redelivery rather than an un-ticketed error ("Delivery guarantees" above) — so a
+current watcher draining a pre-update backlog delivers old-format fingerprints while running new
+code. That is one of the three alternatives
+[#2681](https://github.com/Systemorph/MeshWeaver/issues/2681) itself lists, and the hash cannot
+distinguish it.
+
+**What closes the gap is the report's own timestamps, because a report is fingerprinted at QUEUE
+time.** Pair the fingerprint with `firstSeen`/`lastSeen`: those are the timestamps of the LINES, and
+the window carrying them was processed within a poll interval plus `IngestLag` of them. So an
+old-format fingerprint over *recent* lines says the old binary was running *then*. Measured
+2026-09-14: `log-burst-header-only-memex` carries the 2026-08-09 payload over lines stamped
+`14:24:01Z`–`14:24:18Z` **that same day**, ~18 hours after the holdback image was published. A
+backlog cannot account for that unless it is older than the lines it contains, which it cannot be.
+
+> **So the instrument is the PAIR — the fingerprint's payload format and the report's own
+> `lastSeen` — never the fingerprint alone.** With a stale `lastSeen` the honest reading stops at
+> "whatever produced this predates 2026-08-09", and dating the running image then needs rollout
+> evidence or the watcher's queue.
 
 Two things this is good for beyond dating:
 
@@ -440,9 +461,20 @@ portal refuses all of it — bodies included.
 That is not a theory. `log-burst-header-only-memex` (2026-09-14) carries `occurrences: 4` whose
 samples are **one** bare `crit: …RoutingGrain[0]` header and **three** full `[ROUTE] Routing
 back-pressure` bodies: three diagnosable red logs that got no ticket of their own. The
-`memex-cloud` sibling shows the same thing from one pod 33 ms apart on 2026-09-08 — which also
-falsifies the "multi-pod interleaving cut the burst" reading both issues were filed with, since
-per-pod versus merged grouping cannot explain two lines from a single pod.
+`memex-cloud` sibling shows the same shape from one pod 33 ms apart on 2026-09-08.
+
+🚨 **Be precise about which half of that the evidence settles, because both issues were filed on the
+other half.** They read the samples as multi-pod interleaving cutting a burst up. Interleaving is a
+perfectly good explanation of why the first burst is **bodyless** — in a merged stream another pod's
+line can land between a header and its body, and a global grouper closes the burst there and orphans
+the rest; that is exactly #2153/#2222, and a same-pod pair does *not* rule it out, because the
+orphaned body is simply dropped and never appears in the samples. What interleaving cannot explain is
+the **fold**: why a bodyless burst and a diagnosable one end up in ONE report under ONE fingerprint.
+Grouping decides where bursts begin and end; it has no say in which bursts share an identity. That is
+the identity function, and the arithmetic above names which one.
+
+> **Grouping explains bodylessness; identity explains the fold.** Ruling a cause in or out needs the
+> matching instrument, and a capture-gap incident carries evidence for the second, not the first.
 
 > **So read a capture-gap incident's `samples[]` before quoting its `occurrences` as a count of
 > bodyless captures.** Some of them may be fully-formed faults that were folded into it, and those
