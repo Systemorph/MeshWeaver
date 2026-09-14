@@ -168,6 +168,51 @@ public class ATypedNodeDegradedToMarkdownSaysSoTest
     }
 
     /// <summary>
+    /// 🚨 THE DETECTOR MUST NOT SEE LESS THAN THE LOSS (Copilot review on #4330). The keys are read
+    /// with the SAME deserializer that discarded them, not with a key grammar of this parser's own —
+    /// so a QUOTED key, a DOTTED key and a non-ASCII one are all named.
+    ///
+    /// <para>Measured by reverting the reader to the regex alone and watching this test fail: it
+    /// then produced <c>["ré-sumé", "plugins"]</c> — the QUOTED key and the DOTTED key silently
+    /// dropped, so the record would have named two of the four keys the node actually lost. A
+    /// record that under-reports is worse than one that admits it knows nothing.</para>
+    ///
+    /// <para>🚨 The non-ASCII key survived the regex only because .NET's <c>\w</c> is
+    /// Unicode-aware — coverage by accident, not by design, which is exactly why the reader may not
+    /// be a hand-written grammar. The set of spellings YamlDotNet accepts is YamlDotNet's to
+    /// define.</para>
+    ///
+    /// <para>This YAML is VALID, which is the point: it takes the dictionary path — the one the
+    /// live case, whose YAML is refused, never exercises.</para>
+    /// </summary>
+    [Fact]
+    public void KeysTheNarrowGrammarWouldMiss_AreStillNamed()
+    {
+        const string file = """
+            ---
+            nodeType: Agent
+            name: Oddly keyed
+            "displayName": Quoted key
+            my.dotted.key: dotted
+            ré-sumé: non-ascii
+            plugins:
+              - Mesh
+            ---
+
+            Body.
+            """;
+
+        var node = BuiltIns().TryParse(".md", "Pkg/Agent/odd.md", file, "Pkg/Agent/odd.md");
+
+        Assert.NotNull(node);
+        var unbound = ContentOf(node)!.UnboundFrontMatter;
+        Assert.NotNull(unbound);
+        Assert.Equal(
+            new[] { "displayName", "my.dotted.key", "ré-sumé", "plugins" },
+            unbound!);
+    }
+
+    /// <summary>
     /// The second half of the gate: a file that DOES declare a type but whose every key this parser
     /// binds is not a degradation either. Without this, "declared a nodeType" alone would be enough
     /// to stamp the record, and it would say nothing about whether anything was lost.
