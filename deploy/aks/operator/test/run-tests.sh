@@ -1596,6 +1596,82 @@ else
 fi
 rm -rf "$_ap_dir"
 
+# ── hosting-deploy layers the Key Vault VALUES HALF first, when the record declares one ─────────
+# 🚨 MeshWeaver#3780, measured twice on the control instance (helm revisions 44 and 55). The chart's
+# own Secrets render from `secrets.<half>.*`, which on an external database live ONLY in the vault
+# half `helm-values-<release>` — and this script fed helm the record's secret-free render alone.
+# helm replaces a Secret wholesale, so `ConnectionStrings__orleans` became the chart's in-cluster
+# default and every new pod died at silo start. The config repo's lane had layered
+# `-f vault-values.yaml -f <overlay>` all along. These cases pin the shape that agrees with it:
+# the half is read from the vault the record names, layered FIRST so the render wins, never
+# echoed, REQUIRED where asked for (an absent half is a refusal before helm, naming capture), and
+# absent altogether when the record declares none (a provisioned instance's shape).
+echo
+echo "── hosting-deploy: the Key Vault values half (#3780) ────────────"
+_vh_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_vh_dir/"; _vh_log="$_vh_dir/calls.log"; : > "$_vh_log"
+mkdir -p "$_vh_dir/vault"
+printf 'secrets:\n  memex_portal:\n    ConnectionStrings__orleans: "Host=pg.example.test;Password=SENTINEL-NEVER-PRINTED"\n' > "$_vh_dir/vault/helm-values-memex"
+_vh_vals="$_vh_dir/values.yaml"; printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 2\n' > "$_vh_vals"
+_vh_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_vh_dir" HOSTING_DEPLOY_STUB_LOG="$_vh_log" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_vh_vals" --image cr.example.test/memex-portal-ai:1 "$@" 2>&1; }
+_vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
+[ "$_vh_rc" -eq 0 ] && ok "deploy succeeds when the vault holds the values half" || bad "deploy succeeds when the vault holds the values half" "exited ${_vh_rc}: ${_vh_out}"
+grep -q '^az keyvault secret download --vault-name kv-test --name helm-values-memex --file ' "$_vh_log" \
+  && ok "the half is read from the vault the record names, under helm-values-<release>" \
+  || bad "the half is read from the vault the record names" "$(cat "$_vh_log")"
+# ORDER IS THE CONTRACT: vault half first, the record's render LAST — on the upgrade AND on the
+# adoption render, or the two would disagree about what the release is.
+_vh_layers() { sed -n 's/.* -f \([^ ]*\) -f \([^ ]*\).*/\1 \2/p' <<< "$1"; }
+_vh_up="$(_vh_layers "$(grep '^helm upgrade' "$_vh_log" | head -1)")"
+_vh_tp="$(_vh_layers "$(grep '^helm template' "$_vh_log" | head -1)")"
+_vh_first="${_vh_up%% *}"; _vh_second="${_vh_up##* }"
+if [ -n "$_vh_up" ] && [ "$_vh_first" != "$_vh_vals" ] && [ "$_vh_second" = "$_vh_vals" ]; then
+  ok "helm upgrade layers the vault half FIRST and the record's render LAST"
+else
+  bad "helm upgrade layers the vault half first and the record last" "layers: '${_vh_up}' in: $(cat "$_vh_log")"
+fi
+[ -n "$_vh_tp" ] && [ "$_vh_tp" = "$_vh_up" ] \
+  && ok "the adoption render sees the same two layers in the same order" \
+  || bad "the adoption render sees the same two layers" "template: '${_vh_tp}' upgrade: '${_vh_up}'"
+case "$_vh_out" in *SENTINEL-NEVER-PRINTED*) bad "the values half is never echoed" "the secret value reached the log: ${_vh_out}" ;;
+  *) ok "the values half is never echoed" ;; esac
+case "$_vh_out" in *"::hosting:: vault_values_bytes="*) ok "only the half's SIZE is reported (::hosting:: vault_values_bytes=)" ;;
+  *) bad "only the half's size is reported" "said: ${_vh_out}" ;; esac
+[ -n "$_vh_first" ] && [ ! -e "$_vh_first" ] \
+  && ok "the half's temp file is removed when the script exits" \
+  || bad "the half's temp file is removed on exit" "'${_vh_first}' still exists"
+# 🚨 Declared but absent is a REFUSAL, before helm, naming the way forward — never a deploy that
+# quietly falls through to the chart's defaults, which is the #3780 boot failure itself.
+rm -f "$_vh_dir/vault/helm-values-memex"; : > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
+if [ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q 'helm-values-memex' \
+   && printf '%s' "$_vh_out" | grep -q 'capture' && printf '%s' "$_vh_out" | grep -q '3780' \
+   && ! grep -q '^helm ' "$_vh_log"; then
+  ok "a declared half the vault does not hold is refused before helm, naming capture and #3780"
+else
+  bad "a declared half the vault does not hold is refused before helm" "rc=${_vh_rc} out: ${_vh_out} log: $(cat "$_vh_log")"
+fi
+: > "$_vh_dir/vault/helm-values-memex"; : > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
+if [ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q 'EMPTY' && ! grep -q '^helm ' "$_vh_log"; then
+  ok "an EMPTY half is refused too — a capture that wrote nothing is not 'no secrets'"
+else
+  bad "an empty half is refused" "rc=${_vh_rc} out: ${_vh_out}"
+fi
+# A record that declares NO vault half (vaultValuesKeys empty — every provisioned instance) reads
+# nothing from any vault, and the record is the only layer.
+: > "$_vh_log"
+_vh_out="$(_vh_run)"; _vh_rc=$?
+_vh_fs="$(grep '^helm upgrade' "$_vh_log" | head -1 | grep -o ' -f ' | wc -l | tr -d ' ')"
+if [ "$_vh_rc" -eq 0 ] && ! grep -q '^az ' "$_vh_log" && [ "$_vh_fs" = "1" ]; then
+  ok "without --vault nothing is read from any vault and the record is the only layer"
+else
+  bad "without --vault the record is the only layer" "rc=${_vh_rc} -f count=${_vh_fs} log: $(cat "$_vh_log")"
+fi
+refuses_hard "a vault name that is not a plain name is refused before anything runs" "not a plain name" \
+  env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace memex --release memex --database memex --values "$_vh_vals" --vault 'kv;rm -rf /'
+rm -rf "$_vh_dir"
+
 # ── hosting-deploy refuses BEFORE helm when the identity cannot write a rendered kind ───────────
 # Measured 2026-09-09 01:59Z on memex: helm died on `poddisruptionbudgets.policy is forbidden`
 # and its --atomic rollback erred too. The preflight asks `kubectl auth can-i` per rendered kind
