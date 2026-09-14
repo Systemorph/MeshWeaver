@@ -108,10 +108,40 @@ services, the log-incident ingest and its control plane, the content importers, 
 `GetMeshNode` reads. A GUI click action, a layout area or an MCP session hub already holds a
 non-router hub and is unaffected either way.
 
-> 🚨 **The seams are opt-in and nothing enforces them.** There is no `src/`-side ratchet for this
-> shape; `RouterRequestOriginSites.allow` covers the TEST tree only. A new mesh-singleton that posts
-> node CRUD from its injected hub is a new #1140, and the origin line is what makes that a five-minute
-> question instead of a month-long one.
+### What enforces them
+
+The seams are opt-in — nothing in the type system makes a caller reach for one — so each is held by
+a **ratchet that may only shrink**, one per tree:
+
+| tree | guard | allow file | seeded |
+|---|---|---|---|
+| `src/` | `RouterAsNodeOperationOriginRatchetGuard` | `test/RouterNodeOperationOriginSites.allow` | 1 |
+| `test/` | `RouterAsTestRequestOriginRatchetGuard` | `test/RouterRequestOriginSites.allow` | 3 |
+
+The `src/` guard matches an `.Observe(…)`/`.Post(…)` whose first argument is a node-lifecycle
+request — `CreateNodeRequest`, `CreateNodesRequest`, `CreateOrUpdateNodeRequest`,
+`DeleteNodeRequest`, `MoveNodeRequest`, `CopyNodeRequest` — built inline **or** hoisted into a local
+first, and reads the receiver as an expression rather than as preceding text. Both tolerances were
+measured: over `src/` the shape occurs at 23 sites, of which a construction-anchored scan misses the
+five that are `MeshService`'s own verbs, and a literal `NodeOperationIssuingHub()` receiver test
+misclassifies the six that hoist the seam into a local or a cached property.
+
+**Adopting the seam is never a behaviour change**, which is what lets this be a rule rather than a
+judgement call: `NodeOperationIssuingHub` returns the hub unchanged unless its address type is the
+mesh type. A site already off the router is byte-for-byte unaffected; a site that is not is
+corrected.
+
+> 🚨 **What the ratchets still do not see.** They key on node-CRUD request TYPES, so the read seam
+> (`ReadIssuingHub`, which has no request type of its own) is recognised where it is used but its
+> absence is not reported — and the other message families in #1140's evidence (`ClickedEvent`,
+> `UnsubscribeRequest`, `PatchDataChangeRequest`) have no single seam to hop onto at all. For those
+> the origin line remains the instrument, and it is what makes a new one a five-minute question
+> instead of a month-long one.
+
+The one seeded `src/` entry is not debt: it is the #981 self-targeted inner create inside the
+`CreateOrUpdateNodeRequest` **handler**, posted on and handled by the hub whose turn loop already
+owns the upsert. A self-post is deliberately reported by neither detector site (above), so hopping
+it would move the inner create off the hub that is mid-upsert and buy nothing.
 
 ## Reading a report
 
