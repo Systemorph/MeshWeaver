@@ -131,7 +131,7 @@ jobs:
           ref: ${{ steps.refs.outputs.main }}
           path: core-main
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
@@ -278,7 +278,7 @@ jobs:
 
       - name: Preserve the comparison evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: platform-canary-evidence
           path: |
