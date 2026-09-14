@@ -1589,8 +1589,33 @@ jobs:
           # portal's identity), refused before a mesh boots otherwise — a gate running as another
           # host would decline every bundle and compile the tree itself, passing without judging
           # the bytes that ship.
+          # 🚨 `Modules__RequirePrebuilt=true` — THE GATE COMPILES NOTHING (MeshWeaver.Plugins#1827).
+          # The paragraph above already names the failure it prevents: "compile the tree itself,
+          # passing without judging the bytes that ship". `--app /app` closes the wrong-host route
+          # into that; this closes the other one, a bundle DECLINED on its source fingerprint.
+          #
+          # Measured on Plugins' red bake (job 103825681160), counted over the whole log:
+          #   Prebuilt assembly ADOPTED .......... 96
+          #   DECLINED before writing ............  2
+          #   compiles that SUCCEEDED in the seed   0
+          #   compiles that FAILED in the seed ...  2
+          # Nothing has ever compiled successfully in a seeded gate mesh — the source set it would
+          # need is not what the bake mounts. Yet `PrebuiltAssemblySeeder` read the partition as one
+          # this mesh compiles (`canCompileLocally`, PrebuiltAssemblySeeder.cs — `RequirePrebuilt`
+          # absent means OFF, the compile-fallback default), so a decline dispatched Roslyn into an
+          # environment with a 0-for-2 record and the gate reported 760 × CS0246/CS0103 on the
+          # type's own declared `shared=@…` sources. The real verdict was two lines above it:
+          # `bundle module version 1.2.6, current 1.2: Compatible` — bytes explicitly judged safe to
+          # serve, discarded for a compile that could not succeed.
+          #
+          # With this set, `DecideAfterStaleDecline` reaches the rows it was written for: a
+          # compatible bundle is ADOPTED (the gate tests the bytes that ship, which is its job), and
+          # only a genuinely incompatible one — or none at all — becomes `Unservable`, said at
+          # Critical. A named verdict replaces an unreadable compile failure, and NOTHING that
+          # passes today starts failing: adoption is the path that already carries every gate.
           # shellcheck disable=SC2086
-          docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp "${EXT_V[@]}" \
+          docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -e Modules__RequirePrebuilt=true "${EXT_V[@]}" \
             -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
             --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll /repo --app /app \
             "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
