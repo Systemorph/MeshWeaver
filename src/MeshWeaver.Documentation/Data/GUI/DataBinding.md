@@ -291,6 +291,55 @@ flowchart LR
     Ref --> Path
 ```
 
+## 🚨 An ABSENT `DataContext` does not disable the binding — it RE-ROOTS it
+
+Worth knowing before you read the stack trace in
+[#3711](https://github.com/Systemorph/MeshWeaver/issues/3711), because the exception there names a
+JSON parse and the fault is a lost context.
+
+`LayoutClientExtensions.GetPointer` resolves a relative pointer against the data context — and when
+there is no context it does **not** refuse. It promotes the pointer to an absolute one:
+
+```csharp
+if (pointer.StartsWith('/'))
+    return pointer.TrimEnd('/');
+if (string.IsNullOrWhiteSpace(dataContext))
+    return string.IsNullOrEmpty(pointer) ? "/" : $"/{pointer}";   // ← relative becomes ABSOLUTE
+return $"{dataContext}/{pointer.TrimEnd('/')}";
+```
+
+`LayoutExtensions.GetStream` then reads segment 0 as a COLLECTION and segment 1 as a **JSON-encoded
+id**. So what happens next depends on how many segments the pointer has, and the two cases are
+opposites:
+
+| pointer, context absent | resolves to | outcome |
+|---|---|---|
+| `answers/q1` (2 segments) | `/answers/q1` | `Deserialize<string>("q1")` **throws** — *'q' is an invalid start of a value* |
+| `answers` (1 segment) | `/answers` | `SegmentCount == 1` ⇒ no id decode ⇒ **binds silently against the layout stream's own root** |
+
+🚨 **The crash is the lucky case.** The one-segment form reports nothing and reads — and through
+`BlazorView.UpdatePointer`, writes — against a ROOT path of the layout stream's own document
+(`/answers`, treated as a root collection) instead of the node the view was meant to be bound to.
+
+Be precise about which wrong place that is: it is **not** the area's `/data/{id}` replica.
+`LayoutAreaReference.GetDataPointer` builds `/data/"{id}"/…`, so a value in the data section is two
+segments deeper and JSON-encoded. A context-less relative pointer lands beside `/areas` and `/data`,
+at a root key the layout stream does not define — which is why the read yields nothing and the write
+creates a sibling of the document's real sections. Same class as the replicate-then-save outcome
+this page forbids above (a write that leaves the node it was bound to untouched), reached by
+accident rather than by design — but a different address, and diagnosing it against the `/data`
+storage model sends the reader to the wrong place.
+
+Two consequences:
+
+1. **Never "fix" such a crash by making the id decode tolerant.** It converts the loud case into the
+   silent one — for the quiz in #3711 that means a learner's pick written into the layout replica
+   instead of their answer sheet.
+2. **A bind that reads nothing, or reads the wrong thing, with no error, is a `DataContext`
+   question first.** Check that the control's context reached the CLIENT — it is a
+   `[CascadingParameter]` supplied by `DispatchView`, not a property the view reads off the control
+   it renders — before you look at the pointer.
+
 ---
 
 # Updating Data from the Server
