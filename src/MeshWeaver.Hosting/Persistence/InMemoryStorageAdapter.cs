@@ -33,29 +33,95 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
     // whenever a write lands during a teardown. Symptom: a LIVE children query that silently stops
     // re-emitting after a create that completed successfully.
     private readonly IsolatedChangeFeed _changes;
-    // 🚨 The CHILDREN INDEX (2026-09-13). ListChildPaths used to walk EVERY key of the store on
-    // every call — a full scan with a Split per key — and the storage-adapter query provider calls
-    // it once per directory level of every subtree query. The plugin gate (mw-plugin-test) runs on
-    // this adapter with ~1,100 nodes and issues subtree queries per package install, so that scan
-    // was quadratic in the mesh size: 12.5 % of the tester's CPU samples in a dotnet-trace of one
-    // package (Hosting, 198 nodes), and the shard's 18 install-minutes scaled 4× from a laptop to
-    // a 2-vCPU runner. The index maps a directory to its immediate children (node paths AND implied
-    // directories) and is maintained by every write path of this adapter. It is keyed by the
-    // DICTIONARY instance, not the adapter, because several adapters can be built over one shared
-    // dictionary (the Orleans test cluster's silos): one index per store, every writer maintains
-    // it. A dictionary mutated behind the adapters' back (a test seeding the map directly) is
-    // caught by the count check in ChildrenOf, which rebuilds the whole index once.
+    // 🚨 The CHILDREN INDEX (2026-09-13, #4169). ListChildPaths used to walk EVERY key of the store
+    // on every call — a full scan with a Split per key — and the storage-adapter query provider
+    // calls it once per directory level of every subtree query. The plugin gate (mw-plugin-test)
+    // runs on this adapter with ~1,100 nodes and issues subtree queries per package install, so
+    // that scan was quadratic in the mesh size: 12.5 % of the tester's CPU samples in a
+    // dotnet-trace of one package (Hosting, 198 nodes), and the shard's 18 install-minutes scaled
+    // 4× from a laptop to a 2-vCPU runner. The index maps a directory to its immediate children
+    // (node paths AND implied directories). It is keyed by the DICTIONARY instance, not the
+    // adapter, because several adapters can be built over one shared dictionary (the Orleans test
+    // cluster's silos): one index per store, every writer maintains it.
+    //
+    // 🚨 HOW IT STAYS CONSISTENT UNDER CONCURRENCY (2026-09-14, MeshWeaver.Plugins#1827). The first
+    // shape rebuilt IN PLACE — Clear(), then re-index every key — whenever the count check
+    // mismatched, and a writer reset the count WITHOUT the rebuild lock. A writer landing
+    // mid-rebuild therefore declared the index consistent while it was half-cleared; the next reader
+    // passed the check, skipped the lock, and read the partial index. Measured on the plugin gate:
+    // the synced source query of Essentials/OperationRequest was handed 10 of the 18
+    // Store/Core/Source nodes — written three minutes earlier — cached that snapshot, and nothing
+    // under Store/Core was ever written again to repair it; the live source fingerprint, the
+    // prebuilt decline and both fallback compiles read the same frozen set, and no publication
+    // sealed for two days. Three rules now hold, and each is load-bearing:
+    //
+    //   1. The store and the index MOVE TOGETHER. Every adapter write path mutates `_nodes` and
+    //      the index under the one Mutate lock (microseconds of dictionary work — never a
+    //      subscriber callback, never IO), so IndexedCount is an EXACT tally of what the index
+    //      holds and `IndexedCount != _nodes.Count` means exactly one thing: the dictionary was
+    //      mutated behind the adapters' back (a test seeding the map directly). That is what the
+    //      count check IS a guard for. It is NOT a guard for a writer that has not finished — there
+    //      is no such window any more — and it is NOT a signal a reader may act on without the
+    //      lock, which is what the first shape got wrong.
+    //   2. A rebuild is COPY-ON-WRITE. It builds a FRESH index and swaps the reference atomically;
+    //      the live index is never cleared in place, so a reader holds a complete index at every
+    //      instant — the old one until the swap, the new one after. A reader that finds a refresh
+    //      already in flight reads the live index and moves on; only the very first build of a
+    //      seeded dictionary is waited for, because before it there is no index at all.
+    //   3. A writer NEVER WAITS FOR A REBUILD. The rebuild publishes the index it is building as
+    //      Pending BEFORE it snapshots the keys (one Mutate section), so every write either
+    //      precedes the snapshot — and is in it — or observes Pending and indexes into both the
+    //      live and the pending index. The rebuild takes Mutate per key, so an install interleaves
+    //      between keys instead of stalling behind a full scan.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
         ConcurrentDictionary<string, MeshNode>, ChildIndex> Indexes = new();
     private readonly ChildIndex _index;
 
     private sealed class ChildIndex
     {
-        public readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> Children =
+        /// <summary>The live index: directory → its immediate children (node paths and implied
+        /// directories). Replaced atomically by a rebuild, never cleared in place.</summary>
+        public volatile ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> Children =
             new(StringComparer.OrdinalIgnoreCase);
-        public int IndexedCount = -1;
+
+        /// <summary>The index a rebuild is building, published before the rebuild snapshots the
+        /// keys so a concurrent writer indexes into it too. Null when no rebuild is in flight.</summary>
+        public volatile ConcurrentDictionary<string, ConcurrentDictionary<string, byte>>? Pending;
+
+        /// <summary>The exact number of nodes the live index accounts for; -1 until the first
+        /// build of a dictionary that was seeded before any adapter saw it.</summary>
+        public int IndexedCount;
+
+        /// <summary>Serialises rebuilds among themselves. Held for the whole build; readers only
+        /// TryEnter it (a refresh in flight is not theirs to wait for).</summary>
         public readonly object Rebuild = new();
+
+        /// <summary>Serialises index mutation with the store mutation it mirrors. Held for
+        /// microseconds — dictionary work only.</summary>
+        public readonly object Mutate = new();
+
+        /// <summary>Test seam: invoked by a rebuild after the key snapshot is taken and before
+        /// the first key is indexed, so a test can land a mutation on a not-yet-visited key.</summary>
+        public Action? OnSnapshot;
+
+        /// <summary>Test seam: invoked by a rebuild after the fresh index is built and before it
+        /// is swapped in, so a test can park a rebuild mid-flight.</summary>
+        public Action? OnBuilt;
     }
+
+    /// <summary>
+    /// Test seam (InternalsVisibleTo): runs inside a rebuild after the key snapshot is taken and
+    /// BEFORE the first key is indexed. A test parks here to land a delete on a key the rebuild
+    /// has not visited yet and prove the swapped-in index does not resurrect it.
+    /// </summary>
+    internal Action? OnRebuildSnapshot { get => _index.OnSnapshot; set => _index.OnSnapshot = value; }
+
+    /// <summary>
+    /// Test seam (InternalsVisibleTo): runs inside a rebuild after the fresh index is complete and
+    /// BEFORE it becomes live. A test parks here to prove that a reader sees the whole live index
+    /// and a writer does not wait while a rebuild is in flight.
+    /// </summary>
+    internal Action? OnRebuildBuilt { get => _index.OnBuilt; set => _index.OnBuilt = value; }
 
     /// <inheritdoc />
     public IObservable<DataChangeNotification> Changes => _changes;
@@ -89,7 +155,9 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         _nodes = nodes;
         _partitionObjects = partitionObjects;
         _logger = logger;
-        _index = Indexes.GetValue(nodes, _ => new ChildIndex());
+        // An empty dictionary has an exact (empty) index from the start; one seeded before any
+        // adapter saw it has none, and its first reader builds it (IndexedCount -1).
+        _index = Indexes.GetValue(nodes, d => new ChildIndex { IndexedCount = d.IsEmpty ? 0 : -1 });
         // The logger is passed on DELIBERATELY: an isolated fault that nobody logs is the silence
         // this feed exists to end (see PostgreSqlPartitionStorageProvider's null-logger regression).
         _changes = new IsolatedChangeFeed(logger, "in-memory");
@@ -97,15 +165,16 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
 
     private static string Norm(string? path) => path?.Trim('/') ?? "";
 
-    /// <summary>Records <paramref name="path"/> under every ancestor directory (the root is "").</summary>
-    private void Index(string path)
+    /// <summary>Records <paramref name="path"/> under every ancestor directory of <paramref name="index"/> (the root is "").</summary>
+    private static void Index(
+        ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> index, string path)
     {
         var child = path;
         while (true)
         {
             var slash = child.LastIndexOf('/');
             var parent = slash < 0 ? "" : child[..slash];
-            var set = _index.Children.GetOrAdd(parent, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase));
+            var set = index.GetOrAdd(parent, _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase));
             var added = set.TryAdd(child, 0);
             if (slash < 0 || !added)
                 return; // the root, or an ancestor chain that is already indexed
@@ -113,18 +182,19 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         }
     }
 
-    /// <summary>Drops <paramref name="path"/> from its parent; an ancestor left with nothing under it is dropped too.</summary>
-    private void Unindex(string path)
+    /// <summary>Drops <paramref name="path"/> from its parent in <paramref name="index"/>; an ancestor left with nothing under it is dropped too.</summary>
+    private void Unindex(
+        ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> index, string path)
     {
         var child = path;
         while (true)
         {
-            if (_index.Children.TryGetValue(child, out var own) && !own.IsEmpty)
+            if (index.TryGetValue(child, out var own) && !own.IsEmpty)
                 return; // still a directory with descendants — keep the chain
-            _index.Children.TryRemove(child, out _);
+            index.TryRemove(child, out _);
             var slash = child.LastIndexOf('/');
             var parent = slash < 0 ? "" : child[..slash];
-            if (_index.Children.TryGetValue(parent, out var set))
+            if (index.TryGetValue(parent, out var set))
                 set.TryRemove(child, out _);
             if (slash < 0 || _nodes.ContainsKey(parent) || (set is not null && !set.IsEmpty))
                 return;
@@ -132,35 +202,123 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         }
     }
 
-    /// <summary>The indexed children of a directory, rebuilding the index once if the store was mutated directly.</summary>
-    private ConcurrentDictionary<string, byte>? ChildrenOf(string parent)
+    /// <summary>
+    /// The index half of an insert — called under <see cref="ChildIndex.Mutate"/>, in the same
+    /// section as the store mutation it mirrors. Indexes into the live index and, when a rebuild
+    /// is in flight, into the one it is building (rule 3 above).
+    /// </summary>
+    private void Added(string path, bool inserted)
     {
-        if (_index.IndexedCount != _nodes.Count)
-        {
-            lock (_index.Rebuild)
-            {
-                if (_index.IndexedCount != _nodes.Count)
-                {
-                    _index.Children.Clear();
-                    foreach (var k in _nodes.Keys)
-                        Index(k);
-                    _index.IndexedCount = _nodes.Count;
-                }
-            }
-        }
-        return _index.Children.TryGetValue(parent, out var set) ? set : null;
+        var pending = _index.Pending;
+        var live = _index.Children;
+        Index(live, path);
+        if (pending is not null && !ReferenceEquals(pending, live))
+            Index(pending, path);
+        if (inserted && _index.IndexedCount >= 0)
+            _index.IndexedCount++;
     }
 
-    private void Added(string path)
-    {
-        Index(path);
-        _index.IndexedCount = _nodes.Count;
-    }
-
+    /// <summary>The index half of a delete — same contract as <see cref="Added"/>.</summary>
     private void Removed(string path)
     {
-        Unindex(path);
-        _index.IndexedCount = _nodes.Count;
+        var pending = _index.Pending;
+        var live = _index.Children;
+        Unindex(live, path);
+        if (pending is not null && !ReferenceEquals(pending, live))
+            Unindex(pending, path);
+        if (_index.IndexedCount >= 0)
+            _index.IndexedCount--;
+    }
+
+    /// <summary>True when the dictionary holds nodes the index does not account for — the one
+    /// thing the count is a guard for (rule 1). Read under Mutate so a write in its own section
+    /// cannot be observed half-way.</summary>
+    private bool Drifted()
+    {
+        lock (_index.Mutate)
+            return _index.IndexedCount != _nodes.Count;
+    }
+
+    /// <summary>
+    /// Builds a fresh index from the dictionary and swaps it in. Caller holds
+    /// <see cref="ChildIndex.Rebuild"/>. Never clears the live index; takes Mutate per key so
+    /// writers interleave.
+    /// </summary>
+    private void Rebuild()
+    {
+        var fresh = new ConcurrentDictionary<string, ConcurrentDictionary<string, byte>>(StringComparer.OrdinalIgnoreCase);
+        ICollection<string> keys;
+        // Publish and snapshot in ONE section: every write either precedes it (and is in the
+        // snapshot) or follows it (and sees Pending). ConcurrentDictionary.Keys is a copy taken
+        // under every bucket lock — a consistent snapshot, not a live view.
+        lock (_index.Mutate)
+        {
+            _index.Pending = fresh;
+            keys = _nodes.Keys;
+        }
+        _index.OnSnapshot?.Invoke();
+        foreach (var key in keys)
+            lock (_index.Mutate)
+            {
+                // 🚨 Only a key that is STILL a node. A delete that lands after the snapshot and
+                // before the loop reaches this key runs Unindex(fresh) against an index that does
+                // not hold it yet — a no-op — and an unconditional Index here would then put the
+                // deleted key back: a ghost leaf (filtered by every listing, harmless) or, for a
+                // deleted node with deleted descendants, a PHANTOM implied directory that every
+                // walk descends into and that no later mutation repairs, because the tally is
+                // exact and nothing rebuilds. Checked under the same Mutate section as the Index,
+                // so a delete cannot slip between the check and the write; one that lands after
+                // finds the key in fresh and removes it.
+                if (_nodes.ContainsKey(key))
+                    Index(fresh, key);
+            }
+        _index.OnBuilt?.Invoke();
+        // 🚨 Why the swap needs no second pass over a delta and no version check: the pending index
+        // is ONE set of truth — what this loop iterates AND what every writer indexes into. A
+        // write is a Mutate section, and so is the publish+snapshot above, so a write either ran
+        // before it (its key is in `keys`, indexed by the loop) or after it (it read Pending =
+        // fresh and indexed into fresh itself). Where the loop's iteration stands when the write
+        // lands is irrelevant. The swap is a Mutate section too, so a writer sees either
+        // (Pending = fresh, Children = old) or (Pending = null, Children = fresh) — never a state
+        // in which fresh is not one of the two it indexes.
+        lock (_index.Mutate)
+        {
+            _index.Children = fresh;
+            _index.Pending = null;
+            _index.IndexedCount = _nodes.Count;
+        }
+    }
+
+    /// <summary>
+    /// The live index and the indexed children of <paramref name="parent"/> in it — one
+    /// reference, so the caller's directory checks read the same index the parent set came from.
+    /// A dictionary seeded before any adapter saw it is built on first use (waited for: before it
+    /// there is no index); a dictionary that drifted behind the adapters' back is refreshed by
+    /// the first reader to notice, while later readers read the live index and move on.
+    /// </summary>
+    private (ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> Live,
+        ConcurrentDictionary<string, byte>? Set) ChildrenOf(string parent)
+    {
+        if (Volatile.Read(ref _index.IndexedCount) < 0)
+        {
+            lock (_index.Rebuild)
+                if (Volatile.Read(ref _index.IndexedCount) < 0)
+                    Rebuild();
+        }
+        else if (Drifted() && Monitor.TryEnter(_index.Rebuild))
+        {
+            try
+            {
+                if (Drifted())
+                    Rebuild();
+            }
+            finally
+            {
+                Monitor.Exit(_index.Rebuild);
+            }
+        }
+        var live = _index.Children;
+        return (live, live.TryGetValue(parent, out var set) ? set : null);
     }
 
     /// <inheritdoc />
@@ -212,9 +370,21 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             // one to slip through. The dictionary IS the store of record here, so this is where the
             // "a node's durable state never moves backward" invariant has to live; the in-process
             // high-water filter above it is empty on a fresh replica and cannot be the guarantee.
-            var winner = _nodes.AddOrUpdate(
-                Norm(node.Path), node,
-                (_, existing) => existing.Version > node.Version ? existing : node);
+            //
+            // The store mutation and the index mutation are ONE section under Mutate (rule 1 of the
+            // children index): nothing may observe the row without its index entry. Only dictionary
+            // work is inside; the change notification below runs outside it.
+            MeshNode winner;
+            var inserted = false;
+            lock (_index.Mutate)
+            {
+                winner = _nodes.AddOrUpdate(
+                    Norm(node.Path),
+                    _ => { inserted = true; return node; },
+                    (_, existing) => existing.Version > node.Version ? existing : node);
+                if (ReferenceEquals(winner, node))
+                    Added(Norm(node.Path), inserted);
+            }
             if (!ReferenceEquals(winner, node))
             {
                 // Refused: the stored row is newer. Emit it (never the loser) so the write-integrity
@@ -227,7 +397,6 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
                 return Observable.Return<MeshNode?>(winner);
             }
 
-            Added(Norm(node.Path));
             _logger?.LogDebug("[InMemoryAdapter#{Id:X}] Write {Path} (count={Count})",
                 GetHashCode(), Norm(node.Path), _nodes.Count);
             // No try/catch: IsolatedChangeFeed already isolates and LOGS a faulty observer, so a
@@ -265,14 +434,21 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
 
             if (expectedVersion == 0)
             {
-                if (!_nodes.TryAdd(path, node))
+                // Store and index in one Mutate section — see Write.
+                bool added;
+                lock (_index.Mutate)
+                {
+                    added = _nodes.TryAdd(path, node);
+                    if (added)
+                        Added(path, inserted: true);
+                }
+                if (!added)
                 {
                     _logger?.LogDebug(
                         "[InMemoryAdapter#{Id:X}] WriteIfVersion {Path} REFUSED — a row already exists",
                         GetHashCode(), path);
                     return Observable.Return<bool?>(false);
                 }
-                Added(path);
                 _changes.OnNext(DataChangeNotification.Updated(path, node));
                 return Observable.Return<bool?>(true);
             }
@@ -327,8 +503,13 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
     public override IObservable<string> Delete(string path)
         => Observable.Defer(() =>
         {
-            if (_nodes.TryRemove(Norm(path), out var removed))
-                Removed(Norm(path));
+            MeshNode? removed;
+            // Store and index in one Mutate section — see Write.
+            lock (_index.Mutate)
+            {
+                if (_nodes.TryRemove(Norm(path), out removed))
+                    Removed(Norm(path));
+            }
             _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed));
             return Observable.Return(path);
         });
@@ -342,12 +523,17 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
     public IObservable<bool> DeleteIfExists(string path)
         => Observable.Defer(() =>
         {
-            var won = _nodes.TryRemove(Norm(path), out var removed);
-            if (won)
+            bool won;
+            MeshNode? removed;
+            // Store and index in one Mutate section — see Write.
+            lock (_index.Mutate)
             {
-                Removed(Norm(path));
-                _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed));
+                won = _nodes.TryRemove(Norm(path), out removed);
+                if (won)
+                    Removed(Norm(path));
             }
+            if (won)
+                _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed));
             return Observable.Return(won);
         });
 
@@ -364,13 +550,15 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             // stores no "org/acme/project", yet WalkDescendants must recurse into it). The index
             // carries exactly those implied directories: a child that is not itself a node.
             var directoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var children = ChildrenOf(normalized);
+            // ONE index reference for the whole listing: the parent's set and the implied-directory
+            // checks must read the same index, or a swap between them could answer from two.
+            var (live, children) = ChildrenOf(normalized);
             if (children is not null)
                 foreach (var child in children.Keys)
                 {
                     if (_nodes.ContainsKey(child))
                         nodePaths.Add(child);
-                    else if (_index.Children.TryGetValue(child, out var own) && !own.IsEmpty)
+                    else if (live.TryGetValue(child, out var own) && !own.IsEmpty)
                         directoryPaths.Add(child);
                 }
             return Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(
