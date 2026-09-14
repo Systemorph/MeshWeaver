@@ -133,6 +133,25 @@ public record UpdatePolicyContent
     public string? LastCheckTrigger { get; init; }
 
     /// <summary>
+    /// The release this install last HANDED to the control lane (MeshWeaver#4098) — the tag a
+    /// <c>self-update-available</c> event named — with <see cref="HandedOverAt"/> and
+    /// <see cref="HandedOverTo"/>. Written by the poller on every successful hand-over so the
+    /// Updates tab can say "announced to the control instance at T" rather than "update
+    /// available" for ever; the apply itself is the control plane's Roll, whose state lives on
+    /// the control instance. Not user-editable.
+    /// </summary>
+    [Browsable(false)]
+    public string? HandedOverTag { get; init; }
+
+    /// <summary>When <see cref="HandedOverTag"/> was last announced.</summary>
+    [Browsable(false)]
+    public DateTimeOffset? HandedOverAt { get; init; }
+
+    /// <summary>Where it was announced — the control inbox URL, or the local target on the control instance.</summary>
+    [Browsable(false)]
+    public string? HandedOverTo { get; init; }
+
+    /// <summary>
     /// Combo-verification verdicts per candidate tag — what the Candidate Release Protocol's
     /// instance gate found when it ran this instance's module set inside a candidate image
     /// (<c>mw-combo-verify</c>). Written via

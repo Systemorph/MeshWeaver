@@ -56,9 +56,11 @@ internal static class UnavailableUpdateMechanics
     internal static string DescribeCannotPatch(PlanTierRefusal? patcherRefusal) =>
         patcherRefusal is { } refused
             ? $" ({refused.Describe()} The Kubernetes patcher ships in that package, so this install "
-              + "runs detect-and-notify until the instance's plan covers it.)"
-            : $" (detect-and-notify: list {PatcherModule} under Modules:Assemblies for a Kubernetes install, "
-              + "or install the Hosting package from the registry)";
+              + "runs detect-and-notify until the instance's plan covers it — or hands over to the "
+              + "control lane when a control inbox is configured.)"
+            : $" (no Kubernetes patcher is registered: a fleet instance hands a detected release to the "
+              + "control lane when a control inbox is configured; a standalone Kubernetes install lists "
+              + $"{PatcherModule} under Modules:Assemblies or installs the Hosting package from the registry)";
 
     /// <summary>
     /// Reports no tags, so the poller finds no candidate version. Correct for an install with no

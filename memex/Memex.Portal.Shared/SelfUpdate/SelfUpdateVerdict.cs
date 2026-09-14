@@ -125,6 +125,29 @@ public enum SelfUpdateOutcome
     /// the policy node, never folded into "no newer release". Appended, never inserted.
     /// </summary>
     RestartUnavailable,
+
+    /// <summary>
+    /// A newer release exists and it was HANDED to the control lane (MeshWeaver#4098): one signed
+    /// <c>self-update-available</c> event reached the control instance's inbox, and the control
+    /// plane opens the <c>Roll</c>. This install patched nothing — the correct state of a portal
+    /// that holds no credential for the cluster. Appended, never inserted.
+    /// </summary>
+    HandedOver,
+
+    /// <summary>
+    /// A newer release exists, this install does not patch itself, and the hand-over to the control
+    /// lane FAILED (the inbox refused the signature, or was unreachable). Named apart from
+    /// <see cref="CheckFailed"/> because the CHECK succeeded — the release is known, the record says
+    /// so, and the next check announces it again. Appended, never inserted.
+    /// </summary>
+    HandoverFailed,
+
+    /// <summary>
+    /// A landed module generation is pending activation and the RESTART was handed to the control
+    /// lane (<c>self-update-restart-pending</c>) — a restart re-creates the pods the record
+    /// declares, so the control plane takes it unattended. Appended, never inserted.
+    /// </summary>
+    RestartHandedOver,
 }
 
 /// <summary>
@@ -175,7 +198,8 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     /// </summary>
     public bool FoundNewerRelease => Outcome is SelfUpdateOutcome.Held or SelfUpdateOutcome.Deferred
         or SelfUpdateOutcome.DetectOnly or SelfUpdateOutcome.Applied
-        or SelfUpdateOutcome.ComboBlocked or SelfUpdateOutcome.MigrationFailed;
+        or SelfUpdateOutcome.ComboBlocked or SelfUpdateOutcome.MigrationFailed
+        or SelfUpdateOutcome.HandedOver or SelfUpdateOutcome.HandoverFailed;
 
     /// <summary>The policy says never update.</summary>
     public static SelfUpdateVerdict UpdatesDisabled() => new(
@@ -247,6 +271,39 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     public static SelfUpdateVerdict DetectOnly(string tag) => new(
         SelfUpdateOutcome.DetectOnly,
         $"update available: {tag} (detect-and-notify — this install does not self-patch).", tag);
+
+    /// <summary>
+    /// A newer release exists, this install does not self-patch, and it could not hand over either:
+    /// <paramref name="missing"/> names the configuration that would make it a control-lane
+    /// install (keys, never values). The sentence an operator needs is the one that says WHY a
+    /// detected release goes nowhere.
+    /// </summary>
+    public static SelfUpdateVerdict DetectOnly(string tag, string missing) => new(
+        SelfUpdateOutcome.DetectOnly,
+        $"update available: {tag} (detect-and-notify — this install does not self-patch, and {missing}).",
+        tag);
+
+    /// <summary>
+    /// A newer release exists and it was handed to the control lane (#4098). Says what happens next
+    /// and where, because from this install's point of view nothing else will: the Roll is opened,
+    /// approved and executed on the control instance.
+    /// </summary>
+    public static SelfUpdateVerdict HandedOver(string tag, string destination, string detail) => new(
+        SelfUpdateOutcome.HandedOver,
+        $"update available: {tag} — handed to the control lane ({destination}: {detail}); the control "
+        + "plane opens a Roll for this deployment (a Roll to the record's pinned tag restores "
+        + "unattended, a newer tag waits for an approval in the mesh). This install does not patch itself.",
+        tag);
+
+    /// <summary>
+    /// A newer release exists, this install does not self-patch, and the hand-over FAILED — the
+    /// detail names the status (and, on a 401, the pairing to check). The next check announces again.
+    /// </summary>
+    public static SelfUpdateVerdict HandoverFailed(string tag, string detail) => new(
+        SelfUpdateOutcome.HandoverFailed,
+        $"update available: {tag} — the hand-over to the control lane FAILED: {detail}. This install "
+        + "does not patch itself; the next check hands the release over again.",
+        tag);
 
     /// <summary>The workloads were patched.</summary>
     public static SelfUpdateVerdict Applied(string tag, string installed, DateTimeOffset? lastRolledAt) => new(
@@ -340,16 +397,37 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     };
 
     /// <summary>
+    /// The pending restart was handed to the control lane (#4098): the control plane re-creates
+    /// the pods on the image they run — a restore of the declared state, taken unattended.
+    /// </summary>
+    public static SelfUpdateVerdict RestartHandedOver(SelfUpdateVerdict after, string installed, string destination, string detail) => new(
+        SelfUpdateOutcome.RestartHandedOver,
+        $"{after.Message} A landed module generation is pending activation — handed to the control "
+        + $"lane ({destination}: {detail}); the control plane restarts the workloads on {installed}.",
+        installed)
+    {
+        UnresolvedInstalledTag = after.UnresolvedInstalledTag,
+    };
+
+    /// <summary>The restart hand-over failed: named as unavailable, with the cause, so the pending
+    /// module is a state an operator can see — exactly as an updater without the seam is.</summary>
+    public static SelfUpdateVerdict RestartHandoverFailed(SelfUpdateVerdict after, string installed, string detail) =>
+        RestartUnavailable(after, installed, $"the hand-over to the control lane failed: {detail}");
+
+    /// <summary>
     /// 🚨 Whether a pending restart may follow <paramref name="platform"/>'s verdict at all. Only a
     /// check that PATCHED nothing has a restart to take: an applied roll IS the restart (the new
     /// pods boot the landed set), a refused migration leaves the image deliberately where it is, a
     /// failed check decided nothing, and a disabled policy means never — an operator who pins the
-    /// image restarts by hand. Pure; pinned by <c>SelfUpdateVerdictTest</c>.
+    /// image restarts by hand. A release handed to the control lane is a roll in flight there: the
+    /// Roll it becomes restarts the pods, so a second request for the same instance would only race
+    /// it. Pure; pinned by <c>SelfUpdateVerdictTest</c>.
     /// </summary>
     public static bool MayRestartAfter(SelfUpdateVerdict platform) => platform.Outcome
         is not (SelfUpdateOutcome.Applied or SelfUpdateOutcome.MigrationFailed
             or SelfUpdateOutcome.CheckFailed or SelfUpdateOutcome.UpdatesDisabled
-            or SelfUpdateOutcome.NoOutcome);
+            or SelfUpdateOutcome.NoOutcome
+            or SelfUpdateOutcome.HandedOver or SelfUpdateOutcome.HandoverFailed);
 
     /// <summary>
     /// The roll floor applied to a pending restart: the <see cref="RestartDeferred"/> verdict when

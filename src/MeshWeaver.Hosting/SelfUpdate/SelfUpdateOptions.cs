@@ -124,6 +124,29 @@ public record SelfUpdateOptions
         (Registry ?? string.Empty).Trim().TrimEnd('/')
             .EndsWith(".azurecr.io", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// 🚨 Whether this installation may PATCH ITS OWN workloads — the switch that retires the
+    /// in-pod roll in favour of the control lane (MeshWeaver#4098, P3b of
+    /// <c>Hosting/AksOperationsViaActions</c>).
+    ///
+    /// <para>The chart renders it (<c>SelfUpdate__CanPatch</c>) from the SAME value that renders the
+    /// <c>memex-portal-self-update</c> Role (<c>selfUpdate.canPatch</c>), so the RIGHT and the
+    /// INTENT to use it are one declaration: an install whose chart renders no Role also renders
+    /// <c>false</c> here, and the poller never issues a PATCH the cluster would answer 403 to.
+    /// With it <c>false</c>, a detected release is HANDED to the control instance
+    /// (<c>SelfUpdateHandover</c>) — one signed <c>self-update-available</c> event into its inbox,
+    /// from which the control plane opens the <c>Roll</c> — and the install patches nothing; a
+    /// portal that cannot patch itself is the CORRECT state, not a degraded one.</para>
+    ///
+    /// <para>The C# default is <c>true</c> — deliberately the opposite of the chart's — so an image
+    /// carrying this member under an OLDER chart (which renders no key at all) behaves exactly as
+    /// before. The fleet moves when the CHART moves, namespace by namespace, through the
+    /// maintainer's Reconcile — the same act that deletes the Role. The effective answer is this
+    /// AND <c>IDeploymentUpdater.CanPatch</c>: a non-Kubernetes host stays detect-only whatever
+    /// this says.</para>
+    /// </summary>
+    public bool CanPatch { get; init; } = true;
+
     /// <summary>Repository whose tags are the platform version source of truth (portal + migration
     /// share the same version, built together).</summary>
     public string PortalRepository { get; init; } = "memex-portal-ai";

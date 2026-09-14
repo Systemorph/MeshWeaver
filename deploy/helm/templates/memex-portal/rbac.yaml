@@ -1,17 +1,33 @@
+{{- /*
+🚨 RENDERED ONLY WHEN `selfUpdate.canPatch` IS TRUE — and the chart's default is FALSE (MeshWeaver#4098,
+P3b of Hosting/AksOperationsViaActions: "the only place that alters AKS is the systemorph-com App").
+A portal that cannot patch itself is the CORRECT state: the self-updater still DETECTS a newer
+release (registry watch + Admin/UpdatePolicy) and HANDS it to the control instance's inbox as one
+signed `self-update-available` event; the control plane opens the Roll and aks-ops.yml executes it.
+The same value renders `SelfUpdate__CanPatch` into the portal ConfigMap (config.yaml), so the RIGHT
+and the poller's INTENT to use it are one declaration — an install without this Role never issues
+a PATCH the cluster would answer 403 to. A `helm upgrade` with the value off DELETES the Role and
+RoleBinding from the namespace (they were chart-owned), which is what the acceptance evidence
+`kubectl auth can-i patch deployment/memex-portal-deployment --as=system:serviceaccount:<ns>:memex-portal-sa`
+→ `no` measures. Set `selfUpdate.canPatch: true` ONLY on a standalone Kubernetes install with no
+control instance to hand over to.
+
+Least-privilege RBAC for the in-pod self-updater: it may GET and PATCH ONLY the portal + migration
+deployments (scoped by resourceNames), nothing else. This is what lets the portal "change the image
+version from inside the memex" (ReleaseStrategy.md). Without this the PATCH returns 403 and the
+poller logs + keeps ticking (no crash).
+
+🚨 batch/jobs is what lets a self-update MOVE THE SCHEMA before it moves the image. The migration
+is a run-once Job (memex-migration/job.yaml) that only `helm upgrade` used to mint; a self-update
+that rolled the portal across a db_version boundary without it left the new pods refusing to start
+(DbVersionGate) behind a portal that still answered 200 — memex and memex-cloud, 2026-09-03, seven
+hours. The self-updater creates `memex-migration-su-<tag>` and waits for it BEFORE the PATCH
+(Doc/Architecture/DatabaseMigrationProcedure). Jobs cannot be scoped by resourceNames (the name
+carries the tag), so the rule is namespace-wide on jobs only. On the control lane the operator's
+`hosting-deploy` runs the chart's migration Job instead, so no portal creates Jobs any more.
+*/ -}}
+{{- if (.Values.selfUpdate).canPatch }}
 ---
-# Least-privilege RBAC for the in-pod self-updater: it may GET and PATCH ONLY the portal + migration
-# deployments (scoped by resourceNames), nothing else. This is what lets the portal "change the image
-# version from inside the memex" (ReleaseStrategy.md). Without this the PATCH returns 403 and the
-# poller logs + keeps ticking (no crash).
-#
-# 🚨 batch/jobs is what lets a self-update MOVE THE SCHEMA before it moves the image. The migration
-# is a run-once Job (memex-migration/job.yaml) that only `helm upgrade` used to mint; a self-update
-# that rolled the portal across a db_version boundary without it left the new pods refusing to start
-# (DbVersionGate) behind a portal that still answered 200 — memex and memex-cloud, 2026-09-03, seven
-# hours. The self-updater now creates `memex-migration-su-<tag>` and waits for it BEFORE the PATCH
-# (Doc/Architecture/DatabaseMigrationProcedure). Jobs cannot be scoped by resourceNames (the name
-# carries the tag), so the rule is namespace-wide on jobs only. Until a `helm upgrade` has applied
-# this rule the Job POST answers 403, and the self-updater says so at Warning on every roll.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -46,3 +62,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: "memex-portal-sa"
+{{- end }}

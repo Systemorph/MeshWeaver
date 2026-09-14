@@ -53,14 +53,17 @@ spec:
         checksum/bundle-fetch: {{ include (print $.Template.BasePath "/memex-portal/bundle-fetch.yaml") . | sha256sum }}
 {{- end }}
     spec:
-      # The in-pod self-updater patches this deployment via the Kubernetes API using this SA's
-      # projected token (RBAC in rbac.yaml). See Doc/Architecture/ReleaseStrategy.
+      # The pod runs as this SA. On a standalone install with selfUpdate.canPatch=true the in-pod
+      # self-updater patches this deployment through it (RBAC in rbac.yaml); on the fleet (the
+      # default) the SA holds NO right on the cluster and the self-updater hands a detected release
+      # to the control instance instead (MeshWeaver#4098). See Doc/Architecture/ReleaseStrategy.
       serviceAccountName: "memex-portal-sa"
 {{- /* The pull credential for the platform images when they come from the MIRROR rather than ACR
        (MeshWeaver#3353). A Secret NAME, rendered only when set: absent ⇒ no imagePullSecrets, and
-       the kubelet's AcrPull keeps pulling from ACR exactly as before. The self-updater's PATCH
-       changes containers[].image only — a strategic merge leaves this list in place — so a pull
-       secret set once here survives every automatic roll. The same block is on the migration
+       the kubelet's AcrPull keeps pulling from ACR exactly as before. A roll — the control
+       lane's `set image`, or a self-patch where one is still allowed — changes containers[].image
+       only, a strategic merge leaves this list in place, so a pull secret set once here survives
+       every automatic roll. The same block is on the migration
        Job's pod spec: both pods pull a platform image, and one without the secret is a Job stuck
        in ImagePullBackOff while the portal rolls. */}}
 {{- if (.Values.portal).imagePullSecret }}

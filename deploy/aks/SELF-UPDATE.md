@@ -10,8 +10,11 @@ merge to main ─▶ "Build and Test" (green) ─▶ images job builds+pushes  m
         ┌─────────────────────────────────────────────────────────────────────┼──────────────── … every install in the world
         ▼                                   ▼                                   ▼
    memex install                       prod install                      external install
-   SelfUpdateHostedService lists ACR (its OWN workload identity), per its OWN Admin/UpdatePolicy,
-   and PATCHes its OWN portal+migration Deployments via its OWN in-cluster ServiceAccount token.
+   SelfUpdateHostedService lists the registry (its OWN workload identity or instance key), per its
+   OWN Admin/UpdatePolicy, and — on the fleet — HANDS the selected release to the control instance
+   (one signed `self-update-available` event; the control plane opens the Roll, MeshWeaver#4098,
+   Doc/Architecture/SelfUpdateControlLane). Only a standalone install with `selfUpdate.canPatch: true`
+   still PATCHes its OWN portal+migration Deployments via its OWN in-cluster ServiceAccount token.
    The check is EVENT-DRIVEN: one pass at startup, then one per BuildCompletion record written by
    the GitHub webhook for the platform or ANY module this environment deploys.
    🚨 …plus a SAFETY NET (SelfUpdate__SafetyNetCheckInterval, default 1h — #2494). Not the old
@@ -90,10 +93,18 @@ self-update stops advancing until someone looks.
 
 ## Enabling self-update on an AKS environment
 
+🚨 **On the fleet (MeshWeaver#4098) an instance does NOT patch itself**: the chart's default
+`selfUpdate.canPatch: false` renders no Role and `SelfUpdate__CanPatch=false`, and the poller hands a
+detected release to the control instance — so what an instance needs is the control-inbox channel
+(`Hosting__Deployment`, `Hosting__ReportTo` or `Hosting__ControlInbox__Url`, and the
+`Hosting__ControlInbox__Secret` vault mapping) plus, on the fleet registry, the pairing
+`SelfUpdate__RegistryValidationUrl` (MeshWeaver#4093). The steps below are for a STANDALONE
+Kubernetes install that keeps the in-pod patch with `selfUpdate.canPatch: true`.
+
 Most of it is already in the chart (`deploy/helm/templates/memex-portal/`): the `memex-portal-sa`
-ServiceAccount, a namespaced Role/RoleBinding granting `get,patch` on the portal+migration Deployments,
-`serviceAccountName: memex-portal-sa` on the Deployment, and the conditional workload-identity
-annotation/label/env. The gaps are operational:
+ServiceAccount, a namespaced Role/RoleBinding granting `get,patch` on the portal+migration Deployments
+(rendered only with `selfUpdate.canPatch: true`), `serviceAccountName: memex-portal-sa` on the
+Deployment, and the conditional workload-identity annotation/label/env. The gaps are operational:
 
 1. **Azure (once):** ensure the portal UAMI + per-namespace federated credentials exist
    (`deploy/aks/infra/modules/portal-identity.bicep`, default-on via `main.bicep`), and grant it
@@ -112,9 +123,11 @@ annotation/label/env. The gaps are operational:
    kubectl -n <ns> patch deployment memex-portal-deployment --type=merge -p \
      '{"spec":{"template":{"metadata":{"labels":{"azure.workload.identity/use":"true"}},"spec":{"serviceAccountName":"memex-portal-sa"}}}}'
    ```
-3. **Verify:** the portal logs `[SelfUpdate] starting … canPatch=True`, and a newer ACR tag triggers
-   `[SelfUpdate] applying update <tag>`. A `403` on PATCH = missing RBAC (step 2); a token/ACR error =
-   missing workload identity or AcrPull (steps 1–2).
+3. **Verify:** the portal logs `[SelfUpdate] starting … canPatch=True, apply=self-patch`, and a
+   newer ACR tag triggers `[SelfUpdate] applying update <tag>`. A `403` on PATCH = missing RBAC
+   (step 2); a token/ACR error = missing workload identity or AcrPull (steps 1–2). On a fleet
+   instance the line reads `canPatch=False, apply=control-lane (… handed to <inbox url> …)` and a
+   newer tag logs `[SelfUpdate] handing <tag> to the control lane`.
 
 > ⚠️ The chart's migration is a **Job**, but the updater/RBAC still target `memex-migration-deployment`
 > — a workload the chart does not render (verified: `helm template deploy/helm` emits `kind: Job` named
