@@ -4,6 +4,7 @@ using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -453,6 +454,72 @@ public static class InstallCompleteness
         PackageManifest? record) =>
         Observe(persistence, options, packageId, partition, record, PackageInstaller.BuiltInParsers);
 
+    /// <summary>How many missing paths one line names before it stops counting them out.</summary>
+    internal const int MaxNamedInALine = 20;
+
+    /// <summary>
+    /// 🚨 <b>THE SEVERITY BELONGS TO THE OUTCOME, NOT TO THE DETECTION</b> (MeshWeaver#2387).
+    ///
+    /// <para><b>The line that lies by being early.</b> Until this existed, the only completeness
+    /// line an install ever wrote was emitted BEFORE the repair ran — at
+    /// <see cref="LogLevel.Error"/>, saying the install "is being REPAIRED rather than skipped" —
+    /// and nothing anywhere ever said whether the repair worked. Measured on
+    /// <c>memex.meshweaver.cloud</c> 2026-09-13: <c>Feedback/Feedback/Source/FeedbackHandover</c>
+    /// was named ABSENT at 22:02:37Z and was present at 22:02:45Z, eight seconds later. That Error
+    /// reports a SUCCESS. It ships to Loki, the log watcher mints an incident from it, and because
+    /// incident identity folds per log CATEGORY it lands on MeshWeaver#2387 — an issue about a
+    /// different call site in the same class — which is why that issue re-opens no matter what
+    /// anyone fixes.</para>
+    ///
+    /// <para>🚨 <b>And the case that deserved the Error had no line at all.</b> A completeness
+    /// verdict was only ever taken on the SKIP path, where the module hash was unchanged; an
+    /// install that actually WROTE was never compared against what landed. Same portal, same boot:
+    /// <c>Plugins/Hosting</c> stamped a record declaring 224 files at 22:03:03Z, and
+    /// <c>Hosting/Deployment/Source/TriageIntake.cs</c> plus both
+    /// <c>Hosting/TriageStatus/Source/*.cs</c> were still absent twelve hours later — eight
+    /// NodeTypes sitting at <c>compilationStatus: Error</c> with <c>MISSING SOURCES: N of N</c>,
+    /// and not one log line saying the install had not landed whole. The record is stamped, so
+    /// nothing asks again until the module version moves.</para>
+    ///
+    /// <para>Pure — the whole publication is this function, so every arm is pinnable without a
+    /// host. Same split, and same reason, as <c>NodeTypeBakeStatus.Classify</c>.</para>
+    /// </summary>
+    /// <param name="after">The verdict taken AFTER the install wrote. 🚨 Never the one before.</param>
+    /// <param name="moduleVersion">The module version the install stamped, named on the line.</param>
+    /// <returns>The severity the outcome deserves, and the sentence to log at it.</returns>
+    public static LandingReport DescribeLanding(
+        InstallCompletenessVerdict after, string? moduleVersion)
+    {
+        ArgumentNullException.ThrowIfNull(after);
+        var module = string.IsNullOrEmpty(moduleVersion) ? "(none)" : moduleVersion;
+        return after.Kind switch
+        {
+            // The one arm that is a genuine fault: the install ran, the record is stamped, and the
+            // mesh is still short. NAMED, because "something is missing" is not actionable.
+            InstallCompletenessKind.Incomplete => new LandingReport(
+                LogLevel.Error,
+                $"Package {after.PackageId} finished installing (module {module}) and "
+                + $"{after.Missing.Count} of {after.Declared} declared node(s) are STILL ABSENT "
+                + $"from the mesh: [{string.Join(", ", after.Missing.Take(MaxNamedInALine))}]. "
+                + $"Counted over: {after.Population}. The install record is stamped, so no later "
+                + "install or reconcile will ask again until the module version moves — and a "
+                + "NodeType whose declared source node is among these cannot compile "
+                + "(MeshWeaver#3485)."),
+            InstallCompletenessKind.Complete => new LandingReport(
+                LogLevel.Information,
+                $"Package {after.PackageId} landed whole (module {module}): all {after.Declared} "
+                + $"declared node(s) are present. Counted over: {after.Population}."),
+            // 🚨 Undeclared and NotObserved are NOT passes and must not be spelled like one — the
+            // rule this whole type is built on. They are also not the Error: nothing was shown to
+            // be missing, only that nothing was shown at all.
+            _ => new LandingReport(
+                LogLevel.Warning,
+                $"Package {after.PackageId} finished installing (module {module}) but the OUTCOME "
+                + $"was NOT verified ({after.Kind}): {after.Because}. This is not a pass — nothing "
+                + "here says the install landed whole (MeshWeaver#3485)."),
+        };
+    }
+
     /// <summary>
     /// The OTHER half of the same question, and the one the record-driven arm cannot ask: a
     /// partition ROOT that exists while NO install record accounts for it.
@@ -670,6 +737,19 @@ public enum InstallCompletenessKind
     /// </summary>
     RootWithoutRecord,
 }
+
+/// <summary>
+/// What an install's LANDING deserves to be reported as — the severity, and the sentence — decided
+/// by <see cref="InstallCompleteness.DescribeLanding"/> from the verdict taken after the write.
+///
+/// <para>A record rather than a bare log call so the decision is a VALUE a test can pin: a check
+/// whose only output is a side effect can only be tested by observing the side effect, and the
+/// thing that went wrong here was the SEVERITY, which no assertion on behaviour would have
+/// caught.</para>
+/// </summary>
+/// <param name="Level">The severity the outcome deserves.</param>
+/// <param name="Message">The line to log at it.</param>
+public sealed record LandingReport(LogLevel Level, string Message);
 
 /// <summary>One package's completeness verdict.</summary>
 /// <param name="PackageId">The package the record belongs to.</param>
