@@ -53,8 +53,11 @@ name: Node repo ci-failure ledger (reusable)
 #                      runner touched it — an org Actions budget, or a workflow the runner could not
 #                      resolve; the reason is in the job's ANNOTATION, which needs `checks: read`
 #                      and is therefore read by the control portal's triage (whose App holds it),
-#                      not here. The ledger entry says "N of M never started" and, when N == M,
-#                      that NOTHING in the run executed. 🚨 While a budget refusal is IN FORCE this
+#                      not here. Both counts are over the FAILED jobs only — the ledger lists no
+#                      other kind — so the entry says "N of M failed jobs never started" and, when
+#                      N == M, that EVERY failed job never started: no failing step executed and the
+#                      red carries no verdict about the commit. It says nothing about jobs that ran
+#                      green before a window opened. 🚨 While a budget refusal is IN FORCE this
 #                      lane's own job is refused with the gates (measured 2026-09-11: 16 failure /
 #                      7 skipped / 0 ran in the refused attempt), so a live refusal reaches the
 #                      ledger only from a run whose window closed before this job started; the
@@ -170,9 +173,13 @@ on:
         type: string
       failed-jobs:
         description: >-
-          JSON array of {name, url, step} the caller assembled. Empty (the default) on a failure means
-          "list the run's jobs that concluded failure/timed_out yourself" — which needs `actions: read`
-          on the caller job. Ignored on success. A malformed value is refused before any write.
+          JSON array of {name, url, step, neverStarted} the caller assembled. `neverStarted` is an
+          optional boolean (default false): true marks a failed job that ran no step — refused before
+          any runner touched it (an org Actions budget, or a workflow the runner could not resolve).
+          Empty (the default) on a failure means "list the run's jobs that concluded failure/timed_out
+          yourself, reading neverStarted from each job's step count" — which needs `actions: read` on
+          the caller job. Ignored on success. A malformed value (a non-boolean neverStarted included)
+          is refused before any write.
         required: false
         type: string
         default: "[]"

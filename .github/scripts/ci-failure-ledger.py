@@ -268,13 +268,17 @@ def ledger_entry(run: Run, now: datetime) -> str:
     ]
     refused = never_started(run.failed_jobs)
     if refused:
-        # Said ONCE per entry, above the job list, because the job list is what a reader skims:
-        # a red whose failed jobs never started is not a verdict about this commit.
+        # Said ONCE per entry, above the job list, because the job list is what a reader skims.
+        # The claim is about VERDICTS, never about the whole run: this ledger lists failed jobs
+        # only, so "every failed job never started" is exactly what it can prove — no failing step
+        # executed, hence no failing verdict about the commit — and it says nothing about jobs
+        # that ran green before a window opened.
         every = len(refused) == len(run.failed_jobs)
         rows.append(
             f"| never started | **{len(refused)} of {len(run.failed_jobs)}** failed job(s) ran no step"
-            + (" — NOTHING in this run executed, so this red is not a verdict about the commit. " if every
-               else " — those jobs are not a verdict about the commit; the others are. ")
+            + (" — EVERY failed job of this run never started, so no failing step executed and this "
+               "red carries no verdict about the commit. " if every
+               else " — those jobs carry no verdict about the commit; the failed jobs that ran do. ")
             + "Read the annotation on the job page before debugging the diff: `The job was not started "
             "because an Actions budget is preventing further use.` is an org budget refusal (re-run once "
             "the window has passed — Doc/Architecture/ReadingCiSignals); anything else names a workflow "
@@ -806,7 +810,7 @@ def self_test() -> int:
           listed[0]["neverStarted"] is False and listed[1]["neverStarted"] is True)
     check("a MIXED run says N of M never started and keeps the others as verdicts",
           issue10 is not None and "**1 of 2** failed job(s) ran no step" in issue10.body
-          and "the others are" in issue10.body and json.loads(body10 or "{}")["neverStarted"] == 1)
+          and "the failed jobs that ran do" in issue10.body and json.loads(body10 or "{}")["neverStarted"] == 1)
 
     # 12. Memex#275 — the measured 2026-09-11 shape: an org Actions budget refused every job of the
     #     run; each concluded `failure` in ~2 s with ZERO steps (MeshWeaver.Plugins run 34570627805
@@ -827,9 +831,10 @@ def self_test() -> int:
           and all(j["step"] == "" for j in listed12))
     v, issue12, body12 = go(gh12, run("failure", listed12))
     ev12 = json.loads(body12 or "{}")
-    check("the entry says NOTHING in this run executed and names the budget sentence to look for",
+    check("the entry says EVERY failed job never started (no failing verdict) and names the budget sentence",
           issue12 is not None and "**2 of 2** failed job(s) ran no step" in issue12.body
-          and "NOTHING in this run executed" in issue12.body
+          and "carries no verdict about the commit" in issue12.body
+          and "NOTHING in this run executed" not in issue12.body
           and "Actions budget is preventing further use" in issue12.body
           and issue12.body.count(NEVER_STARTED_NOTE) == 2)
     check("the event carries neverStarted on every job and the run-level count",
