@@ -503,6 +503,14 @@ public class BundleReaderTest
         var native = Assert.Single(
             names.Where(n => n.EndsWith("libe_sqlite3.so", StringComparison.Ordinal)));
 
+        // 🚨 …AND IT IS AT THE DECLARED PATH, not merely somewhere outside the other two (#4318
+        // review). Finding it by file name and then checking only that it is NOT under the old
+        // prefixes leaves a writer free to emit it under any THIRD prefix and still pass — a test
+        // claiming to pin the format contract while pinning only two thirds of it. The path IS the
+        // contract here: `ModuleNativeAssets` probes `<moduleDir>/runtimes/<rid>/native/<lib>`, so
+        // the section name and the preserved relative path are both load-bearing.
+        Assert.Equal(NuGetPackageWriter.ModuleNativeEntryPathFor(NativePath), native);
+
         // The predicate every pre-#4126 consumer of the flat folder spells, driven off the SAME
         // constants those consumers use so the assertion cannot drift away from them.
         static bool FlatModuleEntry(string name) =>
