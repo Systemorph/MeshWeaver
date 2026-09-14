@@ -467,9 +467,15 @@ look transient — and the sentences differ by a preposition.
 
 | the message | who prints it | what it means | does re-running help? |
 |---|---|---|---|
-| `no sealed publication **under** <path on the share>` | `check-release-availability.sh` | may be the window above: the flat copy's `_complete` deleted during its refresh while the generation is sealed, live and pointed at | **yes** — and since the fix above the window is gone |
-| `no SEALED publication **at** <registry URL> … (404)` | `node-repo-gate.yml`'s `upstream_not_ready`, from the registry probe — a **definite** 404, refused immediately on purpose (a 404 is a decision the registry has already made; only 5xx and `000` are treated as no answer) | the upstream genuinely has **not published** for that framework identity | **no.** Look at whether the upstream's own seal is blocked |
-| `no SEALED publication **under** <account>/<share>/<dir>` | `compose-sealed-modules.sh` | the resolved publication carries no sentinel — pointer-resolved since phase 3 | depends; not this window |
+| `no sealed publication **under** <path on the share>` | `check-release-availability.sh` | **since the fix above: a REAL absence.** The probe follows `_current`, so the refresh window can no longer produce it. Before the fix it could be either, and the output did not distinguish them | **no** (post-fix). A run from before the fix may have been the window |
+| `no SEALED publication **at** <registry URL> … (404)` | `node-repo-gate.yml`'s `upstream_not_ready`, from the registry probe — a **definite** 404, refused immediately on purpose: `408`, `429`, any `5xx` and `000` are retried as transient, and everything else is a decision the registry has already made | the upstream genuinely has **not published** for that framework identity | **no.** Look at whether the upstream's own seal is blocked |
+| `no SEALED publication **under** <account>/<share>/<dir>` | `compose-sealed-modules.sh` | the resolved publication carries no sentinel — pointer-resolved since phase 3 | **no**; not this window |
+
+🚨 **"Re-running helps" was never a property of the message — it was a property of the WINDOW**, and
+the window is what the fix removed. A sentinel probe answers `false` for a real absence and for a
+refresh in flight identically, which is why the honest table says *no* everywhere now and leaves the
+diagnosis to the identity, below. An earlier draft of this table said *yes* for the first row; that
+would have told an operator to re-run a job that cannot pass. (Copilot's review.)
 
 A live instance of the middle row on 2026-09-14: MeshWeaver.Education `main` asking for identity
 `s3b3fb865f…` (platform set 8596) while the last MeshWeaver.Plugins publication was `s6b704cd02…`

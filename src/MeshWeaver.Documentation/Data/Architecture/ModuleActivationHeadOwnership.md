@@ -134,19 +134,41 @@ ordinary atomic replace puts the lost update back exactly where it was. The key 
 coordination and keeps idempotence is **the content address of the RECORD**:
 
 ```
-modules/activation.d/<Name>/<generation>.<16 hex of SHA-256 over the record's canonical bytes>.json
+modules/activation.d/<Name>/<generation>.<FULL SHA-256 of the record's canonical bytes>.json
 ```
 
 Two landings writing the **same** record collide **benignly** — same name, same bytes, a no-op —
 which is the property #3656 already relies on one level up; two writing **different** records get
 different names and neither is replaced. A random 128-bit id would also be collision-free but is
 strictly worse: identical re-landings would each mint a record, so the common idempotent case would
-accumulate files for ever. 🚨 It rests on the record being a **deterministic function of the
-landing**, which today it is — `ModuleActivationEntry` carries no timestamp and no per-process field
-(`Name`, `Source`, `PackagePath`, `Directory`, `Version`, `FrameworkMvid`, `MinMeshVersion`,
-`SourceCommit`, `Enabled` and the four `Previous*`). **Adding a non-deterministic field later would
-silently break the addressing**, so such a field must be excluded from the address or kept out of
-the record — which is a rule to write beside the type, not a note on a page.
+accumulate files for ever.
+
+🚨 **The FULL digest, not the 16-hex truncation the generation leaf uses.** 16 hex is 64 bits, and a
+64-bit digest cannot be called collision-free — a collision here would let one replica replace the
+other's record and put back exactly the lost update this design removes. The generation leaf can
+afford the truncation because a collision there means two different module payloads sharing a
+directory, which the bytes' own verification catches; a record file has no such second check. (If a
+shorter name is ever wanted, the alternative is explicit: exclusive-create plus a byte-equality
+check on collision — write only if absent, and accept an existing file only when its bytes are
+identical. That is a rule, not a shorter hash.)
+
+🚨 **And the record that is addressed must be the LANDING's facts only.** The content address is
+worth nothing if the content is not a function of the landing, and today's
+`ModuleActivationEntry` is not: the four `Previous*` fields are populated from `landedBefore` and
+`PreviousToKeep` (`ModuleLandingService.cs:724`, `:872`), i.e. from **whichever head that replica
+happened to observe**. Two replicas landing the same bytes at the same version would therefore
+write different records, get different names, and accumulate files — the idempotence would be lost
+exactly where it is needed.
+
+That is not a flaw to work around; it is the design pointing at itself. `Previous*` **is the
+fallback decision**, and the whole point of deriving is that the head and fallback are computed at
+read time rather than stored. So a per-landing record carries only the landing's own facts —
+`Name`, `Source`, `PackagePath`, `Directory` (the generation), `Version`, `FrameworkMvid`,
+`MinMeshVersion`, `SourceCommit` — every one of which is a function of the bytes and the request.
+`Enabled` is per-module state and lives in its own marker (item 2 below); `Previous*` is not stored
+at all. Those fields carry no timestamp and no per-process value, so the address is stable —
+and **adding a non-deterministic field later would silently break it**, which is a rule to write
+beside the type rather than a note on a page. (Both halves raised by Copilot's review.)
 
 Two replicas then write disjoint files and nothing is ever replaced, so there is no lost update to
 have. It is [#2090](https://github.com/Systemorph/MeshWeaver/issues/2090)'s move — *remove the shared
