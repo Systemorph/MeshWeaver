@@ -61,6 +61,9 @@ public sealed class BakeReportHealthCheck(IServiceProvider services) : IHealthCh
                 ["pending"] = reading.Pending,
                 ["classifiedFromLocalAdoption"] = reading.ClassifiedFromLocalAdoption,
                 ["adoptionStamps"] = reading.AdoptionStamps,
+                // #4258 — the partition each non-baked type lives in, so `previouslybroken=1` can be
+                // routed to an owner. Partitions only; a node title is not published here.
+                ["ownership"] = reading.Ownership,
                 ["at"] = reading.At,
             };
 }

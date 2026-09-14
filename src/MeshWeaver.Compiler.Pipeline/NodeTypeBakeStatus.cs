@@ -177,6 +177,83 @@ public sealed record NodeTypeBakeReport(
         + (ClassifiedFromLocalAdoption > 0
             ? $" fromlocaladoption={ClassifiedFromLocalAdoption}"
             : string.Empty);
+
+    /// <summary>
+    /// How many distinct partitions one state's paths may be NAMED before the rest are counted.
+    /// </summary>
+    private const int MaxNamedPartitions = 12;
+
+    /// <summary>
+    /// 🚨 <b>WHOSE the non-baked types are — the identity half of <see cref="Summary"/>, which
+    /// counts and names nothing</b> (#4258).
+    ///
+    /// <para><see cref="Summary"/> can say <c>previouslybroken=1</c>: exactly one NodeType on this
+    /// replica has a record at <c>CompilationStatus.Error</c> and was never healthy. That number is
+    /// the ONLY record of a permanently-broken type anywhere in the system, because the rollout gate
+    /// deliberately skips such a type so one abandoned NodeType cannot freeze the platform's deploys
+    /// (<see cref="NodeTypeBakeEntry.WasHealthy"/>). A count nobody can resolve to an owner is not an
+    /// answer: #3883 failed to close three times on the ambiguity between "the type is gone" and "I
+    /// may not read it", and the RLS-filtered <c>search</c> sweep a session can run cannot settle it
+    /// — the broken type lives in one of the partitions that sweep holds no grant on, which is
+    /// exactly why this census exists. Every entry has carried its <see cref="NodeTypeBakeEntry.TypePath"/>
+    /// all along; it was discarded here, one call before publication.</para>
+    ///
+    /// <para>🚨 <b>The PARTITION, never the node title.</b> This is published on <c>/health</c>,
+    /// which is PUBLIC and unauthenticated, so it names the path's FIRST SEGMENT and stops
+    /// (<c>BinaryClickerV2/…</c>). A partition name routes the finding to an owner, which is all
+    /// #3883 ever needed; a node title would widen a public disclosure surface that #3890 closed a
+    /// narrower version of — <i>a control that works by disclosing other people's node titles is a
+    /// disclosure surface wearing an instrument's colours</i>. Naming the whole path is a
+    /// disclosure-policy call for whoever owns that surface, and it is now one projection away
+    /// rather than a re-plumbing.</para>
+    ///
+    /// <para>Every non-<see cref="BakeState.Baked"/> state is covered, not just the broken one:
+    /// <c>pending=58 frameworkstale=55</c> has the same shape and the same "nobody can enumerate
+    /// them" consequence.</para>
+    /// </summary>
+    public string Ownership =>
+        string.Join("; ", Entries
+            .Where(e => e.NeedsBake)
+            .GroupBy(e => e.State)
+            .OrderBy(g => g.Key)
+            .Select(g =>
+                $"{g.Key.ToString().ToLowerInvariant()} in {PartitionsOf(g.Select(e => e.TypePath))}"));
+
+    /// <summary>
+    /// The distinct partitions a set of NodeType paths lives in — the first path segment of each,
+    /// deduplicated, ordered, and capped so one mesh-wide state cannot turn the health body into a
+    /// partition listing.
+    /// </summary>
+    private static string PartitionsOf(IEnumerable<string> typePaths)
+    {
+        var owners = typePaths
+            .Select(PartitionOf)
+            .Where(p => p.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (owners.Count == 0)
+            return "(no path recorded)";
+
+        var named = string.Join(", ", owners.Take(MaxNamedPartitions).Select(p => $"{p}/…"));
+        return owners.Count > MaxNamedPartitions
+            ? $"{named} (+{owners.Count - MaxNamedPartitions} more partition(s))"
+            : named;
+    }
+
+    /// <summary>
+    /// The partition a NodeType path belongs to: everything before the first <c>/</c>. A path with
+    /// no separator IS a partition-level name, so it is returned whole — that is the same
+    /// disclosure class, not a node title.
+    /// </summary>
+    private static string PartitionOf(string typePath)
+    {
+        if (string.IsNullOrWhiteSpace(typePath))
+            return string.Empty;
+        var slash = typePath.IndexOf('/');
+        return slash < 0 ? typePath : typePath[..slash];
+    }
 }
 
 /// <summary>

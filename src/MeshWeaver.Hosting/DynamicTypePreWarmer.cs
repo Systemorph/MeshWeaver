@@ -632,7 +632,14 @@ public static class DynamicTypePreWarmer
             report.ClassifiedFromLocalAdoption,
             stamps,
             report.Summary,
-            DateTimeOffset.UtcNow));
+            DateTimeOffset.UtcNow)
+        {
+            // 🚨 #4258 — the entries carry every type's PATH and this call used to drop all of them.
+            // `previouslybroken=1` then said that exactly one NodeType on this replica is broken for
+            // good and declined to say which, in the one census that can see past RLS. Ownership is
+            // the partition each non-baked type lives in; the node title stays unpublished.
+            Ownership = report.Ownership,
+        });
     }
 
     /// <summary>
