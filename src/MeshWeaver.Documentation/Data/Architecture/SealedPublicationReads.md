@@ -620,15 +620,15 @@ Stated plainly, because a page that only lists what works is how the next sessio
   unsealed time, and the alternative is a layout migration every reader must land first (the portal
   boot seeder, the gate's Azure-direct path, and every pinned satellite workflow copy).
 - 🚨 **THREE Azure-direct readers addressed the PREFIX rather than the publication**, and this
-  entry said two until 2026-09-14. The third is `check-release-availability.sh`, the upstream gate
-  every publishing repo runs, which probed the prefix's own sentinel and therefore answered
-  *"no sealed publication"* for the ~90 s of every publish in which the flat copy is unsealed —
-  routed through the same resolution now.
-  `compose-sealed-modules.sh` and `node-repo-gate.yml`'s inline `download-batch` compose their paths
-  used to compose their paths under `prebuilt-bundles/<identity>/<source>/` directly, so they read
-  the flat copy whatever the pointer says. **Both were fixed in phase 3** and both are executed by
-  `test-publication-pointer-readers.py` (14 cases over the two readers) — which is what made phase
-  4's default move safe for them. They are named as phase 3's precondition on
+  entry said TWO until 2026-09-14. `compose-sealed-modules.sh` and `node-repo-gate.yml`'s inline
+  `download-batch` composed their paths under `prebuilt-bundles/<identity>/<source>/` directly, so
+  they read the flat copy whatever the pointer says; **both were fixed in phase 3**, which is what
+  made phase 4's default move safe for them. The third is `check-release-availability.sh` — the
+  upstream gate `main-cd`, `release.yml` and every node repo's `publish-bake` run — which probed the
+  prefix's own sentinel and therefore answered *"no sealed publication"* for the ~90 s of every
+  generation publish in which the flat compatibility copy is unsealed; routed through the same
+  resolution now. All three are executed by `test-publication-pointer-readers.py` (**18 cases over
+  the three readers**). They are named as phase 3's precondition on
   [Sealed Publication Generations](../SealedPublicationGenerations); the publish lane's own two
   readers (`bake-scope.sh`, `carry-forward-bundles.sh`) already resolve it.
 - **The Azure-direct read path carries no generation.** `az storage file download-batch` against the

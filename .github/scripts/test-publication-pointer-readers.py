@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The two Azure-direct readers of a sealed publication, against a share that HAS a generation.
+"""The THREE Azure-direct readers of a sealed publication, against a share that HAS a generation.
 
 🚨 WHY THIS HARNESS EXISTS (MeshWeaver#3461, phase 3). Phase 1 routed every reader the PORTAL IMAGE
 carries through `ShippedPrebuiltBundles.PublicationDirectoryOf`. THREE readers are not in that image
@@ -447,6 +447,21 @@ def main() -> int:
               proc.returncode == 1 and "no sealed publication" in proc.stdout + proc.stderr,
               "a gate that cannot refuse is not a gate — this is what stops the case above from "
               "passing because the script always exits 0", proc)
+
+        # 🚨 THE FALL-BACK BRANCH OF THE NEW RESOLVER, asked for by the review of #4345 and worth
+        # its own case: a DANGLING pointer must degrade to the prefix — this gate's own previous
+        # behaviour — rather than reporting the upstream absent. A resolver that treated "the
+        # generation named is not there" as "nothing is published" would turn an interrupted
+        # pointer move into a fleet-wide hold, which is strictly worse than the defect it replaces.
+        print("the availability gate with a pointer naming a generation that is not there:")
+        root = base / "avail-dangling" / "remote"
+        stage(root, pointer="Systemorph-MeshWeaver-9999-9", generation=False)
+        proc = run_availability(base / "avail-dangling" / "run", root)
+        check("check-release-availability.sh degrades a DANGLING pointer to the prefix, and says so",
+              proc.returncode == 0 and "sealed:" in proc.stdout
+              and "is not on the share" in proc.stdout,
+              "an unusable pointer must mean the source directory — the reader contract, and this "
+              "gate's behaviour before the resolution was added — announced, never in silence", proc)
 
         # The flat control: no pointer at all, prefix sealed — the layout every prefix had before
         # #4269/#4341, which must answer exactly as it did.
