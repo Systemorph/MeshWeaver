@@ -430,12 +430,21 @@ code. That is one of the three alternatives
 distinguish it.
 
 **What closes the gap is the report's own timestamps, because a report is fingerprinted at QUEUE
-time.** Pair the fingerprint with `firstSeen`/`lastSeen`: those are the timestamps of the LINES, and
-the window carrying them was processed within a poll interval plus `IngestLag` of them. So an
-old-format fingerprint over *recent* lines says the old binary was running *then*. Measured
-2026-09-14: `log-burst-header-only-memex` carries the 2026-08-09 payload over lines stamped
-`14:24:01Z`–`14:24:18Z` **that same day**, ~18 hours after the holdback image was published. A
-backlog cannot account for that unless it is older than the lines it contains, which it cannot be.
+time.** A window is read *after* the lines in it exist, never before, so the binary that fingerprinted
+a report was running **at or after** that report's `lastSeen`.
+
+🚨 That is a **one-sided** bound, and one-sided is all the delivery guarantees support. `IngestLag`
+is the margin the watcher subtracts when choosing a window's upper bound — not a promise that
+Promtail and Loki have delivered by then — and a store backlog or watcher downtime pushes processing
+arbitrarily later, which is exactly what `MaxCatchUp` and the skipped-window finding exist for. So do
+not read it as "processed within a poll interval of the line". One-sided is enough here, because
+later only strengthens the conclusion: whenever that window was read, an old-format binary was doing
+the reading, and that cannot have been before the lines existed.
+
+Measured 2026-09-14: `log-burst-header-only-memex` carries the 2026-08-09 payload over lines stamped
+`14:24:01Z`–`14:24:18Z` that same day — so an old-format binary was running **on or after** that
+instant, about 18 hours after the holdback image was published. A queued backlog cannot account for
+it either: a report cannot be older than the lines it contains.
 
 > **So the instrument is the PAIR — the fingerprint's payload format and the report's own
 > `lastSeen` — never the fingerprint alone.** With a stale `lastSeen` the honest reading stops at
