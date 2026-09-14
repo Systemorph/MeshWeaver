@@ -1,6 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -180,6 +183,45 @@ public class DefaultNodeNavigationTest
         // A reset starts over from what it carries.
         tree = DefaultNodeNavigation.Fold(tree, Change(QueryChangeType.Reset, Node(Root, "AI Inference")));
         tree.Should().HaveCount(1);
+    }
+
+    // ── the page never waits for the index ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Core CD #8599 (2026-09-14): the first set this index shipped in timed out two read-view
+    /// tests that had passed on the set before — on that mesh the subtree query never answered,
+    /// and the Overview's CombineLatest waited for it. The guard makes the page independent of
+    /// the query's health: an immediate null, then the index whenever it comes.
+    /// </summary>
+    [Fact]
+    public void ASilentQueryStillLetsThePageRender()
+    {
+        var silent = new Subject<NodeNavigation?>();
+        var seen = new List<NodeNavigation?>();
+
+        using var _ = DefaultNodeNavigation.Guard(silent, _ => Assert.Fail("nothing faulted")).Subscribe(seen.Add);
+
+        seen.Should().Equal([null], "the page renders without its index before the query has answered");
+
+        var index = new NodeNavigation("Docs", [new NodeNavigationEntry("A", "Docs/A")]);
+        silent.OnNext(index);
+        seen.Should().HaveCount(2);
+        seen[1].Should().BeSameAs(index, "…and gets the index when the query answers");
+    }
+
+    [Fact]
+    public void AFaultingQueryIsLoggedAndReadAsNoIndex()
+    {
+        var faults = new List<Exception>();
+        var boom = new InvalidOperationException("the provider refused the query");
+
+        // Observable.Throw faults synchronously on subscribe, so a plain subscription collects the
+        // whole sequence — no blocking bridge (the test ratchet refuses .Wait()/.Result on an observable).
+        var seen = new List<NodeNavigation?>();
+        using var _ = DefaultNodeNavigation.Guard(Observable.Throw<NodeNavigation?>(boom), faults.Add).Subscribe(seen.Add);
+
+        seen.Should().Equal([null, null], "the immediate null, then 'no index' for the fault — never an error into the page");
+        faults.Should().Equal([boom], "the fault is seen (logged) before it is swallowed");
     }
 
     private static IEnumerable<string> Paths(IEnumerable<NodeNavigationEntry> entries)

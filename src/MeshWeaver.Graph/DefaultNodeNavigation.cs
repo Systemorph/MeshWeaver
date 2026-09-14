@@ -7,6 +7,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -55,6 +56,15 @@ public static class DefaultNodeNavigation
     /// Initial/Reset carry the whole tree; Added/Updated/Removed carry the rows that changed — so
     /// it is folded into a snapshot first (<see cref="Fold"/>), and every emission rebuilds the
     /// index from the whole tree: an added, renamed, re-ordered or deleted page re-renders it live.
+    /// <para>🚨 <b>The page never waits for the index.</b> The stream emits <c>null</c> at once and
+    /// the index when the query answers, and a query that faults is logged and read as "no
+    /// index" — the same two guards <c>MarkdownOverviewLayoutArea.SuppliedNavigation</c> puts on a
+    /// module's provider, for the same reason: the Overview combines this with the node and
+    /// permission streams, so a stream that stays silent holds the WHOLE page back. Without them
+    /// this stream did exactly that in the first set it shipped in (core CD #8599, 2026-09-14):
+    /// on a test mesh whose partition has no persisted root the subtree query never answered, and
+    /// two read-view tests that had passed on the previous set timed out at 20 s with nothing
+    /// rendered. A page with its index a beat late is a page; a page that never renders is not.</para>
     /// </summary>
     /// <param name="host">The layout-area host rendering the page; its hub address IS the node path.</param>
     public static IObservable<NodeNavigation?> Observe(LayoutAreaHost host)
@@ -65,10 +75,39 @@ public static class DefaultNodeNavigation
             return Observable.Return<NodeNavigation?>(null);
 
         var root = IndexRoot(currentPath);
-        return meshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{root} scope:subtree is:main"))
-            .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
-            .Select(tree => Build(root, tree.Values.ToList(), currentPath));
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.DefaultNodeNavigation");
+        return Guard(
+            Observable.Defer(() => meshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{root} scope:subtree is:main"))
+                .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
+                .Select(tree => Build(root, tree.Values.ToList(), currentPath))),
+            ex => logger?.LogWarning(ex,
+                "The default index query for {Root} faulted — the page renders without its index",
+                root));
+    }
+
+    /// <summary>
+    /// The two guards that keep an index stream from holding the page: an immediate first
+    /// emission (<c>null</c> — no index yet), and a fault turned into "no index" after
+    /// <paramref name="onFault"/> has seen it. Pure over the stream, so the shape is pinned by a
+    /// test that never touches a mesh: a source that stays silent still lets the page render, and
+    /// one that throws still lets it render.
+    /// </summary>
+    /// <param name="index">The index stream as the query produces it.</param>
+    /// <param name="onFault">Sees the fault before it is swallowed — the log line.</param>
+    public static IObservable<NodeNavigation?> Guard(
+        IObservable<NodeNavigation?> index, Action<Exception> onFault)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(onFault);
+        return index
+            .Catch((Exception ex) =>
+            {
+                onFault(ex);
+                return Observable.Return<NodeNavigation?>(null);
+            })
+            .StartWith((NodeNavigation?)null);
     }
 
     /// <summary>
