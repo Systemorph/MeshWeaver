@@ -37,6 +37,43 @@
     "pins in this ACR, where half its running set would otherwise be protected and half not while",
     "the run reported success.",
     "",
+    "🚨 `retention` (on every registry entry) IS THE SECOND QUESTION ASKED OF THE SAME UNIT, and",
+    "it is REQUIRED. `disposition` says whether this lane can lock a registry; it says nothing",
+    "about whether anything DELETES from it, and for a year the answer to the second question for",
+    "cr.meshweaver.cloud was 'established by nothing' (MeshWeaver#4230). The table is the unit that",
+    "can be shown COMPLETE, so a registry entering the fleet now has to answer both. Three rules:",
+    "  nothing-deletes        no deleter exists, and none may be added before a cleanup can derive",
+    "                         a protected set. Requires `deleters` — every mechanism that COULD",
+    "                         delete, each with `present` and a `verdict` — and AT LEAST ONE must",
+    "                         be `present: true`: an enumeration in which nothing is present is an",
+    "                         enumeration that inspected nothing, which reads exactly like a clean",
+    "                         one. Requires `chart`, the committed source the gate re-derives the",
+    "                         deleters FROM, and `deleteGrantedTo`, the principal the registry's",
+    "                         ACL may grant the `delete` action to — one verdict here rests on that",
+    "                         ACL and on nothing else, so the gate re-reads it too.",
+    "                         🚨 `present` HAS THREE STATES, and the third is why this block exists:",
+    "                         true (measured, and it IS there), false (measured, and it is not) and",
+    "                         \"unverified\" (NOBODY COULD LOOK). Filing an unknown as `false` lets a",
+    "                         declaration read as fully measured over an open question — the",
+    "                         not-checked-spelled-as-clean confusion this whole family is made of.",
+    "                         An \"unverified\" row must name `verifiedBy` (what would answer it), it",
+    "                         is PRINTED on its own line on every run whatever the verdict, and",
+    "                         `cleanupAuthorized` — the record's own statement that deleting here",
+    "                         would be safe — may NOT be true while one stands. That is what the",
+    "                         unknown blocks: the ACT, not the gate. A check that is red until",
+    "                         somebody reads an Azure storage account is a check nobody reads.",
+    "  derived-protected-set  a cleanup exists and deletes only the complement of a DERIVED set.",
+    "                         Requires `protectedSet.axes`, and every axis must declare",
+    "                         `onIncomplete: \"refuse\"` — on a registry with no lock an incomplete",
+    "                         derivation DELETES what it could not see, in the same act.",
+    "  not-ours               third-party; nothing of ours is stored there, so there is nothing to",
+    "                         protect. May NOT carry `deleters` — enumerating somebody else's",
+    "                         deleters would read as a verdict about our artifacts.",
+    "A `third-party` disposition takes `not-ours` and nothing else; a `fleet-unlockable` one takes",
+    "either of the other two and never `not-ours`. Held by",
+    "`lock-pinned-digests.py --check-registry-retention`, on every pull request, with no credential.",
+    "Design: Doc/Architecture/FleetRegistryRetention.",
+    "",
     "Removing an entry is how an installation re-enters the expected set.",
     "",
     "An installation that is LIVE but not reachable from a GitHub-hosted runner is deliberately",
@@ -48,15 +85,67 @@
   "registries": {
     "cr.meshweaver.cloud": {
       "disposition": "fleet-unlockable",
-      "reason": "The fleet's OWN container registry, hosted by MeshWeaver (MeshWeaver#3697) and the default for newly provisioned instances. `acr purge` cannot reach it and this lane cannot lock a manifest there, so an installation running from it is out of THIS lane's scope. 🚨 THAT IS NOT A CLAIM THAT ANYTHING RETAINS IT: what keeps — or deletes — images in cr.meshweaver.cloud is established by nothing, and is an open item on MeshWeaver#3438. Measured 2026-09-13: 4 references across the fleet's overlays (build x2, pearl x2).",
+      "reason": "The fleet's OWN container registry, hosted by MeshWeaver (MeshWeaver#3697) and the default for newly provisioned instances. `acr purge` cannot reach it and this lane cannot lock a manifest there, so an installation running from it is out of THIS lane's scope. 🚨 THAT IS STILL NOT A CLAIM THAT THIS LANE PROTECTS IT — the out-of-scope report line says UNVERIFIED and must keep saying it. What keeps or deletes images there is answered in the `retention` block below rather than by this field, and the answer is that NOTHING deletes and nothing may until a cleanup can derive a protected set (MeshWeaver#4230, Doc/Architecture/FleetRegistryRetention). Measured 2026-09-13: 4 references across the fleet's overlays (build x2, pearl x2), which the nightly run now PRINTS as that registry's protected-set floor.",
       "declaredAt": "2026-09-13",
-      "issue": "MeshWeaver#3438"
+      "issue": "MeshWeaver#3438",
+      "retention": {
+        "rule": "nothing-deletes",
+        "cleanupAuthorized": false,
+        "statedAt": "2026-09-14",
+        "issue": "MeshWeaver#4230",
+        "design": "Doc/Architecture/FleetRegistryRetention",
+        "reason": "Measured 2026-09-14 over core origin/main 192bb073b8, read-only: NOTHING deletes a manifest, a tag or a referenced blob from cr.meshweaver.cloud, and nothing collects its garbage — so the registry grows without bound. That is the safe direction to be wrong in; the hazard is the FIX. 🚨 `distribution` HAS NO LOCK: ACR's `changeableAttributes.deleteEnabled` is an ACR feature, so there is no object here that a protected set can be written INTO ahead of a deleter. A cleanup's own derivation would therefore be the entire safety margin, with nothing behind it — where on the ACR an incomplete run merely writes fewer locks and last night's still hold. Until a cleanup can derive a protected set over what this registry HOLDS (and nothing enumerates that as data today — MeshWeaver#4066), none may be added.",
+        "chart": "deploy/helm/templates/registry",
+        "deleteGrantedTo": "publisherUsername",
+        "maintenance": {
+          "uploadpurging": "168h"
+        },
+        "deleters": [
+          {
+            "mechanism": "maintenance.uploadpurging (distribution config.yml)",
+            "present": true,
+            "verdict": "ENABLED — age 168h, interval 24h, dryrun false. The one automatic deletion in this registry, and it reaches INCOMPLETE UPLOAD SESSIONS only (the `_uploads/` scratch state of a push that never finished). It can never reach a manifest, a tag or a referenced blob. 🚨 PROVENANCE: the KEY and its window are read off the committed chart; what the key DELETES is distribution's own documented behaviour, not something measured here — it is an off-the-shelf component we render rather than extend. It is the one row a distribution major version could change without any file in this repo moving, which is why both images are pinned BY DIGEST; a bump is the moment to re-read it."
+          },
+          {
+            "mechanism": "registry garbage-collect (blob GC)",
+            "present": false,
+            "verdict": "No Job, no CronJob — the 8 objects rendered under deploy/helm/templates/registry are 2 ConfigMaps, 2 Deployments, 2 Services, an Ingress and a SecretProviderClass — and no invocation anywhere in deploy/ or .github/ (hand sweep 2026-09-14 over all 409 files under deploy/ and .github/; the GATE sweeps the 246 of them that can run a command and names the 3 it skips — two denominators, not one. Both with the pattern proven on a synthetic control first). So blobs are never collected: this is the unbounded-growth half."
+          },
+          {
+            "mechanism": "an explicit registry DELETE (HTTP DELETE, or a crane / skopeo / regctl / oras / az-acr-repository deletion)",
+            "present": false,
+            "verdict": "Zero callers over the same hand sweep. CD only ever PUSHES here — mirror-image-to-registry.sh for images, node-repo-publish-bake.yml for bundles."
+          },
+          {
+            "mechanism": "a non-publisher account deleting",
+            "present": false,
+            "verdict": "Refused by the ACL, not by a grep: docker_auth grants the `delete` action to EXACTLY ONE account, the publisher. Every other authenticated account matches a pull-only rule and anonymous matches no rule at all, so an installation holding an instance key cannot delete whatever it asks."
+          },
+          {
+            "mechanism": "acr purge / the two recorded ACR tasks",
+            "present": false,
+            "verdict": "Cannot reach this host — `az acr` addresses meshweaver.azurecr.io. This is the fact that makes MeshWeaver#4230 a separate question from MeshWeaver#3438 rather than a restatement of it."
+          },
+          {
+            "mechanism": "an Azure blob lifecycle / management policy on the registry's storage container",
+            "present": "unverified",
+            "verdict": "🚨 UNVERIFIED, and it is the one row that is not a measurement. The storage account is registry.storage.accountName, provisioned OUTSIDE this chart (storage.bicep in this repo is pgBackRest's, not the registry's), so it cannot be read from a committed file. A lifecycle rule over a CONTENT-ADDRESSED store is not old data expiring — it deletes a layer a current manifest still names, and the image reads as present until something pulls it. One read on that account, and it is the maintainer's: Doc/Architecture/FleetRegistryRetention section 7.",
+            "verifiedBy": "One read on the storage account named by registry.storage.accountName in the deployment's values (the Azure management-policy list for its blob service). It is the maintainer's: the account is provisioned outside this chart, so no committed file can answer it. Doc/Architecture/FleetRegistryRetention section 7."
+          }
+        ]
+      }
     },
     "ghcr.io": {
       "disposition": "third-party",
       "reason": "Somebody else's images, never ours to protect and never published by this fleet. Measured 2026-09-13: 2 references across the fleet's overlays — `ghcr.io/distribution/distribution` (the registry service's own image, in memex-cloud's overlay) and one line of PROSE in the ci-runners overlay describing what the runner image is built from. The second is why whole-line comments are stripped before extraction.",
       "declaredAt": "2026-09-13",
-      "issue": "MeshWeaver#3438"
+      "issue": "MeshWeaver#3438",
+      "retention": {
+        "rule": "not-ours",
+        "statedAt": "2026-09-14",
+        "issue": "MeshWeaver#4230",
+        "reason": "Nothing this fleet produces is stored on ghcr.io, so there is nothing here to retain or to protect. The two images it serves us are the BOOTSTRAP pair — distribution and docker_auth — and they are pulled from outside precisely because a registry cannot serve the image that boots it. Their retention is GitHub's."
+      }
     }
   },
   "instances": [

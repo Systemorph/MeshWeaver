@@ -289,3 +289,21 @@ jobs:
       - name: The purge still skips locked manifests
         if: ${{ !cancelled() }}
         run: python3 .github/scripts/lock-pinned-digests.py --check-retention-record .
+
+      # 🚨 THE OTHER REGISTRY'S RETENTION GATE IS DELIBERATELY *NOT* HERE (MeshWeaver#4230, #4315
+      # review). `--check-registry-retention` asks every registry the fleet's overlays name what
+      # DELETES from it and re-derives the committed chart — and it runs on every PULL REQUEST, in
+      # dotnet-test.yml's `workflow-shell` job, which is a `needs:` of `collect-results`
+      # (`Consolidate test results`, this repository's ONLY required status check) and is named by
+      # that job's explicit fail step. `main` is ruleset-protected and merges through the merge
+      # queue, which builds the merged branch and runs the same job — so there is no path to `main`
+      # on which that gate does not block.
+      #
+      # A second copy HERE would therefore add no coverage and one new way to red THIS lane — whose
+      # green is `pause.reEnableWhen` in .github/acr-retention/tasks.json. Two consecutive nightly
+      # runs were already lost that way in September 2026, and the cost was recorded on #3438: the
+      # false `pins no image at all` refusal stood between the fleet and re-enabling cleanup. A
+      # scheduled-only red also has no durable reporter, so it would be red in an empty room.
+      #
+      # If this lane ever becomes the only place a chart can move — a direct push to `main`, say —
+      # that is the change that should add the step back, in the same diff.
