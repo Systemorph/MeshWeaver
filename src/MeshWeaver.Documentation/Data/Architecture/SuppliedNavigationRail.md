@@ -7,15 +7,26 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # The Supplied Navigation Rail
 
-Core's default left-hand menu lists **the current node's own children**. That is right for a document
-and for a space, and wrong for a course: a learner standing in lesson 2 sees lesson 2's sub-pages and
-nothing else, so they cannot tell how long the course is, what is coming, or that they are nearly
-done.
+Core's default left-hand index is **the tree under the page's index root** — the node one level
+below the partition (`Doc/Architecture` for every page under it, `Infrastructure/Inference` for its
+sub-pages, `{viewer}/Notes` inside a home). Every page of that tree shows the same index: the root's
+children in their declared order, an entry with children as a collapsible group, the groups on the
+reader's path open, and the page being read marked as current (`DefaultNodeNavigation`).
 
+It used to be **the current node's own children**, which was right on the root of a document tree
+and wrong one level down: a sub-page has no children, so the index vanished the moment the reader
+clicked into it, and nothing told them where they were (reported 2026-09-14 on
+`Infrastructure/Inference`). The second segment is the root because the first is the partition — a
+Space, a plugin, a viewer's home — whose own overview lists its content already; an index rooted
+there would put every document of the Space beside every page of every document. A page directly
+under the partition is its own root, so a childless one still renders with no rail.
+
+That default is also wrong for a course: a learner standing in lesson 2 must see the whole course,
+not the document tree the lesson happens to sit in, with the course's own notion of what a page is.
 `INodeNavigationProvider` is the seam that fixes it without core having to learn what a lesson is. A
 module that OWNS a family of pages hands core a whole index; core renders it. **The division of
 labour is the contract: the module decides WHAT is in the index and in WHAT ORDER; core decides how
-it looks.**
+it looks.** Either way the same rail renders it, so a course and a document tree read alike.
 
 ## The seam
 
@@ -56,8 +67,8 @@ emit **promptly**: one that stays silent holds the whole page back.
 ## What core promises
 
 `SuppliedNavigationRail` turns the supplied navigation into the rail in two steps — a pure
-`Plan`, then `Render`. Four properties are deliberate, and each of them is a defect that was
-reported on a live course.
+`Plan`, then `Render`. Five properties are deliberate, and each of them is a defect that was
+reported on a live page.
 
 ### 1 · The title is a link, never the collapsible root
 
@@ -121,6 +132,28 @@ The alternative a module might reach for — **stop declaring children, so every
 the order comes out right** — is not a fix. It buys the ordering by giving up the collapsible
 lessons, which is the thing that makes a long index scannable at all.
 
+### 5 · A group nests
+
+An entry's child that has children of its own is a group *inside* the group. `RailGroup` carries
+`Items` — the same ordered sequence of `RailLink | RailGroup` as the rail itself, its own link first —
+and `Render` walks it recursively. The plan used to flatten a group to its links, so a page three
+levels down a documentation tree had no line to stand on and the page above it showed a link where
+a folder was. It surfaced the day the default index became a tree (2026-09-14): a two-level rail was
+enough for a course (module → lesson pages) and not for a document tree of any depth. Only the groups
+on the reader's path are open, at every level. `RailGroup.Links` remains as a filter — the group's
+direct links — never the render order.
+
+## The rail's chrome — resize and collapse
+
+The rail is one pane of a horizontal `SplitterControl` beside the content, so the divider is a real
+drag handle (180–480px). Core stamps the pane with `MarkdownOverviewLayoutArea.NavigationPaneClass`
+(`nav-rail-pane`), and a portal shell that knows the class hosts the pane's **collapse toggle in its
+top bar** — beside the logo, where a browser keeps its sidebar button — and keeps the collapsed state
+across pages and reloads; the button shows only on pages that have a rail, and while the rail is
+hidden it turns into the expand button. A shell that does not know the class leaves the splitter
+bar's own collapse chevron in charge. (The Blazor portal's half lives in MeshWeaver.Plugins:
+`NavRailStateService`, `NavRailPanePresentation`, and the toggle in `PortalLayoutBase`.)
+
 ## Why the plan is a pure record
 
 A `ContainerControl`'s child views are `protected`. A rail built straight into controls can be
@@ -134,7 +167,7 @@ assertions live.
 
 | Surface | How |
 |---|---|
-| A markdown page's Overview | automatic — `MarkdownOverviewLayoutArea` asks every registered provider, and falls back to the default child list when none claims the page |
+| A markdown page's Overview | automatic — `MarkdownOverviewLayoutArea` asks every registered provider, and falls back to the default index (the tree under the page's index root, `DefaultNodeNavigation`) when none claims the page |
 | A layout that composes its own page | embed the standalone area by name: `new LayoutAreaControl(address, new LayoutAreaReference(MarkdownOverviewLayoutArea.SuppliedNavArea))` |
 
 The standalone area renders nothing when no provider claims the page, so embedding it on a

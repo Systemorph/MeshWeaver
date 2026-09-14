@@ -60,9 +60,10 @@ public class SuppliedNavigationRailTest
         _ => throw new System.NotSupportedException(item.GetType().Name),
     };
 
+    /// <summary>Every link of an item, depth first — a nested group's links included.</summary>
     private static IEnumerable<SuppliedNavigationRail.RailLink> Links(SuppliedNavigationRail.RailItem item)
         => item is SuppliedNavigationRail.RailGroup group
-            ? group.Links
+            ? group.Items.SelectMany(Links)
             : [(SuppliedNavigationRail.RailLink)item];
 
     private static IEnumerable<SuppliedNavigationRail.RailLink> AllLinks(SuppliedNavigationRail.Rail rail)
@@ -262,6 +263,70 @@ public class SuppliedNavigationRailTest
         Groups(rail).Select(g => g.Path).Should().Equal("Course/L1", "Course/L2");
         Groups(rail).Should().OnlyContain(g => g.Links.Count == 2,
             "a folder still carries its own link first, then its children");
+    }
+
+    // ── 2026-09-14: a group nests ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A documentation tree three levels deep: the module's page, a chapter under it, a section
+    /// under that. The section is a child of a child — which the flat group used to render as a
+    /// LINK (its own children dropped), so the page it stood for had no line to be current on.
+    /// </summary>
+    private static NodeNavigation ThreeLevels() =>
+        new("Docs",
+        [
+            new NodeNavigationEntry("Chapter", "Docs/Chapter")
+            {
+                Children =
+                [
+                    new NodeNavigationEntry("Section", "Docs/Chapter/Section")
+                    {
+                        Children = [new NodeNavigationEntry("Detail", "Docs/Chapter/Section/Detail", IsCurrent: true)],
+                    },
+                    new NodeNavigationEntry("Chapter page", "Docs/Chapter/Page"),
+                ],
+            },
+        ])
+        { TitlePath = "Docs" };
+
+    [Fact]
+    public void AChildWithChildrenIsAGroupInsideItsGroup()
+    {
+        var rail = SuppliedNavigationRail.Plan(ThreeLevels(), "Docs/Chapter/Section/Detail");
+        var chapter = Groups(rail).Single();
+
+        chapter.Items.Select(Path).Should().Equal(
+            new[] { "Docs/Chapter", "Docs/Chapter/Section", "Docs/Chapter/Page" },
+            "own link first, then the children in the supplied order — the folder is not moved");
+        var section = chapter.Items.OfType<SuppliedNavigationRail.RailGroup>().Single();
+        section.Items.Select(Path).Should().Equal("Docs/Chapter/Section", "Docs/Chapter/Section/Detail");
+        section.Expanded.Should().BeTrue("the reader is inside it");
+        chapter.Expanded.Should().BeTrue("…and inside its parent");
+        AllLinks(rail).Single(l => l.IsCurrent).Path.Should().Be("Docs/Chapter/Section/Detail",
+            "the page three levels down keeps its line in the tree");
+    }
+
+    [Fact]
+    public void ANestedGroupIsOpenOnlyOnTheReadersPath()
+    {
+        var rail = SuppliedNavigationRail.Plan(ThreeLevels(), "Docs/Chapter/Page");
+        var chapter = Groups(rail).Single();
+
+        chapter.Expanded.Should().BeTrue();
+        chapter.Items.OfType<SuppliedNavigationRail.RailGroup>().Single().Expanded.Should().BeFalse(
+            "the sibling section stays a closed chevron");
+        chapter.Links.Select(l => l.Path).Should().Equal(
+            new[] { "Docs/Chapter", "Docs/Chapter/Page" },
+            "Links is the group's DIRECT links — the nested group's are not in it");
+    }
+
+    [Fact]
+    public void ANestedGroupRendersAsAGroupInsideTheGroup()
+    {
+        var menu = SuppliedNavigationRail.Render(SuppliedNavigationRail.Plan(ThreeLevels(), "Docs"));
+
+        // home link + the chapter group
+        menu.Areas.Should().HaveCount(2);
     }
 
     /// <summary>
