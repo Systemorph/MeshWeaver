@@ -598,8 +598,8 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
         newest = max((str(r.get("created_at") or "") for r in runs), default="")
         notes.append(
             f"none of the {len(runs)} successful main run(s) named the set it resolved "
-            f"(newest run examined was created {newest or 'at an unknown time'}). If a NEWER "
-            f"successful `{SATELLITE_CD_WORKFLOW}` push run on main exists than that, GitHub's "
+            f"(newest run examined was created {newest or 'at an unknown time'}). If a "
+            f"successful `{SATELLITE_CD_WORKFLOW}` push run on main exists that is NEWER than that, GitHub's "
             "run listing served a stale page for this call — re-run this job; the resolver does "
             "not retry on its own, because a run listing is its input and a gate never tests its "
             "own inputs.")
@@ -1615,10 +1615,14 @@ def self_test() -> int:
             if f"/repos/{SATELLITE}/" not in path:
                 return core(path)
             if "/actions/workflows/" in path:
-                # `created_at` travels because the "none named" refusal now prints the newest
-                # run's date — the one fact that tells a stale listing from a broken main.
-                return {"workflow_runs": [{"id": 555, "created_at": "2026-08-19T06:00:00Z"}]
-                        if has_run else []}
+                # `created_at` travels because the "none named" refusal prints the NEWEST run's
+                # date — the one fact that tells a stale listing from a broken main. Two runs,
+                # and the OLDER one is listed FIRST on purpose: the message must take `max`, and
+                # with a single run (or the newest first) a regression to `runs[0]` would pass.
+                return {"workflow_runs": [
+                    {"id": 555, "created_at": "2026-08-19T06:00:00Z"},
+                    {"id": 556, "created_at": "2026-09-14T08:00:00Z"},
+                ] if has_run else []}
             if "/jobs" in path:
                 rows = [{"id": 777, "name": PLATFORM_REF_JOB}] if job else []
                 return {"total_count": len(rows), "jobs": rows}
@@ -1673,8 +1677,9 @@ def self_test() -> int:
     # existing means the LISTING was stale (re-run), not main. Measured 2026-09-14: GitHub served
     # a page from 08-19 for one `status=success` call and the red read as "main is broken" until
     # someone re-issued the query by hand. A message nobody pins drifts; this pins both halves.
-    _ceiling_case("…and the refusal names the newest run's date so a stale listing is legible",
-                  _fetch_main("3.0.0-ci.8203", job=False), None, "created 2026-08-19T06:00:00Z")
+    _ceiling_case("…and the refusal names the NEWEST run's date (max, not runs[0]) so a stale "
+                  "listing is legible",
+                  _fetch_main("3.0.0-ci.8203", job=False), None, "created 2026-09-14T08:00:00Z")
     _ceiling_case("…and tells the reader a newer run means the listing was stale, not main",
                   _fetch_main("3.0.0-ci.8203", job=False), None, "served a stale page")
 
