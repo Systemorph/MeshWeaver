@@ -59,6 +59,16 @@ public sealed class PluginCatalogOptions
     public bool AutoUpdateByDefault { get; set; }
 
     /// <summary>
+    /// The deployment's DEFAULT per-package update policy (<c>PluginCatalog:DefaultUpdatePolicy</c>
+    /// = <c>Auto</c> | <c>Notify</c> | <c>None</c>), consulted ONLY at install time: a fresh install
+    /// record is seeded with it (<c>PackageInstaller.SeedUpdatePolicy</c>). Unset → the legacy
+    /// <see cref="AutoUpdateByDefault"/> decides (<c>true</c> → Auto, else Notify). Separate from
+    /// the platform's own image policy on <c>Admin/UpdatePolicy</c> by design: a deployment may
+    /// pin its platform and still track every module, or the reverse.
+    /// </summary>
+    public PackageUpdatePolicy? DefaultUpdatePolicy { get; set; }
+
+    /// <summary>
     /// A registration bootstrap key (<c>mwr_…</c>) for first-startup auto-registration: when set —
     /// and no <see cref="RegistryToken"/> is configured and no instance key is stored yet — the
     /// installation registers itself at the configured registry on startup as

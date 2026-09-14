@@ -20,12 +20,10 @@ public static class SelfUpdateConfiguration
         builder.AddUpdatePolicyType();
         builder.ConfigureServices(services =>
         {
-            // The module lane's unattended-landing gate (#1664) rides the SAME Admin/UpdatePolicy
-            // node this feature owns — Continuous (default) lands store-installed modules
-            // unattended, Stable/None decline. Registered here, beside the node type, so a host
-            // without self-update simply has no policy provider and the PluginCatalog default
-            // (allowed) applies. Platform-neutral (a storage read), so no browser guard.
-            services.AddSingleton<MeshWeaver.PluginCatalog.IModuleUpdatePolicy, PlatformModuleUpdatePolicy>();
+            // Admin/UpdatePolicy governs the PLATFORM IMAGE roll only. Until 2026-09-14 it also
+            // gated every module's unattended landing (PlatformModuleUpdatePolicy → the retired
+            // IModuleUpdatePolicy seam); each package now carries its own policy on its install
+            // record (PackageManifest.UpdatePolicy) — "separate for the platform and for each module".
             // The deployment gate (#1754): "may this environment be rolled to that release?".
             // Registered unconditionally — the SAME verdict has to be readable by all three paths
             // that roll a version (the poller below, CD's post-promote assertion and a manual

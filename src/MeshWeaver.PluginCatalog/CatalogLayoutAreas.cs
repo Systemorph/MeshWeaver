@@ -792,6 +792,13 @@ public static class CatalogLayoutAreas
                 }), "install");
         }
 
+        // The per-PACKAGE update policy (Auto / Notify / Pinned) — a global administrator's control,
+        // rendered on an INSTALLED package only. Separate from the platform's own update policy on
+        // the Settings ▸ Update policy tab (2026-09-14): that one moves the image, this one moves
+        // this package. The click authorizes; the write runs as System (SetUpdatePolicy).
+        if (installed is not null && viewerIsGlobalAdmin)
+            card = card.WithView(UpdatePolicyControl(host, pkg.Id, installed.EffectiveUpdatePolicy), "updatePolicy");
+
         // 🚨 The LAST STEP of the install, said out loud (#1979). Loading a module is
         // restart-as-activation by design, so for a package that declares one the install is not
         // finished when the content lands — and until this line existed nothing anywhere said so:
@@ -859,6 +866,41 @@ public static class CatalogLayoutAreas
                            + "display: block; margin-top: 6px;"));
 
         return card;
+    }
+
+    /// <summary>
+    /// The per-package policy row: the label, the three choices as buttons with the current one
+    /// accented, and the one-line hint. A click writes the record under System and the record
+    /// stream re-emits, which re-renders the card with the new choice accented.
+    /// </summary>
+    private static UiControl UpdatePolicyControl(LayoutAreaHost host, string packageId, PackageUpdatePolicy current)
+    {
+        var logger = Logger(host);
+        UiControl Choice(PackageUpdatePolicy policy, string key) =>
+            Controls.Button(host.Localize(key))
+                .WithAppearance(policy == current ? Appearance.Accent : Appearance.Neutral)
+                .WithClickAction(_ =>
+                {
+                    if (policy != current)
+                        PackageInstaller.SetUpdatePolicy(host.Hub, packageId, policy, logger)
+                            .Subscribe(
+                                _ => { },
+                                ex => logger?.LogWarning(ex, "Setting update policy {Policy} on {Id} failed.", policy, packageId));
+                    return Task.CompletedTask;
+                });
+        var row = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(6)
+            .WithStyle("align-items: center; margin-top: 8px;")
+            .WithView(Controls.Body(host.Localize("ui.catalogUpdatePolicy"))
+                .WithStyle("font-size: 12px; color: var(--neutral-foreground-hint); margin-right: 4px;"))
+            .WithView(Choice(PackageUpdatePolicy.Auto, "ui.catalogUpdatePolicyAuto"), "auto")
+            .WithView(Choice(PackageUpdatePolicy.Notify, "ui.catalogUpdatePolicyNotify"), "notify")
+            .WithView(Choice(PackageUpdatePolicy.None, "ui.catalogUpdatePolicyNone"), "none");
+        return Controls.Stack
+            .WithView(row)
+            .WithView(Controls.Body(host.Localize("ui.catalogUpdatePolicyHint"))
+                .WithStyle("font-size: 11px; color: var(--neutral-foreground-hint); display: block; margin-top: 2px;"));
     }
 
     /// <summary>

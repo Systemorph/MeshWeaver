@@ -925,11 +925,14 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// without a download, and skips a foreign-framework registry silently-with-log (it becomes
     /// relevant after the next image roll).
     ///
-    /// <para><b>The policy gate is the deployment's EXISTING update policy</b>
-    /// (<see cref="IModuleUpdatePolicy"/> — the memex portals wire it to <c>Admin/UpdatePolicy</c>):
-    /// this lane passes <c>unattended: true</c>, so Continuous (the platform default, and the
-    /// default when no policy is registered) lands unattended while Stable/None decline. There is
-    /// deliberately NO module-specific knob.</para>
+    /// <para><b>The policy gate is the PACKAGE's own update policy</b>
+    /// (<see cref="PackageManifest.EffectiveUpdatePolicy"/> on its install record): this lane
+    /// passes <c>unattended: true</c>, so <c>Auto</c> lands unattended while <c>Notify</c> / <c>None</c>
+    /// decline — per package, and independent of the platform's image policy on
+    /// <c>Admin/UpdatePolicy</c> (separated 2026-09-14; the former <c>IModuleUpdatePolicy</c> seam
+    /// that tied the two together is gone). The content half of the same package follows the
+    /// same policy in <see cref="PackageUpdateReconciler"/>, so a package never lands one half
+    /// without the other.</para>
     ///
     /// <para>Sequential, and failure-tolerant per package — one unreachable bundle must not
     /// withhold the rest, and <see cref="PluginBundleClient.AdoptModule"/> already absorbs its own
@@ -956,7 +959,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                     .SelectMany(record => record is null
                         // Not installed here → somebody else's module; nothing to reconcile.
                         ? Observable.Return(Unit.Default)
-                        : AdoptOne(bundles, registryName, pkg.Id, pkg.Module!, recordPath));
+                        : AdoptOne(bundles, registryName, pkg.Id, pkg.Module!, recordPath,
+                            record.ContentAs<PackageManifest>(hub.JsonSerializerOptions)));
             })
             .ToObservable()
             .Concat()
@@ -1004,7 +1008,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                                 name, packageId);
                             return Observable.Return(Unit.Default);
                         }
-                        var module = record.ContentAs<PackageManifest>(hub.JsonSerializerOptions)?.Module;
+                        var manifest = record.ContentAs<PackageManifest>(hub.JsonSerializerOptions);
+                        var module = manifest?.Module;
                         if (string.IsNullOrWhiteSpace(module))
                         {
                             logger.LogDebug(
@@ -1012,7 +1017,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                                 name, packageId);
                             return Observable.Return(Unit.Default);
                         }
-                        return AdoptOne(bundles, name, packageId, module, recordPath);
+                        return AdoptOne(bundles, name, packageId, module, recordPath, manifest);
                     });
             })
             // The wave of one: ends the same way every wave ends (#3395).
@@ -1026,8 +1031,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// cannot differ in what "adopt" means.
     /// </summary>
     private IObservable<Unit> AdoptOne(
-        PluginBundleClient bundles, string registryName, string packageId, string moduleName, string recordPath) =>
-        bundles.AdoptModule(packageId, moduleName, recordPath, unattended: true)
+        PluginBundleClient bundles, string registryName, string packageId, string moduleName, string recordPath,
+        PackageManifest? record) =>
+        bundles.AdoptModule(packageId, moduleName, recordPath, unattended: true,
+                policyDecline: PolicyDecline(record))
             // 🚨 A HANG is worse than a failure here: the packages run as one sequential Concat,
             // so a single adopt that never answers (a wedged record read, a download that stalls)
             // silently starves EVERY package after it — on memex.systemorph.com the Northwind
@@ -1047,6 +1054,21 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 return Observable.Return(0);
             })
             .Select(_ => Unit.Default);
+
+    /// <summary>
+    /// Why THIS package's own policy declines an unattended module landing, or null when it is
+    /// <see cref="PackageUpdatePolicy.Auto"/>. An unreadable record declines (Notify) — absence of
+    /// a readable policy must never read as "land". Pure; pinned in <c>MeshWeaver.PluginCatalog.Test</c>.
+    /// </summary>
+    internal static string? PolicyDecline(PackageManifest? record)
+    {
+        var policy = record?.EffectiveUpdatePolicy ?? PackageUpdatePolicy.Notify;
+        return policy == PackageUpdatePolicy.Auto
+            ? null
+            : $"the package's update policy is {policy} — unattended module landing rides the Auto "
+              + "policy only; use the catalog's manual Update instead (per-package policy, "
+              + "independent of the platform's Admin/UpdatePolicy)";
+    }
 
     /// <summary>
     /// Closes the landing wave by proposing the module set the activation record now describes

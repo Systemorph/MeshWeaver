@@ -164,18 +164,26 @@ internal static class PackageUpdateReconciler
 
         var detail = Describe(pkg, record);
 
+        var policy = record.EffectiveUpdatePolicy;
         logger?.LogInformation(
-            "Package update: {Id} has an update ({Old} → {New}; {Detail}); autoUpdate={Auto}. {Provenance}",
-            pkg.Id, record.ModuleVersion, pkg.ModuleVersion, detail, record.AutoUpdate, provenance);
+            "Package update: {Id} has an update ({Old} → {New}; {Detail}); updatePolicy={Policy}. {Provenance}",
+            pkg.Id, record.ModuleVersion, pkg.ModuleVersion, detail, policy, provenance);
 
-        return record.AutoUpdate
-            ? Apply(hub, meshService, accessService, source, sourceRef, pkg, record, recordPath,
-                provenance, detail, logger)
-            : Notify(
+        // The PACKAGE's own policy decides — never the platform's image policy (Admin/UpdatePolicy),
+        // which governs the image roll alone since 2026-09-14.
+        return policy switch
+        {
+            PackageUpdatePolicy.Auto => Apply(hub, meshService, accessService, source, sourceRef, pkg, record,
+                recordPath, provenance, detail, logger),
+            PackageUpdatePolicy.Notify => Notify(
                 hub, meshService, accessService, recordPath, pkg, record, UpdateAvailableKind,
                 $"Update available: {pkg.Name ?? pkg.Id}",
                 $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}). {provenance}.",
-                logger);
+                logger),
+            // Pinned: the update exists, the log says so, and nothing else moves — no notification
+            // either, because the administrator chose not to be reminded.
+            _ => Observable.Return(Unit.Default),
+        };
     }
 
     /// <summary>

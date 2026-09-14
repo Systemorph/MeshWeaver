@@ -5,6 +5,34 @@ using System.Text.Json.Serialization;
 namespace MeshWeaver.PluginCatalog;
 
 /// <summary>
+/// How ONE installed package takes updates — the per-package policy, separate from the platform's
+/// image policy on <c>Admin/UpdatePolicy</c> (maintainer, 2026-09-14: <i>"continuous update is set
+/// globally; it should be separate for the platform and for each module"</i>). It governs BOTH
+/// halves of a package update — its node content (<see cref="PackageUpdateReconciler"/>) and its
+/// compiled module bundle (<see cref="RegistryUpdateReconciler"/>) — so a package is either
+/// tracking its registry, reminding, or pinned, never one half without the other.
+///
+/// <para>🚨 The enum ORDER is binary contract: the hub serializer drops whichever member is zero on
+/// write (<c>WhenWritingDefault</c>), which is why <see cref="PackageManifest.UpdatePolicy"/> is
+/// nullable rather than this enum being reordered. Do not reorder.</para>
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<PackageUpdatePolicy>))]
+public enum PackageUpdatePolicy
+{
+    /// <summary>Land every change unattended — content and module — the moment the registry serves
+    /// a newer content identity or a newer bundle for this platform.</summary>
+    Auto,
+
+    /// <summary>Tell the administrators once per candidate (a notification on the install record;
+    /// the catalog card offers Update) and install nothing until a person acts.</summary>
+    Notify,
+
+    /// <summary>Pinned: neither land nor remind. Updates are applied only by an explicit install —
+    /// the catalog's Update, the Store's Provision — never by the reconciler.</summary>
+    None,
+}
+
+/// <summary>
 /// What an installable package delivers into the mesh.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<PackageKind>))]
@@ -373,6 +401,32 @@ public record PackageManifest
     /// moved. See <c>Doc/Architecture/PluginUpdateOnGreenBuild</c>.</para>
     /// </summary>
     public bool AutoUpdate { get; init; }
+
+    /// <summary>
+    /// THE per-package update policy — <see cref="PackageUpdatePolicy.Auto"/> /
+    /// <see cref="PackageUpdatePolicy.Notify"/> / <see cref="PackageUpdatePolicy.None"/> — the
+    /// sole runtime authority for this package's unattended updates, content AND module, and
+    /// independent of the platform's own image policy (<c>Admin/UpdatePolicy</c>). Seeded at
+    /// install time from the deployment's <see cref="PluginCatalogOptions.DefaultUpdatePolicy"/>
+    /// (<c>PackageInstaller.SeedUpdatePolicy</c>), carried forward untouched by every re-stamp,
+    /// and editable per package by a global administrator on the catalog card
+    /// (<c>PackageInstaller.SetUpdatePolicy</c>).
+    ///
+    /// <para><c>null</c> is the LEGACY shape — a record written before this field existed — and
+    /// reads through <see cref="EffectiveUpdatePolicy"/> as what <see cref="AutoUpdate"/> said:
+    /// <c>true</c> → Auto, <c>false</c> → Notify. Nullable on purpose (see the enum's order
+    /// contract): an explicit <c>Auto</c>, the zero member, must survive the round trip.</para>
+    /// </summary>
+    public PackageUpdatePolicy? UpdatePolicy { get; init; }
+
+    /// <summary>
+    /// The policy this package actually follows: <see cref="UpdatePolicy"/> when declared, else
+    /// the legacy <see cref="AutoUpdate"/> flag read as Auto / Notify. Every reconciler branches on
+    /// THIS, never on the flag. Pure.
+    /// </summary>
+    [JsonIgnore]
+    public PackageUpdatePolicy EffectiveUpdatePolicy =>
+        UpdatePolicy ?? (AutoUpdate ? PackageUpdatePolicy.Auto : PackageUpdatePolicy.Notify);
 
     /// <summary>
     /// The candidate <see cref="ModuleVersion"/> this installation has ALREADY told the user

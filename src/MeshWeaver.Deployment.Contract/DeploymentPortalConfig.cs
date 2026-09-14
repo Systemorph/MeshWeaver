@@ -346,6 +346,11 @@ public static class DeploymentPortalConfig
 
         Set("Deployment__Orleans__Clustering", OrleansClustering(d));
         Set("SelfUpdate__MinRollInterval", string.IsNullOrWhiteSpace(d.MinRollInterval) ? DefaultMinRollInterval : d.MinRollInterval!.Trim());
+        // The per-PACKAGE default update policy (Auto | Notify | None) the instance seeds onto every
+        // install record — separate from the platform's own image policy (Admin/UpdatePolicy) since
+        // 2026-09-14. Absent renders nothing: the chart's default keeps the legacy AutoUpdateByDefault
+        // mapping (true → Auto).
+        Set("PluginCatalog__DefaultUpdatePolicy", string.IsNullOrWhiteSpace(d.ModuleUpdatePolicy) ? null : d.ModuleUpdatePolicy!.Trim());
         SetBool("Modules__AutoRecycleOnStaleBuild", d.AutoRecycleOnStaleBuild);
         foreach (var (slot, assembly) in ModuleSlots(d))
             Set($"Modules__Required__{slot}", assembly);

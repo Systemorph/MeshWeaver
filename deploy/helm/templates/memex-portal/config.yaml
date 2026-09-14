@@ -900,6 +900,10 @@ data:
   # seed only; a record's own AutoUpdate flag stays the runtime authority thereafter.
   # See Doc/Architecture/PluginUpdateOnGreenBuild.md.
   PluginCatalog__AutoUpdateByDefault: "{{ .Values.config.memex_portal.PluginCatalog__AutoUpdateByDefault | default "true" }}"
+  # The per-PACKAGE default policy (Auto | Notify | None), seeded onto every fresh install record —
+  # separate from the platform's own image policy (Admin/UpdatePolicy) since 2026-09-14. Empty keeps
+  # the legacy AutoUpdateByDefault mapping (true → Auto, false → Notify).
+  PluginCatalog__DefaultUpdatePolicy: "{{ .Values.config.memex_portal.PluginCatalog__DefaultUpdatePolicy | default "" }}"
   # ---- Plugin catalog: which registry this install CONSUMES, and (on a registry install) which
   # git repos it SERVES. Both were previously un-templated, so an env overlay that set them was
   # silently dropped — the catalog then reads "not configured" with the values file looking right,

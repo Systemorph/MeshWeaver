@@ -294,7 +294,8 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
     /// registry-driven path.
     /// </summary>
     // Internal for the BuildCompletionSubscriptionTest pin (InternalsVisibleTo).
-    internal static bool ShouldAutoApply(PackageManifest record) => record.AutoUpdate;
+    internal static bool ShouldAutoApply(PackageManifest record) =>
+        record.EffectiveUpdatePolicy == PackageUpdatePolicy.Auto;
 
     private static (string Owner, string Repo) OctokitParse(string url)
     {

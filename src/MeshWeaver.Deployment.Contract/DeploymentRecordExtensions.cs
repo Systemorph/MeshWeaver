@@ -109,6 +109,14 @@ public static class DeploymentRecordExtensions
     /// <summary>Self-update policy name (<c>None</c>, <c>Continuous</c>, <c>Stable</c>).</summary>
     public static DeploymentContent WithUpdatePolicy(this DeploymentContent d, string policy) => d with { UpdatePolicy = policy };
 
+    /// <summary>
+    /// The default update policy every package installed on this instance is SEEDED with —
+    /// <c>Auto</c>, <c>Notify</c> or <c>None</c> (<c>PluginCatalog:DefaultUpdatePolicy</c>); a package
+    /// re-stamped later keeps its own. Independent of <see cref="WithUpdatePolicy"/>, which moves the
+    /// platform IMAGE only.
+    /// </summary>
+    public static DeploymentContent WithModuleUpdatePolicy(this DeploymentContent d, string? policy) => d with { ModuleUpdatePolicy = policy };
+
     /// <summary>Minimum interval between self-update rolls (a <see cref="TimeSpan"/> string, e.g. <c>01:00:00</c>).</summary>
     public static DeploymentContent WithMinRollInterval(this DeploymentContent d, string? interval) => d with { MinRollInterval = interval };
 
