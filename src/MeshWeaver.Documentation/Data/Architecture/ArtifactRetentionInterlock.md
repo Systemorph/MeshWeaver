@@ -413,9 +413,30 @@ UNVERIFIED"* rather than the earlier *"protected by that registry's own retentio
 claims protection nobody has checked would make a green run read as covered and support re-enabling
 cleanup on a false premise, which is this mechanism's own failure mode committed by its own report.
 The declaration states that those images are out of *this lane's* reach; it does not claim anything
-protects them. That question
-is open on #3438 and it grows with every installation provisioned on the fleet's own registry —
-which, per the new-deployment path, is now the default.
+protects them.
+
+**That question now has its own page and its own answer: [FleetRegistryRetention](/Doc/Architecture/FleetRegistryRetention)** (#4230).
+The short of it, and it does not change a word of the paragraph above: **nothing deletes from that
+registry today, and nothing may until a cleanup can derive a protected set over what it holds.**
+Two things follow that matter *here*:
+
+- **The rule there is stricter than this one, deliberately.** `distribution` has **no lock** —
+  `changeableAttributes.deleteEnabled` is an ACR feature — so there is no object a protected set can
+  be written *into* ahead of a deleter. Everything on this page rests on a protection that is
+  *persistent registry state, written by a different process on a different clock*; over there the
+  derivation is the entire safety margin, with nothing behind it. An incomplete run here writes
+  fewer locks and last night's still hold; an incomplete run there deletes what it could not see.
+- **This lane now PRINTS what it derives about that registry** instead of discarding it. The
+  nightly report gains a `PROTECTED SET — registries this lane cannot lock` section listing every
+  committed reference, by repository, tag and the file that pins it — the dry run, and the only
+  artifact a lock-less registry can have. It says its own incompleteness on its own line: the
+  committed axis is a **floor**, the plugin-bundle family is not derivable at all today (#4066),
+  and no cleanup may run against it.
+
+`.github/acr-retention/instances.json` carries the declaration itself — every `registries` entry now
+answers the second question as well as the first — and
+`lock-pinned-digests.py --check-registry-retention` holds it, on every pull request, by re-deriving
+the committed chart rather than re-reading the claim.
 
 ## The window is DECIDED, and the record is now held to it
 
@@ -515,10 +536,14 @@ not downstream of that night's protection verdict.
 
 ## What is still the maintainer's, and is not code
 
-0. **What retains `cr.meshweaver.cloud`.** The fleet's own registry now serves at least one live
-   installation and is the default for new ones, and `acr purge` cannot reach it. This lane
-   declares those images out of its scope; nothing yet says what keeps them, or deletes them.
-   That is the same question this page answers for the ACR, asked again about a second store.
+0. **What retains `cr.meshweaver.cloud`** is now [declared, enumerated and gated](/Doc/Architecture/FleetRegistryRetention) —
+   *nothing deletes, and nothing may until a protected set can be derived* — and what is left there
+   is three reads, not a design: whether the registry's storage container carries an **Azure blob
+   lifecycle policy** (the one row of that enumeration that could not be measured from a committed
+   file, and a lifecycle rule over a content-addressed store deletes a layer a live manifest still
+   names); whether **unbounded growth** is accepted as the policy, with a storage bound measured the
+   way the ACR's is; and whether to build the **last-pulled receiver** the registry's notification
+   socket is already wired for but pointed at nothing.
 1. **The decided window has not been APPLIED to the registry.** The record states it; the live
    (disabled) task still carries `--ago 7d --keep 10`. Applying it is the same act as lifting the
    pause, and it belongs to whoever owns the registry. Its cost is storage: dropping `--keep 10`
@@ -541,6 +566,7 @@ run states its denominator, and an incomplete one refuses rather than quietly pr
 
 ## Related
 
+- [FleetRegistryRetention](/Doc/Architecture/FleetRegistryRetention) — the same question asked of `cr.meshweaver.cloud`, where there is NO LOCK and the derivation is therefore the whole of the protection
 - [DeploymentInventory](/Doc/Architecture/DeploymentInventory) — what each instance reports about itself, and the per-report completeness signal
 - [ImageCleanup](/Doc/Architecture/ImageCleanup) — the operator page: how to ask whether the purge is running, the disabled-task/enabled-trigger trap, and why `--keep N` is not "keep the N newest"
 - [PinnedImageRetention](/Doc/Architecture/PinnedImageRetention) — the lock job's history, the two purge tasks and the incidents
