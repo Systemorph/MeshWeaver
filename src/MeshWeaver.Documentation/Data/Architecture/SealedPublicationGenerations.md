@@ -456,6 +456,42 @@ content is already the live publication skips and **changes nothing** — assert
 Setting `publication-layout: generation` on both producers is still what you should do: it makes the
 prefix's layout explicit rather than discovered.
 
+#### 🚨 The pointer only moves FORWARD, and this is the one thing the generation layout could get silently wrong that `flat` could not
+
+Under `flat`, two overlapping publications write ONE directory, so the byte-level postcondition
+finds the other run's bytes and **refuses**. Under `generation` they write disjoint directories:
+there is no mix to refuse, and whichever run finishes **last** moves `_current`. When that is the
+run carrying **older** content, every reader is handed a publication that is complete, sealed,
+self-consistent and out of date — with nothing red anywhere. That is the failure this whole layout
+exists to prevent, reached from the other side.
+
+The decision-time never-seal-backwards guard cannot see it. It reads the publication that was live
+when `publish_to_target` resolved `LIVE`, roughly 90 seconds before the pointer is written; a
+sibling that sealed in between is invisible to it. So the question is asked **again**, in
+`pointer_moved_past_us`, immediately before `move_pointer`:
+
+- re-resolve `_current` by the readers' own rules;
+- if it now names a **different** generation, read that generation's `source-commit.txt` and order
+  it against this bake's `SOURCE_SHA` through the same compare API;
+- `ahead` (newer, and containing ours) ⇒ **do not move the pointer**, and do not refresh the flat
+  copy either — writing this run's older bytes there would do to pre-pointer readers exactly what
+  the pointer refusal just declined to do to pointer-following ones. The run still **succeeds**: its
+  content is contained in what is live, so there is nothing to report as a failure. Its generation
+  stays on the share, sealed and named by nothing, which is precisely the state retention is defined
+  over. Counted as `targets-superseded=N`, printed on every run including zero.
+
+🚨 **This is a postcondition, not mutual exclusion** — the same thing `verify_publication` says of
+itself, and for the same reason: there is no lease command under either storage group. What it buys
+is that the window shrinks from a whole publication to the gap between that read and a one-line
+upload, and that losing *that* race is no worse than `flat`'s behaviour today. An unorderable pair
+keeps today's behaviour and says so, exactly as the decision-time guard does; refusing on an
+unanswerable comparison would mean a run whose content cannot be ordered never becomes live at all.
+
+`test-publish-bake-overlap.py` executes it: the newer content publishes and points while the older
+run is mid-upload, and the older run must leave the pointer alone, say so naming both commits, count
+it, and leave the flat copy carrying the newer bytes. Against the publisher that lacks the check,
+**4 of those assertions fail** and the pointer ends on the older publication.
+
 🚨 **The residual window is a pin bump inside one lane.** Even a single-producer prefix has a moment
 where a run started before the flip is still in flight while a run after it writes a generation. The
 loser leaves the pointer naming a stale generation until that lane publishes again — which happens on

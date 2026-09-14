@@ -1069,6 +1069,69 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
 # sealed; the pointer is written AFTER that, precisely because it is what CHANGES once the set is
 # proven whole. Stamping it would claim it was covered by a postcondition that, by construction, ran
 # before it existed.
+# 🚨 THE POINTER MUST NEVER MOVE BACKWARDS, AND THE DECISION THAT LET THIS RUN PUBLISH IS ~90 s OLD.
+#
+# `publish_to_target` resolves LIVE once and asks the never-seal-backwards question there, against
+# the publication that was live THEN. Under the flat layout that staleness was covered: a sibling
+# that sealed in between wrote the SAME directory, so the byte-level postcondition found another
+# run's bytes and refused. Under the generation layout the two runs write DISJOINT directories, so
+# there is no mix to refuse — and `move_pointer` would then hand consumers this run's older content:
+#
+#   A (older content, slow)  resolve LIVE ──────── upload ──────── seal GA ── move _current → GA
+#   B (newer content, fast)      resolve LIVE ── upload ── seal GB ── _current → GB
+#                                                                        ↑ B is live … then A takes it back
+#
+# Readers never see a torn directory — they see a COMPLETE publication of older bytes, which is the
+# one failure this layout exists to prevent, reached the other way round. So the question is asked
+# AGAIN, here, immediately before the one-line write that changes what is served.
+#
+# 🚨 This is a postcondition, not mutual exclusion — the same thing `verify_publication` says about
+# itself, and for the same reason: there is no lease command under either storage group. What it
+# buys is that the window shrinks from a whole publication (~90 s) to the gap between this read and
+# the pointer upload, and that losing THAT race is no worse than the flat layout's behaviour today.
+#
+# An unorderable pair keeps today's behaviour (move) and SAYS so, exactly as the decision-time guard
+# does — refusing on an unanswerable comparison would mean a run whose content cannot be ordered
+# never becomes live at all.
+#
+# Returns 0 (true) when a NEWER publication became live while this run was in flight.
+pointer_moved_past_us() { # <account> <share> <dest>
+  local account="$1" share="$2" dest="$3" live_now published_now order
+  resolve_publication_dir "$account" "$share" "$dest"
+  live_now="$RESOLVED_DIR"
+  # No pointer at all (this run is migrating the prefix), or it already names THIS run's
+  # generation: there is nothing that could be newer, so there is nothing to order against.
+  [ "$live_now" != "$dest" ] || return 1
+  [ "${live_now##*/}" != "$PUBLICATION" ] || return 1
+  if [ -z "${SOURCE_SHA:-}" ]; then
+    # A framework-repo producer has no content identity, so "newer" is not defined for it; the
+    # framework identity IS the key and two runs under one identity publish the same surface.
+    return 1
+  fi
+  published_now=$(az storage file download --account-name "$account" --share-name "$share" \
+    --path "$live_now/$SOURCE_MARKER" --dest "$SENTINEL_LOCAL_DIR/pointer-$SOURCE_MARKER" \
+    --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1 \
+    && tr -d '[:space:]' < "$SENTINEL_LOCAL_DIR/pointer-$SOURCE_MARKER" || echo "")
+  rm -f "$SENTINEL_LOCAL_DIR/pointer-$SOURCE_MARKER"
+  if [ -z "$published_now" ] || [ "$published_now" = "unknown" ]; then
+    echo "::warning::$account/$share: $dest/$POINTER moved to '${live_now##*/}' while this run was in flight, but that generation records no readable $SOURCE_MARKER — this run's pointer move cannot be ordered against it, so it proceeds as before. A generation with no source marker cannot be protected from being replaced."
+    return 1
+  fi
+  order=""
+  if [ -n "${GH_TOKEN:-}" ] && [ -n "${BAKE_CONTENT_REPOSITORY:-}" ]; then
+    if ! order=$(gh api "repos/$BAKE_CONTENT_REPOSITORY/compare/$SOURCE_SHA...$published_now" --jq .status 2>"$SENTINEL_LOCAL_DIR/pointer-compare.err"); then
+      echo "::warning::the compare API refused to order $SOURCE_SHA against $published_now: $(tail -c 400 "$SENTINEL_LOCAL_DIR/pointer-compare.err" | tr '\n' ' ')"
+      order=""
+    fi
+  fi
+  if [ "$order" = "ahead" ]; then
+    echo "::notice title=Not moving the pointer backwards::$account/$share: while this run was publishing, '${live_now##*/}' became the live publication of $published_now, which is NEWER than this bake's $SOURCE_SHA and contains it. This run's generation $PUBLICATION is sealed and complete on the share, and is deliberately NOT pointed at — moving $POINTER to it would serve older bytes to every reader (MeshWeaver#3461, phase 4). Nothing is lost: the newer publication is live, and this content is contained in it."
+    return 0
+  fi
+  [ -n "$order" ] || echo "::warning::$account/$share: $dest/$POINTER moved to '${live_now##*/}' ($published_now) while this run was in flight and the pair could not be ordered against this bake's $SOURCE_SHA (no GH_TOKEN / BAKE_CONTENT_REPOSITORY, or the compare API refused) — moving the pointer as before. If that publication was newer, this run has just taken it back."
+  return 1
+}
+
 move_pointer() { # <account> <share> <dest>
   local account="$1" share="$2" dest="$3"
   printf '%s\n' "$PUBLICATION" > "$SENTINEL_LOCAL_DIR/$POINTER"
@@ -1128,6 +1191,19 @@ publish_publication() { # <account> <share> <dest> <live-was-sealed>
     --path "$dest/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \
     --only-show-errors 2>/dev/null || echo false)
   if [ "$flat_resealing" != "true" ]; then flat_resealing=false; fi
+  # 🚨 Asked again here, ~90 seconds after `publish_to_target` asked it: a newer publication may
+  # have become live while this generation was being uploaded and verified. Pointing at this one
+  # would then serve OLDER bytes, whole and sealed — see pointer_moved_past_us.
+  if pointer_moved_past_us "$account" "$share" "$dest"; then
+    # The generation stays on the share, sealed and complete, named by nothing. That is exactly the
+    # state retention is defined over (unreachable ⇒ collectable once past the window), so it costs
+    # storage for at most the retention window and is never served.
+    # 🚨 The flat compatibility copy is deliberately NOT refreshed either: writing this run's older
+    # bytes there would do to pre-pointer readers precisely what the pointer refusal just declined
+    # to do to pointer-following ones.
+    echo superseded >> "$OUTCOMES"
+    return 0
+  fi
   move_pointer "$account" "$share" "$dest"
   # Recorded before the compatibility copy: the publication IS live at this point, for every reader
   # that follows the pointer. A refusal below leaves that true and still fails the target.
@@ -1366,6 +1442,12 @@ MARKERS=$(awk '/^marker$/ { c++ } END { print c + 0 }' "$OUTCOMES")
 # claims a seal this run did not write — and printed on every run, including zero, so the number
 # is a denominator rather than an occasional line.
 CONVERGED=$(awk '/^converged$/ { c++ } END { print c + 0 }' "$OUTCOMES")
+# Targets where a NEWER publication became live while this run was uploading, so this run's sealed
+# generation was deliberately not pointed at (MeshWeaver#3461, phase 4). Counted separately and
+# printed on every run, including zero, for the same reason `converged` is: the summary must never
+# report a serve this run did not make, and a number that only appears when non-zero is a number
+# nobody can use as a denominator.
+SUPERSEDED=$(awk '/^superseded$/ { c++ } END { print c + 0 }' "$OUTCOMES")
 if [ "${#FAILED[@]}" -gt 0 ]; then
   echo "::error::bake publication FAILED on ${#FAILED[@]} of $(printf '%s\n' $BAKE_PUBLISH_TARGETS | wc -l | tr -d ' ') target(s): ${FAILED[*]} — identity=$IDENTITY source=$SOURCE. Every OTHER target above was published and sealed; these were not. A target that no longer exists (a torn-down instance's share) belongs OUT of BAKE_PUBLISH_TARGETS — remove it, never route around it."
   exit 1
@@ -1406,4 +1488,4 @@ if [ -n "${BAKE_PUBLICATION_DIR:-}" ]; then
   materialise_publication "$BAKE_PUBLICATION_DIR"
 fi
 
-echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} surface=$HAS_SURFACE targets-published=$PUBLISHED targets-converged=$CONVERGED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"
+echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} surface=$HAS_SURFACE targets-published=$PUBLISHED targets-converged=$CONVERGED targets-superseded=$SUPERSEDED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"
