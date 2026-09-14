@@ -315,6 +315,23 @@ public class MessageService : IMessageService
     }
 
     /// <summary>
+    /// WHO asked for this hub's teardown and WHY, as one clause, for the discard reports and the
+    /// NACKs they produce (<a href="https://github.com/Systemorph/MeshWeaver/issues/3712">#3712</a>).
+    ///
+    /// <para>🚨 It is never a blank and never a silence. <c>MessageHub</c> already renders both
+    /// halves as named answers — a poster that stated no reason is reported as having stated none,
+    /// and a hub nobody asked about over the bus is reported as a direct <c>Dispose()</c>. The one
+    /// case this method has to answer for itself is a hub implementation that is not
+    /// <c>MessageHub</c> (test doubles), where the attribution fields do not exist at all: that is
+    /// stated as such rather than printed as an empty string, because an absent answer rendered as
+    /// nothing reads to the next person as "there was nothing to report" — the very defect this
+    /// issue was filed on.</para>
+    /// </summary>
+    private string DisposalAttribution() =>
+        (hub as MessageHub)?.DisposalAttribution
+        ?? "not attributable (this hub is not a MessageHub, so it records no disposal cause)";
+
+    /// <summary>
     /// Answers and retires every delivery currently parked behind the gates — the ONE drain shared
     /// by <see cref="NotifyStartupFailure"/>, <see cref="FailDeferredBacklog"/> and
     /// <see cref="Dispose"/>.
@@ -2954,6 +2971,24 @@ public class MessageService : IMessageService
         // the same discipline as the queued-turn site below (#3647): an Error that names work as
         // lost, where no reader is left to act on it, sends the next investigator hunting a
         // producer that did nothing wrong.
+        //
+        // 🚨 AND IT NAMES THE TEARDOWN THAT THREW THE WORK AWAY (#3712). The Error's closing
+        // instruction is "find why this hub disposed before its deferred work could run" — and
+        // until now the line could not answer its own question. The hub HAS the answer:
+        // `disposeRequestedBy` / `disposeReason` / `cascadeOwner` are set one frame earlier, in
+        // HandleDispose, precisely so #3510's *"[QUIESCE-START] on a root should name who asked"*
+        // could be satisfied. But [QUIESCE-START] is Information and the red-log pipeline files
+        // Errors, so the line that BECOMES AN ISSUE was the one line without the attribution.
+        // MEASURED on Admin/_LogIncident/d2249f800ffc2577 (364 occurrences, 2026-09-08 → 09-14,
+        // 13 pods): every captured discard names the message, its sender and its gates, and not
+        // one of them says which teardown discarded it — so a reader given the incident alone
+        // cannot tell an operator recycle from a NodeType rebind from an owner's cascade.
+        //
+        // The same clause goes into the NACK, because the STRANDED SENDER is the other reader who
+        // cannot see [QUIESCE-START]: it is in a different process as often as not, and "the hub
+        // went away" without "because X asked it to" is the generic disposal sentence #4261 spent
+        // a whole issue removing from the sibling path.
+        var disposal = DisposalAttribution();
         var discarded = 0;
         DrainDeferredDeliveries((delivery, gatesAtDeferral) =>
         {
@@ -2962,25 +2997,26 @@ public class MessageService : IMessageService
                 logger.LogDebug(DisposalDiscardedDeferredDelivery,
                     "[DISPOSE-DISCARD] Hub {Address} is disposing with its OWN {MessageType} "
                     + "(id={MessageId}) still deferred; initialization gates closed at deferral: [{Gates}]. "
-                    + "RunLevel={RunLevel}. The sender IS this hub, so no answer is owed outside it and "
-                    + "none is posted — this hub's pending-response registry is cancelled in the same "
-                    + "disposal. Teardown-normal (a transient node probe is created, read once and "
-                    + "disposed by design); not a discard of anybody else's work.",
+                    + "RunLevel={RunLevel}; teardown {Disposal}. The sender IS this hub, so no answer is "
+                    + "owed outside it and none is posted — this hub's pending-response registry is "
+                    + "cancelled in the same disposal. Teardown-normal (a transient node probe is created, "
+                    + "read once and disposed by design); not a discard of anybody else's work.",
                     Address, delivery.Message.GetType().Name, delivery.Id,
-                    gatesAtDeferral, hub.RunLevel);
+                    gatesAtDeferral, hub.RunLevel, disposal);
             else
                 logger.LogError(DisposalDiscardedDeferredDelivery,
                     "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
                     + "still deferred; initialization gates closed at deferral: [{Gates}] — the message is NOT processed; "
-                    + "the sender is answered ShuttingDown. RunLevel={RunLevel}. Accepted work must be drained "
-                    + "before a hub goes down; find why this hub disposed before its deferred work could run.",
+                    + "the sender is answered ShuttingDown. RunLevel={RunLevel}. This teardown was {Disposal}. "
+                    + "Accepted work must be drained before a hub goes down — that attribution is who to ask why "
+                    + "this hub went down with work still parked behind its gates.",
                     Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
-                    gatesAtDeferral, hub.RunLevel);
+                    gatesAtDeferral, hub.RunLevel, disposal);
             NackThroughParent(delivery,
                 $"Hub {Address} was disposed while {delivery.Message.GetType().Name} "
                 + $"(id={delivery.Id}) was still deferred; initialization gates closed at deferral: "
-                + $"[{gatesAtDeferral}] — the message was never processed. The address "
-                + "may reactivate (recycle / restart); retry to get the authoritative answer.");
+                + $"[{gatesAtDeferral}] — the message was never processed. The teardown was {disposal}. "
+                + "The address may reactivate (recycle / restart); retry to get the authoritative answer.");
         });
 
         // No buffers to Complete — ScheduleNotify drops post-shutdown messages and the
@@ -3043,10 +3079,11 @@ public class MessageService : IMessageService
                     "[DISPOSE-DISCARD] Hub {Address} is disposing with {Count} turn(s) still queued and "
                     + "NOTHING DRAINING (drainsInFlight=0), so nobody will take them: {Queued}. "
                     + "RunLevel={RunLevel}; {Discarded} deferred delivery(ies) already answered "
-                    + "ShuttingDown; last turn executing: {Executing}. Accepted work must be drained before "
-                    + "a hub goes down — find why this hub's pump is not turning.",
+                    + "ShuttingDown; last turn executing: {Executing}; this teardown was {Disposal}. "
+                    + "Accepted work must be drained before a hub goes down — find why this hub's pump "
+                    + "is not turning, and that attribution is who to ask why it was asked to stop.",
                     Address, stillQueued.Length, queued, hub.RunLevel, discarded,
-                    currentlyExecutingMessageType ?? "(idle)");
+                    currentlyExecutingMessageType ?? "(idle)", disposal);
         }
 
         // Don't wait on deliveryAction.Completion. Handler execution now runs INLINE

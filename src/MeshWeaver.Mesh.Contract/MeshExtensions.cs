@@ -2916,15 +2916,47 @@ public static class MeshExtensions
                                             .TimeoutAtStage(budget, () =>
                                             {
                                                 var done = SnapshotProgress();
+                                                // 🚨 WHICH PATHS THE DRAIN IS STUCK ON (#1198). The
+                                                // count of what SUCCEEDED does not identify what
+                                                // failed, and the shared `[DeleteNode] timeout` line
+                                                // prints an `unanswered=` field that only the
+                                                // pre-flight stage ever filled — so a commit-stage
+                                                // timeout rendered `unanswered=-`, which does not mean
+                                                // "not measured", it reads as "nothing is outstanding".
+                                                // Measured on memex-cloud 2026-09-14T08:45:38Z:
+                                                // `stage=commit partial-deleted=3 unanswered=-` for
+                                                // 'Hosting/TriageStatus' — three removed, the rest
+                                                // stuck, and the field that exists to name them said
+                                                // there were none. The plan and the progress are both
+                                                // in hand here; the difference is the answer.
+                                                //
+                                                // Stated as "planned but not yet recorded removed"
+                                                // rather than "remaining", because a drain can remove
+                                                // MORE than it planned (a resurrected child; see the
+                                                // no-progress note above), so this set is the paths
+                                                // the PLAN still owes — never a claim about what else
+                                                // storage may hold.
+                                                var stuck = collected.ToDelete
+                                                    .Except(done, StringComparer.OrdinalIgnoreCase)
+                                                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                                                    .ToArray();
                                                 var ex = DeleteStageTimeout(
                                                     DeleteStage.Commit,
                                                     $"the bottom-up delete of '{path}' made no progress for "
-                                                    + $"{budget.TotalSeconds:0}s — {done.Count} path(s) removed "
-                                                    + "from storage so far");
+                                                    + $"{budget.TotalSeconds:0}s — {done.Count} of "
+                                                    + $"{collected.ToDelete.Count} planned path(s) removed "
+                                                    + "from storage so far"
+                                                    + (stuck.Length == 0
+                                                        ? ", and every planned path is already removed"
+                                                        : $"; still owed by the plan: {string.Join(", ", stuck.Take(10))}"
+                                                          + (stuck.Length > 10
+                                                              ? $" (+{stuck.Length - 10} more)"
+                                                              : string.Empty)));
                                                 // Carry the REAL progress: the timeout discards the fan-out's
                                                 // own bookkeeping, and reporting 0 here is what made #1198 look
                                                 // like a pre-commit failure.
                                                 ex.Data[DeletedPathsDataKey] = done;
+                                                ex.Data[DeleteUnansweredDataKey] = (IReadOnlyList<string>)stuck;
                                                 return ex;
                                             })
                                             // Only the drain's own emission carries a result; the ticks are
@@ -3096,10 +3128,22 @@ public static class MeshExtensions
                             "[DeleteNode] permission-denied path={Path}: {Reason}", path, ex.Message);
                     else if (isTimeout)
                         // 🚨 stage= is the whole point of issue #1198: six stages share one budget,
-                        // and only two of them can leave the subtree untouched. unanswered= names the
-                        // descendant hubs that went silent when it was the pre-flight fan-out — that
-                        // stage waits for EVERY descendant under a single timeout, so one wedged
-                        // per-node hub stops the whole delete and used to do it anonymously.
+                        // and only two of them can leave the subtree untouched. unanswered= names
+                        // what that stage is STILL WAITING ON, and stage= is what says in whose
+                        // vocabulary to read it:
+                        //   stage=pre-validate-descendants ⇒ the descendant hubs that went silent.
+                        //     That stage waits for EVERY descendant under a single timeout, so one
+                        //     wedged per-node hub stops the whole delete and used to do it anonymously.
+                        //   stage=commit ⇒ the planned paths not yet recorded as removed — the drain
+                        //     stalled and these are what it still owes.
+                        // 🚨 BOTH must fill it, or the field lies rather than abstains. Until #1198's
+                        // commit arm landed, only the pre-flight stage set it, so a commit-stage
+                        // timeout printed `unanswered=-` — and `-` is the SAME rendering this line
+                        // uses for "there is nothing outstanding". Measured on memex-cloud
+                        // 2026-09-14T08:45:38Z: `stage=commit partial-deleted=3 unanswered=-`, which
+                        // told the operator the drain owed nothing while it was stuck on the rest of
+                        // the subtree. A field that renders "not measured" identically to "none" is
+                        // the defect this issue is now a spec for.
                         logger.LogError(ex,
                             "[DeleteNode] timeout path={Path} stage={Stage} partial-deleted={Partial} "
                             + "unanswered={Unanswered}",
