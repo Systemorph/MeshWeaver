@@ -775,6 +775,49 @@ The one native family the fleet ships through the registry today (SkiaSharp, for
 `MeshWeaver.Markdown.Export`) still works because the PORTAL HOST carries the natives — the
 "host happens to have it" shape the 2026-09-01 What's New called a defect for managed assemblies.
 
+#### 🚨 Does the new section need a FORMAT VERSION? No — and that is measured, not reasoned
+
+**A bundle is read by portals running older images.** The registry serves one set of bytes to every
+installation, so *"the format gained a section"* is only safe if an **older reader** ignores it — and
+until `ABundleCarryingNativesIsReadUnchangedByAPreNativesReader` (`BundleReaderTest`) nothing
+asserted that. It is not something a producer-side test can reach: the property belongs to the code
+that is *not* in this build.
+
+**Verdict: additive. No format version, no manifest `schemaVersion`, no dual-write.** It rests on two
+independent facts, both pinned by that test rather than argued:
+
+| | why an older reader is unaffected |
+|---|---|
+| **the archive** | the three sections are **prefix-disjoint**. Every pre-#4126 consumer of the flat folder filters `meshweaver/modules/` with no `/` in the remainder (`ServedModuleBytes`, `PublishedBundleCatalogue`) and the asset consumer filters `meshweaver/moduleassets/`. A native is under **neither prefix**, so an older reader does not skip it, mis-file it or fail on it — it never enumerates it |
+| **the manifest** | `BundleReader` deserializes with `JsonSerializerDefaults.Web`, whose `UnmappedMemberHandling` is **`Skip`**. An older `ModuleRef` — which has no `nativeAssets` property at all — reads every other field unchanged. No reader on the bundle path uses `Disallow` |
+
+🚨 **What WOULD have needed a format version, and is exactly why the section is its own:**
+
+- under `meshweaver/modules/` — that changes the folder's **meaning**. An older reader's flat filter
+  *silently drops* the natives while the producer believes it shipped them: bytes that read as
+  shipped and behave as absent, with nothing anywhere to grep.
+- under `meshweaver/moduleassets/` — an older reader would lay a **loadable binary into `wwwroot`**
+  and serve it over HTTP.
+
+The test drives the real writer and reader, and it carries its own anti-vacuity controls, each
+falsified: a bundle with **no** native fails `Assert.Single` on the entry; a manifest that does not
+**declare** `nativeAssets` fails the `Disallow` control (which exists to prove the JSON really
+carries the unmapped member, rather than the `Skip` assertion passing over a document with nothing
+new in it); and writing the native **inside** `meshweaver/modules/` — the change-of-meaning case —
+fails the prefix-disjointness assertion.
+
+One incidental fact the test had to learn, worth keeping: **the manifest entry is written with a
+UTF-8 BOM**, and `Utf8JsonReader` skips one over a **stream** but not over a **span**. Reading the
+entry's bytes directly fails with `'0xEF' is an invalid start of a value`. `BundleReader` uses the
+stream overload; anything reading the manifest must do the same.
+
+**The other closure derivation — the container lane — still drops `runtimeTargets`, and that is a
+policy line rather than a data limit.** `ContainerReferenceSet` reads only the `runtime` section of
+the image's deps.json, and the `runtimeTargets` section sits in the same document; the refusal of a
+native-only `PackageReference` is `Resolve` matching a package by the ASSEMBLY it contributes, so a
+package contributing only natives answers `Supplied=false`. Nothing about the deps.json format
+prevents stage 3 — see the stage list above.
+
 ## The bundle lane — modules as Store packages (#1664)
 
 A compiled module reaches a deployment one of two ways: shipped in the image (the baseline above),

@@ -433,4 +433,155 @@ public class BundleReaderTest
         Assert.Contains(says, thrown.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// 🚨 A BUNDLE IS READ BY PORTALS RUNNING OLDER IMAGES, and #4126 added a whole new section to
+    /// the format. Whether that is ADDITIVE — an older reader ignores it — or a CHANGE OF MEANING
+    /// is the question that decides whether the format needs a VERSION, and until this test nothing
+    /// asserted it. The registry serves one set of bytes to every installation, so the answer is not
+    /// something a producer-side test can reach: it is a property of what the OLD reader does.
+    ///
+    /// <para>The verdict is <b>additive, no format version required</b>, and it rests on two
+    /// independent facts, both pinned below rather than reasoned about:</para>
+    ///
+    /// <list type="number">
+    /// <item><b>The sections are PREFIX-DISJOINT.</b> Every consumer of the flat module folder
+    /// filters by <c>meshweaver/modules/</c> with no <c>/</c> in the remainder
+    /// (<c>ServedModuleBytes</c>, <c>PublishedBundleCatalogue</c>), and the asset consumer by
+    /// <c>meshweaver/moduleassets/</c>. A native lands under neither prefix, so an older reader
+    /// does not skip it, mis-file it, or fail on it — it never enumerates it at all.</item>
+    /// <item><b>The manifest field is UNMAPPED, and unmapped is SKIPPED.</b>
+    /// <c>BundleReader</c> deserializes with <c>JsonSerializerDefaults.Web</c>, whose
+    /// <c>UnmappedMemberHandling</c> is <c>Skip</c>, so an older <c>ModuleRef</c> — which has no
+    /// <c>nativeAssets</c> property at all — reads the rest of the manifest unchanged.</item>
+    /// </list>
+    ///
+    /// <para>🚨 What WOULD have needed a format version, and is the reason the section is its own:
+    /// putting natives under <c>meshweaver/modules/</c> changes that folder's MEANING — an older
+    /// reader's flat filter silently drops them while the producer believes it shipped them — and
+    /// putting them under <c>meshweaver/moduleassets/</c> would have an older reader lay a loadable
+    /// binary into <c>wwwroot</c> and SERVE it over HTTP.</para>
+    /// </summary>
+    [Fact]
+    public void ABundleCarryingNativesIsReadUnchangedByAPreNativesReader()
+    {
+        const string NativePath = "runtimes/linux-x64/native/libe_sqlite3.so";
+        var manifestJson = JsonSerializer.Serialize(new
+        {
+            plugin = "ThreeBody",
+            version = "1.3.2",
+            frameworkMvid = "33f2efb8aaaabbbbccccddddeeeeffff",
+            module = new
+            {
+                assemblyName = "M",
+                assemblies = new[] { "M.dll" },
+                minMeshVersion = "3.0.0",
+                staticAssets = new[] { "wwwroot/app.js" },
+                nativeAssets = new[] { NativePath },
+            },
+        });
+        var buffer = new MemoryStream();
+        NuGetPackageWriter.Write(buffer, Manifest, "3.0.0",
+        [
+            new NuGetPackageWriter.Entry(NuGetPackageWriter.ModuleEntryPathFor("M.dll"),
+                () => new MemoryStream("M"u8.ToArray())),
+            new NuGetPackageWriter.Entry(
+                NuGetPackageWriter.ModuleAssetEntryPathFor("wwwroot/app.js"),
+                () => new MemoryStream("js"u8.ToArray())),
+            new NuGetPackageWriter.Entry(NuGetPackageWriter.ModuleNativeEntryPathFor(NativePath),
+                () => new MemoryStream("elf"u8.ToArray())),
+        ], manifestJson);
+        var bundle = buffer.ToArray();
+
+        // ---- (1) the ARCHIVE: an older reader's prefix filter never reaches the new section ----
+        using var archive = new System.IO.Compression.ZipArchive(
+            new MemoryStream(bundle, writable: false), System.IO.Compression.ZipArchiveMode.Read);
+        var names = archive.Entries.Select(e => e.FullName).ToArray();
+
+        // 🚨 THE CONTROL FIRST. Without it every assertion below would pass over a bundle that
+        // simply carries no native — "the older reader ignored it" and "there was nothing to
+        // ignore" are the same green.
+        var native = Assert.Single(
+            names.Where(n => n.EndsWith("libe_sqlite3.so", StringComparison.Ordinal)));
+
+        // 🚨 …AND IT IS AT THE DECLARED PATH, not merely somewhere outside the other two (#4318
+        // review). Finding it by file name and then checking only that it is NOT under the old
+        // prefixes leaves a writer free to emit it under any THIRD prefix and still pass — a test
+        // claiming to pin the format contract while pinning only two thirds of it. The path IS the
+        // contract here: `ModuleNativeAssets` probes `<moduleDir>/runtimes/<rid>/native/<lib>`, so
+        // the section name and the preserved relative path are both load-bearing.
+        Assert.Equal(NuGetPackageWriter.ModuleNativeEntryPathFor(NativePath), native);
+
+        // The predicate every pre-#4126 consumer of the flat folder spells, driven off the SAME
+        // constants those consumers use so the assertion cannot drift away from them.
+        static bool FlatModuleEntry(string name) =>
+            name.StartsWith(NuGetPackageWriter.ModuleFolder + "/", StringComparison.Ordinal)
+            && !name[(NuGetPackageWriter.ModuleFolder.Length + 1)..].Contains('/');
+
+        Assert.Equal([NuGetPackageWriter.ModuleEntryPathFor("M.dll")],
+            names.Where(FlatModuleEntry).ToArray());
+        Assert.False(FlatModuleEntry(native));
+        // …and it is not under the flat folder AT ALL — not merely filtered out of it. The
+        // difference matters: an entry under `meshweaver/modules/` that the filter drops is bytes a
+        // producer believes it shipped and a consumer silently skips.
+        Assert.DoesNotContain(NuGetPackageWriter.ModuleFolder + "/", native, StringComparison.Ordinal);
+        Assert.DoesNotContain(NuGetPackageWriter.ModuleAssetFolder + "/", native, StringComparison.Ordinal);
+        // The asset consumer is untouched too: its tree is exactly what it was.
+        Assert.Equal([NuGetPackageWriter.ModuleAssetEntryPathFor("wwwroot/app.js")],
+            names.Where(n => n.StartsWith(NuGetPackageWriter.ModuleAssetFolder + "/",
+                StringComparison.Ordinal)).ToArray());
+
+        // ---- (2) the MANIFEST: an older ModuleRef has no such property, and Skip is the default --
+        // 🚨 From the STREAM, exactly as BundleReader does. The manifest entry is written with a
+        // UTF-8 BOM, and `Utf8JsonReader` skips one over a stream but NOT over a span — so reading
+        // the bytes directly fails with "'0xEF' is an invalid start of a value" and would have this
+        // test measuring the wrong thing entirely.
+        var manifestBytes = ReadEntry(archive, NuGetPackageWriter.ManifestEntry);
+        Assert.NotNull(manifestBytes);
+        var web = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var older = JsonSerializer.Deserialize<PreNativesManifest>(
+            new MemoryStream(manifestBytes!, writable: false), web);
+
+        Assert.NotNull(older);
+        Assert.Equal("ThreeBody", older!.Plugin);
+        Assert.Equal("1.3.2", older.Version);
+        Assert.Equal("33f2efb8aaaabbbbccccddddeeeeffff", older.FrameworkMvid);
+        Assert.Equal("M", older.Module!.AssemblyName);
+        Assert.Equal(["M.dll"], older.Module.Assemblies);
+        Assert.Equal("3.0.0", older.Module.MinMeshVersion);
+        Assert.Equal(["wwwroot/app.js"], older.Module.StaticAssets);
+
+        // 🚨 AND THE POSITIVE CONTROL FOR (2). The assertion above is only evidence about SKIP if
+        // the JSON really carries the unmapped member — otherwise it passes having deserialized a
+        // manifest with nothing new in it. Disallow must therefore THROW on the very same bytes.
+        var strict = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
+        };
+        Assert.Throws<JsonException>(
+            () => JsonSerializer.Deserialize<PreNativesManifest>(
+                new MemoryStream(manifestBytes!, writable: false), strict));
+    }
+
+    /// <summary>The manifest shape as it stood BEFORE #4126 — no <c>nativeAssets</c> anywhere. This
+    /// is the older reader, and it is spelled out here rather than referenced so that adding a
+    /// property to the real <see cref="BundleReader.Manifest"/> can never quietly update it.</summary>
+    private sealed record PreNativesManifest(
+        string? Plugin, string? Version, string? FrameworkMvid, PreNativesModule? Module);
+
+    private sealed record PreNativesModule(
+        string? AssemblyName, IReadOnlyList<string>? Assemblies, string? MinMeshVersion,
+        IReadOnlyList<string>? StaticAssets);
+
+    private static byte[]? ReadEntry(System.IO.Compression.ZipArchive archive, string name)
+    {
+        var entry = archive.Entries.FirstOrDefault(
+            e => e.FullName.EndsWith(name, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+            return null;
+        using var stream = entry.Open();
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        return copy.ToArray();
+    }
+
 }
