@@ -477,6 +477,9 @@ public static class TreeBake
                     SourceFingerprint = NodeTypeSourceFingerprint.Compute(
                         resolution.Sources, candidate.Node.Path,
                         compiled.Inputs.ResolvedIncludes, options.Logger),
+                    // #4280 — WHICH includes, beside the query-resolved key set above, so the
+                    // consumer can tell an include still landing from a source that moved.
+                    SourceIncludes = NodeTypeSourceFingerprint.IncludePathsOf(compiled.Inputs.ResolvedIncludes),
                 });
 
                 results.Add(new TypeResult(

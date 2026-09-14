@@ -103,6 +103,11 @@ public static class BundleReader
         /// reason as <see cref="SourceFingerprint"/>.
         /// </summary>
         public IReadOnlyDictionary<string, long>? SourceVersions { get; init; }
+
+        /// <summary>The <c>@@</c>-include closure's resolved paths, sorted ordinal —
+        /// <c>BundleWriter.AssemblyEntry.SourceIncludes</c> (MeshWeaver#4280). Null for a producer
+        /// that recorded none.</summary>
+        public IReadOnlyList<string>? SourceIncludes { get; init; }
     }
 
     /// <summary>The bundle's compiled-module declaration.</summary>
@@ -197,6 +202,15 @@ public static class BundleReader
         /// alone, exactly as before.
         /// </summary>
         public IReadOnlyList<string>? SourcePaths { get; init; }
+
+        /// <summary>
+        /// The <c>@@</c>-include paths the bytes were compiled with, sorted ordinal (MeshWeaver#4280)
+        /// — the other half of the completeness witness. <see cref="SourcePaths"/> covers what the
+        /// type's source QUERIES resolve; an include is matched by no query, lands as its own node,
+        /// and is an ABSENT include (an answer) until it does — so the owner defers on this list
+        /// exactly as on the paths. Null for a legacy bundle: the owner then judges without it.
+        /// </summary>
+        public IReadOnlyList<string>? SourceIncludes { get; init; }
     }
 
     /// <summary>
@@ -277,6 +291,9 @@ public static class BundleReader
                 // judgement while any of these has not landed on the mesh yet.
                 SourcePaths = reference.SourceVersions is { Count: > 0 } versions
                     ? versions.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList()
+                    : null,
+                SourceIncludes = reference.SourceIncludes is { Count: > 0 } includes
+                    ? includes.OrderBy(k => k, StringComparer.Ordinal).ToList()
                     : null,
             });
         }
