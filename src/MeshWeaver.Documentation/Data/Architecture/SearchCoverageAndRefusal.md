@@ -60,10 +60,13 @@ that planner — each is a documented decision whose consequence the `search` en
 3. **A routing rule can pin a query to a partition the caller cannot read.** `UserNodeType`
    registers `nodeType:User` (no path) → the `Auth` mirror, so the planner serves it from one schema
    — and every UNION branch a signed-in caller gets opens with a `public.partition_access` membership
-   test for that schema. Nobody holds a grant on `auth`; the middleware that the rule exists for
-   reads as System and gets no access clause. A signed-in `search 'nodeType:User'` is therefore 0
-   for everyone, and `partitions:all` does not help because the hint is resolved before the
-   declaration is considered.
+   test for that schema. Core's `Auth` partition definition (`DefaultPartitionProvider`) declares no
+   read policy; the one place the mirror is readable to a signed-in caller is
+   `PerSchemaAccessClauseLeakTests`, which seeds a `Public` grant on `auth` by SQL to exercise the
+   generator. The middleware the rule exists for reads as System and gets no access clause. On the
+   control instance a signed-in platform admin measured `nodeType:User` → 0 (whether the mirror is
+   empty there or ungranted cannot be told from outside; both read the same), and `partitions:all`
+   did not help because the hint was resolved before the declaration was considered.
 
 And a fourth, on the tool itself: `basePath` became a bare `namespace:{base}`, which is *immediate
 children*. `Admin/_LogIncident/…` is two levels down, so the parameter whose documented purpose is
@@ -175,10 +178,11 @@ Two things the declared sweep still cannot see, and no query form can:
 - **A routing hint overriding an explicit declaration** (mechanism 3) is a planner decision to
   revisit in the same half: a caller that wrote `partitions:all` asked for the fan-out, and the
   `Auth` pin is for the callers that did not say where to look.
-- **`nodeType:User` for a signed-in caller** stays 0 through the mirror regardless, because nobody
-  holds a grant on `auth`. Any code path that issues that shape as the user rather than as System
-  (an invite-by-email lookup, for instance) resolves nobody; that is its own issue, and the envelope
-  now at least names `Auth` as the partition the zero was read against.
+- **`nodeType:User` for a signed-in caller** stays 0 through the mirror on a deployment whose
+  `auth` partition carries no `Public` read grant (the control instance measured that way). Any code
+  path that issues that shape as the user rather than as System (an invite-by-email lookup, for
+  instance) resolves nobody there; that is its own issue, and the envelope now at least names
+  `Auth` as the partition the zero was read against.
 
 ## Tests
 
