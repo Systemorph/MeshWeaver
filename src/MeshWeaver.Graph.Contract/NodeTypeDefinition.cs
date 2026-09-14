@@ -614,6 +614,28 @@ public record NodeTypeDefinition
     public ImmutableList<string>? AdoptedSourcePaths { get; init; }
 
     /// <summary>
+    /// The <c>@@</c>-include paths the PRODUCER compiled the adopted bytes with — the bundle
+    /// manifest's <c>sourceIncludes</c> (MeshWeaver#4280, second finding on #4293). The other half
+    /// of the completeness witness beside <see cref="AdoptedSourcePaths"/>: an include is matched
+    /// by no source query, lands as its own node, and until it does the owner's include reader
+    /// answers ABSENT — an answer, not a stall — so the live fold is shorter and the fingerprints
+    /// differ for a reason that is an arrival, not a move. Judged against
+    /// <see cref="CurrentSourceIncludes"/>. Null for a locally-compiled build and for a bundle
+    /// whose producer recorded none. Operational, never authored.
+    /// </summary>
+    public ImmutableList<string>? AdoptedSourceIncludes { get; init; }
+
+    /// <summary>
+    /// The <c>@@</c>-include paths the sources watcher resolved as PRESENT when it last computed
+    /// <see cref="CurrentSourceFingerprint"/> — published in the SAME write (MeshWeaver#4280). Null
+    /// until the first fingerprint computation, and left at its previous value on an inconclusive
+    /// emission exactly as the fingerprint is; an empty list means "computed, and this type's
+    /// sources include nothing". Compared with <see cref="AdoptedSourceIncludes"/> by
+    /// <c>NodeTypeCompilationHelpers.CanJudgeAdoption</c>.
+    /// </summary>
+    public ImmutableList<string>? CurrentSourceIncludes { get; init; }
+
+    /// <summary>
     /// Content fingerprint of the LIVE source set — the same
     /// <see cref="Mesh.PartitionSourceFingerprint"/> shape as
     /// <see cref="AdoptedSourceFingerprint"/>, computed over this NodeType's own Code/Test nodes

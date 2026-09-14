@@ -76,6 +76,18 @@ public static class BundleWriter
         /// right to refuse it) and would take down a mixed fleet on the roll.</para>
         /// </summary>
         public string? SourceFingerprint { get; init; }
+
+        /// <summary>
+        /// The <c>@@</c>-include closure these bytes were compiled with — the resolved mesh paths,
+        /// sorted ordinal (MeshWeaver#4280). Inside <see cref="SourceFingerprint"/> already, but the
+        /// hash cannot say WHICH paths, and the consumer needs them: an included Code node that has
+        /// not landed on the consumer yet is an ABSENT include there (an answer, not a stall), so
+        /// the live fold is shorter, the fingerprints differ, and without this list the owner reads
+        /// an arrival as a move. Beside <see cref="SourceVersions"/>, which is the query-resolved
+        /// half of the same question. Null from a producer that recorded none; init property for
+        /// the binary-break reason above.
+        /// </summary>
+        public IReadOnlyList<string>? SourceIncludes { get; init; }
     }
 
     /// <summary>
@@ -147,6 +159,9 @@ public static class BundleWriter
                     // by BundleReader and carried to PrebuiltAssemblySeeder — it is the value the
                     // consumer's refusal is decided on.
                     sourceFingerprint = a.SourceFingerprint,
+                    // #4280 — the include paths the fingerprint folded over, so the consumer's
+                    // completeness witness covers includes as well as query-resolved sources.
+                    sourceIncludes = a.SourceIncludes,
                 })
                 .ToList(),
             // DECLARED, never left to be discovered by enumerating the folder — the same rule the
