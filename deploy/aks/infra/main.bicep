@@ -76,6 +76,9 @@ param availabilityZones array = [
 @description('VNet address space.')
 param vnetAddressSpace string = '10.0.0.0/16'
 
+@description('Delegated subnet for the PRIVATE Postgres Flexible Server (inside vnetAddressSpace, after the AKS, gateway and bastion subnets).')
+param postgresSubnetPrefix string = '10.0.18.0/24'
+
 // --- VPN -------------------------------------------------------------------
 @description('Deploy the P2S VPN Gateway (set false to use az aks command invoke / Bastion instead).')
 param deployVpnGateway bool = true
@@ -182,6 +185,7 @@ module network 'modules/network.bicep' = {
     location: location
     namePrefix: namePrefix
     vnetAddressSpace: vnetAddressSpace
+    postgresSubnetPrefix: postgresSubnetPrefix
     tags: tags
   }
 }
