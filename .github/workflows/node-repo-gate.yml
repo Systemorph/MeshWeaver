@@ -110,7 +110,14 @@ name: Node repo gate (reusable)
 #     /opt/platform/sha256-<hex>/app/           the tester image's /app
 #     /opt/platform/sha256-<hex>/platform-refs/ the PORTAL image's /app
 #     /opt/platform/sha256-<hex>/platform.json  set, core sha, BOTH image digests, installed-at
-#     /opt/platform/sha256-<hex>/.complete      the digest, written LAST — no .complete, no set
+#     /opt/platform/sha256-<hex>/.complete      the digest — no .complete, no set
+#     /opt/platform/sha256-<hex>.tmp.<pod>/     an install IN FLIGHT by that refresh pod
+#
+# 🚨 A shard can resolve a set the volume does not have YET, and that is the normal case, not an
+# edge: the refresh is a CronJob on a timer while this run was triggered by the SEAL. So an absent
+# set is not automatically a refusal — `resolve-gate-platform.sh` WAITS, bounded, when the install
+# is in flight or the volume simply has not reached the set, and is RED at once only when no future
+# refresh can ever install it (#4283).
 #
 # So this lane has TWO MODES, and `.github/scripts/resolve-gate-platform.sh` decides which by
 # MEASURING whether that mount exists — never by reading a label or an input:
@@ -1008,6 +1015,11 @@ jobs:
           # `inputs.*`, which are empty for a caller that pins nothing (MeshWeaver#4099).
           TESTER_DIGEST: ${{ steps.platform.outputs.image-digest }}
           PLATFORM_DIGEST: ${{ steps.platform.outputs.platform-image-digest }}
+          # 🚨 The SET NAME is what lets the script tell the three absences apart (#4283): a set the
+          # volume has not REACHED yet is waited out, one it has moved PAST is red at once. Without
+          # it only "an install is in flight" is visible and the other two are indistinguishable —
+          # which is how a message came to assert a retention miss for eight runs that had none.
+          PLATFORM_SET: ${{ steps.platform.outputs.set }}
           RUNNER_LABEL: ${{ inputs.runner }}
           PLATFORM_VOLUME: /opt/platform
         run: |
@@ -1025,7 +1037,8 @@ jobs:
           # `tee`, under pipefail: the resolver's refusals are ::error:: lines on stdout, so they
           # must be SHOWN, and its exit code must still fail this step.
           "$SCRIPT" --volume-root "$PLATFORM_VOLUME" \
-            --tester-digest "$TESTER_DIGEST" --portal-digest "$PLATFORM_DIGEST" | tee "$OUT"
+            --tester-digest "$TESTER_DIGEST" --portal-digest "$PLATFORM_DIGEST" \
+            --set "${PLATFORM_SET:-}" | tee "$OUT"
           MODE=$(sed -n 's/^mode=//p' "$OUT" | head -1)
           case "$MODE" in
             volume)
