@@ -1003,13 +1003,13 @@ live in the Entra tenant — four of them, every one scoped to `ref:refs/heads/m
 recorded that those credentials existed, which repositories held one, or who authorised them.
 
 That is the shape of the plaintext-provider-key incident: **a security fact with no record a reader
-can point at.** Here the rule IS a node — `search nodeType:BuildPrincipal` is the complete list of
+can point at.** Here the rule IS a node — `search nodeType:BuildPrincipal partitions:all` is the complete list of
 repositories this mesh trusts and exactly what each may do, and revoking one is a node write.
 
 |  | Azure OIDC federated credential | Build principal |
 |---|---|---|
 | what is stored | a subject rule, in Entra | a subject rule, on a mesh node |
-| who can see which repos may fetch | whoever has tenant access | `search nodeType:BuildPrincipal` |
+| who can see which repos may fetch | whoever has tenant access | `search nodeType:BuildPrincipal partitions:all` |
 | PR vs main | one credential per event subject, per subject *format* | one node; `event_name` is a claim it reads |
 | secret in the repo | none (already) | none |
 | verified by | Azure | the mesh, the way it already verifies `mwa_` tokens |

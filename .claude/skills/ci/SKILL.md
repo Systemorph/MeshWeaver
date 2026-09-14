@@ -172,8 +172,10 @@ activation budget: hung pages, failed liveness probes, dropped silos.
   when nothing was searched, so the absent field is the tell. Sweep on a deployment whose index is
   live, or stop — do not delete on an unrun sweep. Port or delete callers in the SAME change. A
   clean `-c Release -warnaserror` build proves nothing here.
-- **Before prod, sweep every NodeType green.** `Search('nodeType:NodeType')` →
-  `LspDiagnosticsForNode` per type → fix roots first (a red upstream makes every dependent
+- **Before prod, sweep every NodeType green.** `search 'nodeType:NodeType content.compilationStatus:Error partitions:all' limit:200`
+  (the bare form without `partitions:all` is REFUSED since #4274; state the zero as "0 of N over M",
+  N from `search 'nodeType:NodeType partitions:all'`, M = the envelope's `coverage.partitions`) →
+  `LspDiagnosticsForNode` per NAMED failure → fix roots first (a red upstream makes every dependent
   `UpstreamFailed`) → re-sweep until all read `Ok`. 🚨 **`ok:false` with a `status` other than
   `Compiled` is a sweep FAILURE, not a pass** — `Absent` (renamed/mistyped/not on this replica),
   `NotCompilable` (wrong kind of node), `Unavailable` (the owning hub did not answer) each mean that

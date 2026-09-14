@@ -64,6 +64,26 @@ public record QueryResultChange<T>
     public IReadOnlyList<double>? Scores { get; init; }
 
     /// <summary>
+    /// The partitions this batch was READ FROM — the denominator a zero is read against.
+    ///
+    /// <para>A partitioned backend answers a query from a SUBSET of the mesh: the one partition an
+    /// anchor names, or — for a declared fan-out — the partitions it enumerates MINUS the system
+    /// schemas it never enumerates (<c>admin</c>, <c>auth</c>, …) MINUS every partition the caller
+    /// holds no read grant on (row-level security drops those branches before the SQL is written).
+    /// An empty <see cref="Items"/> from such a read says "none in these", never "none exist"
+    /// (MeshWeaver #4274, and the three ways a pre-deploy sweep's zero has been wrong). A provider
+    /// that knows the set it read states it here, so an envelope built on this change can carry it.
+    /// </para>
+    ///
+    /// <para><see langword="null"/> means the provider did NOT report — a static catalog, a
+    /// pedestrian path walk, an older image — and MUST be surfaced as unknown, never as "all" or
+    /// "none". The aggregator (<c>MeshQuery.MergeProviderObservables</c>) unions the lists of the
+    /// providers that reported and stays null when none did. Meaningful on the Initial; live
+    /// deltas leave it null.</para>
+    /// </summary>
+    public IReadOnlyList<string>? Partitions { get; init; }
+
+    /// <summary>
     /// The original query that produced this change.
     /// </summary>
     public ParsedQuery Query { get; init; } = null!;

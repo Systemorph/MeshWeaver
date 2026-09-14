@@ -1298,12 +1298,35 @@ public class MeshOperations
 
     /// <summary>
     /// Runs a mesh query and returns a JSON envelope
-    /// <c>{count, limit, truncated, results:[{path,name,nodeType,version,lastModified}]}</c>.
-    /// When <paramref name="basePath"/> is set the query is scoped to that namespace; <c>truncated</c> flags that
-    /// more matches exist than were returned.
+    /// <c>{count, limit, truncated, coverage:{scope, partitions}, results:[{path,name,nodeType,version,lastModified}]}</c>.
+    /// When <paramref name="basePath"/> is set the query is scoped to everything UNDER that path
+    /// (<c>namespace:{base} scope:descendants</c>, unless the query states its own <c>scope:</c>);
+    /// <c>truncated</c> flags that more matches exist than were returned.
+    ///
+    /// <para>🚨 <b>An unanchored query is REFUSED, not answered</b> (MeshWeaver #4274). A query that
+    /// names no partition (<c>path:</c>/<c>namespace:</c>), does not declare the fan-out
+    /// (<c>partitions:all</c>) and matches no routing rule comes back as <c>"Error: …"</c> naming the
+    /// remedy — the same verdict the Postgres planner's CI policy gives. A production host serves
+    /// such a query from the partitions it happens to enumerate (never the system schemas
+    /// <c>admin</c>/<c>auth</c>, never a partition the caller cannot read) and reports it at Error in
+    /// its OWN log; the caller used to get a clean <c>count: 0</c> that read as "none exist".
+    /// Measured on memex.systemorph.com 2026-09-14: <c>nodeType:LogIncident</c> → 0 while
+    /// <c>namespace:Admin scope:descendants nodeType:LogIncident</c> → truncated at any limit, with
+    /// one credential seconds apart. AGENTS.md's pre-deploy NodeType sweep was written in the
+    /// refused form — the third way its zero could be wrong (after RLS and #3511's executor split).</para>
+    ///
+    /// <para><b>The envelope carries its coverage</b> so a zero reads against a denominator:
+    /// <c>coverage.scope</c> is <c>partition</c> (anchored), <c>declared</c> (<c>partitions:all</c>),
+    /// or <c>routed</c> (a routing rule named the partition); <c>coverage.partitions</c> is the list
+    /// the storage provider reported READING FROM
+    /// (<see cref="QueryResultChange{T}.Partitions"/> — after row-level narrowing, so it IS the
+    /// denominator), falling back to what the query NAMED when no provider reported, and
+    /// <c>null</c> for a declared fan-out on an image whose provider does not report — explicitly
+    /// unknown, never "all" (the same reasoning as <c>search_chunks</c>' missing <c>count</c> under
+    /// <c>"searched": false</c>, #2741).</para>
     /// </summary>
     /// <param name="query">The GitHub-style query string (e.g. <c>nodeType:Agent name:*sales*</c>).</param>
-    /// <param name="basePath">Optional namespace to scope the search to; <c>null</c> searches everywhere.</param>
+    /// <param name="basePath">Optional path to search UNDER; <c>null</c> means the query must anchor or declare itself.</param>
     /// <param name="limit">Maximum number of results, clamped to 1..200 (default 50).</param>
     /// <returns>A cold observable emitting the JSON results envelope or an <c>"Error: …"</c> string.</returns>
     public IObservable<string> Search(string query, string? basePath = null, int limit = 50)
@@ -1321,19 +1344,43 @@ public class MeshOperations
         else
         {
             var cleanQuery = query.Replace("namespace:", "").Trim();
-            fullQuery = $"namespace:{resolvedBase} {cleanQuery}".Trim();
+            // "Base path to search FROM" is the whole subtree, not one level of it. A bare
+            // `namespace:X` is IMMEDIATE CHILDREN, so `basePath: @Admin` + `nodeType:LogIncident`
+            // answered 0 for nodes at `Admin/_LogIncident/…` — the parameter whose documented
+            // purpose is scoping did not reach what it scoped to (#4274, property 1). A query that
+            // states its own scope keeps it.
+            var scoped = StatesScope(cleanQuery) ? cleanQuery : $"{cleanQuery} scope:descendants".Trim();
+            fullQuery = $"namespace:{resolvedBase} {scoped}".Trim();
+        }
+
+        var parsed = new QueryParser().Parse(fullQuery);
+        var coverage = ResolveCoverage(parsed);
+        if (coverage is null)
+        {
+            // Information, not Warning: the refusal IS the answer and travels back to the caller;
+            // an agent iterating on its query must not fill Loki with warnings on the way.
+            logger.LogInformation("Search refused unanchored query {Query} (basePath={BasePath})", query, basePath);
+            return Observable.Return(
+                $"Error: Query is not sufficiently specified: '{fullQuery}' names no partition. "
+                + "An unanchored search would be answered from whichever partitions the store enumerates — "
+                + "never the system partitions (Admin, Auth, …), never one you cannot read — and its count "
+                + "would read as a total. Anchor it (namespace:<partition> scope:descendants …, or "
+                + "path:<partition>/…, or pass basePath), or declare the fan-out (add "
+                + $"{ParsedQuery.CrossPartitionQualifier}) if spanning every readable partition is what this read means.");
         }
 
         // Snapshot semantics: Take(1) on Query gives us the Initial change
         // containing every match for this query in one batch — no async enumeration,
-        // no FromAsync bridge.
-        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = fullQuery, Limit = limit })
+        // no FromAsync bridge. ONE row past the limit is asked for, so `truncated` is a
+        // measurement ("a further match exists") rather than "the page happened to be full".
+        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = fullQuery, Limit = limit + 1 })
             .Take(1)
             .Select(change =>
             {
                 // Version + LastModified ride along so remote consumers (the instance-sync
                 // pull sweep) can detect changed nodes from the listing alone.
                 var list = change.Items
+                    .Take(limit)
                     .Select(node => (object)new { node.Path, node.Name, node.NodeType, node.Version, node.LastModified })
                     .ToImmutableList();
                 // Envelope instead of a bare array so truncation is VISIBLE: a result
@@ -1341,12 +1388,23 @@ public class MeshOperations
                 // and the agent under-reports. Composed explicitly via JsonObject —
                 // the hub serializer options drop empty collections, which would strip
                 // the 'results' key from a zero-hit response and break consumers.
-                var truncated = list.Count >= limit;
+                var truncated = change.Items.Count > limit;
+                // The denominator: what the provider says it READ FROM wins (it is post-narrowing);
+                // what the query NAMED is the fallback; a declared fan-out with no report is
+                // explicitly null — unknown, never "all".
+                var partitions = change.Partitions ?? coverage.Value.Named;
                 var payload = new JsonObject
                 {
                     ["count"] = list.Count,
                     ["limit"] = limit,
                     ["truncated"] = truncated,
+                    ["coverage"] = new JsonObject
+                    {
+                        ["scope"] = coverage.Value.Scope,
+                        ["partitions"] = partitions is null
+                            ? null
+                            : new JsonArray(partitions.Select(p => (JsonNode?)JsonValue.Create(p)).ToArray()),
+                    },
                     ["results"] = JsonSerializer.SerializeToNode(list, hub.JsonSerializerOptions) ?? new JsonArray(),
                 };
                 if (truncated)
@@ -1359,6 +1417,38 @@ public class MeshOperations
                 logger.LogWarning(ex, "Error searching with query {Query}", query);
                 return Observable.Return($"Error: {ex.Message}");
             });
+    }
+
+    /// <summary>
+    /// Whether the query text states its own <c>scope:</c> qualifier, so a <c>basePath</c> must not
+    /// impose <c>scope:descendants</c> on top of it.
+    /// </summary>
+    private static bool StatesScope(string query)
+        => query.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Any(token => token.StartsWith("scope:", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The coverage a <see cref="Search"/> can state for <paramref name="parsed"/> from the query
+    /// alone, or <see langword="null"/> when the query is unanchored and must be refused.
+    ///
+    /// <para>The verdict is the Postgres planner's (<c>PostgreSqlPartitionedMeshQuery.Judge</c>,
+    /// MeshWeaver.Plugins) under its CI policy: served iff the query
+    /// <see cref="ParsedQuery.IsSufficientlySpecified"/> or a registered routing rule names its
+    /// partition (<c>nodeType:User</c> → the auth mirror, <c>nodeType:Partition</c> → Admin);
+    /// otherwise refused. The grace list that planner also consults is deliberately NOT consulted
+    /// here: it names the in-repo CODE callers still carrying known debt, and an operator's or
+    /// agent's search is not one of them — a graced shape served here would be exactly the partial
+    /// answer this refusal exists to stop.</para>
+    /// </summary>
+    /// <returns>The scope label and, where the query names them, the partitions; null to refuse.</returns>
+    private (string Scope, IReadOnlyList<string>? Named)? ResolveCoverage(ParsedQuery parsed)
+    {
+        if (parsed.CrossPartition)
+            return ("declared", null);
+        if (parsed.IsSufficientlySpecified())
+            return ("partition", parsed.NamedPartitions());
+        var routed = hub.ServiceProvider.GetService<MeshConfiguration>()?.ResolveRoutingHints(parsed).Partition;
+        return string.IsNullOrEmpty(routed) ? null : ("routed", ImmutableList.Create(routed));
     }
 
     /// <summary>
@@ -2302,7 +2392,7 @@ public class MeshOperations
             return $"Error: cannot {operation} '{node.Path}': 'nodeType' is not set. Every node must declare a nodeType — " +
                    "it is the path of the type definition that gives the node its shape, views, and behaviour " +
                    "(e.g. \"Markdown\", \"Code\", \"Organization\"). Discover available types with " +
-                   "Search('nodeType:NodeType') and retry with nodeType set." +
+                   "Search('nodeType:NodeType partitions:all') and retry with nodeType set." +
                    (operation == "update"
                        ? " If you only meant to change a few fields, use Patch instead — it preserves all fields you don't mention."
                        : "");

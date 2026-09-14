@@ -9,7 +9,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 > **`Hosting/LogEntry` nodes under `Ops/Logs` are the OUTPUT of one `Logs` `Hosting/InstanceAction`
 > — a LogQL query a person wrote, over a window they chose, capped at a limit they set. Nothing on
-> this platform ingests logs continuously.** So `search 'nodeType:Hosting/LogEntry'` answers *"what
+> this platform ingests logs continuously.** So `search 'nodeType:Hosting/LogEntry partitions:all'` answers *"what
 > did the last person ask for"*. It never answers *"what does this portal log"*, and an absence in
 > it is not evidence of anything.
 
@@ -22,7 +22,7 @@ live incident, and the data carried its own refutation the whole time.
 `memex.meshweaver.cloud` 503ing after ~10.2 s — needed the discriminator from
 [The /api/content 503](../ContentRoute503). The issue reports:
 
-> `search 'nodeType:Hosting/LogEntry'` on that portal returns only `Received
+> `search 'nodeType:Hosting/LogEntry partitions:all'` on that portal returns only `Received
 > '$type':'LearningJourneyContent' which is NOT registered in this (receiving) hub` entries, every
 > one stamped `2026-09-10T12:36:35Z` … **LogWatch's ingest does not carry the lines the documented
 > discriminator depends on.**

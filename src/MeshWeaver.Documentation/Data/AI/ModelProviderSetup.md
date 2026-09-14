@@ -233,7 +233,7 @@ For the credential-encryption master key and the general "bring your own key" la
 
 Work top-down — the first hit is usually the cause:
 
-1. **Are there any provider/model nodes?** `search nodeType:ModelProvider scope:descendants`. Empty ⇒ no system config signal (see [installation](#installation-considerations)) and no space/user provider authored.
+1. **Are there any provider/model nodes?** `search nodeType:ModelProvider partitions:all`. Empty ⇒ no system config signal (see [installation](#installation-considerations)) and no space/user provider authored.
 2. **Does the user's `Selection` point at a provider that exists?** Read `{user}/_Memex/Selection`; a path to a non-existent `ModelProvider` yields no models.
 3. **Can the user read the space provider?** Org providers are visible only to users with Read on the space subtree.
 4. **Do the model ids exist in the resource?** A model node whose `Id` isn't deployed in the Azure resource shows in the picker but 404s at chat time — that is a *credential/deployment* problem, not a picker problem.

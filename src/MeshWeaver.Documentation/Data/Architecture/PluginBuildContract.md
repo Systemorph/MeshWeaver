@@ -227,7 +227,7 @@ already takes (`Store/Provision`, `Store/Enrollment`). It records what a stored 
 | `scopes` | `publish:socialmedia`, `fetch:plugins` — what this repo may bake INTO the registry and install FROM it |
 | `issuedBy` / `issuedAt` / `lastSeen` | the audit trail |
 
-A global admin `create`s it; `requestedAction: Revoke` ends it. `search nodeType:BuildPrincipal`
+A global admin `create`s it; `requestedAction: Revoke` ends it. `search nodeType:BuildPrincipal partitions:all`
 lists every repo the mesh trusts and exactly what each may do. There is no key to lose because
 there is no key.
 
@@ -257,7 +257,7 @@ a credential someone had to remember to create.
 | | Azure OIDC federated credential | Build principal |
 |---|---|---|
 | what is stored | a subject rule, in Entra | a subject rule, on a mesh node |
-| who can see which repos may fetch | whoever has tenant access | `search nodeType:Store/BuildPrincipal` |
+| who can see which repos may fetch | whoever has tenant access | `search nodeType:Store/BuildPrincipal partitions:all` |
 | PR vs main | one credential per event subject, per subject *format* | one node; `event_name` is a claim it reads |
 | secret in the repo | none (already) | none |
 | tied to the build queue | no — a storage reader | yes — the same identity that publishes, scoped |

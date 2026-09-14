@@ -112,23 +112,30 @@ Get('@ACME/ProductLaunch/model/')       // Full data model
 
 ## Search
 
-Searches the mesh using a GitHub-style query syntax. Returns a JSON array of up to 50 matching nodes.
+Searches the mesh using a GitHub-style query syntax. Returns an envelope
+`{count, limit, truncated, coverage, results}` of up to `limit` matching nodes; `coverage.partitions`
+is the list of partitions the answer was read from — a `count: 0` is read against it.
+
+A query must say WHERE to look: a `namespace:`/`path:` anchor, a `basePath`, or `partitions:all` to
+declare a read over every partition the caller can read. A query with none of these is refused
+(`Error: Query is not sufficiently specified …`) rather than answered from whichever partitions the
+store happened to enumerate — see [Search Coverage and Refusal](/Doc/Architecture/SearchCoverageAndRefusal).
 
 ### Parameters
 
 | Parameter | Required | Description |
 |---|---|---|
 | `query` | Yes | Filter string with field filters, wildcards, scoping, and sorting |
-| `basePath` | No | Limits the search to a specific subtree |
+| `basePath` | No | Limits the search to everything UNDER a path (`scope:descendants` unless the query states its own scope) |
 
 ### Common patterns
 
 ```
-Search('nodeType:Agent')                                         // All agents
+Search('nodeType:Agent partitions:all')                          // All agents (a search that names no partition is refused)
 Search('namespace:ACME')                                         // Direct children of ACME
 Search('path:ACME scope:descendants')                            // Everything under ACME recursively
 Search('namespace:Doc scope:descendants')                        // Browse all documentation
-Search('name:*sales* nodeType:Organization sort:name')           // Complex filtered query
+Search('name:*sales* nodeType:Organization sort:name', '@ACME')  // Complex filtered query, scoped by basePath
 Search('laptop', '@graph')                                       // Free-text search within graph
 ```
 
