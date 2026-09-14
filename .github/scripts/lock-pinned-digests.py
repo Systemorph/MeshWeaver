@@ -2321,6 +2321,10 @@ def check_retention_record(root: str) -> int:
 
 RETENTION_RULES = {"nothing-deletes", "derived-protected-set", "not-ours"}
 
+# The third state of `deleters[].present`. "measured, and it is not there" and "nobody could look"
+# are different facts, and only one of them is evidence (#4315 review).
+UNVERIFIED = "unverified"
+
 # Which rules a disposition may carry, and the pairing is checked BOTH ways. `third-party` means the
 # images were never ours, so the only honest statement is that there is nothing of ours to keep;
 # `fleet-unlockable` means our images live there and something has to say what keeps them — a
@@ -2335,9 +2339,15 @@ RULES_FOR_DISPOSITION = {
 # addresses `meshweaver.azurecr.io`, and it cannot reach the fleet registry at all — the record
 # declares it `present: false` with that reason, and `--check-retention-record` is the gate that
 # reads it. Including it here would red on the other registry's own record.
+#
+# 🚨 THE SPELLINGS ARE THE COMMAND LINE'S, NOT THE README'S (#4315 review). `curl` takes `-XDELETE`
+# with no space and `--request=DELETE` with an equals sign, and both execute identically to the
+# spaced forms — a sweep that matches only `-X DELETE` is defeated by a keystroke, silently, while
+# still printing a denominator and a clean verdict. Same lesson as `--include-"locked"` one gate
+# along: read what the shell will RUN, never what it usually looks like.
 DELETER_PATTERNS = (
-    (r"-X\s+DELETE", "an HTTP DELETE"),
-    (r"--request\s+DELETE", "an HTTP DELETE"),
+    (r"-X\s*['\"]?DELETE\b", "an HTTP DELETE"),
+    (r"--request[\s=]\s*['\"]?DELETE\b", "an HTTP DELETE"),
     (r"\bcrane\s+delete\b", "a crane deletion"),
     (r"\bskopeo\s+delete\b", "a skopeo deletion"),
     (r"\bregctl\s+manifest\s+delete\b", "a regctl manifest deletion"),
@@ -2439,6 +2449,43 @@ def maintenance_stanza(chart_dir: Path) -> tuple[dict[str, str], list[str]]:
     return found, problems
 
 
+def acl_delete_grants(chart_dir: Path) -> tuple[list[tuple[str, int, str]], int]:
+    """Every ACL rule in the registry's chart that grants the `delete` ACTION, with the `match:` it
+    is attached to — and how many rules were inspected.
+
+    🚨 THE ACL IS THE ONLY EVIDENCE BEHIND ONE OF THE RECORD'S VERDICTS (#4315 review). *"an
+    installation holding an instance key cannot delete"* is not a grep result — it is a property of
+    `docker_auth`'s ACL, where exactly one rule carries `delete` and its `match:` names the publisher.
+    Change that rule's match to `/.+/` and every authenticated account may delete, while the record
+    still reads "nothing deletes" and every other arm of this gate stays green. So the gate re-derives
+    it, the same way it re-derives the `maintenance:` stanza.
+
+    Read by structure rather than by YAML parser: the file is a Helm template whose ACL matches carry
+    `{{ … }}` expressions, which is exactly the shape a parser refuses. The rules are a list of
+    `- match: {…}` / `actions: [...]` pairs, so each `actions:` line granting `delete` is attributed
+    to the nearest `- match:` above it.
+
+    🚨 The returned COUNT is the denominator: zero rules inspected and zero bad rules are the same
+    answer without it, and the caller reds on the first."""
+    grants: list[tuple[str, int, str]] = []
+    rules = 0
+    for template in sorted(chart_dir.rglob("*.yaml")) + sorted(chart_dir.rglob("*.yml")):
+        match_line = ""
+        for number, line in enumerate(template.read_text(encoding="utf-8").splitlines(), 1):
+            if line.strip().startswith("#"):
+                continue
+            if re.match(r"^\s*-\s*match:", line):
+                match_line = line.strip()
+                continue
+            action = re.match(r"^\s*actions:\s*\[(?P<actions>[^\]]*)\]", line)
+            if not action or not match_line:
+                continue
+            rules += 1
+            if re.search(r"['\"]delete['\"]", action.group("actions")):
+                grants.append((str(template), number, match_line))
+    return grants, rules
+
+
 def check_registry_retention(root: str) -> int:
     """Does every registry the fleet's overlays name still say what — if anything — DELETES from it,
     and does the committed chart still agree with what the record says?
@@ -2469,8 +2516,10 @@ def check_registry_retention(root: str) -> int:
 
     problems: list[str] = []
     charts_checked = 0
+    acl_rules_checked = 0
     swept_files = swept_skipped = 0
     declaring_nothing_deletes: list[str] = []
+    unverified_by_host: dict[str, list[str]] = {}
     for host, entry in sorted(registries.items()):
         where = f"{ROSTER_PATH}: `registries.{host}`"
         if not isinstance(entry, dict):
@@ -2546,6 +2595,7 @@ def check_registry_retention(root: str) -> int:
                 "same sentence.")
             continue
         present = 0
+        unverified: list[str] = []
         for position, deleter in enumerate(deleters):
             if not isinstance(deleter, dict):
                 problems.append(f"{where}.retention.deleters[{position}] is not an object.")
@@ -2553,13 +2603,27 @@ def check_registry_retention(root: str) -> int:
             for required in ("mechanism", "verdict"):
                 if not str(deleter.get(required, "")).strip():
                     problems.append(f"{where}.retention.deleters[{position}] has no `{required}`.")
-            if not isinstance(deleter.get("present"), bool):
+            state = deleter.get("present")
+            # 🚨 THREE STATES, NOT TWO (#4315 review). `present: false` used to carry BOTH "measured,
+            # and it is not there" and "nobody could look" — and the second is the one that matters:
+            # `cr.meshweaver.cloud`'s storage account is provisioned outside this chart, so whether a
+            # blob LIFECYCLE POLICY deletes referenced layers cannot be read from any committed file.
+            # Filing that as `false` let the declaration read as fully measured over an open unknown,
+            # which is precisely the "not-checked spelled as clean" confusion this family is made of.
+            if state == UNVERIFIED:
+                if not str(deleter.get("verifiedBy", "")).strip():
+                    problems.append(
+                        f"{where}.retention.deleters[{position}] is `{UNVERIFIED}` and names no "
+                        "`verifiedBy`. An unknown with no stated way to answer it is indistinguishable "
+                        "from one nobody intends to answer.")
+                unverified.append(str(deleter.get("mechanism", f"[{position}]")))
+            elif not isinstance(state, bool):
                 problems.append(
-                    f"{where}.retention.deleters[{position}].present is "
-                    f"{deleter.get('present')!r}, not a boolean. Every `is True` reader in this "
-                    "file treats a string or a null as absent, so a typed quote mark would "
-                    "silently move a mechanism out of the enumeration.")
-            elif deleter["present"]:
+                    f"{where}.retention.deleters[{position}].present is {state!r}; expected true, "
+                    f"false or {UNVERIFIED!r}. Every `is True` reader in this file treats another "
+                    "string or a null as absent, so a typed quote mark would silently move a "
+                    "mechanism out of the enumeration.")
+            elif state:
                 present += 1
         if deleters and present == 0:
             problems.append(
@@ -2567,6 +2631,30 @@ def check_registry_retention(root: str) -> int:
                 "`present: true`. An enumeration in which nothing is present is an enumeration "
                 "that inspected nothing, and it reads exactly like a clean one — the confusion "
                 "#3438 is made of. `cr.meshweaver.cloud` has one: `maintenance.uploadpurging`.")
+
+        # 🚨 AND THE UNKNOWN HAS TO BLOCK SOMETHING, or naming it is decoration. It cannot usefully
+        # block the GATE — a check that is red until somebody reads an Azure storage account is a
+        # check nobody reads, which this file learned on 2026-09-07 over a trailing newline, and it
+        # would sit on `pause.reEnableWhen` besides. What it blocks is the ACT: `cleanupAuthorized`
+        # is the record's own statement that a cleanup here would be safe, and it may not be `true`
+        # while any mechanism is unverified. The day somebody writes the cleanup, this is what
+        # refuses — naming the row that is still open.
+        authorized = retention.get("cleanupAuthorized")
+        if not isinstance(authorized, bool):
+            problems.append(
+                f"{where}.retention is `nothing-deletes` and declares "
+                f"`cleanupAuthorized: {authorized!r}`, which is not a boolean. It must state, "
+                "explicitly, whether this enumeration is complete enough to authorize deleting "
+                "anything — an absent field would default to whatever the next reader assumes.")
+        elif authorized and unverified:
+            problems.append(
+                f"{where}.retention declares `cleanupAuthorized: true` while "
+                f"{len(unverified)} mechanism(s) are `{UNVERIFIED}`: {', '.join(unverified)}. "
+                "On a registry with NO LOCK the derivation is the whole of the protection, so a "
+                "deleter nobody has ruled out is a deleter that may be running beside the cleanup. "
+                "Answer it — each row names its `verifiedBy` — or leave the authorization false.")
+
+        unverified_by_host[host] = unverified
 
         chart = str(retention.get("chart", "")).strip()
         if not chart:
@@ -2617,6 +2705,33 @@ def check_registry_retention(root: str) -> int:
                         f"in the chart and {age!r} in the record. A window that moved without the "
                         "record moving is a deletion nobody decided.")
 
+        # (c) the ACL — the ONLY evidence behind the "a non-publisher account cannot delete" verdict.
+        # The record names the token its match must carry, so the check cannot silently inspect
+        # nothing when the ACL moves or is templated differently.
+        principal = str(retention.get("deleteGrantedTo", "")).strip()
+        if not principal:
+            problems.append(
+                f"{where}.retention names no `deleteGrantedTo`. One row of this enumeration rests "
+                "entirely on the registry's ACL — change the rule that carries the `delete` action "
+                "to match every account and the verdict becomes false with every other arm still "
+                "green — so the record has to say which principal that rule may name.")
+        else:
+            grants, rules_seen = acl_delete_grants(chart_dir)
+            acl_rules_checked += rules_seen
+            if rules_seen == 0:
+                problems.append(
+                    f"{where}.retention names `deleteGrantedTo: {principal!r}` and ZERO ACL rules "
+                    f"were found under {chart}. An ACL that cannot be located is not an ACL that "
+                    "grants nothing — the check inspected nothing while reporting success.")
+            for template, number, match_line in grants:
+                if principal not in match_line:
+                    problems.append(
+                        f"{Path(template).relative_to(Path(root))}:{number} grants the `delete` "
+                        f"action to `{match_line}`, which does not name {principal!r}. "
+                        f"`registries.{host}` records that only the publisher may delete, and that "
+                        "verdict is this ACL and nothing else — an installation holding an instance "
+                        "key would now be able to delete a manifest a live portal pins.")
+
         declaring_nothing_deletes.append(host)
 
     # (c) Nothing anywhere executes a deletion against a registry. ONE sweep, after the loop: it
@@ -2636,19 +2751,30 @@ def check_registry_retention(root: str) -> int:
     # are the same output without it, and that is the confusion this whole family is made of.
     print(f"registry retention: {len(registries)} registry(ies) declared "
           f"({', '.join(sorted(registries))}); {charts_checked} chart(s) re-derived; "
+          f"{acl_rules_checked} ACL rule(s) read; "
           f"{swept_files} executable file(s) swept for a deleter, {swept_skipped} skipped "
           "(this script, which carries every pattern as a literal, and the ACR record, whose job "
           "is to name deleters).")
+    # 🚨 PRINTED WHATEVER THE VERDICT, and NOT only when the list is empty. A green run over an
+    # enumeration with an open row must not read as a fully measured one — that is the same
+    # not-checked-spelled-as-clean confusion one level down (#4315 review).
+    for host in sorted(unverified_by_host):
+        open_rows = unverified_by_host[host]
+        print(f"  {host}: {len(open_rows)} mechanism(s) UNVERIFIED"
+              + (f" — {', '.join(open_rows)}" if open_rows else "")
+              + ("; no cleanup may be authorized here while that stands" if open_rows else ""))
     for problem in problems:
         print(f"::error::{problem}")
     if problems:
         return 1
     print("  every declared registry says what deletes from it, the pairing with its disposition "
           "holds, and a `nothing-deletes` enumeration names at least one mechanism that IS "
-          "present — so it inspected something.")
+          "present — so it inspected something — while an UNVERIFIED one is counted apart from a "
+          "measured absence and keeps `cleanupAuthorized` false.")
     print("  the committed chart still agrees: no Job or CronJob beside the registry, the "
-          "`maintenance:` stanza carries exactly the declared keys and windows, and no executable "
-          "line anywhere runs a deletion against a registry.")
+          "`maintenance:` stanza carries exactly the declared keys and windows, every ACL rule "
+          "granting `delete` still names the declared principal, and no executable line anywhere "
+          "runs a deletion against a registry.")
     return 0
 
 
@@ -3604,9 +3730,17 @@ ingress:
     # over a non-zero denominator, and each break fires on its own.
     _CHART = "deploy/helm/templates/registry"
     _GOOD_MAINTENANCE = "    maintenance:\n      uploadpurging:\n        enabled: true\n        age: 168h\n"
+    # The registry's real ACL shape: the ONE rule carrying `delete` matches the publisher account,
+    # and every other rule is pull-only.
+    _GOOD_ACL = ('    acl:\n'
+                 '      - match: {account: {{ $r.publisherUsername | quote }}}\n'
+                 '        actions: ["push", "pull", "delete"]\n'
+                 '      - match: {account: "/.+/"}\n'
+                 '        actions: ["pull"]\n')
 
     def _registry_root(scratch: str, registries: dict, *,
                        chart_body: str | None = _GOOD_MAINTENANCE,
+                       acl: str = _GOOD_ACL,
                        extra_chart: tuple[str, str] | None = None,
                        extra_workflow: str | None = None) -> str:
         root = Path(scratch)
@@ -3619,7 +3753,7 @@ ingress:
             chart.mkdir(parents=True, exist_ok=True)
             (chart / "configmap.yaml").write_text(
                 "data:\n  config.yml: |\n    storage:\n      delete:\n        enabled: true\n"
-                + chart_body, encoding="utf-8")
+                + chart_body + "  auth_config.yml: |\n" + acl, encoding="utf-8")
         if extra_chart:
             (root / _CHART / extra_chart[0]).write_text(extra_chart[1], encoding="utf-8")
         if extra_workflow:
@@ -3634,8 +3768,10 @@ ingress:
             "reason": "ours, and this lane cannot lock it",
             "retention": {
                 "rule": "nothing-deletes",
+                "cleanupAuthorized": False,
                 "reason": "measured; nothing deletes",
                 "chart": _CHART,
+                "deleteGrantedTo": "publisherUsername",
                 "maintenance": {"uploadpurging": "168h"},
                 "deleters": [
                     {"mechanism": "uploadpurging", "present": True, "verdict": "incomplete uploads only"},
@@ -3682,7 +3818,7 @@ ingress:
 
     code, output = _verdict(_fleet(retention={"deleters": [
         {"mechanism": "uploadpurging", "present": "true", "verdict": "v"}]}))
-    check(code == 1 and "not a boolean" in output,
+    check(code == 1 and "expected true, false or" in output,
           f"ARM 33: `present` as the STRING \"true\" passed. Every `is True` reader in this file "
           f"treats it as absent, so one typed quote mark empties the enumeration: {output}")
 
@@ -3767,6 +3903,75 @@ ingress:
     code, output = _verdict(_fleet(retention=_empty))
     check(code == 1 and "names no `protectedSet.axes`" in output,
           f"ARM 33: a cleanup deleting the complement of a set nobody wrote down passed: {output}")
+
+    # ── ARM 33b: the three arms the #4315 review found MISSING ──────────────────────────────────
+    # 🚨 (1) UNVERIFIED is not ABSENT. `present: false` used to carry both "measured, and it is not
+    # there" and "nobody could look", and the second is the row that matters: the fleet registry's
+    # storage account is provisioned outside the chart, so whether a blob lifecycle policy deletes
+    # referenced layers cannot be read from any committed file. Filed as `false`, the declaration
+    # read as fully measured over an open question.
+    _open = {"mechanism": "blob lifecycle policy", "present": UNVERIFIED,
+             "verdict": "cannot be read from a committed file",
+             "verifiedBy": "one read on the storage account"}
+    code, output = _verdict(_fleet(retention={"deleters": [
+        {"mechanism": "uploadpurging", "present": True, "verdict": "uploads only"}, _open]}))
+    check(code == 0, f"ARM 33b: a declaration carrying an UNVERIFIED mechanism was REJECTED. It "
+                     f"must be sayable, or the only way to pass is to file the unknown as a "
+                     f"measured absence — which is the defect: {output}")
+    check("1 mechanism(s) UNVERIFIED" in output and "blob lifecycle policy" in output,
+          f"ARM 33b: an UNVERIFIED mechanism did not PRINT, so a green run over an open question "
+          f"reads exactly like a fully measured one: {output}")
+    _nameless = dict(_open)
+    del _nameless["verifiedBy"]
+    code, output = _verdict(_fleet(retention={"deleters": [
+        {"mechanism": "uploadpurging", "present": True, "verdict": "uploads only"}, _nameless]}))
+    check(code == 1 and "names no `verifiedBy`" in output,
+          f"ARM 33b: an unknown with no stated way to answer it passed — indistinguishable from "
+          f"one nobody intends to answer: {output}")
+    # …and what the unknown BLOCKS is the ACT, not the gate.
+    code, output = _verdict(_fleet(retention={"cleanupAuthorized": True, "deleters": [
+        {"mechanism": "uploadpurging", "present": True, "verdict": "uploads only"}, _open]}))
+    check(code == 1 and "cleanupAuthorized: true" in output and "UNVERIFIED" not in output.split("::error")[0].split("\n")[0],
+          f"ARM 33b: a cleanup was AUTHORIZED with a deleter nobody had ruled out. On a registry "
+          f"with no lock that is a deleter that may be running beside the cleanup: {output}")
+    code, output = _verdict(_fleet(retention={"cleanupAuthorized": None}))
+    check(code == 1 and "not a boolean" in output,
+          f"ARM 33b: a `nothing-deletes` record that never states whether it authorizes a cleanup "
+          f"passed — the next reader supplies the default: {output}")
+
+    # 🚨 (2) THE ACL IS THE ONLY EVIDENCE BEHIND ONE VERDICT, and it was not re-derived at all.
+    # "an installation holding an instance key cannot delete" is not a grep result — change the
+    # rule carrying `delete` to match every account and the verdict is false with every other arm
+    # of this gate still green.
+    _OPEN_ACL = ('    acl:\n'
+                 '      - match: {account: "/.+/"}\n'
+                 '        actions: ["push", "pull", "delete"]\n')
+    code, output = _verdict(_fleet(), acl=_OPEN_ACL)
+    check(code == 1 and "grants the `delete` action" in output,
+          f"ARM 33b: an ACL granting `delete` to EVERY authenticated account passed while the "
+          f"record said only the publisher may delete: {output}")
+    code, output = _verdict(_fleet(), acl="    acl: []\n")
+    check(code == 1 and "ZERO ACL rules" in output,
+          f"ARM 33b: an ACL that could not be LOCATED passed. An ACL nobody found is not an ACL "
+          f"that grants nothing — the check inspected nothing while reporting success: {output}")
+    code, output = _verdict(_fleet(retention={"deleteGrantedTo": ""}))
+    check(code == 1 and "names no `deleteGrantedTo`" in output,
+          f"ARM 33b: a record resting a verdict on the ACL without saying which principal that "
+          f"rule may name passed: {output}")
+    check("ACL rule(s) read" in _verdict(_fleet())[1],
+          "ARM 33b: the passing run does not print how many ACL rules it read, so zero inspected "
+          "and zero bad are the same answer")
+
+    # 🚨 (3) THE SPELLINGS ARE THE COMMAND LINE'S. `curl -XDELETE` and `--request=DELETE` execute
+    # identically to the spaced forms and matched nothing.
+    for _compact in ("curl -XDELETE https://cr.example/v2/x/manifests/sha256:aa",
+                     "curl --request=DELETE https://cr.example/v2/x",
+                     "curl -X 'DELETE' https://cr.example/v2/x"):
+        code, output = _verdict(
+            _fleet(), extra_workflow=f"jobs:\n  x:\n    steps:\n      - run: {_compact}\n")
+        check(code == 1 and "an HTTP DELETE" in output,
+              f"ARM 33b: `{_compact}` was not seen as a deletion. A sweep defeated by a keystroke "
+              f"still prints a denominator and a clean verdict: {output}")
 
     # 🚨 THE SWEEP IS ONLY EVIDENCE ONCE IT HAS BEEN SHOWN ABLE TO MATCH. Every pattern, over a
     # synthetic file carrying each spelling — the control that a zero over the real repository is

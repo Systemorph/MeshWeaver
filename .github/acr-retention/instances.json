@@ -48,7 +48,20 @@
     "                         be `present: true`: an enumeration in which nothing is present is an",
     "                         enumeration that inspected nothing, which reads exactly like a clean",
     "                         one. Requires `chart`, the committed source the gate re-derives the",
-    "                         deleters FROM, so the record cannot drift away from what deploys.",
+    "                         deleters FROM, and `deleteGrantedTo`, the principal the registry's",
+    "                         ACL may grant the `delete` action to — one verdict here rests on that",
+    "                         ACL and on nothing else, so the gate re-reads it too.",
+    "                         🚨 `present` HAS THREE STATES, and the third is why this block exists:",
+    "                         true (measured, and it IS there), false (measured, and it is not) and",
+    "                         \"unverified\" (NOBODY COULD LOOK). Filing an unknown as `false` lets a",
+    "                         declaration read as fully measured over an open question — the",
+    "                         not-checked-spelled-as-clean confusion this whole family is made of.",
+    "                         An \"unverified\" row must name `verifiedBy` (what would answer it), it",
+    "                         is PRINTED on its own line on every run whatever the verdict, and",
+    "                         `cleanupAuthorized` — the record's own statement that deleting here",
+    "                         would be safe — may NOT be true while one stands. That is what the",
+    "                         unknown blocks: the ACT, not the gate. A check that is red until",
+    "                         somebody reads an Azure storage account is a check nobody reads.",
     "  derived-protected-set  a cleanup exists and deletes only the complement of a DERIVED set.",
     "                         Requires `protectedSet.axes`, and every axis must declare",
     "                         `onIncomplete: \"refuse\"` — on a registry with no lock an incomplete",
@@ -77,11 +90,13 @@
       "issue": "MeshWeaver#3438",
       "retention": {
         "rule": "nothing-deletes",
+        "cleanupAuthorized": false,
         "statedAt": "2026-09-14",
         "issue": "MeshWeaver#4230",
         "design": "Doc/Architecture/FleetRegistryRetention",
         "reason": "Measured 2026-09-14 over core origin/main 192bb073b8, read-only: NOTHING deletes a manifest, a tag or a referenced blob from cr.meshweaver.cloud, and nothing collects its garbage — so the registry grows without bound. That is the safe direction to be wrong in; the hazard is the FIX. 🚨 `distribution` HAS NO LOCK: ACR's `changeableAttributes.deleteEnabled` is an ACR feature, so there is no object here that a protected set can be written INTO ahead of a deleter. A cleanup's own derivation would therefore be the entire safety margin, with nothing behind it — where on the ACR an incomplete run merely writes fewer locks and last night's still hold. Until a cleanup can derive a protected set over what this registry HOLDS (and nothing enumerates that as data today — MeshWeaver#4066), none may be added.",
         "chart": "deploy/helm/templates/registry",
+        "deleteGrantedTo": "publisherUsername",
         "maintenance": {
           "uploadpurging": "168h"
         },
@@ -113,8 +128,9 @@
           },
           {
             "mechanism": "an Azure blob lifecycle / management policy on the registry's storage container",
-            "present": false,
-            "verdict": "🚨 UNVERIFIED, and it is the one row that is not a measurement. The storage account is registry.storage.accountName, provisioned OUTSIDE this chart (storage.bicep in this repo is pgBackRest's, not the registry's), so it cannot be read from a committed file. A lifecycle rule over a CONTENT-ADDRESSED store is not old data expiring — it deletes a layer a current manifest still names, and the image reads as present until something pulls it. One read on that account, and it is the maintainer's: Doc/Architecture/FleetRegistryRetention section 7."
+            "present": "unverified",
+            "verdict": "🚨 UNVERIFIED, and it is the one row that is not a measurement. The storage account is registry.storage.accountName, provisioned OUTSIDE this chart (storage.bicep in this repo is pgBackRest's, not the registry's), so it cannot be read from a committed file. A lifecycle rule over a CONTENT-ADDRESSED store is not old data expiring — it deletes a layer a current manifest still names, and the image reads as present until something pulls it. One read on that account, and it is the maintainer's: Doc/Architecture/FleetRegistryRetention section 7.",
+            "verifiedBy": "One read on the storage account named by registry.storage.accountName in the deployment's values (the Azure management-policy list for its blob service). It is the maintainer's: the account is provisioned outside this chart, so no committed file can answer it. Doc/Architecture/FleetRegistryRetention section 7."
           }
         ]
       }

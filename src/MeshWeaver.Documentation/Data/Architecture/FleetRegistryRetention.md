@@ -40,7 +40,7 @@ shown able to match something.
 | `registry garbage-collect` (blob GC) | **NO** — no `Job`, no `CronJob`, nothing under `deploy/helm/templates/registry/` (8 rendered objects, none of them a Job) and no invocation anywhere in `deploy/` or `.github/` | unreferenced blobs, permanently | never runs. Storage therefore grows without bound, which is the other half of §1's answer |
 | an explicit registry `DELETE` | **NO CALLER** — zero matches over the 409 files for `-X DELETE`, `crane delete`, `skopeo delete`, `regctl manifest delete`, `oras manifest delete` or `acr repository delete` | any manifest or tag | CD only ever **pushes** here (`mirror-image-to-registry.sh` for images, `node-repo-publish-bake.yml` for bundles) |
 | anything authenticating as a non-publisher account | **NO** — by the ACL, not by a grep | — | `docker_auth`'s ACL grants `delete` to **exactly one account**, the publisher. Every other authenticated account matches a `pull`-only rule, and anonymous matches no rule at all. An installation holding an instance key **cannot** delete, whatever it asks |
-| an Azure blob lifecycle / management policy on the registry's storage container | **UNVERIFIED** | any blob, including a referenced one | 🚨 **the one remaining unknown, and it is a maintainer read.** The storage account is `registry.storage.accountName`, provisioned outside this chart; `storage.bicep` in this repo is pgBackRest's, not the registry's. See §7 |
+| an Azure blob lifecycle / management policy on the registry's storage container | **UNVERIFIED** — and that is a state of its own in the record, not a `false` | any blob, including a referenced one | 🚨 **the one remaining unknown, and it is a maintainer read.** The storage account is `registry.storage.accountName`, provisioned outside this chart; `storage.bicep` in this repo is pgBackRest's, not the registry's. See §7 |
 
 **So both of #4230's dangerous readings are answered, and it is the second one.** This is not
 silent deletion — it is unbounded growth. The registry keeps every image and every bundle ever
@@ -85,6 +85,20 @@ reds when the chart and the record disagree — so adding a GC `CronJob`, or cha
 record must name at least one mechanism that IS present — today `uploadpurging` — or the gate reds.
 "Zero deleters found" and "the sweep did not run" read identically otherwise, which is the confusion
 #3438 is made of.
+
+🚨 **And `present` has THREE states, because "measured, and it is not there" and "nobody could look"
+are different facts.** The lifecycle row of §1 is the second kind: the storage account is
+provisioned outside this chart, so no committed file can answer it. Filing that as `false` would let
+the declaration read as *fully measured* over an open question — the same
+not-checked-spelled-as-clean confusion one level down. So it is `"unverified"`, it must name a
+`verifiedBy` (what would answer it), and it is **printed on its own line on every run whatever the
+verdict**.
+
+**What the unknown blocks is the ACT, not the gate.** `cleanupAuthorized` is the record's own
+statement that deleting here would be safe, and it **may not be `true` while any mechanism is
+unverified** — the gate reds naming the open row. Making the *gate* red instead would be a check
+that stays red until somebody reads an Azure storage account, and a check that is always red is one
+nobody reads (this lane learned that on 2026-09-07, over a trailing newline).
 
 ### R1 — A cleanup may not be added until it derives a protected set, and an INCOMPLETE derivation deletes NOTHING
 
@@ -243,15 +257,38 @@ run on every pull request beside the existing record gate. It asserts:
 
 - every declared registry has a `retention` block, with a known rule and a reason;
 - a `nothing-deletes` rule enumerates its `deleters`, and **at least one is `present: true`** (R0's
-  denominator clause);
+  denominator clause); an `"unverified"` one names its `verifiedBy` and keeps `cleanupAuthorized`
+  false;
 - a `derived-protected-set` rule names its axes, and every axis declares `onIncomplete: "refuse"`
   (R1, held by the gate rather than by review);
 - **the chart still agrees with the record** — the registry templates render no `Job` or `CronJob`,
-  the `maintenance:` stanza carries exactly the declared keys and window, and no
-  `garbage-collect` invocation exists in `deploy/` or `.github/`.
+  the `maintenance:` stanza carries exactly the declared keys and window, **every ACL rule granting
+  the `delete` action still names the declared principal**, and no executable line anywhere runs a
+  deletion against a registry.
 
-The last one is what makes the declaration falsifiable rather than a comment. Each arm is driven
-both ways by `--self-test`.
+The chart arms are what make the declaration falsifiable rather than a comment. Two of them are
+worth naming:
+
+- **The ACL is re-derived, because one verdict rests on it and on nothing else.** *"An installation
+  holding an instance key cannot delete"* is not a grep result — it is a property of `docker_auth`'s
+  ACL, where exactly one rule carries `delete` and its match names the publisher. Change that rule's
+  match to `/.+/` and the verdict is false with every other arm still green. The record declares
+  `deleteGrantedTo`, the gate re-reads the rules, and **zero rules found is a failure** — an ACL
+  nobody located is not an ACL that grants nothing.
+- **The deleter sweep matches the COMMAND LINE's spellings, not the README's.** `curl` takes
+  `-XDELETE` with no space and `--request=DELETE` with an equals sign, and both execute identically
+  to the spaced forms. A sweep matching only `-X DELETE` is defeated by a keystroke — silently,
+  while still printing a denominator and a clean verdict. Same lesson as `--include-"locked"` one
+  gate along: read what the shell will *run*.
+
+Each arm is driven both ways by `--self-test`.
+
+**It runs on every pull request**, in `dotnet-test.yml`'s `workflow-shell` job — a `needs:` of
+`collect-results` (`Consolidate test results`, this repository's only required status check), named
+by that job's explicit fail step. `main` is ruleset-protected and merges through the merge queue,
+which builds the merged branch and runs the same job, so there is no path to `main` on which the
+gate does not block. It is deliberately **not** duplicated onto the nightly lock lane: that would
+add no coverage and one new way to red the lane whose green is `pause.reEnableWhen`.
 
 **The dry run** is the nightly protection run's report, which now prints, per fleet-unlockable
 registry, every reference the fleet's committed files make to it — repository, tag and the file that
