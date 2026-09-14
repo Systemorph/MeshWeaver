@@ -1286,18 +1286,19 @@ internal static class NodeTypeCompilationHelpers
             .DistinctUntilChanged(missing => string.Join("\n", missing))
             .Select(missing => missing.Count == 0
                 ? Observable.Never<Unit>()
-                // Same System scope the source-set read takes, for the same reason: a per-user read
-                // of a node UNDER this NodeType routes a permission check back into this activation.
-                : Observable.Using(
-                    () => accessService?.ImpersonateAsSystem()
-                          ?? System.Reactive.Disposables.Disposable.Empty,
-                    _ => missing
-                        .Select(path => workspace
-                            .GetQuery($"nodetype-include-arrival:{hubPath}:{path}", $"path:{path}")
-                            .Where(items => items.Any())
-                            .Take(1)
-                            .Select(_ => Unit.Default))
-                        .Merge()))
+                // Read as System for the same reason the source-set read is: a per-user read of a
+                // node UNDER this NodeType routes a permission check back into this activation.
+                // RunAsSystem, never Observable.Using(ImpersonateAsSystem, …) — that shape opens the
+                // AsyncLocal scope on the subscribing thread and disposes it wherever the work
+                // terminates, leaving the subscriber impersonated (#1790; the ratchet guard
+                // refuses a new site of it).
+                : accessService.RunAsSystem(() => missing
+                    .Select(path => workspace
+                        .GetQuery($"nodetype-include-arrival:{hubPath}:{path}", $"path:{path}")
+                        .Where(items => items.Any())
+                        .Take(1)
+                        .Select(_ => Unit.Default))
+                    .Merge()))
             .Switch();
 
     /// <summary>
