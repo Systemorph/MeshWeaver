@@ -4,6 +4,7 @@
     <IsTestProject>false</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="xunit.v3.extensibility.core" />
     <ProjectReference Include="..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
   </ItemGroup>
 </Project>

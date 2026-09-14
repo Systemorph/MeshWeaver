@@ -8,6 +8,7 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="xunit.v3.extensibility.core" />
     <ProjectReference Include="..\..\src\MeshWeaver.Deployment.Contract\MeshWeaver.Deployment.Contract.csproj" />
     <!-- ConfigurationBuilder + AddInMemoryCollection (Microsoft.Extensions.Configuration rides in). -->
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" />

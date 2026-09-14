@@ -6,6 +6,7 @@
          guards against is not a crash but a run that succeeds against the WRONG reference set, and
          that is decided in the argv, which needs no daemon. A docker-shaped test would have to be
          skipped on CI, and a skipped gate renders the same green tick as a passing one. -->
+    <PackageReference Include="xunit.v3.extensibility.core" />
     <ProjectReference Include="..\..\src\MeshWeaver.Cli\MeshWeaver.Cli.csproj" />
   </ItemGroup>
 </Project>
