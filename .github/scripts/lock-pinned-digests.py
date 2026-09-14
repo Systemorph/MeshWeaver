@@ -1563,11 +1563,49 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
         by_host: dict[str, list[tuple[str, str, str]]] = {}
         for host, repo, tag, where in plan.foreign_references:
             by_host.setdefault(host, []).append((repo, tag, where))
+        # Read off the same record the planner classified from, so the label the reader sees and the
+        # verdict the run reached cannot disagree.
+        dispositions, _ = read_registry_dispositions(root)
+        # 🚨 THE DISPOSITION IS PRINTED BESIDE EACH HOST, AND THE SENTENCE DIFFERS (#4323). The
+        # first live run of this section said "a cleanup must KEEP" over `ghcr.io` — a host declared
+        # `third-party`, where this fleet runs no cleanup at all. A report that asserts the same
+        # thing about a store we retain and a store somebody else retains is wrong about one of them
+        # whichever way the declaration reads.
+        #
+        # 🚨 And LISTING is what caught the deeper one, so it is stated as the reason: the same run
+        # showed two of ghcr.io's five references are `systemorph/*` — OUR images, on a host whose
+        # declaration says "never published by this fleet", while release.yml mirrors three
+        # repositories there on every official release (#4323). A count alone would have hidden it.
         for host in sorted(by_host):
             references = sorted(set(by_host[host]))
-            emit(f"      {host}: {len(references)} committed reference(s) a cleanup must KEEP")
+            disposition = dispositions.get(host, ("undeclared", ""))[0]
+            if disposition == "fleet-unlockable":
+                emit(f"      {host} (declared fleet-unlockable): {len(references)} committed "
+                     "reference(s) a cleanup must KEEP")
+            elif disposition == "third-party":
+                emit(f"      {host} (declared third-party): {len(references)} committed "
+                     "reference(s) — declared NOT ours to retain, so no cleanup of ours protects "
+                     "them. Listed so the declaration can be checked against what is really pinned")
+            else:
+                # 🚨 THE FALLBACK IS NOT A KEEP SENTENCE (#4324 review). An UNDECLARED, malformed or
+                # unreadable entry has already BLOCKED this run (`classify_foreign_registries`), so
+                # the one thing the report must not do is print a verdict over it — an unknown that
+                # reads as actionable is the whole failure mode of this family, and it would be the
+                # shape a reader is most likely to act on: a list of references under "must KEEP",
+                # produced by a run that refused.
+                emit(f"      {host} (UNCLASSIFIED — {disposition}): {len(references)} committed "
+                     "reference(s), and NO verdict about them. This host is not declared in "
+                     f"`{ROSTER_PATH}`'s `registries` table, so the run is BLOCKED and nothing here "
+                     "says whether anything retains these — declare it before reading this list as "
+                     "anything")
             for repo, tag, where in references:
-                emit(f"        {repo}:{tag}")
+                # 🚨 The floating set, not the string `latest` (#4324 review). `extract_foreign_pins`
+                # PRESERVES a moving tag, and `main`/`master`/`edge`/`stable`/`nightly` move exactly
+                # as `latest` does — checking one spelling reports the other five as ordinary pins.
+                # One set, shared with the ACR path, so the two cannot drift apart.
+                moving = tag.strip().lower() in FLOATING_TAGS
+                emit(f"        {repo}:{tag}"
+                     + ("   🚨 a MOVING tag — outside this model (#3438)" if moving else ""))
                 emit(f"          pinned by {where}")
         # 🚨 ITS OWN INCOMPLETENESS, ON ITS OWN LINE. This is the COMMITTED axis only. The set an
         # installation is RUNNING is derivable the same way it is here (the mirror pushes the
@@ -3701,8 +3739,13 @@ ingress:
     check("PROTECTED SET — registries this lane cannot lock" in _dry_run,
           f"ARM 33a: the run printed NO protected set for a registry it cannot lock, so what a "
           f"cleanup there must keep is derivable and unread: {_dry_run[-1500:]}")
-    check("cr.meshweaver.cloud: 2 committed reference(s)" in _dry_run,
-          f"ARM 33a: the protected set did not name the host and its count: {_dry_run[-1500:]}")
+    # 🚨 THE DISPOSITION IS PART OF THE LABEL (#4323). The first live run said "a cleanup must
+    # KEEP" over `ghcr.io`, a host declared `third-party` where this fleet runs no cleanup at all —
+    # the same sentence about a store we retain and a store somebody else retains.
+    check("cr.meshweaver.cloud (declared fleet-unlockable): 2 committed reference(s) a cleanup "
+          "must KEEP" in _dry_run,
+          f"ARM 33a: the protected set did not name the host, its DISPOSITION and its count: "
+          f"{_dry_run[-1500:]}")
     check("memex-portal-ai:3.0.0-ci.8411" in _dry_run,
           f"ARM 33a: the protected set printed a COUNT and not the references themselves. A "
           f"number nobody can check against the registry is not a dry run: {_dry_run[-1500:]}")
@@ -3711,6 +3754,73 @@ ingress:
     check("PLUGIN BUNDLE family" in _dry_run and "floor, never a complete protected set" in _dry_run,
           f"ARM 33a: the protected set did not print its own INCOMPLETENESS, so a reader would "
           f"take a committed-pins floor for a complete answer: {_dry_run[-1500:]}")
+    # 🚨 A `third-party` host gets a DIFFERENT SENTENCE, and the reason is printed with it (#4323).
+    # This is the arm that would have caught the first live run: `ghcr.io` was labelled "a cleanup
+    # must KEEP" over images this fleet runs no cleanup on — and two of the five turned out to be
+    # OURS, on a host declared "never published by this fleet".
+    _third_party_scan = _scan2("Systemorph/Memex", FIXTURE_OVERLAY_FOREIGN.replace(
+        "cr.meshweaver.cloud", "ghcr.io"),
+        "deployments/aks/memex-cloud/values.memexcloud.public.yaml")
+    plan, _, _ = _drive(clean1, clean2 + [_third_party_scan],
+                        FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                        dispositions={"ghcr.io": ("third-party", "somebody else's")})
+    _printed = io.StringIO()
+    with contextlib.redirect_stdout(_printed):
+        report(plan, clean1, clean2 + [_third_party_scan], REGISTRY_DEFAULT, _inventory(),
+               apply=False, release_enabled=False, root=str(HERE.parent.parent))
+    _tp = _printed.getvalue()
+    check("(declared third-party)" in _tp and "NOT ours to retain" in _tp,
+          f"ARM 33a: a THIRD-PARTY host was reported with the same 'a cleanup must KEEP' sentence "
+          f"as a store this fleet actually retains: {_tp[-1200:]}")
+    check("a cleanup must KEEP" not in _tp.split("(declared third-party)")[-1].split("🚨")[0],
+          f"ARM 33a: the third-party block still claims a cleanup must keep its references: "
+          f"{_tp[-1200:]}")
+    check("so the declaration can be checked against what is really pinned" in _tp,
+          "ARM 33a: the third-party block does not say WHY it is listed. Listing is what caught "
+          "#4323 — two `systemorph/*` images on a host declared 'never published by this fleet' — "
+          "and a count alone would have hidden it")
+
+    # 🚨 AN UNDECLARED HOST GETS NO VERDICT AT ALL (#4324 review). It has already BLOCKED the run;
+    # printing its references under "a cleanup must KEEP" hands the reader an actionable-looking
+    # list produced by a run that refused — the unknown-reads-as-clean shape, one layer up.
+    plan, _, _ = _drive(clean1, clean2 + [foreign_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers())          # no dispositions ⇒ undeclared ⇒ blocked
+    check(plan.blockers, "ARM 33a: an UNDECLARED registry did not block the run, so the fallback "
+                         "arm below would be testing a state that cannot happen")
+    _printed = io.StringIO()
+    with contextlib.redirect_stdout(_printed):
+        report(plan, clean1, clean2 + [foreign_scan], REGISTRY_DEFAULT, _inventory(),
+               apply=False, release_enabled=False, root=str(tempfile.gettempdir()))
+    _undeclared = _printed.getvalue()
+    check("UNCLASSIFIED" in _undeclared and "NO verdict about them" in _undeclared,
+          f"ARM 33a: an UNDECLARED host was reported without saying so: {_undeclared[-1200:]}")
+    check("a cleanup must KEEP" not in _undeclared,
+          f"ARM 33a: an UNDECLARED host's references were printed under 'a cleanup must KEEP'. The "
+          f"run REFUSED; a list that reads as actionable is the worst thing it can emit: "
+          f"{_undeclared[-1200:]}")
+
+    # 🚨 EVERY floating tag, not the string `latest` (#4324 review). `main`, `master`, `edge`,
+    # `stable` and `nightly` move exactly as `latest` does and are PRESERVED by the extractor.
+    for _moving in sorted(FLOATING_TAGS):
+        _scan = _scan2("Systemorph/Memex",
+                       FIXTURE_OVERLAY_FOREIGN.replace("3.0.0-ci.8411", _moving),
+                       "deployments/aks/build/values.build.public.yaml")
+        plan, _, _ = _drive(clean1, clean2 + [_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                            probe=_answers(), dispositions=FLEET_UNLOCKABLE)
+        _printed = io.StringIO()
+        with contextlib.redirect_stdout(_printed):
+            report(plan, clean1, clean2 + [_scan], REGISTRY_DEFAULT, _inventory(),
+                   apply=False, release_enabled=False, root=str(HERE.parent.parent))
+        _out = _printed.getvalue()
+        # 🚨 THE CONTROL FIRST, then the check. `check(tag not in out or flagged)` passes VACUOUSLY
+        # the day the fixture stops producing that reference — an arm that cannot fail.
+        check(f":{_moving}" in _out,
+              f"ARM 33a: the fixture produced NO reference tagged `{_moving}`, so the assertion "
+              f"below would pass having checked nothing")
+        check("a MOVING tag" in _out,
+              f"ARM 33a: the floating tag `{_moving}` was printed as an ordinary protected pin. It "
+              f"moves exactly as `latest` does, and checking one spelling misses the other five")
+
     # …and a fleet with no foreign reference prints no such section, rather than an empty one that
     # reads as "nothing needs protecting there".
     plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers())
