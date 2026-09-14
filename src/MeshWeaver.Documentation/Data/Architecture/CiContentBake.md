@@ -1437,3 +1437,55 @@ and both the publish and the assert read that step. A sha with no version tag wa
 a release; the step stops loudly rather than publishing a marker for an invented version.
 Pinned by `PlatformBakeLaneGuard.PlatformBake_ResolvesTheReleaseVersionOnce_AndEveryConsumerReadsIt`.
 
+
+## 🚨 The gate compiles NOTHING — `Modules:RequirePrebuilt` on the seeded mesh
+
+`node-repo-publish-bake.yml` runs two containers: `compile … --output /bake` produces the bake, and
+a second, seeded one (`--seed /bake`) stands a mesh up **as the portal** and gates it against those
+bundles. The step's own comment states the contract — *"a gate running as another host would decline
+every bundle and **compile the tree itself, passing without judging the bytes that ship**"* — and
+`--app /app` closes the wrong-host route into it.
+
+It did not close the other route. A bundle DECLINED on its source fingerprint
+(`PrebuiltAssemblySeeder`, #2813/#3129/#3583) falls through to `DecideAfterStaleDecline`, whose
+`canCompileLocally` input comes from `Modules:RequirePrebuilt` — **absent means OFF, the
+compile-fallback default**. The gate set it nowhere, so a decline dispatched Roslyn.
+
+### What that is worth, counted
+
+MeshWeaver.Plugins' red bake (job 103825681160), over the whole log:
+
+| | |
+|---|---:|
+| `Prebuilt assembly ADOPTED` | 96 |
+| `DECLINED before writing` | 2 |
+| compiles that SUCCEEDED in the seed | **0** |
+| compiles that FAILED in the seed | 2 |
+
+**Nothing has ever compiled successfully in a seeded gate mesh.** The same count across every repo
+that calls this lane, on each one's newest successful publish-bake:
+
+| repo | adopted | declined | seed compiles that succeeded |
+|---|---:|---:|---:|
+| MeshWeaver.Education | 43 | 0 | **0** |
+| MeshWeaver.SocialMedia | 43 | 0 | **0** |
+| MeshWeaver.Manufacturing | 34 | 0 | **0** |
+| MeshWeaver.Crm | 34 | 0 | **0** |
+
+So no caller depends on the gate compiling; adoption is the path that already carries all of them.
+(MeshWeaver.Reinsurance published no successful bake in its newest 25 `main` runs — unmeasured
+rather than measured clean.)
+
+### Why the failure was unreadable
+
+The declined type's verdict was `bundle module version 1.2.6, current 1.2: **Compatible**` — bytes
+explicitly judged safe to serve. `StaleDeclineAction.AdoptBundle` was available and was passed over,
+because `canCompileLocally` said this mesh compiles. The gate then reported 760 × `CS0246`/`CS0103`
+on the type's own declared `shared=@…` sources, and the publication never sealed: ~700 commits of a
+satellite's `main` reached no portal for two days behind a compile that could not have succeeded.
+
+With `Modules__RequirePrebuilt=true` on the seeded container, `DecideAfterStaleDecline` reaches the
+rows it was written for: a compatible bundle is **adopted** — the gate tests the bytes that ship,
+which is its whole purpose — and only a genuinely incompatible bundle, or none at all, becomes
+`Unservable`, said at Critical. A named verdict replaces an unreadable compile failure, and nothing
+that passes today starts failing.
