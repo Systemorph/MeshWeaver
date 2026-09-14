@@ -116,6 +116,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Moved-Node Redirects](NodeRedirects) — keeping links alive after a move
 - [MainNode and Rebasing](MainNodeRebasing) — a `with { Namespace = … }` copy un-lists a node with nothing logged
 - [Write Verdict Totality](WriteVerdictTotality) — a write whose base read ends empty answers nobody, and arms no deadline either
+- [Reading a Base-State Timeout](BaseStateTimeoutCensus) — "no initial state arrived within 30s" has two causes with two different fixes; the census that says which, and how to read one off a running deployment
 - [The Phantom Base After Owner Disposal](PhantomBaseAfterOwnerDisposal) — the owner echoes a merge BEFORE it flushes it, so a "never applied" NACK's re-attempt can find its own unpersisted write in the mirror, diff to nothing and report success
 - [Conditional Writes Across Hubs](ConditionalWritesAcrossHubs) — on a node you do not own the lambda runs on YOUR mirror and ships a diff, so a field it decided not to write is absent from the patch and a concurrent write to it survives
 - [Live Mirrors and the Change Feed](LiveMirrorsAndTheChangeFeed) — a write must not end its own streams

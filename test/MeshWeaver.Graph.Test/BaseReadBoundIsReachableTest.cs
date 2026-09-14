@@ -91,7 +91,7 @@ public class BaseReadBoundIsReachableTest
         observed.Values.Should().BeEmpty("no emission ever carried the node, so there is no base");
         observed.Completed.Should().BeFalse(
             "a live mirror does not end, and a fault is not a completion — that is the whole point");
-        observed.Error.Should().BeOfType<TimeoutException>(
+        observed.Error.Should().BeAssignableTo<TimeoutException>(
             "the bound must measure the wait for a USABLE base; applied upstream of the null-filter "
             + "it was reset by every emission the filter dropped and could never fire, so the write "
             + "raised no terminal at all and its caller parked for the life of the process (#2543)");
@@ -128,7 +128,94 @@ public class BaseReadBoundIsReachableTest
             runFor: TimeSpan.FromSeconds(120));
 
         observed.Values.Should().BeEmpty();
-        observed.Error.Should().BeOfType<TimeoutException>(
+        observed.Error.Should().BeAssignableTo<TimeoutException>(
             "a mirror that says nothing at all was already bounded, and must stay bounded");
+    }
+
+    /// <summary>
+    /// 🚨 ISSUE #1174 — THE FORK. The two faults above are different shapes with different fixes,
+    /// and until now they raised the SAME bare <c>TimeoutException("The operation has timed
+    /// out.")</c> as the inner of the same four-suspect caller sentence. 414 production
+    /// occurrences over five weeks on <c>{user}/_UserActivity/*</c> could therefore not be
+    /// attributed: triage cycled between "RLS rejected the create" and "the silo is starved" with
+    /// nothing in the log able to separate "the mirror carried nothing at all" from "the mirror
+    /// carried frames, none of them the node".
+    ///
+    /// <para>🚨 It also asserts the HONESTY of the zero branch. This seam observes
+    /// <c>ChangeItem</c> frames, NOT the subscribe acknowledgement, and a fresh stream
+    /// <c>Ack()</c>s immediately — before its first <c>Full</c> comes out of hydration
+    /// (<c>JsonSynchronizationStream</c>, #3058). So zero frames does not mean the owner was
+    /// silent, and a message that said so would rule out exactly the causes a reader must still
+    /// consider.</para>
+    ///
+    /// <para>This asserts the two messages DISAGREE and that each names its own half. If the
+    /// census were removed, or counted downstream of the null-filter, both would read "no change
+    /// item at all" and this test goes red on the <c>NotBe</c> and on the count
+    /// <c>Contain</c>.</para>
+    /// </summary>
+    [Fact]
+    public void ASilentMirrorAndAChattyOne_TimeOutWithDIFFERENTMessages()
+    {
+        var silent = Run(
+            _ => Observable.Never<ChangeItem<MeshNode>>(),
+            runFor: TimeSpan.FromSeconds(120));
+
+        // 7 s apart so four emissions land strictly INSIDE the 30 s bound (7/14/21/28) and none
+        // ties with the deadline — the count must be a fact, not a scheduling coincidence.
+        var chatty = Run(
+            s => Observable.Interval(TimeSpan.FromSeconds(7), s).Select(_ => Empty()),
+            runFor: TimeSpan.FromSeconds(120));
+
+        silent.Error.Should().BeAssignableTo<TimeoutException>();
+        chatty.Error.Should().BeAssignableTo<TimeoutException>();
+
+        silent.Error!.Message.Should().Contain("NO change item at all",
+            "a mirror that carried nothing is the fact the census reports for this branch");
+        silent.Error.Message.Should().Contain("does NOT establish",
+            "🚨 and it must SAY it cannot decide. A fresh subscribe is ACKNOWLEDGED BEFORE "
+            + "hydration (JsonSynchronizationStream, #3058), so an owner that acked and then "
+            + "produced no frame is indistinguishable here from one that never answered — this "
+            + "seam sees ChangeItem frames, not acknowledgements. Claiming 'the owner never "
+            + "answered' would send a reader away from a cold data source, an activating per-node "
+            + "hub, or a refused initial read");
+
+        chatty.Error!.Message.Should().Contain("4 change item(s)",
+            "the census is the measurement — four frames landed inside the bound, and the number "
+            + "is what tells a reader the subscription was established and producing");
+        chatty.Error.Message.Should().Contain("view of this path is EMPTY",
+            "THIS is the branch that excludes something: frames are arriving, so the fault is the "
+            + "node's readability at the owner, not routing or activation");
+
+        chatty.Error.Message.Should().NotBe(silent.Error.Message,
+            "🚨 this is the whole of #1174: the two faults used to be indistinguishable in the "
+            + "log, so five weeks of triage could not attribute 414 occurrences to either");
+    }
+
+    /// <summary>
+    /// 🚨 …and NOTHING ELSE gets a census sentence — issue #2387's rule, kept.
+    ///
+    /// <para>A base read is bounded at 30 s, but the terminal that ends it is routinely something
+    /// else: an owner that never answered the <c>SubscribeRequest</c> inside the REQUEST budget
+    /// raises a <see cref="TimeoutException"/> of its own. #2387 is the record of what happens
+    /// when such a terminal is described in the language of the 30 s wait — the boot-install
+    /// failures claimed a wait that never happened. Only the exception the base read itself
+    /// raised carries a measurement, so only that one may be described.</para>
+    /// </summary>
+    [Fact]
+    public void AForeignTimeout_GetsNoCensusSentence()
+    {
+        MeshNodeStreamHandle.BaseStateObservation(new TimeoutException("The operation has timed out."))
+            .Should().BeEmpty(
+                "a TimeoutException this base read did not raise carries no census, and "
+                + "describing it as though it did is exactly #2387");
+
+        MeshNodeStreamHandle.BaseStateObservation(new InvalidOperationException("boom"))
+            .Should().BeEmpty("a non-timeout terminal is not a base-read census either");
+
+        MeshNodeStreamHandle.BaseStateObservation(
+                new MeshNodeStreamHandle.BaseStateTimeoutException(0, -1))
+            .Should().Contain("NO change item at all",
+                "…while the one the base read DID raise must still be described — otherwise this "
+                + "test would pass with the whole feature deleted");
     }
 }
