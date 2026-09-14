@@ -46,42 +46,43 @@ public static class MarkdownOverviewLayoutArea
             ? Observable.Return<NodeNavigation?>(null)
             : SuppliedNavigation(host);
 
+        // Core's default when nothing is supplied: the tree under the page's index root
+        // (DefaultNodeNavigation) — the same index on every page of a document tree, the reader's
+        // position marked. Not opened for an embed either.
+        var defaultStream = hideHeader
+            ? Observable.Return<NodeNavigation?>(null)
+            : DefaultNodeNavigation.Observe(host);
+
         // The node's PARTITION ROOT, for the header icon's package-mark inheritance (#2075 item 2).
         // Starts null and never gates: a page that inherits nothing renders exactly as before.
         var partitionRootStream = host.Workspace.ObservePartitionRoot(host.Hub.Address.Path);
 
         return host.Workspace.GetMeshNodeStream()
-            .CombineLatest(permissionsStream, host.ObserveChildren("is:main"), suppliedStream,
+            .CombineLatest(permissionsStream, defaultStream, suppliedStream,
                 partitionRootStream,
-                (node, perms, children, supplied, partitionRoot) =>
+                (node, perms, defaultNavigation, supplied, partitionRoot) =>
             {
                 var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
                 var canEdit = perms.HasFlag(Permission.Update);
                 var content = (UiControl)BuildOverview(host, node, canComment, canEdit, hideHeader, partitionRoot);
 
-                // A markdown node with sub-nodes gets a collapsible side menu of them. Skipped for
-                // @@ embeds and when there are none; internal satellites (_Access, _Thread, …) excluded.
+                // A markdown page in a tree gets the tree's index beside it. Skipped for @@ embeds
+                // and when there is nothing to index (no sub-nodes, no siblings). A module's own
+                // index wins over the default; the default keeps docs and spaces looking the same
+                // on their root page and gives every sub-page the index it used to lose.
                 if (hideHeader)
                     return (UiControl?)content;
-                var subNodes = OrderSubNodes(
-                    children.Where(c => !LastSegment(c.Path).StartsWith('_')));
-                // Nothing supplied → core's default child list, unchanged — which is why docs and
-                // spaces are untouched by this.
-                return (UiControl?)(subNodes.Count == 0 && supplied is not { Entries.Count: > 0 }
-                    ? content
-                    : BuildWithSubNodeNav(host, node, subNodes, content, supplied));
+                var navigation = supplied is { Entries.Count: > 0 } ? supplied : defaultNavigation;
+                return (UiControl?)(navigation is { Entries.Count: > 0 }
+                    ? BuildWithSubNodeNav(host, content, navigation)
+                    : content);
             });
-    }
-
-    private static string LastSegment(string path)
-    {
-        var i = path.LastIndexOf('/');
-        return i < 0 ? path : path[(i + 1)..];
     }
 
     // Sub-nodes for the side menu, ordered by the node's declared Order (nulls last, per the
     // MeshNode.Order contract) then by name — mirroring the graph navigator and every other child
-    // list in the codebase. internal for unit testing (InternalsVisibleTo MeshWeaver.Graph.Test).
+    // list in the codebase. Every level of DefaultNodeNavigation orders with this. internal for
+    // unit testing (InternalsVisibleTo MeshWeaver.Graph.Test).
     internal static List<MeshNode> OrderSubNodes(IEnumerable<MeshNode> children) =>
         children
             .OrderBy(c => c.Order ?? int.MaxValue)
@@ -178,24 +179,24 @@ public static class MarkdownOverviewLayoutArea
     }
 
     /// <summary>
-    /// Wraps the page content with the collapsible left-hand NavMenu: the navigation a module
-    /// supplied for this page when there is one, otherwise core's default list of the node's own
-    /// sub-nodes.
+    /// CSS class core stamps on the index pane, so the portal's shell can recognise it: the shell
+    /// hosts the pane's collapse toggle in its top bar (beside the logo, the way a browser's sidebar
+    /// button sits) and persists the collapsed state across pages. A shell that does not know the
+    /// class leaves the splitter bar's own collapse chevron in charge.
     /// </summary>
-    private static UiControl BuildWithSubNodeNav(
-        LayoutAreaHost host, MeshNode? node, IReadOnlyList<MeshNode> subNodes, UiControl content,
-        NodeNavigation? supplied = null)
+    public const string NavigationPaneClass = "nav-rail-pane";
+
+    /// <summary>
+    /// Wraps the page content with the left-hand index: the navigation a module supplied for this
+    /// page when there is one, otherwise core's default tree (<see cref="DefaultNodeNavigation"/>).
+    /// Either way the same rail renders it, so a course and a document tree read alike.
+    /// </summary>
+    private static UiControl BuildWithSubNodeNav(LayoutAreaHost host, UiControl content, NodeNavigation navigation)
     {
-        // A module that OWNS this page supplied the whole index — rendered by the shared rail, whose
-        // shape is pinned by SuppliedNavigationRail's tests. Nothing supplied → core's default list
-        // of the node's own children, unchanged, so docs and spaces are untouched by this.
+        // Rendered by the shared rail, whose shape is pinned by SuppliedNavigationRail's tests.
         // The nav renders NON-collapsible: the Splitter below owns both resize and collapse.
-        var nav = supplied is { Entries.Count: > 0 }
-            ? SuppliedNavigationRail.Render(
-                SuppliedNavigationRail.Plan(supplied, host.Hub.Address.ToString()), collapsible: false)
-            : Controls.NavMenu
-                .WithSkin(s => s.WithCollapsible(false))
-                .WithNavGroup(BuildChildrenGroup(host, node, subNodes));
+        var nav = SuppliedNavigationRail.Render(
+            SuppliedNavigationRail.Plan(navigation, host.Hub.Address.ToString()), collapsible: false);
 
         // A SPLITTER, not a Stack — the same idiom as the Settings pages, and for the same reason:
         // the divider is a real, draggable resize handle (FluentMultiSplitter, client-side), and
@@ -209,32 +210,11 @@ public static class MarkdownOverviewLayoutArea
             // WithId, not WithArea: the addressable area path is {context}/{Id} — PrepareRendering
             // OVERWRITES Area from Id, so naming Area here would leave the pane on an auto id and
             // break every consumer addressing …/Navigation (Copilot on #2098).
-            .WithView(nav, x => x.WithId(NavigationArea)
+            .WithView(nav, x => x.WithId(NavigationArea).WithClass(NavigationPaneClass)
                 .AddSkin(new SplitterPaneSkin().WithSize("260px").WithMin("180px").WithMax("480px").WithCollapsible(true)))
             .WithView(
                 Controls.Stack.WithStyle("min-width: 0; padding-left: 16px;").WithView(content),
                 skin => skin.WithSize("*"));
-    }
-
-    // Core's default: the node's own children, one flat list.
-    private static NavGroupControl BuildChildrenGroup(
-        LayoutAreaHost host, MeshNode? node, IReadOnlyList<MeshNode> subNodes)
-    {
-        var group = new NavGroupControl(node?.Name ?? host.Localize("nav.contents"))
-            .WithSkin(s => s.WithExpanded(true));
-        // The heading shows the DOCUMENT's icon, same resolution as its children below — without it
-        // the doc title was the one line of the index with no icon.
-        if (MeshNodeImageHelper.ResolveNodeIcon(node) is { } groupIcon)
-            group = group.WithIcon(groupIcon);
-        foreach (var child in subNodes)
-        {
-            var href = $"/{child.Path}";
-            var icon = MeshNodeImageHelper.ResolveNodeIcon(child);
-            group = icon is null
-                ? group.WithView(new NavLinkControl(child.Name ?? child.Id, null, href))
-                : group.WithView(new NavLinkControl(child.Name ?? child.Id, icon, href));
-        }
-        return group;
     }
 
     // partitionRoot: the node's partition root, when the caller holds it — the header icon inherits

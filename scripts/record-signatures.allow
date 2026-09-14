@@ -26,3 +26,4 @@
 # for ~40 minutes every C#-touching pull request in the fleet was red on somebody else's merge.
 # See Doc/Architecture/TransitionalAllowEntries.
 PrebuiltBundleSweepPlan  #3749 — the record shipped in #3741 hours earlier and is in no released image or module; 2 references org-wide, both core (definition + its test); no in-mesh source names it
+RailGroup  #4321 — SuppliedNavigationRail.RailGroup: parameter 4 Links (IReadOnlyList<RailLink>) becomes Items (IReadOnlyList<RailItem>) so a group can nest a group; constructed ONLY by core (SuppliedNavigationRail.Plan) — no compiled module, no in-mesh source and no satellite constructs it (grep across Plugins, SocialMedia, Reinsurance, Manufacturing, Education: Edu consumes NodeNavigation, never RailGroup); Links stays as a read-only filter property
