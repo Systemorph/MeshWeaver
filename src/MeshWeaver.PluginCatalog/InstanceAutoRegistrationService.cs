@@ -8,6 +8,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -1254,30 +1255,7 @@ public sealed class InstanceAutoRegistrationService(
                         string.Join(", ", sourceNames));
             return Observable.Return(Unit.Default);
         }).SelectMany(_ => sources
-            .Select(source => ListWithRefusals(source)
-                .Take(1)
-                // 🚨 Stamp the source name HERE, not only in the registry's HTTP merge. Source-
-                // scoped matching reads PackageManifest.Source, and until now only
-                // PluginRegistryEndpoints set it — so a REGISTRY instance, which reads its own
-                // configured sources directly with no HTTP hop, saw Source == null on every
-                // package and matched nothing. The result was a healthy deploy that installed
-                // zero plugins while reporting a green boot. The lister always knows which source
-                // it read from, so that is where the stamp belongs; an already-stamped value
-                // (arriving over the wire) is left alone.
-                // The WHOLE listing is carried forward, not just the selected packages: a selected
-                // package's requirements are resolved against the full catalog below, and a
-                // dependency that is neither pre-installed nor pattern-matched exists only here.
-                .Select(packages => (Candidates: packages
-                    .Select(p => string.IsNullOrEmpty(p.Source) ? p with { Source = source.Name } : p)
-                    .Select(p => new InstallCandidate(source, p))
-                    .ToList(), Failed: false))
-                .Catch((Exception exception) =>
-                {
-                    logger.LogWarning(exception,
-                        "[DefaultInstall] listing {Name} @ {Ref} failed — its packages are skipped "
-                        + "this boot", source.Name, source.GitRef);
-                    return Observable.Return((Candidates: new List<InstallCandidate>(), Failed: true));
-                }))
+            .Select(ListAtProvenRef)
             .ToObservable()
             .Concat()
             .ToList()
@@ -1380,6 +1358,193 @@ public sealed class InstanceAutoRegistrationService(
                     })
                     .ToList(), listingIncomplete);
             }));
+
+    /// <summary>
+    /// One source's listing, at the ref this UNATTENDED lane is allowed to read — the commit the
+    /// seal names for the source's repository when this instance runs a publication of it, the
+    /// configured ref otherwise — and a HOLD when the seal cannot yet say which
+    /// (Systemorph/MeshWeaver#4259).
+    ///
+    /// <para>🚨 <b>The boot default install was the last unattended branch-tip import, and it was
+    /// writing partitions a sync entry already held at the sealed commit.</b> The Sync-Ref Contract
+    /// (<c>Doc/Architecture/SyncRefContract</c>) says an unattended import reads a commit a build
+    /// PROVED; only a human clicking "Update to latest" reads a branch. Every GitSync path honours
+    /// it, and <c>ModuleDiscoveryService.FirstImport</c> was pinned to the seal for exactly that
+    /// reason (MeshWeaver#3845). This lane still listed <c>PluginCatalog:Sources:N:Ref</c> —
+    /// <c>main</c> on every deployment — resolved at fetch time on every boot, and stamped
+    /// <c>installedFromRef: main</c> on the record.</para>
+    ///
+    /// <para>Measured on memex.meshweaver.cloud, 2026-09-13. <c>Hosting/_GitSync</c> (the same
+    /// repository, <c>subdirectory: Hosting</c>) is held by <see cref="SealedSyncGate"/> to
+    /// <c>627fb3cd</c>, the Plugins commit sealed for the running framework identity — a 2026-09-12
+    /// tree. The boot install put <c>Plugins/Hosting</c> 1.19.0 (a 2026-09-13 tree) into the same
+    /// partition at 08:12Z. On the next boot the bake declined the Hosting bundles on their source
+    /// fingerprint, <c>SealedSyncReconcile</c> read that as "the live sources have drifted from the
+    /// commit they claim" — which they had — and re-imported the partition at <c>627fb3cd</c> at
+    /// 21:56:05Z, pruning the eleven <c>Triage*</c> nodes that exist only in the newer tree. The
+    /// boot install then re-applied <c>main</c> (1.19.16) as a diff against its own record, which
+    /// declared those files unchanged, so they stayed absent and eight NodeTypes sat at
+    /// <c>compilationStatus: Error</c>. Two unattended writers of one partition with two commit
+    /// policies: each boot the seal-bound one removes what the tip-bound one added.</para>
+    ///
+    /// <para>So this lane now asks the SAME question the first import asks —
+    /// <see cref="SealedSyncGate.DecideFirstImport"/> over the seal on this pod's disk — and lands
+    /// on the same answer, so the two writers of a partition agree on its tree. Three outcomes, kept
+    /// apart on purpose: a repository this instance runs no publication of keeps the configured ref
+    /// (an Education or course repo on a registry, a local checkout, a registered
+    /// <see cref="IPackageSource"/> with no repository — the residue the contract already names);
+    /// a sealed commit is listed AND installed at, so the record's <c>installedFromRef</c> carries
+    /// the sha; a seal that is torn, at an unknown commit, or self-contradictory HOLDS the source
+    /// this boot — its packages are neither installed at the branch (the very shape being removed)
+    /// nor reported as failed (a retry cannot change a seal; the seal landing can), and the pass
+    /// says so at Warning and marks the listing incomplete so its silence is not read as "that
+    /// source refuses nothing" (#4097).</para>
+    ///
+    /// <para>🚨 <b>A hold releases at the NEXT PROCESS START, everywhere.</b> This lane runs once
+    /// per boot, after the bake settles, and subscribes to neither
+    /// <c>PublicationSealArrivalService</c> nor <c>SealedPublicationSyncReconciler</c> —
+    /// deliberately (no timer, no retry, no watchdog). The sync side of the same partition DOES
+    /// follow a seal that arrives mid-process (MeshWeaver#4209); the two do not fight in between,
+    /// because this lane writes nothing again until it runs again, and then both are on the new
+    /// seal.</para>
+    /// </summary>
+    /// <param name="configured">The source as configured.</param>
+    /// <returns>The candidates listed at the proven ref, or an empty, FAILED listing for a held
+    /// source; the tuple shape every other listing outcome uses.</returns>
+    private IObservable<(List<InstallCandidate> Candidates, bool Failed)> ListAtProvenRef(
+        ConfiguredPackageSource configured)
+        => ProvenRef(configured)
+            .Catch((Exception exception) =>
+            {
+                // An unobserved seal is not a clean one: a read that faulted holds the source,
+                // exactly as a torn seal does — never a fall-through to the branch.
+                logger.LogWarning(exception,
+                    "[DefaultInstall] the seal for {Name} could not be read — its packages are "
+                    + "held this boot and re-attempted at the next process start; an unattended "
+                    + "install never resolves the branch instead (Doc/Architecture/SyncRefContract).",
+                    configured.Name);
+                return Observable.Return(new ProvenSource(configured, exception.Message, exception.Message));
+            })
+            .SelectMany(proven => ListAtProvenRef(configured, proven));
+
+    private IObservable<(List<InstallCandidate> Candidates, bool Failed)> ListAtProvenRef(
+        ConfiguredPackageSource configured, ProvenSource proven)
+    {
+        if (proven.HoldReason is { } hold)
+        {
+            logger.LogWarning(
+                "[DefaultInstall] {Name} is HELD this boot — {Reason}. Its packages are not "
+                + "asserted this boot; this lane runs once per boot, so they are re-attempted at "
+                + "the next process start after the seal lands — an unattended install never "
+                + "resolves the branch instead (Doc/Architecture/SyncRefContract).",
+                configured.Name, hold);
+            return Observable.Return((Candidates: new List<InstallCandidate>(), Failed: true));
+        }
+        var source = proven.Source;
+        if (!ReferenceEquals(source, configured))
+            logger.LogInformation(
+                "[DefaultInstall] {Name} is listed and installed at {Ref}, not '{Configured}' — {Reason}",
+                source.Name, source.GitRef, configured.GitRef, proven.Reason);
+        return ListWithRefusals(source)
+            .Take(1)
+            // 🚨 Stamp the source name HERE, not only in the registry's HTTP merge. Source-
+            // scoped matching reads PackageManifest.Source, and until now only
+            // PluginRegistryEndpoints set it — so a REGISTRY instance, which reads its own
+            // configured sources directly with no HTTP hop, saw Source == null on every
+            // package and matched nothing. The result was a healthy deploy that installed
+            // zero plugins while reporting a green boot. The lister always knows which source
+            // it read from, so that is where the stamp belongs; an already-stamped value
+            // (arriving over the wire) is left alone.
+            // The WHOLE listing is carried forward, not just the selected packages: a selected
+            // package's requirements are resolved against the full catalog below, and a
+            // dependency that is neither pre-installed nor pattern-matched exists only here.
+            .Select(packages => (Candidates: packages
+                .Select(p => string.IsNullOrEmpty(p.Source) ? p with { Source = source.Name } : p)
+                .Select(p => new InstallCandidate(source, p))
+                .ToList(), Failed: false))
+            .Catch((Exception exception) =>
+            {
+                logger.LogWarning(exception,
+                    "[DefaultInstall] listing {Name} @ {Ref} failed — its packages are skipped "
+                    + "this boot", source.Name, source.GitRef);
+                return Observable.Return((Candidates: new List<InstallCandidate>(), Failed: true));
+            });
+    }
+
+    /// <summary>
+    /// The seal's answer for one configured source, as the source to list — pinned to the sealed
+    /// commit, left as configured, or held. Cold; the decision is pure once the seal is read.
+    ///
+    /// <para>🚨 The seal is read on the FileSystem <see cref="IIoPool"/>, never inline. The
+    /// published-bundle root is a mounted share, and a read of it that is not on the pool is
+    /// invisible to <see cref="IoPoolRegistry"/>'s teardown drain — it can still be running after
+    /// the mesh scope is gone, the straggler the pool exists to prevent — and would block whatever
+    /// thread the install chain happens to be on while the share is slow. Same shape, same pool as
+    /// <c>PublicationSealArrivalService</c>. A mesh with a published root but no pool registry is
+    /// not composed the way this needs; it keeps the configured ref and says so, rather than
+    /// running untracked I/O.</para>
+    /// </summary>
+    /// <param name="source">The source as configured.</param>
+    /// <returns>A cold observable emitting exactly once.</returns>
+    internal IObservable<ProvenSource> ProvenRef(ConfiguredPackageSource source)
+    {
+        // A local checkout is a working tree this portal MIRRORS — there is no commit to pin and
+        // the operator is the authority (MeshWeaver#3359). A source with no repository path (a
+        // registered IPackageSource, a remote registry) names no repository a seal could be
+        // attributed to. Both keep today's behaviour, by construction rather than by fall-through.
+        if (source.LocalCheckout || string.IsNullOrWhiteSpace(source.RepoPath))
+            return Observable.Return(new ProvenSource(source, null, "no repository to attribute a seal to"));
+        var (owner, name) = ModuleDiscovery.SplitRepo(source.RepoPath);
+        if (owner.Length == 0 || name.Length == 0)
+            return Observable.Return(new ProvenSource(source, null,
+                $"'{source.RepoPath}' is not an owner/name repository, so no seal is attributable"));
+        var publishedRoot = hub.ServiceProvider.GetService<IConfiguration>()?[ShippedPrebuiltBundles.PublishedRootConfigKey];
+        if (string.IsNullOrWhiteSpace(publishedRoot))
+            return Observable.Return(new ProvenSource(source, null,
+                "this installation has no published bundle root, so no publication is sealed here"));
+        if (hub.ServiceProvider.GetService<IoPoolRegistry>() is not { } pools)
+        {
+            logger.LogWarning(
+                "[DefaultInstall] no IoPoolRegistry is registered, so the seal under {Root} cannot be "
+                + "read on a drained pool — not reading it; {Name} is listed at its configured ref "
+                + "'{Ref}'.", publishedRoot, source.Name, source.GitRef);
+            return Observable.Return(new ProvenSource(source, null, "the seal was not read: no IoPoolRegistry"));
+        }
+        var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
+        var repo = new RepoIdentity(owner, name);
+        return pools.Get(IoPoolNames.FileSystem)
+            .InvokeBlocking(_ => SealedPublicationIndex.ReadFor(publishedRoot, identity, logger))
+            .Select(sealedForThisIdentity =>
+                ApplyPlan(source, SealedSyncGate.DecideFirstImport(repo, sealedForThisIdentity, identity)));
+    }
+
+    /// <summary>
+    /// The plan → source mapping, pure and pinnable offline: a plan naming a commit re-refs the
+    /// source to it; a plan resolving the branch leaves the source untouched (the same instance, so
+    /// a caller can tell "pinned" from "as configured" without comparing refs); a hold carries its
+    /// reason and no source to list.
+    /// </summary>
+    /// <param name="source">The source as configured.</param>
+    /// <param name="plan">The seal's decision for its repository.</param>
+    internal static ProvenSource ApplyPlan(ConfiguredPackageSource source, SealedSyncGate.FirstImportPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(plan);
+        if (!plan.Proceed)
+            return new ProvenSource(source, plan.HoldReason, plan.Reason);
+        if (plan.AtBranchTip)
+            return new ProvenSource(source, null, plan.Reason);
+        return new ProvenSource(source with { GitRef = plan.Commit! }, null, plan.Reason);
+    }
+
+    /// <summary>
+    /// A configured source after the seal has spoken: the source to list (pinned or as configured),
+    /// or — when <paramref name="HoldReason"/> is set — a source held this boot.
+    /// </summary>
+    /// <param name="Source">The source to list; ignored when held.</param>
+    /// <param name="HoldReason">Why nothing may be listed this boot, or null.</param>
+    /// <param name="Reason">Log copy for whichever of the three this is — always populated.</param>
+    internal sealed record ProvenSource(ConfiguredPackageSource Source, string? HoldReason, string Reason);
 
     /// <summary>
     /// One source's listing WITH the registry's plan-tier refusals folded in as refused rows

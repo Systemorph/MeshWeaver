@@ -190,6 +190,8 @@ activity finished, CI on both repositories was green. A per-NodeType `Error` is 
 | `GitHubActivityExtensions.UpdateToProvenCommitFromGitHub` | `GitHubWebhookProcessor` on a green `workflow_run` | the run's **`head_sha`** | the tree CI proved, and the tree the candidates were selected against |
 | `GitHubActivityExtensions.ReimportFromGitHub` | a person names a commit | that **commitish** | stated by the caller |
 | `PluginUpdateWatcher` → `PackageUpdateReconciler` | the same green build, via the `BuildCompletion` node | `BuildCompletion.HeadSha` | already correct before #1430 — this is the path GitSync now agrees with |
+| `ModuleDiscoveryService.FirstImport` | AutoSync provisions a new Space (boot, or a green build) | the commit **sealed** for this identity; the branch only for a repository this instance runs no publication of | `SealedSyncGate.DecideFirstImport` — MeshWeaver#3845 hole 2, below |
+| `InstanceAutoRegistrationService.InstallDefaults` — the **boot default install** (`preInstalled`, `InstallByDefault`, feature flags) | every boot, after the bake settles | the commit **sealed** for this identity; `PluginCatalog:Sources:N:Ref` only for a repository this instance runs no publication of; **held** while that repository's seal is torn | the same `DecideFirstImport`, since MeshWeaver#4259 — see "The lane the closure missed", below |
 
 Two consumers read the same fact — "repo X built green at sha Y". The package path always installed
 at Y. The GitSync path recorded Y, filtered on Y, and then fetched the branch. Making them agree is
@@ -237,7 +239,9 @@ had at least compiled. That is a different question — *what a publication cont
 instances may adopt it* — tracked separately (MeshWeaver.Plugins#1438, MeshWeaver#3538). This page is
 only about which commit's sources an instance receives.
 
-**The last unattended branch-tip import is closed — by a pin the residue's own rationale overlooked.**
+**The AutoSync first import is closed — by a pin the residue's own rationale overlooked.** (This
+paragraph once opened with "the last unattended branch-tip import is closed". It was not the last;
+the boot default install was still one, and the section after this one is what it cost.)
 `ModuleDiscoveryService.FirstImport` — the AutoSync provisioning path — used to bring a newly created,
 still-empty Space to `main`. It was left that way on purpose, and the reasoning was sound as far as it
 went: *a consumer instance that never receives GitHub webhooks has no `BuildCompletion` record to pin
@@ -276,6 +280,84 @@ operator reading it knows which event to wait for.
 nor a last-sync commit, so both commit-attribution legs of `SealedSyncGate.BelongsTo` have nothing to
 compare against — a seal predating that marker therefore reads as unattributable and keeps today's
 behaviour. Unattributable is never a guess in either direction. `MeshWeaver#3845` hole 2.
+
+## The lane the closure missed: the boot default install (MeshWeaver#4259)
+
+The table above had one unattended importer missing from it, and it was the one that runs on
+**every boot of every deployment**: `InstanceAutoRegistrationService.InstallDefaults`, which installs
+the `preInstalled` baseline, the operator's `InstallByDefault` patterns and the environment's
+feature-flag packages. It listed each configured source at `PluginCatalog:Sources:N:Ref` — `main` on
+every fleet record — resolved at fetch time, and stamped `installedFromRef: main` on the install
+record. That is the shape this page exists to remove, and nothing on this page named it.
+
+**Why it mattered is that a partition can have two unattended writers.** On memex.meshweaver.cloud
+the `Hosting` partition is written by both `Hosting/_GitSync` (MeshWeaver.Plugins, `subdirectory:
+Hosting`, created 2026-08-19T10:43Z by AutoSync) and the `Plugins/Hosting` install record (created
+2026-08-19T14:27Z, three hours later, by the boot install of `preInstall: Plugins/*`).
+`ModuleDiscoveryService` steps over a module that already has an install record; the installer had
+no reciprocal rule, so both stayed. Once `SealedSyncGate` landed, the two disagreed about the tree:
+
+```
+2026-09-13
+08:09:48Z  Hosting/_GitSync imports at 627fb3cd — the Plugins commit SEALED for framework
+           sd608997 (the image's 2026-09-12 build). lastSyncCommitSha = 627fb3cd.
+08:12:26Z  The boot install lists Plugins@main → Hosting 1.19.0 (a 2026-09-13 tree: the Triage
+           types), writes eleven Source/Test nodes 627fb3cd does not have, stamps the record
+           v93/v94 with installedFromRef: main.
+08:12:35Z  Hosting/TriageStatus compiles Succeeded from those nodes (its Release node names them).
+21:55:55Z  Next boot. The bake declines the Hosting bundles on their source fingerprint — the
+           live sources are 1.19.0's, the bundles were baked from 627fb3cd — so
+           SealedSyncReconcile answers ReconcileAtSealedCommit ("the live sources have drifted
+           from the commit they claim; re-importing at it"): the sync rewrites
+           PlatformBuildInboxWatcher and DeploymentTestsArea to 627fb3cd's content and PRUNES the
+           eleven nodes. lastSyncedAt = 21:56:05.97Z, same commit.
+21:56:07Z  Hosting/TriageStatus: MISSING SOURCES 2 of 2 → compilationStatus: Error.
+22:03:03Z  The boot install lists Plugins@main again → 1.19.16, diffs it against ITS OWN record
+           (1.19.0): two changed files. The pruned eleven are declared unchanged, so they are not
+           fetched. Record v95, installedFromRef: main. Eight Hosting NodeTypes stay at Error.
+```
+
+Every reading is from `get_versions` on the two records and the Release nodes; the sealed commit's
+tree was confirmed in the repository (`627fb3cd` carries no `Triage*` file and its
+`PlatformBuildInboxWatcher.cs` does not reference `TriageIntake`, which is why the 21:58:01Z compile
+of `Hosting/Deployment` succeeded from thirteen sources and the 22:03Z one failed from fourteen).
+Note what each half did *correctly*: the sync obeyed the seal, and the reconciler's "drifted from
+the commit they claim" was a true statement. The drift was the other writer.
+[Declared Is Not Landed](../DeclaredIsNotLanded) closed the *persistence* half — an update now
+restores a declared node that is absent — and on its own that would have turned this into an
+every-boot flap: sync prunes, install restores, bake declines, sync prunes.
+
+**The fix is the rule, applied to the lane that had missed it.** The boot install now asks
+`SealedSyncGate.DecideFirstImport` per configured git source — the very decision the first import
+takes — and lists *and* installs at its answer:
+
+| what the seal says for the source's repository | what the boot install does |
+|---|---|
+| no publication of it is sealed for this identity | the configured ref — the residue's case, unchanged (a course repo on a registry, a local checkout, a registered `IPackageSource` with no repository) |
+| one sealed commit, attributed by the `repository.txt` marker | list and install at that commit; the record's `installedFromRef` carries the sha |
+| torn, at an unknown commit, or two seals disagreeing | **hold the source this boot** — nothing installed at the branch instead, the pass marks its listing incomplete (#4097) and says which seal it waits for |
+
+So on the instance above every unattended writer of `Hosting` lands on `627fb3cd` until the image
+rolls, and when it rolls the seal moves them together. A registry still *serves* its sources at the
+configured ref over `/api/plugins` — that is a listing for a person to install from, and the
+consumer's own boot lane applies this rule on its side when it can attribute a seal.
+
+🚨 **A hold here releases at the NEXT PROCESS START — everywhere, not only on a webhook-less
+instance.** That is a narrower condition than the first import's: the boot lane runs once per boot,
+after the bake settles, and subscribes to neither `PublicationSealArrivalService` nor
+`SealedPublicationSyncReconciler`, deliberately (no timer, no retry, no watchdog — the class's own
+rule). A seal that completes mid-process is therefore installed at the next boot, and the log line
+says so in those words. The sync side of the same partition *does* follow that mid-process arrival
+(#4209), and the two do not fight in between: the boot lane writes nothing again until it runs
+again, and then both are on the new seal. The hold is deliberately not a failure — a retry cannot
+change a seal, the seal landing can — so it is neither ledgered as failed nor re-attempted in a loop.
+
+🚨 **The seal is read on the FileSystem `IIoPool`, never inline** — the published root is a mounted
+share, and a read of it off the pool is invisible to the registry's teardown drain and blocks
+whatever thread the install chain is on while the share is slow; `PublicationSealArrivalService`
+reads it the same way. A read that faults holds the source — an unobserved seal is not a clean one —
+and a mesh that has a published root but no pool registry keeps the configured ref and says so,
+rather than running untracked I/O.
 
 **Out-of-order builds can move a Space backwards.** Two green builds of one branch can finish out of
 order, so a later webhook may name an earlier commit — and it is imported, not skipped: GitHub's
