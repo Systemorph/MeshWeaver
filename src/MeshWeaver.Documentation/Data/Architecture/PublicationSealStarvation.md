@@ -178,11 +178,29 @@ lifetime**. The reconciler designed for exactly this ordering had one caller,
 `ShippedPrebuiltBundles.SeedPublishedRoot`, at `ApplicationStarted`.
 
 The trigger is now the **fact**, never a timer: the publishing lane already announces each sealed
-publication in the mesh as `Hosting/PlatformBuilds/<source>`, and that write is relayed post-commit
-into every replica through `IMeshInvalidationFeed`. `PublicationSealArrivalService` listens to it,
-re-reads `SealedPublicationIndex` for this identity on the bounded file-system pool, and runs the
-same reconcile the boot sweep runs. No poller, no watchdog, no resubscribe loop, no retry — an event
-that already existed and was simply not listened to.
+publication in the mesh as `Hosting/PlatformBuilds/<source>`.
+`PublicationSealArrivalService` listens for that write, re-reads `SealedPublicationIndex` for this
+identity on the bounded file-system pool, and runs the same reconcile the boot sweep runs. No
+poller, no watchdog, no resubscribe loop, no retry — an event that already existed and was simply
+not listened to.
+
+🚨 **It listens on the LOGICAL feed (`IMeshChangeFeed`), not `IMeshInvalidationFeed`, and that
+choice is the whole defence against an import storm.** The boundary is the one
+[Durable Streams via Mesh Nodes](/Doc/Architecture/DurableStreamsViaMeshNodes) states: cache invalidators are
+idempotent and deliberately run in **every** replica, while logical subscribers retain the
+publisher's **single** delivery precisely because they do things like send mail or sync an
+instance. A reconcile dispatches a GitHub fetch and an import, so it is a logical effect: on the
+invalidation feed, N replicas would each fetch and import the same tree, and the gate's idempotence
+only applies *after* one import has written. One announcement, one reconcile, fleet-wide.
+
+Two consequences of that seam worth knowing before reading an instrument:
+
+- the reconcile runs **in the replica that wrote the announcement**, i.e. the one that handled the
+  webhook — not in all of them. The import lands in shared storage, so once is right;
+- but `/health`'s `publication-seal` reading is **per replica**, recorded by that replica's own boot
+  sweep and its own deliveries. Two replicas of one instance can therefore print different hold sets
+  for a while, and a single `/health` call samples one replica you did not choose. Read it with the
+  same denominator discipline every other `/health` entry needs.
 
 It hands the reconciler an **empty declined-type set** on purpose, so only `ImportAtSealedCommit`
 can fire. The `ReconcileAtSealedCommit` arm exists for types the adoption sweep declined on their
