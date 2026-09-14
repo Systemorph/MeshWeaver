@@ -1263,6 +1263,44 @@ internal static class NodeTypeCompilationHelpers
     }
 
     /// <summary>
+    /// 🚨 #4280 — fires once for each adopted <c>@@</c>-include the owner has NOT resolved as
+    /// present, when that include LANDS. Read off the hub's own record
+    /// (<see cref="NodeTypeDefinition.AdoptedSourceIncludes"/> minus
+    /// <see cref="NodeTypeDefinition.CurrentSourceIncludes"/>), re-derived whenever the record
+    /// changes, and watched through a synced <c>path:</c> query per include — empty while the node
+    /// is absent, the node when it lands — never a point read on an absent path (the storm shape
+    /// <c>MeshNodeStreamCache</c>'s breaker exists for). Nothing missing ⇒ nothing subscribed. The
+    /// sources watcher merges these arrivals into its own trigger so the fingerprint stage re-runs
+    /// over the current source set; see the call site for why the source queries cannot see them.
+    /// </summary>
+    internal static IObservable<Unit> AdoptedIncludeArrivals(
+        IWorkspace workspace,
+        IObservable<MeshNode?> ownStream,
+        AccessService? accessService,
+        string hubPath)
+        => ownStream
+            .Select(node => node?.Content as NodeTypeDefinition)
+            .Select(d => d is null
+                ? (IReadOnlyList<string>)[]
+                : SourceIncludesNotYetLive(d.AdoptedSourceIncludes, d.CurrentSourceIncludes))
+            .DistinctUntilChanged(missing => string.Join("\n", missing))
+            .Select(missing => missing.Count == 0
+                ? Observable.Never<Unit>()
+                // Same System scope the source-set read takes, for the same reason: a per-user read
+                // of a node UNDER this NodeType routes a permission check back into this activation.
+                : Observable.Using(
+                    () => accessService?.ImpersonateAsSystem()
+                          ?? System.Reactive.Disposables.Disposable.Empty,
+                    _ => missing
+                        .Select(path => workspace
+                            .GetQuery($"nodetype-include-arrival:{hubPath}:{path}", $"path:{path}")
+                            .Where(items => items.Any())
+                            .Take(1)
+                            .Select(_ => Unit.Default))
+                        .Merge()))
+            .Switch();
+
+    /// <summary>
     /// <see cref="CanJudgeAdoption(NodeTypeDefinition, IReadOnlyDictionary{string, long})"/> for a
     /// caller whose producer fingerprint is NOT on the record yet.
     ///
@@ -1984,6 +2022,20 @@ internal static class NodeTypeCompilationHelpers
                 // here; the hash is what costs, and it is paid only where it is used.
                 return (Snapshot: (IReadOnlyDictionary<string, long>)snap, Nodes: sources);
             })
+            // 🚨 #4280 — an `@@`-include ARRIVAL re-runs the fingerprint stage over the SAME source
+            // set. The stages above fire on the type's source QUERIES, and an include is matched by
+            // none of them: it lands as its own node, so its arrival would otherwise change nothing
+            // this watcher observes, and an adoption deferred on it (CanJudgeAdoption's include
+            // witness) would wait for an unrelated edit or a restart — the residue
+            // NodeTypeSourceFingerprint names. So while the record names adopted includes the
+            // owner has not resolved as present, each of them is watched through a synced
+            // `path:` query (empty while absent, the node when it lands — never a point read on
+            // an absent path, which is the storm shape), and its first landing re-emits the
+            // current set into the stage below. Nothing to watch ⇒ nothing subscribed.
+            .Select(published => AdoptedIncludeArrivals(workspace, ownStream, accessService, hubPath)
+                .Select(_ => published)
+                .StartWith(published))
+            .Switch()
             // 🚨 #2948 — the CONTENT fingerprint now covers the `@@`-include closure, and resolving
             // that needs mesh READS, so it happens HERE (an observable step) rather than inside the
             // pure Update lambda below. Cost: `CollectIncludeClosure` scans each source's text for
@@ -2052,7 +2104,23 @@ internal static class NodeTypeCompilationHelpers
                                 // arriving now — whose token is built from this NEW snapshot —
                                 // must still PARK. Re-stamping here would claim the running
                                 // compile produces the new sources, which it will not.
-                                var refreshed = def with { CurrentSourceVersions = snapshot };
+                                // 🚨 The retry write publishes the SAME generation the ordinary
+                                // write below would — fingerprint, include list and module version
+                                // beside the snapshot (#4280). Refreshing the snapshot alone left
+                                // the three companions from the PREVIOUS source generation on the
+                                // record, so a later adoption judgement read a mixed snapshot: a
+                                // current CurrentSourceVersions against a stale
+                                // CurrentSourceIncludes. Inconclusive values (null) keep the
+                                // previous ones, exactly as below.
+                                var refreshed = def with
+                                {
+                                    CurrentSourceVersions = snapshot,
+                                    CurrentSourceFingerprint = published.Fingerprint ?? def.CurrentSourceFingerprint,
+                                    CurrentSourceIncludes = published.Includes ?? def.CurrentSourceIncludes,
+                                    CurrentModuleVersion = published.ModuleVersion.Established
+                                        ? published.ModuleVersion.Version
+                                        : def.CurrentModuleVersion,
+                                };
                                 return curr with
                                 {
                                     Content =
