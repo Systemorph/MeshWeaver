@@ -385,11 +385,40 @@ nowhere else. There is no downstream copy left to fall back on, which makes
 **The pin half is still open.** A producer past phase 2 *can* write generations and is still writing
 flat. Core CD needs no pin move; the satellites move theirs the way they always do.
 
-### Phase 4 — flip, one prefix at a time *(open)*
+### Phase 4 — flip, one prefix at a time *(core's half of `plugins` landed; the satellite's is explicitness, not correctness)*
 
 Set `publication-layout: generation` on every producer of one prefix. The multi-producer prefix is
 `plugins` and nothing else: core CD's `plugins-bake` and MeshWeaver.Plugins' `publish-bake`. The
 single-producer prefixes each flip in their own repository's PR.
+
+#### What is landed, and the precondition that was measured before it was
+
+`main-cd.yml`'s `plugins-bake` passes `publication-layout: generation`. From that merge, core's
+publications of `prebuilt-bundles/<identity>/plugins` are written into their own run-named
+directory, sealed there, and pointed at.
+
+🚨 **The prefix-ownership mechanism lives in the PUBLISHER, so "either order" is a claim about
+which publisher each producer is RUNNING** — a producer resolving a `publish-bake-bundles.sh` that
+predates [#4249](https://github.com/Systemorph/MeshWeaver/pull/4249) still refreshes the flat copy
+in place and never moves the pointer. That is the one thing that had to be true before flipping and
+it is checkable rather than assumed. **Measured 2026-09-14 across all six node repos** — Plugins,
+Crm, Education, Reinsurance, SocialMedia, Manufacturing — every `uses:` of a `node-repo-*.yml` lane
+is `@main` and every `scripts-ref:` is `main`. **No pinned publisher and no pinned reader of this
+prefix exists in the fleet.** The exception is core's own `plugins-bake`, which passes no
+`scripts-ref` and so resolves its scripts at `platform-ref` = the commit the run publishes; on a
+reconcile run that commit can be older than #4249, and such a run refreshes the flat copy without
+moving the pointer — which leaves pointer-following readers on the **newer** generation, the safe
+direction, and is the same flat-copy residual phase 5 removes.
+
+What the satellite's own flip buys is therefore **explicitness, not correctness**: it replaces a
+discovered layout (announced by a `::warning::` on every publish) with a declared one.
+
+🚨 **Every reader fails safe to today's behaviour.** `ResolvePublicationPointer` degrades an absent,
+blank, unreadable, escaping or dangling pointer to the source directory, where the flat copy still
+sits, still sealed — so the worst case of a pointer that cannot be followed is the pre-flip serve.
+The single reader that may *not* take that fallback is `node-repo-gate.yml`'s `seed`, because
+`download-batch` recurses and flattens; it refuses instead, transiently, and a re-run reads the
+publication that now applies.
 
 🚨 **"In one change set" was stated here as the precondition, and it is not available.** The two
 producers of `plugins` live in **two repositories**, which cannot merge atomically, and one of them
@@ -524,20 +553,21 @@ was ever visible instead of silently shipping a mixed set.
   to 1 on that incident. The **residual is a sibling that has not sealed yet when this run's sweep
   ends** (21 seconds, measured), and that is not shrinkable by any amount of checking: it is what
   phases 2–5 exist for.
-- **The next change is the FLIP, and it is a scope call rather than a code one.** Measured over
+- **Phase 4's core half is landed** (2026-09-14) — `main-cd.yml`'s `plugins-bake` passes
+  `publication-layout: generation`, so `prebuilt-bundles/<identity>/plugins` is on the generation
+  layout and every reader that follows `_current` stops reading a directory mutated in place. The
+  satellite's own flip is explicitness, not correctness (phase 4 above). **Phase 5 is open.**
+- **The measurement the flip waited on.** Measured over
   2026-09-12T08:00Z → 09-13T08:00Z, every `plugins` publish job of both lanes: core `plugins-bake`
   **25** executed (23 sealed), Plugins `publish-bake` **10** (8 sealed); **62 of 62** target
   verifications read *"N/N file(s) hold this run's bytes … 0 byte-identical from another"*; **0**
   MIX refusals; 20 distinct identities, **6 written by both lanes** — all 6 at different Plugins
   commits, hours apart, with no overlap in the window. So the defect is **latent, not active**, and
   the postcondition is carrying it.
-  Flipping is still not a core-only change — `plugins`' other producer lives in another repository —
-  and measured 2026-09-13 **no caller anywhere passes `publication-layout`**, core's `main-cd.yml`
-  `plugins-bake` included, so the prefix's core-side producer is `flat` too. What has changed is
-  that it no longer has to be **one** change set: the layout now belongs to the prefix (phase 4
-  above), so the two producers may flip in either order and the interval between the two merges
-  cannot produce a stale serve. What phase 3 removed was the reason a flip could not be attempted at
-  all; what this removes is the reason it had to be attempted atomically across two repositories.
+  The layout belongs to the prefix (phase 4 above), so the two producers may flip in either order
+  and the interval between the two merges cannot produce a stale serve. What phase 3 removed was the
+  reason a flip could not be attempted at all; what #4249 removed is the reason it had to be
+  attempted atomically across two repositories; core's half is now merged.
 - 🚨 **Flipping `plugins` does not by itself stop the publish reds.** The flat compatibility copy is
   still replaced in place and still races, so an overlap still costs that copy and still fails the
   job — the postcondition covering it is unchanged. What the flip buys immediately is that the
