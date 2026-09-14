@@ -770,7 +770,15 @@ jobs:
         shard: ${{ fromJson(needs.plan.outputs.matrix) }}
     # `runner` — THE job that honours it; see "`runner` — honoured by the gate shards" in the header.
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 30
+    # 🚨 45, the fleet ceiling, not 30 — because of the platform WAIT, not the gate. A shard that
+    # resolves a set the volume has not reached yet waits up to 900 s (one refresh period + one
+    # install + the attribute cache, see resolve-gate-platform.sh) BEFORE it gates anything. An
+    # unsharded full-set gate measured 17.9-30.4 min on its own (the fan-out note above), so at
+    # 30 a healthy wait plus a healthy gate would be CUT AT THE CAP — which reports `cancelled`,
+    # unreadable, the exact failure that note documents. 15 + 30 = 45 fits, once. Do not raise
+    # further: 45 is the ceiling `check-workflow-timeouts.py` refuses to exceed, so a job that
+    # needs more is STUCK, not slow.
+    timeout-minutes: 45
     env:
       # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
       # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.

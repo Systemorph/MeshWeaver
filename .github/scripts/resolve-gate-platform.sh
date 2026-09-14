@@ -275,14 +275,19 @@ CALLER_SET=""
 # The bound on waiting for a set that is ARRIVING or AHEAD, in seconds. It is not a guess and it is
 # not a knob to turn up when a run fails: it is the refresh's worst-case latency, and it is
 # arithmetic over values that are declared elsewhere —
-#   120 s  the CronJob's schedule (Systemorph/Memex ci-platform.yaml; `*/10` until that change is
-#          applied, in which case the wait simply runs out and says so rather than passing wrongly)
+#   600 s  the CronJob's schedule AS DEPLOYED (Systemorph/Memex ci-platform.yaml, `*/10`). A run
+#          that is AHEAD at the instant a tick fires waits one FULL period before the next tick
+#          even starts installing; a bound below one period reds the ordinary AHEAD case by
+#          arithmetic, whatever the install takes. (Review on #4282 caught a draft of this that
+#          budgeted 120 s for a cadence change that had not been applied — the wait ran out at
+#          7 min and still reddened a run that would have arrived on the next tick.)
 # + 210 s  one install, measured in-cluster at 197 s with the browser on the share
 # +  90 s  the runner mount's `actimeo=30` attribute cache, twice over, plus slack
-# = 420 s. A shard that waits longer than that is not waiting for the refresh; it is waiting for a
-# refresh that is not coming, which is what the refusals below say. Raising it would only move a
-# red later into the job.
-WAIT_SECONDS=420
+# = 900 s. That is 15 min inside this lane's 30-min job cap — the wait can run out and still leave
+# the job time to say why. A shard that waits longer than that is not waiting for the refresh; it
+# is waiting for a refresh that is not coming, which is what the refusals below say. Raising it
+# would only move a red later into the job; if the CronJob cadence is ever shortened, LOWER this.
+WAIT_SECONDS=900
 while [ $# -gt 0 ]; do
   case "$1" in
     --volume-root)   VOLUME_ROOT="${2:-}"; shift 2 ;;
