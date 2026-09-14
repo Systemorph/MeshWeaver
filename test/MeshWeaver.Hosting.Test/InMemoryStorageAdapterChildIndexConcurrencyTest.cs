@@ -145,6 +145,89 @@ public class InMemoryStorageAdapterChildIndexConcurrencyTest
         Assert.Equal(1, CountNow(adapter, "Bulk"));
     }
 
+    private static (string[] Nodes, string[] Dirs) ListNow(InMemoryStorageAdapter adapter, string? parent)
+    {
+        string[] nodes = [], dirs = [];
+        adapter.ListChildPaths(parent).Subscribe(level =>
+        {
+            nodes = level.NodePaths.OrderBy(x => x).ToArray();
+            dirs = level.DirectoryPaths.OrderBy(x => x).ToArray();
+        });
+        return (nodes, dirs);
+    }
+
+    /// <summary>
+    /// A delete that lands AFTER the rebuild's key snapshot and BEFORE the loop visits that key
+    /// (Copilot on #4295): <c>Removed</c> runs <c>Unindex</c> against a pending index that does not
+    /// hold the key yet — a no-op — and an unconditional <c>Index</c> in the loop then put the
+    /// deleted key back. A deleted leaf is filtered by every listing; a deleted node whose
+    /// descendants were deleted too came back as a PHANTOM implied directory that every walk
+    /// descends into, and nothing repairs it because the tally is exact and nothing rebuilds.
+    /// The loop now indexes only a key that is still a node, checked in the same Mutate section.
+    /// </summary>
+    [Fact]
+    public void A_key_deleted_after_the_snapshot_and_before_its_visit_is_not_resurrected()
+    {
+        var nodes = new ConcurrentDictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase);
+        var adapter = new InMemoryStorageAdapter(nodes, new(StringComparer.OrdinalIgnoreCase));
+        WriteNow(adapter, "Store/Core/Source/F0");
+        WriteNow(adapter, "Ghost/Dir");
+        WriteNow(adapter, "Ghost/Dir/Leaf");
+        var (beforeNodes, beforeDirs) = ListNow(adapter, "Ghost");
+        Assert.Equal(new[] { "Ghost/Dir" }, beforeNodes);
+        Assert.Empty(beforeDirs);
+
+        nodes["Bulk/Seeded"] = Node("Bulk/Seeded");   // the sanctioned rebuild trigger
+
+        var parked = 0;
+        var release = 0;
+        var releasedByBudget = 0;
+        adapter.OnRebuildSnapshot = () =>
+        {
+            Volatile.Write(ref parked, 1);
+            if (!SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.Convergence))
+                Volatile.Write(ref releasedByBudget, 1);
+        };
+
+        var rebuilder = new Thread(() => CountNow(adapter, "Bulk")) { IsBackground = true, Name = "rebuilder" };
+        var deleteDone = 0;
+        var deleter = new Thread(() =>
+        {
+            adapter.Delete("Ghost/Dir/Leaf").Subscribe();
+            adapter.Delete("Ghost/Dir").Subscribe();
+            Volatile.Write(ref deleteDone, 1);
+        }) { IsBackground = true, Name = "deleter" };
+        try
+        {
+            rebuilder.Start();
+            Assert.True(
+                SpinWait.SpinUntil(() => Volatile.Read(ref parked) == 1, TestTimeouts.Convergence),
+                "the seeded dictionary did not trigger a rebuild — the seam never fired");
+            deleter.Start();
+            Assert.True(
+                SpinWait.SpinUntil(() => Volatile.Read(ref deleteDone) == 1, TestTimeouts.Convergence),
+                "the deletes did not complete while a rebuild was in flight — a writer waited for it");
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+        rebuilder.Join();
+        deleter.Join();
+
+        Assert.True(releasedByBudget == 0, "the parked rebuild was released by its budget, not by the test");
+        var (ghostNodes, ghostDirs) = ListNow(adapter, "Ghost");
+        Assert.True(ghostNodes.Length == 0 && ghostDirs.Length == 0,
+            $"after the rebuild, 'Ghost' lists nodes=[{string.Join(", ", ghostNodes)}] dirs=[{string.Join(", ", ghostDirs)}] — "
+            + "a key deleted between the snapshot and its visit was indexed back into the swapped-in "
+            + "index as a phantom directory");
+        var (rootNodes, rootDirs) = ListNow(adapter, null);
+        Assert.DoesNotContain("Ghost", rootDirs);
+        Assert.DoesNotContain("Ghost", rootNodes);
+        Assert.Equal(new[] { "Bulk", "Store" }, rootDirs);
+        Assert.Equal(1, CountNow(adapter, "Store/Core/Source"));
+    }
+
     /// <summary>
     /// The unwidened shape — concurrent writers and readers in a tight loop — as a control over
     /// the fixed adapter's contract that the count is EXACT: adapter-only traffic, however

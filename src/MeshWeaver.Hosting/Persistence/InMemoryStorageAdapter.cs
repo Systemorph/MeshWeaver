@@ -100,10 +100,21 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         /// microseconds — dictionary work only.</summary>
         public readonly object Mutate = new();
 
+        /// <summary>Test seam: invoked by a rebuild after the key snapshot is taken and before
+        /// the first key is indexed, so a test can land a mutation on a not-yet-visited key.</summary>
+        public Action? OnSnapshot;
+
         /// <summary>Test seam: invoked by a rebuild after the fresh index is built and before it
         /// is swapped in, so a test can park a rebuild mid-flight.</summary>
         public Action? OnBuilt;
     }
+
+    /// <summary>
+    /// Test seam (InternalsVisibleTo): runs inside a rebuild after the key snapshot is taken and
+    /// BEFORE the first key is indexed. A test parks here to land a delete on a key the rebuild
+    /// has not visited yet and prove the swapped-in index does not resurrect it.
+    /// </summary>
+    internal Action? OnRebuildSnapshot { get => _index.OnSnapshot; set => _index.OnSnapshot = value; }
 
     /// <summary>
     /// Test seam (InternalsVisibleTo): runs inside a rebuild after the fresh index is complete and
@@ -245,9 +256,22 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             _index.Pending = fresh;
             keys = _nodes.Keys;
         }
+        _index.OnSnapshot?.Invoke();
         foreach (var key in keys)
             lock (_index.Mutate)
-                Index(fresh, key);
+            {
+                // 🚨 Only a key that is STILL a node. A delete that lands after the snapshot and
+                // before the loop reaches this key runs Unindex(fresh) against an index that does
+                // not hold it yet — a no-op — and an unconditional Index here would then put the
+                // deleted key back: a ghost leaf (filtered by every listing, harmless) or, for a
+                // deleted node with deleted descendants, a PHANTOM implied directory that every
+                // walk descends into and that no later mutation repairs, because the tally is
+                // exact and nothing rebuilds. Checked under the same Mutate section as the Index,
+                // so a delete cannot slip between the check and the write; one that lands after
+                // finds the key in fresh and removes it.
+                if (_nodes.ContainsKey(key))
+                    Index(fresh, key);
+            }
         _index.OnBuilt?.Invoke();
         // 🚨 Why the swap needs no second pass over a delta and no version check: the pending index
         // is ONE set of truth — what this loop iterates AND what every writer indexes into. A

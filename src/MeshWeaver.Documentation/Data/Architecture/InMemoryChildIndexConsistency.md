@@ -164,7 +164,12 @@ concurrency contract in `InMemoryStorageAdapter`:
 3. **A writer never waits for a rebuild.** The rebuild publishes the index it is building as
    `Pending` before it snapshots the keys, in one `Mutate` section, so every write either precedes
    the snapshot (and is in it) or observes `Pending` and indexes into both. The rebuild takes
-   `Mutate` per key, so an install interleaves between keys instead of stalling behind a scan.
+   `Mutate` per key, so an install interleaves between keys instead of stalling behind a scan —
+   and it indexes a snapshot key only if it is *still a node*, checked in that same section: a
+   delete that landed after the snapshot found nothing to remove from `Pending` yet, and an
+   unconditional re-index would have resurrected the key as a phantom directory that no later
+   mutation repairs (Copilot's finding on the PR, pinned by
+   `A_key_deleted_after_the_snapshot_and_before_its_visit_is_not_resurrected`).
 
 The pin is `InMemoryStorageAdapterChildIndexConcurrencyTest`: a rebuild is parked mid-flight
 through the adapter's test seam (`OnRebuildBuilt`, a volatile `int` under a bounded
