@@ -585,7 +585,24 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
         if len(notes) >= limit:
             break
     if best is None:
-        notes.append(f"none of the {len(runs)} successful main run(s) named the set it resolved")
+        # 🚨 Say WHEN the runs examined are from, because the one cause of this refusal that is not
+        # the caller's fault is invisible without it. Measured 2026-09-14 on MeshWeaver.Plugins
+        # (run 34822109263): GitHub's `status=success` listing served a page from 2026-08-19 for
+        # ONE call — twelve runs that all predate this job's existence — while the same query
+        # issued seconds later returned the real newest runs. Every one of the twelve was
+        # correctly skipped ("no `Resolve the released platform` job"), the refusal was right, and
+        # the reader still spent five minutes establishing that the listing was stale rather than
+        # main being broken. This is NOT a retry: a resolver that decides its own input must be
+        # wrong and asks again is a gate testing its own inputs. It is one line so the next
+        # reader knows which of the two things the red means, and re-runs the job.
+        newest = max((str(r.get("created_at") or "") for r in runs), default="")
+        notes.append(
+            f"none of the {len(runs)} successful main run(s) named the set it resolved "
+            f"(newest run examined was created {newest or 'at an unknown time'}). If a "
+            f"successful `{SATELLITE_CD_WORKFLOW}` push run on main exists that is NEWER than that, GitHub's "
+            "run listing served a stale page for this call — re-run this job; the resolver does "
+            "not retry on its own, because a run listing is its input and a gate never tests its "
+            "own inputs.")
     return best, notes
 
 
@@ -1598,7 +1615,14 @@ def self_test() -> int:
             if f"/repos/{SATELLITE}/" not in path:
                 return core(path)
             if "/actions/workflows/" in path:
-                return {"workflow_runs": [{"id": 555}] if has_run else []}
+                # `created_at` travels because the "none named" refusal prints the NEWEST run's
+                # date — the one fact that tells a stale listing from a broken main. Two runs,
+                # and the OLDER one is listed FIRST on purpose: the message must take `max`, and
+                # with a single run (or the newest first) a regression to `runs[0]` would pass.
+                return {"workflow_runs": [
+                    {"id": 555, "created_at": "2026-08-19T06:00:00Z"},
+                    {"id": 556, "created_at": "2026-09-14T08:00:00Z"},
+                ] if has_run else []}
             if "/jobs" in path:
                 rows = [{"id": 777, "name": PLATFORM_REF_JOB}] if job else []
                 return {"total_count": len(rows), "jobs": rows}
@@ -1649,6 +1673,15 @@ def self_test() -> int:
                   _fetch_main(None), None, "annotation")
     _ceiling_case("a main run without the platform-ref job ⇒ skipped, named",
                   _fetch_main("3.0.0-ci.8203", job=False), None, PLATFORM_REF_JOB)
+    # 🚨 The refusal names WHEN the newest run examined was created, and says that a newer run
+    # existing means the LISTING was stale (re-run), not main. Measured 2026-09-14: GitHub served
+    # a page from 08-19 for one `status=success` call and the red read as "main is broken" until
+    # someone re-issued the query by hand. A message nobody pins drifts; this pins both halves.
+    _ceiling_case("…and the refusal names the NEWEST run's date (max, not runs[0]) so a stale "
+                  "listing is legible",
+                  _fetch_main("3.0.0-ci.8203", job=False), None, "created 2026-09-14T08:00:00Z")
+    _ceiling_case("…and tells the reader a newer run means the listing was stale, not main",
+                  _fetch_main("3.0.0-ci.8203", job=False), None, "served a stale page")
 
     # ── 🚨 THE CEILING IS READ OUT OF A LIST THE SELF-TEST ALSO WRITES INTO (#1826) ─────────────
     # `Resolve the released platform` runs `resolve-platform.py --self-test` and
