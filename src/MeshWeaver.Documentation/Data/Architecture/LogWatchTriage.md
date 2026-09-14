@@ -144,6 +144,49 @@ is titled after and whose last recorded occurrence is still 2026-09-10 02:30:43Z
 > issue is not evidence that its headline defect is still live; read `samples[]` — the unmasked node
 > paths are in there — and resolve each `pods[]` entry to a deployment before naming a portal.
 
+### 🚨 A REOPEN is not a recurrence — read `samples[]` before you believe it
+
+`ReopenOnRecurrence` reopens a **closed** issue when its incident fires again. On a folded
+fingerprint that sentence is doing something the reader does not expect: the thing that fired again
+may be **a different call site**, and the issue it reopens is the one that happened to be filed from
+that fingerprint first. The reopen comment then prints recent log lines — from the *group*, not from
+the headline defect — and reads, convincingly, as *"your fix did not work"*.
+
+Measured 2026-09-13/14, two issues reopened the same minute by the same watcher, neither of them
+about what reopened it:
+
+| issue | its own subject | what the reopen actually carried |
+|---|---|---|
+| [#2387](https://github.com/Systemorph/MeshWeaver/issues/2387) — category `MeshWeaver.PluginCatalog.InstanceAutoRegistrationService` | `[DefaultInstall] reconciled with FAILURES … FAILED: [Import]` — last seen **2026-09-02T07:43:52Z** | `Package Feedback … 1 of 14 declared node(s) are ABSENT … REPAIRED rather than skipped` — a **different method** in the same class |
+| [#1840](https://github.com/Systemorph/MeshWeaver/issues/1840) — category `MeshWeaver.Graph.Configuration.MeshNodeCompilationService` | `…/Northwind/AnalyticsCatalog` — a node that **no longer exists** on that portal | `rbuergi/OperationRequest`, `Hosting/InstanceAction` — unrelated NodeTypes |
+
+🚨 **And the line that reopened #2387 reported a SUCCESS.** `Feedback/Feedback/Source/FeedbackHandover`
+was named ABSENT at 22:02:37.818Z and its `lastModified` in the mesh is 22:02:45.036Z — the repair
+worked, eight seconds later. It was logged at `Error` because the severity was decided *before* the
+remedy ran, so every self-heal shipped a fault to Loki and minted an incident. That is fixed in the
+emitter (the detection is now a Warning and the Error moved onto the verified outcome), and the
+general rule it teaches is worth stating on its own:
+
+> **Never assert a severity on a DETECTION when a remedy is about to run.** A line that says "X is
+> missing, repairing" is an `Error` about a condition that is usually gone by the time anyone reads
+> it. Log the detection at Warning, re-observe after the remedy, and put the `Error` on the outcome
+> — where it can only fire when the remedy did not work, which is the fact worth an incident.
+
+**So the procedure on a reopened auto-filed issue is:**
+
+1. Read the incident node's `samples[]` — **not** the issue body's evidence table, which was written
+   when the issue was filed and may never have been updated (see the stuck-syncer note above).
+2. Ask whether the newest samples are the **same call site** as the title. On a category fold they
+   often are not.
+3. Only if they are, treat it as a recurrence. Otherwise the reopen is routing traffic, and the
+   right move is to say so on the thread, close on the headline defect's own evidence, and file the
+   traffic where it belongs.
+
+🚨 **Fixing the identity function does not clear this.** Changing how fingerprints are computed
+re-fingerprints **future** occurrences only; existing `Admin/_LogIncident/*` nodes keep the identity
+they were minted under, and nothing recomputes them. So after an identity fix, folded traffic keeps
+arriving on the same old threads until that backlog is migrated — which is its own change.
+
 Re-measured 2026-09-11T09:1xZ, same incident, and the spread had widened rather than settled:
 `occurrences: 62`, **26** entries in `pods[]`, `firstSeen` 2026-09-10T02:26:49Z,
 `lastSeen` 2026-09-11T05:22:40Z. All **ten** retained `samples[]` are one of three node paths —

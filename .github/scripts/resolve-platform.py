@@ -414,6 +414,101 @@ NOTICE_TITLE = "Platform for this run"
 NOTICE_SET = re.compile(r"(\d+\.\d+\.\d+[0-9A-Za-z.\-]*)[.-]ci\.(\d+)")
 
 
+# ───── THE FLOOR: the oldest set this TREE can compile against (MeshWeaver.Plugins#1826) ─────
+#
+# 🚨 A CEILING AND A FREEZE ARE NOT ENOUGH. The ceiling says which set is VOUCHED; the freeze says
+# which set to TAKE. Neither says which sets this repository's own source can still COMPILE against,
+# and that is a third, independent fact — one the repository learns the moment it adopts a symbol
+# from a newer platform set.
+#
+# Measured (Plugins#1821): `src/Memex.LocalMesh` adopted core's `OperationSentinel`. Its pull request
+# compiled clean and merged, because `MW_PLATFORM_REF` was frozen to `3.0.0-ci.8506`, a set carrying
+# the type. The freeze was then lifted — a repo VARIABLE edit, no gate, no diff — and the resolver
+# fell back to its ceiling `3.0.0-ci.8492`, fifty newer sealed sets passed over. Every open pull
+# request went red on `CS0103: The name 'OperationSentinel' does not exist in the current context`,
+# a fault none of their diffs could reach.
+#
+# The floor makes that fact DECLARED, in a file that moves in the diff that needs it, so the
+# adoption and the requirement land together. It binds EVERY path, a freeze included: a freeze is an
+# instruction about WHICH of the sets that can build this tree to take, and it cannot make an older
+# set carry a symbol that set does not have. Resolving below the floor has exactly one outcome, a
+# compile error in a file nobody touched — so this refuses early, naming the set, the floor, the
+# reason and the one way down (remove the adoption and lower the floor in the same commit).
+#
+# An ABSENT declaration is no floor at all — the other five vendored copies carry no such file and
+# are unaffected. A MALFORMED one is refused, never read as "no floor": a declaration the reader
+# silently ignores is a guard that passes having checked nothing.
+#
+# 🚨 THE BOUNDARY IS DELIBERATE: the floor binds `main()`, which is every CI resolution (all four
+# `ci.yml` call sites, the freeze path and the kept-baseline path alike). It does NOT bind
+# `fetch-refs.py`, which calls `choose` directly for local tooling — and that is not a hole, it is
+# the shape of the defect: `fetch-refs` takes the NEWEST sealed set with no ceiling and no freeze,
+# so it has no mechanism to resolve backwards past an adoption. Extending it there needs its own
+# fixtures (its cases resolve `3.0.0-ci.8207`, below the real floor) and buys nothing this issue is
+# about. Written down so the next reader does not have to guess whether it was considered.
+PLATFORM_FLOOR_BASENAME = "platform-floor.json"
+# How the file is NAMED in diagnostics — the path a reader of a satellite repository will type.
+PLATFORM_FLOOR_FILE = "scripts/" + PLATFORM_FLOOR_BASENAME
+
+
+def read_floor_text(text: str | None) -> tuple[int | None, str]:
+    """`(minimum core-CD run number, why)` from the declaration's text; `(None, "")` if absent."""
+    if text is None:
+        return None, ""
+    try:
+        doc = json.loads(text)
+    except ValueError as error:
+        raise ResolutionError(f"{PLATFORM_FLOOR_FILE} is not readable JSON ({error}). A floor this "
+                              "script cannot parse is NOT 'no floor'; fix or delete the file.")
+    minimum = doc.get("minimum") if isinstance(doc, dict) else None
+    because = doc.get("because") if isinstance(doc, dict) else None
+    if not isinstance(minimum, int) or isinstance(minimum, bool):
+        raise ResolutionError(f"{PLATFORM_FLOOR_FILE} must carry an integer `minimum` (the oldest "
+                              f"core-CD run number this tree compiles against); got {minimum!r}.")
+    if not isinstance(because, str) or not because.strip():
+        raise ResolutionError(f"{PLATFORM_FLOOR_FILE} must carry a non-empty `because` naming what "
+                              "the tree adopted. A floor with no reason cannot be lowered safely "
+                              "by anyone who did not raise it.")
+    return minimum, because.strip()
+
+
+def read_floor(path: str) -> tuple[int | None, str]:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return read_floor_text(handle.read())
+    except FileNotFoundError:
+        return None, ""
+
+
+def current_floor() -> tuple[int | None, str]:
+    """This repository's declared floor. The ONE seam — there is deliberately no flag and no
+    environment variable to point it elsewhere, because either would be a way to resolve below the
+    floor without changing the file that states it."""
+    # BESIDE THE RESOLVER, explicitly — not derived from the repository root. The canonical lives
+    # at `.github/scripts/` in the platform and at `scripts/` in every repository that vendors it,
+    # and a root-relative path would have to be right for both. A sibling is right for both by
+    # construction, and stays right if either layout moves.
+    return read_floor(os.path.join(os.path.dirname(os.path.abspath(__file__)), PLATFORM_FLOOR_BASENAME))
+
+
+def floor_refusal(floor: tuple[int | None, str], set_name: str, run_number: int) -> str | None:
+    """The refusal text when `set_name` is below the declared floor, else None."""
+    minimum, because = floor
+    if minimum is None or run_number >= minimum:
+        return None
+    return (f"{set_name} is core CD #{run_number}, BELOW the floor #{minimum} this repository "
+            f"declares in {PLATFORM_FLOOR_FILE}.\n"
+            f"Why the floor exists: {because}\n"
+            "Resolving below it compiles this tree against a set that does not carry a symbol the "
+            "tree has already adopted, which reds every open pull request on a fault no author's "
+            "diff can reach (MeshWeaver.Plugins#1821 — 50 newer sets were passed over and every "
+            "open PR failed on one CS0103).\n"
+            "A freeze does NOT exempt it: a freeze chooses among the sets that can build this tree; "
+            "it cannot make an older set carry a symbol that set does not have.\n"
+            f"To go below deliberately, remove the adoption and lower `minimum` in "
+            f"{PLATFORM_FLOOR_FILE} in the SAME commit.")
+
+
 def ceiling_for(fetch: Fetch, repo: str, freeze: str | None,
                 log: Callable[[str], None] = print) -> tuple[int | None, list[str], bool]:
     """`(ceiling, notes, fatal)` for a run that asked to follow its own main.
@@ -460,13 +555,28 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             notes.append(f"main run {run_id}: annotations unreadable ({error}) — skipped")
             continue
         rows = annotations if isinstance(annotations, list) else annotations.get("annotations") or []
-        found = None
-        for row in rows:
-            if NOTICE_TITLE in str(row.get("title") or ""):
-                match = NOTICE_SET.search(str(row.get("message") or ""))
-                if match:
-                    found = int(match.group(2))
-                    break
+        # 🚨 EVERY matching annotation is read, and DISAGREEMENT is a refusal (#1826). This used to
+        # take the FIRST match and break — and the list it reads is one the job's own self-test
+        # steps write into: `test-platform-resolution.py` went through `emit`, so its FIXTURE set
+        # ids (`3.0.0-ci.8207 — core aaaaaaaaa`) were published under this very title. It answered
+        # correctly only because the verdict happened to sort first, which the API does not promise
+        # and which is not even emission order. Picking a different one of them is not the fix:
+        # if a run publishes two different sets under the production title, its own verdict cannot
+        # be told from a fixture, so the RUN is skipped and said. `best` is a max over the other
+        # runs examined, so one poisoned run costs a data point, never a wrong ceiling.
+        named = [int(match.group(2))
+                 for row in rows if NOTICE_TITLE in str(row.get("title") or "")
+                 for match in [NOTICE_SET.search(str(row.get("message") or ""))] if match]
+        distinct = sorted(set(named))
+        if len(distinct) > 1:
+            notes.append(
+                f"main run {run_id}: {len(distinct)} DIFFERENT sets published under "
+                f"`{NOTICE_TITLE}` ({', '.join(f'#{n}' for n in distinct)}) — a run's own verdict "
+                "cannot be told from another annotation on the same job, so this run is SKIPPED "
+                "rather than guessed at (#1826). A self-test or probe that emits under the "
+                "production title is the usual cause; it must use a title of its own.")
+            continue
+        found = distinct[0] if distinct else None
         if found is None:
             notes.append(f"main run {run_id}: no `{NOTICE_TITLE}` annotation — skipped")
             continue
@@ -1475,7 +1585,13 @@ def self_test() -> int:
         failures.append("output rows: a run that followed main must produce the SAME key set as "
                         f"one that did not — {set(plain) ^ set(followed)}")
 
-    def _fetch_main(passed_set: str | None, has_run: bool = True, job: bool = True) -> Fetch:
+    def _fetch_main(passed_set: str | None, has_run: bool = True, job: bool = True,
+                    before: list[dict] | None = None, after: list[dict] | None = None) -> Fetch:
+        """`before`/`after` place EXTRA annotations around the real one, in list order.
+
+        The annotations endpoint does not promise emission order, so a case that pins the reader's
+        answer must be able to put a decoy on either side of the verdict.
+        """
         core = _fetch_for(two, sealed_two)
 
         def fetch(path: str) -> dict:
@@ -1487,10 +1603,10 @@ def self_test() -> int:
                 rows = [{"id": 777, "name": PLATFORM_REF_JOB}] if job else []
                 return {"total_count": len(rows), "jobs": rows}
             if "/check-runs/777/annotations" in path:
-                if passed_set is None:
-                    return {"annotations": []}
-                return {"annotations": [{"title": NOTICE_TITLE,
-                                         "message": f"{passed_set} — core {B[:9]} (the newest)"}]}
+                real = ([] if passed_set is None
+                        else [{"title": NOTICE_TITLE,
+                               "message": f"{passed_set} — core {B[:9]} (the newest)"}])
+                return {"annotations": (before or []) + real + (after or [])}
             raise AssertionError(path)
         return fetch
 
@@ -1533,6 +1649,100 @@ def self_test() -> int:
                   _fetch_main(None), None, "annotation")
     _ceiling_case("a main run without the platform-ref job ⇒ skipped, named",
                   _fetch_main("3.0.0-ci.8203", job=False), None, PLATFORM_REF_JOB)
+
+    # ── 🚨 THE CEILING IS READ OUT OF A LIST THE SELF-TEST ALSO WRITES INTO (#1826) ─────────────
+    # `Resolve the released platform` runs `resolve-platform.py --self-test` and
+    # `test-platform-resolution.py` in the SAME step as the real resolution, and both go through
+    # `emit`, which prints `::notice title=Platform for this run::` — so their FIXTURE set ids
+    # become check-run annotations on the very job this reader parses. Measured on three
+    # consecutive green main runs (34800174441, 34798629153, 34798196752), each publishes:
+    #
+    #   3.0.0-ci.8539 — core 77451a10b (frozen by the repo VARIABLE …)   ← the verdict
+    #   3.0.0-ci.8207 — core aaaaaaaaa (the newest sealed platform set)  ← a fixture
+    #   3.0.0-ci.8207 — core aaaaaaaaa (the newest sealed platform set)  ← a fixture
+    #
+    # It happened to answer correctly only because the verdict sorted first, which the API does not
+    # promise and which is NOT emission order (the fixtures are logged ~7 s earlier). A flip would
+    # have put every pull request on `8207` — a set id this repository never resolved.
+    #
+    # The rule is therefore NOT "pick the right one": two different sets under the production title
+    # means the run cannot be read, so it is SKIPPED and said. Guessing is what this was.
+    _DECOY = {"title": NOTICE_TITLE, "message": "3.0.0-ci.8207 — core aaaaaaaaa (a self-test fixture)"}
+
+    _ceiling_case("a FIXTURE set id before the verdict must NOT be taken (#1826)",
+                  _fetch_main("3.0.0-ci.8539", before=[_DECOY]), None, "2 DIFFERENT sets")
+    _ceiling_case("…nor after it — the reader must not depend on annotation order either",
+                  _fetch_main("3.0.0-ci.8539", after=[_DECOY]), None, "2 DIFFERENT sets")
+    _ceiling_case("…and the note names BOTH sets, so the poisoning is readable from the log",
+                  _fetch_main("3.0.0-ci.8539", before=[_DECOY]), None, "8207")
+    _ceiling_case("two annotations naming the SAME set are not ambiguous — still read",
+                  _fetch_main("3.0.0-ci.8203",
+                              before=[{"title": NOTICE_TITLE,
+                                       "message": f"3.0.0-ci.8203 — core {B[:9]} (a retry)"}]),
+                  8203, "8203")
+    _ceiling_case("an annotation under a DIFFERENT title is ignored, not counted as disagreement",
+                  _fetch_main("3.0.0-ci.8203",
+                              before=[{"title": "Platform for this SELF-TEST",
+                                       "message": "3.0.0-ci.8207 — core aaaaaaaaa (a fixture)"}]),
+                  8203, "8203")
+
+    # ── 🚨 THE FLOOR: A SET OLDER THAN ONE THIS TREE HAS ALREADY ADOPTED (#1826) ────────────────
+    # The resolver had a CEILING (the newest set main passed) and a FREEZE, and nothing that stops
+    # it resolving BACKWARDS past an adoption. Measured: `src/Memex.LocalMesh` adopted core's
+    # `OperationSentinel` and merged green against a frozen `3.0.0-ci.8506`; the freeze was lifted,
+    # the resolver fell to its ceiling `3.0.0-ci.8492` — 50 newer sets passed over — and every open
+    # pull request went red on `CS0103: The name 'OperationSentinel' does not exist`, a fault no
+    # author's diff could reach (Plugins#1821).
+    #
+    # The floor is a property of the SOURCE, not a preference about which set to take, so it binds
+    # EVERY path — including a freeze. A freeze may choose among sets that can compile this tree;
+    # it cannot make an older set carry a symbol that set does not have. That is why `floor_refusal`
+    # takes only the resolved set, and `main` calls it after the choice however the choice was made.
+    def _floor_case(name: str, floor: tuple[int | None, str], set_name: str, number: int,
+                    expect_refusal: bool, says: str = "") -> None:
+        nonlocal total
+        total += 1
+        got = floor_refusal(floor, set_name, number)
+        if (got is not None) != expect_refusal:
+            failures.append(f"{name}: refusal={got!r}, expected refusal={expect_refusal}")
+        elif says and (got is None or says not in got):
+            failures.append(f"{name}: refusal does not say {says!r} — {got!r}")
+
+    _WHY = "src/Memex.LocalMesh calls OperationSentinel.Classify (#1767)"
+    _floor_case("a set BELOW the declared floor is refused", (8506, _WHY),
+                "3.0.0-ci.8492", 8492, True, "8506")
+    _floor_case("…and the refusal names the set it refused", (8506, _WHY),
+                "3.0.0-ci.8492", 8492, True, "3.0.0-ci.8492")
+    _floor_case("…and WHY the tree needs it, so the reader is not left guessing", (8506, _WHY),
+                "3.0.0-ci.8492", 8492, True, "OperationSentinel")
+    _floor_case("…and says a freeze does not exempt it", (8506, _WHY),
+                "3.0.0-ci.8492", 8492, True, "freeze")
+    _floor_case("a set AT the floor is fine", (8506, _WHY), "3.0.0-ci.8506", 8506, False)
+    _floor_case("a set ABOVE the floor is fine", (8506, _WHY), "3.0.0-ci.8539", 8539, False)
+    _floor_case("no declared floor constrains nothing — every other repo's copy has no such file",
+                (None, ""), "3.0.0-ci.1", 1, False)
+
+    total += 1
+    if read_floor_text(None) != (None, ""):
+        failures.append("an ABSENT floor declaration must read as no floor, not as an error")
+    total += 1
+    if read_floor_text('{"minimum": 8506, "because": "x"}') != (8506, "x"):
+        failures.append("a declared floor must be read back — got "
+                        + repr(read_floor_text('{"minimum": 8506, "because": "x"}')))
+    # 🚨 A malformed floor must RAISE, never read as "no floor": a declaration the reader silently
+    # ignores is a guard that passes having checked nothing — the shape this repo keeps legislating
+    # against, and the one that would make the floor decorative the first time someone fat-fingers it.
+    for bad, label in (('{"because": "x"}', "no minimum"),
+                       ('{"minimum": "soon", "because": "x"}', "a non-integer minimum"),
+                       ('{"minimum": 8506}', "no reason"),
+                       ("not json at all", "unparseable")):
+        total += 1
+        try:
+            read_floor_text(bad)
+        except ResolutionError:
+            pass
+        else:
+            failures.append(f"a floor declaration with {label} must be REFUSED, not ignored")
     # The annotations endpoint answers a BARE ARRAY in the real API; a reader that only handled
     # the object form would read every main run as "named no set" and refuse every pull request.
     total += 1
@@ -1736,8 +1946,10 @@ def self_test() -> int:
           "request, a freeze never substitutes, a re-run takes a newer set and keeps its baseline "
           "otherwise, the OPTIONAL main ceiling changes nothing unless asked for and refuses "
           "rather than falling back when main has passed nothing, the OPTIONAL source verification "
-          "reads no job log unless asked for and passes over a set it cannot attribute, and every "
-          "dead end is RED naming why.")
+          "reads no job log unless asked for and passes over a set it cannot attribute, a main run "
+          "whose annotations name two DIFFERENT sets is SKIPPED rather than guessed at, a set below "
+          "this repository's declared FLOOR is refused on every path including under a freeze, and "
+          "every dead end is RED naming why.")
     return 0
 
 
@@ -1835,6 +2047,29 @@ def main() -> int:
                                wait_for_seal=arguments.wait_for_seal, freeze=arguments.freeze or None,
                                migration=migration or None, passed_ceiling=ceiling,
                                verify_source=arguments.verify_source)
+    # 🚨 THE FLOOR BINDS EVERY PATH — read BEFORE the choice so a malformed declaration is a red
+    # here and not a surprise after a successful resolution, and applied to whatever set was
+    # chosen, by whatever route (newest sealed, ceiling, freeze, or a kept baseline).
+    try:
+        floor = current_floor()
+    except ResolutionError as error:
+        print(f"::error title=The platform floor declaration is unreadable::{error}")
+        return 1
+
+    def below_floor(set_name: str, run_number: int) -> int | None:
+        """Prints and returns 1 when the resolved set is below the floor, else None."""
+        refusal = floor_refusal(floor, set_name, run_number)
+        if refusal is None:
+            return None
+        print("::error title=The resolved platform is below this repository's floor::"
+              + refusal.replace("\n", "%0A"))
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a", encoding="utf-8") as handle:
+                handle.write("### ❌ The resolved platform is below this repository's floor\n\n"
+                             f"```\n{refusal}\n```\n")
+        return 1
+
     try:
         baseline = load_baseline(os.environ.get(BASELINE_ENV))
         if baseline is not None:
@@ -1842,6 +2077,9 @@ def main() -> int:
             # on the re-resolution itself — the baseline is a valid answer.
             rows, _ = refresh(baseline, choose_fn,
                               rows_of=lambda c: output_rows(c, tester, portal, migration or None))
+            refused = below_floor(rows.get("set", "?"), int(rows.get("run-number") or 0))
+            if refused is not None:
+                return refused
             emit(rows, title="Platform for this job")
             return 0
         chosen = choose_fn()
@@ -1854,6 +2092,9 @@ def main() -> int:
                 handle.write("### ❌ The released platform did not resolve\n\n"
                              f"```\n{error}\n```\n")
         return 1
+    refused = below_floor(chosen.set_name, chosen.run_number)
+    if refused is not None:
+        return refused
     write_outputs(chosen, tester, portal, migration or None)
     output = os.environ.get("GITHUB_OUTPUT")
     if output:

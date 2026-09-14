@@ -1438,6 +1438,93 @@ a release; the step stops loudly rather than publishing a marker for an invented
 Pinned by `PlatformBakeLaneGuard.PlatformBake_ResolvesTheReleaseVersionOnce_AndEveryConsumerReadsIt`.
 
 
+## The resolver's third question: a FLOOR, and why "newest sealed" is not enough
+
+`resolve-platform.py` answered two questions. A **ceiling** (`main_passed_ceiling`, opt-in behind
+`--passed-on-main`) says which sealed set a repository's own `main` has already passed — so a core
+set that regresses a satellite reds that satellite's `main` alone instead of every open pull request.
+A **freeze** (`MW_PLATFORM_REF`) says which set to take, and overrides the ceiling, because the
+likeliest moment to need it is when `main` is red and has passed nothing recently.
+
+Neither answers which sets a repository's **source** can still be compiled against. That is a third,
+independent fact, and a repository acquires it the moment it adopts a symbol from a newer set.
+
+### What its absence cost, measured
+
+MeshWeaver.Plugins#1821. `src/Memex.LocalMesh` adopted `MeshWeaver.Mesh.Operations.OperationSentinel`.
+The adopting pull request compiled clean and merged, because `MW_PLATFORM_REF` was frozen to
+`3.0.0-ci.8506`, a set carrying the type. The freeze was then lifted — a repository VARIABLE edit,
+no gate, no diff — and the resolver fell back to its ceiling:
+
+```
+set=3.0.0-ci.8492
+source=the newest sealed platform set this repo's `main` has passed; 50 newer run(s) passed over
+…
+src/Memex.LocalMesh/LocalMeshApiEndpoints.cs(240,23):
+error CS0103: The name 'OperationSentinel' does not exist in the current context
+```
+
+Every open pull request red, on a fault none of their diffs could reach.
+
+### The floor
+
+A repository may declare `platform-floor.json` **beside the resolver** (`scripts/` in a vendoring
+repository, `.github/scripts/` here) naming the oldest core-CD run number its tree compiles against,
+and why. It moves in the diff that needs it, so an adoption and its requirement land together.
+
+It binds **every** path — newest-sealed, ceiling, kept-baseline, and a freeze. A freeze chooses among
+the sets that can build a tree; it cannot make an older set carry a symbol that set does not have, so
+resolving below the floor has exactly one outcome and the refusal is early and named. **Absent means
+no floor** — the platform declares none and no vendoring repository is affected until it writes one.
+**Malformed is refused, never read as "no floor"**: a declaration the reader silently ignores is a
+guard that passes having checked nothing.
+
+It guards `main()`, which is every CI resolution. It does not guard `fetch-refs.py`, which calls
+`choose` directly for local tooling and takes the newest sealed set with no ceiling and no freeze —
+so it has no mechanism to resolve backwards past an adoption.
+
+### 🚨 The ceiling was parsed out of a list the same job writes into
+
+The ceiling is recovered from the `::notice title=Platform for this run::` each run publishes. In
+MeshWeaver.Plugins the job that resolves also runs the resolver's self-tests **in the same step**, and
+those reach `emit`, so FIXTURE set ids were published under the production title on the very job the
+reader parses. Measured 2026-09-14 on three consecutive green `main` runs, each carrying the verdict
+`3.0.0-ci.8539 — core 77451a10b` beside two fabrications `3.0.0-ci.8207 — core aaaaaaaaa`.
+
+The reader took the first match. It was right only because the verdict happened to sort first —
+which the API does not promise and which is not emission order (the fixtures print about seven
+seconds *earlier*). The reader now collects **every** annotation under the title and **refuses a run
+whose annotations name two different sets**, skipping it with both numbers in the note; `best` is a
+max over the other runs examined, so one poisoned run costs a data point, never a wrong ceiling.
+Picking a different one of them would still have been a guess.
+
+### 🚨 "Pin the newest sealed set" is necessary and NOT sufficient — it must also VERIFY its source
+
+Measured 2026-09-14, hours after the above. `MW_PLATFORM_REF` was moved to `3.0.0-ci.8547`, the
+newest sealed set. Plugins `main` and every open pull request went red on the first job of every run:
+
+```
+the freeze names main-cd #8547 (core 1c1d62adf), but its source/release is unverified:
+platform-bake job 103845949792 has an incomplete or inconsistent final publication receipt.
+Refusing to substitute another set.
+```
+
+That job reported `completed success`, and emitted one well-formed receipt — carrying
+`targets-published=0`. The set was sealed and had been published to **no target at all**. The
+resolver's `--verify-source` is the instrument that answers the second question, and refusing was
+correct: compiling against a set whose content reached no target is how a run goes green against
+bytes nobody can load.
+
+So a freeze set under pressure needs **both** tests, and only one of them is visible from a set's
+name or its run's colour. Before setting `MW_PLATFORM_REF`, resolve the candidate with the same
+verification a run will use:
+
+```bash
+python3 scripts/resolve-platform.py --no-registry --verify-source --freeze <set>
+```
+
+A set that refuses there will refuse on every run afterwards, in the first job, for the whole
+repository. The floor does not help here — a floor is a lower bound, and `8547 > 8506` passes it.
 ## 🚨 The gate compiles NOTHING — `Modules:RequirePrebuilt` on the seeded mesh
 
 `node-repo-publish-bake.yml` runs two containers: `compile … --output /bake` produces the bake, and
