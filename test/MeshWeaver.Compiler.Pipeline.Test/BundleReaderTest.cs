@@ -150,6 +150,68 @@ public class BundleReaderTest
         Assert.Equal("PDB", Encoding.UTF8.GetString(only.Pdb!));
     }
 
+    /// <summary>
+    /// 🚨 #4280 — the manifest's per-assembly <c>sourceVersions</c> (written by both bake paths
+    /// since the fingerprint landed, skipped by every reader until now) comes back as the sorted
+    /// KEY SET on the payload. The values are the producer's own clock and stay meaningless; the
+    /// keys are which source nodes the bytes were built from, and they are what lets the owner
+    /// tell a live set still ARRIVING from one that MOVED.
+    /// </summary>
+    [Fact]
+    public void TheProducersSourcePathsRideAlongAsASortedKeySet()
+    {
+        var manifestJson = JsonSerializer.Serialize(new
+        {
+            plugin = "ThreeBody",
+            version = "1.3.2",
+            frameworkMvid = "33f2efb8",
+            assemblies = new[]
+            {
+                new
+                {
+                    nodePath = "ThreeBody/X",
+                    assembly = "ThreeBody/X.dll",
+                    sourceFingerprint = "aa82137e45651a6c",
+                    // Unsorted on purpose, with the tree bake's zero ticks — the reader sorts.
+                    sourceVersions = new Dictionary<string, long>
+                    {
+                        ["ThreeBody/Source/Zeta"] = 0,
+                        ["ThreeBody/X/Source/X"] = 0,
+                        ["ThreeBody/Source/Alpha"] = 0,
+                    },
+                },
+            },
+        });
+
+        var buffer = new MemoryStream();
+        NuGetPackageWriter.Write(buffer, Manifest, "3.0.0",
+            [
+                new NuGetPackageWriter.Entry(
+                    $"{NuGetPackageWriter.AssemblyFolder}/ThreeBody/X.dll",
+                    () => new MemoryStream("DLL"u8.ToArray())),
+            ],
+            manifestJson);
+
+        var only = Assert.Single(BundleReader.Read(buffer.ToArray()).Assemblies);
+
+        Assert.Equal("aa82137e45651a6c", only.SourceFingerprint);
+        Assert.Equal(
+            ["ThreeBody/Source/Alpha", "ThreeBody/Source/Zeta", "ThreeBody/X/Source/X"],
+            only.SourcePaths!);
+    }
+
+    /// <summary>A legacy producer that recorded no snapshot yields <c>null</c> paths — the owner
+    /// then judges on the fingerprint alone, exactly as before #4280.</summary>
+    [Fact]
+    public void ALegacyBundleWithoutSourceVersionsCarriesNoPaths()
+    {
+        var bundle = WriteBundle(("ThreeBody/Physics/Source", "PHYSICS"u8.ToArray()));
+
+        var only = Assert.Single(BundleReader.Read(bundle).Assemblies);
+
+        Assert.Null(only.SourcePaths);
+    }
+
     // ── the MODULE variant (#1664): one bundle, one reader, a second lane ──
 
     private static byte[] WriteModuleBundle(
