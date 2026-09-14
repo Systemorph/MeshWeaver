@@ -8,6 +8,7 @@ using MeshWeaver.PluginTester;
 using MeshWeaver.Compiler;
 using MeshWeaver.Messaging;
 // mw-plugin-test <repo-root> [--compile-timeout <seconds>] [--render-timeout <seconds>]
+//                             [--tests-timeout <seconds>]   (a Tests area EXECUTES; default 600)
 //                            [--allow <file>] [--report <file>] [--seed <dir>]
 //                            [--bake-output <dir>] [--source-sha <sha>] [--module <dll>]...
 //
@@ -813,6 +814,7 @@ static async Task<int> RunGate(string[] args)
     string? root = null;
     var compileTimeout = TimeSpan.FromMinutes(5);
     var renderTimeout = TimeSpan.FromMinutes(2);
+    var testsTimeout = TimeSpan.FromMinutes(10);
     var allowlist = GateAllowlist.Empty;
     var allowApplied = false;
     string? reportPath = null;
@@ -849,6 +851,12 @@ static async Task<int> RunGate(string[] args)
                 break;
             case "--render-timeout" when i + 1 < args.Length:
                 renderTimeout = TimeSpan.FromSeconds(
+                    double.Parse(args[++i], CultureInfo.InvariantCulture));
+                break;
+            // Separate from --render-timeout on purpose: a Tests area EXECUTES its cases, a render
+            // does not. See PluginGateRunner.TestsTimeout.
+            case "--tests-timeout" when i + 1 < args.Length:
+                testsTimeout = TimeSpan.FromSeconds(
                     double.Parse(args[++i], CultureInfo.InvariantCulture));
                 break;
             // A ratchet the gate cannot read is a CONFIGURATION error, and it is refused here —
@@ -942,7 +950,7 @@ static async Task<int> RunGate(string[] args)
             }
             // A value-taking option as the LAST argument would otherwise fall through to the default
             // case as "Unknown argument" — a misleading message for a missing value.
-            case "--compile-timeout" or "--render-timeout" or "--allow" or "--report"
+            case "--compile-timeout" or "--render-timeout" or "--tests-timeout" or "--allow" or "--report"
                 or "--bake-output" or "--seed" or "--source-sha" or "--module" or "--app"
                 or "--shard":
                 Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
@@ -1003,6 +1011,7 @@ static async Task<int> RunGate(string[] args)
         RepoRoot = root ?? ".",
         CompileTimeout = compileTimeout,
         RenderTimeout = renderTimeout,
+        TestsTimeout = testsTimeout,
         BakeOutputDirectory = bakeOutput,
         SourceSha = sourceSha,
         Seed = seed,
