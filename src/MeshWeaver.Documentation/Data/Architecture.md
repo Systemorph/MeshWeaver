@@ -1,4 +1,4 @@
----
+﻿---
 Name: MeshWeaver Architecture
 Category: Documentation
 Description: How the platform works under the hood — message-based communication, the actor model, partitioned persistence, reactive UI streaming, and AI agents
@@ -86,6 +86,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Silent Completion](SilentCompletion) — an empty completion is invisible to every timeout
 - [AsyncLocal Across Scheduler Hops](AsyncLocalAcrossHops)
 - [Initialization Gates](InitializationGates)
+- [Retiring an Activation](RetiringAnActivation) — a transient init fault retires instead of latching; the gate is failed BEFORE the dispose, because two drains cannot be ordered by a comment
 - [Aggregating Providers](AggregatingProviders)
 - [Hub Disposal Model](HubDisposalModel)
 - [Transient Node Probes](TransientNodeProbes) — a probe hub's own address is not a node

@@ -497,7 +497,7 @@ public sealed record DataContext : IDisposable
     /// <summary>
     /// The init watchdog's terminal body: discriminates shutdown / timed-out / faulted /
     /// canceled / clean off <paramref name="allInit"/>'s state at settle time, records the
-    /// outcome, and always ANSWERS the gate (<see cref="IMessageHub.FailGate"/> on shutdown,
+    /// outcome, and always ANSWERS the gate (<see cref="IMessageHub.FailGate(string,string,ErrorType)"/> on shutdown,
     /// <see cref="IMessageHub.OpenGate"/> otherwise). Runs exactly once, whichever watchdog
     /// arm fired first — see <see cref="OpenInitializationGate"/>.
     /// </summary>
@@ -531,11 +531,18 @@ public sealed record DataContext : IDisposable
             // reactivate; retry") immediately. It records no InitializationError, no
             // fail-level log and no errored data streams — the post-mortem FAILED residue
             // #1122 removed stays removed.
-            Hub.FailGate(InitializationGateName, ShutdownNack.RetryForTheAuthoritativeAnswer(
-                Hub.Address,
-                null,
-                $"its DataContext initialization ended without opening "
-                + $"'{InitializationGateName}', which can therefore never open"));
+            Hub.FailGate(
+                InitializationGateName,
+                ShutdownNack.RetryForTheAuthoritativeAnswer(
+                    Hub.Address,
+                    null,
+                    $"its DataContext initialization ended without opening "
+                    + $"'{InitializationGateName}', which can therefore never open"),
+                // Stated, not derived (#4261). It happens to agree with the drain-time read of
+                // IsShuttingDown on THIS branch — the hub is already shutting down — which is
+                // precisely why leaving it implicit was invisible: it only diverges on the
+                // retirement branch below, where the gate is failed BEFORE the teardown starts.
+                ErrorType.ShuttingDown);
             return;
         }
 
@@ -547,11 +554,22 @@ public sealed record DataContext : IDisposable
         // two minutes). A hub that demand routing re-creates is RETIRED instead: the backlog
         // behind the gate is answered "ask again" with the specific cause, the hub disposes
         // itself, and the next delivery activates a fresh one whose data sources initialise
-        // against the dependency that has come back. Dispose FIRST so the refusal is classified
-        // ShuttingDown (the reporters read IsShuttingDown), FailGate SECOND so the caller's
-        // error names the database rather than the recycle. The root mesh hub, and any hub not
+        // against the dependency that has come back. The root mesh hub, and any hub not
         // declared WithReactivationOnDemand, keeps the latch — retiring it would not bring it
         // back — and its log line says so.
+        //
+        // 🚨 FailGate FIRST, Dispose SECOND, and the classification is STATED (#4261). The
+        // ordering used to be the other way round so that AnswerUnreleasableDelivery's drain-time
+        // read of hub.IsShuttingDown would come out ShuttingDown rather than the terminal Failed.
+        // That ordering could not be enforced: THIS method runs on the thread pool (see
+        // OpenInitializationGate's ObserveOn), while Hub.Dispose() merely POSTS a ShutdownRequest
+        // whose turn reaches MessageService.Dispose later, on the hub's action block. Both ends
+        // then drain the SAME deferred backlog through DrainDeferredDeliveries, and whichever got
+        // there first decided what the requester was told — measured 1 ms apart, with the
+        // requester receiving "the message was never processed" instead of the infrastructure
+        // fault that retired the activation. With the ErrorType carried by the gate failure there
+        // is nothing left for the ordering to protect, so the backlog is answered before a
+        // teardown exists that could answer it differently.
         if (allInit.IsFaulted && InfrastructureFault.IsTransient(allInit.Exception))
         {
             if (Hub.Configuration.ReactivatesOnDemand
@@ -567,8 +585,8 @@ public sealed record DataContext : IDisposable
                     "DataContext initialization for {Address} met a transient infrastructure fault — retiring "
                     + "this activation instead of latching it FAILED; the address reactivates on the next "
                     + "delivery and initializes again. {Reason}", Hub.Address, reason);
+                Hub.FailGate(InitializationGateName, reason, ErrorType.ShuttingDown);
                 Hub.Dispose();
-                Hub.FailGate(InitializationGateName, reason);
                 return;
             }
             logger.LogError(allInit.Exception,

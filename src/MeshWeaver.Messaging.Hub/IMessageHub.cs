@@ -276,6 +276,36 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// <returns>True if the gate existed and was failed; false if it was not found (already opened).</returns>
     bool FailGate(string name, string reason);
 
+    /// <summary>
+    /// <see cref="FailGate(string,string)"/> with the refusal's classification STATED rather than
+    /// derived — the form every in-tree caller uses.
+    ///
+    /// <para>🚨 Why it exists (issue #4261). The two-argument form leaves the
+    /// <see cref="ErrorType"/> to be worked out when the backlog is actually drained, from
+    /// <see cref="IsShuttingDown"/>. That makes the answer a property of HOW FAR A TEARDOWN HAS GOT
+    /// rather than of WHY THE GATE DIED, and it forced every retirement site to call
+    /// <see cref="IDisposable.Dispose"/> BEFORE this method purely to make that read come out
+    /// transient. Those two calls run on DIFFERENT THREADS — a <c>DataContext</c> settles its gate
+    /// on the thread pool, while <c>Dispose()</c> only POSTS a <c>ShutdownRequest</c> whose turn
+    /// later drains the SAME backlog on the hub's action block — so the ordering could not be
+    /// enforced and the requester was told "the message was never processed" instead of the
+    /// infrastructure fault that actually retired the activation. Measured 1 ms apart in a failing
+    /// run. With the classification stated up front the gate is failed FIRST, before a teardown
+    /// exists that could answer it differently.</para>
+    ///
+    /// <para>An implementer that does not override this keeps the historical behaviour of
+    /// <see cref="FailGate(string,string)"/> — the classification is derived, and the ordering
+    /// hazard above is theirs to avoid.</para>
+    /// </summary>
+    /// <param name="name">The name of the gate that can never open.</param>
+    /// <param name="reason">Why it can never open; becomes the failure message senders receive.</param>
+    /// <param name="errorType">
+    /// How the refusal is classified. <see cref="ErrorType.ShuttingDown"/> whenever the address can
+    /// come back — "ask again", never "gone".
+    /// </param>
+    /// <returns>True if the gate existed and was failed; false if it was not found (already opened).</returns>
+    bool FailGate(string name, string reason, ErrorType errorType) => FailGate(name, reason);
+
 
     internal IObservable<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,

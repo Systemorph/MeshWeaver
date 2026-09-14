@@ -458,20 +458,44 @@ public class MessageService : IMessageService
     }
 
     /// <summary>
-    /// Gates that can never open, by name → why. A gate here stays in <see cref="gates"/> (so
-    /// nothing that would have been deferred is instead let through to handlers that were never
-    /// initialized) but the deferral path ANSWERS those deliveries instead of parking them.
+    /// Gates that can never open, by name → why, AND how the answer is to be classified. A gate
+    /// here stays in <see cref="gates"/> (so nothing that would have been deferred is instead let
+    /// through to handlers that were never initialized) but the deferral path ANSWERS those
+    /// deliveries instead of parking them.
+    ///
+    /// <para>🚨 The <see cref="ErrorType"/> is stored WITH the reason, decided by whoever failed
+    /// the gate, and is never re-derived at drain time — see <see cref="FailGate(string,string,ErrorType)"/>.</para>
     /// </summary>
-    private readonly ConcurrentDictionary<string, string> failedGates = new();
+    private readonly ConcurrentDictionary<string, (string Reason, ErrorType ErrorType)> failedGates = new();
 
     /// <summary>
-    /// Declares <paramref name="name"/> DEAD — see <see cref="IMessageHub.FailGate"/>. Answers the
+    /// Declares <paramref name="name"/> DEAD — see <see cref="IMessageHub.FailGate(string,string,ErrorType)"/>. Answers the
     /// entire deferred backlog now, and marks the gate so every later deferral is answered too.
     ///
     /// <para>🚨 The WHOLE backlog is answered, not just the part "belonging" to this gate: a
     /// delivery is held until EVERY gate opens, so one dead gate strands all of them equally.</para>
+    ///
+    /// <para>🚨 <paramref name="errorType"/> IS THE CLASSIFICATION, and it travels with the reason
+    /// (issue #4261). It used to be re-derived at drain time from <c>hub.IsShuttingDown</c>, which
+    /// made the answer a property of HOW FAR A TEARDOWN HAD GOT rather than of WHY THE GATE DIED —
+    /// and that forced every retirement site to call <c>Dispose()</c> BEFORE <c>FailGate</c> just
+    /// to make the read come out transient. Those two calls run on different threads (the
+    /// <c>DataContext</c> settle runs on the thread pool; <c>Dispose</c> only POSTS, and
+    /// <c>MessageService.Dispose</c> runs later inside that request's turn on the action block), so
+    /// the ordering the comments demanded could not be enforced: both ends drain the SAME backlog
+    /// through <see cref="DrainDeferredDeliveries"/>, and whichever arrived first decided what the
+    /// requester was told. Measured 1 ms apart in a failing run. With the classification explicit
+    /// the gate can be failed FIRST — before a teardown exists that could answer it differently —
+    /// so the requester learns the CAUSE rather than the generic disposal nack.</para>
     /// </summary>
-    public bool FailGate(string name, string reason)
+    /// <param name="name">The gate that can never open.</param>
+    /// <param name="reason">Why it can never open; becomes the failure message senders receive.</param>
+    /// <param name="errorType">
+    /// How the refusal is to be classified. <see cref="ErrorType.ShuttingDown"/> whenever the
+    /// address can come back ("ask again"); <see cref="ErrorType.Unknown"/> keeps the historical
+    /// derive-from-run-level behaviour for callers that have not stated one.
+    /// </param>
+    public bool FailGate(string name, string reason, ErrorType errorType)
     {
         lock (gateStateLock)
         {
@@ -483,15 +507,15 @@ public class MessageService : IMessageService
                 return false;
             }
 
-            failedGates[name] = reason;
+            failedGates[name] = (reason, errorType);
         }
 
         logger.LogDebug(
             "Initialization gate '{Name}' in hub {Address} can NEVER open ({Reason}) — failing "
-            + "{Count} deferred delivery/deliveries instead of parking them",
-            name, Address, reason, deferredDeliveries.Count);
+            + "{Count} deferred delivery/deliveries instead of parking them, classified {ErrorType}",
+            name, Address, reason, deferredDeliveries.Count, errorType);
 
-        FailDeferredBacklog(reason);
+        FailDeferredBacklog(reason, errorType);
         return true;
     }
 
@@ -501,9 +525,9 @@ public class MessageService : IMessageService
     /// <see cref="NotifyStartupFailure"/> and <see cref="Dispose"/> apply, reached here from a
     /// KNOWN-terminal gate rather than from a timeout.
     /// </summary>
-    private void FailDeferredBacklog(string reason)
+    private void FailDeferredBacklog(string reason, ErrorType errorType)
     {
-        DrainDeferredDeliveries((delivery, _) => AnswerUnreleasableDelivery(delivery, reason));
+        DrainDeferredDeliveries((delivery, _) => AnswerUnreleasableDelivery(delivery, reason, errorType));
         // The parked turns are the same deliveries, already answered — running them later
         // (a subsequent OpenGate, the disposal drain) would answer them a second time.
         lock (turnGate)
@@ -516,11 +540,18 @@ public class MessageService : IMessageService
     /// otherwise through this hub's own <see cref="ReportFailure"/> — which still works here
     /// because a failed gate is reached long before <c>RunLevel &gt;= DisposeHostedHubs</c>.
     /// </summary>
-    private void AnswerUnreleasableDelivery(IMessageDelivery delivery, string reason)
+    /// <param name="errorType">
+    /// The classification the GATE FAILURE carries. <see cref="ErrorType.Unknown"/> means "not
+    /// stated" and falls back to the historical read of the hub's run level — which is exactly the
+    /// dependence on teardown progress #4261 removed, so every in-tree caller states one.
+    /// </param>
+    private void AnswerUnreleasableDelivery(IMessageDelivery delivery, string reason, ErrorType errorType)
     {
         if (!NackThroughParent(delivery, reason))
             ReportFailure(delivery.WithProperty("Error", reason),
-                hub.IsShuttingDown ? ErrorType.ShuttingDown : ErrorType.Failed);
+                errorType != ErrorType.Unknown
+                    ? errorType
+                    : hub.IsShuttingDown ? ErrorType.ShuttingDown : ErrorType.Failed);
     }
 
     /// <summary>
@@ -1833,8 +1864,16 @@ public class MessageService : IMessageService
                         // IMessageHub.FailGate.
                         if (shouldDefer && !failedGates.IsEmpty)
                         {
+                            var deadGates = failedGates.ToArray();
                             var deadReason = string.Join("; ",
-                                failedGates.Select(g => $"[{g.Key}] {g.Value}"));
+                                deadGates.Select(g => $"[{g.Key}] {g.Value.Reason}"));
+                            // The classification travels with the gate failure (#4261), never
+                            // re-derived here from how far a teardown has got. Several dead gates
+                            // can only be answered once, so the FIRST stated classification wins —
+                            // an unstated one (Unknown) falls through to the historical read.
+                            var deadErrorType = deadGates
+                                .Select(g => g.Value.ErrorType)
+                                .FirstOrDefault(t => t != ErrorType.Unknown, ErrorType.Unknown);
                             MessageTrace.Write(
                                 $"hub={Address} msg={name} id={delivery.Id} GATE_FAILED gates=[{string.Join(",", failedGates.Keys)}]");
                             fate?.Add($"GATE_FAILED gates=[{string.Join(",", failedGates.Keys)}]", Address);
@@ -1842,7 +1881,7 @@ public class MessageService : IMessageService
                                 "Failing {MessageType} (ID: {MessageId}) in {Address} — it would have been "
                                 + "deferred behind gate(s) that can never open: {Reason}",
                                 delivery.Message.GetType().Name, delivery.Id, Address, deadReason);
-                            AnswerUnreleasableDelivery(delivery, deadReason);
+                            AnswerUnreleasableDelivery(delivery, deadReason, deadErrorType);
                             return Observable.Return(delivery.Failed(deadReason));
                         }
 
