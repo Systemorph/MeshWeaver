@@ -802,14 +802,21 @@ held nothing:
 | writer | what it writes | held a lease |
 |---|---|---|
 | `PackageInstaller.Install` / `InstallNodeRepoDelta` | the package's tree under its root | yes |
-| `GitHubActivityExtensions.UpdateToLatestFromGitHub` and the two unattended imports | the whole Space tree, **including the `NodeType` retypes `RequiresRebind` fires on** | **no** → now yes |
+| `GitHubActivityExtensions`' FOUR import entry points | the whole Space tree, **including the `NodeType` retypes `RequiresRebind` fires on** | **no** → now yes |
 | the Plugins-side `Store/Publishing/Source/SystemInstall` plan (`CreateRoot` → `RetypeRoot` → `WireSync` → `ImportLatest` → `CompileAllTypes`) | a provisioned Space, root retype included | **no** (MeshWeaver.Plugins; separate change) |
 
-The GitSync half is closed by `GitHubActivityExtensions.HoldSpaceDuringImport`, which wraps each of
-the three import entry points — `UpdateToLatestFromGitHub`, `UpdateToProvenCommitFromGitHub`,
-`ReconcileAtProvenCommitFromGitHub` — in `PackageRootInstallLeases.HoldDuring` keyed on the Space
-path. `CommitToGitHub` is deliberately NOT wrapped: it exports the Space to the repo and writes no
-mesh nodes, so holding there would defer recycles for a reader.
+The GitSync half is closed by `GitHubActivityExtensions.HoldSpaceDuringImport`, which wraps **all
+four** import entry points in `PackageRootInstallLeases.HoldDuring` keyed on the Space path:
+`UpdateToLatestFromGitHub`, `UpdateToProvenCommitFromGitHub`, `ReconcileAtProvenCommitFromGitHub` and
+`ReimportFromGitHub`. `CommitToGitHub` is deliberately NOT wrapped: it exports the Space to the repo
+and writes no mesh nodes, so holding there would defer recycles for a reader.
+
+🚨 **The fourth one is the lesson, not a footnote.** `ReimportFromGitHub` — the settings tab's manual
+re-import — was missed on the first pass because it is the one import that does not go through
+`TriggerAuthorizedAsSystem`, so it did not match the shape the other three share. It writes the same
+tree they do. A reader who took "the import entry points are covered" on trust would have inherited
+exactly the defect this section names: a guard whose reach is assumed reads as a guarantee it does
+not keep. Enumerate the writers; do not pattern-match them.
 
 Everything the installer's lease gets, this gets for the same reasons and by the same mechanism: the
 hold is `Observable.Using`, so it is released on completion, on fault and on unsubscribe, with no

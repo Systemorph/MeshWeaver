@@ -396,7 +396,14 @@ public static class GitHubActivityExtensions
         Action<string>? onActivityCreated = null, string? sourceId = null, bool force = false)
     {
         var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
-        return hub.RunActivity(spacePath, ActivityCategory.Import,
+        // 🚨 #3510 — hold the Space's root for the whole import; see HoldSpaceDuringImport. This is
+        // the path the SETTINGS TAB's manual re-import takes (GitHubSyncSettingsTab), and it writes
+        // the same tree the unattended imports do; it was missed on the first pass, which is the
+        // very defect that section names — a guard whose reach is assumed reads as a guarantee it
+        // does not keep.
+        return HoldSpaceDuringImport(hub, spacePath,
+            $"GitSync: a re-import is writing '{spacePath}' at {commitish}",
+            hub.RunActivity(spacePath, ActivityCategory.Import,
             new LogMessage($"Re-import {spacePath} at {commitish}", LogLevel.Information)
                 .WithKey("activity.gitsync.reimport.title", ("space", spacePath), ("commitish", commitish)),
             ctx =>
@@ -415,7 +422,7 @@ public static class GitHubActivityExtensions
                     ctx.Log(ImportedLine(r, commitish));
                     return Unit.Default;
                 });
-            }, onActivityCreated);
+            }, onActivityCreated));
     }
 
     /// <summary>

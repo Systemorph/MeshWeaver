@@ -1201,6 +1201,26 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// 🚨 Did a route actually TAKE this reply — the predicate both create-verdict posts check.
+    ///
+    /// <para><c>null</c> and <see cref="MessageDeliveryState.Failed"/> are the refusals
+    /// <c>MessageService.PostImplGeneric</c> returns when the hub (and its parent) are past
+    /// <c>DisposeHostedHubs</c>, stamped <c>POST_REFUSED_SHUTTING_DOWN</c>.
+    /// <see cref="MessageDeliveryState.Ignored"/> belongs with them and is the one that reads like
+    /// a success: the storm breaker and the aggregate shedder return it WITHOUT enqueueing
+    /// anything, so treating it as carried would claim the once-only gate, skip the parent
+    /// fallback, and leave the caller waiting out its budget for a verdict that was dropped on the
+    /// floor. <c>MessageHub.TryDeliverNackInProcess</c> already rejects exactly this pair
+    /// (<c>is not (Failed or Ignored)</c>) for the same reason; this is that rule, not a new
+    /// one.</para>
+    /// </summary>
+    /// <param name="delivery">The post's result, or <c>null</c> when the transport returned none.</param>
+    /// <returns><c>true</c> when the reply was accepted for delivery.</returns>
+    private static bool WasCarried(IMessageDelivery? delivery)
+        => delivery is not null
+           && delivery.State is not (MessageDeliveryState.Failed or MessageDeliveryState.Ignored);
+
+    /// <summary>
     /// 🚨 Posts a terminal <see cref="CreateNodeResponse"/> and VERIFIES that a route took it —
     /// claim-then-verify, the same shape <c>DataExtensions.PostPatchVerdict</c> uses on the UPDATE
     /// leg and for the same reason (#3196, carried to the create leg by #3510).
@@ -1237,8 +1257,7 @@ public static class MeshExtensions
         IMessageHub? parent,
         ILogger logger)
     {
-        var delivery = hub.Post(response, o => o.ResponseFor(request));
-        if (delivery is not null && delivery.State != MessageDeliveryState.Failed)
+        if (WasCarried(hub.Post(response, o => o.ResponseFor(request))))
             return;
 
         ReportVerdictWithNoRoute(hub, request, response, parent, logger, "[CreateNode]");
@@ -1274,8 +1293,7 @@ public static class MeshExtensions
             return;
         }
 
-        var viaParent = parent.Post(response, o => o.ResponseFor(request));
-        if (viaParent is not null && viaParent.State != MessageDeliveryState.Failed)
+        if (WasCarried(parent.Post(response, o => o.ResponseFor(request))))
             return;
 
         logger.LogWarning(
@@ -1358,9 +1376,13 @@ public static class MeshExtensions
             var nodeErr = new MeshNodeError(
                 MeshNodeErrorCode.OwnerDisposing,
                 hubPath,
-                "the activation handling this create was disposed before the create chain reached a "
-                + "verdict — the create was NOT completed by this activation; re-drive it against "
-                + "the fresh one (a row that did land answers NodeAlreadyExists)");
+                $"the activation '{hubPath}' handling this create was disposed before the create "
+                + "chain reached a verdict — the create was NOT completed by that activation; "
+                + "re-drive it against the fresh one (a row that did land answers "
+                + "NodeAlreadyExists). 🚨 The hub is NAMED in the sentence, not only in the "
+                + "structured payload: the requester is usually in another process and sees none of "
+                + "this hub's log, so an unnamed teardown leaves the next occurrence unattributable "
+                + "from the only side that can see it.");
             var resp = CreateNodeResponse.Fail(nodeErr.Message, NodeCreationRejectionReason.Unavailable)
                 with { NodeError = nodeErr };
             hub.NoteRequestStage(request.Id, "CREATE_OWNER_DISPOSING_NACK");
@@ -5103,10 +5125,7 @@ public static class MeshExtensions
 
         return request.Processed();
 
-        // <param name="attempt">Which re-drive this is: 0 for the first dispatch, incremented only
-        // by the OwnerDisposing arm below and capped at
-        // <see cref="MeshNodeStreamHandle.MaxOwnerDisposingReenqueues"/>.</param>
-        void DispatchInnerCreate(int attempt = 0)
+        void DispatchInnerCreate()
         {
             // Claimed by whichever arm answers first, so the three terminal states cannot double-post.
             var innerAnswered = false;
@@ -5182,46 +5201,37 @@ public static class MeshExtensions
                             // resolves.
                             ApplyUpdateViaStream(node, existingNodeType: null);
                         }
-                        // 🚨 THE OWNER-DISPOSING RE-DRIVE (#3510) — the create leg's half of the
-                        // recovery the UPDATE leg has had since #3499. The inner create's owner
-                        // answered "I went away owing you a verdict", which is not a verdict about
-                        // this request: the activation re-forms at the same address, so re-driving
-                        // reaches the fresh one. Capped at the SAME budget
-                        // MeshNodeStreamHandle uses for the patch leg's re-enqueue
-                        // (MaxOwnerDisposingReenqueues = 2 — enough to cover a re-drive that itself
-                        // lands on a disposing fresh activation during recycle churn), and derived
-                        // from that constant rather than restated so the two cannot drift.
+                        // 🚨 AN OwnerDisposing NACK IS NOT RE-DRIVEN HERE, AND THE REASON IS
+                        // STRUCTURAL (#3510). The obvious symmetry with the patch leg — re-enqueue
+                        // against the fresh activation, capped at
+                        // MeshNodeStreamHandle.MaxOwnerDisposingReenqueues — would be UNREACHABLE
+                        // code on this branch, and unreachable code that looks like a recovery is
+                        // worse than none: it reads to the next person as a covered case.
                         //
-                        // 🚨 IDEMPOTENT BY CONSTRUCTION, which is what makes it safe where the
-                        // create leg cannot promise "never applied": a create whose row DID land is
-                        // answered NodeAlreadyExists, and the arm directly above folds exactly that
-                        // into the update path. So a re-drive either creates (the row was gone with
-                        // its activation) or converges to an update (it was not) — both the outcome
-                        // the caller asked for, and neither a second row.
+                        // The inner create is posted to THIS hub's own address (see the #981 note
+                        // above, which is why it must stay that way), so the ONLY activation whose
+                        // disposal can mint that NACK for it is this hub — and a hub past
+                        // DisposeHostedHubs cannot take a re-drive. A re-attempt would buy a second
+                        // InnerCreateVerdictBound of silence before the identical refusal, which is
+                        // the band-aid shape this repository refuses.
                         //
-                        // 🚨 NOT re-driven onto a hub that is itself going down. The inner create is
-                        // posted to THIS hub's address, so when this hub is the one disposing, a
-                        // re-drive cannot be taken and would only buy a second InnerCreateVerdictBound
-                        // of silence before the same refusal — the band-aid shape this repository
-                        // refuses. The caller is answered immediately instead, with the owner's own
-                        // words and its structured code, which is strictly better than the "outcome
-                        // unknown" it used to get at the bound.
-                        else if ((d.Message as CreateNodeResponse)?.NodeError?.Code
-                                     == MeshNodeErrorCode.OwnerDisposing
-                                 && attempt < MeshNodeStreamHandle.MaxOwnerDisposingReenqueues
-                                 && !hub.IsShuttingDown)
-                        {
-                            hub.NoteRequestStage(request.Id,
-                                $"UPSERT_CREATE_OWNER_NACK_REENQUEUE attempt={attempt + 1}");
-                            logger.LogInformation(
-                                "[CreateOrUpdate] the inner CreateNode for {Path} was NACKed "
-                                + "OwnerDisposing by {Owner}; re-driving against the fresh "
-                                + "activation (attempt {Attempt} of {Max}).",
-                                node.Path,
-                                (d.Message as CreateNodeResponse)?.NodeError?.Path ?? "(unnamed)",
-                                attempt + 1, MeshNodeStreamHandle.MaxOwnerDisposingReenqueues);
-                            DispatchInnerCreate(attempt + 1);
-                        }
+                        // 🚨 AND A CALLER-SIDE RE-DRIVE IS NOT SHIPPED EITHER, ON EVIDENCE. The
+                        // obvious next move — re-post from `MeshService.CreateNode`, the way
+                        // `MeshNodeStreamHandle` re-enqueues a patch — was written and MEASURED, and
+                        // it does not work on this lane: node CRUD executes on
+                        // `portal/nodeops-{meshId}`, a stream-ROUTED address that is unregistered
+                        // when its hub is disposed and is NOT re-materialised by posting to it. The
+                        // re-post is answered `RouteMessage: NotFound … No node found at
+                        // 'portal/nodeops-…'`, so the retry buys one extra round trip before the
+                        // identical failure — a bound-widening band-aid, not a recovery. Making that
+                        // address re-form is its own change; until it does, a retry here would be a
+                        // promise the transport cannot keep.
+                        //
+                        // What this branch does IS the Expectation #3510 states — *"the install
+                        // fails in milliseconds with a name instead of running out a 10-minute
+                        // bound"*: the caller is answered IMMEDIATELY, carrying the owner's own
+                        // words and its structured code, instead of waiting out
+                        // InnerCreateVerdictBound for "the outcome is unknown".
                         else
                             PostFail(
                                 // The inner Error is the create handler's own words — verbatim

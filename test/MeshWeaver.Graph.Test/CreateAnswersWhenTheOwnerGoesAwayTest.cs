@@ -62,6 +62,13 @@ public class CreateAnswersWhenTheOwnerGoesAwayTest(ITestOutputHelper output)
     private const string ParkMarker = "create-nack-parked";
 
     /// <summary>
+    /// Path infix that parks the FIRST create for a path and passes every later one — the lever the
+    /// convergence case needs, because a re-drive that met the same park would never finish and the
+    /// test could only ever assert "answered", never "recovered".
+    /// </summary>
+    private const string ParkOnceMarker = "create-nack-parkonce";
+
+    /// <summary>
     /// 🚨 A creation validator that PARKS — it signals that it was entered and then never emits,
     /// never completes and never faults. That is Rx's fourth outcome, the one a
     /// <c>Subscribe(onNext, onError)</c> plus an <c>onCompleted</c> arm still settles as silence,
@@ -74,24 +81,45 @@ public class CreateAnswersWhenTheOwnerGoesAwayTest(ITestOutputHelper output)
     {
         private readonly ReplaySubject<string> entered = new(1);
 
-        /// <summary>Emits the path of the first create this validator parked.</summary>
+        // Instance state on a mesh-scoped singleton, never static: the repository's no-static-state
+        // rule holds in test/ too, and a static here would bleed across test classes.
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> parkedOnce =
+            new(StringComparer.Ordinal);
+
+        /// <summary>Emits the path of each create this validator parked.</summary>
         public IObservable<string> Entered => entered;
+
+        /// <summary>How many creates have been parked — the denominator the convergence case
+        /// reads, so "it recovered" is distinguishable from "it never parked in the first
+        /// place".</summary>
+        public int ParkedCount => parkedOnce.Count;
 
         public IReadOnlyCollection<NodeOperation> SupportedOperations { get; } =
             new[] { NodeOperation.Create };
 
         public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
         {
-            if (context.Node.Path?.Contains(ParkMarker, StringComparison.Ordinal) != true)
+            var path = context.Node.Path;
+            if (path is null)
                 return Observable.Return(NodeValidationResult.Valid());
 
-            return Observable.Create<NodeValidationResult>(_ =>
+            if (path.Contains(ParkOnceMarker, StringComparison.Ordinal))
+                // TryAdd is the once-only claim: the FIRST create for this path parks, every
+                // re-drive of it validates normally.
+                return parkedOnce.TryAdd(path, 0) ? Park(path) : Observable.Return(NodeValidationResult.Valid());
+
+            return path.Contains(ParkMarker, StringComparison.Ordinal)
+                ? Park(path)
+                : Observable.Return(NodeValidationResult.Valid());
+        }
+
+        private IObservable<NodeValidationResult> Park(string path) =>
+            Observable.Create<NodeValidationResult>(_ =>
             {
-                entered.OnNext(context.Node.Path);
+                entered.OnNext(path);
                 // No emission, no completion, no fault — the park.
                 return Disposable.Empty;
             });
-        }
     }
 
     // Field initializers run BEFORE the base constructor body, which is where ConfigureMesh is
@@ -225,5 +253,112 @@ public class CreateAnswersWhenTheOwnerGoesAwayTest(ITestOutputHelper output)
         answer.Message.NodeError.Should().BeNull(
             "a successful create carries no structured error — otherwise the regression above "
             + "would pass on a fix that stamped OwnerDisposing unconditionally");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The SANCTIONED caller — <c>IMeshService.CreateNode</c> — is answered in milliseconds
+    /// with a NAME, instead of waiting out its budget.</b> That is #3510's Expectation verbatim:
+    /// *"the recycle answers every in-flight write under it with a NACK the nodeops handler turns
+    /// into the installer's reply, so the install fails in milliseconds with a name instead of
+    /// running out a 10-minute bound."*
+    ///
+    /// <para><b>Why this case exists beside the one above, rather than duplicating it.</b> The
+    /// first case posts a <see cref="CreateNodeRequest"/> directly and reads the response; this one
+    /// goes through the API every production writer actually uses, whose failure surface is an
+    /// <see cref="Exception"/> on the observable, not a response object. The NACK has to survive
+    /// that translation — through the owner's parent, into the caller's callback, through
+    /// <c>ToException</c> — and "the verdict was minted" says nothing about whether it arrived
+    /// there.</para>
+    ///
+    /// <para>🚨 <b>What it deliberately does NOT assert: a recovery.</b> A re-drive was written and
+    /// measured against this exact rig and does not work on this lane —
+    /// <c>portal/nodeops-{meshId}</c> is a stream-routed address that is unregistered with its hub
+    /// and is not re-materialised by posting to it, so the re-post is answered
+    /// <c>RouteMessage: NotFound … No node found at 'portal/nodeops-…'</c> and buys one extra round
+    /// trip before the identical failure. Asserting a convergence this transport cannot deliver
+    /// would be a test written for a promise rather than for the code.</para>
+    ///
+    /// <para>The bound is what carries the claim: the answer must arrive well inside
+    /// <see cref="TestTimeouts.Quick"/>, far below <c>InnerCreateVerdictBound</c> (36 s) — an answer
+    /// that only arrived at a bound is indistinguishable from the defect.</para>
+    /// </summary>
+    [Fact]
+    public async Task TheSanctionedCallerIsAnsweredAtOnce_NotLeftToItsBudget()
+    {
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var targetId = $"{ParkMarker}-svc-{suffix}";
+
+        // The node-operation execution hub the sanctioned caller targets. Resolved through the
+        // framework's own walk, never a hand-built address, so a change to where node CRUD executes
+        // moves this test with it rather than leaving it asserting about a hub nobody uses.
+        var executorAddress = RequestHub.NodeOperationTarget();
+        Output.WriteLine($"[target] node operations execute on {executorAddress}");
+
+        // 🚨 Resolved from the CALLER's hub, not the mesh's. `IMeshService` is AddScoped over
+        // `IMessageHub`, and `NodeOperationIssuingHub` returns the resolving hub UNCHANGED for
+        // anything that is not the router — so a per-node, portal, session or import-hub caller
+        // issues from its OWN block while the work executes on `portal/nodeops-{meshId}`. Resolving
+        // from `Mesh` instead collapses issuer and executor onto one hub, and disposing it then
+        // kills the caller's own callback: measured here as `HubDisposedBeforeResponseException`,
+        // which is a different defect and not this one.
+        var callerService = RequestHub.ServiceProvider.GetRequiredService<IMeshService>();
+        var outcome = new ReplaySubject<Exception>(1);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        using var create = access
+            .RunAsSystem(() => callerService.CreateNode(
+                new MeshNode(targetId, TestPartition) { Name = "parked", NodeType = "Markdown" }))
+            .Subscribe(
+                node => outcome.OnError(new InvalidOperationException(
+                    $"the parked create must not succeed; it emitted {node.Path}")),
+                ex =>
+                {
+                    outcome.OnNext(ex);
+                    outcome.OnCompleted();
+                });
+
+        await parkingValidator.Entered.Should().Within(TestTimeouts.Convergence).Emit(
+            "the create must be parked inside the executing hub before that hub is disposed");
+        var executor = Mesh.GetHostedHub(executorAddress, HostedHubCreation.Never);
+        executor.Should().NotBeNull("the parked create proves the executing hub exists");
+        Output.WriteLine("[fence] the create is parked inside the node-operation execution hub");
+
+        executor!.Post(
+            new DisposeRequest
+            {
+                Reason = "CreateAnswersWhenTheOwnerGoesAwayTest: disposing the node-operation "
+                         + "execution hub while it handles a create, to drive #3510's create leg "
+                         + "through the sanctioned caller",
+            },
+            o => o.WithTarget(executor.Address));
+        Output.WriteLine("[dispose] DisposeRequest posted to the executing hub");
+
+        var error = await outcome.Should().Within(TestTimeouts.Quick).Emit(
+            "the sanctioned caller must be told, AT ONCE, that the activation went away — silence "
+            + "until InnerCreateVerdictBound is #3510: the installer then runs out its whole bound "
+            + "with no name for what happened");
+
+        Output.WriteLine($"[caller] {error.GetType().Name}: {error.Message}");
+
+        // 🚨 The STRUCTURED check first: a caller that only ever sees the exception must be able to
+        // act on the code rather than parse a sentence. That is what NodeErrorKey is for.
+        var nodeError = error.Data[NodeCreationFailure.NodeErrorKey] as MeshNodeError;
+        nodeError.Should().NotBeNull(
+            "the structured verdict must survive the translation to an exception — the sanctioned "
+            + "caller's failure surface IS an exception, so dropping it here would leave every "
+            + "programmatic consumer pattern-matching a sentence");
+        nodeError!.Code.Should().Be(MeshNodeErrorCode.OwnerDisposing,
+            "'the activation went away' is not a verdict about the request, and only the code can "
+            + "say so");
+        nodeError.Path.Should().Be(executorAddress.ToString(),
+            "it must name the activation that went away, so the next occurrence is attributable "
+            + "from the requester's side alone");
+
+        // And the sentence too, because the requester is usually in another process and a log
+        // reader there has nothing else to go on.
+        error.Message.Should().Contain("disposed",
+            "the failure must NAME the teardown, not merely fail — 'the outcome is unknown' is the "
+            + "answer this change exists to replace");
+        error.Message.Should().Contain(executorAddress.ToString(),
+            "and the hub must be named in the words as well as in the payload");
     }
 }
