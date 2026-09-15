@@ -41,8 +41,8 @@ namespace MeshWeaver.Data;
 
 /// <summary>
 /// Default <see cref="IWorkspace"/> implementation: builds the data context from the hub's
-/// configuration, caches remote synchronization streams (evicting them when their owner node
-/// changes), and routes reads, writes and disposal through the owning message hub.
+/// configuration, caches remote synchronization streams (version-gating them against the change
+/// feed, and evicting them when their owner node is deleted), and routes reads, writes and disposal through the owning message hub.
 /// </summary>
 public class Workspace : IWorkspace
 {
@@ -69,18 +69,17 @@ public class Workspace : IWorkspace
         logger.LogDebug("Started initialization of data context of address {address}", Id);
         DataContext.Initialize();
 
-        // Evict cached remote streams when their owner node changes (delete, recreate,
-        // recycle, content/type update). Without this, a Singleton workspace keeps
-        // serving the original snapshot forever — including across Blazor circuit
-        // refreshes, since the workspace lives on the singleton mesh hub. The next
-        // GetRemoteStream after eviction creates a fresh subscription against the
-        // (re-)activated owner and pulls the current persistence state.
+        // React to commits on the owners of cached remote streams — see OnOwnerNodeChanged. A
+        // versioned UPDATE records the announced version as the next write's freshness floor and
+        // KEEPS the mirror (#1174); everything else (delete, create/recreate, a version-less
+        // recycle broadcast) evicts, so the next GetRemoteStream creates a fresh subscription
+        // against the (re-)activated owner and pulls the current persistence state.
         //
         // IMeshInvalidationFeed lives in MeshWeaver.Mesh.Contract which would create a
         // Data → Mesh.Contract → Layout → Data project cycle. Resolve via reflection
         // and adapt the Subscribe(Action<MeshChangeEvent>, MeshChangeKind?) signature.
         _changeFeedSubscription = TrySubscribeToChangeFeed(hub.ServiceProvider, _logger,
-            evtPath => EvictForPath(evtPath));
+            (evtPath, evtVersion, evtKind) => OnOwnerNodeChanged(evtPath, evtVersion, evtKind));
 
         // 🚨 Give the hub the goodbye it cannot say for itself — see RecycleAnnouncement and
         // AnnounceRecycleToClientSubscriptions. Registered here because the client-subscription
@@ -234,7 +233,7 @@ public class Workspace : IWorkspace
     }
 
     private static IDisposable? TrySubscribeToChangeFeed(
-        IServiceProvider serviceProvider, ILogger logger, Action<string> onPathChanged)
+        IServiceProvider serviceProvider, ILogger logger, Action<string, long, string?> onPathChanged)
     {
         try
         {
@@ -258,12 +257,18 @@ public class Workspace : IWorkspace
             if (eventType is null) return null;
             var pathProp = eventType.GetProperty("Path");
             if (pathProp is null) return null;
+            // 🚨 The VERSION and KIND the commit announced — the whole of the version-aware base
+            // (#1174). Optional by construction: an event shape that lacks either reads as 0 /
+            // null, and OnOwnerNodeChanged EVICTS for both, i.e. keeps the pre-#1174 behaviour
+            // for that event. Never assume they are there.
+            var versionProp = eventType.GetProperty("Version", typeof(long));
+            var kindProp = eventType.GetProperty("Kind");
 
             // Build a strongly-typed Action<MeshChangeEvent> via a generic helper so the
             // runtime sees the exact delegate signature Subscribe expects.
             var helper = typeof(Workspace).GetMethod(nameof(SubscribeChangeFeedHelper),
                 BindingFlags.NonPublic | BindingFlags.Static)!.MakeGenericMethod(eventType);
-            return (IDisposable?)helper.Invoke(null, [feed, subscribe, pathProp, onPathChanged]);
+            return (IDisposable?)helper.Invoke(null, [feed, subscribe, pathProp, versionProp, kindProp, onPathChanged]);
         }
         catch (Exception ex)
         {
@@ -274,7 +279,8 @@ public class Workspace : IWorkspace
     }
 
     private static IDisposable? SubscribeChangeFeedHelper<TEvent>(
-        object feed, MethodInfo subscribe, PropertyInfo pathProperty, Action<string> onPathChanged)
+        object feed, MethodInfo subscribe, PropertyInfo pathProperty, PropertyInfo? versionProperty,
+        PropertyInfo? kindProperty, Action<string, long, string?> onPathChanged)
         where TEvent : class
     {
         Action<TEvent> handler = evt =>
@@ -282,7 +288,9 @@ public class Workspace : IWorkspace
             try
             {
                 if (pathProperty.GetValue(evt) is string p && !string.IsNullOrEmpty(p))
-                    onPathChanged(p);
+                    onPathChanged(p,
+                        versionProperty?.GetValue(evt) is long v ? v : 0L,
+                        kindProperty?.GetValue(evt)?.ToString());
             }
             catch { /* keep change-feed alive on handler faults */ }
         };
@@ -290,54 +298,151 @@ public class Workspace : IWorkspace
     }
 
     /// <summary>
-    /// Drops any cached remote streams whose owner address matches the changed path.
+    /// 🚨 The change feed's arrival on a cached mirror's owner — issue #1174. It does ONE of two
+    /// things, and which one is decided by what the commit ANNOUNCED, never by how the mirror
+    /// looks.
+    ///
+    /// <list type="number">
+    ///   <item><description><b>A versioned <c>Updated</c></b> — the hot path, one per write —
+    ///     RECORDS the announced version against the owner and leaves the mirror in the cache. The
+    ///     writer's base read then waits for the mirror to REACH that version before it diffs
+    ///     (<c>MeshNodeStreamHandle.RebaseSource</c>), so freshness is PROVEN per write instead of
+    ///     being bought by throwing the mirror away.</description></item>
+    ///   <item><description><b>Everything else EVICTS</b>, exactly as this method always did: a
+    ///     <c>Deleted</c> (which announces 0 by construction — the node is gone and a recreate
+    ///     restarts its version counter), a <c>Created</c> (a create on a path this workspace already
+    ///     mirrors is a RECREATE, a new incarnation whose versions say nothing about the old
+    ///     mirror's), the version-less <c>Updated</c> the operator recycle broadcasts, and any event
+    ///     shape that carries no version or kind. None of those gives a version a mirror could be
+    ///     held to, so the pre-#1174 behaviour is the only safe one — and all of them are rare, so
+    ///     keeping it costs nothing on a hot path.</description></item>
+    /// </list>
+    ///
+    /// <para>🚨🚨 <b>What must NOT come back is the LIVENESS gate.</b> Skipping the eviction
+    /// because the mirror is still <c>StreamLiveness.IsUsable</c> was implemented, measured and
+    /// REVERTED: liveness says nothing about FRESHNESS, so it handed writers a healthy mirror that
+    /// was behind. With <c>DOTNET_PROCESSOR_COUNT=4</c> on
+    /// <c>StaticRepoImportActivityWriteCountTest.AppendCost_DoesNotGrowWithTheLengthOfTheActivity</c>
+    /// it LOST a whole 25-message append batch (2000 appended, 1975 recorded) while the ungated arm
+    /// passed, and on CI it turned 80 appends into 99 writes with 44 <c>OWNER_NACK_REENQUEUE</c> /
+    /// <c>MergeGuard</c> refusals of <c>messageCount</c>. The version gate is the OPPOSITE test: it
+    /// asks the mirror to PROVE it carries the announced commit, and the writer that cannot get
+    /// that proof inside <c>ConflictRebaseBound</c> calls <see cref="EvictRemoteStreamsForPath"/>
+    /// itself — i.e. falls back to exactly the behaviour below, at the one moment it is needed.
+    /// See <c>Doc/Architecture/LiveMirrorsAndTheChangeFeed</c>.</para>
+    ///
+    /// <para><b>What the unconditional eviction cost, and why #1174 is that cost.</b> The feed
+    /// fires after EVERY create/update/delete, so every cross-hub write evicted its own mirror; a
+    /// write holds a lease only for its <c>Observable.Create</c> subscription, so moments later
+    /// <see cref="ReclaimIfUnheld"/> DISPOSED the evicted stream — <c>UnsubscribeRequest</c> to the
+    /// owner, both <c>sync/{id}</c> hubs gone — and the next write resolved a brand-new mirror:
+    /// another <c>SubscribeRequest</c>, another initial-state round trip, another pair of
+    /// <c>sync/</c> hubs, PER WRITE. Measured: six progress writes to one activity node with one
+    /// live reader minted 7 client-side and 11 owner-side <c>sync/</c> hubs. A node like
+    /// <c>{user}/_UserActivity/{user}</c> — written on every cold page load, at version 6498 in
+    /// production — paid that cycle thousands of times, and each of those hydrations had to finish
+    /// inside the writer's 30 s base-state bound while the mirror it had just destroyed was being
+    /// torn down on the same owner address. That is #1174's 414 occurrences, and it is why the
+    /// failures concentrated on HOT paths while cold ones never appeared. The
+    /// <c>"Dropping StreamEndedEvent … the target stream is gone"</c> lines of #2776 are the same
+    /// mechanism seen from the owner's side.</para>
+    /// </summary>
+    /// <param name="path">The owner path the commit names.</param>
+    /// <param name="version">The version the commit announced; <c>0</c> when the event carries
+    /// none (a <c>Deleted</c>, a recycle broadcast, or a shape that lacks the field).</param>
+    /// <param name="kind">The <c>MeshChangeKind</c> name, or <c>null</c> when the event shape
+    /// carries none. Compared by NAME because this assembly sits below the one that defines the
+    /// enum (the same reason the feed itself is resolved by reflection).</param>
+    private void OnOwnerNodeChanged(string path, long version, string? kind)
+    {
+        if (string.IsNullOrEmpty(path) || _remoteStreamCache.IsEmpty)
+            return;
+
+        if (version <= 0 || !string.Equals(kind, "Updated", StringComparison.Ordinal))
+        {
+            // Nothing a mirror could be held to — see the list above. Drop both the mark and the
+            // mirrors (EvictRemoteStreamsForPath removes the mark).
+            EvictRemoteStreamsForPath(path);
+            return;
+        }
+
+        // 🚨 Only for an owner this workspace actually mirrors. Recording for every path the
+        // process ever commits would grow without bound; recording only what the eviction loop
+        // below would have touched keeps this map bounded by _remoteStreamCache, and an owner
+        // with no mirror needs no mark at all (the next acquire builds a fresh stream, which is
+        // authoritative by construction).
+        var mirrored = false;
+        foreach (var key in _remoteStreamCache.Keys)
+        {
+            if (!string.Equals(key.Owner.ToString(), path, StringComparison.OrdinalIgnoreCase))
+                continue;
+            mirrored = true;
+            break;
+        }
+        if (!mirrored)
+        {
+            // …and a mark left behind by a detach that raced an earlier event (checked mirrored,
+            // then lost the mirror before recording) is swept here rather than kept for the life
+            // of the process. Dropping a mark with no mirror to protect is always safe.
+            _announcedVersions.TryRemove(path, out _);
+            return;
+        }
+
+        var announced = _announcedVersions.AddOrUpdate(path, version, (_, seen) => Math.Max(seen, version));
+        _logger.LogDebug(
+            "Mirror for {Address} kept; the change feed announced version {Version} (high-water {Announced}) "
+            + "and the next write's base read waits for the mirror to reach it.",
+            path, version, announced);
+    }
+
+    /// <summary>
+    /// The version the change feed most recently announced for <paramref name="path"/>, or
+    /// <c>0</c> when this workspace has heard none — the freshness floor a cross-hub write's base
+    /// must reach before it may be diffed against (#1174). <c>0</c> means "no claim", and the
+    /// write reads the mirror exactly as it did before.
+    /// </summary>
+    internal long AnnouncedVersion(string path)
+        => !string.IsNullOrEmpty(path) && _announcedVersions.TryGetValue(path, out var v) ? v : 0L;
+
+    /// <summary>
+    /// The high-water version the change feed has announced per mirrored owner path — the floor a
+    /// write's base read must reach. Instance state on the mesh-scoped workspace, never static,
+    /// and bounded by <see cref="_remoteStreamCache"/>: an entry is only ever written for an owner
+    /// this workspace currently mirrors, and removed when those mirrors leave — evicted
+    /// (<see cref="EvictRemoteStreamsForPath"/>) or detached by the shared mesh-node cache's idle
+    /// release (<see cref="DetachRemoteStreams"/>, once no mirror of the owner remains). Without
+    /// the second removal a written-then-idle path would keep its mark for the life of the
+    /// process.
+    ///
+    /// <para>Dropping a mark is always SAFE: it can only matter to a mirror that is still cached
+    /// and behind, and both removals take every such mirror out of the cache with it — a mirror
+    /// built afterwards hydrates from the owner's current state, which is at or past any version
+    /// the feed announced before it.</para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, long> _announcedVersions =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Drops any cached remote streams whose owner address matches <paramref name="path"/>.
     /// The currently-attached subscribers stay live (they continue to receive
     /// DataChanged events from the source hub for the moment); the eviction only
     /// affects the NEXT GetRemoteStream caller, which will spin up a fresh stream.
     ///
-    /// <para>🚨🚨 <b>DO NOT make this conditional on the stream still being LIVE.</b> It is the
-    /// obvious change to make — the mirror looks healthy, the owner's own fan-out delivers routine
-    /// updates, and the two other consumers of this same <c>IMeshInvalidationFeed</c> broadcast already
-    /// say so in as many words (<c>MeshNodeStreamCache.ResetFailureState</c>: <i>"A healthy live
-    /// entry is left untouched"</i>; <c>JsonSynchronizationStream</c>'s version-gated
-    /// <c>Resubscribe</c>: <i>"a HEALTHY subscriber receives that same write through its own
-    /// subscription, so resubscribing on it is pure churn"</i>). It was tried, measured, and
-    /// REVERTED — see <c>Doc/Architecture/LiveMirrorsAndTheChangeFeed</c> for the numbers.</para>
-    ///
-    /// <para><b>Why it cannot simply go.</b> This eviction is, incidentally, what keeps a
-    /// cross-hub writer's BASE current with respect to writes the OWNER makes for itself. The
-    /// per-path update queue hands a predecessor's locally-computed node to its successor
-    /// (<c>_pendingSelfWrites</c>), but that only carries THIS cache's writes forward; an
-    /// owner-side write (an activity's <c>messageCount</c>, a sealed log segment) reaches the
-    /// mirror only through the asynchronous fan-out. Evicting on the change event forces the next
-    /// write to resolve a fresh stream and therefore to diff against a freshly-fetched
-    /// authoritative snapshot. Skip it and the base goes stale: measured with
-    /// <c>DOTNET_PROCESSOR_COUNT=4</c> on
-    /// <c>StaticRepoImportActivityWriteCountTest.AppendCost_DoesNotGrowWithTheLengthOfTheActivity</c>,
-    /// the gated version LOST a whole 25-message append batch (2000 appended, 1975 recorded) while
-    /// the ungated one passed, and on CI it turned 80 appends into 99 writes with 44
-    /// <c>OWNER_NACK_REENQUEUE</c> / <c>MergeGuard</c> refusals of <c>messageCount</c>.</para>
-    ///
-    /// <para><b>What it costs, and what that cost looks like in a log.</b> The feed fires after
-    /// EVERY create/update/delete, so every cross-hub write evicts its own mirror; a write holds a
-    /// lease only for its <c>Observable.Create</c> subscription, so moments later
-    /// <see cref="ReclaimIfUnheld"/> DISPOSES the evicted stream — <c>UnsubscribeRequest</c> to the
-    /// owner, both <c>sync/{id}</c> hubs gone — and the owner then announces
-    /// <c>StreamEndedEvent</c> to a subscriber that no longer exists. Measured: six progress writes
-    /// to one activity node with one live reader mint 7 client-side and 11 owner-side <c>sync/</c>
-    /// hubs. Those announcements are the <c>"Dropping StreamEndedEvent … the target stream is
-    /// gone"</c> lines of #2776 — and they are logged
-    /// <c>SyncStreamOptions.SyncHubRegistrationGrace</c> (5 s) AFTER the stream actually ended,
-    /// which is what made that issue read as a mid-run hub teardown.</para>
-    ///
-    /// <para><b>The real fix</b> is to make the writer's base version-aware rather than to buy its
-    /// freshness with a full re-subscribe — i.e. wait for the mirror to reach the version the
-    /// change feed announced. That is a change to the write path, not to this method.</para>
+    /// <para>Two callers, and both have PROVED the mirror is unusable rather than guessed it:
+    /// <see cref="OnOwnerNodeChanged"/> for an event no mirror can be held to (a delete, a
+    /// recreate, a version-less recycle broadcast), and the write path when its base read watched
+    /// the mirror carry a node BELOW the announced version and nothing at or above it inside
+    /// <c>ConflictRebaseBound</c>. Never call it speculatively — that is the per-write churn #1174
+    /// is about.</para>
     /// </summary>
-    private void EvictForPath(string path)
+    internal void EvictRemoteStreamsForPath(string path)
     {
         if (string.IsNullOrEmpty(path) || _remoteStreamCache.IsEmpty)
             return;
+
+        // The mark describes a mirror that is about to be gone; a fresh stream is authoritative by
+        // construction and needs no floor.
+        _announcedVersions.TryRemove(path, out _);
 
         // Do NOT unconditionally dispose the evicted stream — an undeclared reader (e.g. a
         // MeshDataSource reduce callback that handed the stream on) may still be attached and
@@ -349,7 +454,6 @@ public class Workspace : IWorkspace
         foreach (var key in _remoteStreamCache.Keys)
         {
             // Owner-address match only — every identity's stream for that owner is evicted.
-            // 🚨 Unconditional ON PURPOSE — see the remarks above before adding a liveness gate.
             if (string.Equals(key.Owner.ToString(), path, StringComparison.OrdinalIgnoreCase)
                 && _remoteStreamCache.TryRemove(key, out var removed))
             {
@@ -650,7 +754,7 @@ public class Workspace : IWorkspace
     // never drift apart.
     private readonly ConcurrentDictionary<(Address Owner, WorkspaceReference Reference, string Identity), Lazy<ISynchronizationStream>> _remoteStreamCache = new();
 
-    // Streams that EvictForPath removed from the cache but did NOT dispose (their
+    // Streams that EvictRemoteStreamsForPath removed from the cache but did NOT dispose (their
     // live subscribers keep them attached). The workspace still OWNS their lifetime —
     // each carries a per-stream `sync/` hub whose 5s stale-callback scanner roots it
     // in the global TimerQueue, so an evicted-and-never-disposed stream leaks its hub
@@ -740,6 +844,21 @@ public class Workspace : IWorkspace
         // "undeclared holders" bucket until a fresh lease is taken.
         foreach (var stream in detached)
             _remoteStreamLeases.TryRemove(stream, out _);
+        // …and the freshness floor those mirrors were held to (#1174), once NO mirror of this
+        // owner is left in the cache for it to protect: the next one hydrates fresh from the
+        // owner's current state and needs no floor. Checked rather than assumed because this
+        // method detaches ONE reference, and a mark dropped while another reference's mirror of the
+        // same owner is still cached and behind would hand that mirror's next write a stale base.
+        var ownerStillMirrored = false;
+        foreach (var key in _remoteStreamCache.Keys)
+        {
+            if (!key.Owner.Equals(owner))
+                continue;
+            ownerStillMirrored = true;
+            break;
+        }
+        if (!ownerStillMirrored)
+            _announcedVersions.TryRemove(owner.ToString(), out _);
         return detached;
     }
 

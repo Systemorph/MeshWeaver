@@ -136,8 +136,10 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     // for a fact that is already on its way: the owner committed the winning write BEFORE it
     // NACK'd us, so the newer state is in flight to the mirror we are about to read. The wait is
     // for the arrival, not for a repeat. Generous against a sub-second propagation, and short
-    // enough to sit well inside the caller's own budget.
-    private static readonly TimeSpan ConflictRebaseBound = TimeSpan.FromSeconds(5);
+    // enough to sit well inside the caller's own budget. 🚨 internal, not private: the same bound
+    // is the #1174 freshness floor's catch-up wait, and its tests place their virtual-time
+    // arrivals relative to THIS value rather than restating it.
+    internal static readonly TimeSpan ConflictRebaseBound = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// 🚨 How long a write waits for a USABLE base state — a mirror emission that actually carries
@@ -343,6 +345,28 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// re-refusal. This is why the change can only improve on the old behaviour: it converges
     /// where the old shape could not, and degrades to the old shape where it cannot.</para>
     ///
+    /// <para>🚨 <b>The SAME filter now also carries the write's FRESHNESS floor — issue
+    /// #1174.</b> A cross-hub writer's base used to be kept current by throwing the mirror away:
+    /// <c>Workspace.EvictForPath</c> fired on every change-feed <c>Created/Updated/Deleted</c> and
+    /// evicted unconditionally — including the mirror the writer itself had just used — so the next
+    /// write resolved a brand-new mirror (another <c>SubscribeRequest</c>, another initial-state
+    /// round trip, another pair of <c>sync/</c> hubs) PER WRITE. On a hot path that is thousands of
+    /// hydrations, each of which has to finish inside <see cref="BaseStateWaitBound"/> while the
+    /// mirror it replaced is torn down on the same owner address — which is exactly why #1174's 414
+    /// production timeouts concentrated on <c>{user}/_UserActivity/{user}</c> (version 6498) and on
+    /// revisited pages, and never on cold paths.</para>
+    ///
+    /// <para>So the eviction is no longer the freshness barrier: the change feed's
+    /// <c>Version</c> is recorded against the owner (<c>Workspace.AnnouncedVersion</c>) and the
+    /// base must REACH it — <c>Version &gt;= announced</c> — before it may be diffed. Same filter,
+    /// same bound, same never-parks fallback; the predicate is just the conjunction of the two
+    /// reasons a base can be too old. 🚨 This is NOT the liveness gate that was
+    /// tried and reverted (<c>Doc/Architecture/LiveMirrorsAndTheChangeFeed</c>): liveness asks how
+    /// the mirror LOOKS and lets a healthy-but-behind one through, which lost a whole 25-message
+    /// append batch in <c>StaticRepoImportActivityWriteCountTest</c>. This asks the mirror to PROVE
+    /// it carries the announced commit, and <paramref name="onMirrorBehindAnnounced"/> — which
+    /// evicts — is what restores the old behaviour at the one moment it is needed.</para>
+    ///
     /// <para>Static, with the mirror and the scheduler as seams, so the re-read rule is asserted
     /// deterministically — no hub, no cluster, no wall clock.</para>
     /// </summary>
@@ -353,28 +377,76 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// <param name="onStaleMirror">Called with <paramref name="refusedBaseVersion"/> when the
     /// bound elapsed and the re-attempt fell back to un-advanced state.</param>
     /// <param name="scheduler">Timer seam for tests.</param>
+    /// <param name="announcedVersion">The highest version the change feed has announced for this
+    /// path, or <c>0</c> when this workspace has heard none — in which case the read is byte-for-byte
+    /// what it was before #1174.</param>
+    /// <param name="onMirrorBehindAnnounced">Called with <paramref name="announcedVersion"/> when
+    /// the ANNOUNCED floor is the binding one and the mirror is PROVABLY behind it — it carried a
+    /// node below the floor and nothing at or above it inside the bound. The call site evicts the
+    /// path there, so the next acquire builds a fresh mirror — the pre-#1174 behaviour, paid once
+    /// on proof instead of once per write. NOT called for a mirror that carried nothing at all: that
+    /// one is still hydrating, not behind.</param>
     internal static IObservable<MeshNode> RebaseSource(
         IObservable<MeshNode> mirror,
         long refusedBaseVersion,
         Action<long> onStaleMirror,
-        IScheduler? scheduler = null)
-        => RequireBaseState(
-            refusedBaseVersion <= 0
-                // A first attempt reads the mirror exactly as it always did — the ordinary write
-                // path gains no filter, no timer and no second subscription.
-                ? mirror.Take(1)
-                : mirror
-                    .Where(node => node.Version > refusedBaseVersion)
+        IScheduler? scheduler = null,
+        long announcedVersion = 0,
+        Action<long>? onMirrorBehindAnnounced = null)
+    {
+        // No floor at all — a first attempt on a path this workspace has heard no commit for
+        // reads the mirror exactly as it always did: no filter, no timer, no second subscription.
+        if (refusedBaseVersion <= 0 && announcedVersion <= 0)
+            return RequireBaseState(mirror.Take(1), refusedBaseVersion);
+
+        // The two reasons a base can be too old, as ONE predicate: strictly newer than a version
+        // the owner refused, AND at least the version the change feed announced.
+        bool Fresh(MeshNode node)
+            => node.Version > refusedBaseVersion && node.Version >= announcedVersion;
+
+        // Only when the ANNOUNCED floor is the binding one may the fallback evict: a conflict
+        // re-attempt whose mirror is already past the announced version is stale for the OTHER
+        // reason, and evicting there would be exactly the speculative churn #1174 is about.
+        var announcedIsBinding = announcedVersion > 0 && announcedVersion - 1 >= refusedBaseVersion;
+
+        return RequireBaseState(
+            // Deferred so the proof below is per SUBSCRIPTION — RequireBaseState / a re-enqueue may
+            // subscribe this more than once, and a shared flag would carry one attempt's evidence
+            // into the next.
+            Observable.Defer(() =>
+            {
+                // 🚨 PROOF, not suspicion. The fallback evicts only a mirror that CARRIED a node
+                // below the floor — i.e. one that is provably BEHIND. A mirror that has carried
+                // nothing yet is not behind, it is still HYDRATING (a cold owner, a per-node hub
+                // still activating), and evicting it would throw away the one subscription that is
+                // about to deliver: the next write would then hydrate yet another fresh mirror,
+                // which is the per-write churn this floor exists to remove, re-entered at exactly
+                // the moment the owner is slowest. So an un-hydrated mirror just falls back to the
+                // un-floored read, still bounded by BaseStateWaitBound.
+                var sawNodeBelowFloor = 0;
+                return mirror
+                    .Do(node =>
+                    {
+                        if (!Fresh(node))
+                            System.Threading.Volatile.Write(ref sawNodeBelowFloor, 1);
+                    })
+                    .Where(Fresh)
                     .Take(1)
                     .Timeout(
                         ConflictRebaseBound,
                         Observable.Defer(() =>
                         {
-                            onStaleMirror(refusedBaseVersion);
+                            if (refusedBaseVersion > 0)
+                                onStaleMirror(refusedBaseVersion);
+                            if (announcedIsBinding
+                                && System.Threading.Volatile.Read(ref sawNodeBelowFloor) == 1)
+                                onMirrorBehindAnnounced?.Invoke(announcedVersion);
                             return mirror.Take(1);
                         }),
-                        scheduler ?? Scheduler.Default),
+                        scheduler ?? Scheduler.Default);
+            }),
             refusedBaseVersion);
+    }
 
     /// <summary>
     /// 🚨 TOTALITY GUARD on a write's BASE READ — issue #3001. An EMPTY completion must never
@@ -1935,11 +2007,20 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // Leased for the life of this subscription — see WriteViaSyncStream's note and
             // Workspace._remoteStreamLeases (#1324): without the declaration the workspace
             // cannot tell a write-scoped mirror from one a live reader still needs.
-            var (remoteStream, streamLease) = ((Workspace)_workspace)
+            var workspace = (Workspace)_workspace;
+            var (remoteStream, streamLease) = workspace
                 .AcquireRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
                     new Address(_path!), new MeshNodeReference());
 
             var composite = new CompositeDisposable(streamLease);
+
+            // 🚨 The write's FRESHNESS floor — issue #1174. The change feed announces a Version per
+            // commit; the workspace records the highest one it has heard for this owner and KEEPS
+            // the mirror, instead of evicting it on every commit and making the next write hydrate
+            // a brand-new one inside BaseStateWaitBound. Read once, here, so the floor is the one
+            // in force when this attempt started. 0 ⇒ no claim ⇒ the read below is exactly what it
+            // was before. See Workspace.OnOwnerNodeChanged and RebaseSource.
+            var announcedVersion = workspace.AnnouncedVersion(_path!);
 
             // Wait for the per-node hub's initial SubscribeResponse before
             // running the user lambda — the lambda needs a non-null current
@@ -1976,7 +2057,25 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 + "owner refused this write as stale at version {Version}, but this hub's "
                                 + "mirror did not advance past it within {Bound}; rebuilding the patch "
                                 + "against the state it has. The re-attempt may be refused again",
-                                _workspace.Hub.Address, _path, attempt, staleVersion, ConflictRebaseBound)),
+                                _workspace.Hub.Address, _path, attempt, staleVersion, ConflictRebaseBound),
+                            scheduler: null,
+                            announcedVersion: announcedVersion,
+                            // 🚨 The mirror was asked to PROVE it carries the announced commit and
+                            // instead carried an OLDER node and nothing newer, so it is provably
+                            // behind — evict it, which is exactly what the change feed used to do
+                            // on every commit (#1174). The next acquire — this write's Conflict
+                            // re-attempt, or the next write on this path — builds a fresh one. Paid
+                            // once, on proof, instead of once per write.
+                            onMirrorBehindAnnounced: behindVersion =>
+                            {
+                                workspace.EvictRemoteStreamsForPath(_path!);
+                                diagLogger?.LogWarning(
+                                    "[UpdateRemote] MIRROR_BEHIND hub={Hub} target={Path} attempt={Attempt} — the "
+                                    + "change feed announced version {Version} but this hub's mirror carried only "
+                                    + "older state within {Bound}; evicting the mirror so the next acquire "
+                                    + "hydrates a fresh one, and building this patch on the state it has",
+                                    _workspace.Hub.Address, _path, attempt, behindVersion, ConflictRebaseBound);
+                            }),
                         pendingSelfWrite),
                     // Deferred: composed on every "never applied" re-attempt, subscribed only on the
                     // one that finds a phantom. Routed to the OWNER, whose paced re-probe stands
