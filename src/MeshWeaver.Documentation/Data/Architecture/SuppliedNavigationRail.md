@@ -7,19 +7,20 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # The Supplied Navigation Rail
 
-Core's default left-hand index is **the tree under the page's index root** — the node one level
-below the partition (`Doc/Architecture` for every page under it, `Infrastructure/Inference` for its
-sub-pages, `{viewer}/Notes` inside a home). Every page of that tree shows the same index: the root's
-children in their declared order, an entry with children as a collapsible group, the groups on the
-reader's path open, and the page being read marked as current (`DefaultNodeNavigation`).
+Core's default left-hand index is **the tree of the page's Space** — its first path segment
+(`Infrastructure` for every page under it, `{viewer}` inside a home). Every page of the Space shows
+the same index: the Space's children in their declared order, an entry with children as a
+collapsible group, the groups on the reader's path open, and the page being read marked as current
+(`DefaultNodeNavigation`).
 
 It used to be **the current node's own children**, which was right on the root of a document tree
 and wrong one level down: a sub-page has no children, so the index vanished the moment the reader
 clicked into it, and nothing told them where they were (reported 2026-09-14 on
-`Infrastructure/Inference`). The second segment is the root because the first is the partition — a
-Space, a plugin, a viewer's home — whose own overview lists its content already; an index rooted
-there would put every document of the Space beside every page of every document. A page directly
-under the partition is its own root, so a childless one still renders with no rail.
+`Infrastructure/Inference`). A first fix rooted the index one level below the Space, which left the
+Space's own pages — `Infrastructure/Options` beside `Infrastructure/Inference` — outside every index
+again (reported 2026-09-15: "Infra has one; show it, with where we are"). **The root is the Space**:
+a Space is the document and its overview is the title page, so every page under it shows the one
+index of the Space, with the page being read marked and only the groups on the reader's path open.
 
 That default is also wrong for a course: a learner standing in lesson 2 must see the whole course,
 not the document tree the lesson happens to sit in, with the course's own notion of what a page is.

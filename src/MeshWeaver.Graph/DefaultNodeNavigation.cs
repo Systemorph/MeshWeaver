@@ -15,21 +15,24 @@ namespace MeshWeaver.Graph;
 /// Core's DEFAULT left-hand index for a markdown page — what a page shows when no module's
 /// <see cref="INodeNavigationProvider"/> claims it.
 ///
-/// <para><b>What it indexes.</b> The tree under the page's <see cref="IndexRoot"/>: the node one
-/// level below the partition (<c>Doc/Architecture</c> for every page under it,
-/// <c>Infrastructure/Inference</c> for its sub-pages, <c>{viewer}/Notes</c> inside a home). Every
-/// page of that tree shows the SAME index — the root's children in their declared order, an entry
-/// with children as a collapsible group, the groups on the reader's path open, and the page being
-/// read marked as current. The index used to be the page's OWN children, which is right on the
-/// root of a document tree and wrong one level down: a sub-page has no children, so its index
-/// vanished the moment the reader clicked into it, and nothing told them where they were
-/// (reported 2026-09-14 on Infrastructure/Inference).</para>
+/// <para><b>What it indexes.</b> The tree of the page's SPACE — its <see cref="IndexRoot"/>, the
+/// first path segment (<c>Infrastructure</c> for every page under it, <c>Doc</c> for the docs,
+/// <c>{viewer}</c> inside a home). Every page of the space shows the SAME index — the space's
+/// children in their declared order, an entry with children as a collapsible group, the groups on
+/// the reader's path open, and the page being read marked as current. The index used to be the
+/// page's OWN children, which is right on the root of a document tree and wrong one level down: a
+/// sub-page has no children, so its index vanished the moment the reader clicked into it, and
+/// nothing told them where they were (reported 2026-09-14 on Infrastructure/Inference). A first
+/// fix rooted the index one level below the space, which put the space's own pages —
+/// <c>Infrastructure/Options</c> beside <c>Infrastructure/Inference</c> — outside every index
+/// again: a page directly under the space is not its own document, it is a chapter of the space's
+/// (reported 2026-09-15 on Infrastructure/Options: "Infra has one index; show it, with where we
+/// are").</para>
 ///
-/// <para><b>Why the second segment.</b> The first segment is the partition — a Space, a plugin, a
-/// viewer's home — whose own overview lists its content already, so an index rooted there would
-/// put every document of the Space beside every page of every document. One level down is where
-/// a document tree starts. A page directly under the partition is its own root, so a childless
-/// one keeps rendering with no rail, exactly as before.</para>
+/// <para><b>Why the space.</b> A space is the document; its overview is its title page. One index
+/// per space, the same on every page, is what a reader can hold in their head — a deep tree stays
+/// legible because only the groups on the reader's path open. A space's own root page shows the
+/// index too, so the rail is the one place that never moves.</para>
 ///
 /// <para>Pure at its core: <see cref="Build"/> turns one subtree snapshot into the index, so
 /// structure, ordering, exclusions and position marking are pinned without a mesh.</para>
@@ -37,14 +40,14 @@ namespace MeshWeaver.Graph;
 public static class DefaultNodeNavigation
 {
     /// <summary>
-    /// The root of the index the page at <paramref name="currentPath"/> shows: its first two path
-    /// segments, or the page itself when it is not that deep.
+    /// The root of the index the page at <paramref name="currentPath"/> shows: its space — the
+    /// first path segment — or the page itself when the path has none.
     /// </summary>
     /// <param name="currentPath">The page being read.</param>
     public static string IndexRoot(string currentPath)
     {
         var segments = currentPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return segments.Length >= 2 ? $"{segments[0]}/{segments[1]}" : currentPath;
+        return segments.Length >= 1 ? segments[0] : currentPath;
     }
 
     /// <summary>
