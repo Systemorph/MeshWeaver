@@ -271,7 +271,9 @@ NotificationService.DispatchLocalizable(
     hub, recipient: null, mainNodePath: record,
     title:   LocalizableText.Keyed($"Update available: {name}",
                  "notification.packageUpdate.available.title", ("name", name)),
-    message: LocalizableText.Keyed(english, bodyKey, ("name", name), ("provenance", provenance)),
+    message: LocalizableText.Keyed(english, bodyKey,
+                 ("name", name), ("changed", delta?.Changed), ("removed", delta?.Removed),
+                 ("provenance", provenance)),
     type: NotificationType.System);
 
 // render site — the bell, per viewer
@@ -316,7 +318,11 @@ notification reuses it verbatim; that stays as it is until the issue content its
 🚨 **A conditional clause gets its own key**, never a `{detail}` argument — the package-update body
 is `…bodyFiles`/`…bodyContent` rather than one key taking a composed `"3 file(s) changed, 1 removed"`,
 because an English clause spliced into a translated sentence lands as English inside German word
-order. Same rule as `commit.done`/`commit.doneRepoCreated`.
+order. Same rule as `commit.done`/`commit.doneRepoCreated`. Note that **every** argument is passed on
+both branches: `bodyContent` simply names none of the file-count ones, and an argument a template
+does not name costs nothing — whereas a template naming an argument that was not passed leaves a
+literal `{changed}` on screen, because `GetNamed` deliberately keeps an unknown name VISIBLE rather
+than blanking it.
 
 ### The catalog has a second home, and it goes stale SILENTLY
 
