@@ -41,6 +41,12 @@ public class KernelContainer(IServiceProvider serviceProvider)
     private readonly object executorHubLock = new();
 
     /// <summary>
+    /// The idle-disconnect's shared state — set by <see cref="DisposeOnTimeout"/>, read by the
+    /// submission forwarder. Holds the hub only WEAKLY (see <see cref="DisposeOnTimeout"/>).
+    /// </summary>
+    private IdleState? idle;
+
+    /// <summary>
     /// Idle window after which a kernel-hosting hub disposes itself. 15 minutes by default; a host
     /// (or a test that needs to observe the reclamation inside its budget) can override it by
     /// registering a <see cref="KernelHubOptions"/> singleton. 🚨 NOT a memory tuning knob — see
@@ -194,21 +200,84 @@ public class KernelContainer(IServiceProvider serviceProvider)
         // [RunLevel=1] — the MeshHub_IsCollected leak). A WeakReference + static callback
         // lets the GC reclaim an unreferenced hub: if it's already collectable the
         // disconnect is moot; if it's still alive the weak ref resolves and disposes it.
-        var weakHub = new WeakReference<IMessageHub>(hub);
-        var timer = new Timer(static state =>
-        {
-            if (((WeakReference<IMessageHub>)state!).TryGetTarget(out var h))
-                h.Dispose();
-        }, weakHub, disconnectTimeout, Timeout.InfiniteTimeSpan);
+        //
+        // 🚨 IDLE MEANS "NO MESSAGE *AND* NOTHING EXECUTING" (MeshWeaver#4422). The timer is
+        // re-armed by messages DELIVERED to this hub, and a running script delivers none: it
+        // executes on the hosted executor, its mesh reads answer elsewhere, and its log lines
+        // leave as outgoing writes. So a script still working 15 min after the last inbound
+        // message had this hub — and its executor with it — disposed mid-run, silently: no
+        // SubmitCodeResponse, no terminal status (an approved OperationRequest died that way on
+        // memex, 2026-09-15). While a forwarded submission is in flight the callback re-arms
+        // instead of disposing; the finished-activity reclamation (#1324/#1435) is unchanged,
+        // because a finished run has nothing in flight and the window restarts when it ends.
+        var state = new IdleState(new WeakReference<IMessageHub>(hub), disconnectTimeout);
+        var timer = new Timer(static s => ((IdleState)s!).Elapsed(), state, disconnectTimeout, Timeout.InfiniteTimeSpan);
+        state.Timer = timer;
+        idle = state;
         // Dispose the timer WITH the hub for the normal (activated → disposed) path so
         // the queue drops it promptly rather than waiting on a GC.
         hub.RegisterForDisposal((IDisposable)timer);
-        var idle = disconnectTimeout;
         hub.Register<object>(d =>
         {
-            timer.Change(idle, Timeout.InfiniteTimeSpan);
+            state.Rearm();
             return d;
         });
+    }
+
+    /// <summary>
+    /// The idle-disconnect's state: the hub (WEAKLY — the timer queue is a GC root), the window,
+    /// and how many forwarded submissions have not answered yet. The timer holds this object and
+    /// this object holds the timer — a cycle the GC collects; nothing here roots the hub.
+    /// </summary>
+    internal sealed class IdleState(WeakReference<IMessageHub> hub, TimeSpan window)
+    {
+        private int inFlight;
+        private WeakReference<IMessageHub>? executor;
+
+        /// <summary>The one-shot timer this state re-arms.</summary>
+        public Timer? Timer { get; set; }
+
+        /// <summary>Submissions forwarded to the executor that have not answered yet.</summary>
+        public int InFlight => Volatile.Read(ref inFlight);
+
+        /// <summary>Remembers the executor so a dead one cannot keep the hub alive forever.</summary>
+        public void Executor(IMessageHub hosted) => executor = new WeakReference<IMessageHub>(hosted);
+
+        /// <summary>A submission was forwarded — the hub is executing, not idle.</summary>
+        public void Begin() => Interlocked.Increment(ref inFlight);
+
+        /// <summary>A submission answered (or failed) — the idle window starts again from now.</summary>
+        public void End()
+        {
+            if (Interlocked.Decrement(ref inFlight) < 0)
+                Interlocked.Exchange(ref inFlight, 0);
+            Rearm();
+        }
+
+        /// <summary>Restart the idle window.</summary>
+        public void Rearm()
+        {
+            try { Timer?.Change(window, Timeout.InfiniteTimeSpan); }
+            catch (ObjectDisposedException) { /* the hub is gone; nothing to keep alive */ }
+        }
+
+        /// <summary>
+        /// The window elapsed. A submission still executing on a LIVE executor keeps the hub; a
+        /// dead executor cannot answer, so its count no longer means "working" and the hub goes.
+        /// </summary>
+        public void Elapsed()
+        {
+            if (InFlight > 0 && ExecutorAlive())
+            {
+                Rearm();
+                return;
+            }
+            if (hub.TryGetTarget(out var h))
+                h.Dispose();
+        }
+
+        private bool ExecutorAlive() =>
+            executor is not null && executor.TryGetTarget(out var e) && !e.IsDisposing;
     }
 
     ISynchronizationStream<ImmutableDictionary<string, object>> GetAreaStream(IServiceProvider sp)
@@ -255,6 +324,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
             var executor = new KernelExecutor(publicHub);
             executorHub = publicHub.GetHostedHub(execAddress, executor.Configure, HostedHubCreation.Always)
                 ?? throw new InvalidOperationException($"Failed to create kernel executor hub at {execAddress}");
+            idle?.Executor(executorHub);
             return executorHub;
         }
     }
@@ -268,8 +338,14 @@ public class KernelContainer(IServiceProvider serviceProvider)
     {
         var executor = GetOrCreateExecutor(hub);
 
+        // In flight until the executor answers — the idle-disconnect must not dispose this hub
+        // under a running script (MeshWeaver#4422). Finally runs on the response, on an error,
+        // and on a disposal that tears the subscription down, so the count cannot leak upward.
+        var state = idle;
+        state?.Begin();
         hub.Observe<SubmitCodeResponse>(request.Message, o => o.WithTarget(executor.Address))
             .Take(1)
+            .Finally(() => state?.End())
             .Subscribe(
                 resp => hub.Post(resp.Message, o => o.ResponseFor(request)),
                 ex => hub.Post(
