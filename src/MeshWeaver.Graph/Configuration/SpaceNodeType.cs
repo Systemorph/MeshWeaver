@@ -54,8 +54,30 @@ public record Space
     /// <summary>Whether the space has been verified.</summary>
     public bool IsVerified { get; init; }
 
-    /// <summary>Timestamp when the space was created.</summary>
-    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+    /// <summary>
+    /// Timestamp when the space was created, when the writer recorded one — <c>null</c> otherwise.
+    ///
+    /// <para>🚨 <b>NULLABLE, AND WITHOUT A CLOCK DEFAULT, BECAUSE A DEFAULT HERE IS NOT
+    /// IDEMPOTENT (#4382).</b> This used to read
+    /// <c>public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;</c>. A Space
+    /// DECLARED in a content repo omits <c>createdAt</c>, so every deserialization stamped a fresh
+    /// clock reading; the incoming content then differed from the stored content on every install
+    /// and the unchanged-skip could never hold. MeshWeaver.Plugins#1901's idempotence gate caught
+    /// it — <c>re-install of the unchanged snapshot wrote 1 node(s) (expected 0)</c> — and core's
+    /// own <c>samples/Graph/Data/{Systemorph,ACME,MeshWeaver}.json</c> had been re-written on every
+    /// static-repo import for as long as the default existed, silently, because a re-write that
+    /// produces the correct node goes green.</para>
+    ///
+    /// <para>🚨 <b>Stamping it at creation instead would not have fixed it</b>, and that is why
+    /// there is no "set it once on create" here: a declaring file that omits the field would then
+    /// present <c>null</c> against a STORED stamp, differ again, and re-write again. Provenance
+    /// that a declaration does not carry cannot live on the declared content at all — the node's
+    /// own version history already records when it first materialised, and that is the reading to
+    /// use. Nothing in core or MeshWeaver.Plugins reads this property (measured 2026-09-15: its
+    /// declaration is the only occurrence in either repo), so it is kept, nullable, for the rows
+    /// that already carry a value rather than removed from a public surface.</para>
+    /// </summary>
+    public DateTimeOffset? CreatedAt { get; init; }
 }
 
 /// <summary>
