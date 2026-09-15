@@ -4572,8 +4572,11 @@ public static class MeshExtensions
         // write that skips it lands a node that EXISTS in Postgres and does not exist to the
         // running mesh — see WriteAndPublishCreated for the full mechanism.
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+        // Matching is the HANDLER's decision (INodePostCreationHandler.Matches), as it is on the
+        // deletion side: the default IS the NodeType compare, and a structural handler (a
+        // partition-owning type declared in mesh content) answers from the node's shape.
         var handlers = hub.ServiceProvider.GetServices<INodePostCreationHandler>()
-            .Where(h => h.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
+            .Where(h => h.Matches(node))
             .ToList();
 
         if (handlers.Count == 0)
