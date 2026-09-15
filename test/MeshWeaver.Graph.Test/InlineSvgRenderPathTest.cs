@@ -122,9 +122,11 @@ public class InlineSvgRenderPathTest
     // ── The other half of the policy: what already works must not change ──────────────────────
 
     /// <summary>
-    /// An icon that paints its own plate passes through every path byte-identical — one plate, the
-    /// authored colors, nothing added. This is what makes the fix safe to apply everywhere at once:
-    /// no store mark and no thread identicon renders differently than it did.
+    /// An icon that paints its own plate keeps it through every path — one plate, the authored
+    /// hue, the authored glyph, nothing recolored and nothing wrapped. (The sizing style a
+    /// raw-HTML surface injects is still injected; that is what those surfaces are for, and it is
+    /// what these icons already got before this change.) This is what makes the fix safe to apply
+    /// everywhere at once: no store mark and no thread identicon renders differently than it did.
     /// </summary>
     [Theory]
     [InlineData("sizer")]

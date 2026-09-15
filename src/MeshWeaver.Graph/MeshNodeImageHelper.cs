@@ -371,9 +371,11 @@ public static class MeshNodeImageHelper
     /// backplate was written to prevent, re-appearing at every seam that was not the one seam.
     /// Sizing an icon into a raw-HTML box IS the moment the policy applies: there is no caller that
     /// wants an inline icon injected unplated, so making the two inseparable here is what makes the
-    /// invariant hold by construction rather than by everyone remembering it. An icon that already
-    /// paints its own full-bleed plate passes through byte-identical, so this is a no-op for every
-    /// authored store mark and every thread identicon.</para>
+    /// invariant hold by construction rather than by everyone remembering it. For an icon that
+    /// already paints its own full-bleed plate the POLICY is a no-op — <c>Ensure</c> returns the
+    /// same instance, so every authored store mark and every thread identicon keeps its own plate,
+    /// hue and glyph exactly as written; the sizing style below is then the only markup this method
+    /// adds, and adding it is the whole point of calling it.</para>
     ///
     /// <para>The size half: node icons are typically authored with a <c>viewBox</c> but NO
     /// <c>width</c>/<c>height</c>, and on a raw-HTML surface (a <c>Controls.Html</c> tile) no

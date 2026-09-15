@@ -253,9 +253,10 @@ public static class SeoResolver
     ///
     /// <para>The value is resolved exactly the way the in-app icon is
     /// (<see cref="MeshNodeImageHelper.ResolveContentPath"/>) — a <c>content:</c> reference becomes
-    /// the access-controlled content URL, an inline <c>&lt;svg&gt;</c> stays that same svg, a URL
-    /// stays that URL — so the tab, the card and the app can never disagree about what a node looks
-    /// like.</para>
+    /// the access-controlled content URL, a URL stays that URL, and an inline <c>&lt;svg&gt;</c>
+    /// goes through the same backplate policy the app applies (<see cref="ResolveIconSvg"/>), which
+    /// leaves an icon that paints its own plate exactly as authored — so the tab, the card and the
+    /// app can never disagree about what a node looks like.</para>
     /// </summary>
     /// <param name="node">The node whose page is being served.</param>
     /// <returns>Its own icon, or null when it carries none an <c>href</c> can point at.</returns>

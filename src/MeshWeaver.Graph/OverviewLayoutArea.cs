@@ -334,8 +334,9 @@ public static class OverviewLayoutArea
     /// <see cref="MeshNodeImageHelper.SizeInlineSvg"/> carries in full (#4350): this sizer is the
     /// last thing that touches the markup before it is injected into a raw-HTML title row, so a
     /// <c>currentColor</c> outline that skipped the policy inherited the heading's color and
-    /// vanished on one of the two themes. An icon that already paints its own full-bleed plate is
-    /// returned byte-identical.</para></summary>
+    /// vanished on one of the two themes. For an icon that already paints its own full-bleed plate
+    /// the policy is a no-op — its plate, hue and glyph are untouched — and the fill-to-box style
+    /// below remains the only markup this method adds.</para></summary>
     internal static string SizeInlineSvg(string svg) =>
         System.Text.RegularExpressions.Regex.Replace(IconBackplate.Ensure(svg).Trim(), "^<svg\\b",
             "<svg style=\"width:100%;height:100%\" preserveAspectRatio=\"xMidYMid meet\"",

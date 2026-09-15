@@ -1,5 +1,6 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
 using Memex.Portal.Shared.Seo;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
@@ -9,7 +10,8 @@ namespace Memex.Portal.Shared.Test;
 
 /// <summary>
 /// 🚨 THE NODE FAVICON GOES THROUGH THE BACKPLATE POLICY — and here it is not a matter of taste:
-/// it is the difference between an icon and a 404 (#4350).
+/// it is the difference between an icon you can see and a black hairline on nothing, served
+/// behind a 200 so that nothing reports it (#4350).
 ///
 /// <para><b>The chain.</b> <see cref="SeoResolver.ResolveIconSvg"/> produces the markup; two
 /// consumers render it on a ground this process does not control — the
@@ -96,11 +98,11 @@ public class NodeFaviconBackplateTest
 
         Assert.NotNull(png);
         using var bitmap = SkiaSharp.SKBitmap.Decode(png);
-        var painted = new List<SkiaSharp.SKColor>();
-        for (var x = 0; x < bitmap.Width; x++)
-            for (var y = 0; y < bitmap.Height; y++)
-                if (bitmap.GetPixel(x, y).Alpha > 0)
-                    painted.Add(bitmap.GetPixel(x, y));
+        var painted = Enumerable
+            .Range(0, bitmap.Width)
+            .SelectMany(x => Enumerable.Range(0, bitmap.Height).Select(y => bitmap.GetPixel(x, y)))
+            .Where(pixel => pixel.Alpha > 0)
+            .ToImmutableArray();
 
         Assert.NotEmpty(painted);
         Assert.All(painted, p => Assert.True(p.Red < 40 && p.Green < 40 && p.Blue < 40,

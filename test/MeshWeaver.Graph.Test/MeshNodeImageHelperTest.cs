@@ -81,10 +81,14 @@ public class MeshNodeImageHelperTest
         sized.Should().Contain("M0 0h24v24", "the authored glyph survives plating");
     }
 
+    /// <summary>A value that is not inline svg comes back as it went in — including the
+    /// whitespace-only case, which the plating step (#4350) must not turn into an empty string.</summary>
     [Theory]
     [InlineData(null)]
     [InlineData("")]
+    [InlineData("   ")]
     [InlineData("not an svg")]
+    [InlineData("/static/NodeTypeIcons/box.svg")]
     public void SizeInlineSvg_PassesThrough_NonSvg(string? value)
         => MeshNodeImageHelper.SizeInlineSvg(value!, 48).Should().Be(value);
 

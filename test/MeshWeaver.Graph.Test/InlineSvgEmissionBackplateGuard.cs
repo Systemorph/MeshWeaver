@@ -81,16 +81,20 @@ public class InlineSvgEmissionBackplateGuard
     /// </summary>
     private static readonly ImmutableArray<(string File, string Value, string Reason)> ValueCarriers =
     [
-        ("MeshNodeThumbnailControl.cs", "thumbnail",
+        ("src/MeshWeaver.Graph/MeshNodeThumbnailControl.cs", "thumbnail",
             "carries the content's thumbnail/avatar/logo VALUE into MeshNodeThumbnailControl.ImageUrl; "
             + "the view packs that render it plate at their own emission seam (MeshWeaver.Plugins#1880), "
             + "and plating here would put generated markup into a property that is also compared and persisted"),
-        ("MarkdownFileParser.cs", "iconValue",
+        ("src/MeshWeaver.Hosting/Persistence/Parsers/MarkdownFileParser.cs", "iconValue",
             "is the PERSISTENCE side — front matter into MeshNode.Icon on import. Plating here would "
             + "rewrite the author's icon in the store rather than in the rendering of it"),
     ];
 
-    /// <summary>One classification found in the sources, and what the branch does with the value.</summary>
+    /// <summary>
+    /// One classification found in the sources, and what the branch does with the value.
+    /// <paramref name="File"/> is the REPO-RELATIVE path, in <c>/</c> form: matching an exemption on
+    /// a bare file name would silently exempt an unrelated same-named file in another root.
+    /// </summary>
     private sealed record Classified(string File, int Line, string Value, string Region);
 
     // ── The invariant ─────────────────────────────────────────────────────────────────────────
@@ -102,11 +106,11 @@ public class InlineSvgEmissionBackplateGuard
             .Where(c => !IsDeclaredValueCarrier(c))
             .SelectMany(c => UnplatedUses(c).Select(use => $"  {c.File}:{c.Line} renders `{c.Value}` {use}"))
             .OrderBy(s => s, StringComparer.Ordinal)
-            .ToList();
+            .ToImmutableArray();
 
         // The offenders go into the message, not just their count: a guard whose failure says
         // "1 item(s)" sends the next reader hunting for which one.
-        Assert.True(offenders.Count == 0,
+        Assert.True(offenders.Length == 0,
             "An inline-svg icon rendered without IconBackplate.Ensure takes the surrounding text "
             + "color and is invisible on one of the two themes wherever it sits on a card, a tile, a "
             + "chip or a browser tab (#4350). Route it through MeshNodeImageHelper.SizeInlineSvg "
@@ -127,19 +131,69 @@ public class InlineSvgEmissionBackplateGuard
     [Fact]
     public void TheScanFindsEveryKnownClassifier_SoAPassIsNotVacuous()
     {
-        var files = Scan().Select(c => c.File).Distinct().OrderBy(f => f, StringComparer.Ordinal).ToList();
+        var files = Scan().Select(c => c.File).Distinct().OrderBy(f => f, StringComparer.Ordinal).ToImmutableArray();
 
-        Assert.Contains("CreateLayoutArea.cs", files);
-        Assert.Contains("MeshNodeLayoutAreas.cs", files);
-        Assert.Contains("NodeIconPickerDialog.cs", files);
-        Assert.Contains("OverviewLayoutArea.cs", files);
-        Assert.Contains("SeoResolver.cs", files);
-        Assert.Contains("MeshNodeImageHelper.cs", files);
-        Assert.Contains("IconBackplate.cs", files);
-        Assert.Contains("Icon.cs", files);
-        Assert.True(files.Count >= 8,
-            "the scan found only " + files.Count + " classifying file(s) — it has stopped seeing the "
-            + "sources it guards. Found: " + string.Join(", ", files));
+        string[] expected =
+        [
+            "src/MeshWeaver.Graph/CreateLayoutArea.cs",
+            "src/MeshWeaver.Graph/MeshNodeLayoutAreas.cs",
+            "src/MeshWeaver.Graph/NodeIconPickerDialog.cs",
+            "src/MeshWeaver.Graph/OverviewLayoutArea.cs",
+            "src/MeshWeaver.Graph/MeshNodeImageHelper.cs",
+            "src/MeshWeaver.Graph/MeshNodeThumbnailControl.cs",
+            "src/MeshWeaver.Graph/IconBackplate.cs",
+            "src/MeshWeaver.Domain/Icon.cs",
+            "src/MeshWeaver.Hosting/Persistence/Parsers/MarkdownFileParser.cs",
+            "memex/Memex.Portal.Shared/Seo/SeoResolver.cs",
+        ];
+        var missing = expected.Where(e => !files.Contains(e)).ToImmutableArray();
+
+        Assert.True(missing.Length == 0,
+            "the scan stopped seeing files it guards — a rename, a project move, or a broken scan. "
+            + "Missing: " + string.Join(", ", missing) + ". Found: " + string.Join(", ", files));
+    }
+
+    /// <summary>
+    /// 🚨 THE DETECTOR'S OWN BLIND SPOT, held still. It reads two spellings of the question "is this
+    /// inline svg?" — <c>StartsWith("&lt;svg"</c> and <c>IsInlineSvg(…)</c> — because those are the
+    /// two every surface in this repo uses. There is a THIRD: the typed
+    /// <c>DomainIcon.InlineSvgProvider</c> / <see cref="IconRenderKind.InlineSvg"/> classification,
+    /// which the detector cannot follow (its value is a pattern-bound name inside a switch arm, not
+    /// a local whose later uses can be traced).
+    ///
+    /// <para>Rather than claim a coverage the scan does not have — which is the exact failure this
+    /// whole change is about — the third spelling is CONFINED: it may appear only in the files
+    /// below, all of which plate or exist to define the policy. A new file using it fails here, and
+    /// the author has to say how it is plated. Extending the detector instead would be better; this
+    /// keeps the claim honest until someone does.</para>
+    /// </summary>
+    [Fact]
+    public void TheTypedClassification_StaysInTheFilesThatPlateIt()
+    {
+        var root = FindRepoRoot();
+        string[] mayUseIt =
+        [
+            "src/MeshWeaver.Domain/Icon.cs",              // defines the provider constant and parses to it
+            "src/MeshWeaver.Graph/MeshNodeImageHelper.cs", // ResolveRenderable/IconLinkFor — both plate
+        ];
+
+        var users = ScannedRoots
+            .Select(r => Path.Combine(root, r))
+            .SelectMany(dir => Directory.EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories))
+            .Where(f => !IsExcluded(root, f))
+            .Where(f => File.ReadAllText(f).Contains("InlineSvgProvider", StringComparison.Ordinal)
+                        || File.ReadAllText(f).Contains("IconRenderKind.InlineSvg", StringComparison.Ordinal))
+            .Select(f => RelativePath(root, f))
+            .Where(f => !mayUseIt.Contains(f))
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .ToImmutableArray();
+
+        Assert.True(users.Length == 0,
+            "a file outside the two that plate now classifies icons through the TYPED inline-svg "
+            + "provider, which this guard's source scan cannot follow. Either plate it through "
+            + "MeshNodeImageHelper.ResolveRenderable / IconBackplate.Ensure and add it to mayUseIt "
+            + "with the reason, or teach the detector that spelling: "
+            + string.Join(", ", users));
     }
 
     /// <summary>A declared exemption whose subject is gone permits nothing and hides nothing —
@@ -151,9 +205,9 @@ public class InlineSvgEmissionBackplateGuard
         var stale = ValueCarriers
             .Where(carrier => !found.Any(c => c.File == carrier.File && c.Value == carrier.Value))
             .Select(carrier => $"  {carrier.File} [{carrier.Value}]")
-            .ToList();
+            .ToImmutableArray();
 
-        Assert.True(stale.Count == 0,
+        Assert.True(stale.Length == 0,
             "A ValueCarriers entry no longer names a live inline-svg classification. Either the site "
             + "moved (repoint the entry) or it is gone (delete it) — left as it is, it exempts "
             + "whatever next classifies under the same name in that file:\n" + string.Join("\n", stale));
@@ -173,13 +227,16 @@ public class InlineSvgEmissionBackplateGuard
     [InlineData("""if (icon.TrimStart().StartsWith("<svg", StringComparison.Ordinal)) return Controls.Html($"<div>{icon}</div>");""", true)]
     [InlineData("""var html = raw.StartsWith("<svg", StringComparison.Ordinal) ? $"<span>{raw}</span>" : "";""", true)]
     [InlineData("""if (MeshNodeImageHelper.IsInlineSvg(value)) return value;""", true)]
+    // Straight into a raw-html consumer, with no interpolation for the scan to see.
+    [InlineData("""if (MeshNodeImageHelper.IsInlineSvg(icon)) return Controls.Html(icon);""", true)]
     // …and the shapes that are correct.
     [InlineData("""if (icon.TrimStart().StartsWith("<svg", StringComparison.Ordinal)) return Controls.Html($"<div>{MeshNodeImageHelper.SizeInlineSvg(icon, 48)}</div>");""", false)]
     [InlineData("""if (MeshNodeImageHelper.IsInlineSvg(icon)) return IconBackplate.Ensure(icon);""", false)]
+    [InlineData("""if (MeshNodeImageHelper.IsInlineSvg(icon)) return Controls.Html(IconBackplate.Ensure(icon));""", false)]
     [InlineData("""var html = url.StartsWith("<svg", StringComparison.Ordinal) ? $"<div>{IconBackplate.Ensure(url)}</div>" : $"<img src=\"{url}\" alt=\"\" />";""", false)]
     public void TheDetectorFlagsABypass_AndOnlyABypass(string source, bool expectedBypass)
     {
-        var classified = Classify("Sample.cs", source).ToList();
+        var classified = Classify("src/Sample.cs", source).ToImmutableArray();
         Assert.NotEmpty(classified); // the sample must be recognised as a classification at all
         Assert.Equal(expectedBypass, classified.Any(c => UnplatedUses(c).Any()));
     }
@@ -192,12 +249,19 @@ public class InlineSvgEmissionBackplateGuard
     private static ImmutableArray<Classified> Scan()
     {
         var root = FindRepoRoot();
+
+        // 🚨 Every scanned root must EXIST. Skipping a missing one would leave the guard green over
+        // a tree it never opened — the same shape as a CI gate whose input step is allowed to fail.
+        foreach (var scanned in ScannedRoots)
+            Assert.True(Directory.Exists(Path.Combine(root, scanned)),
+                $"The scanned root '{scanned}' is absent from {root}. This guard verifies nothing "
+                + "about a tree it cannot find; if the root moved, repoint ScannedRoots.");
+
         var found = ScannedRoots
             .Select(r => Path.Combine(root, r))
-            .Where(Directory.Exists)
             .SelectMany(dir => Directory.EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories))
             .Where(f => !IsExcluded(root, f))
-            .SelectMany(f => Classify(Path.GetFileName(f), File.ReadAllText(f)))
+            .SelectMany(f => Classify(RelativePath(root, f), File.ReadAllText(f)))
             .ToImmutableArray();
 
         Assert.True(found.Length > 0,
@@ -206,6 +270,11 @@ public class InlineSvgEmissionBackplateGuard
             + "verifying nothing, which is the one thing a guard must never do quietly.");
         return found;
     }
+
+    /// <summary>The path relative to the repo root, always <c>/</c>-separated so an exemption reads
+    /// the same on every platform.</summary>
+    private static string RelativePath(string root, string file) =>
+        Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
 
     /// <summary>Every inline-svg classification in one source text, paired with the code that runs
     /// on the strength of it (the enclosing branch or statement).</summary>
@@ -232,11 +301,23 @@ public class InlineSvgEmissionBackplateGuard
             if (IsInMarkupElementContent(c.Region, hole.Index)
                 && !SafeWrappers.Any(w => hole.Value.Contains(w, StringComparison.Ordinal)))
                 yield return $"into markup as `{hole.Value}`";
+        // Handed whole to something that puts a string on the page as MARKUP. Without this, a
+        // surface could take the raw-html route with no interpolation at all —
+        // `return Controls.Html(icon);` — and the scan would see nothing.
+        foreach (var consumer in RawHtmlConsumers)
+            if (Regex.IsMatch(c.Region, Regex.Escape(consumer) + @"\s*\(\s*" + v + @"\s*[,)]"))
+                yield return $"whole into `{consumer}(…)`";
         if (Regex.IsMatch(c.Region, @"\breturn\s+" + v + @"\s*;"))
             yield return "verbatim as its result";
         if (Regex.IsMatch(c.Region, @"\?\s*" + v + @"\s*:") || Regex.IsMatch(c.Region, @":\s*" + v + @"\s*[;,)]"))
             yield return "verbatim as a ternary result";
     }
+
+    /// <summary>The calls that put a whole string on the page as markup rather than as text. A
+    /// classified icon passed to one of these unwrapped is the same bypass as an interpolation, and
+    /// it was invisible to the first version of this scan.</summary>
+    private static readonly ImmutableArray<string> RawHtmlConsumers =
+        ["Controls.Html", "new HtmlControl", "HtmlControl", "MarkupString"];
 
     /// <summary>
     /// Whether the interpolation at <paramref name="index"/> sits in element content rather than

@@ -44,10 +44,10 @@ page cannot disagree about what a node looks like.
 
 ## What changes for you
 
-If your icons already carry their own background, **nothing**: they arrive byte for byte as
-authored, on every surface. If you re-authored an icon to work around this, it keeps rendering as
-you wrote it. And an outline icon you had given up on now shows up — on both themes, in the tab,
-and in a link preview.
+If your icons already carry their own background, **nothing**: the background, the colours and the
+artwork you authored are left exactly as they are, on every surface. If you re-authored an icon to
+work around this, it keeps rendering as you wrote it. And an outline icon you had given up on now
+shows up — on both themes, in the tab, and in a link preview.
 
 Two tests keep it that way, and they are deliberately different in kind: one drives each surface
 with the icon shape that vanished and reads the markup it produced, and one derives the list of
