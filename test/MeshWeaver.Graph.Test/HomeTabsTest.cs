@@ -244,7 +244,7 @@ public class HomeTabsTest
     {
         // "apps should be ordered by last accessed not by alphabet" — the phone-home rule, applied
         // at PAINT from the viewer's own access log (see MeshSearchScopeTab.SortByAccess).
-        var scope = UserActivityLayoutAreas.BuildAppsBand(NodePath, null).ScopeTabs!.Single();
+        var scope = UserActivityLayoutAreas.BuildAppsBand(NodePath, null).ScopeTabs![0];
 
         scope.SortByAccess.Should().BeTrue();
     }
@@ -259,9 +259,37 @@ public class HomeTabsTest
 
         apps.Sortable.Should().Be(true);
         apps.Grouping!.GroupByProperty.Should().Be(nameof(App.Group));
-        var scope = apps.ScopeTabs!.Single();
+        var scope = apps.ScopeTabs![0];
         scope.Sortable.Should().BeTrue("the view reads the per-scope setting while the scope is active");
         scope.SortByAccess.Should().BeTrue("tiles the viewer has never placed keep the phone order behind the placed ones");
+    }
+
+    [Fact]
+    public void Apps_OffersTheViewersSpaces_AsASecondScope()
+    {
+        // "can we also integrate spaces in this? recently used? show an icon for each space?" — a
+        // space is something you OPEN, so it belongs on the launcher, and the launcher's filter
+        // offers it after the categories (the GUI renders every scope past the first as one more
+        // filter entry). A different QUERY, hence a scope and not a slice of the app records.
+        var apps = UserActivityLayoutAreas.BuildAppsBand(NodePath, null, ["Acme", "Contoso"]);
+
+        apps.ScopeTabs.Should().HaveCount(2, "the apps themselves, then the spaces");
+        var spaces = apps.ScopeTabs![1];
+        spaces.Label.Should().Be("Spaces");
+        spaces.RenderMode.Should().Be(nameof(MeshSearchRenderMode.Icons), "an icon for each space");
+        spaces.NavigateToMainNode.Should().BeTrue();
+        spaces.SortByAccess.Should().BeTrue("recently used first, from the viewer's own access log");
+        spaces.Sortable.Should().BeFalse(
+            "the arrangement lives on App records — a space has none, so a drop would have nowhere to write");
+
+        var legs = spaces.Query.Split('\n');
+        legs.Should().HaveCount(2, "the partition roots, then the spaces the viewer was invited into");
+        legs[0].Should().Contain("nodeType:Space").And.Contain("namespace:");
+        legs[1].Should().Contain("path:Acme|Contoso");
+
+        UserActivityLayoutAreas.SpacesQuery(null).Should().NotContain("\n",
+            "with no invitations there is only the roots leg");
+        UserActivityLayoutAreas.SpacesQuery([]).Should().NotContain("\n");
     }
 
     [Fact]
@@ -273,7 +301,7 @@ public class HomeTabsTest
         var apps = UserActivityLayoutAreas.BuildAppsBand(NodePath, null);
 
         apps.RenderMode.Should().Be(MeshSearchRenderMode.Icons);
-        var scope = apps.ScopeTabs!.Single();
+        var scope = apps.ScopeTabs![0];
         scope.RenderMode.Should().Be(nameof(MeshSearchRenderMode.Icons));
         scope.NavigateToMainNode.Should().Be(true);
         scope.ItemArea.Should().BeNull("a per-record tile area meant one hub activation per result");
