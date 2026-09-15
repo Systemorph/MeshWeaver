@@ -61,6 +61,58 @@ public static class PartitionSourceFingerprint
     }
 
     /// <summary>
+    /// Fingerprint over the source nodes AND the inline content files the same import mirrors into
+    /// their collections (<c>IStaticRepoSource.EnumerateInlineContentSyncs</c>). Each file adds
+    /// <c>(its place in the target collection, sha256 of its bytes)</c>, so a commit that only adds,
+    /// edits or removes a content file changes the fingerprint and re-imports.
+    ///
+    /// <para>🚨 Without the content files the fingerprint saw nodes only, and a content-only commit
+    /// matched the previous import's marker and short-circuited as "already imported": the added
+    /// file never landed and the removed one was never pruned. The gap stayed invisible while the
+    /// synthesized Space root stamped <c>CreatedAt = UtcNow</c>, which changed the root's token on
+    /// every import; MeshWeaver#4394 made the root stable and exposed it.</para>
+    ///
+    /// <para>With no content syncs the entry set is exactly the node-only one, so a partition
+    /// without inline content keeps the fingerprint it already had.</para>
+    /// </summary>
+    public static string Compute(
+        IEnumerable<MeshNode> nodes,
+        bool versioned,
+        JsonSerializerOptions? contentOptions,
+        IEnumerable<StaticContentSync> contentSyncs)
+    {
+        ArgumentNullException.ThrowIfNull(nodes);
+        ArgumentNullException.ThrowIfNull(contentSyncs);
+        return Compute(nodes.Select(n => (
+                n.Path,
+                versioned
+                    ? n.Version.ToString(CultureInfo.InvariantCulture)
+                    : NodeContentToken(n, contentOptions)))
+            .Concat(ContentEntries(contentSyncs)));
+    }
+
+    /// <summary>
+    /// One <c>(path, token)</c> entry per inline content file. The path is the file's place in its
+    /// target collection, prefixed so it sorts apart from the node paths; the token is the SHA-256
+    /// of its bytes. Even a collision with a node path could not hide a change, because every entry
+    /// is hashed.
+    /// </summary>
+    private static IEnumerable<(string Path, string Token)> ContentEntries(
+        IEnumerable<StaticContentSync> contentSyncs) =>
+        contentSyncs.SelectMany(sync => sync.Files.Select(file => (
+            $"{ContentEntryPrefix}{sync.NodePath}/{sync.TargetCollection}/{JoinContentPath(sync.TargetPath, file.Path)}",
+            Convert.ToHexString(SHA256.HashData(file.Content)))));
+
+    private const string ContentEntryPrefix = "@content:";
+
+    private static string JoinContentPath(string targetPath, string filePath)
+    {
+        var head = targetPath.Trim('/');
+        var tail = filePath.TrimStart('/');
+        return head.Length == 0 ? tail : $"{head}/{tail}";
+    }
+
+    /// <summary>
     /// The deterministic per-node source token (the same value folded into the partition fingerprint) —
     /// exposed so the static-repo import can diff each source node against the per-node hash it stored on
     /// the previous import (the manifest) and upsert ONLY the changed nodes. Computed over the RAW source
