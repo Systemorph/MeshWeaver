@@ -1,5 +1,6 @@
 ﻿using System.Reactive;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -162,7 +163,9 @@ internal static class PackageUpdateReconciler
         if (string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
             return Observable.Return(Unit.Default);
 
-        var detail = Describe(pkg, record);
+        var delta = DescribeDelta(pkg, record);
+        var detail = Describe(delta);
+        var name = pkg.Name ?? pkg.Id;
 
         var policy = record.EffectiveUpdatePolicy;
         logger?.LogInformation(
@@ -190,19 +193,31 @@ internal static class PackageUpdateReconciler
                 .Observe(hub, PackageInstaller.TargetPartitionOf(pkg.Id, pkg), pkg.Id, logger)
                 .SelectMany(ownership => ownership.InstallerOwnsTheContent
                     ? Apply(hub, meshService, accessService, source, sourceRef, pkg, record,
-                        recordPath, provenance, detail, logger)
+                        recordPath, provenance, delta, logger)
                     : Notify(
                         hub, meshService, accessService, recordPath, pkg, record, SyncOwnedPartitionKind,
-                        $"Update held: {pkg.Name ?? pkg.Id}",
-                        $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}), and this package "
-                        + "is set to update automatically — but it was NOT applied. "
-                        + ownership.Because + ". Applying it here would leave two writers with "
-                        + "separate records of one partition (MeshWeaver#4355). " + provenance + ".",
+                        LocalizableText.Keyed(
+                            $"Update held: {name}",
+                            "notification.packageUpdate.held.title", ("name", name)),
+                        LocalizableText.Keyed(
+                            $"A new build of {name} is available ({detail}), and this package "
+                            + "is set to update automatically — but it was NOT applied. "
+                            + ownership.Because + ". Applying it here would leave two writers with "
+                            + "separate records of one partition (MeshWeaver#4355). " + provenance + ".",
+                            BodyKey("held", delta),
+                            ("name", name), ("changed", delta?.Changed), ("removed", delta?.Removed),
+                            ("because", ownership.Because), ("provenance", provenance)),
                         logger)),
             PackageUpdatePolicy.Notify => Notify(
                 hub, meshService, accessService, recordPath, pkg, record, UpdateAvailableKind,
-                $"Update available: {pkg.Name ?? pkg.Id}",
-                $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}). {provenance}.",
+                LocalizableText.Keyed(
+                    $"Update available: {name}",
+                    "notification.packageUpdate.available.title", ("name", name)),
+                LocalizableText.Keyed(
+                    $"A new build of {name} is available ({detail}). {provenance}.",
+                    BodyKey("available", delta),
+                    ("name", name), ("changed", delta?.Changed), ("removed", delta?.Removed),
+                    ("provenance", provenance)),
                 logger),
             // Pinned: the update exists, the log says so, and nothing else moves — no notification
             // either, because the administrator chose not to be reminded.
@@ -213,9 +228,10 @@ internal static class PackageUpdateReconciler
     /// <summary>
     /// What actually changed, for the reminder's message — computed without re-fetching anything:
     /// the installed side is on the record (<c>InstalledFiles</c>), the candidate side rode in on
-    /// the catalog entry (<c>ManifestFiles</c>).
+    /// the catalog entry (<c>ManifestFiles</c>). <c>null</c> when the file-level delta cannot be
+    /// told (one side carries no file list), which is a DIFFERENT sentence, not a zero.
     /// </summary>
-    private static string Describe(PackageManifest pkg, PackageManifest record)
+    private static (int Changed, int Removed)? DescribeDelta(PackageManifest pkg, PackageManifest record)
     {
         var changed = 0;
         var removed = 0;
@@ -229,10 +245,22 @@ internal static class PackageUpdateReconciler
                     removed++;
         }
 
-        return changed + removed > 0
-            ? $"{changed} file(s) changed, {removed} removed"
-            : "content changed";
+        return changed + removed > 0 ? (changed, removed) : null;
     }
+
+    /// <summary>The English rendering of <see cref="DescribeDelta"/> — the log line, and the
+    /// fallback half of the reminder's localizable body.</summary>
+    private static string Describe((int Changed, int Removed)? delta)
+        => delta is { } d ? $"{d.Changed} file(s) changed, {d.Removed} removed" : "content changed";
+
+    /// <summary>
+    /// The catalog key for a reminder body. 🚨 TWO keys per kind, selected by whether the
+    /// file-level delta is known — never one key taking a composed <c>{detail}</c> argument: an
+    /// English clause spliced into a translated sentence lands as English inside German word order
+    /// (Doc/Architecture/Localization, "a conditional clause gets its own key").
+    /// </summary>
+    private static string BodyKey(string kind, (int Changed, int Removed)? delta)
+        => $"notification.packageUpdate.{kind}.body{(delta is null ? "Content" : "Files")}";
 
     /// <summary>
     /// Unattended install of a changed module — reached only for a record that opted in.
@@ -252,9 +280,10 @@ internal static class PackageUpdateReconciler
         PackageManifest record,
         string recordPath,
         string provenance,
-        string detail,
+        (int Changed, int Removed)? delta,
         ILogger? logger)
     {
+        var detail = Describe(delta);
         logger?.LogInformation(
             "Package update: auto-updating {Id} to {Version} ({Detail}); authorized by {Principal}.",
             pkg.Id, pkg.ModuleVersion, detail, record.AuthorizedBy ?? "(nobody)");
@@ -273,12 +302,19 @@ internal static class PackageUpdateReconciler
                 {
                     logger?.LogWarning(
                         "Package update: auto-update of {Id} REFUSED — {Reason}", pkg.Id, ex.Message);
+                    var name = pkg.Name ?? pkg.Id;
                     return Notify(
                         hub, meshService, accessService, recordPath, pkg, record,
                         AuthorizationRequiredKind,
-                        $"Update needs a Global Admin: {pkg.Name ?? pkg.Id}",
-                        $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}), but it is a "
-                        + "commercial package and was not applied automatically. " + ex.Message,
+                        LocalizableText.Keyed(
+                            $"Update needs a Global Admin: {name}",
+                            "notification.packageUpdate.authorizationRequired.title", ("name", name)),
+                        LocalizableText.Keyed(
+                            $"A new build of {name} is available ({detail}), but it is a "
+                            + "commercial package and was not applied automatically. " + ex.Message,
+                            BodyKey("authorizationRequired", delta),
+                            ("name", name), ("changed", delta?.Changed), ("removed", delta?.Removed),
+                            ("reason", ex.Message)),
                         logger);
                 }
 
@@ -351,8 +387,8 @@ internal static class PackageUpdateReconciler
         PackageManifest pkg,
         PackageManifest record,
         string kind,
-        string title,
-        string body,
+        LocalizableText title,
+        LocalizableText body,
         ILogger? logger)
     {
         // Decide() has already refused an empty candidate hash, so this is a real content identity.
@@ -367,7 +403,7 @@ internal static class PackageUpdateReconciler
         return accessService
             .RunAsSystem(() => NotificationService
                 // ── Guard 2: one node per (record, kind, candidate) ──────────────────────────
-                .CreateNotification(
+                .CreateLocalizableNotification(
                     meshService, recordPath, title, body,
                     NotificationType.System, targetNodePath: recordPath,
                     // Addressed to the PLATFORM: only a platform admin can apply a plugin

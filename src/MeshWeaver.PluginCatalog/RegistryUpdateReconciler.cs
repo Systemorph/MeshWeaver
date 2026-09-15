@@ -4,6 +4,7 @@ using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.SelfUpdate;
@@ -806,13 +807,27 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             LastFault = cause.Message,
         });
 
-        var access = hub.ServiceProvider.GetService<AccessService>();
-        return NotificationService.Dispatch(
+        // 🚨 The key and its arguments are PERSISTED; the bell resolves them per viewer. An
+        // `access.Localize(...)` here — which is what stood at these two lines — runs on a boot
+        // reaction with NO viewer in scope, so it resolved to the system default and baked ENGLISH
+        // into a row every German operator then read (#4373).
+        var args = ImmutableDictionary<string, object>.Empty
+            .Add("name", name)
+            .Add("url", registry.Url)
+            .Add("attempts", attempts)
+            .Add("cause", cause.Message);
+        return NotificationService.DispatchLocalizable(
                 hub,
                 recipient: null,
                 mainNodePath: StartupErrorNotifier.AdminPartition,
-                title: access.Localize("plugins.reconcile.deferred.title", name),
-                message: access.Localize("plugins.reconcile.deferred.body", name, registry.Url, attempts, cause.Message),
+                title: LocalizableText.Keyed(
+                    LocalizationCatalog.GetNamed("notification.plugins.reconcileDeferred.title", Locales.Default, args),
+                    "notification.plugins.reconcileDeferred.title",
+                    ("name", name)),
+                message: LocalizableText.Keyed(
+                    LocalizationCatalog.GetNamed("notification.plugins.reconcileDeferred.body", Locales.Default, args),
+                    "notification.plugins.reconcileDeferred.body",
+                    ("name", name), ("url", registry.Url), ("attempts", attempts), ("cause", cause.Message)),
                 type: NotificationType.System,
                 targetNodePath: LedgerPath,
                 createdBy: "system")
