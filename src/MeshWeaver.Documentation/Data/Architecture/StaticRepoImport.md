@@ -221,10 +221,12 @@ The prune does not chunk: it rides the **first** delivery and carries `SyncConte
 A deterministic, order-independent hash over the source node set (children **+ the Space root**) **and the inline content files** the same import mirrors:
 
 ```
-for each source node:          line = path + "\0" + (Versioned ? version : sha256(content))
-for each inline content file:  line = "@content:" + node + "/" + collection + "/" + file + "\0" + sha256(bytes)
-sort lines by path                     // order MUST NOT affect the hash
-fingerprint = sha256( join(lines, "\n") )[..16]
+for each source node:          entry = (path, Versioned ? version : sha256(stable content fields))
+for each inline content file:  entry = ("@content:" + node + NUL + collection + NUL + targetPath + NUL + file,
+                                        sha256(bytes))
+sort entries by path                   // order MUST NOT affect the hash
+framed(v)   = utf8ByteCount(v) + ":" + v          // injective, so no separator is needed
+fingerprint = sha256( concat over entries of framed(path) + framed(token) )[..16]
 ```
 
 Changes iff a node or an inline content file is added, removed, or modified — including an edited welcome (the root is in the set). Helper: `PartitionSourceFingerprint.Compute`.
