@@ -350,7 +350,11 @@ public sealed class IoPool : IIoPool, IDisposable
                 // no slot is ever leaked. The ThreadPool thread is released during
                 // the inner await, so the gate caps in-flight ops, not threads.
                 var queuedAt = Stopwatch.GetTimestamp();
-                await _gate.WaitAsync(ct).ConfigureAwait(false);
+                // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
+                // what lets a test synchronise on arrival instead of guessing with a duration.
+                Interlocked.Increment(ref _waiting);
+                try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
+                finally { Interlocked.Decrement(ref _waiting); }
                 RecordWait(queuedAt);
                 Interlocked.Increment(ref _inFlight);
                 var leaf = EnterLeaf(io);
@@ -400,6 +404,7 @@ public sealed class IoPool : IIoPool, IDisposable
     // Lock-free counters, instance fields on a mesh-scoped pool — never static, and not a
     // collection. Six buckets rather than a mean, because the question a cap has to answer is
     // about the TAIL; see IoPoolWaitStats for why #1198 could not be decided without this.
+    private int _waiting;
     private long _waitTicks;
     private long _waitMaxTicks;
     private long _waitUnderMillisecond;
@@ -443,6 +448,9 @@ public sealed class IoPool : IIoPool, IDisposable
     }
 
     /// <inheritdoc />
+    public int CurrentlyWaiting => Volatile.Read(ref _waiting);
+
+    /// <inheritdoc />
     public IoPoolWaitStats QueueWait => new(
         StopwatchElapsed(Volatile.Read(ref _waitTicks)),
         StopwatchElapsed(Volatile.Read(ref _waitMaxTicks)),
@@ -476,7 +484,11 @@ public sealed class IoPool : IIoPool, IDisposable
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
                 var ct = linked.Token;
                 var queuedAt = Stopwatch.GetTimestamp();
-                await _gate.WaitAsync(ct).ConfigureAwait(false);
+                // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
+                // what lets a test synchronise on arrival instead of guessing with a duration.
+                Interlocked.Increment(ref _waiting);
+                try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
+                finally { Interlocked.Decrement(ref _waiting); }
                 RecordWait(queuedAt);
                 Interlocked.Increment(ref _inFlight);
                 var leaf = EnterLeaf(source);
@@ -540,8 +552,10 @@ public sealed class IoPool : IIoPool, IDisposable
                 // scheduler instead — so its wait is timed at THAT grant point. Instrumenting only the
                 // async gate would have left a whole admission path out of a reading that looks total.
                 var queuedAt = Stopwatch.GetTimestamp();
+                Interlocked.Increment(ref _waiting);
                 _blockingFactory.StartNew(() =>
                     {
+                        Interlocked.Decrement(ref _waiting);
                         RecordWait(queuedAt);
                         // _inFlight increments only once the scheduler grants a slot —
                         // so CurrentInFlight reflects actually-running blocking work,
@@ -658,7 +672,11 @@ public sealed class IoPool : IIoPool, IDisposable
                             using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
                             var ct = linked.Token;
                             var queuedAt = Stopwatch.GetTimestamp();
-                            await _gate.WaitAsync(ct).ConfigureAwait(false);
+                            // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
+                            // what lets a test synchronise on arrival instead of guessing with a duration.
+                            Interlocked.Increment(ref _waiting);
+                            try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
+                            finally { Interlocked.Decrement(ref _waiting); }
                             RecordWait(queuedAt);
                             Interlocked.Increment(ref _inFlight);
                             var subLeaf = EnterLeaf(source);

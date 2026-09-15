@@ -134,4 +134,17 @@ public interface IIoPool
     /// and the caller can tell it from a busy pool by <see cref="IoPoolWaitStats.Samples"/>.</para>
     /// </summary>
     IoPoolWaitStats QueueWait => IoPoolWaitStats.Empty;
+
+    /// <summary>
+    /// Work that has REACHED an admission point and is queued for a slot right now — the live
+    /// gauge to <see cref="QueueWait"/>'s history, and the other half of the picture
+    /// <see cref="CurrentInFlight"/> starts: running, waiting, and what the waiting has cost.
+    ///
+    /// <para>Counted from the moment a leaf arrives at the gate (or, for blocking work, is handed
+    /// to the scheduler) until it is granted or cancelled — so a depth that stays high while
+    /// <see cref="CurrentInFlight"/> sits at the cap is a pool whose cap is the constraint.</para>
+    ///
+    /// <para>Defaulted to 0 so an implementation that does not instrument is not obliged to.</para>
+    /// </summary>
+    int CurrentlyWaiting => 0;
 }
