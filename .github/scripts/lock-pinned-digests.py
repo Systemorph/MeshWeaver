@@ -732,6 +732,10 @@ class Instance:
     out_of_scope: bool = False
     # Registry hosts THIS installation's overlay pins images in, other than the ACR this lane locks.
     foreign_registries: list[str] = field(default_factory=list)
+    # The same pins as (host, repository) — because a HOST is the wrong unit for `ghcr.io`, which
+    # serves `systemorph/*` (ours, published by our own CD) beside `distribution/*` (the registry
+    # service's own image, which cannot come from the registry it boots). #4323.
+    foreign_references: list[tuple[str, str]] = field(default_factory=list)
     # Those of them declared `fleet-unlockable` — the ones that make it out of scope.
     unlockable_registries: list[str] = field(default_factory=list)
 
@@ -1079,6 +1083,10 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str]]
                                         reason=reason,
                                         foreign_registries=sorted({
                                             foreign_host for foreign_host, _, _, foreign_where
+                                            in scan.foreign if foreign_where == where}),
+                                        foreign_references=sorted({
+                                            (foreign_host, foreign_repo)
+                                            for foreign_host, foreign_repo, _, foreign_where
                                             in scan.foreign if foreign_where == where}))
     for ident in sorted(set(roster) - set(instances)):
         blockers.append(
@@ -1097,7 +1105,8 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str]]
     return list(instances.values()), blockers
 
 
-def classify_foreign_registries(plan: Plan, dispositions: dict[str, tuple[str, str]]) -> None:
+def classify_foreign_registries(plan: Plan, dispositions: dict[str, tuple[str, str]],
+                                publications: dict[str, set[str]] | None = None) -> None:
     """Hold EVERY registry the fleet's overlays name to the declaration table, before anything
     decides an installation is covered.
 
@@ -1122,6 +1131,29 @@ def classify_foreign_registries(plan: Plan, dispositions: dict[str, tuple[str, s
         instance.unlockable_registries = [
             host for host in instance.foreign_registries
             if dispositions[host][0] == "fleet-unlockable"]
+        # 🚨 THE ARM THAT MAKES `publishes` LOAD-BEARING RATHER THAN PROSE (#4323). A host may be
+        # declared `third-party` about what the fleet PULLS and still hold repositories the fleet
+        # PUBLISHES — `ghcr.io` is exactly that. An overlay pinning one of THOSE is not a
+        # third-party pin: it is an installation running OUR images from a store nothing of ours
+        # retains and this lane cannot lock, and the `third-party` disposition would wave it
+        # through in the one branch (pins here AND there) that prints success.
+        #
+        # It fires on nobody today — measured 2026-09-15, no overlay in the fleet names a
+        # `ghcr.io/systemorph/*` image — which is precisely the claim `publishes.runFrom` makes and
+        # therefore precisely the claim that has to red when it stops being true.
+        published = publications or {}
+        pinned = sorted({f"{host}/{repo}" for host, repo in instance.foreign_references
+                         if repo in published.get(host, set())})
+        if pinned:
+            plan.blockers.append(
+                f"AXIS 3 — installation `{instance.id}` pins {', '.join(pinned)}, which "
+                f"`.github/acr-retention/{ROSTER_PATH}` declares this fleet PUBLISHES rather than "
+                "retains. Those are OUR images in a store this lane cannot lock and nothing of "
+                "ours keeps — its operator's retention is the whole of their protection — so an "
+                "installation RUNNING from them is running an unprotected set that this run would "
+                "otherwise report as covered. Point the overlay at a registry the fleet retains "
+                "(`cr.meshweaver.cloud`, or this ACR), or move the repository out of `publishes` "
+                "and declare what protects it. Doc/Architecture/FleetRegistryRetention.")
 
 
 def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
@@ -1576,9 +1608,28 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
         # showed two of ghcr.io's five references are `systemorph/*` — OUR images, on a host whose
         # declaration says "never published by this fleet", while release.yml mirrors three
         # repositories there on every official release (#4323). A count alone would have hidden it.
+        publications = read_registry_publications(root)
         for host in sorted(by_host):
             references = sorted(set(by_host[host]))
             disposition = dispositions.get(host, ("undeclared", ""))[0]
+            # 🚨 A MIXED HOST GETS ITS REFERENCES SPLIT, NOT ONE SENTENCE OVER BOTH HALVES (#4323).
+            # `ghcr.io` serves `systemorph/*` — ours, mirrored there by our own CD — beside
+            # `distribution/*` and `oras-project/*`, which are not. Printing "declared NOT ours to
+            # retain" over our own two chart-default references is the report asserting the very
+            # thing that was false in the record, in the one artifact a reader checks it against.
+            ours = sorted({(repo, tag, where) for repo, tag, where in references
+                           if repo in publications.get(host, set())})
+            if ours:
+                emit(f"      {host} (declared {disposition}, and this fleet PUBLISHES here): "
+                     f"{len(ours)} of {len(references)} committed reference(s) are OUR OWN "
+                     "repositories — a MIRROR this fleet pushes and does not retain; the store's "
+                     "operator keeps them, no cleanup of ours protects them, and no installation "
+                     "may run from them (`publishes.runFrom`)")
+                for repo, tag, where in ours:
+                    emit(f"        {repo}:{tag}".ljust(52) + f" published by us — {where}")
+                references = [reference for reference in references if reference not in ours]
+                if not references:
+                    continue
             if disposition == "fleet-unlockable":
                 emit(f"      {host} (declared fleet-unlockable): {len(references)} committed "
                      "reference(s) a cleanup must KEEP")
@@ -1913,7 +1964,8 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
 
     # 🚨 AXIS 3 FIRST. `resolve_and_classify` is what splits `plan.wanted` into already-protected
     # and to-lock, so anything added to `wanted` after it runs is wanted by nobody who locks.
-    classify_foreign_registries(plan, dispositions)
+    classify_foreign_registries(plan, dispositions,
+                                read_registry_publications(local_root or "."))
     resolve_running_sets(plan, inventory, repositories_of)
     resolve_and_classify(plan, registry, inventory, inventory_errors)
     classify_tags(plan, registry)
@@ -2372,6 +2424,391 @@ RULES_FOR_DISPOSITION = {
     "third-party": {"not-ours"},
 }
 
+# ── The THIRD question about a registry: what this fleet PUSHES to it (#4323) ─────────────────
+#
+# `disposition` answers "can THIS lane lock that host", `retention` answers "what deletes from it".
+# Neither asks the question that turned out to be wrong about `ghcr.io` for a day: **does this
+# fleet PUBLISH there at all**. The record said of that host *"never published by this fleet"* and
+# *"Nothing this fleet produces is stored on ghcr.io"* while `main-cd.yml` pushed twelve tags across
+# three of our own repositories to it on every promoting run — measured in the job log of run
+# 34918214035 (2026-09-15T02:27Z): `mw-plugin-test`, `memex-migration` and `memex-portal-ai`, all
+# under `ghcr.io/systemorph/`.
+#
+# 🚨 THE UNIT OF `disposition` IS WHAT THE FLEET PULLS, AND THAT IS NOT AN EVASION — it is what
+# every axis of this script reads it FOR. `foreign_registries` comes off deployment overlays;
+# `classify_foreign_registries` and `resolve_running_sets` ask whether an installation's RUNNING SET
+# is accounted for. Nothing in a running set comes from a registry no overlay pins. `ghcr.io` is the
+# one host in the fleet that is genuinely MIXED — `systemorph/*` is ours, `distribution/*`,
+# `oras-project/*` and `actions/*` are not — and a single per-host disposition is false about one
+# half whichever value it takes. Measured, both halves:
+#
+#   * `third-party` is false about `systemorph/*`. That was #4323.
+#   * `fleet-unlockable` is false about `distribution/*` — AND IT REDS THE LANE. `memex-cloud` pins
+#     `meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8411` AND
+#     `ghcr.io/distribution/distribution:3.1.1@sha256:…` (the registry service's own image, which
+#     cannot come from the registry it boots). Flip the host and `resolve_running_sets` fires "half
+#     its running set would be protected and half would not" over an installation whose every image
+#     OF OURS is in this ACR and protected. `pause.reEnableWhen` is "lock-pinned-digests is green",
+#     so that false red would stand between the fleet and re-enabling cleanup — the exact shape
+#     ARM 32 exists for, manufactured by the fix.
+#
+# So the publication is declared as its OWN fact, on the same unit, and this is the derivation that
+# holds the declaration to the workflows rather than re-reading it. A record that checks itself
+# passes on the day it stops being true.
+
+# The workflows in THIS repository that push an image anywhere. Both are asserted to exist: a
+# publishing lane that was renamed and left underived would take the whole check with it silently.
+PUBLISHING_WORKFLOWS = ("main-cd.yml", "release.yml")
+
+# 🚨 ONE PUSH TARGET IS DELIBERATELY NOT IN THE `registries` TABLE, and the skip is named and
+# printed rather than silent: `meshweaver.azurecr.io` is the registry this lane LOCKS — the subject
+# of the entire script — not a foreign host it declares. Every OTHER derived target must be
+# accounted for by the table.
+LANE_REGISTRY = "meshweaver.azurecr.io"
+
+# `NS` in both workflows is the repository owner, lowercased. Resolving it needs a literal, and the
+# literal is worth nothing on its own — so the ASSIGNMENT is what is asserted: the derivation reds
+# if a workflow ever computes `NS` from something that is not the owner, which is the only way this
+# substitution could go quietly wrong.
+_NS_FROM_OWNER = re.compile(r"NS=\$\(\s*(?:printf\s+'%s'|echo)\s+'?\"?"
+                            r"(?:\$GITHUB_REPOSITORY_OWNER|\$\{\{\s*github\.repository_owner\s*\}\})")
+REPOSITORY_OWNER = "systemorph"
+
+# `--tag <ref>` in any of the three quotings a shell accepts.
+_TAG_ARGUMENT = re.compile(r"--tag\s+(?:\"([^\"]+)\"|'([^']+)'|(\S+))")
+# 🚨 `--tag` IS NOT THE ONLY PUSH, and a derivation that thinks it is misses an entire registry.
+# Every consumer-visible tag main-cd writes on the ACR is written on `cr.meshweaver.cloud` too, and
+# that half goes through `mirror-image-to-registry.sh <source> <destination>…` — no `--tag` on the
+# line. A publication mechanism the derivation cannot see is a host the table never has to account
+# for, which is this issue one register down.
+_MIRROR_CALL = re.compile(r"mirror-image-to-registry\.sh\s+(.+?)\s*(?:\\|$)")
+# …and its destinations are often an ARRAY built a line earlier (`mirror+=("…")`), so the appends
+# are collected first and `"${mirror[@]}"` is expanded from them.
+_ARRAY_APPEND = re.compile(r"(\w+)\+=\(\s*\"([^\"]+)\"\s*\)")
+_ARRAY_EXPANSION = re.compile(r"^\"?\$\{(\w+)\[@\]\}\"?$")
+# `for repo in a b c; do` — the loop that makes `$repo` on a tag line resolvable.
+_REPO_LOOP = re.compile(r"for\s+repo\s+in\s+([^;\n]+);\s*do")
+# `for pair in "memex-migration:$V_MIGRATION" "memex-portal-ai:$V_PORTAL"; do` — the same thing
+# spelled as pairs, which is how main-cd's phase D writes it.
+_PAIR_LOOP = re.compile(r"for\s+pair\s+in\s+([^;\n]+);\s*do")
+
+
+def _workflow_env(text: str) -> dict[str, str]:
+    """The top-level `env:` map of a workflow — enough to resolve `${{ env.ACR }}` in a tag."""
+    values: dict[str, str] = {}
+    inside = False
+    for line in text.splitlines():
+        if re.match(r"^env:\s*$", line):
+            inside = True
+            continue
+        if inside:
+            if line and not line[0].isspace():
+                break
+            entry = re.match(r"^\s{2}([A-Za-z_][A-Za-z0-9_]*):\s*(\S+)\s*$", line)
+            if entry:
+                values[entry.group(1)] = entry.group(2).strip("'\"")
+    return values
+
+
+def _continued_lines(text: str) -> list[tuple[int, str]]:
+    """The file's lines with shell continuations JOINED, each carrying the number it STARTS on.
+
+    🚨 The destinations of a `mirror-image-to-registry.sh` call routinely sit on the line after the
+    source, behind a `\\`. Read line-by-line, that call publishes to nothing — and a host whose
+    only publication is spelled across two lines is a host the accounting never asks about."""
+    joined: list[tuple[int, str]] = []
+    buffer = ""
+    start = 1
+    for number, line in enumerate(text.splitlines(), 1):
+        if not buffer:
+            start = number
+        stripped = line.rstrip()
+        if stripped.endswith("\\"):
+            buffer += stripped[:-1] + " "
+            continue
+        joined.append((start, buffer + stripped))
+        buffer = ""
+    if buffer:
+        joined.append((start, buffer))
+    return joined
+
+
+def publish_targets(root: str) -> tuple[dict[str, set[str]], list[str], int]:
+    """Every `(host, repository)` this repository's own workflows PUSH an image to.
+
+    Returns the targets by host, any problems, and the number of `--tag` arguments read — the
+    denominator, because "no publication found" and "nothing was parsed" are the same output
+    without it, and that is the confusion this whole family is made of.
+
+    🚨 DERIVED FROM THE WORKFLOWS, NEVER FROM THE RECORD. The record is what this checks."""
+    base = Path(root) / ".github" / "workflows"
+    targets: dict[str, set[str]] = {}
+    problems: list[str] = []
+    arguments = 0
+    for name in PUBLISHING_WORKFLOWS:
+        path = base / name
+        if not path.is_file():
+            problems.append(
+                f".github/workflows/{name} is missing, and it is one of the two lanes this fleet "
+                "publishes images from. A renamed publishing workflow takes the derivation with "
+                "it — and a derivation that reads nothing reports exactly like a clean one.")
+            continue
+        text = path.read_text(encoding="utf-8")
+        environment = _workflow_env(text)
+        namespace = REPOSITORY_OWNER if _NS_FROM_OWNER.search(text) else None
+        if "$NS" in text and namespace is None:
+            problems.append(
+                f".github/workflows/{name} uses `$NS` in an image reference and does not assign it "
+                "from the repository owner. The substitution this check makes would be a guess, so "
+                "it refuses rather than deriving a namespace that is not the one being pushed to.")
+        loops = [repo for group in _REPO_LOOP.findall(text) for repo in group.split()]
+        loops += [pair.strip("\"'").split(":")[0]
+                  for group in _PAIR_LOOP.findall(text) for pair in group.split()]
+        arrays: dict[str, list[str]] = {}
+        for _, line in _continued_lines(text):
+            if line.strip().startswith("#"):
+                continue
+            for variable, value in _ARRAY_APPEND.findall(line):
+                arrays.setdefault(variable, []).append(value)
+        for number, line in _continued_lines(text):
+            if line.strip().startswith("#"):
+                continue
+            references = [next(group for group in match.groups() if group is not None)
+                          for match in _TAG_ARGUMENT.finditer(line)]
+            for call in _MIRROR_CALL.findall(line):
+                try:
+                    destinations = shlex.split(call)[1:]     # [0] is the SOURCE, not a publication
+                except ValueError:
+                    problems.append(
+                        f".github/workflows/{name}:{number} calls mirror-image-to-registry.sh with "
+                        "a command line this check could not tokenize, so its destinations — every "
+                        "one of them a publication — were never read.")
+                    continue
+                for destination in destinations:
+                    array = _ARRAY_EXPANSION.match(destination)
+                    references.extend(arrays.get(array.group(1), []) if array else [destination])
+            for reference in references:
+                arguments += 1
+                # Strip the tag: the LAST colon that is not inside a `${{ … }}` expansion.
+                image = re.sub(r":[^:/]*$", "", reference)
+                for key, value in environment.items():
+                    image = image.replace("${{ env.%s }}" % key, value)
+                if "/" not in image:
+                    continue
+                host, _, repository = image.partition("/")
+                if "." not in host and host != "localhost":
+                    continue          # a Docker Hub short name, not a registry this fleet runs
+                if "${{" in host or "$" in host:
+                    problems.append(
+                        f".github/workflows/{name}:{number} pushes to a registry host this check "
+                        f"could not resolve (`{host}`). An unresolved push target is not an absent "
+                        "one — it is a publication nothing in the table has to account for.")
+                    continue
+                if namespace:
+                    repository = repository.replace("${NS}", namespace).replace("$NS", namespace)
+                expansions = [repository]
+                if "$repo" in repository or "${repo}" in repository:
+                    expansions = [repository.replace("${repo}", name_).replace("$repo", name_)
+                                  for name_ in sorted(set(loops))] or []
+                    if not expansions:
+                        problems.append(
+                            f".github/workflows/{name}:{number} pushes `{repository}` and no "
+                            "`for repo in …` loop in the file says what `$repo` ranges over, so "
+                            "the repositories being published cannot be named.")
+                for expanded in expansions:
+                    if "$" in expanded or "${{" in expanded:
+                        problems.append(
+                            f".github/workflows/{name}:{number} pushes to `{host}/{expanded}`, a "
+                            "repository this check could not resolve to a literal name.")
+                        continue
+                    targets.setdefault(host, set()).add(expanded)
+    if not targets and not problems:
+        problems.append(
+            "ZERO publication targets were derived from "
+            + ", ".join(PUBLISHING_WORKFLOWS)
+            + ". Both lanes push images today, so zero means the derivation stopped matching, not "
+              "that this fleet stopped publishing — and an empty derivation accounts for every "
+              "registry equally well.")
+    return targets, problems, arguments
+
+
+# A `publishes` block's retention may ONLY be this, and it is deliberately NOT in `RETENTION_RULES`.
+# Allowing `operator-retained` as a HOST-level rule would be a trapdoor out of `nothing-deletes`:
+# any registry could then answer the second question with "somebody else's problem". It is legible
+# only about a publication into a store this fleet does not operate.
+PUBLICATION_RETENTION_RULES = {"operator-retained"}
+
+
+def read_registry_publications(root: str) -> dict[str, set[str]]:
+    """What each registry entry DECLARES this fleet publishes there — `(host → repositories)`.
+
+    Read leniently and used only to LABEL: `--check-registry-retention` is what holds the
+    declaration to the workflows, and a malformed entry has already reddened there."""
+    path = Path(root) / ".github" / "acr-retention" / ROSTER_PATH
+    declared: dict[str, set[str]] = {}
+    if not path.is_file():
+        return declared
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return declared
+    for host, entry in (document.get("registries") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        publishes = entry.get("publishes")
+        if isinstance(publishes, dict) and isinstance(publishes.get("repositories"), list):
+            declared[host] = {str(repo) for repo in publishes["repositories"]}
+    return declared
+
+
+def check_publication_accounting(root: str, registries: dict) -> tuple[list[str], str]:
+    """Every registry THIS FLEET PUSHES TO is accounted for by the table, derived from the lanes.
+
+    🚨 THIS IS THE ARM THAT WOULD HAVE CAUGHT #4323, and it is derived rather than re-read. The
+    record said of `ghcr.io` *"never published by this fleet"* and *"Nothing this fleet produces is
+    stored on ghcr.io"* on the very day `main-cd.yml` pushed twelve tags across three of our own
+    repositories there. Both fields validated green, because every existing arm asks the record what
+    it says and this one asks the WORKFLOWS what they do.
+
+    A host we push to satisfies the table in one of two ways:
+
+      * `disposition: fleet-unlockable` — the host-level declaration already says our images live
+        there (`cr.meshweaver.cloud`), and the `retention` block already has to say what keeps them.
+      * a `publishes` block — for a host whose disposition is about what the fleet PULLS, because
+        the host is MIXED. `ghcr.io` is the fleet's only one: `systemorph/*` is ours and every other
+        namespace on it is somebody else's, and a single per-host disposition is false about one
+        half whichever value it takes.
+
+    Returns the problems and the denominator line, which is PRINTED whatever the verdict."""
+    targets, problems, references = publish_targets(root)
+    hosts = sorted(set(targets) - {LANE_REGISTRY})
+    denominator = (
+        f"publication accounting: {references} image reference(s) read across "
+        + ", ".join(PUBLISHING_WORKFLOWS)
+        + f"; {len(targets)} registry(ies) pushed to ({', '.join(sorted(targets))}); "
+        + (f"`{LANE_REGISTRY}` skipped — it is the registry this lane LOCKS, the subject of this "
+           "script rather than a foreign host it declares" if LANE_REGISTRY in targets
+           else f"`{LANE_REGISTRY}` was NOT among them, which is itself a change worth reading")
+        + f"; {len(hosts)} left for the table to account for.")
+
+    for host in hosts:
+        pushed = sorted(targets[host])
+        entry = registries.get(host)
+        if not isinstance(entry, dict):
+            problems.append(
+                f"{ROSTER_PATH}: this fleet PUBLISHES {len(pushed)} repository(ies) to `{host}` "
+                f"({', '.join(pushed)}) and the `registries` table does not declare that host at "
+                "all. A registry we push our own images to is not a registry with nothing of ours "
+                "in it.")
+            continue
+        disposition = str(entry.get("disposition", "")).strip()
+        publishes = entry.get("publishes")
+        if disposition == "fleet-unlockable" and publishes is None:
+            continue          # the host-level declaration already says our images live there
+        where = f"{ROSTER_PATH}: `registries.{host}`"
+        if publishes is None:
+            problems.append(
+                f"{where} is `{disposition}` and declares no `publishes` block, while this fleet "
+                f"PUSHES {len(pushed)} repository(ies) to it: {', '.join(pushed)} — derived from "
+                + " and ".join(PUBLISHING_WORKFLOWS) + ", not from this record. `third-party` and "
+                "its `not-ours` retention BOTH say nothing of ours is stored there, and that is "
+                "the false sentence #4323 is. Either the host is really `fleet-unlockable`, or — "
+                "if the host is MIXED, as `ghcr.io` is — declare `publishes` with the repositories, "
+                "the lanes that produce them, what retains them, and whether any installation runs "
+                "from them. Doc/Architecture/FleetRegistryRetention.")
+            continue
+        if not isinstance(publishes, dict):
+            problems.append(f"{where}.publishes is not an object.")
+            continue
+
+        # 🚨 EQUALITY, NOT CONTAINMENT, IN BOTH DIRECTIONS. A repository we push that the record
+        # does not name is the gap; a repository the record names and nothing pushes is a stale
+        # exemption, and a stale one hides the next one — the same doctrine the roster is held to.
+        declared = publishes.get("repositories")
+        if not isinstance(declared, list) or not declared or not all(
+                isinstance(repo, str) and repo.strip() for repo in declared):
+            problems.append(
+                f"{where}.publishes names no `repositories`. The claim IS the enumeration: a "
+                "publication block that lists nothing accounts for nothing while reading exactly "
+                "like a complete one.")
+        else:
+            named = {repo.strip() for repo in declared}
+            missing = sorted(set(pushed) - named)
+            stale = sorted(named - set(pushed))
+            if missing:
+                problems.append(
+                    f"{where}.publishes does not name {', '.join(missing)}, which "
+                    + " / ".join(PUBLISHING_WORKFLOWS) + f" push(es) to `{host}`. An unnamed "
+                    "publication is one nothing in this record has to say anything about.")
+            if stale:
+                problems.append(
+                    f"{where}.publishes names {', '.join(stale)}, which nothing in "
+                    + " / ".join(PUBLISHING_WORKFLOWS) + f" pushes to `{host}` any more. A stale "
+                    "entry exempts nothing and hides the next one — delete the line, or restore "
+                    "the publication.")
+
+        produced_by = publishes.get("producedBy")
+        if not isinstance(produced_by, list) or not produced_by:
+            problems.append(
+                f"{where}.publishes names no `producedBy`. Without the committed lane the claim "
+                "was derived from, the next reader cannot tell a publication that still happens "
+                "from one that was removed.")
+        else:
+            for candidate in produced_by:
+                relative = str(candidate).strip()
+                lane = Path(root) / relative
+                if not lane.is_file():
+                    problems.append(
+                        f"{where}.publishes names `producedBy: {relative}`, which is not a file in "
+                        "this repository. A record pointing at a moved lane checks nothing.")
+                elif host not in lane.read_text(encoding="utf-8"):
+                    problems.append(
+                        f"{where}.publishes names `{relative}` as producing `{host}` and that file "
+                        f"does not mention `{host}`. Either the publication moved or the record "
+                        "did not — and a `producedBy` that names the wrong lane reads as evidence.")
+
+        if not str(publishes.get("runFrom", "")).strip():
+            problems.append(
+                f"{where}.publishes states no `runFrom`. Whether any INSTALLATION pulls its running "
+                "set from these repositories is the whole difference between a publication and a "
+                "source this lane has to protect, and leaving it unsaid lets the next reader assume "
+                "either one.")
+
+        retention = publishes.get("retention")
+        if not isinstance(retention, dict):
+            problems.append(
+                f"{where}.publishes has no `retention` block. Our artifacts are stored there, so "
+                "something has to say what keeps them — the whole point of asking the second "
+                "question of every registry (#4230) is that it may not go unasked about ours.")
+            continue
+        rule = str(retention.get("rule", "")).strip()
+        if rule not in PUBLICATION_RETENTION_RULES:
+            problems.append(
+                f"{where}.publishes.retention.rule is {rule!r}; expected one of "
+                + ", ".join(sorted(PUBLICATION_RETENTION_RULES))
+                + ". A publication into a store this fleet does not operate can make exactly one "
+                  "honest statement: that its operator retains it and we do not.")
+            continue
+        if not str(retention.get("operator", "")).strip():
+            problems.append(
+                f"{where}.publishes.retention is `{rule}` and names no `operator`. 'Somebody else "
+                "keeps it' with nobody named is the sentence that reads as an answer and is not one.")
+        if not str(retention.get("reason", "")).strip():
+            problems.append(f"{where}.publishes.retention has no `reason`.")
+        if retention.get("deleters") is not None:
+            problems.append(
+                f"{where}.publishes.retention enumerates `deleters` for a store this fleet does not "
+                "operate. We cannot measure GitHub's deletion mechanisms from a committed file, so "
+                "such a list would be a verdict about OUR artifacts resting on nothing — the same "
+                "false reassurance `not-ours` refuses.")
+        if retention.get("cleanupAuthorized") is True:
+            problems.append(
+                f"{where}.publishes.retention declares `cleanupAuthorized: true` for a store this "
+                "fleet does not operate. There is no cleanup of ours to authorize there, and the "
+                "day there is, it is not authorized by this record.")
+    return problems, denominator
+
+
 # Every spelling of "delete something from a registry" this fleet could plausibly acquire.
 # 🚨 `acr purge` is DELIBERATELY ABSENT: it is legitimately present in `.github/acr-retention/`, it
 # addresses `meshweaver.azurecr.io`, and it cannot reach the fleet registry at all — the record
@@ -2553,6 +2990,11 @@ def check_registry_retention(root: str) -> int:
         return 1
 
     problems: list[str] = []
+    # 🚨 THE THIRD QUESTION, ASKED FIRST because it is the one that was never asked (#4323): what
+    # does this fleet PUSH to each of these hosts? Derived from the publishing workflows, so it
+    # cannot be satisfied by the record agreeing with itself.
+    publication_problems, publication_denominator = check_publication_accounting(root, registries)
+    problems.extend(publication_problems)
     charts_checked = 0
     acl_rules_checked = 0
     swept_files = swept_skipped = 0
@@ -2787,6 +3229,7 @@ def check_registry_retention(root: str) -> int:
 
     # 🚨 THE DENOMINATOR, printed whatever the verdict. "No deleter found" and "nothing was swept"
     # are the same output without it, and that is the confusion this whole family is made of.
+    print(publication_denominator)
     print(f"registry retention: {len(registries)} registry(ies) declared "
           f"({', '.join(sorted(registries))}); {charts_checked} chart(s) re-derived; "
           f"{acl_rules_checked} ACL rule(s) read; "
@@ -2813,6 +3256,9 @@ def check_registry_retention(root: str) -> int:
           "`maintenance:` stanza carries exactly the declared keys and windows, every ACL rule "
           "granting `delete` still names the declared principal, and no executable line anywhere "
           "runs a deletion against a registry.")
+    print("  and every registry this fleet PUSHES to is accounted for by the table — derived from "
+          "the publishing lanes rather than re-read from the record, which is the half that was "
+          "missing while `ghcr.io` read 'never published by this fleet' (#4323).")
     return 0
 
 
@@ -3116,6 +3562,7 @@ def _drive(axis1, axis2, registry: FakeRegistry, apply: bool = True,
            roster: dict[str, tuple[str, str, str]] | None = None,
            probe=None,
            dispositions: dict[str, tuple[str, str]] | None = None,
+           publications_root: str | None = None,
            ) -> tuple[Plan, list[str], FakeRegistry]:
     """The SAME sequence `run()` performs, minus the report — so the self-test falsifies the real
     decision path rather than a paraphrase of it. Its per-lock chatter is swallowed; the assertions
@@ -3138,7 +3585,11 @@ def _drive(axis1, axis2, registry: FakeRegistry, apply: bool = True,
                                  if f"{scan.gh_repo} {where}" == instance.source})
             for instance in plan.instances
         }
-        classify_foreign_registries(plan, dispositions or {})
+        # Read the same way `run()` reads it — from a root — so ARM 29's parity check is answered
+        # by the harness doing the step, not by the harness declaring it did.
+        classify_foreign_registries(
+            plan, dispositions or {},
+            read_registry_publications(publications_root) if publications_root else {})
         resolve_running_sets(plan, inventory, repositories_of)
         resolve_and_classify(plan, registry, inventory, inventory_errors)
         classify_tags(plan, registry)
@@ -3852,12 +4303,29 @@ ingress:
                        chart_body: str | None = _GOOD_MAINTENANCE,
                        acl: str = _GOOD_ACL,
                        extra_chart: tuple[str, str] | None = None,
-                       extra_workflow: str | None = None) -> str:
+                       extra_workflow: str | None = None,
+                       publishing: dict[str, str] | None = None) -> str:
         root = Path(scratch)
         record = root / ".github" / "acr-retention"
         record.mkdir(parents=True, exist_ok=True)
         (record / ROSTER_PATH).write_text(
             json.dumps({"registries": registries, "instances": []}), encoding="utf-8")
+        # 🚨 THE PUBLISHING LANES ARE ALWAYS WRITTEN, and by DEFAULT they push only to the registry
+        # this lane LOCKS. The publication accounting runs on every invocation of the gate — it has
+        # no `if` asking whether its input exists, because that is the trapdoor this repository
+        # keeps paying for — so a fixture with no workflows at all would red every arm below over
+        # a derivation that read nothing. Pushing solely to `LANE_REGISTRY` leaves these arms
+        # testing exactly what they test, and ARM 34 supplies its own `publishing` bodies.
+        workflows = root / ".github" / "workflows"
+        workflows.mkdir(parents=True, exist_ok=True)
+        for name in PUBLISHING_WORKFLOWS:
+            if publishing is not None and name not in publishing:
+                continue          # a fixture that OMITS a lane, so "renamed away" can be driven
+            (workflows / name).write_text(
+                (publishing or {}).get(name, f'env:\n  ACR: {LANE_REGISTRY}\n'
+                 '    run: |\n'
+                 '      docker buildx imagetools create --tag "${{ env.ACR }}/memex-portal-ai:v" '
+                 '"${{ env.ACR }}/memex-portal-ai:staging"\n'), encoding="utf-8")
         if chart_body is not None:
             chart = root / _CHART
             chart.mkdir(parents=True, exist_ok=True)
@@ -4110,6 +4578,233 @@ ingress:
     # And this repository's own declaration validates, over a non-zero denominator.
     check(check_registry_retention(str(HERE.parent.parent)) == 0,
           "ARM 33: this repository's own `registries` retention declaration does not validate")
+
+    # ── ARM 34: what this fleet PUBLISHES to a registry, DERIVED from the lanes (#4323) ──────────
+    # 🚨 THE ARM FOR THE DEFECT NO OTHER ARM COULD SEE. `.github/acr-retention/instances.json` said
+    # of `ghcr.io` *"never published by this fleet"* and *"Nothing this fleet produces is stored on
+    # ghcr.io"*, and BOTH fields validated green — because every arm above asks the record what it
+    # says, and nothing asked the WORKFLOWS what they do. Measured 2026-09-15 in the job log of
+    # run 34918214035 (02:27Z): main-cd's promote job pushed TWELVE tags across three of our own
+    # repositories to `ghcr.io/systemorph/`, on a run like every other promoting run. `release.yml`,
+    # the lane #4323 named, had never run at all — 0 runs — so the continuous lane is the whole of
+    # the publication and the issue's framing understated it.
+    HERE_ROOT = str(HERE.parent.parent)
+
+    # (a) THE MEASUREMENT. Derived from the committed lanes, not from the record it checks.
+    _targets, _problems, _references = publish_targets(HERE_ROOT)
+    check(not _problems,
+          f"ARM 34: the publication derivation could not read this repository's own lanes: "
+          f"{_problems}")
+    check(_references > 0,
+          "ARM 34: ZERO image references were read across the publishing workflows. A derivation "
+          "that parses nothing reports exactly like a fleet that publishes nothing — which is the "
+          "sentence #4323 is made of")
+    check(_targets.get("ghcr.io") == {"systemorph/memex-portal-ai", "systemorph/memex-migration",
+                                      "systemorph/mw-plugin-test"},
+          f"ARM 34: the three repositories this fleet pushes to ghcr.io were not derived: "
+          f"{sorted(_targets.get('ghcr.io', []))}. That set is the fact #4323 turns on")
+    check(LANE_REGISTRY in _targets,
+          f"ARM 34: the registry this lane LOCKS was not among the derived push targets: "
+          f"{sorted(_targets)}. It is skipped by name, and a skip over something that was never "
+          f"found is not a skip")
+    # 🚨 `--tag` IS NOT THE ONLY PUSH, and this is TWO arms because two separate readers decide it.
+    # `cr.meshweaver.cloud` receives every consumer-visible tag through `mirror-image-to-registry.sh`
+    # — no `--tag` anywhere on the line — and a publication mechanism the derivation cannot see is a
+    # host the accounting never has to ask about, which is this issue one register down.
+    check("cr.meshweaver.cloud" in _targets,
+          f"ARM 34: the fleet's own registry was not derived as a push target: {sorted(_targets)}. "
+          f"Its publications go through mirror-image-to-registry.sh, so a derivation that reads "
+          f"only `--tag` sees an entire registry as published-to by nothing")
+    # …and the SECOND reader: that script's destinations routinely sit on the line AFTER the source,
+    # behind a `\`. Measured 2026-09-15 by disabling the join: the host survives (phase D's call is
+    # one line) and `mw-plugin-test` DISAPPEARS — so the host's presence proves nothing about
+    # continuations and the REPOSITORY SET is what this arm has to assert. An arm whose subject is
+    # decided elsewhere passes having checked nothing.
+    check(_targets.get("cr.meshweaver.cloud") == {"memex-portal-ai", "memex-migration",
+                                                  "mw-plugin-test"},
+          f"ARM 34: the fleet's own registry was derived with "
+          f"{sorted(_targets.get('cr.meshweaver.cloud', []))} rather than all three repositories. "
+          f"`mw-plugin-test` reaches it through a mirror call whose destinations are on the "
+          f"CONTINUATION line, and it is the one repository that vanishes when the join stops")
+
+    # (b) THIS REPOSITORY'S OWN RECORD now accounts for all of it.
+    _live, _ = check_publication_accounting(HERE_ROOT, json.loads(
+        (Path(HERE_ROOT) / ".github" / "acr-retention" / ROSTER_PATH).read_text(encoding="utf-8")
+    )["registries"])
+    check(not _live,
+          f"ARM 34: this repository's own `registries` table does not account for what it "
+          f"publishes: {_live}")
+
+    # A lane that pushes to one foreign host, used by every negative below.
+    _PUBLISHING = {
+        "main-cd.yml": 'env:\n  ACR: ' + LANE_REGISTRY + '\n'
+                       '    run: |\n'
+                       '      docker buildx imagetools create --tag "ghcr.example/us/portal:v" '
+                       '"${{ env.ACR }}/portal:staging"\n',
+        "release.yml": 'env:\n  ACR: ' + LANE_REGISTRY + '\n'
+                       '    run: |\n'
+                       '      docker buildx imagetools create --tag "${{ env.ACR }}/portal:v" '
+                       '"${{ env.ACR }}/portal:staging"\n',
+    }
+
+    def _published(**overrides) -> dict:
+        block = {
+            "repositories": ["us/portal"],
+            "producedBy": [".github/workflows/main-cd.yml"],
+            "runFrom": "no installation",
+            "retention": {"rule": "operator-retained", "operator": "Someone Else",
+                          "reason": "their store, their retention"},
+        }
+        block["retention"].update(overrides.pop("retention", {}))
+        block.update(overrides)
+        return block
+
+    def _mixed(**overrides) -> dict:
+        entry = {
+            "disposition": "third-party",
+            "reason": "what we PULL here is somebody else's",
+            "publishes": _published(**overrides.pop("publishes", {})),
+            "retention": {"rule": "not-ours", "reason": "scoped to what we pull"},
+        }
+        entry.update(overrides)
+        return {"ghcr.example": entry}
+
+    def _accounting(registries: dict, publishing=_PUBLISHING) -> tuple[int, str]:
+        return _verdict(registries, publishing=publishing)
+
+    # The CONTROL: a mixed host that declares its publication passes.
+    code, output = _accounting(_mixed())
+    check(code == 0,
+          f"ARM 34: a host that DECLARES what this fleet publishes there was rejected — the gate "
+          f"would red on the fix: {output}")
+    check("2 registry(ies) pushed to" in output and "1 left for the table to account for" in output,
+          f"ARM 34: the passing run printed no publication DENOMINATOR. 'nothing publishes here' "
+          f"and 'nothing was parsed' are the same output without one: {output}")
+
+    # 🚨 THE DEFECT ITSELF, as a negative control: `third-party` + `not-ours` over a host we push to.
+    _bare = _mixed()
+    _bare["ghcr.example"].pop("publishes")
+    code, output = _accounting(_bare)
+    check(code == 1 and "declares no `publishes` block" in output and "us/portal" in output,
+          f"ARM 34: a `third-party` host this fleet PUSHES THREE REPOSITORIES TO passed with a "
+          f"retention that says nothing of ours is stored there. That is #4323 exactly, and it "
+          f"validated green for a day: {output}")
+
+    # A host we push to that the table does not mention AT ALL.
+    code, output = _accounting({"other.example": {
+        "disposition": "third-party", "reason": "r",
+        "retention": {"rule": "not-ours", "reason": "r"}}})
+    check(code == 1 and "does not declare that host at all" in output,
+          f"ARM 34: a registry this fleet publishes to and the table never names was accepted: "
+          f"{output}")
+
+    # 🚨 A `fleet-unlockable` host needs NO `publishes` — its host-level declaration already says
+    # our images live there, and its `retention` block already has to say what keeps them. Without
+    # this the accounting would demand a second declaration of the same fact on cr.meshweaver.cloud.
+    code, output = _accounting({"ghcr.example": {
+        "disposition": "fleet-unlockable", "reason": "ours",
+        "retention": {"rule": "derived-protected-set", "reason": "r", "protectedSet": {"axes": [
+            {"axis": "committed pins", "derivedFrom": "overlays", "onIncomplete": "refuse"}]}}}})
+    check(code == 0,
+          f"ARM 34: a `fleet-unlockable` host was made to declare `publishes` as well, so the "
+          f"accounting demands the same fact twice: {output}")
+
+    # EQUALITY IN BOTH DIRECTIONS — a missing repository is the gap, a stale one hides the next one.
+    code, output = _accounting(_mixed(publishes={"repositories": ["us/other"]}))
+    check(code == 1 and "does not name us/portal" in output and "names us/other" in output,
+          f"ARM 34: a publication list that misses what we push AND names what we do not was "
+          f"accepted in one or both directions: {output}")
+
+    # The retention statement a publication may make, and the three it may not.
+    code, output = _accounting(_mixed(publishes={"retention": {"rule": "nothing-deletes"}}))
+    check(code == 1 and "expected one of operator-retained" in output,
+          f"ARM 34: a publication into somebody else's store claimed `nothing-deletes` — a rule "
+          f"whose evidence is a chart we render and an ACL we own, neither of which exists there: "
+          f"{output}")
+    code, output = _accounting(_mixed(publishes={"retention": {"operator": ""}}))
+    check(code == 1 and "names no `operator`" in output,
+          f"ARM 34: 'somebody else keeps it' passed with nobody named: {output}")
+    code, output = _accounting(_mixed(publishes={"retention": {
+        "deleters": [{"mechanism": "theirs", "present": False, "verdict": "none"}]}}))
+    check(code == 1 and "does not operate" in output and "deleters" in output,
+          f"ARM 34: a publication block enumerated the OPERATOR'S deleters. We cannot measure them "
+          f"from a committed file, so the list would be a verdict about OUR artifacts resting on "
+          f"nothing: {output}")
+    code, output = _accounting(_mixed(publishes={"retention": {"cleanupAuthorized": True}}))
+    check(code == 1 and "cleanupAuthorized" in output,
+          f"ARM 34: a record authorized a cleanup in a store this fleet does not operate: {output}")
+
+    # `runFrom` — the whole difference between a publication and a source this lane must protect.
+    code, output = _accounting(_mixed(publishes={"runFrom": ""}))
+    check(code == 1 and "states no `runFrom`" in output,
+          f"ARM 34: a publication block left unsaid whether any INSTALLATION runs from it: {output}")
+
+    # `producedBy` has to name a lane that actually pushes THERE.
+    code, output = _accounting(_mixed(publishes={
+        "producedBy": [".github/workflows/release.yml"]}))
+    check(code == 1 and "does not mention" in output,
+          f"ARM 34: `producedBy` named a lane that never pushes to that host, and a wrong "
+          f"attribution reads as evidence: {output}")
+    code, output = _accounting(_mixed(publishes={"producedBy": [".github/workflows/gone.yml"]}))
+    check(code == 1 and "not a file in this repository" in output,
+          f"ARM 34: `producedBy` pointed at a moved lane and still checked: {output}")
+
+    # A renamed publishing lane must RED, never quietly derive nothing.
+    code, output = _verdict(_mixed(), publishing={"main-cd.yml": _PUBLISHING["main-cd.yml"]})
+    check(code == 1 or "release.yml is missing" in output,
+          f"ARM 34: a MISSING publishing lane did not red. A derivation that reads one of two "
+          f"lanes reports exactly like one that read both: {output}")
+
+    # ── ARM 34b: an installation that RUNS from a publication, and the report that names it ──────
+    # 🚨 WITHOUT THIS THE `publishes` BLOCK IS PROSE. A host declared `third-party` about what the
+    # fleet PULLS may still hold repositories the fleet PUBLISHES, and an overlay pinning one of
+    # THOSE is not a third-party pin — it is an installation running OUR images from a store
+    # nothing of ours retains, in the one branch (pins here AND there) that otherwise prints
+    # success. It fires on nobody today, which is exactly the claim `publishes.runFrom` makes.
+    _publication_scan = _scan2("Systemorph/Memex", FIXTURE_OVERLAY_FOREIGN.replace(
+        "cr.meshweaver.cloud", "ghcr.io/systemorph"),
+        "deployments/aks/memex-cloud/values.memexcloud.public.yaml")
+    plan, _, _ = _drive(clean1, clean2 + [_publication_scan],
+                        FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                        dispositions={"ghcr.io": ("third-party", "somebody else's")},
+                        publications_root=HERE_ROOT)
+    check(any("PUBLISHES rather than retains" in blocker for blocker in plan.blockers),
+          f"ARM 34b: an installation pinning `ghcr.io/systemorph/memex-portal-ai` — OUR image, on "
+          f"a host declared third-party — was waved through as somebody else's: {plan.blockers}")
+
+    # …and the NEGATIVE control: a genuinely third-party pin on the SAME host still passes. Without
+    # it the arm above could be firing on the host rather than on the repository.
+    _bootstrap_scan = _scan2("Systemorph/Memex", FIXTURE_OVERLAY_FOREIGN.replace(
+        "cr.meshweaver.cloud/memex-portal-ai", "ghcr.io/distribution/distribution").replace(
+        "cr.meshweaver.cloud/memex-migration", "ghcr.io/oras-project/oras"),
+        "deployments/aks/memex-cloud/values.memexcloud.public.yaml")
+    plan, _, _ = _drive(clean1, clean2 + [_bootstrap_scan],
+                        FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                        dispositions={"ghcr.io": ("third-party", "somebody else's")},
+                        publications_root=HERE_ROOT)
+    check(not any("PUBLISHES rather than retains" in blocker for blocker in plan.blockers),
+          f"ARM 34b: `ghcr.io/distribution/distribution` — the registry service's own image, which "
+          f"cannot come from the registry it boots — was read as one of ours. The arm would then "
+          f"be firing on the HOST, and the host is precisely the wrong unit: {plan.blockers}")
+
+    # 🚨 AND THE REPORT MUST NOT PRINT OUR OWN IMAGES UNDER "NOT ours to retain" — that is the
+    # record's false sentence reproduced in the one artifact a reader checks it against.
+    plan, _, _ = _drive(clean1, clean2 + [_publication_scan],
+                        FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                        dispositions={"ghcr.io": ("third-party", "somebody else's")},
+                        publications_root=HERE_ROOT)
+    _printed = io.StringIO()
+    with contextlib.redirect_stdout(_printed):
+        report(plan, clean1, clean2 + [_publication_scan], REGISTRY_DEFAULT, _inventory(),
+               apply=False, release_enabled=False, root=HERE_ROOT)
+    _mirror = _printed.getvalue()
+    check("this fleet PUBLISHES here" in _mirror and "published by us" in _mirror,
+          f"ARM 34b: the protected-set report did not distinguish OUR OWN repositories on a mixed "
+          f"host: {_mirror[-1500:]}")
+    _ours_block = _mirror.split("this fleet PUBLISHES here")[-1].split("\n\n")[0]
+    check("NOT ours to retain" not in _ours_block,
+          f"ARM 34b: the report printed this fleet's own published images under 'declared NOT ours "
+          f"to retain' — the record's false sentence, reproduced by the report: {_ours_block}")
 
     # ── ARM 31: the decided WINDOW is asserted on the record, and the assertion can fail ────────
     # 🚨 The control that matters is the one this repository's own record FAILED on 2026-09-13:
@@ -4402,7 +5097,7 @@ env:
           "unresolved tag / indeterminate / unreadable registry all RED with nothing released, "
           "release arm off by default and live when enabled, report-only writes nothing, a lock "
           "write that exits 0 without taking and one whose read-back cannot answer are both RED "
-          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), an UNDECLARED registry REDS wherever it appears, a declared `fleet-unlockable` one is counted on its own line saying protection there is UNVERIFIED, pinning in BOTH is RED because half covered is not covered, a `*.azurecr.io` that is not this registry is foreign, helm's split repository/tag shape is read, and a reference inside a COMMENT is prose. WHAT DELETES FROM IT (#4230, the SECOND question about the same unit): every declared registry must say what deletes from it or go RED, an empty table is zero-asked rather than clean, a `nothing-deletes` enumeration in which NOTHING is `present` inspected nothing, a `present` written as the STRING \"true\" is RED, the rule and the disposition are checked against EACH OTHER in both directions, a `derived-protected-set` axis that merely WARNS on an incomplete derivation is RED because on a registry with NO LOCK that deletes more rather than protecting less — and the arm that is not about JSON: the committed CHART is re-derived, so a `kind: Job`/`kind: CronJob` rendered beside the registry (quoted or bare), a `maintenance:` window that MOVED, a NEW key in that stanza, the stanza VANISHING, and an executable deletion anywhere in `deploy/`/`.github/` each go RED while the record still reads 'nothing deletes' — with the sweep's every spelling PROVEN to match on a synthetic control, and a deleter named inside a COMMENT proven NOT to.")
+          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), an UNDECLARED registry REDS wherever it appears, a declared `fleet-unlockable` one is counted on its own line saying protection there is UNVERIFIED, pinning in BOTH is RED because half covered is not covered, a `*.azurecr.io` that is not this registry is foreign, helm's split repository/tag shape is read, and a reference inside a COMMENT is prose. WHAT DELETES FROM IT (#4230, the SECOND question about the same unit): every declared registry must say what deletes from it or go RED, an empty table is zero-asked rather than clean, a `nothing-deletes` enumeration in which NOTHING is `present` inspected nothing, a `present` written as the STRING \"true\" is RED, the rule and the disposition are checked against EACH OTHER in both directions, a `derived-protected-set` axis that merely WARNS on an incomplete derivation is RED because on a registry with NO LOCK that deletes more rather than protecting less — and the arm that is not about JSON: the committed CHART is re-derived, so a `kind: Job`/`kind: CronJob` rendered beside the registry (quoted or bare), a `maintenance:` window that MOVED, a NEW key in that stanza, the stanza VANISHING, and an executable deletion anywhere in `deploy/`/`.github/` each go RED while the record still reads 'nothing deletes' — with the sweep's every spelling PROVEN to match on a synthetic control, and a deleter named inside a COMMENT proven NOT to. WHAT THIS FLEET PUBLISHES TO IT (#4323, the THIRD question about the same unit): the push targets are DERIVED from the publishing lanes — every `--tag` and every mirror-image-to-registry.sh destination, shell continuations joined, with the two readers falsified SEPARATELY because disabling the mirror call loses a whole registry while disabling the join loses one repository — a `third-party` host this fleet pushes to with no `publishes` block is RED (that is the defect, and it validated green for a day), an undeclared push target is RED, the declared repositories are held to the derived set in BOTH directions, `operator-retained` is the only rule a publication may claim and may enumerate no deleters and authorize no cleanup, a `fleet-unlockable` host is NOT made to declare the same fact twice, a renamed lane REDS rather than deriving nothing — and the two arms that stop the block being prose: an overlay pinning one of OUR published repositories is RED while the bootstrap image on the SAME host is not, and the report never prints our own images under 'declared NOT ours to retain'.")
     return 0
 
 
