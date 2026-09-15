@@ -999,6 +999,7 @@ public static class ProjectBuild
             sink.Warn($"[{name}] private closure: a package declares the native payload '{absent}' "
                 + "and neither the image nor the shelf carries the file — it cannot ride, and the "
                 + "module will throw DllNotFoundException at its first P/Invoke");
+        ReportUncarried(name, privateClosure, sink.Warn);
         if (!privateClosure.Rides.IsEmpty)
             sink.Info($"[{name}] private closure: {privateClosure.Rides.Length} assembl(y|ies) ride "
                 + $"the bundle, {privateClosure.FrameworkResolved.Length} left to the shared framework"
@@ -1555,6 +1556,26 @@ public static class ProjectBuild
         File.WriteAllLines(Path.Combine(outputDirectory, ShelfManifestName), manifest);
         sink.Info($"[{moduleName}] private closure: {manifest.Count} assembl(y|ies) beside the module "
             + $"({ShelfManifestName} is the provenance the pack inspection keys on)");
+    }
+
+    /// <summary>
+    /// 🚨 NAMES, as one warning line each, what the module's private closure declares and this lane
+    /// does not carry (#4367, #4445) — never a refusal here, deliberately: nothing had ever printed
+    /// on this lane, so a refusal would be armed on faith (the #3240 shape). The line carries the
+    /// SAME finding wording the SDK lane refuses on, so one grep over a container wave's logs is the
+    /// measurement #4445 arms on. A separate method, and a delegate rather than the sink, so the
+    /// report is pinnable without a build.
+    /// </summary>
+    /// <param name="moduleName">The module's name, for the log line.</param>
+    /// <param name="closure">The derived private closure.</param>
+    /// <param name="warn">Where a finding goes (the build sink's warning channel).</param>
+    /// <returns>How many findings were named.</returns>
+    internal static int ReportUncarried(
+        string moduleName, PrivateClosure.Result closure, Action<string> warn)
+    {
+        foreach (var finding in closure.Uncarried)
+            warn($"[{moduleName}] private closure: {finding}");
+        return closure.Uncarried.Length;
     }
 
     /// <summary>

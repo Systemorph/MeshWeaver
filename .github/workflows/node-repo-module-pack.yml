@@ -2559,6 +2559,39 @@ jobs:
                     ${REFS:+-p:MeshWeaverRefs=$REFS}
                   packdir="$GITHUB_WORKSPACE/$(dirname "$PROJECT")/bin/Release/net10.0/publish"
                   printf '%s\n' --deps-closure >> "$packargs"
+                  # >>> module pack additions (#4367) — EXECUTED by .github/scripts/test-module-pack-with.py
+                  # 🚨 THE MODULE'S OWN CARRIERS. --deps-closure REFUSES the pack (exit 2) for a
+                  # RID-specific MANAGED asset or a native at a layout the loader does not probe,
+                  # unless something the module NAMES carries it — and this lane composes the pack
+                  # arguments itself, so without this read the refusal's remedy (--with /
+                  # --with-native) would be a step no CI-built module could take. The module states
+                  # it in its OWN csproj, beside the Target that lays the file out:
+                  #   <MeshWeaverPackWith Include="<file name>" />        → --with <file name>
+                  #   <MeshWeaverPackWithNative Include="runtimes/<rid>/native/<file>" /> → --with-native …
+                  # (module-pack's refusal prints the exact lines). Read by MSBuild's OWN evaluation —
+                  # `-getItem` prints JSON on SDK ≥ 8, and this job runs 10.0.x — under the SAME
+                  # properties as the build, so an item conditioned on them reads as the build saw
+                  # it. Every step fails the module RED rather than reading as "declares none": a
+                  # failed evaluation, output that is not the JSON shape, and (in module-pack) a value
+                  # of the wrong shape or a file the publish does not hold.
+                  pack_items="$(dotnet msbuild "$PROJECT" -nologo \
+                    -getItem:MeshWeaverPackWith -getItem:MeshWeaverPackWithNative \
+                    -p:Configuration=Release \
+                    -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" \
+                    -p:Version="$VERSION" \
+                    ${REFS:+-p:MeshWeaverRefs=$REFS})"
+                  pack_lines="$(jq -r 'if (.Items | type) != "object" then error("no Items object in the -getItem answer") else
+                      ((.Items.MeshWeaverPackWith // [])[] | "--with\t\(.Identity)"),
+                      ((.Items.MeshWeaverPackWithNative // [])[] | "--with-native\t\(.Identity)") end' <<< "$pack_items")"
+                  pack_added=0
+                  while IFS=$'\t' read -r flag value; do
+                    [ -n "$flag" ] || continue
+                    printf '%s\n%s\n' "$flag" "$value" >> "$packargs"
+                    pack_added=$((pack_added + 1))
+                    echo "closure: $flag $value — declared by $PROJECT (MeshWeaverPackWith / MeshWeaverPackWithNative)"
+                  done <<< "$pack_lines"
+                  echo "closure: $pack_added pack addition(s) declared by the module's csproj"
+                  # <<< module pack additions
                   # What resolved this bundle's private closure — recorded, not merely implied. It is
                   # stamped into the built marker below and the verifier REFUSES a marker without it:
                   # "the bundle exists" and "the bundle is composable" must be one claim, not two

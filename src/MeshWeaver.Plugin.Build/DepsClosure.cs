@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.Plugin.Build;
 
@@ -167,33 +168,64 @@ public static class DepsClosure
         }
 
         /// <summary>
-        /// The finding in words — what is not carried, why, and the step that carries it. 🚨 The
-        /// step must be one that SATISFIES the pack's refusal, and each one below does: the
-        /// refusal is lifted by exactly <c>--with <see cref="FileName"/></c> or, for a native,
-        /// <c>--with-native <see cref="ProbedPath"/></c>. Advice that names any other step would
-        /// block a module the message claims to unblock.
+        /// The finding in words — what is not carried, why, and the step that carries it. 🚨 Every
+        /// step it names must SATISFY the pack's refusal, and each one does: the refusal is lifted by
+        /// exactly <c>--with <see cref="FileName"/></c> or, for a native,
+        /// <c>--with-native <see cref="ProbedPath"/></c> — and in the shared lane, which composes the
+        /// pack arguments itself, by the csproj items it turns into those flags
+        /// (<c>MeshWeaverPackWith</c> / <c>MeshWeaverPackWithNative</c>, read by
+        /// <c>node-repo-module-pack.yml</c>). Advice that names any other step blocks a module the
+        /// message claims to unblock. The finding itself is the one spelling both lanes share
+        /// (<see cref="UncarriedAssetFindings"/>).
         /// </summary>
         public string Describe() => Kind switch
         {
             UncarriedKind.RidSpecificManaged =>
-                $"'{Package}' declares a RID-specific MANAGED asset the bundle does not carry: "
-                + $"{RelativePath}. The module's flat closure has one slot per assembly name and "
-                + "no way to choose a RID at pack time, so the pack will not choose one silently. "
-                + "State which copy occupies that slot: copy the file into the module folder root "
-                + "before packing (or keep the RID-agnostic copy already there, if that is the one "
-                + $"the module needs) and name it with --with {FileName} (--with takes a plain file "
-                + "name; it refuses a path).",
+                UncarriedAssetFindings.RidSpecificManaged(Package, RelativePath)
+                + " The pack will not choose one silently, so state which copy occupies that slot. "
+                + "Packing locally: copy the file into the module folder root before packing (or "
+                + "keep the RID-agnostic copy already there, if that is the one the module needs) "
+                + $"and name it with --with {FileName} (--with takes a plain file name; it refuses a "
+                + "path). "
+                + SharedLane("$(PublishDir)", $"<MeshWeaverPackWith Include=\"{FileName}\" />")
+                + " — or the MeshWeaverPackWith item alone, to keep the RID-agnostic copy.",
             _ =>
-                $"'{Package}' declares a native asset at '{RelativePath}', which is NOT the layout "
-                + "the module loader probes (exactly runtimes/<rid>/native/<file>) — it is not "
-                + "carried, because bytes at a path nothing looks at read as shipped and behave "
-                + "as absent. Carry it where the loader looks: "
+                UncarriedAssetFindings.UnprobedNative(Package, RelativePath)
+                + " Carry it where the loader looks. Packing locally: "
                 + (ProbedPath is { } probed
                     ? $"lay it out at {probed} and name it with --with-native {probed}, or "
                     : "")
                 + $"copy it to the module folder root and name it with --with {FileName} (the "
-                + "loader's LAST probe is that flat folder).",
+                + "loader's LAST probe is that flat folder). "
+                + (ProbedPath is { } slot
+                    ? SharedLane($"$(PublishDir)runtimes/{Rid}/native",
+                        $"<MeshWeaverPackWithNative Include=\"{slot}\" />")
+                    : SharedLane("$(PublishDir)", $"<MeshWeaverPackWith Include=\"{FileName}\" />")),
         };
+
+        /// <summary>
+        /// The shared lane's half of the remedy, as csproj lines a module author can paste.
+        /// <c>node-repo-module-pack.yml</c> packs the module's PORTABLE publish folder and composes
+        /// the pack arguments itself, so the module states its carrier where the lane reads it —
+        /// its own csproj. A portable publish lays every <c>runtimeTargets</c> asset out at its
+        /// declared key (measured 2026-09-15 on SDK 10.0.400 for both shapes:
+        /// <c>System.IO.Ports</c>' <c>runtimes/unix/lib/net9.0/System.IO.Ports.dll</c>, and a
+        /// native at <c>runtimes/linux-x64/nativeassets/net10.0/</c>), so a copy after Publish
+        /// from <c>$(PublishDir)&lt;that key&gt;</c> needs no package-cache path, and the item names
+        /// the result.
+        /// </summary>
+        private string SharedLane(string destinationFolder, string packItem) =>
+            "In the shared lane (node-repo-module-pack), which packs the module's publish folder, "
+            + $"put it in the module's csproj — the publish lays this file out at {RelativePath}, so "
+            + $"copy it after Publish and name it: <Target Name=\"{TargetName}\" "
+            + $"AfterTargets=\"Publish\"><Copy SourceFiles=\"$(PublishDir){RelativePath}\" "
+            + $"DestinationFolder=\"{destinationFolder}\" /></Target><ItemGroup>{packItem}</ItemGroup>";
+
+        /// <summary>An MSBuild target name unique to this finding, so two pasted snippets never
+        /// collide (MSBuild keeps the LAST definition of a target name, silently).</summary>
+        private string TargetName =>
+            "MeshWeaverPackCarry_" + string.Concat(
+                $"{Package}_{Rid}_{FileName}".Select(c => char.IsAsciiLetterOrDigit(c) ? c : '_'));
     }
 
     /// <summary>

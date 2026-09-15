@@ -1,6 +1,7 @@
 #pragma warning disable CS1591
 
 using System.Text;
+using System.Text.RegularExpressions;
 using MeshWeaver.Plugin.Build;
 using MeshWeaver.Plugin.Packaging;
 using Xunit;
@@ -882,6 +883,73 @@ public class ModulePackCommandTest : IDisposable
         Assert.Equal(2, exit);
         Assert.False(Directory.Exists(outDir), "a refused pack must not have written anything");
         Assert.Contains(UnprobedNative, error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 #4367 — the SHARED LANE's remedy, which the coordinator's review found missing: the lane
+    /// composes the pack arguments itself, so a CI-built module cannot pass <c>--with</c>. The
+    /// refusal therefore prints csproj lines — a <c>Copy</c> after <c>Publish</c> from the key the
+    /// portable publish lays the file out at, and the <c>MeshWeaverPackWith*</c> item
+    /// <c>node-repo-module-pack.yml</c> turns into the flag. This reads those lines off the refusal
+    /// VERBATIM (what an author pastes), does what they do — MSBuild's copy, then the lane's flag —
+    /// and packs again: the lines must lift the refusal, or the advice is a dead end in the only
+    /// lane that runs it. (The lane's read of the item is executed by
+    /// <c>.github/scripts/test-module-pack-with.py</c>; the whole chain was run for real against the
+    /// SDK once, see Doc/Architecture/Modules.)
+    /// </summary>
+    [Theory]
+    [InlineData("rid-specific managed")]
+    [InlineData("unprobed native")]
+    public void DepsClosure_TheSharedLaneCsprojLinesInTheRefusal_WhenApplied_LiftIt(string shape)
+    {
+        var managed = shape == "rid-specific managed";
+        var declared = managed ? RidSpecificManagedAsset : UnprobedNative;
+        if (managed)
+            RidSpecificManagedModule();
+        else
+            UnprobedNativeModule();
+        // A PORTABLE publish lays every runtimeTargets asset out at its declared key.
+        FileUnderClosure(declared, managed ? "WIN-X64" : "ODD-ENGINE");
+
+        var (refusedExit, refusal) = PackCapturingErrors(
+            DepsClosurePackArgs("2.2.0", Path.Combine(root, "out-lane-refused")));
+        Assert.Equal(2, refusedExit);
+
+        var copy = Regex.Match(refusal,
+            """<Target Name="[A-Za-z0-9_]+" AfterTargets="Publish"><Copy SourceFiles="\$\(PublishDir\)(?<src>[^"]+)" DestinationFolder="\$\(PublishDir\)(?<dst>[^"]*)" /></Target>""");
+        var item = Regex.Match(refusal,
+            """<ItemGroup><(?<type>MeshWeaverPackWith(Native)?) Include="(?<value>[^"]+)" /></ItemGroup>""");
+        Assert.True(copy.Success && item.Success,
+            $"the refusal must print the csproj lines the shared lane needs; stderr: {refusal}");
+        Assert.Equal(declared, copy.Groups["src"].Value);
+
+        // What those lines DO: MSBuild's Copy after Publish…
+        var publish = Path.Combine(root, "closure");
+        var source = Path.Combine(publish, copy.Groups["src"].Value);
+        var destination = Path.Combine(publish, copy.Groups["dst"].Value);
+        Directory.CreateDirectory(destination);
+        File.Copy(source, Path.Combine(destination, Path.GetFileName(source)), overwrite: true);
+        // …then the lane's read: one flag per item.
+        var flag = item.Groups["type"].Value == "MeshWeaverPackWithNative" ? "--with-native" : "--with";
+        var outDir = Path.Combine(root, "out-lane-carried");
+
+        var (exit, error) = PackCapturingErrors(
+            [.. DepsClosurePackArgs("2.2.1", outDir), flag, item.Groups["value"].Value]);
+
+        Assert.True(exit == 0, $"the csproj lines the refusal prints must lift it; stderr: {error}");
+        var bundle = File.ReadAllBytes(BundleIn(outDir, "2.2.1"));
+        if (managed)
+        {
+            var (_, files) = BundleReader.ReadModule(bundle);
+            Assert.Equal("WIN-X64",
+                Encoding.UTF8.GetString(Assert.Single(files, f => f.FileName == "RidPicky.dll").Bytes));
+        }
+        else
+        {
+            var native = Assert.Single(BundleReader.ReadModuleNativeAssets(bundle));
+            Assert.Equal(UnprobedNativesProbedSlot, native.RelativePath);
+            Assert.Equal("ODD-ENGINE", Encoding.UTF8.GetString(native.Bytes));
+        }
     }
 
     [Fact]

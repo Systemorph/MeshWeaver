@@ -1,6 +1,7 @@
 #pragma warning disable CS1591
 
 using MeshWeaver.Plugin.Build;
+using MeshWeaver.Plugin.Packaging;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -287,6 +288,14 @@ public class DepsClosureTest
         // The slot the loader probes for the same file and the same RID.
         Assert.Equal("runtimes/win/native/msalruntime.dll", native.ProbedPath);
 
+        // The finding is the ONE spelling both lanes share, so one grep measures both (#4445).
+        Assert.StartsWith(
+            UncarriedAssetFindings.RidSpecificManaged("RidPicky", "runtimes/win-x64/lib/net10.0/RidPicky.dll"),
+            managed.Describe(), StringComparison.Ordinal);
+        Assert.StartsWith(
+            UncarriedAssetFindings.UnprobedNative("Microsoft.Identity.Client", "runtimes/win/lib/net8.0/msalruntime.dll"),
+            native.Describe(), StringComparison.Ordinal);
+
         Assert.Equal(pure.Uncarried.Select(u => u.Describe()), pure.Warnings);
         Assert.Equal(graph.Uncarried.Select(u => u.Describe()), graph.Warnings);
     }
@@ -328,6 +337,9 @@ public class DepsClosureTest
         Assert.Null(loose.ProbedPath);
         Assert.DoesNotContain("--with-native", loose.Describe(), StringComparison.Ordinal);
         Assert.Contains("--with loose.so", loose.Describe(), StringComparison.Ordinal);
+        // …and the shared lane's csproj lines follow suit: the flat item, never the native one.
+        Assert.Contains("<MeshWeaverPackWith Include=\"loose.so\" />", loose.Describe(), StringComparison.Ordinal);
+        Assert.DoesNotContain("MeshWeaverPackWithNative", loose.Describe(), StringComparison.Ordinal);
     }
 
     [Fact]
