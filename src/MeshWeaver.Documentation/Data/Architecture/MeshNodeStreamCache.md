@@ -311,6 +311,19 @@ that can only pass is not a guard.
 lesson of this section is that the clocks were correct and something was resetting them; a
 shorter window would have hidden that defect rather than cured it.
 
+🚨 **Idle means no inbound message AND nothing in flight** (#4422). A running script delivers no
+message to the hub that hosts its kernel: it executes on the hosted `kernelExec/…` child, and its
+progress lines leave as outgoing writes. Re-armed only by inbound messages, the window therefore
+disposed a hub under a script still working 15 minutes after its last input, silently. That is how an
+approved OperationRequest died on memex on 2026-09-15. `KernelContainer.IdleState` now holds each
+forwarded `SubmitCodeRequest` as a **claim**, taken before the executor is set up and released on the
+response, an error or a teardown. On the tick it keeps the hub while any claim is still being set up
+or sits on a live executor, and re-arms. A released claim restarts the window, so the reclamation
+above is unchanged, one window after the last run. The claims and the close decision are one
+immutable snapshot swapped atomically, so a claim and a close are always ordered.
+`KernelIdleDisconnectWhileRunningTest` steps through the production window on an injected clock
+(`KernelHubOptions.TimeProvider`).
+
 ### The idle sweep is not the only reaper — an evicted upstream dies with its last holder
 
 The idle sweep answers *"this path went quiet"*. It cannot answer *"this write is finished
