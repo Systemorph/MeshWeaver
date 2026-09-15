@@ -1005,7 +1005,8 @@ public class IoPoolTest
         }) { IsBackground = true };
         t.Start();
 
-        await done.Should().Within(Timeout5).Emit("the leaf should complete");
+        await done.Should().Within(Timeout5).Emit("the leaf should complete",
+            cancellationToken: TestContext.Current.CancellationToken);
         bodyOnThreadPool.Should().BeTrue("the leaf must run on the ThreadPool, not the subscriber's thread");
         bodyThread.Should().NotBe(subscriberThread);
     }
@@ -1117,7 +1118,8 @@ public class IoPoolTest
             sw.Stop();
 
             await teardownEntered.Should().Within(Timeout5)
-                .Emit("disposal must still terminate the subscription");
+                .Emit("disposal must still terminate the subscription",
+                    cancellationToken: TestContext.Current.CancellationToken);
             sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
                 "Dispose must return immediately — the WAIT belongs on Disposed, and running the "
                 + "pooled subscriptions' teardown inline made Dispose block for as long as they took");

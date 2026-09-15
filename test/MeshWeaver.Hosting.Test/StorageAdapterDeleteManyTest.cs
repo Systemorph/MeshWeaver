@@ -45,7 +45,7 @@ public class StorageAdapterDeleteManyTest
     {
         IStorageAdapter adapter = new InMemoryStorageAdapter();
         foreach (var path in paths)
-            await adapter.Write(Node(path), Options).FirstAsync().Await();
+            await adapter.Write(Node(path), Options).FirstAsync().Await(TestContext.Current.CancellationToken);
         return adapter;
     }
 

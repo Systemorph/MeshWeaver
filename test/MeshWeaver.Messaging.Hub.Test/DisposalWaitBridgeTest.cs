@@ -300,7 +300,7 @@ public class DisposalWaitBridgeTest
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait);
         await disposed.Should().Within(10.Seconds()).Emit(
             "cancelling an opted-in wait must dispose the subscription — that disposal IS what "
-            + "cancels Rx's subscriberCt and releases an IoPool permit (#2772)");
+            + "cancels Rx's subscriberCt and releases an IoPool permit (#2772)", cancellationToken: TestContext.Current.CancellationToken);
         late.Should().BeNull("the source only ever completes by disposal, so nothing may be reported");
     }
 
@@ -332,7 +332,7 @@ public class DisposalWaitBridgeTest
 
         await reported.Should().Within(10.Seconds()).Emit(
             "the DEFAULT keeps the subscription attached, so a fault arriving after a cancelled wait "
-            + "is still reported — if this ever goes silent, the default has flipped");
+            + "is still reported — if this ever goes silent, the default has flipped", cancellationToken: TestContext.Current.CancellationToken);
         seen.Should().BeSameAs(boom);
     }
 
@@ -364,7 +364,7 @@ public class DisposalWaitBridgeTest
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait);
         await disposed.Should().Within(10.Seconds()).Emit(
             "a token that fires DURING Subscribe must still reach the source: the handle is assigned "
-            + "to an already-disposed SingleAssignmentDisposable, which disposes it on assignment");
+            + "to an already-disposed SingleAssignmentDisposable, which disposes it on assignment", cancellationToken: TestContext.Current.CancellationToken);
         late.Should().BeNull("nothing faults here — a report would mean the SAD race took another route");
     }
 }

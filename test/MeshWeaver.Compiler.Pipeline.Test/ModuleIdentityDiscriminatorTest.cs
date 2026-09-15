@@ -310,7 +310,7 @@ public class ModuleIdentityDiscriminatorTest : IDisposable
                 minMeshVersion: null,
                 staticAssets: [("wwwroot/build.txt",
                     System.Text.Encoding.UTF8.GetBytes(frameworkMvid ?? "(unrecorded)"))])
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     /// <summary>
     /// One replica's boot, composed exactly as <c>MemexConfiguration.ConfigureMemexMesh</c>

@@ -92,7 +92,7 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
     /// node whose type does not own a partition — only System may write one), its
     /// <c>Admin/Partition/{id}</c> definition, and one child so the delete has a real subtree.
     /// </summary>
-    private async Task<string> InstallPluginLikePartition()
+    private async Task<string> InstallPluginLikePartition(CancellationToken cancellationToken = default)
     {
         var partition = NewPartition();
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -134,7 +134,7 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
                 .FirstAsync()
                 .Select(d => d.Message)
                 .Timeout(TestTimeouts.Convergence)
-                .Await();
+                .Await(cancellationToken);
             response.Success.Should().BeTrue(
                 $"the fixture must actually exist before it is deleted — '{node.Path}' answered "
                 + $"{response.RejectionReason}: {response.Error}");
@@ -144,7 +144,7 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
         return partition;
     }
 
-    private async Task<DeleteNodeResponse> DeleteAsSystem(string path)
+    private async Task<DeleteNodeResponse> DeleteAsSystem(string path, CancellationToken cancellationToken = default)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var response = await access
@@ -159,7 +159,7 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
             .FirstAsync()
             .Select(d => d.Message)
             .Timeout(TestTimeouts.CrossSilo)
-            .Await();
+            .Await(cancellationToken);
         Output.WriteLine($"delete {path} success={response.Success} error={response.Error}");
         return response;
     }
@@ -174,9 +174,9 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
     [Fact(Timeout = 240000)]
     public async Task DeletingAPartitionRootOfAnUnknownNodeType_DropsItsBackingStore()
     {
-        var partition = await InstallPluginLikePartition();
+        var partition = await InstallPluginLikePartition(TestContext.Current.CancellationToken);
 
-        var response = await DeleteAsSystem(partition);
+        var response = await DeleteAsSystem(partition, TestContext.Current.CancellationToken);
         response.Success.Should().BeTrue($"the delete itself must succeed: {response.Error}");
 
         Recorder.Dropped.Should().Contain(partition,
@@ -200,13 +200,13 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
         var definitionPath = $"{PartitionNodeType.Namespace}/{partition}";
         var persistence = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
 
-        (await persistence.Exists(definitionPath).FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+        (await persistence.Exists(definitionPath).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Should().BeTrue("the fixture writes the definition, so the assertion below can fail");
 
         var response = await DeleteAsSystem(partition);
         response.Success.Should().BeTrue($"the delete itself must succeed: {response.Error}");
 
-        (await persistence.Exists(definitionPath).FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+        (await persistence.Exists(definitionPath).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Should().BeFalse(
                 $"'{definitionPath}' must be removed with the partition it describes — a definition "
                 + "left behind keeps the partition in the routing prime and in every partition "
@@ -222,9 +222,9 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
     [Fact(Timeout = 240000)]
     public async Task DeletingANestedNode_DoesNotDropTheEnclosingPartition()
     {
-        var partition = await InstallPluginLikePartition();
+        var partition = await InstallPluginLikePartition(TestContext.Current.CancellationToken);
 
-        var response = await DeleteAsSystem($"{partition}/Page");
+        var response = await DeleteAsSystem($"{partition}/Page", TestContext.Current.CancellationToken);
         response.Success.Should().BeTrue($"the child delete must succeed: {response.Error}");
 
         Recorder.Dropped.Should().NotContain(partition,
@@ -242,6 +242,7 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
     [Fact(Timeout = 60000)]
     public void TheBootGateReds_WhenNoHandlerCoversAnArbitraryPartitionRoot()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         INodePostDeletionHandler[] perTypeOnly = [new NamedHandler("Space"), new NamedHandler("User")];
         INodePostDeletionHandler[] structural =
             [new NamedHandler("Space"), new PartitionDropPostDeletionHandler(Mesh)];
@@ -270,6 +271,7 @@ public class PartitionTeardownCoverageTest(ITestOutputHelper output) : MonolithM
     [Fact(Timeout = 60000)]
     public void TheConfiguredMeshCoversAnArbitraryPartitionRoot()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var handlers = Mesh.ServiceProvider.GetServices<INodePostDeletionHandler>().ToList();
 
         PartitionTeardownCoverageGate.Verdict(handlers).Should().BeNull(

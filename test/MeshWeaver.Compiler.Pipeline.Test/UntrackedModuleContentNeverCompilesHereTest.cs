@@ -84,10 +84,11 @@ public class UntrackedModuleContentNeverCompilesHereTest(ITestOutputHelper outpu
                 BuildProvenance = adoptedBefore ? BuildProvenance.AdoptedVerified : BuildProvenance.Compiled,
             },
         };
-        await MeshService.CreateNode(node).Should().Within(TestTimeouts.Convergence).Emit();
+        await MeshService.CreateNode(node).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         await Mesh.GetMeshNodeStream(path).Should().Within(TestTimeouts.Convergence)
             .Match(n => n?.Content is NodeTypeDefinition d
-                        && string.Equals(d.LatestAssemblyMvid, StaleMvid, StringComparison.Ordinal));
+                        && string.Equals(d.LatestAssemblyMvid, StaleMvid, StringComparison.Ordinal),
+                            cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>A real <c>{partition}/_GitSync</c> naming a repository — what the settings tab
@@ -106,9 +107,10 @@ public class UntrackedModuleContentNeverCompilesHereTest(ITestOutputHelper outpu
                     Branch = "main",
                 },
             })
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         var tracked = await NodeTypeCompilationHelpers.PartitionTracksSources(Mesh, $"{partition}/Widget")
-            .Should().Within(TestTimeouts.Convergence).Emit("the seam answers once, promptly");
+            .Should().Within(TestTimeouts.Convergence).Emit("the seam answers once, promptly",
+                cancellationToken: TestContext.Current.CancellationToken);
         tracked.Should().BeTrue("a _GitSync naming a repository is what 'tracked' means");
     }
 
@@ -124,7 +126,7 @@ public class UntrackedModuleContentNeverCompilesHereTest(ITestOutputHelper outpu
                 RequestedReleaseForce = true,
                 RequestedReleaseBy = "operator",
             })
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
     /// <summary>The record after the request settled: an <c>Error</c>, an <c>Ok</c> whose MVID
     /// is no longer the seeded one (the seeded Ok is what the stream starts with, so it is not a
@@ -138,7 +140,8 @@ public class UntrackedModuleContentNeverCompilesHereTest(ITestOutputHelper outpu
                             || (d.CompilationStatus == CompilationStatus.Ok
                                 && (d.BuildProvenance == BuildProvenance.StaleAdopted
                                     || !string.Equals(d.LatestAssemblyMvid, StaleMvid, StringComparison.Ordinal)))),
-                "every route into a compile settles: a Roslyn pass, a hold or a named park");
+                "every route into a compile settles: a Roslyn pass, a hold or a named park",
+                    cancellationToken: TestContext.Current.CancellationToken);
         return (NodeTypeDefinition)node.Content!;
     }
 

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Net;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph;
 
@@ -30,6 +31,35 @@ public static class EmailTemplate
         string? ctaLabel = null,
         string? ctaUrl = null,
         string? footerNote = null)
+        => Build(heading, paragraphs, ctaLabel, ctaUrl, footerNote, locale: null);
+
+    /// <summary>
+    /// <see cref="Build(string,IReadOnlyList{string},string,string,string)"/> with the standing
+    /// footer — the one line the TEMPLATE itself owns — rendered in <paramref name="locale"/>.
+    ///
+    /// <para>🚨 An email has exactly ONE reader and cannot be re-rendered, so this is resolved here
+    /// rather than stored as a key (Systemorph/MeshWeaver#4373). Every other string on the page is
+    /// the caller's and arrives already resolved; this one was a bare literal compiled into the
+    /// view, which is the unowned case AGENTS.md calls a bug outright.</para>
+    ///
+    /// <para>The five-argument entry point stays, byte for byte, so an already-compiled caller —
+    /// the invitation sender, whose invitee has no profile to read a language from — keeps binding
+    /// it and keeps getting English.</para>
+    /// </summary>
+    /// <param name="heading">The heading, plain text.</param>
+    /// <param name="paragraphs">Body paragraphs, plain text.</param>
+    /// <param name="ctaLabel">Call-to-action label; a button is emitted only with a URL too.</param>
+    /// <param name="ctaUrl">Call-to-action URL.</param>
+    /// <param name="footerNote">The optional muted line under the CTA.</param>
+    /// <param name="locale">The RECIPIENT's language tag; null renders English.</param>
+    /// <returns>The HTML body.</returns>
+    public static string Build(
+        string heading,
+        IReadOnlyList<string> paragraphs,
+        string? ctaLabel,
+        string? ctaUrl,
+        string? footerNote,
+        string? locale)
     {
         var sb = new StringBuilder();
         sb.Append(
@@ -66,7 +96,7 @@ public static class EmailTemplate
             "</div></div>" +
             $"<div style=\"max-width:520px;margin:12px auto 0 auto;font-size:11px;color:{Muted};text-align:center;" +
             "font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;\">" +
-            "You received this because someone shared content with this email address on Memex." +
+            Enc(LocalizationCatalog.Get("notification.email.standingFooter", locale)) +
             "</div></div>");
         return sb.ToString();
     }

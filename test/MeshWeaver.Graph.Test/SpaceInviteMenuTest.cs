@@ -45,7 +45,7 @@ public class SpaceInviteMenuTest(ITestOutputHelper output) : MonolithMeshTestBas
         // Admin (auto-logged-in) has Update on the Space → the item appears.
         var items = await NodeMenu(new Address(Space))
             .Where(i => i.Any(m => m.Label == "Invite people"))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
         Assert.Contains(items, m => m.Label == "Invite people"
             && m.Area == SpaceInviteLayoutArea.AreaName);
     }
@@ -56,7 +56,7 @@ public class SpaceInviteMenuTest(ITestOutputHelper output) : MonolithMeshTestBas
         // Wait until the node menu has rendered (Edit is a standard item), then assert Invite is absent.
         var items = await NodeMenu(new Address(Plain))
             .Where(i => i.Any(m => m.Label == "Edit"))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
         Assert.DoesNotContain(items, m => m.Label == "Invite people");
     }
 }

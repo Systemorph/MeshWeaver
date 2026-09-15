@@ -60,6 +60,7 @@ public class NodeTypeContentDiscriminatorGuard
     [Fact(Timeout = 60000)]
     public void EveryDeclaredContentType_AlsoRegistersItsDiscriminator()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var root = SourceScan.FindRepoRoot();
         var files = SourceScan.SourceFiles(root, ScannedRoots).ToArray();
 
@@ -109,6 +110,7 @@ public class NodeTypeContentDiscriminatorGuard
     [Fact(Timeout = 30000)]
     public void TheGuardDetectsAnUnregisteredType()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         RegisteredNames("builder.ConfigureHub(c => c.WithType<Widget>(nameof(Widget)));")
             .Should().Contain("Widget");
         RegisteredNames("builder.WithMeshType<Widget>();").Should().Contain("Widget");

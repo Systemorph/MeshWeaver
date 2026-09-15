@@ -4,6 +4,7 @@ using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.SelfUpdate;
@@ -806,13 +807,27 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             LastFault = cause.Message,
         });
 
-        var access = hub.ServiceProvider.GetService<AccessService>();
-        return NotificationService.Dispatch(
+        // 🚨 The key and its arguments are PERSISTED; the bell resolves them per viewer. An
+        // `access.Localize(...)` here — which is what stood at these two lines — runs on a boot
+        // reaction with NO viewer in scope, so it resolved to the system default and baked ENGLISH
+        // into a row every German operator then read (#4373).
+        var args = ImmutableDictionary<string, object>.Empty
+            .Add("name", name)
+            .Add("url", registry.Url)
+            .Add("attempts", attempts)
+            .Add("cause", cause.Message);
+        return NotificationService.DispatchLocalizable(
                 hub,
                 recipient: null,
                 mainNodePath: StartupErrorNotifier.AdminPartition,
-                title: access.Localize("plugins.reconcile.deferred.title", name),
-                message: access.Localize("plugins.reconcile.deferred.body", name, registry.Url, attempts, cause.Message),
+                title: LocalizableText.Keyed(
+                    LocalizationCatalog.GetNamed("notification.plugins.reconcileDeferred.title", Locales.Default, args),
+                    "notification.plugins.reconcileDeferred.title",
+                    ("name", name)),
+                message: LocalizableText.Keyed(
+                    LocalizationCatalog.GetNamed("notification.plugins.reconcileDeferred.body", Locales.Default, args),
+                    "notification.plugins.reconcileDeferred.body",
+                    ("name", name), ("url", registry.Url), ("attempts", attempts), ("cause", cause.Message)),
                 type: NotificationType.System,
                 targetNodePath: LedgerPath,
                 createdBy: "system")
@@ -932,7 +947,9 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// <c>Admin/UpdatePolicy</c> (separated 2026-09-14; the former <c>IModuleUpdatePolicy</c> seam
     /// that tied the two together is gone). The content half of the same package follows the
     /// same policy in <see cref="PackageUpdateReconciler"/>, so a package never lands one half
-    /// without the other.</para>
+    /// without the other — which is also why the CONTENT half's ownership hold (#4355,
+    /// <see cref="PartitionContentOwnership"/>) rides this lane's own decline seam; see
+    /// <see cref="OwnershipDecline"/>.</para>
     ///
     /// <para>Sequential, and failure-tolerant per package — one unreachable bundle must not
     /// withhold the rest, and <see cref="PluginBundleClient.AdoptModule"/> already absorbs its own
@@ -1033,15 +1050,29 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     private IObservable<Unit> AdoptOne(
         PluginBundleClient bundles, string registryName, string packageId, string moduleName, string recordPath,
         PackageManifest? record) =>
-        bundles.AdoptModule(packageId, moduleName, recordPath, unattended: true,
-                policyDecline: PolicyDecline(record))
-            // 🚨 A HANG is worse than a failure here: the packages run as one sequential Concat,
-            // so a single adopt that never answers (a wedged record read, a download that stalls)
-            // silently starves EVERY package after it — on memex.systemorph.com the Northwind
-            // adopt was never even attempted while earlier packages logged failures
-            // (Plugins#959). A bounded wait turns the hang into the loud, caught failure below and
-            // the chain proceeds.
-            .Timeout(PerPackageAdoptBudget)
+        // 🚨 #4355 — THE MODULE HALF TAKES THE SAME HOLD AS THE CONTENT HALF. The policy gate above
+        // exists so "a package never lands one half without the other"; the ownership gate that
+        // holds the CONTENT apply (PackageUpdateReconciler) would break exactly that promise if it
+        // stopped there — the partition's synced content would stay on the sealed tree while this
+        // lane advanced the package's compiled module, which is the same sources-and-bundle split
+        // MeshWeaver.Plugins#1430 removed, one level over. So the hold rides the SAME
+        // `policyDecline` seam, in the ONE place both unattended module lanes share (the boot pass
+        // and the broadcast drain), and the package's own policy still speaks first: a Notify/None
+        // record declines for that reason, which is the more specific answer.
+        PartitionContentOwnership
+            .Observe(hub, record is null
+                ? packageId
+                : PackageInstaller.TargetPartitionOf(packageId, record))
+            .SelectMany(ownership => bundles
+                .AdoptModule(packageId, moduleName, recordPath, unattended: true,
+                    policyDecline: PolicyDecline(record) ?? OwnershipDecline(ownership))
+                // 🚨 A HANG is worse than a failure here: the packages run as one sequential Concat,
+                // so a single adopt that never answers (a wedged record read, a download that stalls)
+                // silently starves EVERY package after it — on memex.systemorph.com the Northwind
+                // adopt was never even attempted while earlier packages logged failures
+                // (Plugins#959). A bounded wait turns the hang into the loud, caught failure below and
+                // the chain proceeds.
+                .Timeout(PerPackageAdoptBudget))
             .Catch((Exception ex) =>
             {
                 // The CAUSE goes into the message itself, not only the attached exception:
@@ -1068,6 +1099,32 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             : $"the package's update policy is {policy} — unattended module landing rides the Auto "
               + "policy only; use the catalog's manual Update instead (per-package policy, "
               + "independent of the platform's Admin/UpdatePolicy)";
+    }
+
+    /// <summary>
+    /// Why an unattended module landing declines because the package's CONTENT half is held —
+    /// its target partition's content is kept by a sync source, not by the installer
+    /// (<see cref="PartitionContentOwnership"/>, MeshWeaver#4355) — or null when the installer owns
+    /// it and the module may land.
+    ///
+    /// <para>🚨 A HOLD, not a refusal of the module itself. Such a partition has a delivery path for
+    /// its module already: the sealed publication its content is held to. Landing the registry's
+    /// newer bundle instead would advance the package's CODE past the content the seal pins, which
+    /// is the split the one-bookkeeping invariant exists to prevent. A human's manual Update lands
+    /// both halves together, as it always did.</para>
+    ///
+    /// <para>Pure, so both unattended lanes' behaviour is pinnable without a registry.</para>
+    /// </summary>
+    /// <param name="ownership">Who owns the target partition's content.</param>
+    /// <returns>The decline sentence, or null when the module may land.</returns>
+    internal static string? OwnershipDecline(PartitionContentOwnershipVerdict ownership)
+    {
+        ArgumentNullException.ThrowIfNull(ownership);
+        return ownership.InstallerOwnsTheContent
+            ? null
+            : $"the CONTENT half of this package is held — {ownership.Because}. A package never "
+              + "lands one half without the other (MeshWeaver#4355), so its module waits for the "
+              + "same seal its content does; the catalog's manual Update lands both";
     }
 
     /// <summary>

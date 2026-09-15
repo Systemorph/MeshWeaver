@@ -63,15 +63,15 @@ public class InstanceOpenRegistrationTest(ITestOutputHelper output) : MonolithMe
     }
 
     /// <summary>Mints the key the operator would: for the FREE plan, owned by a platform admin.</summary>
-    private Task<string> MintOpenKey() =>
+    private Task<string> MintOpenKey(CancellationToken cancellationToken) =>
         Mesh.ServiceProvider.GetRequiredService<RegistrationKeyService>()
             .Mint("open-owner", "Open Owner", "open@test.com", "open registration (free)", null, "free")
             .Select(r => r.RawKey)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .Await();
+            .Await(cancellationToken);
 
-    private async Task<WebApplication> StartRegistrationHost(string? openKey)
+    private async Task<WebApplication> StartRegistrationHost(string? openKey, CancellationToken cancellationToken)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -79,7 +79,7 @@ public class InstanceOpenRegistrationTest(ITestOutputHelper output) : MonolithMe
         builder.Services.AddSingleton(InstanceService(openKey));
         var app = builder.Build();
         app.MapInstanceRegistration();
-        await app.StartAsync();
+        await app.StartAsync(cancellationToken);
         return app;
     }
 
@@ -101,13 +101,13 @@ public class InstanceOpenRegistrationTest(ITestOutputHelper output) : MonolithMe
                     .Take(1))
             .Select(node => node?.ContentAs<PluginGrant>(Mesh.JsonSerializerOptions))
             .Timeout(TimeSpan.FromSeconds(30))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
     }
 
     [Fact(Timeout = 300_000)]
     public async Task WithoutAnOpenKey_AnUnkeyedRegistrationIsRefused()
     {
-        var app = await StartRegistrationHost(openKey: null);
+        var app = await StartRegistrationHost(openKey: null, TestContext.Current.CancellationToken);
         await using var _ = app;
 
         using var response = await RegisterOpenly(app, "homebrew-mac-closed");
@@ -119,8 +119,8 @@ public class InstanceOpenRegistrationTest(ITestOutputHelper output) : MonolithMe
     [Fact(Timeout = 300_000)]
     public async Task WithAnOpenKeyForTheFreePlan_AnUnkeyedRegistrationLandsOnFree()
     {
-        var openKey = await MintOpenKey();
-        var app = await StartRegistrationHost(openKey);
+        var openKey = await MintOpenKey(TestContext.Current.CancellationToken);
+        var app = await StartRegistrationHost(openKey, TestContext.Current.CancellationToken);
         await using var _ = app;
 
         using var response = await RegisterOpenly(app, "homebrew-mac-open");
@@ -153,7 +153,7 @@ public class InstanceOpenRegistrationTest(ITestOutputHelper output) : MonolithMe
                 : access.RunAsSystem(() => Mesh.GetMeshNode(path, TimeSpan.FromSeconds(10)).Take(1)))
             .Select(node => node?.ContentAs<MeshWeaverInstance>(Mesh.JsonSerializerOptions)?.Plan)
             .Timeout(TimeSpan.FromSeconds(30))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
     }
 
     [Fact(Timeout = 300_000)]
@@ -164,8 +164,8 @@ public class InstanceOpenRegistrationTest(ITestOutputHelper output) : MonolithMe
         // never invents entitlement.
         var openKey = await Mesh.ServiceProvider.GetRequiredService<RegistrationKeyService>()
             .Mint("open-owner", "Open Owner", "open@test.com", "open registration (no plan)")
-            .Select(r => r.RawKey).FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
-        var app = await StartRegistrationHost(openKey);
+            .Select(r => r.RawKey).FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
+        var app = await StartRegistrationHost(openKey, TestContext.Current.CancellationToken);
         await using var _ = app;
 
         using var response = await RegisterOpenly(app, "homebrew-mac-noplan");

@@ -123,6 +123,11 @@ internal static class RxFanOutInversionHarness
 
         // Task.Delay is the DEADLOCK BOUND here, not a wait-for-propagation sleep: the only way
         // both handlers fail to finish is a genuine cycle.
+        //
+        // 🚨 AND IT IS UNTOKENED ON PURPOSE (#4378). Handing it the test's token would make a
+        // cancelled run lose the WhenAny race and return false — i.e. report "deadlock detected"
+        // for a test that merely ran out of time. A measurement's bound must not double as its
+        // verdict.
         var finished = await Task.WhenAny(bothFinished, Task.Delay(DeadlockBound));
         return ReferenceEquals(finished, bothFinished) && bothFinished.IsCompletedSuccessfully;
     }

@@ -27,7 +27,7 @@ public class CreateMenuE2ETest(PortalFixture fixture)
 
         var space = $"createe2e{nodeType.ToLowerInvariant()}";
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         try
@@ -68,7 +68,7 @@ public class CreateMenuE2ETest(PortalFixture fixture)
             }
             catch (InvalidOperationException) { }
 
-            (await fixture.WaitUntilReadableAsync(context, token, space, TimeSpan.FromSeconds(60)))
+            (await fixture.WaitUntilReadableAsync(context, token, space, TimeSpan.FromSeconds(60), cancellationToken: TestContext.Current.CancellationToken))
                 .Should().BeTrue("the seeded space must be readable before driving the UI");
 
             var page = await context.NewPageAsync();
@@ -126,7 +126,7 @@ public class CreateMenuE2ETest(PortalFixture fixture)
 
             // The created node must actually exist (Active) — the Edit URL alone could be reached
             // with a broken node, so confirm via the read API the browser's grant can see.
-            (await fixture.WaitUntilReadableAsync(context, token, $"{space}/{expectedId}", TimeSpan.FromSeconds(30)))
+            (await fixture.WaitUntilReadableAsync(context, token, $"{space}/{expectedId}", TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken))
                 .Should().BeTrue($"the created node {space}/{expectedId} must be persisted and readable");
 
             await page.ScreenshotAsync(new PageScreenshotOptions { Path = $"/tmp/create-{nodeType}.png" });

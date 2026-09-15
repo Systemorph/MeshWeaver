@@ -115,7 +115,7 @@ public static class NodeIconPickerDialog
             .WithClosable(true);
     }
 
-    private static UiControl BuildPreviewTile(string resolved, string raw)
+    internal static UiControl BuildPreviewTile(string resolved, string raw)
     {
         const string tile = "width: 72px; height: 72px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--neutral-layer-2);";
         if (string.IsNullOrEmpty(raw))
@@ -129,8 +129,12 @@ public static class NodeIconPickerDialog
                 $"<div style=\"{tile}\"><img src=\"{resolved}\" alt=\"\" style=\"width: 64px; height: 64px; border-radius: 8px; object-fit: {fit};\" /></div>");
         }
 
+        // Through MeshNodeImageHelper.SizeInlineSvg, which plates the icon (#4350) and sizes it to
+        // the 64px the <img> branch above uses. The picker's whole job is to show the user what
+        // they are choosing, so it has to show the icon the way the portal renders it — and drawn
+        // raw, a currentColor outline is invisible on one of the two themes.
         if (raw.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
-            return Controls.Html($"<div style=\"{tile}\">{raw}</div>");
+            return Controls.Html($"<div style=\"{tile}\">{MeshNodeImageHelper.SizeInlineSvg(raw, 64)}</div>");
 
         return Controls.Html($"<div style=\"{tile} font-size: 36px;\">{System.Web.HttpUtility.HtmlEncode(raw)}</div>");
     }

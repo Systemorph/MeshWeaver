@@ -523,6 +523,91 @@ public class ModulePackCommandTest : IDisposable
         Assert.DoesNotContain(files, f => f.FileName.Contains('/'));
     }
 
+    /// <summary>
+    /// 🚨 #4126 — the CONTAINER lane's route into the same section. That lane passes NO
+    /// <c>--deps-closure</c>, because <c>build-project</c> compiles through Roslyn directly and
+    /// there is no SDK deps.json to derive from: its builder derives the payloads from the IMAGE's
+    /// and the shelf's deps.json, lays them out under the pack input, and names them in
+    /// <c>module-natives.txt</c>. <c>--with-native</c> is where that provenance becomes a bundle
+    /// section.
+    ///
+    /// <para>🚨 It takes the opposite argument to <c>--with</c>, and deliberately: <c>--with</c>
+    /// REFUSES a path component because the flat closure has no place for one, while this REQUIRES
+    /// the path because the path is what the loader probes. A lane that fed one to the other would
+    /// be wrong whichever way it was written — hence two flags and two manifests.</para>
+    /// </summary>
+    [Fact]
+    public void WithNative_CarriesADeclaredPayload_OnALaneWithNoDepsJson()
+    {
+        const string nativeRelative = "runtimes/linux-x64/native/libe_sqlite3.so";
+        var nativeDir = Path.Combine(root, "closure", "runtimes", "linux-x64", "native");
+        Directory.CreateDirectory(nativeDir);
+        File.WriteAllBytes(Path.Combine(nativeDir, "libe_sqlite3.so"), "ENGINE"u8.ToArray());
+
+        var outDir = Path.Combine(root, "out-with-native");
+        Assert.Equal(0, ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.9.0",
+            "--framework-mvid", Identity,
+            "--with-native", nativeRelative,
+            "--out", outDir,
+        ]));
+
+        var bundle = File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.9.0.module.nupkg"));
+        var (manifest, _) = BundleReader.ReadModule(bundle);
+        Assert.Equal([nativeRelative], manifest!.Module!.NativeAssets);
+        Assert.Equal("ENGINE",
+            Encoding.UTF8.GetString(Assert.Single(BundleReader.ReadModuleNativeAssets(bundle)).Bytes));
+    }
+
+    /// <summary>
+    /// A payload at a layout the loader never probes is REFUSED at the pack, not carried. Bytes at
+    /// such a path read as shipped and behave as absent, and the packer is the last place that can
+    /// still say so to the person who can fix it.
+    /// </summary>
+    [Fact]
+    public void WithNative_RefusesAPathTheLoaderWouldNeverProbe()
+    {
+        var nativeDir = Path.Combine(root, "closure", "runtimes", "linux-x64", "other", "native");
+        Directory.CreateDirectory(nativeDir);
+        File.WriteAllBytes(Path.Combine(nativeDir, "libe_sqlite3.so"), "ENGINE"u8.ToArray());
+
+        Assert.Equal(2, ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.9.1",
+            "--framework-mvid", Identity,
+            "--with-native", "runtimes/linux-x64/other/native/libe_sqlite3.so",
+            "--out", Path.Combine(root, "out-bad-native"),
+        ]));
+    }
+
+    /// <summary>
+    /// A DECLARED payload the pack input does not carry is refused too — packing a module that
+    /// declares an engine it does not ship lands a module that throws at its first P/Invoke, which
+    /// is the failure the declaration exists to prevent.
+    /// </summary>
+    [Fact]
+    public void WithNative_RefusesAPayloadThePackInputDoesNotCarry()
+    {
+        Assert.Equal(2, ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.9.2",
+            "--framework-mvid", Identity,
+            "--with-native", "runtimes/linux-x64/native/libnowhere.so",
+            "--out", Path.Combine(root, "out-absent-native"),
+        ]));
+    }
+
     [Fact]
     public void AModuleWithNoNative_DeclaresNoNativeSectionAtAll()
     {

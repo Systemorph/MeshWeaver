@@ -11,6 +11,9 @@ namespace = {'__name__': 'canary_under_test'}
 exec(compile('\n'.join(line[10:] for line in source.splitlines()), str(workflow), 'exec'), namespace)
 compare = namespace['compare']
 read_results = namespace['read_results']
+test_runner = namespace['test_runner']
+
+MTP = '{"test": {"runner": "Microsoft.Testing.Platform"}}'
 
 
 def arm(**results):
@@ -104,6 +107,51 @@ class CanaryEvidenceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.trx([('test', 'Passed'), ('test', 'Failed')], code=1)
 
+
+class CanaryTestRunnerTest(unittest.TestCase):
+    """Which runner an arm's `dotnet test` uses, and the cwd it runs from (#4414).
+
+    The suite builds against the arm's PLATFORM checkout, so the platform pins the xunit.v3
+    version — and xunit.v3 4.x refuses VSTest on .NET 10. `dotnet test` reads the runner from the
+    first global.json walking UP from its cwd, so the cwd is half of the answer."""
+
+    def checkouts(self, caller=None, platform=None):
+        root = Path(tempfile.mkdtemp())
+        repo, core = root / 'repo', root / 'core-main'
+        for directory, marker in ((repo, caller), (core, platform)):
+            directory.mkdir()
+            if marker is not None:
+                (directory / 'global.json').write_text(marker)
+        return repo, core
+
+    def test_a_platform_that_selects_mtp_carries_a_caller_that_selects_nothing(self):
+        # The #4414 shape: MeshWeaver.Plugins has no global.json, core main selects MTP.
+        repo, core = self.checkouts(platform=MTP)
+        self.assertEqual((True, core), test_runner(repo, core),
+                         'must run under MTP, FROM the platform checkout so its global.json is found')
+
+    def test_a_caller_that_selects_mtp_runs_from_its_own_checkout(self):
+        repo, core = self.checkouts(caller=MTP)
+        self.assertEqual((True, repo), test_runner(repo, core))
+
+    def test_both_selecting_mtp_keeps_the_callers_checkout(self):
+        repo, core = self.checkouts(caller=MTP, platform=MTP)
+        self.assertEqual((True, repo), test_runner(repo, core))
+
+    def test_neither_selecting_mtp_is_vstest_from_the_callers_checkout(self):
+        # The pin arm before 4.x: nothing changes for it.
+        repo, core = self.checkouts()
+        self.assertEqual((False, repo), test_runner(repo, core))
+
+    def test_a_global_json_that_selects_another_runner_selects_nothing(self):
+        repo, core = self.checkouts(caller='{"sdk": {"version": "10.0.400"}}',
+                                    platform='{"test": {"runner": "VSTest"}}')
+        self.assertEqual((False, repo), test_runner(repo, core))
+
+    def test_an_unreadable_global_json_is_refused_not_guessed(self):
+        repo, core = self.checkouts(caller='{not json', platform=MTP)
+        with self.assertRaises(ValueError):
+            test_runner(repo, core)
 
 if __name__ == '__main__':
     unittest.main()

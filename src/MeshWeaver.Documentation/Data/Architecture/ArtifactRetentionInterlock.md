@@ -109,6 +109,57 @@ from it is **live**, so forgetting an entry makes a run stricter and never loose
 needs a `state` (`not-installed` / `retired`) and a `reason`, and an entry naming an installation no
 overlay declares is red — a stale exemption hides the next one.
 
+### 🚨 An installation's identity is `owner/name:id`, not `id` — and a second deployments repository proved it
+
+`Hosting__Deployment` is unique inside **one** deployments repository and inside nothing larger.
+`Systemorph/PartnerRe.Memex` was created at **2026-09-14T21:30:38Z**, and its control instance is
+called `memex` too — correctly: it *is* PartnerRe's memex, at `partnerre.meshweaver.cloud`, live and
+answering `/api/version`. A run keyed by the bare id has no way to tell the two apart, and from the
+next scheduled run onward this lane was red on:
+
+```
+installation 'memex' is declared by two overlays (Systemorph/Memex deployments/aks/memex/values.memex.public.yaml
+and Systemorph/PartnerRe.Memex deployments/aks/memex/values.memex.yaml), so which host answers for it is ambiguous.
+AXIS 3 — installation 'partnerre' could not be accounted for: its overlay declares the installation but no
+ingress host, so it cannot be asked what it is running.
+```
+
+🚨 **The cost is not the red — it is that neither installation was then asked anything.** The
+duplicate is dropped *and the first one is never probed*, so `memex` — the installation actually
+exposed to the ACR purge — got no locks from that run either, on a lane whose green is
+`pause.reEnableWhen`. Two names colliding took protection off an installation that has nothing to do
+with either repository's naming.
+
+So identity is the pair, and three things follow:
+
+- **The duplicate blocker still fires, for what it was always about**: one repository declaring an
+  id in two overlays, where the ingress host really is ambiguous.
+- **A roster entry may name its `repo`**, and it **must** where two repositories declare the same id
+  — an unqualified line would otherwise exempt an installation nobody wrote it about, which is the
+  one direction this file may not fail in. An `id` may not itself contain `:` or `/`, because the
+  key is `owner/name:id`.
+- **What a human reads can never name two installations the same way**: the report and every blocker
+  use the bare id while it is unique across the fleet and the qualified key the moment it is not.
+
+### The repository roster — the half that stops qualification becoming exemption
+
+Keying by repository is what lets two repositories each declare a `memex`. On its own it *also*
+means a new deployments repository joins the fleet **silently**, its installations becoming their own
+slots with nobody having read a line about them: *"a fork reds the lane"* traded for *"a fork is
+invisible to it"*, which is the same defect in the other costume.
+
+`instances.json` therefore carries a top-level **`repositories`** table, and it is held **both ways**:
+a repository whose tree carries deployment overlay files and that the table does not name is a
+blocker, and a name no repository in the fleet answers to is a stale line that hides the next one.
+
+🚨 **The population is overlay FILES, not extracted installations.** A repository whose overlays this
+reader stopped understanding would otherwise vanish from the table's reach exactly when that
+mattered. Measured 2026-09-15, the whole fleet: `Systemorph/Memex` (8 files, 4 installations),
+`Systemorph/PartnerRe.Memex` (2 files, 2 installations) and `Systemorph/MeshWeaver` (14 files, **0**
+installations — its `deploy/` tree is the chart's own values and declares `Hosting__Deployment: ""`).
+A repository whose tree could not be **read** is skipped here and only here: `build_plan` has already
+made it a blocker, so it is never a silent pass.
+
 ## The two locks — the bytes and the reference are different objects
 
 🚨 **A TAG carries its own `deleteEnabled`, and it is the one the purge reads when it deletes a
@@ -364,6 +415,7 @@ locked — nothing here can write to another registry — but the facts stay dis
 | pins **only** in a declared `fleet-unlockable` one | out of scope — counted on its own line, and that line says protection there is **UNVERIFIED** |
 | pins **both** here and in a `fleet-unlockable` one | **RED.** Half its running set would be protected and half not, and the run would report success |
 | pins **only** in declared `third-party` ones | **RED** — nothing it runs is then accounted for by any registry that holds our images |
+| pins a repository the table declares this fleet **publishes** | **RED** — our images, in a store nothing of ours retains and this lane cannot lock (#4323) |
 | pins **nothing**, in any registry | RED, and the message now says "in ANY registry" so it means what it says |
 
 ### 🚨 The unit of declaration is the REGISTRY, not the installation
@@ -381,6 +433,18 @@ Each needs a `reason`; an unknown disposition, a missing reason and an **undecla
 RED. An undeclared host reds **wherever it appears**, including on an installation that also pins
 here — the branch a *"no in-scope repositories"* guard never reaches.
 
+🚨 **Both dispositions are about what the fleet PULLS, and that scoping is explicit since #4323** —
+it is what every axis reads them for: `foreign_registries` comes off deployment overlays, and the
+question asked is whether an installation's **running set** is accounted for. What the fleet
+**pushes** to a host is a separate fact in a separate field (`publishes`), because a host can be
+mixed and `ghcr.io` is: `systemorph/*` is ours — `main-cd.yml` mirrors twelve tags across three of
+our repositories there on every promoting run — while `distribution/*` and `oras-project/*` are not.
+A single per-host disposition is false about one half whichever value it takes, and the naive
+correction (`third-party` → `fleet-unlockable`) is not merely a loosening: it makes `memex-cloud`
+red as *half covered*, because that installation pins its portal images **here** and the registry
+service's own image on GHCR. See
+[FleetRegistryRetention §8](/Doc/Architecture/FleetRegistryRetention).
+
 ### The table is small because it was measured, not guessed
 
 Across the fleet's **twelve** deployment overlays on 2026-09-13, exactly **two** foreign hosts:
@@ -389,6 +453,13 @@ Across the fleet's **twelve** deployment overlays on 2026-09-13, exactly **two**
 |---|---|---|
 | `cr.meshweaver.cloud` | 4 (`build` ×2, `pearl` ×2) | `fleet-unlockable` |
 | `ghcr.io` | 1 (`ghcr.io/distribution/distribution` — the registry service's own image) | `third-party` |
+
+🚨 **The counts are the OVERLAYS', and the extractor has since widened.** #4315's shipped extractor
+reads the fleet's committed files rather than the overlays alone, and reports **five** `ghcr.io`
+references — the two above plus `ghcr.io/oras-project/oras` and the chart's own default
+`portal.image` / `migration.image`, both `ghcr.io/systemorph/…:latest`. The overlay measurement is
+unchanged and still correct; a count from this table is not a count from that report, and #4323 is
+what the difference between them surfaced.
 
 🚨 **There was a second `ghcr.io` "reference", and it was a line of PROSE** in the `ci-runners`
 overlay describing what the runner image is built from. This issue already paid for that lesson

@@ -1571,6 +1571,33 @@ public class MessageService : IMessageService
     /// running a turn anywhere else would break the actor model to keep a queue moving. Releasing
     /// the latch is the honest recovery: the next <c>KickDrain</c> tries again and reports again,
     /// instead of the pump going silently dark.</para>
+    ///
+    /// <para>🚨 <b><see cref="TaskCreationOptions.PreferFairness"/> IS LOAD-BEARING — the drain must
+    /// not ride the posting thread's own work queue (#3593).</b> Without it,
+    /// <see cref="Task.Factory"/>.<c>StartNew</c> on <see cref="TaskScheduler.Default"/> — which is
+    /// every hosted hub — enqueues onto the LOCAL LIFO queue of whatever thread called
+    /// <see cref="KickDrain"/>, because that thread is a pool worker. And <c>KickDrain</c> runs on
+    /// the POSTER'S thread, which belongs to a different hub: a mass teardown posts every child's
+    /// <c>ShutdownRequest</c> from one worker
+    /// (<c>HostedHubsCollection.DisposeHubsReactive</c> calls <c>h.Dispose()</c> sequentially inside
+    /// the owner's own turn), so N children's drains pile onto that one worker's local queue. Work
+    /// there is reachable ONLY by that worker once it returns to the dispatcher, or by
+    /// work-stealing — and measured on an 18-core host with every worker busy in a non-blocking
+    /// loop, it is reachable by NEITHER: 18 drains sat unstarted for a full 20 s with
+    /// <c>ThreadPool.ThreadCount</c> pinned at 18, because the pool's starvation detection does not
+    /// look at a busy worker's local queue and therefore never injects a thread. The same tasks
+    /// with <c>PreferFairness</c> go to the GLOBAL queue, which starvation detection DOES see: a
+    /// thread was injected and every drain ran.</para>
+    ///
+    /// <para>So this is not a latency tweak. Without the flag a hub's pump cannot start until an
+    /// UNRELATED hub's turn finishes — an unbounded cross-hub coupling the actor model forbids, and
+    /// the mechanism behind #3593's fingerprint: 47 <c>sync/*</c> hubs, all <c>RunLevel=Started</c>
+    /// with <c>Disposal=Pending</c>, <c>buffer=1</c>, <c>draining=true</c>, <c>drainsInFlight=0</c>,
+    /// <c>drainsAwaitingScheduler&gt;0</c> and nothing dequeued, reported once each inside 41 ms and
+    /// never again — because the posting worker eventually went idle and drained them. With the
+    /// flag the wait becomes the pool's own bounded, self-healing back-pressure. Pinned by
+    /// <c>PumpDrainReachabilityTest</c>; recorded in <c>Doc/Architecture/DisposalStallVerdicts</c>.
+    /// </para>
     /// </remarks>
     private void ScheduleDrainOne()
     {
@@ -1578,7 +1605,8 @@ public class MessageService : IMessageService
         try
         {
             Task.Factory.StartNew(DrainOne, CancellationToken.None,
-                TaskCreationOptions.DenyChildAttach, turnScheduler);
+                TaskCreationOptions.DenyChildAttach | TaskCreationOptions.PreferFairness,
+                turnScheduler);
         }
         catch (Exception ex)
         {

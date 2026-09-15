@@ -90,7 +90,7 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
     [Fact(Timeout = 240_000)]
     public async Task AControlLaneInstall_AnnouncesTheRelease_AndPatchesNothing()
     {
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         var inbox = new FakeControlInbox(HttpStatusCode.OK);
         var updater = new RecordingUpdater();
 
@@ -126,7 +126,7 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
     [Fact(Timeout = 240_000)]
     public async Task AChartThatStillAllowsSelfPatch_Patches_AndAnnouncesNothing()
     {
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         var inbox = new FakeControlInbox(HttpStatusCode.OK);
         var updater = new RecordingUpdater();
 
@@ -143,7 +143,7 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
     [Fact(Timeout = 240_000)]
     public async Task AnInboxThatRefuses_IsAFailedHandover_NeverAPatch()
     {
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         var inbox = new FakeControlInbox(HttpStatusCode.Unauthorized);
         var updater = new RecordingUpdater();
 
@@ -163,7 +163,7 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
     [Fact(Timeout = 240_000)]
     public async Task AnInboxThatAcceptsWithoutVerifying_IsAFailedHandover()
     {
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         var inbox = new FakeControlInbox(HttpStatusCode.OK, "{\"status\":\"accepted\",\"signature\":\"not-required\"}");
         var updater = new RecordingUpdater();
 
@@ -182,7 +182,7 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
     [Fact(Timeout = 240_000)]
     public async Task AnInboxThatVerifiesButDoesNotAccept_IsAFailedHandover()
     {
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         var inbox = new FakeControlInbox(HttpStatusCode.OK, "{\"status\":\"rejected\",\"signature\":\"verified\"}");
         var updater = new RecordingUpdater();
 
@@ -199,7 +199,7 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
     [Fact(Timeout = 240_000)]
     public async Task NoControlInbox_IsDetectOnly_NamingTheMissingKey()
     {
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         var inbox = new FakeControlInbox(HttpStatusCode.OK);
         var updater = new RecordingUpdater();
 
@@ -218,7 +218,7 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
     [Fact(Timeout = 240_000)]
     public async Task APendingRestartOnAControlLaneInstall_IsHandedOverAsARestart()
     {
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         using var root = ModuleRoot.WithPendingRestart();
         var inbox = new FakeControlInbox(HttpStatusCode.OK);
         var updater = new RecordingUpdater();
@@ -410,7 +410,7 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
         }
     }
 
-    private Task Seed(UpdatePolicyKind policy)
+    private Task Seed(UpdatePolicyKind policy, CancellationToken cancellationToken)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var node = new MeshNode(UpdatePolicyNodeType.NodeId, UpdatePolicyNodeType.AdminPartition)
@@ -431,7 +431,7 @@ public class SelfUpdateHandsOverToTheControlLaneTest(ITestOutputHelper output) :
             })
             .FirstAsync()
             .Timeout(Budget)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
     }
 
     private Task<UpdatePolicyContent> WaitForContent(Func<UpdatePolicyContent, bool> predicate) =>

@@ -51,6 +51,7 @@ public class TombstoneSupersededBeforeCreatedTest
     [Fact(Timeout = 5000)]
     public void Supersede_LiftsGoneForGood_ButKeepsTheDeleteOnRecord()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new RecentlyDeletedRegistry();
         var tombstones = (IAddressTombstones)registry;
 
@@ -97,10 +98,10 @@ public class TombstoneSupersededBeforeCreatedTest
         registry.MarkDeleted(Path);
         tombstones.IsDeleted(Path).Should().BeTrue();
 
-        var saved = await adapter.WriteAndPublishCreated(Node("Second"), JsonOptions, feed).Await();
+        var saved = await adapter.WriteAndPublishCreated(Node("Second"), JsonOptions, feed).Await(TestContext.Current.CancellationToken);
         saved.Should().NotBeNull();
 
-        var observed = await tombstonedAtPublish.Should().Emit();
+        var observed = await tombstonedAtPublish.Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
         observed.Should().BeFalse(
             "by the time Created reaches the change feed the tombstone must already be superseded — "
             + "a subscriber acting on Created would otherwise still be told the address will not reactivate");
@@ -122,10 +123,10 @@ public class TombstoneSupersededBeforeCreatedTest
         });
         registry.MarkDeleted(Path);
 
-        var written = await adapter.WriteManyAndPublishCreated(new[] { Node("Second") }, JsonOptions, feed).Await();
+        var written = await adapter.WriteManyAndPublishCreated(new[] { Node("Second") }, JsonOptions, feed).Await(TestContext.Current.CancellationToken);
         written.Count.Should().Be(1);
 
-        var observed = await tombstonedAtPublish.Should().Emit();
+        var observed = await tombstonedAtPublish.Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
         observed.Should().BeFalse("the bulk write is a recreate like any other — superseded before its Created is published");
         tombstones.IsDeleted(Path).Should().BeFalse();
     }
@@ -136,16 +137,16 @@ public class TombstoneSupersededBeforeCreatedTest
         var (registry, adapter, _) = Rig();
         var tombstones = (IAddressTombstones)registry;
 
-        var first = await adapter.Write(Node("First", version: 1), JsonOptions).Await();
+        var first = await adapter.Write(Node("First", version: 1), JsonOptions).Await(TestContext.Current.CancellationToken);
         first.Should().NotBeNull();
         registry.MarkDeleted(Path);
 
         // A mismatching expected version writes nothing — the tombstone must stay live.
-        var refused = await adapter.WriteIfVersion(Node("Second", version: 2), expectedVersion: 99, JsonOptions).Await();
+        var refused = await adapter.WriteIfVersion(Node("Second", version: 2), expectedVersion: 99, JsonOptions).Await(TestContext.Current.CancellationToken);
         refused.Should().Be(false);
         tombstones.IsDeleted(Path).Should().BeTrue("a compare-and-set that did not commit supersedes nothing");
 
-        var committed = await adapter.WriteIfVersion(Node("Second", version: 2), expectedVersion: 1, JsonOptions).Await();
+        var committed = await adapter.WriteIfVersion(Node("Second", version: 2), expectedVersion: 1, JsonOptions).Await(TestContext.Current.CancellationToken);
         committed.Should().Be(true);
         tombstones.IsDeleted(Path).Should().BeFalse("the compare-and-set committed — the path exists again");
         registry.IsRecreatedAt(Path, 2).Should().BeTrue();

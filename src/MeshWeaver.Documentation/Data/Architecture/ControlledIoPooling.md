@@ -210,8 +210,8 @@ one, which is often *not* "how much parallelism can this resource take".
 | `Routing` | 256 | Isolation boundary — see below |
 | `Compile` | `Environment.ProcessorCount` | CPU-bound |
 | `Process` | 4 | Heavy external processes |
-| `pg:{adapter}` / `sf:{adapter}` (per write adapter) | **1** | The gate *is* the single write connection — never a parallel bound on top of it |
-| `pg-read:{adapter}` / `sf-read:{adapter}` | 16 | Keeps read fan-out below the shared connection pool's `MaxPoolSize` so reads can't starve writes |
+| `pg:{provider}` / `sf:{provider}` (writes) | **1** | Half a connection BUDGET, not a mirror of one connection — see the pairing note below |
+| `pg-read:{provider}` / `sf-read:{provider}` | 16 | The other half: keeps read fan-out below the shared connection pool's `MaxPoolSize` so reads can't starve writes |
 | anything else | `Environment.ProcessorCount` | `IoPoolOptions.Default` |
 
 Note the prefix-shadowing order in `MaxConcurrencyFor`: `pg-read:` is tested **before** `pg:`
@@ -353,7 +353,7 @@ Pinned by `DelegationCancellationTest` (unit) and `DelegationDrainJoinsParkedToo
 
 Earlier guidance carved storage and Postgres out of the pool and left them on plain `Observable.FromAsync`. **That carve-out is rescinded — there is no exemption.** `FromAsync` is never tolerated (see the absolute rule above), so storage / file-system / Postgres leaves go through `IIoPool` like everything else.
 
-**Per-adapter pools: a WRITE gate of 1 and a READ gate of 16, and the split is not optional.** A Postgres adapter's **writes** run on `pg:{adapter}`, capped at **1** — the `IIoPool` gate *is* the write connection ("hook into the pg pool") rather than a redundant bound stacked on top of it. Its **reads** run on `pg-read:{adapter}`, capped at `IoPoolOptions.PostgresRead` (16). The naming + caps live in `IoPoolNames.PostgresAdapterPrefix` / `IoPoolOptions.MaxConcurrencyFor`.
+**Per-PROVIDER pools: a WRITE gate of 1 and a READ gate of 16, and the split is not optional.** The Postgres backend's **writes** run on `pg:{provider}`, capped at **1**; its **reads** run on `pg-read:{provider}`, capped at `IoPoolOptions.PostgresRead` (16). Both names are the PROVIDER's (`pg:Postgres`, `pg-read:Postgres`) — `PostgreSqlPartitionStorageProvider` resolves each once from `Name`, and `PostgreSqlPathRoutingAdapter` hands the same pair to every per-schema adapter it materialises. So these are two process-wide gates, not one pair per schema, and the 16 + 1 below is the aggregate. The naming + caps live in `IoPoolNames.PostgresAdapterPrefix` / `IoPoolOptions.MaxConcurrencyFor`.
 
 > 🚨 **Read the pairing correctly.** Only a *dedicated* single-connection data source makes "the gate and the driver pool are the same size" literally true — `PostgreSqlChunkedContentVectorStore` is the one place that holds (`MaxPoolSize=1` alongside its cap-1 `pg:vector` pool). The **partitioned** provider deliberately does the opposite: every per-schema adapter shares ONE `NpgsqlDataSource` (`MaxPoolSize=50` in the portal), because minting a data source per (schema, table) leaked a pool per hub and exhausted the server. There the two caps are a *budget*, not an identity — 16 reads + 1 write = 17 concurrent connections, comfortably under 50. That budget only holds if **both** pools are actually wired and each operation is filed on the right one.
 

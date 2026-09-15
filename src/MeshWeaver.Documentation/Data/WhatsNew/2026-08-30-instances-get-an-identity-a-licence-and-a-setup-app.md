@@ -1,7 +1,10 @@
 ---
 Name: Instances get an identity, a licence and a setup app — the design
 Category: Feature
-Description: Design page: an instance is a partition on the registry, authenticates with a JWT, carries its plan on its own node, sets itself up through the Hosting app, and its environment changes only through its Deployment record
+Description: >-
+  Design page: an instance is a partition on the registry, authenticates with a JWT, carries its plan
+  on its own node, sets itself up through the Hosting app, and its environment changes only through
+  its Deployment record
 Icon: Sparkle
 Order: -20260830
 ---

@@ -52,9 +52,9 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
             LastActivityPath = $"{TestPartition}/_Activity/{Guid.NewGuid():N}",
             // … and the stamp's proof of WHAT it ran never arrived.
             LastExecutedCodeHash = null,
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var cell = await ReadCell(path, c => c is { Code: Source });
+        var cell = await ReadCell(path, c => c is { Code: Source }, TestContext.Current.CancellationToken);
 
         cell.LastExecutedCodeHash.Should().BeNull(
             "the round trip must preserve the state under test — if storage had invented a hash "
@@ -76,17 +76,17 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 180_000)]
     public async Task ARunTheNodeDidRecord_ReadsAsCurrent_AndGoesStaleWhenTheCodeMoves()
     {
-        var path = await CreateCell(new CodeConfiguration { Code = Source, IsExecutable = true });
+        var path = await CreateCell(new CodeConfiguration { Code = Source, IsExecutable = true }, TestContext.Current.CancellationToken);
 
         var dispatch = await RequestHub
             .Observe<ExecuteScriptResponse>(new ExecuteScriptRequest(), o => o.WithTarget(new Address(path)))
             .FirstAsync()
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         dispatch.Message.Success.Should().BeTrue(
             "the dispatch must be accepted before its stamp can be asserted on");
 
-        var ran = await ReadCell(path, c => c is { LastExecutedCodeHash: not null and not "" });
+        var ran = await ReadCell(path, c => c is { LastExecutedCodeHash: not null and not "" }, TestContext.Current.CancellationToken);
         ran.OutputCurrency().Should().Be(CodeOutputCurrency.Current,
             "the stamp recorded the fingerprint of what the run submitted and the code has not "
             + "moved since — the one state a cell may render as up to date");
@@ -102,10 +102,10 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
             })
             .FirstAsync()
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         var edited = await ReadCell(path,
-            c => c is { Code: "2 + 2", LastExecutedCodeHash: not null and not "" });
+            c => c is { Code: "2 + 2", LastExecutedCodeHash: not null and not "" }, TestContext.Current.CancellationToken);
         edited.OutputCurrency().Should().Be(CodeOutputCurrency.Stale,
             "the visible output belongs to source the reader is no longer looking at");
     }
@@ -135,10 +135,10 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
 
         // Two cells, both genuinely run: the second one's Activity shares the _Activity namespace,
         // so a lookup that merely listed the namespace would pass on the wrong evidence.
-        var wiped = await CreateCell(new CodeConfiguration { Code = Source, IsExecutable = true });
-        var neighbour = await CreateCell(new CodeConfiguration { Code = Source, IsExecutable = true });
-        await Run(wiped);
-        await Run(neighbour);
+        var wiped = await CreateCell(new CodeConfiguration { Code = Source, IsExecutable = true }, TestContext.Current.CancellationToken);
+        var neighbour = await CreateCell(new CodeConfiguration { Code = Source, IsExecutable = true }, TestContext.Current.CancellationToken);
+        await Run(wiped, TestContext.Current.CancellationToken);
+        await Run(neighbour, TestContext.Current.CancellationToken);
 
         // The stamp is one write to one node — it lands whole or not at all. Removing it reproduces
         // the state every #3249 failure path leaves behind.
@@ -156,12 +156,12 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
             })
             .FirstAsync()
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         var stampless = await ReadCell(wiped, c => c is
         {
             Code: Source, LastExecutedAt: null, LastActivityPath: null, LastExecutedCodeHash: null,
-        });
+        }, TestContext.Current.CancellationToken);
 
         // The defect, asserted rather than assumed: from the cell alone, the run is gone.
         stampless.OutputCurrency().Should().Be(CodeOutputCurrency.NeverRun,
@@ -172,7 +172,7 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
         var recovered = await stampless
             .ResolveOutputCurrency(wiped, viewerHome: null, meshService)
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         recovered.Should().Be(CodeOutputCurrency.Unverified,
             "the Activity node created before the dispatch still names this cell on HubPath, so the "
             + "run is not lost — only the cell's pointer to it is. A run with nothing recording WHAT "
@@ -181,12 +181,12 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
 
         // Non-vacuity: a cell that genuinely never ran must still say so, or the lookup is a rubber
         // stamp that would report every unrun cell in the mesh as having run.
-        var untouched = await CreateCell(new CodeConfiguration { Code = Source, IsExecutable = true });
-        var untouchedCell = await ReadCell(untouched, c => c is { Code: Source });
+        var untouched = await CreateCell(new CodeConfiguration { Code = Source, IsExecutable = true }, TestContext.Current.CancellationToken);
+        var untouchedCell = await ReadCell(untouched, c => c is { Code: Source }, TestContext.Current.CancellationToken);
         var untouchedVerdict = await untouchedCell
             .ResolveOutputCurrency(untouched, viewerHome: null, meshService)
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         untouchedVerdict.Should().Be(CodeOutputCurrency.NeverRun,
             "no Activity anywhere names this cell — and the neighbour's run, which lives in the very "
             + "same _Activity namespace, must not be mistaken for it. A verdict that could not come "
@@ -194,32 +194,32 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
 
         // The stamped neighbour never reaches the lookup at all — the stamp answers first, which is
         // what keeps a notebook of normal cells at zero queries.
-        var neighbourCell = await ReadCell(neighbour, c => c is { LastExecutedCodeHash: not null and not "" });
+        var neighbourCell = await ReadCell(neighbour, c => c is { LastExecutedCodeHash: not null and not "" }, TestContext.Current.CancellationToken);
         var neighbourVerdict = await neighbourCell
             .ResolveOutputCurrency(neighbour, viewerHome: null, meshService)
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         neighbourVerdict.Should().Be(CodeOutputCurrency.Current,
             "a cell whose stamp landed is judged by the stamp, unchanged and without a query");
     }
 
     // ── helpers ──
 
-    private async Task Run(string path)
+    private async Task Run(string path, CancellationToken cancellationToken)
     {
         var dispatch = await RequestHub
             .Observe<ExecuteScriptResponse>(new ExecuteScriptRequest(), o => o.WithTarget(new Address(path)))
             .FirstAsync()
             .Timeout(Bound)
-            .Await();
+            .Await(cancellationToken);
         dispatch.Message.Success.Should().BeTrue(
             $"the run of '{path}' must be accepted before anything about it can be asserted");
         // The stamp is what makes the run observable from the cell; waiting on it also guarantees
         // the Activity node exists before the lookup goes looking for it.
-        await ReadCell(path, c => c is { LastExecutedCodeHash: not null and not "" });
+        await ReadCell(path, c => c is { LastExecutedCodeHash: not null and not "" }, cancellationToken);
     }
 
-    private async Task<string> CreateCell(CodeConfiguration content)
+    private async Task<string> CreateCell(CodeConfiguration content, CancellationToken cancellationToken)
     {
         var id = $"cell{Guid.NewGuid():N}"[..12];
         var path = $"{TestPartition}/{id}";
@@ -235,7 +235,7 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
             }))
             .FirstAsync()
             .Timeout(Bound)
-            .Await();
+            .Await(cancellationToken);
         return path;
     }
 
@@ -245,7 +245,7 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
     /// that crossed a hub boundary can arrive as untyped JSON, and the cast would yield a silent
     /// null that reads exactly like "the node has no code".
     /// </summary>
-    private async Task<CodeConfiguration> ReadCell(string path, Func<CodeConfiguration?, bool> until)
+    private async Task<CodeConfiguration> ReadCell(string path, Func<CodeConfiguration?, bool> until, CancellationToken cancellationToken)
     {
         var options = Mesh.JsonSerializerOptions;
         return (await Mesh.GetWorkspace().GetMeshNodeStream(path)
@@ -254,6 +254,6 @@ public class CodeCellCurrencyThroughTheMeshTest(ITestOutputHelper output) : Mono
             .Where(until)
             .FirstAsync()
             .Timeout(Bound)
-            .Await())!;
+            .Await(cancellationToken))!;
     }
 }

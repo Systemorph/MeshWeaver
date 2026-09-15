@@ -145,7 +145,7 @@ public class StreamAttachTransientRetryTest
         // condition under test is "the attach gave up", and this task IS that condition. The bound
         // is a backstop against a hang, not the measurement: with AttachBackoff collapsed to zero
         // the real elapsed time is milliseconds.
-        await settled.WaitAsync(TimeSpan.FromSeconds(30));
+        await settled.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         return provider.GetStreamCalls;
     }

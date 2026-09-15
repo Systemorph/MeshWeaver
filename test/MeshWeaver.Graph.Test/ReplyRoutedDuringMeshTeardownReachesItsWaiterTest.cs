@@ -243,7 +243,8 @@ public class ReplyRoutedDuringMeshTeardownReachesItsWaiterTest(ITestOutputHelper
         waiter.Post(new ParkTurn(), o => o.WithTarget(WaiterAddress));
         await turnEntered.Should().Within(20.Seconds()).Emit(
             "the parked turn must hold the waiter's action block before the mesh is torn down — that park "
-            + "is what keeps the waiter's own ShutdownRequest queued behind it");
+            + "is what keeps the waiter's own ShutdownRequest queued behind it",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         Mesh.Dispose();
         Output.WriteLine("[dispose] mesh disposal invoked");

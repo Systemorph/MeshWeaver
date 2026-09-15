@@ -62,7 +62,7 @@ public class InstanceKeyLiveResolutionTest(ITestOutputHelper output) : MonolithM
 
     private Task<InstanceRegistrationResult> Register(string instanceId) =>
         Service().Register("owner", "Owner", "owner@test.com", instanceId, instanceId)
-            .Timeout(TestTimeouts.CrossSilo).Await();
+            .Timeout(TestTimeouts.CrossSilo).Await(TestContext.Current.CancellationToken);
 
     private static string IndexPath(string hash) =>
         $"{MeshWeaverInstanceNodeType.IndexNamespace}/{InstanceKeys.HashPrefix(hash)}";
@@ -70,7 +70,8 @@ public class InstanceKeyLiveResolutionTest(ITestOutputHelper output) : MonolithM
     private static Task<InstanceAuthResult> Resolve(InstanceRegistryAuthenticator authenticator, string rawKey) =>
         authenticator.AuthenticateOutcome($"Bearer {rawKey}")
             .Should().Within(TestTimeouts.Convergence)
-            .Emit("a resolution always reaches one of its three outcomes");
+            .Emit("a resolution always reaches one of its three outcomes",
+                cancellationToken: TestContext.Current.CancellationToken);
 
     /// <summary>
     /// The index trails the store. Registration is acknowledged when the nodes are WRITTEN; the
@@ -85,7 +86,8 @@ public class InstanceKeyLiveResolutionTest(ITestOutputHelper output) : MonolithM
                 $"instance-key-listing:{parent}", $"path:{parent} scope:children select:path"))
             .Where(nodes => nodes.Any(n => string.Equals(n.Path, path, StringComparison.Ordinal)))
             .Should().Within(TestTimeouts.Convergence)
-            .Emit($"the listing of {parent} must catch up with the registration of {path}");
+            .Emit($"the listing of {parent} must catch up with the registration of {path}",
+                cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -200,7 +202,8 @@ public class InstanceKeyFirstFrameTest
         IObservable<IEnumerable<MeshNode>>? listing, Func<IObservable<MeshNode>> stream, TimeSpan? budget = null) =>
         InstanceRegistryAuthenticator.FirstFrame(listing, stream, Path, budget ?? TestTimeouts.Convergence)
             .Should().Within(TestTimeouts.Convergence)
-            .Emit("FirstFrame always produces exactly one outcome");
+            .Emit("FirstFrame always produces exactly one outcome",
+                cancellationToken: TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task NoFrameWithinTheBudget_IsUnavailable_NeverAbsent()

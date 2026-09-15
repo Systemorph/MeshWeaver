@@ -56,12 +56,12 @@ public class DataContextDisposeDuringInitTest(ITestOutputHelper output) : HubTes
         // Dispose while the data source is still initializing — the transient-probe lifecycle
         // ($model-probe is created, read once, disposed; dispose-during-init is a NORMAL path).
         host.Dispose();
-        await host.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
+        await host.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await(TestContext.Current.CancellationToken);
 
         // Sanctioned negative wait (WritingTests.md: "wait to confirm nothing happened"): run
         // PAST the watchdog deadline to prove it does not fire post-mortem. There is no
         // positive signal to filter for — the fix is precisely that nothing happens.
-        await Task.Delay(TimeSpan.FromMilliseconds(2500));
+        await Task.Delay(TimeSpan.FromMilliseconds(2500), TestContext.Current.CancellationToken);
 
         dataContext.InitializationError.Should().BeNull(
             "a hub disposed while its data sources were still initializing ended by SHUTDOWN, "

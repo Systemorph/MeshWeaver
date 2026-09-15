@@ -41,7 +41,9 @@ public class OrleansCrossSiloStreamProbeTest : IClassFixture<TwoSiloCacheUpdateF
     [Fact(Timeout = 90000)]
     public async Task ExplicitSubscriber_ReceivesCrossSiloPublish()
     {
-        var ct = new CancellationTokenSource(TimeSpan.FromSeconds(70)).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(70));
+        var ct = deadline.Token;
         var cluster = _fixture.Cluster;
         Assert.True(cluster.Silos.Count >= 2, "probe needs two silos");
 

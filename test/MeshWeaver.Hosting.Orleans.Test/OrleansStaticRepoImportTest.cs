@@ -43,8 +43,6 @@ public class OrleansStaticRepoImportTest(ITestOutputHelper output)
     // container, so resolve the source/import/reads from the silo.
     private IMessageHub Mesh => SiloServices().GetRequiredService<IMessageHub>();
 
-    private CancellationToken Ct => new CancellationTokenSource(55.Seconds()).Token;
-
     /// <summary>Read a node's authoritative state under System (bypasses RLS) and wait for a
     /// predicate — the canonical single-node read (GetMeshNodeStream), not the lagged query.</summary>
     private async Task<MeshNode?> ReadWhen(string path, Func<MeshNode, bool> predicate, CancellationToken ct)
@@ -65,7 +63,9 @@ public class OrleansStaticRepoImportTest(ITestOutputHelper output)
     [Fact(Timeout = 90000)]
     public async Task Import_CreatesSpaceRoot_AndChildContent()
     {
-        var ct = Ct;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(55.Seconds());
+        var ct = deadline.Token;
         Source.Body = "ORIGINAL body";
 
         var results = await StaticRepoImporter.ImportAll(Mesh).ToList().FirstAsync().Await(ct);
@@ -87,7 +87,9 @@ public class OrleansStaticRepoImportTest(ITestOutputHelper output)
     [Fact(Timeout = 90000)]
     public async Task Reimport_ChangedContent_RepairsContentNullPage()
     {
-        var ct = Ct;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(55.Seconds());
+        var ct = deadline.Token;
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         // v1: import a page WITH content.

@@ -33,7 +33,7 @@ public class BusinessRulesBalanceSheetE2ETest(PortalFixture fixture, ITestOutput
         Assert.SkipUnless(Directory.Exists(SampleRoot),
             $"PensionFund sample not found at {SampleRoot} — run from the repo tree.");
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         // ── 1. Seed the sample verbatim: type definitions first, then their Source code
@@ -61,13 +61,13 @@ public class BusinessRulesBalanceSheetE2ETest(PortalFixture fixture, ITestOutput
         // ── 2. Wait for the BalanceSheet NodeType's dynamic compile (5 Source files +
         //       the built-in scope generator) to SETTLE before creating the typed instance.
         var settled = await WaitForCompileAsync(context, token, "PensionFund/BalanceSheet",
-            TimeSpan.FromSeconds(180));
+            TimeSpan.FromSeconds(180), TestContext.Current.CancellationToken);
         Assert.True(settled, "the BalanceSheet NodeType compile must settle Ok — " +
                              "a compile error here means the scope generator / compile path broke");
 
         await SeedFileAsync(context, token, Path.Combine(SampleRoot, "Statement.json"));
         Assert.True(await fixture.WaitUntilReadableAsync(context, token, "PensionFund/Statement",
-            TimeSpan.FromSeconds(60)), "the seeded Statement instance must become readable");
+            TimeSpan.FromSeconds(60), cancellationToken: TestContext.Current.CancellationToken), "the seeded Statement instance must become readable");
 
         // ── 3. Drive the GUI: the report page must render the SCOPE-COMPUTED numbers.
         var page = await context.NewPageAsync();
@@ -155,7 +155,8 @@ public class BusinessRulesBalanceSheetE2ETest(PortalFixture fixture, ITestOutput
     }
 
     /// <summary>Polls the NodeType node via the mesh get API until its compilationStatus is Ok.</summary>
-    private async Task<bool> WaitForCompileAsync(IBrowserContext context, string token, string path, TimeSpan timeout)
+    private async Task<bool> WaitForCompileAsync(IBrowserContext context, string token, string path,
+        TimeSpan timeout, CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         string last = "";
@@ -177,7 +178,7 @@ public class BusinessRulesBalanceSheetE2ETest(PortalFixture fixture, ITestOutput
                 output.WriteLine($"compile settled at Error:\n{last[..Math.Min(last.Length, 2000)]}");
                 return false;
             }
-            await Task.Delay(2000);
+            await Task.Delay(2000, cancellationToken);
         }
         output.WriteLine($"compile poll timed out; last get:\n{last[..Math.Min(last.Length, 2000)]}");
         return false;

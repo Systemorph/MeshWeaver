@@ -1,7 +1,10 @@
 ---
 Name: The Pod-Hub Claim Must Be Re-Asserted
 Category: Architecture
-Description: A pod-hub claim publishes an address→silo mapping into Orleans' grain directory — the one component that is re-partitioned on every membership change. Asserting it once was the root cause of #2938/#2915, and the fix is the move Orleans' own ClientDirectory already makes.
+Description: >-
+  A pod-hub claim publishes an address→silo mapping into Orleans' grain directory — the one component
+  that is re-partitioned on every membership change. Asserting it once was the root cause of
+  #2938/#2915, and the fix is the move Orleans' own ClientDirectory already makes.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/><circle cx="12" cy="12" r="2.5"/></svg>
 ---
 

@@ -2572,16 +2572,20 @@ internal static class NodeTypeEnrichmentHelpers
         try
         {
             var instance = instanceHub.Address.ToString();
-            NotificationService.Dispatch(
+            NotificationService.DispatchLocalizable(
                     instanceHub,
                     recipient: null,
                     mainNodePath: nodeType,
-                    title: $"Type '{nodeType}' is serving a fallback page",
-                    message:
+                    title: LocalizableText.Keyed(
+                        $"Type '{nodeType}' is serving a fallback page",
+                        "notification.nodeType.fallbackPage.title", ("nodeType", nodeType)),
+                    message: LocalizableText.Keyed(
                         $"The instance '{instance}' has been rendering the \"build did not settle\" "
                         + $"fallback for over {StuckReportDelay.TotalSeconds:0}s and did not self-heal. "
                         + "Its NodeType has no usable build on this pod. Users see a broken page until "
                         + "the type builds or the instance is recycled.",
+                        "notification.nodeType.fallbackPage.body",
+                        ("instance", instance), ("seconds", (int)StuckReportDelay.TotalSeconds)),
                     type: NotificationType.System,
                     targetNodePath: nodeType)
                 .Subscribe(

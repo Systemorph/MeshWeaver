@@ -75,11 +75,11 @@ public class OAuthCodeStoreTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         var code = await store.GenerateCode("rbuergi", "Roland", "rbuergi@systemorph.com",
                 ClientId, RedirectUri, challenge, method)
-            .Should().Within(30.Seconds()).Emit();
+            .Should().Within(30.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var stored = await Storage
             .Read(OAuthCodeStore.PathForCode(code), Mesh.JsonSerializerOptions)
-            .Should().Within(30.Seconds()).Emit();
+            .Should().Within(30.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
         stored.Should().NotBeNull("GenerateCode must not emit before the row is committed");
 
         return code;
@@ -89,7 +89,7 @@ public class OAuthCodeStoreTest(ITestOutputHelper output) : MonolithMeshTestBase
         OAuthCodeStore store, string code,
         string clientId = ClientId, string redirectUri = RedirectUri, string? verifier = null)
         => store.ExchangeCode(code, clientId, redirectUri, verifier)
-            .Should().Within(30.Seconds()).Emit();
+            .Should().Within(30.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task Exchange_WithMatchingParameters_ReturnsEntry_NoReason()

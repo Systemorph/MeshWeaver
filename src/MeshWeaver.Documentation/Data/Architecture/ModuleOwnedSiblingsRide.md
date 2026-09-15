@@ -1,7 +1,11 @@
 ---
 Name: Module-Owned Siblings Ride
 Category: Architecture
-Description: The settled answer to #3221 — a module-owned MeshWeaver.* sibling rides every bundle that references it IFF the platform host does not already ship it; being another package's declared module is no reason to exclude it, and what closes the double-production hazard is one build per name per publication, asserted at the producer and again at the consumer.
+Description: >-
+  The settled answer to #3221 — a module-owned MeshWeaver.* sibling rides every bundle that references
+  it IFF the platform host does not already ship it; being another package's declared module is no
+  reason to exclude it, and what closes the double-production hazard is one build per name per
+  publication, asserted at the producer and again at the consumer.
 Icon: /static/NodeTypeIcons/code.svg
 ---
 

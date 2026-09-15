@@ -96,7 +96,7 @@ public class SourcesWatcherStopsAtTeardownTest(ITestOutputHelper output) : Monol
                 NodeType = GateNodeType,
                 Name = "Target",
                 State = MeshNodeState.Active
-            }).Should().Within(TestTimeouts.Convergence).Emit();
+            }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
             // ── The NodeType and its one source, whose @@ include points at the gated target ──
             var typeNode = MeshNode.FromPath(TypePath) with
@@ -109,7 +109,7 @@ public class SourcesWatcherStopsAtTeardownTest(ITestOutputHelper output) : Monol
                 },
                 State = MeshNodeState.Active
             };
-            await MeshService.CreateNode(typeNode).Should().Within(TestTimeouts.Convergence).Emit();
+            await MeshService.CreateNode(typeNode).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
             await MeshService.CreateNode(new MeshNode("model", $"{TypePath}/Source")
             {
                 NodeType = "Code",
@@ -120,16 +120,16 @@ public class SourcesWatcherStopsAtTeardownTest(ITestOutputHelper output) : Monol
                     Language = "csharp"
                 },
                 State = MeshNodeState.Active
-            }).Should().Within(TestTimeouts.Convergence).Emit();
+            }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
             // ── Activate the NodeType hub through the mesh (a routed read), which installs its
             //    watchers; the sources watcher's first pass resolves the @@ closure ───────────
             await Mesh.GetMeshNode(TypePath, TestTimeouts.Convergence)
-                .Should().Within(TestTimeouts.Convergence).Emit("the NodeType node must be readable");
+                .Should().Within(TestTimeouts.Convergence).Emit("the NodeType node must be readable", cancellationToken: TestContext.Current.CancellationToken);
             await gateActivated.Should().Within(TestTimeouts.Convergence).Emit(
                 "the sources watcher's @@-include read must reach the gated target — that read, "
                 + "parked behind the target's never-opening init gate, is the in-flight request the "
-                + "rest of this test is about");
+                + "rest of this test is about", cancellationToken: TestContext.Current.CancellationToken);
 
             var typeHub = Mesh.GetHostedHub(new Address(TypePath), HostedHubCreation.Never);
             typeHub.Should().NotBeNull("the routed read activated the NodeType's own hub");
@@ -138,7 +138,7 @@ public class SourcesWatcherStopsAtTeardownTest(ITestOutputHelper output) : Monol
             // ── Dispose the NodeType hub with the include read outstanding ────────────────────
             typeHub.Dispose();
             await typeHub.DisposalCompleted.Take(1).Should().Within(TestTimeouts.Convergence)
-                .Emit("the NodeType hub's teardown must complete");
+                .Emit("the NodeType hub's teardown must complete", cancellationToken: TestContext.Current.CancellationToken);
 
             ((MessageHub)typeHub).QuiescingTimedOut.Should().BeFalse(
                 "the sources watcher must release its in-flight @@-include read at the FIRST instant "

@@ -154,7 +154,9 @@ BuildLog(log, locale: host.ViewerLocale())
 ### 3. Key + args on a persisted record — for text written with no viewer in scope
 
 Shapes 1 and 2 both assume the string is chosen while somebody is *looking*. An **activity
-transcript** breaks that assumption, and it is the reason this third shape exists (#3236).
+transcript** breaks that assumption, and it is the reason this third shape exists (#3236). A
+**notification** breaks it the same way and is the second surface to adopt it (#4373) — see
+*A notification is the same shape* below.
 
 Clause 1 already answers *whose* language it is: the platform wrote these lines, so they follow the
 **viewer**. What was missing was a way to honour that answer — the writer has no viewer to resolve
@@ -243,6 +245,84 @@ under `-warnaserror` that is an error, not a warning — break shape 3 in
 [CrossRepoPairGate](../CrossRepoPairGate), which no gate detects. Land the dependent's
 signature-qualified cref FIRST: it resolves against one overload as well as two, so it is correct
 before and after (MeshWeaver.Plugins#1338 did this for #3281).
+
+#### A notification is the same shape — #4373
+
+A bell row is the second persisted surface, and it arrived English for every viewer for exactly the
+reason above. `NotificationService.CreateNotification` took rendered `string` title and body, and
+every emitter in `src/` is a **background reaction** — a package-update reconciler poll, a module
+discovery scan, a startup-error drain, a compile park, a boot-time import. There is no viewer and
+the writer runs as System.
+
+🚨 **Two of those emitters were already calling `Localize` at the write site, and that is the part
+worth remembering.** `ModuleDiscoveryService` and `RegistryUpdateReconciler` looked migrated — they
+had catalog keys, they read them through `accessService.Localize(...)`, both languages were
+translated — and they still wrote English into every row, because a System writer resolves to the
+system default. A `Localize` call is only a localization when there is a viewer to resolve against;
+where there is not, it is a **rendering**, and the row it produces is no more localizable than a
+literal. That is why "call `Localize` at the call site" is not the fix for this class of text, and
+why seeing one there is not evidence that a surface is done.
+
+So the notification carries the pair and the bell resolves it:
+
+```csharp
+// write site — a reconciler poll, running as System, with nobody looking
+NotificationService.DispatchLocalizable(
+    hub, recipient: null, mainNodePath: record,
+    title:   LocalizableText.Keyed($"Update available: {name}",
+                 "notification.packageUpdate.available.title", ("name", name)),
+    message: LocalizableText.Keyed(english, bodyKey,
+                 ("name", name), ("changed", delta?.Changed), ("removed", delta?.Removed),
+                 ("provenance", provenance)),
+    type: NotificationType.System);
+
+// render site — the bell, per viewer
+@notification.LocalizedTitle(Access)        // or .LocalizedTitle(host.ViewerLocale())
+```
+
+`LocalizableText` is the **same carrier** #3917 introduced for refusals (`MeshWeaver.Data.Contract`);
+`#4373` only gave it a second exit — `Localize(locale)` and `PersistedArgs()` — beside its existing
+`ToLogMessage`. There is one convention for a server-authored sentence, not one per surface. Keys
+live under **`notification.`**, and `LocalizationTest.PersistedNamespaces_UseNamedPlaceholders`
+refuses a positional `{0}` anywhere under `activity.*` or `notification.*`: `GetNamed` replaces only
+`{identifier}`, so a positional placeholder in a persisted key reaches the reader **literally** while
+every other assertion in that file stays green.
+
+**Two entry points, on purpose, and neither is an overload.**
+`CreateNotification`/`Dispatch` keep their exact `string` signatures and forward to
+`CreateLocalizableNotification`/`DispatchLocalizable`. Changing the originals would have been
+binary-breaking for every module bundle already compiled against them — the `MissingMethodException`
+shape [Module Versioning](../ModuleVersioning) and `scripts/check-record-signatures.py` exist for — and
+*overloading* them would make every unqualified `<see cref="NotificationService.CreateNotification"/>`
+in a dependent ambiguous (`CS0419`, an error under `-warnaserror`, in repositories core cannot see
+and in in-mesh source no compiler here type-checks; break shape 3 in
+[CrossRepoPairGate](../CrossRepoPairGate)). Both entry points reach one implementation, so there is
+nothing to keep in step. `ICompileFailureNotifier` takes the same addition as a **default-implemented**
+member for the same reason a forwarder cannot rescue an implementer (#3465).
+
+**The email leg resolves at send time, and that is not a contradiction.** A bell row is durable and
+read by several people, so it stores the key. An email has exactly **one** reader, is known at send
+time, and cannot be re-rendered afterwards — so `NotificationService` resolves subject, body, CTA
+label and footer against that person's own `User.Locale` before handing them to `EmailTemplate`
+(including the default `Open` button label). The rule is not "never resolve at write time", it is
+*never resolve against a viewer you do not have*.
+
+**What stayed English, and why.** The same boundary as the transcript: the sentence the platform
+owns is keyed, verbatim upstream text is not. `ex.Message`, a Roslyn diagnostic, the captured
+startup log lines, a `PartitionContentOwnership` explanation and the composed
+`ServingNotice`/`IncompatibleNotice` — the last two declared as the operator/log wording of the
+record's own fields, which the page already localizes separately — ride as arguments or as the whole
+body. Outside `src/`, `IssueDetectors`/`FleetWatch` compose their English into `IssueContent` and the
+notification reuses it verbatim; that stays as it is until the issue content itself carries keys.
+
+🚨 **A conditional clause gets its own key**, never a `{detail}` argument — the package-update body
+is `…bodyFiles`/`…bodyContent` rather than one key taking a composed `"3 file(s) changed, 1 removed"`,
+because an English clause spliced into a translated sentence lands as English inside German word
+order. Same rule as `commit.done`/`commit.doneRepoCreated`. Note that **every** argument is passed on
+both branches: `bodyContent` simply names none of the file-count ones, and an argument a template
+does not name costs nothing — whereas a template naming an argument that was not passed leaves a
+literal `{changed}` on screen, because `GetNamed` deliberately keeps an unknown name VISIBLE rather
+than blanking it.
 
 ### The catalog has a second home, and it goes stale SILENTLY
 

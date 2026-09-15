@@ -113,6 +113,11 @@ spec:
         # host was therefore gated by NOTHING: the pod passed Init:1/1 and the silo then died in
         # `MembershipTableManager` on a name that never resolved (#3780), with the init container's
         # PASS saying nothing about the connection that failed. See templates/_database.tpl.
+        #
+        # 🚨 ONE exception, the Key Vault case: an external database whose connection string is not
+        # in the values (a record-driven instance, `ConnectionStrings__memex` from a CSI class) probes
+        # `config.memex_portal.MEMEX_HOST` — the values' string there is only the chart's in-cluster
+        # default, and probing it spun forever on `memex-postgres-service` (pearl, 2026-09-15).
         - name: "wait-for-postgres"
           image: "busybox:1.36"
           command:

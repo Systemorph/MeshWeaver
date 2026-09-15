@@ -1,7 +1,12 @@
 ---
 Name: An activated node hub no longer pins itself — idle nodes can retire on the Orleans host
 Category: Fix
-Description: On a multi-replica portal every node ever activated stayed resident for the life of the process, with its cache entry and the sync hubs on both sides — the unexplained half of the heap growth measured in #3432. The hub was handed the process cache's live view of its own path and kept it subscribed; the entry then heart-beat the hub's own grain alive. The hub now receives the node it was activated with, as it always did on the single-process host.
+Description: >-
+  On a multi-replica portal every node ever activated stayed resident for the life of the process,
+  with its cache entry and the sync hubs on both sides — the unexplained half of the heap growth
+  measured in #3432. The hub was handed the process cache's live view of its own path and kept it
+  subscribed; the entry then heart-beat the hub's own grain alive. The hub now receives the node it
+  was activated with, as it always did on the single-process host.
 Icon: Recycle
 Order: -20260913
 ---

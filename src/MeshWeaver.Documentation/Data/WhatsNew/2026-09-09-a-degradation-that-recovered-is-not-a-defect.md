@@ -1,7 +1,12 @@
 ---
 Name: A degradation that recovered is not a defect
 Category: Fix
-Description: The CI gate that catches unreadable node content reddened a shard for the ordinary boot race — a NodeType read a moment before its own compile registered the type. It now reports the verdict rather than the event: at teardown the platform re-asks the content-type registry about everything that degraded, and only what is still unresolvable is a hit. The same correction makes /health stop calling a replica Degraded over a race it already won.
+Description: >-
+  The CI gate that catches unreadable node content reddened a shard for the ordinary boot race — a
+  NodeType read a moment before its own compile registered the type. It now reports the verdict rather
+  than the event: at teardown the platform re-asks the content-type registry about everything that
+  degraded, and only what is still unresolvable is a hit. The same correction makes /health stop
+  calling a replica Degraded over a race it already won.
 Icon: Filter
 Order: -20260909
 ---

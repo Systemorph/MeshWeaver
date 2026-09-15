@@ -26,7 +26,11 @@
     "would pass it with half its running set unnamed. A per-instance `registry` key is therefore",
     "REFUSED, so a stale one cannot sit there looking like a declaration.",
     "",
-    "Two dispositions, and the difference is load-bearing:",
+    "Two dispositions, and the difference is load-bearing. 🚨 BOTH ARE ABOUT WHAT THE FLEET",
+    "PULLS — which is what every axis reads them for: `foreign_registries` comes off deployment",
+    "overlays, and the question asked is whether an installation's RUNNING SET is accounted for.",
+    "What the fleet PUSHES to a host is a separate fact with a separate field (`publishes`,",
+    "below), because a host can be MIXED and `ghcr.io` is:",
     "  fleet-unlockable  serves OUR images and this lane cannot lock them. An installation running",
     "                    from one is out of THIS lane's scope — still live, still expected to",
     "                    answer, still counted, and printed on its own line saying protection there",
@@ -69,10 +73,71 @@
     "  not-ours               third-party; nothing of ours is stored there, so there is nothing to",
     "                         protect. May NOT carry `deleters` — enumerating somebody else's",
     "                         deleters would read as a verdict about our artifacts.",
+    "  out-of-estate          our images live there and the registry is in an ESTATE outside this",
+    "                         fleet's reach — a different subscription, a credential this lane does",
+    "                         not hold — so what deletes from it is decided there. Requires",
+    "                         `estate` (whose decision it is, and where that decision lives) and",
+    "                         `cleanupAuthorized: false`, and may NOT carry `deleters`: we cannot",
+    "                         measure somebody else's mechanisms from a committed file, and a list",
+    "                         here would be a verdict about OUR artifacts resting on nothing.",
+    "                         🚨 IT IS NOT A TRAPDOOR OUT OF `nothing-deletes`, and the refusal is",
+    "                         DERIVED rather than declared: a host this fleet's own publishing",
+    "                         lanes push to may never take this rule — which is precisely",
+    "                         cr.meshweaver.cloud and meshweaver.azurecr.io, the two where it would",
+    "                         have mattered — and a run whose push-target derivation cannot be",
+    "                         trusted refuses the rule instead of allowing it. Every run PRINTS the",
+    "                         host on its own line saying this record measures nothing about it,",
+    "                         because 'not ours to answer' and 'clean' are different sentences.",
     "A `third-party` disposition takes `not-ours` and nothing else; a `fleet-unlockable` one takes",
-    "either of the other two and never `not-ours`. Held by",
+    "any of the other three and never `not-ours`. Held by",
     "`lock-pinned-digests.py --check-registry-retention`, on every pull request, with no credential.",
     "Design: Doc/Architecture/FleetRegistryRetention.",
+    "",
+    "🚨 `publishes` IS THE THIRD QUESTION, AND IT IS THE ONE THAT WAS NEVER ASKED (MeshWeaver#4323).",
+    "`disposition` says whether this lane can LOCK a host; `retention` says what DELETES from it;",
+    "neither asks whether this fleet PUBLISHES there. For a day this file said of `ghcr.io` both",
+    "'never published by this fleet' and 'Nothing this fleet produces is stored on ghcr.io' while",
+    "`main-cd.yml` pushed twelve tags across three of our own repositories there on every promoting",
+    "run — and BOTH fields validated green, because every other arm asks this record what it says",
+    "and none asked the WORKFLOWS what they do.",
+    "",
+    "A host this fleet pushes to satisfies the table in one of two ways, and",
+    "`--check-registry-retention` DERIVES the push targets from the publishing lanes",
+    "(.github/workflows/main-cd.yml and release.yml — every `--tag` argument and every",
+    "mirror-image-to-registry.sh destination, shell continuations joined) rather than reading them",
+    "here:",
+    "  disposition: fleet-unlockable   the host-level declaration already says our images live",
+    "                                  there, and its `retention` block already has to say what",
+    "                                  keeps them. Nothing further is required (cr.meshweaver.cloud).",
+    "  a `publishes` block             for a MIXED host, where the disposition is about what the",
+    "                                  fleet pulls. Requires `repositories` (checked for EQUALITY",
+    "                                  against the derived set, both ways — a missing one is the",
+    "                                  gap, a stale one hides the next), `producedBy` (lanes that",
+    "                                  exist AND mention the host), `runFrom` (whether any",
+    "                                  installation runs from them) and a `retention` block whose",
+    "                                  rule is `operator-retained`: the store's operator keeps them",
+    "                                  and this fleet does not. That rule may NOT carry `deleters`",
+    "                                  — we cannot measure somebody else's deletion mechanisms from",
+    "                                  a committed file, so the list would be a verdict about OUR",
+    "                                  artifacts resting on nothing — and may not authorize a",
+    "                                  cleanup. It is deliberately NOT a host-level rule: allowing",
+    "                                  it there would be a trapdoor out of `nothing-deletes`.",
+    "",
+    "🚨 AND AN OVERLAY MAY NOT PIN A PUBLISHED REPOSITORY. That is what stops `publishes` being",
+    "prose: an installation pinning `<host>/<a published repo>` is running OUR images from a store",
+    "nothing of ours retains and this lane cannot lock, and the host's `third-party` disposition",
+    "would wave it through in the one branch — pins here AND there — that prints success. It fires",
+    "on nobody today, which is exactly the claim `publishes.runFrom` makes.",
+    "",
+    "🚨 WHY THE DISPOSITION WAS NOT SIMPLY FLIPPED. `third-party` → `fleet-unlockable` on `ghcr.io`",
+    "is the correct-sounding fix and it REDS THE LANE: `memex-cloud` pins its portal and migration",
+    "images in this ACR AND `ghcr.io/distribution/distribution` (the registry service's own image,",
+    "which cannot come from the registry it boots), so the flip makes `resolve_running_sets` fire",
+    "'half its running set would be protected and half would not' over an installation whose every",
+    "image OF OURS is here and protected. `pause.reEnableWhen` is 'lock-pinned-digests is green',",
+    "so that false red would stand between the fleet and re-enabling cleanup. The unit is the",
+    "problem, not the value: one disposition per host is false about one half of a mixed host",
+    "whichever way it reads.",
     "",
     "Removing an entry is how an installation re-enters the expected set.",
     "",
@@ -80,8 +145,51 @@
     "NOT a state here. It would be an exemption meaning `this one never has to answer`, which is",
     "the shape that goes stale silently — and the two installations measured on 2026-09-12 both",
     "answer over the public internet. If one ever cannot, that is a decision to take then, in a",
-    "reviewed diff, and it needs its own state rather than being filed under `retired`."
+    "reviewed diff, and it needs its own state rather than being filed under `retired`.",
+    "",
+    "🚨 AN INSTALLATION'S IDENTITY IS `owner/name:id`, NOT `id` (MeshWeaver#3438, 2026-09-15).",
+    "`Hosting__Deployment` is unique inside ONE deployments repository and inside nothing larger.",
+    "`Systemorph/PartnerRe.Memex` was created at 2026-09-14T21:30Z and its control instance is",
+    "`memex` too — correctly: it is PartnerRe's memex, at partnerre.meshweaver.cloud — and the",
+    "collision took this lane down the same night with `installation 'memex' is declared by two",
+    "overlays … so which host answers for it is ambiguous`. NEITHER installation was then asked",
+    "anything, so `memex` — the one actually exposed to the ACR purge — got no locks either, and",
+    "the red sat on `pause.reEnableWhen`. An entry below may therefore carry `repo`, and it MUST",
+    "where two repositories declare the same id: an unqualified line would otherwise exempt an",
+    "installation nobody wrote it about. The duplicate blocker still fires for one repository",
+    "declaring an id in two overlays — which is what it was always about.",
+    "",
+    "🚨 `repositories` (below) IS THE HALF THAT STOPS THAT QUALIFICATION BECOMING AN EXEMPTION.",
+    "Keying by repository is what lets two repositories each declare a `memex`; on its own it also",
+    "means a new deployments repository joins the fleet SILENTLY, its installations becoming their",
+    "own slots with nobody having read a line about them — 'a fork reds the lane' traded for 'a",
+    "fork is invisible to it', the same defect in the other costume. So every repository whose tree",
+    "carries deployment overlay FILES is named there, checked BOTH ways: an undeclared one is a",
+    "blocker, and a name no repository answers to is a stale line that hides the next one. The",
+    "population is overlay FILES rather than extracted installations on purpose — a repository",
+    "whose overlays this reader stopped understanding would otherwise vanish from the table's reach",
+    "exactly when that mattered."
   ],
+  "repositories": {
+    "Systemorph/Memex": {
+      "role": "deployments",
+      "reason": "The fleet's deployments repository: the AKS overlays for every installation Systemorph operates (measured 2026-09-15: 8 overlay files declaring build, memex, memex-cloud and pearl). Its overlays are AXIS 2's tag pins and AXIS 3's expected-installation denominator.",
+      "declaredAt": "2026-09-15",
+      "issue": "MeshWeaver#3438"
+    },
+    "Systemorph/PartnerRe.Memex": {
+      "role": "deployments",
+      "reason": "PartnerRe's deployments repository, created 2026-09-14T21:30:38Z (measured 2026-09-15: 2 overlay files). It declares its own control instance `memex` — partnerre.meshweaver.cloud, LIVE and answering /api/version with core 2592e228 — and `partnerre`, the hand-over template for PartnerRe's own estate, which still carries TODO placeholders including its ingress host. Its images are pinned in memexaksacrqoqqdqnhlaksg.azurecr.io, an ACR in the `PartnerRe Memex` subscription that this lane's credential does not reach; the `registries` table below is where that is accounted for.",
+      "declaredAt": "2026-09-15",
+      "issue": "MeshWeaver#3438"
+    },
+    "Systemorph/MeshWeaver": {
+      "role": "chart",
+      "reason": "This repository. Its `deploy/` tree carries the platform CHART's own values files (measured 2026-09-15: 14 files that match the overlay path filter), not an installation — `deploy/helm/values.yaml` declares `Hosting__Deployment: \"\"`, which yields no instance on AXIS 3. It is named here because the unit of this table is a repository whose tree carries overlay FILES: a repository that contributes pins and is absent from the table would be exactly the silent one this table exists to refuse.",
+      "declaredAt": "2026-09-15",
+      "issue": "MeshWeaver#3438"
+    }
+  },
   "registries": {
     "cr.meshweaver.cloud": {
       "disposition": "fleet-unlockable",
@@ -137,14 +245,52 @@
     },
     "ghcr.io": {
       "disposition": "third-party",
-      "reason": "Somebody else's images, never ours to protect and never published by this fleet. Measured 2026-09-13: 2 references across the fleet's overlays — `ghcr.io/distribution/distribution` (the registry service's own image, in memex-cloud's overlay) and one line of PROSE in the ci-runners overlay describing what the runner image is built from. The second is why whole-line comments are stripped before extraction.",
+      "reason": "🚨 THE ONLY MIXED HOST IN THE FLEET, and the `disposition` is about what the fleet PULLS — which is what every axis reads it for. What the fleet's overlays PIN here is somebody else's and was never ours to protect: `ghcr.io/distribution/distribution` and `ghcr.io/oras-project/oras` (the registry service's own image and the bundle-pull helper, both pulled from outside precisely because a registry cannot serve the image that boots it), plus one line of PROSE in the ci-runners overlay describing what the runner image is built from — which is why whole-line comments are stripped before extraction. What this fleet PUBLISHES here is OURS, it is a different set of repositories, and it is declared in `publishes` below rather than by this field. 🚨 A SINGLE PER-HOST DISPOSITION IS FALSE ABOUT ONE HALF WHICHEVER VALUE IT TAKES, and both halves are measured: `third-party` read as a claim about the whole host was false about `systemorph/*` (MeshWeaver#4323, the reason this entry was rewritten), and `fleet-unlockable` is false about `distribution/*` AND REDS THE LANE — `memex-cloud` pins `meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8411` AND `ghcr.io/distribution/distribution:3.1.1`, so flipping the host makes `resolve_running_sets` fire 'half its running set would be protected and half would not' over an installation whose every image OF OURS is in this ACR and protected. `pause.reEnableWhen` is 'lock-pinned-digests is green', so that false red would stand between the fleet and re-enabling cleanup.",
       "declaredAt": "2026-09-13",
+      "restatedAt": "2026-09-15",
       "issue": "MeshWeaver#3438",
+      "publishes": {
+        "statedAt": "2026-09-15",
+        "issue": "MeshWeaver#4323",
+        "design": "Doc/Architecture/FleetRegistryRetention",
+        "repositories": [
+          "systemorph/memex-portal-ai",
+          "systemorph/memex-migration",
+          "systemorph/mw-plugin-test"
+        ],
+        "producedBy": [
+          ".github/workflows/main-cd.yml",
+          ".github/workflows/release.yml"
+        ],
+        "runFrom": "NO INSTALLATION. Measured 2026-09-15 over the fleet's deployment overlays: not one names a `ghcr.io/systemorph/*` image. The only committed `systemorph/*` references on this host are the CHART'S OWN DEFAULTS (deploy/helm/values.yaml `portal.image` and `migration.image`, both `:latest`), and that file declares `Hosting__Deployment: \"\"` — it is the chart's default value set, not an installation, so it yields no instance on AXIS 3. 🚨 THAT IS WHAT MAKES THIS A PUBLICATION AND NOT A SOURCE THIS LANE MUST PROTECT, and it is also the thing most likely to stop being true: an overlay that ever pins one of these repositories is running our images from a store nothing of ours retains and this lane cannot lock, so `classify_foreign_registries` REDS on it by name rather than letting it pass as a third-party pin. The chart defaults themselves are MeshWeaver#4323's open half — an unconfigured install pulls the platform from here, at a moving tag.",
+        "retention": {
+          "rule": "operator-retained",
+          "operator": "GitHub (GitHub Packages / ghcr.io)",
+          "reason": "Measured 2026-09-15, read-only: our images ARE stored here and their retention is GITHUB'S, not this fleet's. Nothing of ours deletes from ghcr.io — the deleter sweep over `deploy/` and `.github/` finds no deletion against this host, and CD only ever PUSHES — and nothing of ours CAN lock here: `changeableAttributes.deleteEnabled` is an ACR feature. 🚨 THE DIFFERENCE FROM `nothing-deletes` IS THAT WE CANNOT SHOW IT, and that is why this rule exists rather than reusing that one. A `nothing-deletes` enumeration is held to a COMMITTED CHART the gate re-derives the deleters from, plus the ACL that carries the `delete` action; GitHub Packages is rendered by no file of ours and its ACL is not ours to read, so an enumeration here would be a verdict about our artifacts resting on nothing — the same false reassurance `not-ours` refuses one field along. What IS established: this is a MIRROR, never an origin. Every reference is copied by digest from `meshweaver.azurecr.io` (main-cd Phase B/D and release.yml's mirror step, all `docker buildx imagetools create`, never a second build), the ACR copy is the one this lane locks, and `cr.meshweaver.cloud` carries the same set for the installations that actually run from a registry. So a GHCR retention event loses a MIRROR of an image that exists, protected, in two other registries. The consumer that would notice is MeshWeaver.Plugins, which pins `ghcr.io/systemorph/mw-plugin-test:latest` as MW_TEST_IMAGE.",
+          "cleanupAuthorized": false
+        }
+      },
       "retention": {
         "rule": "not-ours",
         "statedAt": "2026-09-14",
+        "restatedAt": "2026-09-15",
         "issue": "MeshWeaver#4230",
-        "reason": "Nothing this fleet produces is stored on ghcr.io, so there is nothing here to retain or to protect. The two images it serves us are the BOOTSTRAP pair — distribution and docker_auth — and they are pulled from outside precisely because a registry cannot serve the image that boots it. Their retention is GitHub's."
+        "reason": "Scoped, like the `disposition` beside it, to what this fleet PULLS from ghcr.io — the BOOTSTRAP set: `distribution` and `oras`, images we run and do not produce, pulled from outside precisely because a registry cannot serve the image that boots it. Their retention is GitHub's and they were never ours to protect. 🚨 THIS FIELD SAID `Nothing this fleet produces is stored on ghcr.io` UNTIL 2026-09-15 AND THAT WAS FALSE (MeshWeaver#4323): `main-cd.yml` pushed twelve tags across three of our OWN repositories here on every promoting run — measured in the job log of run 34918214035 at 02:27Z that day — while `release.yml`, the lane the issue named, had never run at all (0 runs). What this fleet produces and stores here is declared in `publishes` above, and `--check-registry-retention` now DERIVES that set from the publishing workflows, so neither field can go false again without reddening."
+      }
+    },
+    "memexaksacrqoqqdqnhlaksg.azurecr.io": {
+      "disposition": "fleet-unlockable",
+      "reason": "PartnerRe's estate registry — the ACR attached to the `memexaks-cluster` in the `PartnerRe Memex` subscription (17b34cbc-…, resource group memex-aks-rg, swedencentral, Premium), pinned by Systemorph/PartnerRe.Memex deployments/aks/memex/values.memex.yaml for the LIVE control instance at partnerre.meshweaver.cloud. It serves OUR images — memex-portal-ai and memex-migration at 3.0.0-ci.8622, mirrored there — and this lane cannot lock them: its OIDC credential addresses meshweaver.azurecr.io in the Systemorph subscription and nothing else, so `az acr repository update --delete-enabled false` has no reach here at all. 🚨 THAT IS NOT A CLAIM THAT ANYTHING PROTECTS THEM: the out-of-scope report line says UNVERIFIED and must keep saying it, and the `retention` block below says the answer is PartnerRe's estate to give, not ours to state. `third-party` would be the false half of the same sentence — the images ARE ours — and it also REDS the lane, because an installation whose every pin is third-party is one whose running set no registry holding our images accounts for.",
+      "declaredAt": "2026-09-15",
+      "issue": "MeshWeaver#3438",
+      "retention": {
+        "rule": "out-of-estate",
+        "estate": "The `PartnerRe Memex` subscription (17b34cbc-7848-424d-a819-c47934f243ea), operated for PartnerRe under Systemorph/PartnerRe.Memex — deployments/aks/envs.json is where that estate's registry, identities and hand-over state are recorded, and the decision about what is kept or deleted in this registry belongs there.",
+        "cleanupAuthorized": false,
+        "statedAt": "2026-09-15",
+        "issue": "MeshWeaver#3438",
+        "design": "Doc/Architecture/FleetRegistryRetention",
+        "reason": "🚨 EVERY OTHER RULE WOULD HAVE BEEN A FALSE SENTENCE ABOUT THIS HOST, which is why the vocabulary grew a fourth word rather than this entry taking the nearest fit. `not-ours` is false (the images are ours, mirrored from the platform's own build). `nothing-deletes` is held to a committed CHART this gate re-derives the deleters FROM, plus the ACL carrying the `delete` action — an ACR renders neither, and nothing in this repository could re-derive a word of it. `derived-protected-set` asserts that a cleanup exists there which deletes only the complement of a derived set, and nobody here is in a position to say that. So this record states the fact instead: the registry is in an estate outside this fleet's reach, what deletes from it is decided there, this record measures nothing about it, and no cleanup is authorized here. 🚨 FOR THE RECORD AND NOT AS A CLAIM THIS GATE RE-DERIVES: read-only from a maintainer credential on 2026-09-15, that registry carried ZERO `az acr task`s and its untagged-manifest retention policy read `status: disabled` — so nothing deletes there today either. It is written here as evidence for whoever asks, never as a measurement this lane repeats, because it cannot: the nightly run has no credential for that subscription. 🚨 AND THIS RULE IS NOT A TRAPDOOR OUT OF `nothing-deletes`: `--check-registry-retention` REFUSES it for any host this fleet's own publishing lanes push to, derived from main-cd.yml and release.yml rather than read from this file — which is exactly `cr.meshweaver.cloud` and `meshweaver.azurecr.io`, the two hosts where it would have mattered — and refuses it outright on a run where that derivation cannot be trusted."
       }
     }
   },
@@ -162,6 +308,14 @@
       "reason": "Declared by deployments/aks/pearl/values.pearl.public.yaml and never installed — pearl.meshweaver.cloud has no DNS record (measured 2026-09-12). Memex#219 records the same state: 'live on pearl, which has never been installed and would have seeded from an unpullable tag'. Its overlay pins are still protected on AXIS 2; what is not expected is an answer from a portal that was never stood up. Delete this entry the day it is provisioned.",
       "declaredAt": "2026-09-12",
       "issue": "Memex#219"
+    },
+    {
+      "id": "partnerre",
+      "repo": "Systemorph/PartnerRe.Memex",
+      "state": "not-installed",
+      "reason": "Declared by Systemorph/PartnerRe.Memex deployments/aks/partnerre/values.partnerre.yaml — PartnerRe's control instance in PARTNERRE'S OWN estate, and the overlay is the hand-over template rather than a deployed one: `ingress.host`, `image.registry`, `image.tag`, the Key Vault name, the storage classes and every Entra id still read `TODO`, and that file's own header says the lane refuses to deploy while one remains. So it has no ingress host, which is what the 2026-09-15 runs reported as `its overlay declares the installation but no ingress host, so it cannot be asked what it is running` — a correct refusal about an installation that does not exist yet, and this line is the answer to it. 🚨 IT EXEMPTS ONLY THIS ONE: `repo` is named, so it cannot reach an installation of the same name in another repository. Delete this entry the day PartnerRe's estate is stood up and the overlay carries a real host — an installation that is live and silent must go back to being a blocker, not stay filed under a declaration written while it was a template.",
+      "declaredAt": "2026-09-15",
+      "issue": "MeshWeaver#3438"
     }
   ]
 }

@@ -184,6 +184,51 @@ public static class NotificationService
         string? icon = null,
         string? recipient = null,
         string? identity = null)
+        => CreateLocalizableNotification(
+            nodeFactory, mainNodePath,
+            LocalizableText.Verbatim(title), LocalizableText.Verbatim(message), type,
+            targetNodePath, createdBy, icon, recipient, identity);
+
+    /// <summary>
+    /// <see cref="CreateNotification"/> for text the platform OWNS: the title and body carry their
+    /// catalog KEY and arguments, and the bell resolves them in the language of whoever reads the
+    /// row (<c>NotificationLocalizationExtensions.LocalizedTitle</c>).
+    ///
+    /// <para>🚨 <b>This is a separate name, not an overload, and that is deliberate.</b> An
+    /// overload of <c>CreateNotification</c> would make every unqualified
+    /// <c>&lt;see cref="NotificationService.CreateNotification"/&gt;</c> in a dependent ambiguous —
+    /// <c>CS0419</c>, an ERROR under <c>-warnaserror</c>, in repositories this one cannot see and
+    /// in in-mesh source no compiler here type-checks (break shape 3 in
+    /// Doc/Architecture/CrossRepoPairGate; it reddened MeshWeaver.SocialMedia on 2026-09-04). And
+    /// CHANGING <c>CreateNotification</c>'s parameter types would be binary-breaking for every
+    /// module bundle already published against the old signature — the
+    /// <c>MissingMethodException</c> shape <c>scripts/check-record-signatures.py</c> exists for.
+    /// Both entry points reach this one implementation, so there is nothing to keep in step.</para>
+    /// </summary>
+    /// <param name="nodeFactory">The mesh service performing the write.</param>
+    /// <param name="mainNodePath">The ENTITY the notification is about (the click target's default).</param>
+    /// <param name="title">Notification title — <see cref="LocalizableText.Keyed"/> for text the
+    /// reader should see in their own language, <see cref="LocalizableText.Verbatim"/> for upstream
+    /// output no catalog can carry.</param>
+    /// <param name="message">Notification body, same shape as <paramref name="title"/>.</param>
+    /// <param name="type">Notification type, which drives the preference category and the icon.</param>
+    /// <param name="targetNodePath">Explicit click target; defaults to <paramref name="mainNodePath"/>.</param>
+    /// <param name="createdBy">User ObjectId of whoever caused the notification.</param>
+    /// <param name="icon">Optional icon URL override.</param>
+    /// <param name="recipient">The addressee — a user id, or <see cref="PlatformAddressee"/>.</param>
+    /// <param name="identity">The dedupe identity — see <see cref="CreateNotification"/>.</param>
+    /// <returns>A cold observable emitting the created node.</returns>
+    public static IObservable<MeshNode> CreateLocalizableNotification(
+        IMeshService nodeFactory,
+        string mainNodePath,
+        LocalizableText title,
+        LocalizableText message,
+        NotificationType type,
+        string? targetNodePath = null,
+        string? createdBy = null,
+        string? icon = null,
+        string? recipient = null,
+        string? identity = null)
     {
         // The two concepts compose: `recipient` decides WHERE the notification is delivered, and
         // `identity` decides WHETHER a repeat is a new row or the same one refreshed.
@@ -207,8 +252,14 @@ public static class NotificationService
         var notification = new Notification
         {
             Id = notificationId,
-            Title = title,
-            Message = message,
+            // The rendered English stays on Title/Message as the FALLBACK; the key and its
+            // arguments ride alongside so the reader resolves in THEIR language (#4373).
+            Title = title.English,
+            TitleKey = title.Key,
+            TitleArgs = title.PersistedArgs(),
+            Message = message.English,
+            MessageKey = message.Key,
+            MessageArgs = message.PersistedArgs(),
             Icon = icon,
             Recipient = addressee,
             TargetNodePath = targetNodePath ?? mainNodePath,
@@ -220,7 +271,9 @@ public static class NotificationService
 
         var node = new MeshNode(notificationId, parentPath)
         {
-            Name = title,
+            // The node NAME is an addressing/diagnostic surface, not a rendered one — it stays
+            // English, exactly as the path and the nodeType do.
+            Name = title.English,
             NodeType = NotificationNodeType.NodeType,
             State = MeshNodeState.Active,
             MainNode = addressee,
@@ -275,6 +328,55 @@ public static class NotificationService
         string? icon = null,
         string? emailCtaLabel = null,
         string? emailFooterNote = null)
+        => DispatchLocalizable(
+            hub, recipient, mainNodePath,
+            LocalizableText.Verbatim(title), LocalizableText.Verbatim(message), type,
+            targetNodePath, createdBy, icon,
+            emailCtaLabel is null ? null : LocalizableText.Verbatim(emailCtaLabel),
+            emailFooterNote is null ? null : LocalizableText.Verbatim(emailFooterNote));
+
+    /// <summary>
+    /// <see cref="Dispatch"/> for text the platform OWNS — the preference-aware entry point every
+    /// emitter in this repository uses. The two channels resolve the language DIFFERENTLY, and
+    /// each way is the only one that is correct for its channel:
+    /// <list type="bullet">
+    ///   <item><b>In-app</b> — the bell row is a durable node several people may read, so the KEY
+    ///     and its arguments are persisted and the bell resolves per viewer at render time.</item>
+    ///   <item><b>Email</b> — a message has exactly ONE reader and it cannot be re-rendered, so it
+    ///     is resolved HERE, off that person's own <c>User.Locale</c>. That is not the write-time
+    ///     resolution #4373 forbids: the viewer is known and there is only one.</item>
+    /// </list>
+    ///
+    /// <para>A separate name rather than an overload, for the reasons on
+    /// <see cref="CreateLocalizableNotification"/>: an overload breaks a dependent's unqualified
+    /// <c>&lt;see cref&gt;</c>, and a changed signature breaks an already-published module bundle
+    /// binding the old one.</para>
+    /// </summary>
+    /// <param name="hub">The hub the dispatch runs on.</param>
+    /// <param name="recipient">The addressee — a user id, or null for the platform operators' bell.</param>
+    /// <param name="mainNodePath">The ENTITY the notification is about.</param>
+    /// <param name="title">Notification title — <see cref="LocalizableText.Keyed"/>, or
+    /// <see cref="LocalizableText.Verbatim"/> for upstream output.</param>
+    /// <param name="message">Notification body, same shape as <paramref name="title"/>.</param>
+    /// <param name="type">Notification type, which drives the preference category and the icon.</param>
+    /// <param name="targetNodePath">Explicit click target.</param>
+    /// <param name="createdBy">User ObjectId of whoever caused the notification.</param>
+    /// <param name="icon">Optional icon URL override.</param>
+    /// <param name="emailCtaLabel">Label for the email's call-to-action button.</param>
+    /// <param name="emailFooterNote">Footer note for the email — a first-contact hint, when the caller owns one.</param>
+    /// <returns>A cold observable; subscribe to drive.</returns>
+    public static IObservable<Unit> DispatchLocalizable(
+        IMessageHub hub,
+        string? recipient,
+        string mainNodePath,
+        LocalizableText title,
+        LocalizableText message,
+        NotificationType type,
+        string? targetNodePath = null,
+        string? createdBy = null,
+        string? icon = null,
+        LocalizableText? emailCtaLabel = null,
+        LocalizableText? emailFooterNote = null)
     {
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
@@ -306,7 +408,7 @@ public static class NotificationService
                 if (settings.InApp(category))
                     // Passed explicitly, so the compatibility fallback in CreateNotification (derive
                     // the addressee from the main node path) is never the thing that decides here.
-                    ops.Add(CreateNotification(
+                    ops.Add(CreateLocalizableNotification(
                             meshService, mainNodePath, title, message, type, targetNodePath, createdBy, icon,
                             recipient: addressee)
                         .Select(_ => Unit.Default)
@@ -349,21 +451,39 @@ public static class NotificationService
     /// no email on file or no <see cref="IEmailSender"/> is registered.
     /// </summary>
     private static IObservable<bool> MaybeSendEmail(
-        IMessageHub hub, string recipient, string title, string message, string? targetNodePath,
-        string? ctaLabel, string? footerNote)
+        IMessageHub hub, string recipient, LocalizableText title, LocalizableText message,
+        string? targetNodePath, LocalizableText? ctaLabel, LocalizableText? footerNote)
     {
         return HasRoutingRules(hub, recipient).SelectMany(hasRules =>
         {
             if (hasRules)
                 return Observable.Return(false);
             return hub.GetMeshNode(recipient, LookupTimeout)
-                .Select(n => n?.ContentAs<User>(hub.JsonSerializerOptions)?.Email)
-                .SelectMany(email => string.IsNullOrWhiteSpace(email)
-                    ? Observable.Return(false)
-                    : hub.SendEmail(email!, title, BuildEmailHtml(hub, title, message, targetNodePath, ctaLabel, footerNote)))
+                .Select(n => n?.ContentAs<User>(hub.JsonSerializerOptions))
+                .SelectMany(user =>
+                {
+                    var email = user?.Email;
+                    if (string.IsNullOrWhiteSpace(email))
+                        return Observable.Return(false);
+                    // 🚨 The ONE place a notification's language is decided at WRITE time, and the
+                    // only place where that is right: an email has exactly one reader, we know who
+                    // they are, and it cannot be re-rendered later for a second viewer. Resolved
+                    // EXPLICITLY off their stored profile locale — never CultureInfo.CurrentUICulture,
+                    // which on a server is the container's culture and the same for everyone.
+                    var locale = Locales.Resolve(user!.Locale);
+                    var subject = title.Localize(locale);
+                    return hub.SendEmail(email!, subject, BuildEmailHtml(
+                        hub, subject, message.Localize(locale), targetNodePath,
+                        Rendered(ctaLabel, locale), Rendered(footerNote, locale), locale));
+                })
                 .Catch(Observable.Return(false));
         });
     }
+
+    /// <summary>An optional piece of email copy in the recipient's language; blank reads as absent,
+    /// which is what lets <see cref="BuildEmailHtml"/> keep its "no label / no footer" branches.</summary>
+    private static string? Rendered(LocalizableText? text, string? locale)
+        => text?.Localize(locale) is { Length: > 0 } rendered ? rendered : null;
 
     /// <summary>True when the recipient authored at least one AI routing rule (defer email to triage).</summary>
     private static IObservable<bool> HasRoutingRules(IMessageHub hub, string recipient) =>
@@ -379,7 +499,7 @@ public static class NotificationService
 
     private static string BuildEmailHtml(
         IMessageHub hub, string title, string message, string? targetNodePath,
-        string? ctaLabel, string? footerNote)
+        string? ctaLabel, string? footerNote, string? locale)
     {
         var baseUrl = ResolveBaseUrl(hub);
         var ctaUrl = (!string.IsNullOrEmpty(baseUrl) && !string.IsNullOrWhiteSpace(targetNodePath))
@@ -392,9 +512,15 @@ public static class NotificationService
         return EmailTemplate.Build(
             heading: title,
             paragraphs: string.IsNullOrEmpty(message) ? [] : [message],
-            ctaLabel: ctaUrl is null ? null : (string.IsNullOrWhiteSpace(ctaLabel) ? "Open" : ctaLabel),
+            // The default label is the recipient's word for "Open", not the server's.
+            ctaLabel: ctaUrl is null
+                ? null
+                : (string.IsNullOrWhiteSpace(ctaLabel)
+                    ? LocalizationCatalog.Get("notification.email.open", locale)
+                    : ctaLabel),
             ctaUrl: ctaUrl,
-            footerNote: footerNote);
+            footerNote: footerNote,
+            locale: locale);
     }
 
     private static string? ResolveBaseUrl(IMessageHub hub)

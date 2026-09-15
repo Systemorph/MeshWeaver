@@ -1,7 +1,10 @@
 ---
 Name: Reading a Silo Eviction
 Category: Architecture
-Description: "I have been told I am dead" with a heartbeat newer than the suspect votes looks like a false-positive kill and usually is not. The two readings that make a correct eviction look wrong, the control arm that separates them, and the measured 2026-09-02 case.
+Description: >-
+  "I have been told I am dead" with a heartbeat newer than the suspect votes looks like a
+  false-positive kill and usually is not. The two readings that make a correct eviction look wrong,
+  the control arm that separates them, and the measured 2026-09-02 case.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3l2-6 3 12 2.5-8 1.5 4h6"/><circle cx="19" cy="19" r="3"/><path d="M17.2 16.8 20.8 21.2"/></svg>
 ---
 

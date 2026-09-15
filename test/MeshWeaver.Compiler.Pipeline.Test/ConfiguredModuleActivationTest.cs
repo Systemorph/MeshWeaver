@@ -550,7 +550,7 @@ public class ConfiguredModuleActivationTest
 
         // The mesh's set activates the landed generation — so the adoption below has something to
         // be wrong about, which is the point: it must record what RUNS, not what the set names.
-        var proposed = await deployment.Landing.ProposeModuleSet().Timeout(TestTimeouts.Convergence).Await();
+        var proposed = await deployment.Landing.ProposeModuleSet().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Equal(asked, proposed!.Generations[deployment.Module]);
 
         var (services, _) = Boot(deployment);
@@ -1159,7 +1159,7 @@ public class ConfiguredModuleActivationTest
         await deployment.Landing.LandModule(
                 deployment.Module, [(deployment.Module + ".dll", bytes)],
                 frameworkMvid: frameworkMvid, packagePath: PackagePath, version: version)
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         return Entry(deployment).Directory!;
     }
 
@@ -1172,7 +1172,7 @@ public class ConfiguredModuleActivationTest
         var outcome = await deployment.Landing.ShelveModule(
                 deployment.Module, [(deployment.Module + ".dll", bytes)],
                 frameworkMvid: frameworkMvid, packagePath: PackagePath, version: version)
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.True(outcome.Held, "the shelved generation was expected to be unloadable here");
         return Entry(deployment).Directory!;
     }

@@ -138,7 +138,8 @@ public class ACopyThatCannotCompleteSaysSoTest(ITestOutputHelper output) : Monol
                 {
                     Name = path, NodeType = "Markdown", State = MeshNodeState.Active,
                 })
-                .Should().Within(Budget).Emit($"the admin owns {TestPartition}");
+                .Should().Within(Budget).Emit($"the admin owns {TestPartition}",
+                    cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -155,13 +156,13 @@ public class ACopyThatCannotCompleteSaysSoTest(ITestOutputHelper output) : Monol
     }
 
     private Task<MeshNode?> Read(string path, string because) =>
-        ReadNode(path).Should().Within(Budget).Emit(because);
+        ReadNode(path).Should().Within(Budget).Emit(because, cancellationToken: TestContext.Current.CancellationToken);
 
     private Task<NodeCopyOutcome> CopyOutcome(
         string sourcePath, string targetNamespace, string because) =>
         NodeCopyHelper
             .CopyNodeTreeOutcome(MeshQuery, NodeFactory, Mesh, sourcePath, targetNamespace, force: false)
-            .Should().Within(Budget).Emit(because);
+            .Should().Within(Budget).Emit(because, cancellationToken: TestContext.Current.CancellationToken);
 
     /// <summary>
     /// The premise <see cref="AnUnreadableDescendantRefusesTheCopyInsteadOfHalfLandingIt"/> rests

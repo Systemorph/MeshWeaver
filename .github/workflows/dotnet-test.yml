@@ -2055,6 +2055,16 @@ jobs:
     - name: "NodeType import-scope parser can fail (self-test)"
       run: python3 .github/scripts/compile-check.py --self-test
 
+    # 🚨 The module-pack lane's static-asset assertion (#2384). It replaced
+    # `staticAssets | length > 0`, which was blind twice over: OpenStreetMap's 7 vendored Leaflet
+    # files satisfied `7 > 0` while the one file its view imports was missing, and AppleMaps did not
+    # meet the guard's `if` at all. Every map in every container-built view pack was blank for three
+    # weeks and nothing in CI could have said so. The script runs in every satellite's pack lane, so
+    # its 14 cases — 6 that must FAIL the gate, 8 that must PASS it — are proven here, where core
+    # owns it.
+    - name: "A bundle declaring only SOME of its static assets is caught (self-test)"
+      run: python3 .github/scripts/check-bundle-static-assets.py --self-test
+
     # The gate host every node-repo bake and gate RUNS AS since MeshWeaver#3022 — the portal's /app
     # with the tester CLI beside it (compose-gate-host.sh, fetched by the reusable lanes at their
     # platform-ref). Its rules are load-bearing (the portal's bytes win, the tester's deps.json and
@@ -2151,6 +2161,20 @@ jobs:
       run: python3 .github/scripts/check-combo-verify.py --self-test
     - name: "The combo-verify preflight names what to provision, and the verdict merge loses nothing"
       run: python3 .github/scripts/check-combo-verify.py --root .
+
+    # 🚨 WHICH instances that lane covers is DERIVED from the fleet's deployment overlays (#3848),
+    # not listed in a repository variable — the pin #3842 rules out, and one that was already an
+    # installation short of the fleet on the day it was specified. The derivation needs the
+    # fleet-reader token, so it cannot run on a pull request; what runs here is its falsification.
+    # Every arm that must REFUSE is driven: an unreadable repository (NOBODY LOOKED is not a
+    # measured zero), an ambiguous or duplicated declaration, a live installation with no ingress
+    # host, a stale instances.json entry, and — the one the whole lane exists for — a derivation
+    # that would come back EMPTY, because an empty matrix skips the verify job and GitHub paints a
+    # skipped job the same colour as a passed one. The overlay extractor is driven over two known
+    # fixtures and then BLINDED, so "the extractor stopped matching" can never arrive wearing "the
+    # fleet declares no installations".
+    - name: "The combo-verification roster derivation refuses an empty fleet (self-test)"
+      run: python3 .github/scripts/derive-combo-instances.py --self-test
 
     # 🚨 A Dependabot run resolves `secrets.X` against a SECOND, SEPARATE store (Settings → Secrets
     # and variables → **Dependabot**), which is a PARTIAL mirror of the Actions one — and there is no
@@ -2389,6 +2413,18 @@ jobs:
     - name: "Execute compose-sealed-modules.sh against a republishing registry"
       run: python3 .github/scripts/test-sealed-module-compose.py
 
+    # The lanes that run a SATELLITE's suites pick the test runner and the cwd `dotnet test` runs
+    # from, and the platform they compile against pins the xunit.v3 version (#4414): xunit.v3 4.x
+    # refuses VSTest on .NET 10, so a caller with no global.json must still run under
+    # Microsoft.Testing.Platform, FROM the platform checkout. Both harnesses EXTRACT the real code —
+    # module-pack's bash at both call sites (run under bash, `dotnet` stubbed), the canary's
+    # embedded Python — and fail red when they cannot find it. The canary harness also carries the
+    # evidence comparator's cases, which no workflow ran until now.
+    - name: "Execute module-pack's test-runner selection against temp checkouts"
+      run: python3 .github/scripts/test-module-pack-test-runner.py
+    - name: "Execute the platform canary's evidence and runner code"
+      run: python3 .github/scripts/test-platform-canary.py
+
     # The WRITER side of the same window (#3461). `prebuilt-bundles/<identity>/<source>/` has
     # several publishers — core CD's `plugins-bake`, the satellite's own `publish-bake`, and (four
     # times in one measured day, more often than the cross-lane case) two concurrent runs of ONE of
@@ -2426,7 +2462,7 @@ jobs:
     - name: "Execute the module publication lane against a stub registry"
       run: python3 .github/scripts/test-module-publication.py
 
-    # The gate and publish-bake lanes compose every external module into /ext/<Name>/ for the
+    # The gate and publish-bake lanes compose every external module into /ext/modules/<Name>/ for the
     # tester container, and until #3514 they copied `meshweaver/modules/` alone — leaving a module
     # that LOADS and then 404s every static asset it ships (`meshweaver/moduleassets/`), announced
     # in one LogDebug line. Latent here (the bake is mesh-free, the gate runs no browser) and fine
@@ -2434,6 +2470,11 @@ jobs:
     # browser-driven mesh e2e, rendered a bare Code card where the workbench belongs for three days.
     # This EXTRACTS both lanes' step by `id:` and executes it against real bundle shapes, reading
     # the verdict off the landed bytes — with two arms that mutate the real step and must go RED.
+    # Since #4126 the same harness also covers the THIRD bundle section — a module's RID-specific
+    # NATIVE payloads (`meshweaver/modulenatives/`), which must land at the exact four segments
+    # `ModuleNativeAssets` probes, under a folder whose PARENT is named `modules`. Both properties
+    # are asserted, and both have their own falsification arm: the drop has no symptom short of a
+    # DllNotFoundException at the first P/Invoke.
     - name: "Execute the lanes' external-module landing against real bundle shapes"
       run: python3 .github/scripts/test-module-asset-landing.py
 

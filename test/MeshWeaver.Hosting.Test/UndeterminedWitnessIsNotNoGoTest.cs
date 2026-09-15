@@ -228,14 +228,15 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
     };
 
     /// <summary>Puts bytes in the store under the same key the probe looks the type up by.</summary>
-    private Task StageBytesOnTheShare(string typePath) =>
-        Store.Put(typePath, StagedVersion, [0x4D, 0x5A, 0x00, 0x00], null).Await();
+    private Task StageBytesOnTheShare(string typePath, CancellationToken cancellationToken) =>
+        Store.Put(typePath, StagedVersion, [0x4D, 0x5A, 0x00, 0x00], null).Await(cancellationToken);
 
     /// <summary>
     /// Writes the DURABLE build root. Present in every case so the arms differ only in whether the
     /// witness can be READ — never in whether there is something to read.
     /// </summary>
-    private Task WriteTheDurableBuildRoot(ImmutableDictionary<string, BuildGo>? ready)
+    private Task WriteTheDurableBuildRoot(
+        ImmutableDictionary<string, BuildGo>? ready, CancellationToken cancellationToken)
     {
         // Through the INNER adapter: the decorator only fails the READ, but resolving the write off
         // the decorator would still be the decorator's job to forward, and going straight to what it
@@ -250,7 +251,7 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
                 Ready = ready,
             },
         };
-        return Witness.Write(root, Mesh.JsonSerializerOptions).Await();
+        return Witness.Write(root, Mesh.JsonSerializerOptions).Await(cancellationToken);
     }
 
     private static ImmutableDictionary<string, BuildGo> Go(params string[] fingerprints) =>
@@ -262,7 +263,9 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
                     Detail: "baked by a peer process")));
 
     private Task<IList<PreWarmOutcome>> DriveTheDoor(
-        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions, ILogger? logger = null) =>
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        ILogger? logger = null,
+        CancellationToken cancellationToken = default) =>
         BuildProtocolDriver.WhenTheSubscriptionDoorIsShut(
                 Observable.Throw<PreWarmOutcome>(TheSubscriptionDoorIsShut()),
                 Mesh,
@@ -271,7 +274,7 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
                 Store,
                 logger)
             .ToList()
-            .Await();
+            .Await(cancellationToken);
 
     // ── the grant ───────────────────────────────────────────────────────────────────────────────
 
@@ -288,12 +291,13 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
     [Fact(Timeout = 60_000)]
     public async Task AnUnreadableWitness_WithTheShareAlreadyBaked_GrantsReadiness()
     {
-        await WriteTheDurableBuildRoot(Go(MyFingerprint));
-        await StageBytesOnTheShare(BakedType);
+        await WriteTheDurableBuildRoot(Go(MyFingerprint), TestContext.Current.CancellationToken);
+        await StageBytesOnTheShare(BakedType, TestContext.Current.CancellationToken);
 
         var outcomes = await DriveTheDoor(
             ImmutableDictionary<string, NodeTypeDefinition?>.Empty
-                .Add(BakedType, RecordedAgainstThisFramework()));
+                .Add(BakedType, RecordedAgainstThisFramework()),
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Witness.Served.Should().BeTrue(
             "the fault must actually have been served — a decorator shadowed by a later "
@@ -320,15 +324,16 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
     [Fact(Timeout = 60_000)]
     public async Task AnUnreadableWitness_WithAPreviouslyHealthyTypeStillPending_RefusesReadiness()
     {
-        await WriteTheDurableBuildRoot(Go(MyFingerprint));
-        await StageBytesOnTheShare(BakedType);
+        await WriteTheDurableBuildRoot(Go(MyFingerprint), TestContext.Current.CancellationToken);
+        await StageBytesOnTheShare(BakedType, TestContext.Current.CancellationToken);
         // PendingType is recorded against this framework but its bytes were never staged, so the
         // store answers a miss and the probe reports BytesMissing — needs-bake AND was-healthy.
 
         var refuse = () => DriveTheDoor(
             ImmutableDictionary<string, NodeTypeDefinition?>.Empty
                 .Add(BakedType, RecordedAgainstThisFramework())
-                .Add(PendingType, RecordedAgainstThisFramework()));
+                .Add(PendingType, RecordedAgainstThisFramework()),
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var thrown = await refuse.Should().ThrowAsync<BuildCoordinationUnreachableException>(
             "a pod whose own share is short of a previously-healthy type, with nobody reachable to "
@@ -350,13 +355,14 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
     [Fact(Timeout = 60_000)]
     public async Task AnUnreadableWitness_IsNeverReportedAsAWitnessThatSaidNoGo()
     {
-        await WriteTheDurableBuildRoot(Go(MyFingerprint));
+        await WriteTheDurableBuildRoot(Go(MyFingerprint), TestContext.Current.CancellationToken);
         var recorder = new RecordingLogger();
 
         var refuse = () => DriveTheDoor(
             ImmutableDictionary<string, NodeTypeDefinition?>.Empty
                 .Add(PendingType, RecordedAgainstThisFramework()),
-            recorder);
+            recorder,
+            TestContext.Current.CancellationToken);
         await refuse.Should().ThrowAsync<BuildCoordinationUnreachableException>();
 
         recorder.Entries.Should().Contain(
@@ -385,9 +391,9 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
     [Fact(Timeout = 60_000)]
     public async Task AFailedRead_ClassifiesAsUndetermined_NeverAsNoGo()
     {
-        await WriteTheDurableBuildRoot(Go(MyFingerprint));
+        await WriteTheDurableBuildRoot(Go(MyFingerprint), TestContext.Current.CancellationToken);
 
-        var reading = await Mesh.ReadBuildGoReading(MyFingerprint).Await();
+        var reading = await Mesh.ReadBuildGoReading(MyFingerprint).Await(TestContext.Current.CancellationToken);
 
         Witness.Served.Should().BeTrue("the injected fault must actually have been served");
         reading.Witness.Should().Be(BuildGoWitness.Undetermined,

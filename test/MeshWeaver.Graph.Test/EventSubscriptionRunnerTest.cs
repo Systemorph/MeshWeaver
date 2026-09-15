@@ -81,7 +81,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             Role = "Editor",
             Pin = true,
         };
-        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // The invitee onboards — their User node is created (as onboarding does). This publishes a
         // Created event the runner observes.
@@ -92,7 +92,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 NodeType = "User",
                 Name = "Newcomer",
                 Content = new User { Email = InviteeEmail, FullName = "Newcomer" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
         }
 
         // Wait for the subscription to reach a TERMINAL state first (race-free — the node already
@@ -135,7 +135,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 NodeType = "Group",
                 Name = "Team",
                 Content = new AccessObject { Description = "Test group" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // Start the runner BEFORE the triggering write so the live change-feed path is armed.
         using var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService, runnerLogger);
@@ -153,7 +153,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             ContinuationType = EventContinuationType.AddToGroup,
             TargetPath = groupPath,
         };
-        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // The invitee onboards — their User node is created.
         using (accessService.ImpersonateAsSystem())
@@ -163,7 +163,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 NodeType = "User",
                 Name = "Newcomer",
                 Content = new User { Email = InviteeEmail, FullName = "Newcomer" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
         }
 
         // The subscription reaches its terminal state — Fired.
@@ -208,7 +208,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 NodeType = "Group",
                 Name = "Team2",
                 Content = new AccessObject { Description = "Test group" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // The runner's ONLY live trigger is a SilentChangeFeed — it will never learn of the user create
         // from the feed. If the subscription fires, it can ONLY be via the live trigger-node reconcile.
@@ -225,7 +225,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             ContinuationType = EventContinuationType.AddToGroup,
             TargetPath = groupPath,
         };
-        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // The invitee onboards AFTER the subscription is pending — the runner already reconciled (no user
         // then) and the feed stays silent. Only the live trigger-node query can catch this.
@@ -236,7 +236,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 NodeType = "User",
                 Name = "Newcomer",
                 Content = new User { Email = InviteeEmail, FullName = "Newcomer" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
         }
 
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
@@ -280,7 +280,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 NodeType = "Group",
                 Name = "Team3",
                 Content = new AccessObject { Description = "Test group" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // BOTH the subscription AND the matching User already exist BEFORE the runner starts.
         var subscription = new EventSubscription
@@ -293,7 +293,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             ContinuationType = EventContinuationType.AddToGroup,
             TargetPath = groupPath,
         };
-        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
         using (accessService.ImpersonateAsSystem())
         {
             await meshService.CreateNode(new MeshNode(InviteeId)
@@ -301,7 +301,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 NodeType = "User",
                 Name = "Newcomer",
                 Content = new User { Email = InviteeEmail, FullName = "Newcomer" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
         }
 
         // Start the runner AFTER both exist, wired to a SILENT change feed — it can only fire via the
@@ -352,7 +352,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 NodeType = "Group",
                 Name = "Team4",
                 Content = new AccessObject { Description = "Test group" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var subscription = new EventSubscription
         {
@@ -364,7 +364,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             ContinuationType = EventContinuationType.AddToGroup,
             TargetPath = groupPath,
         };
-        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
         using (accessService.ImpersonateAsSystem())
         {
             await meshService.CreateNode(new MeshNode(InviteeId)
@@ -372,7 +372,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 NodeType = "User",
                 Name = "Newcomer",
                 Content = new User { Email = InviteeEmail, FullName = "Newcomer" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
         }
 
         // Every firing path is armed: the change feed IS live here (unlike the silent-feed tests), and
@@ -397,7 +397,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         // Observation window for a MUST-NOT-HAPPEN assertion: the duplicate fires this pins arrive within
         // ~50ms of the first, so the window can only ever hide the defect, never invent it. (Before the
         // fix this reports 3 fires; after it, 1.)
-        await Task.Delay(3.Seconds());
+        await Task.Delay(3.Seconds(), TestContext.Current.CancellationToken);
         Assert.True(fires.Count == 1,
             $"the subscription's continuation ran {fires.Count} times — one per firing path instead of once. "
             + $"Each extra run is an unobserved duplicate write that outlives the test:{Environment.NewLine}"
@@ -447,7 +447,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 NodeType = ScheduledActionNodeType.NodeType,
                 Name = "Legacy grant",
                 Content = legacy,
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
         }
 
         // Start the runner — its startup migration converts the legacy node into an EventSubscription.
@@ -476,7 +476,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 NodeType = "User",
                 Name = "Newcomer",
                 Content = new User { Email = InviteeEmail, FullName = "Newcomer" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
         }
 
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(legacyId))
@@ -506,7 +506,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             TargetPath = Space,
             Role = "Editor",
         };
-        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         using var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
             Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
@@ -540,7 +540,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
                 NodeType = "Watched",
                 Name = "Watched 1",
                 Content = new WatchedContent { Status = "Running" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // Fire when the watched node's Status reaches "Idle" (resting), granting the subject.
         var subscription = new EventSubscription
@@ -554,7 +554,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
             TargetPath = Space,
             Role = "Editor",
         };
-        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         using var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
             Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
@@ -564,7 +564,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         using (accessService.ImpersonateAsSystem())
             await Mesh.GetWorkspace().GetMeshNodeStream(watchId)
                 .Update(n => n with { Content = new WatchedContent { Status = "Idle" } })
-                .Timeout(30.Seconds()).Await();
+                .Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
 
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.Content as EventSubscription)

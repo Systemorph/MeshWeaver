@@ -68,7 +68,8 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
             Operation = NodeOperation.Update,
             Node = Page(id, MissingType),
             ExistingNode = Page(id, "Markdown"),
-        }).Should().Within(TestTimeouts.Quick).Emit("the guard must reach a verdict");
+        }).Should().Within(TestTimeouts.Quick).Emit("the guard must reach a verdict",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeFalse(
             "an update that RETYPES a node to something that resolves to nothing produces an "
@@ -93,7 +94,8 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
             Operation = NodeOperation.Update,
             Node = Page(id, MissingType),
             ExistingNode = Page(id, MissingType),
-        }).Should().Within(TestTimeouts.Quick).Emit("the guard must reach a verdict");
+        }).Should().Within(TestTimeouts.Quick).Emit("the guard must reach a verdict",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeTrue(
             "round-tripping the type a node ALREADY carries introduces nothing; refusing it would "
@@ -110,7 +112,8 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
             Operation = NodeOperation.Update,
             Node = Page(id, "Markdown"),
             ExistingNode = Page(id, MissingType),
-        }).Should().Within(TestTimeouts.Quick).Emit("the guard must reach a verdict");
+        }).Should().Within(TestTimeouts.Quick).Emit("the guard must reach a verdict",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeTrue(
             "naming a type that DOES resolve is the sanctioned repair for a mistyped node — the "
@@ -124,6 +127,7 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
     [Fact(Timeout = 60000)]
     public void TheGuard_IsWiredIntoTheLiveUpdatePipeline()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var validators = Mesh.ServiceProvider.GetServices<INodeValidator>().ToList();
         validators.OfType<DanglingNodeTypeValidator>().Should().ContainSingle(
             "AddGraph must register the guard, or IMeshService.UpdateNode runs without it");
@@ -141,14 +145,15 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
         var id = NewId();
         var path = $"{TestPartition}/{id}";
         await MeshService.CreateNode(Page(id, "Markdown")).Take(1)
-            .Should().Within(60.Seconds()).Emit("the node to retype must exist first");
+            .Should().Within(60.Seconds()).Emit("the node to retype must exist first",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         var live = await Mesh.GetWorkspace().GetMeshNodeStream(path)
-            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds()).Await();
+            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
 
         var failure = await Record.ExceptionAsync(() =>
             MeshService.UpdateNode(live with { NodeType = MissingType })
-                .Take(1).Timeout(60.Seconds()).Await());
+                .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken));
 
         failure.Should().BeOfType<InvalidOperationException>(
             "a refused NodeType is an integrity failure, not a permission one — mapping it to "
@@ -156,7 +161,7 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
         failure!.Message.Should().Contain(MissingType);
 
         var after = await Mesh.GetWorkspace().GetMeshNodeStream(path)
-            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds()).Await();
+            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
         after.NodeType.Should().Be("Markdown",
             "the refusal must leave the node as it was — a half-applied retype is the orphan "
             + "condition this guard exists to prevent");
@@ -170,7 +175,8 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
         var id = NewId();
         var path = $"{TestPartition}/{id}";
         await MeshService.CreateNode(Page(id, "Markdown")).Take(1)
-            .Should().Within(60.Seconds()).Emit("the node to retype must exist first");
+            .Should().Within(60.Seconds()).Emit("the node to retype must exist first",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         var response = await Upsert(Page(id, MissingType), allowUnresolvable: false);
 
@@ -182,7 +188,7 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
         response.Error.Should().Contain(MissingType);
 
         var after = await Mesh.GetWorkspace().GetMeshNodeStream(path)
-            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds()).Await();
+            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
         after.NodeType.Should().Be("Markdown");
     }
 
@@ -200,7 +206,8 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
         var id = NewId();
         var path = $"{TestPartition}/{id}";
         await MeshService.CreateNode(Page(id, "Markdown")).Take(1)
-            .Should().Within(60.Seconds()).Emit("the node to retype must exist first");
+            .Should().Within(60.Seconds()).Emit("the node to retype must exist first",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         var response = await Upsert(Page(id, MissingType), allowUnresolvable: true);
 
@@ -242,7 +249,7 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
                 }))
             .FirstAsync()
             .Select(d => d.Message)
-            .Timeout(90.Seconds()).Await();
+            .Timeout(90.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine(
             $"upsert allowUnresolvable={allowUnresolvable} success={response.Success} "
             + $"reason={response.RejectionReason} error={response.Error}");
