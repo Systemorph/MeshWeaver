@@ -148,8 +148,29 @@ def declared_assets(manifest: Path) -> list[str]:
         document = json.loads(manifest.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
         raise CannotReadManifest(f"{manifest}: {type(exc).__name__}: {exc}") from exc
-    module = document.get("module") or {}
-    return list(module.get("staticAssets") or [])
+
+    # 🚨 Parsing is not validating. `[]`, `{"module": []}` and a string `staticAssets` are all
+    # valid JSON, and each one raises AttributeError/TypeError out of the `.get`/`list` below —
+    # i.e. the crash this refusal exists to replace, one shape further in. Check the shape.
+    if not isinstance(document, dict):
+        raise CannotReadManifest(
+            f"{manifest}: the manifest's top level is {type(document).__name__}, not an object")
+    # Read each value BEFORE coercing it: `x or {}` silently rescues an empty list, so a
+    # `"module": []` would pass a check written after the coercion and fail one written before.
+    module = document.get("module")
+    if module is None:
+        module = {}
+    if not isinstance(module, dict):
+        raise CannotReadManifest(
+            f"{manifest}: 'module' is {type(module).__name__}, not an object")
+    assets = module.get("staticAssets")
+    if assets is None:
+        assets = []
+    if not isinstance(assets, list) or not all(isinstance(a, str) for a in assets):
+        raise CannotReadManifest(
+            f"{manifest}: 'module.staticAssets' is not a list of strings "
+            f"(got {type(assets).__name__})")
+    return list(assets)
 
 
 def check(module: str, project: Path, manifest: Path, *, out=sys.stdout) -> int:
@@ -317,7 +338,7 @@ def self_test() -> int:
     # ── the manifest READER, which the table above cannot reach ────────────────────────────
     # Every case above writes its manifest with this file's own helper, so none of them can
     # see how a manifest written by SOMEONE ELSE decodes. These two do.
-    for title, write, want_exit, needle in [
+    reader_cases = [
         ("a BOM-prefixed manifest (as .NET writes it) is read, not rejected",
          lambda path: path.write_bytes(
              b"\xef\xbb\xbf" + json.dumps({
@@ -328,7 +349,14 @@ def self_test() -> int:
         ("a manifest that is not JSON REFUSES by name instead of raising",
          lambda path: path.write_text("{ not json", encoding="utf-8"),
          1, "the bundle manifest could not be read"),
-    ]:
+        ("a STRUCTURALLY malformed manifest REFUSES too — parsing is not validating",
+         lambda path: path.write_text('{"module": []}', encoding="utf-8"),
+         1, "'module' is list, not an object"),
+        ("a manifest whose top level is not an object REFUSES",
+         lambda path: path.write_text("[]", encoding="utf-8"),
+         1, "top level is list, not an object"),
+    ]
+    for title, write, want_exit, needle in reader_cases:
         with tempfile.TemporaryDirectory() as raw:
             root = _tree(Path(raw) / "proj", {"Plain.csproj": "<Project/>"})
             manifest = Path(raw) / "manifest.json"
@@ -348,8 +376,10 @@ def self_test() -> int:
             else:
                 print(f"  ok    [bom] {title}")
 
-    fires = sum(1 for case in _CASES if case[3] == 1)
-    print(f"\n{len(_CASES)} case(s): {fires} must FAIL the gate, {len(_CASES) - fires} must PASS it.")
+    total = len(_CASES) + len(reader_cases)
+    fires = sum(1 for case in _CASES if case[3] == 1) + sum(1 for case in reader_cases if case[2] == 1)
+    print(f"\n{total} case(s) — {len(_CASES)} asset-shape + {len(reader_cases)} manifest-reader: "
+          f"{fires} must FAIL the gate, {total - fires} must PASS it.")
     if failures:
         print(f"FAILED — {failures} case(s) did not behave as stated")
         return 1
