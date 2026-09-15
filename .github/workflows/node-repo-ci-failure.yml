@@ -292,9 +292,14 @@ jobs:
           # see, or a revoked run token is named HERE rather than as a 401 four steps later. The
           # WRITE half is proven by the first write the ledger makes (the label ensure): a 403 there
           # names the `issues: write` grant on the caller job.
+          # 🚨 `--get --data-urlencode`, never string interpolation. `label` is caller-controlled now,
+          # and a perfectly legal GitHub label may contain a space, `&`, `?` or `#` — interpolated
+          # straight into the query those either truncate the value or silently probe a DIFFERENT
+          # label, so the preflight would refuse a label the ledger itself handles fine.
           code=$(curl -sS -o "$RUNNER_TEMP/issues-probe" -w '%{http_code}' --connect-timeout 10 --max-time 30 \
             -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues?labels=${LEDGER_LABEL}&state=all&per_page=1") || code=000
+            --get --data-urlencode "labels=${LEDGER_LABEL}" --data-urlencode "state=all" --data-urlencode "per_page=1" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues") || code=000
           if [ "$code" != "200" ]; then
             echo "::error::GET /repos/${GITHUB_REPOSITORY}/issues answered HTTP ${code} with the token this lane was handed. It must be the caller's secrets.GITHUB_TOKEN, forwarded as \`secrets: github-token:\`, on a caller job granting \`permissions: {contents: read, issues: write, actions: read}\`. Response: $(head -c 300 "$RUNNER_TEMP/issues-probe" || true)"
             exit 1

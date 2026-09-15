@@ -291,8 +291,16 @@ jobs:
     needs: [preflight, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # 🚨 `result == 'success'` is NOT "verified" on this job, and the reporter below depends on the
+    # difference. This job exits 0 for TWO different facts: a real verification, and "no candidate"
+    # (the triggering CD published nothing, so there was nothing to check). Collapsing them is the
+    # exact defect the job's own body refuses three lines down — and it would make `combo-green`
+    # CLOSE a standing `ci-combo-unverified` alert on a run that verified nothing.
+    outputs:
+      verified: ${{ steps.verdict.outputs.verified }}
     steps:
       - name: The verdict, and it can fail
+        id: verdict
         env:
           PREFLIGHT: ${{ needs.preflight.result }}
           VERIFY: ${{ needs.verify.result }}
@@ -323,6 +331,7 @@ jobs:
               echo "**No candidate.** The triggering CD run concluded \`$TRIGGER\`, so there is"
               echo "nothing to verify. This is not an unverified roll — no roll was produced."
             } >>"$GITHUB_STEP_SUMMARY"
+            echo "verified=false" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$PREFLIGHT" = "skipped" ]; then
@@ -346,6 +355,7 @@ jobs:
             echo "::error::the preflight passed but named ZERO instances — that is a vacuous green, not a verification."
             exit 1
           fi
+          echo "verified=true" >>"$GITHUB_OUTPUT"
           echo "Every declared instance has a landed combo verdict for its roll target."
 
   # ── The audience (#4395) ────────────────────────────────────────────────────────────────────────
@@ -401,10 +411,14 @@ jobs:
       github-token: ${{ secrets.GITHUB_TOKEN }}
       control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
 
+  # 🚨 GATED ON `verified`, NOT ON `result`. The verdict exits 0 both when it verified everything
+  # and when there was NO CANDIDATE — and closing a standing "the fleet's rolls are not
+  # combo-verified" alert on a run that verified nothing is the same false clear this whole change
+  # exists to stop. Only a real landed verification clears the ledger.
   combo-green:
     name: "Combo verification landed: close the ledger"
     needs: [verdict]
-    if: always() && needs.verdict.result == 'success'
+    if: always() && needs.verdict.result == 'success' && needs.verdict.outputs.verified == 'true'
     permissions:
       contents: read
       issues: write
