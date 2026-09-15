@@ -893,7 +893,7 @@ internal static class PermissionEvaluator
         // schema is `system_access`, so the router pins this read to that ONE schema
         // (SecurityQueryShapesTest.TheRootAccessLegPinsTheRegisteredGlobalSchema). ONE process-wide
         // cached subscription for the whole mesh.
-        var root = SecurityQuery(cache, "$security-access:", hub.JsonSerializerOptions,
+        var root = SecurityQuery(cache, SecurityQueries.RootAssignmentsQueryId, hub.JsonSerializerOptions,
             SecurityQueries.RootAssignments);
 
         var statics = Observable.Return<IEnumerable<MeshNode>>(staticNodes.ToArray());
@@ -902,7 +902,7 @@ internal static class PermissionEvaluator
         var withStatics = string.IsNullOrEmpty(partition)
             ? Observable.CombineLatest(root, statics, UnionByPath)
             : Observable.CombineLatest(
-                SecurityQuery(cache, $"$security-access:{partition}", hub.JsonSerializerOptions,
+                SecurityQuery(cache, SecurityQueries.PartitionAssignmentsQueryId(partition), hub.JsonSerializerOptions,
                     SecurityQueries.PartitionAssignments(partition)),
                 root,
                 statics,
@@ -925,14 +925,14 @@ internal static class PermissionEvaluator
         // never fans out (#2194 — the path-less spelling UNION-ed every partition schema 179× per
         // five minutes on memex-cloud for a row that cannot exist there; see SecurityQueries.RootPolicy).
         // One process-wide subscription.
-        var root = SecurityQuery(cache, "$security-policy:", hub.JsonSerializerOptions,
+        var root = SecurityQuery(cache, SecurityQueries.RootPolicyQueryId, hub.JsonSerializerOptions,
             SecurityQueries.RootPolicy);
 
         var partition = GetPartition(scope);
         var nodes = string.IsNullOrEmpty(partition)
             ? root
             : Observable.CombineLatest(
-                SecurityQuery(cache, $"$security-policy:{partition}", hub.JsonSerializerOptions,
+                SecurityQuery(cache, SecurityQueries.PartitionPoliciesQueryId(partition), hub.JsonSerializerOptions,
                     SecurityQueries.PartitionPolicies(partition)),
                 root,
                 UnionByPath);

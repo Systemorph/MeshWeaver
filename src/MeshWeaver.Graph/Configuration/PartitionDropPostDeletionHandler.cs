@@ -175,6 +175,14 @@ public sealed class PartitionDropPostDeletionHandler : INodePostDeletionHandler
     /// <c>SpaceRecreateGrantVisibilityPgTests</c>: the resident query survived the drop in 8 of 8
     /// runs, holding an EMPTY fold while the store held the grant.</para>
     ///
+    /// <para>🚨 <b>The set is enumerated, not pattern-matched.</b> <c>InvalidatePartition</c> drops
+    /// exactly the ids <c>SecurityQueries.PartitionAnchoredQueryIds</c> names, which are minted from
+    /// the same helpers the fold mints its own with. A name test such as "the id ends in
+    /// <c>:{partition}</c>" would also have matched the GLOBAL gated-node folds
+    /// (<c>$security-gated:{nodeType}</c>), because a NodeType name and a partition name come from
+    /// the same alphabet — a Space called <c>Course</c> dropping the mesh-wide gate fold for a
+    /// NodeType called <c>Course</c>.</para>
+    ///
     /// <para>Runs only on a SUCCESSFUL teardown — a failed store drop leaves the partition (and
     /// therefore its caches) in place for a retry, which is the same reason the definition node
     /// stays. In-memory and synchronous; the cache is optional so a minimal fixture without one

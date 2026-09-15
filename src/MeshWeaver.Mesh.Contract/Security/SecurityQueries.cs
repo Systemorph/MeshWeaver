@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.RegularExpressions;
 using MeshWeaver.Mesh.Services;
 
@@ -225,6 +226,57 @@ public static class SecurityQueries
     public static string PartitionPolicies(string partition)
         => Enumeration($"path:{partition} scope:descendants id:_Policy "
             + $"nodeType:{SecurityCollections.PartitionAccessPolicyNodeType} {ContentProjection}");
+
+    /// <summary>The <c>IMeshNodeStreamCache</c> id prefix of the grant read — <c>$security-access:</c>
+    /// alone is the ROOT scope's id, and a partition's is this prefix plus its name.</summary>
+    public const string AssignmentsQueryIdPrefix = "$security-access:";
+
+    /// <summary>The <c>IMeshNodeStreamCache</c> id prefix of the policy read — the
+    /// <see cref="AssignmentsQueryIdPrefix"/> twin.</summary>
+    public const string PoliciesQueryIdPrefix = "$security-policy:";
+
+    /// <summary>The cache id of <see cref="RootAssignments"/> — the scope that belongs to no partition.</summary>
+    public const string RootAssignmentsQueryId = AssignmentsQueryIdPrefix;
+
+    /// <summary>The cache id of <see cref="RootPolicy"/>.</summary>
+    public const string RootPolicyQueryId = PoliciesQueryIdPrefix;
+
+    /// <summary>The cache id of <see cref="PartitionAssignments"/> for <paramref name="partition"/>.</summary>
+    /// <param name="partition">The partition (first path segment).</param>
+    /// <returns>The process-wide cache id.</returns>
+    public static string PartitionAssignmentsQueryId(string partition)
+        => AssignmentsQueryIdPrefix + partition;
+
+    /// <summary>The cache id of <see cref="PartitionPolicies"/> for <paramref name="partition"/>.</summary>
+    /// <param name="partition">The partition (first path segment).</param>
+    /// <returns>The process-wide cache id.</returns>
+    public static string PartitionPoliciesQueryId(string partition)
+        => PoliciesQueryIdPrefix + partition;
+
+    /// <summary>
+    /// 🚨 <b>The COMPLETE list of process-wide cache ids whose fold is confined to ONE partition</b>
+    /// — and therefore the exact set a partition teardown must drop, because their backing store is
+    /// what the teardown destroys (Systemorph/MeshWeaver.Plugins#1870).
+    ///
+    /// <para>It is an enumeration rather than a pattern ON PURPOSE. A name test such as "the id ends
+    /// in <c>:{partition}</c>" is not a statement about anchoring: the GLOBAL gated-node folds are
+    /// spelled <c>$security-gated:{nodeType}</c>, a gated NodeType name and a partition name are
+    /// drawn from the same alphabet, and a Space called <c>Course</c> would therefore have evicted
+    /// the gate fold for a NodeType called <c>Course</c> — a mesh-wide fold, dropped by coincidence
+    /// of naming. Every read in this class that carries no <c>path:</c> anchor (<see cref="Roles"/>,
+    /// <see cref="Memberships"/>, <see cref="GatedNodes"/>, the root twins above) spans partitions
+    /// and belongs to none, so none of them may appear here.</para>
+    ///
+    /// <para>Adding a per-partition fold means adding it here in the same change; the ids are minted
+    /// from the same helpers the fold uses (<c>PermissionEvaluator.ObserveEffectiveAssignments</c> /
+    /// <c>ObserveScopePolicies</c>), so what is minted and what is evicted cannot drift.</para>
+    /// </summary>
+    /// <param name="partition">The partition (first path segment) whose store was torn down.</param>
+    /// <returns>The cache ids anchored to it; empty for the root scope (which has no partition).</returns>
+    public static ImmutableArray<string> PartitionAnchoredQueryIds(string partition)
+        => string.IsNullOrEmpty(partition)
+            ? ImmutableArray<string>.Empty
+            : [PartitionAssignmentsQueryId(partition), PartitionPoliciesQueryId(partition)];
 
     /// <summary>
     /// The root-scope <c>AccessAssignment</c>s naming ONE subject — <see cref="RootAssignments"/>

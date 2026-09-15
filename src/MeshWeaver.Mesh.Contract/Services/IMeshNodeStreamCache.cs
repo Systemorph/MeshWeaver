@@ -203,11 +203,18 @@ public interface IMeshNodeStreamCache
     /// first-create property: the next decision on that partition is minted from the store it
     /// actually has.</para>
     ///
-    /// <para>Idempotent, and a no-op for a partition that holds no cached query. Anchored means the
-    /// cache id is a string ending in <c>:{partition}</c> — the spelling every per-partition
-    /// security query uses (<c>SecurityQueries.PartitionAssignments</c> /
-    /// <c>PartitionPolicies</c>); the root-scope twins (<c>$security-access:</c>) and every global
-    /// query are untouched.</para>
+    /// <para>Idempotent, and a no-op for a partition that holds no cached query, for the empty
+    /// partition (the root scope belongs to none), and for an implementation that holds no
+    /// partition-anchored cache — which is why the default body does nothing.</para>
+    ///
+    /// <para>🚨 <b>Anchored is ENUMERATED, never inferred from the id's shape</b>
+    /// (<see cref="MeshWeaver.Mesh.Security.SecurityQueries.PartitionAnchoredQueryIds"/>). A name
+    /// test such as "the id ends in <c>:{partition}</c>" is not a statement about anchoring: the
+    /// GLOBAL gated-node folds are spelled <c>$security-gated:{nodeType}</c>, and a NodeType name
+    /// and a partition name are drawn from the same alphabet — so a Space called <c>Course</c>
+    /// would drop the mesh-wide gate fold for a NodeType called <c>Course</c>, by coincidence of
+    /// naming. The root-scope twins and every global fold belong to no partition and are never in
+    /// the set.</para>
     /// </summary>
     /// <param name="partition">The partition (a first path segment) whose store was torn down.</param>
     internal void InvalidatePartition(string partition) { }

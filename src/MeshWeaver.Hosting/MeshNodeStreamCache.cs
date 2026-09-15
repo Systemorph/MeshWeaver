@@ -2932,10 +2932,19 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 return (existing.Stream, signature);
 
             // This chain's own connection owner — released by an eviction of THIS set alone, and
-            // by the cache's disposal through _queryConnections (see QueryChain). Registered only
-            // on the CAS winner below: a loser's chain has no subscriber, never connects, and its
-            // empty owner is collected with it.
+            // by the cache's disposal through _queryConnections (see QueryChain).
+            //
+            // 🚨 Rooted in the registry BEFORE the CAS publishes the chain, and removed again if
+            // the CAS loses. The other order leaves a gap: between publishing the QueryChain and
+            // registering its owner, a concurrent EvictQueryId can read the entry, call
+            // Remove(owner) on an owner the composite does not hold yet — a silent no-op — and
+            // this Add would then re-root a chain that has just been evicted, leaving it connected
+            // to a dropped partition until cache disposal. Registering first makes "reachable in
+            // _queries" imply "reachable in _queryConnections" at every instant.
             var connectionOwner = new System.Reactive.Disposables.CompositeDisposable();
+            // On an already disposed registry Add disposes the owner on the spot, which cancels the
+            // pool-queued connect — the same late-connect resolution AutoConnectOwnedBy performs.
+            _queryConnections.Add(connectionOwner);
 
             // Deferred + thread-pool subscribe-on + Replay(1).RefCount: a
             // shared cached observable. The lambda inside Defer runs on the
@@ -3065,14 +3074,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 new QueryCacheEntry(
                     bySignature.SetItem(signature, new QueryChain(stream, connectionOwner)), signature));
             if (Interlocked.CompareExchange(ref _queries, updated, current) == current)
-            {
-                // Root the winner's connection owner in the cache's registry. On an already
-                // disposed registry Add disposes it on the spot, which cancels the pool-queued
-                // connect — the same late-connect resolution AutoConnectOwnedBy performs.
-                _queryConnections.Add(connectionOwner);
                 return (stream, signature);
-            }
-            // CAS lost — another thread won concurrently; retry the read.
+            // CAS lost — another thread won concurrently. This chain was never handed to anyone
+            // and AutoConnect(1) means it never connected, so releasing its owner disposes an
+            // empty registration; leaving it would grow the registry by one per contended miss.
+            _queryConnections.Remove(connectionOwner);
+            // Retry the read.
         }
     }
 
@@ -3152,54 +3159,56 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// <inheritdoc />
     public void InvalidatePartition(string partition)
     {
-        if (string.IsNullOrEmpty(partition))
-            return;
+        // 🚨 The set is ENUMERATED by the security layer, never inferred from the id's SHAPE. A
+        // name test ("the id ends in `:{partition}`") is not a statement about anchoring: the
+        // GLOBAL gated-node folds are spelled `$security-gated:{nodeType}`, and a NodeType name and
+        // a partition name come from the same alphabet — so a Space called `Course` would have
+        // evicted the mesh-wide gate fold for a NodeType called `Course`, by coincidence of naming.
+        // SecurityQueries.PartitionAnchoredQueryIds mints its ids from the same helpers the fold
+        // mints its own with, so what is created and what is dropped cannot drift.
+        foreach (var id in MeshWeaver.Mesh.Security.SecurityQueries.PartitionAnchoredQueryIds(partition))
+            EvictQueryId(id, partition);
+    }
 
-        // Anchored ids are the `{prefix}:{partition}` spelling every per-partition security query
-        // uses. The root-scope twins end in a bare ':' and a non-empty partition can never match
-        // them, so `$security-access:` / `$security-policy:` and every global query are untouched.
-        var suffix = ":" + partition;
-        var released = new List<System.Reactive.Disposables.CompositeDisposable>();
+    /// <summary>
+    /// Drops every query set registered under <paramref name="id"/> and releases each one's
+    /// upstream connection. Unlike <see cref="EvictFaultedQuery"/> — which is pair-exact on
+    /// (id, signature) because it reacts to ONE chain's terminal — this drops the id outright: the
+    /// store the whole id reads has ceased to exist, so every signature registered under it is
+    /// serving a fold of something that is gone.
+    /// </summary>
+    private void EvictQueryId(object id, string partition)
+    {
         while (true)
         {
             var current = _queries;
-            var doomed = current.Keys
-                .OfType<string>()
-                .Where(key => key.EndsWith(suffix, StringComparison.Ordinal))
-                .ToArray();
-            if (doomed.Length == 0)
+            if (!current.TryGetValue(id, out var entry))
                 return;
 
-            var updated = current;
-            released.Clear();
-            foreach (var key in doomed)
-            {
-                if (current.TryGetValue(key, out var entry))
-                    released.AddRange(entry.BySignature.Values.Select(chain => chain.Connection));
-                updated = updated.Remove(key);
-            }
-
+            var updated = current.Remove(id);
             if (Interlocked.CompareExchange(ref _queries, updated, current) != current)
                 continue; // CAS lost — re-read and retry; nothing has been released yet.
 
-            // Only the CAS winner releases, so a concurrent invalidation can never tear down a
-            // chain a competing snapshot still had in the map. Remove disposes what it removes;
-            // on an already disposed registry it is a no-op (cache teardown got there first).
-            foreach (var connection in released)
-                _queryConnections.Remove(connection);
+            // Only the CAS winner releases, so a concurrent eviction can never tear down a chain a
+            // competing snapshot still had in the map. The owner is registered BEFORE the chain is
+            // published (see GetQueryRaw), so a chain reachable here is always reachable in the
+            // registry too. Remove disposes what it removes; on an already disposed registry it is
+            // a no-op, the cache teardown having got there first.
+            foreach (var chain in entry.BySignature.Values)
+                _queryConnections.Remove(chain.Connection);
 
             // Drop the memoised option wrappers that closed over the released chains — otherwise
             // the eviction would be invisible from the public surface, exactly as #1316 documents
             // for the faulted case.
             foreach (var key in _optionsWrappedQueries.Keys)
-                if (key.Id is string id && id.EndsWith(suffix, StringComparison.Ordinal))
+                if (Equals(key.Id, id))
                     _optionsWrappedQueries.TryRemove(key, out _);
 
             logger.LogDebug(
-                "MeshNodeStreamCache: dropped {Count} query id(s) anchored to partition '{Partition}' "
-                + "after its backing store was torn down — the next read of each mints a fresh chain "
-                + "from the store instead of serving a fold of a store that no longer exists.",
-                doomed.Length, partition);
+                "MeshNodeStreamCache: dropped query '{QueryId}' ({Count} query set(s)) after partition "
+                + "'{Partition}' was torn down — the next read mints a fresh chain from the store "
+                + "instead of serving a fold of a store that no longer exists.",
+                id, entry.BySignature.Count, partition);
             return;
         }
     }

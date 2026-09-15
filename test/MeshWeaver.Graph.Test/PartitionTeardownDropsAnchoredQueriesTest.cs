@@ -47,8 +47,8 @@ public class PartitionTeardownDropsAnchoredQueriesTest(ITestOutputHelper output)
 {
     private const string SpaceId = "teardownqueries";
 
-    private static string AccessQueryId => $"$security-access:{SpaceId}";
-    private static string PolicyQueryId => $"$security-policy:{SpaceId}";
+    private static string AccessQueryId => SecurityQueries.PartitionAssignmentsQueryId(SpaceId);
+    private static string PolicyQueryId => SecurityQueries.PartitionPoliciesQueryId(SpaceId);
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => Bootstrap.Bootstrap(builder)
@@ -85,6 +85,12 @@ public class PartitionTeardownDropsAnchoredQueriesTest(ITestOutputHelper output)
         return Mesh.GetQuery(queryId) is not null;
     }
 
+    /// <summary>The cache's own registry of live synced-query connections — one per registered
+    /// chain. Forgetting a map entry and RELEASING its upstream are different acts, and only this
+    /// can tell them apart.</summary>
+    private MeshWeaver.Hosting.MeshNodeStreamCache Cache =>
+        (MeshWeaver.Hosting.MeshNodeStreamCache)Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+
     [Fact(Timeout = 180_000)]
     public async Task DeletingAPartitionRoot_DropsTheQueriesAnchoredToIt()
     {
@@ -103,8 +109,26 @@ public class PartitionTeardownDropsAnchoredQueriesTest(ITestOutputHelper output)
             "CONTROL ARM: the child create's permission decision reads $security-access:{partition}, "
             + "so the chain must be registered here — a false makes the post-delete assertion vacuous");
 
+        // The connection registry, measured BEFORE the delete. Forgetting a map entry and RELEASING
+        // the chain's upstream are different acts: AutoConnect(1) never disconnects, so an eviction
+        // that only forgot the entry would leave a SyncedQueryMeshNodes — with its provider and
+        // change-feed subscriptions — running against a dropped schema for the life of the process,
+        // and every residency assertion in this test would stay green while it did.
+        var connectionsBefore = Cache.LiveQueryConnections;
+        connectionsBefore.Should().BeGreaterThan(0,
+            "CONTROL ARM: the chains opened above must be registered with the cache — a zero makes "
+            + "the release assertion below vacuous");
+
         await meshService.DeleteNode(SpaceId)
             .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may delete its own Space");
+
+        Cache.LiveQueryConnections.Should().BeLessThan(connectionsBefore,
+            "the anchored chains' UPSTREAM connections must be released, not merely forgotten — a "
+            + "count that did not move means the map entry went and the SyncedQueryMeshNodes behind "
+            + "it kept its provider and change-feed subscriptions over a dropped store");
+        Cache.QueryConnectionsReleased.Should().BeFalse(
+            "and the release must be per-chain: the cache's whole registry is still live, so the "
+            + "sibling queries this test does not name keep running");
 
         IsResident(AccessQueryId).Should().BeFalse(
             "the partition teardown destroyed the store this query mirrors, so the chain must go "
@@ -115,8 +139,24 @@ public class PartitionTeardownDropsAnchoredQueriesTest(ITestOutputHelper output)
             "the _Policy twin is anchored to the same partition and lived in the same dropped store");
     }
 
+    /// <summary>
+    /// The negative control for the eviction's REACH. Two global folds, both of which a shape-based
+    /// rule would have taken:
+    ///
+    /// <list type="bullet">
+    ///   <item>the ROOT-scope grants (<c>$security-access:</c>), read on every permission decision
+    ///     in the mesh — dropping them on a Space delete is a mesh-wide denial storm, not one
+    ///     refused create;</item>
+    ///   <item>a fold whose id merely ENDS with this partition's name. The gated-node folds are
+    ///     spelled <c>$security-gated:{nodeType}</c> and span every partition; a NodeType name and
+    ///     a partition name are drawn from the same alphabet, so a Space called <c>Course</c> and a
+    ///     gated NodeType called <c>Course</c> collide under any "ends with <c>:{partition}</c>"
+    ///     rule. This is why the eviction set is ENUMERATED by
+    ///     <c>SecurityQueries.PartitionAnchoredQueryIds</c> rather than inferred.</item>
+    /// </list>
+    /// </summary>
     [Fact(Timeout = 180_000)]
-    public async Task TheRootScopeQueryIsNotAnchoredToAnyPartition_AndSurvivesATeardown()
+    public async Task ATeardownLeavesGlobalFoldsAlone_IncludingOneWhoseIdEndsWithThePartitionName()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -125,17 +165,30 @@ public class PartitionTeardownDropsAnchoredQueriesTest(ITestOutputHelper output)
         await meshService.CreateNode(Child("first"))
             .Should().Within(TestTimeouts.CrossSilo).Emit("a child create takes a decision on the partition");
 
+        // The gated-node fold's REAL id spelling, for a NodeType that happens to be named exactly
+        // like this partition. Registering it is enough — residency is read off the cache's map,
+        // which GetQuery populates whether or not anyone subscribes.
+        var collidingGlobalId = $"$security-gated:{SpaceId}";
+        _ = Mesh.GetQuery(collidingGlobalId, $"nodeType:{SpaceId} partitions:all scope:subtree limit:all");
+
         // The root-scope leg is read on EVERY decision, whatever the partition (ObserveEffective-
         // Assignments combines it with the partition leg), so the control arm is the same create.
-        IsResident("$security-access:").Should().BeTrue(
+        IsResident(SecurityQueries.RootAssignmentsQueryId).Should().BeTrue(
             "CONTROL ARM: the root-scope grants are read on every permission decision");
+        IsResident(collidingGlobalId).Should().BeTrue(
+            "CONTROL ARM: the colliding global fold must be registered before the delete, or the "
+            + "assertion after it proves nothing");
 
         await meshService.DeleteNode(SpaceId)
             .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may delete its own Space");
 
-        IsResident("$security-access:").Should().BeTrue(
+        IsResident(SecurityQueries.RootAssignmentsQueryId).Should().BeTrue(
             "the root scope belongs to NO partition — its grants live in the registered global "
             + "schema, which no partition teardown touches. An eviction that reached it would drop "
             + "the platform-wide grants of every user on every Space delete");
+        IsResident(collidingGlobalId).Should().BeTrue(
+            "a gated-node fold spans EVERY partition; that its id ends with this partition's name "
+            + "is a coincidence of two namespaces sharing an alphabet, not evidence of anchoring. "
+            + "Dropping it here would change permission decisions mesh-wide until it rebuilt");
     }
 }

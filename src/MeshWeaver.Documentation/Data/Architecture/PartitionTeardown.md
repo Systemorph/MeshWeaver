@@ -156,10 +156,16 @@ Three boundaries are deliberate:
 - **Only on a SUCCESSFUL teardown.** A failed store drop leaves the partition in place for a retry,
   so its caches stay too — the same reason the definition node stays (see the ordering contract
   above).
-- **Anchored means `…:{partition}`.** The root-scope twins end in a bare colon
-  (`$security-access:`, `$security-policy:`) and a non-empty partition can never match them. An
-  eviction that reached the root scope would drop every user's platform-wide grants on every Space
-  delete — a mesh-wide denial storm instead of one refused create — so both harnesses carry that as
+- **Anchored is ENUMERATED, never inferred from the id's shape.**
+  `SecurityQueries.PartitionAnchoredQueryIds(partition)` is the complete list, minted from the same
+  helpers the fold mints its own ids with, so what is created and what is dropped cannot drift. A
+  name test — "the id ends in `:{partition}`" — is *not* a statement about anchoring: the global
+  gated-node folds are spelled `$security-gated:{nodeType}`, and a NodeType name and a partition
+  name come from the same alphabet, so a Space called `Course` would have dropped the mesh-wide
+  gate fold for a NodeType called `Course`. The root-scope twins (`$security-access:`,
+  `$security-policy:`) and every global fold belong to no partition and are never in the set — an
+  eviction reaching the root scope would drop every user's platform-wide grants on every Space
+  delete, a mesh-wide denial storm instead of one refused create, so both harnesses carry that as
   an explicit negative control.
 - **The chain's connection is released, not merely forgotten.** `AutoConnect(1)` never disconnects,
   so an eviction that only dropped the map entry would leave a `SyncedQueryMeshNodes` — with its
