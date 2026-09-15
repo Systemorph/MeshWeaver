@@ -26,6 +26,18 @@ public sealed record KernelHubOptions
     /// settable so a TEST can assert the reclamation property inside a test budget
     /// (<c>CompileActivityHubRetentionTest</c>), and for a host that genuinely wants a different
     /// idle policy — not as a memory tuning knob. Default: 15 minutes.</para>
+    /// <para>🚨 <b>Idle means no inbound message AND no submission in flight</b> (#4422). The
+    /// window is re-armed by delivered messages, and a running script delivers none, so without the
+    /// in-flight check a script still working 15 min after the last inbound message had its hub
+    /// disposed mid-run, silently. <c>KernelContainer.IdleState</c> keeps the hub while a forwarded
+    /// submission is being set up or has not answered, and restarts the window when it does.</para>
     /// </summary>
     public TimeSpan IdleDisconnectTimeout { get; init; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// The clock <see cref="IdleDisconnectTimeout"/> runs on — <see cref="TimeProvider.System"/> in
+    /// every host. A TEST injects its own so it can step through the window deterministically
+    /// instead of waiting it out or shrinking it (<c>KernelIdleDisconnectWhileRunningTest</c>).
+    /// </summary>
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 }
