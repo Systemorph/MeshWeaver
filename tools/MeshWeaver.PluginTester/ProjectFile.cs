@@ -205,6 +205,26 @@ public static class ProjectFile
         /// </summary>
         public ImmutableArray<RazorItem> RazorItems { get; init; } = [];
 
+        /// <summary>
+        /// Every <c>*.razor.js</c> / <c>*.cshtml.js</c> ON DISK under the project — the Razor SDK's
+        /// <b>JS module</b> asset kind, which is a static web asset the SDK COMPUTES rather than a
+        /// file anyone put under <c>wwwroot/</c>.
+        ///
+        /// <para>The set is the candidate list, not the verdict: <see cref="ProjectBuild"/> pairs
+        /// each entry with the Razor item it is collocated with, emits the paired ones, and refuses
+        /// an unpaired one by name — the SDK's own <c>BLAZOR106</c>, measured 2026-09-15 against
+        /// SDK 10.0.400, which is an ERROR and fires for a file under <c>wwwroot/</c> exactly as it
+        /// does for one beside a component. Enumerated here so the bin/obj/dot-directory exclusions
+        /// live in ONE place, beside the Razor and scoped-CSS globs that share them.</para>
+        ///
+        /// <para>🚨 An <c>init</c> PROPERTY, not a primary-constructor parameter — the rule this
+        /// record already documents three times over: adding a parameter, even a defaulted one,
+        /// REPLACES the constructor signature and <c>scripts/check-record-signatures.py</c> refuses
+        /// it, because every assembly compiled against the old arity calls a constructor that no
+        /// longer exists.</para>
+        /// </summary>
+        public ImmutableArray<string> JsModuleFiles { get; init; } = [];
+
         /// <summary>The <c>RazorLangVersion</c> the generator is given.</summary>
         public string RazorLangVersion { get; init; } = DefaultRazorLangVersion;
 
@@ -1309,6 +1329,12 @@ public static class ProjectFile
             {
                 AssemblyInfo = BuildAssemblyInfo(assemblyName),
                 RazorItems = razorItems,
+                // Only for an Sdk that processes Razor: under plain Microsoft.NET.Sdk the SDK
+                // itself never discovers a JS module, so neither does this builder — and refusing
+                // an unpaired one there would be a refusal the SDK does not make.
+                JsModuleFiles = razorItems.IsEmpty && !ProcessesRazor(sdk)
+                    ? []
+                    : [.. JsModuleFilesOnDisk().OrderBy(f => f, StringComparer.Ordinal)],
                 RazorLangVersion = Prop("RazorLangVersion") is { Length: > 0 } rlv ? rlv : DefaultRazorLangVersion,
                 RazorConfiguration = Prop("RazorConfiguration") is { Length: > 0 } rc ? rc : DefaultRazorConfiguration,
                 SupportLocalizedComponentNames = IsTrue(Prop("SupportLocalizedComponentNames")),
@@ -1403,6 +1429,19 @@ public static class ProjectFile
 
         /// <summary>Every <c>*.razor.css</c> under the project, minus the output trees.</summary>
         private IEnumerable<string> ScopedCssFilesOnDisk() => DefaultGlob("*.razor.css");
+
+        /// <summary>
+        /// Every <c>*.razor.js</c> / <c>*.cshtml.js</c> under the project, minus the output trees —
+        /// the SDK's JS MODULE candidates.
+        ///
+        /// <para>🚨 <c>wwwroot/</c> is deliberately NOT excluded. Measured against SDK 10.0.400
+        /// (2026-09-15): a <c>wwwroot/Ghost.razor.js</c> with no component beside it is the same
+        /// <c>BLAZOR106</c> error as one at the project root, so the SDK's rule is "anywhere the
+        /// default items reach", and narrowing it here would make this builder accept a project the
+        /// SDK refuses.</para>
+        /// </summary>
+        private IEnumerable<string> JsModuleFilesOnDisk() =>
+            DefaultGlob("*.razor.js").Concat(DefaultGlob("*.cshtml.js"));
 
         /// <summary>
         /// Whether this SDK compiles Razor. <c>Microsoft.NET.Sdk.Razor</c> does;

@@ -1294,12 +1294,23 @@ public static class ProjectBuild
                     $"{warnings} warning(s) under the no-warn policy");
             }
             NameTheDocumentationFile(outputDirectory, model);
-            var scopedCssCount = EmitStaticAssets(outputDirectory, model, sink, name);
+            var staticAssets = EmitStaticAssets(outputDirectory, model, sink, name);
+            if (staticAssets.Refusal is { } assetRefusal)
+            {
+                // 🚨 RED, not a warning. The SDK makes this an ERROR (BLAZOR106) and the reason is
+                // this issue: a JS module that does not ship is invisible until a browser asks for
+                // it, and by then it is a 404 in a view pack nobody can fix from the portal.
+                sink.Error($"[{name}] RED — {assetRefusal}");
+                return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
+                    model.CompileItems.Length, 1, warnings, null, [], assetRefusal);
+            }
+            var scopedCssCount = staticAssets.ScopedStylesheets;
             sink.Info(
                 $"[{name}] OK — {model.CompileItems.Length} source file(s)"
                 + (razorGenerated == 0 ? "" : $" + {model.RazorItems.Length} Razor file(s)")
                 + (model.EmbeddedResources.IsEmpty ? "" : $" + {model.EmbeddedResources.Length} resource(s)")
                 + (scopedCssCount == 0 ? "" : $" + {scopedCssCount} scoped stylesheet(s)")
+                + (staticAssets.JsModules == 0 ? "" : $" + {staticAssets.JsModules} JS module(s)")
                 + $", {warnings} warning(s), "
                 + $"{artifact.Length} bytes in {clock.Elapsed.TotalMilliseconds:F0} ms → {artifact.DllPath}");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
@@ -1347,17 +1358,41 @@ public static class ProjectBuild
             resource.ManifestName, () => File.OpenRead(resource.Path), isPublic: true)),
     ];
 
+    /// <summary>What <see cref="EmitStaticAssets"/> produced, or why it refused.</summary>
+    /// <param name="ScopedStylesheets">How many scoped stylesheets went into the aggregate.</param>
+    /// <param name="JsModules">How many collocated JS modules were emitted.</param>
+    /// <param name="Refusal">Non-null when the project's asset set cannot be reproduced.</param>
+    private readonly record struct StaticAssetResult(
+        int ScopedStylesheets, int JsModules, string? Refusal);
+
     /// <summary>
-    /// The static-asset half of the module: the project's own <c>wwwroot/**</c> copied verbatim,
-    /// plus the CSS-isolation aggregate <c>wwwroot/&lt;AssemblyName&gt;.styles.css</c> — each
-    /// <c>*.razor.css</c> rewritten under the SAME scope the generator stamped into the markup
-    /// (<see cref="ScopedCss"/>), concatenated in item order. The packer sweeps <c>wwwroot/</c>
-    /// into the bundle's <c>staticAssets</c>, and the portal's module-asset host links the
-    /// aggregate at runtime — without this a converted pack lands, loads, and renders UNSTYLED
-    /// with nothing in any log (#2221's signature).
+    /// The static-asset half of the module — the Razor SDK's THREE asset kinds, reproduced, in the
+    /// order this method emits them and the order
+    /// <see href="/Doc/Architecture/ModuleStaticAssets">the architecture page</see> numbers them:
+    /// <list type="number">
+    /// <item><b>Kind 1</b> — the project's own <c>wwwroot/**</c>, copied verbatim;</item>
+    /// <item><b>Kind 2</b> — each collocated <b>JS module</b>, a <c>Foo.razor.js</c> beside
+    /// <c>Foo.razor</c>, copied to <c>wwwroot/&lt;path relative to the project&gt;</c>;</item>
+    /// <item><b>Kind 3</b> — the CSS-isolation aggregate <c>wwwroot/&lt;AssemblyName&gt;.styles.css</c>
+    /// — each <c>*.razor.css</c> rewritten under the SAME scope the generator stamped into the
+    /// markup (<see cref="ScopedCss"/>), concatenated in item order.</item>
+    /// </list>
+    /// The packer sweeps <c>wwwroot/</c> into the bundle's <c>staticAssets</c>, the landing writes
+    /// it module-relative, and the host mounts it at <c>_content/&lt;Name&gt;/…</c>.
+    ///
+    /// <para>🚨 Kinds 2 and 3 are COMPUTED: neither file exists under the project's <c>wwwroot/</c>,
+    /// so a directory walk cannot see them and every producer of a module bundle has to reproduce
+    /// them. <b>Kind 3 was missing until #2221</b> and a converted pack landed, loaded and rendered
+    /// UNSTYLED with nothing in any log. <b>Kind 2 was missing until #2384</b> and did the same
+    /// thing one step further along: <c>OpenStreetMapView.razor.js</c> 404'd for three weeks, so
+    /// every map in every container-built view pack — OpenStreetMap, GoogleMaps, AppleMaps, Chat —
+    /// threw <c>Failed to fetch dynamically imported module</c> in <c>OnAfterRenderAsync</c> and
+    /// rendered nothing. The real SDK lays kind 2 at the project-relative path
+    /// (<c>publish/wwwroot/Components/Badge.razor.js</c> for <c>Components/Badge.razor.js</c> —
+    /// measured against SDK 10.0.400, 2026-09-15), which is exactly what
+    /// <c>MeshModuleStaticAssetExtensions</c> re-bases onto <c>_content/&lt;Name&gt;/…</c>.</para>
     /// </summary>
-    /// <returns>How many scoped stylesheets went into the aggregate.</returns>
-    private static int EmitStaticAssets(
+    private static StaticAssetResult EmitStaticAssets(
         string outputDirectory, ProjectFile.Model model, Sink sink, string name)
     {
         var projectDirectory = Path.GetDirectoryName(model.ProjectPath)!;
@@ -1375,6 +1410,10 @@ public static class ProjectBuild
                 + $"({Directory.GetFiles(wwwroot, "*", SearchOption.AllDirectories).Length} file(s))");
         }
 
+        var jsModules = EmitJsModules(target, model, sink, name);
+        if (jsModules.Refusal is not null)
+            return jsModules;
+
         var scoped = model.RazorItems
             .Where(item => item.CssScope is { Length: > 0 })
             .Select(item => (
@@ -1382,13 +1421,80 @@ public static class ProjectBuild
                 Rewritten: ScopedCss.Rewrite(File.ReadAllText(item.Path + ".css"), item.CssScope!)))
             .ToImmutableArray();
         if (scoped.IsEmpty)
-            return 0;
+            return jsModules;
         Directory.CreateDirectory(target);
         var aggregatePath = Path.Combine(target, model.AssemblyName + ".styles.css");
         File.WriteAllText(aggregatePath, ScopedCss.Aggregate(scoped.Select(s => (s.RelativePath, s.Rewritten))));
         sink.Info($"[{name}] css isolation: {scoped.Length} scoped stylesheet(s) → "
             + $"wwwroot/{model.AssemblyName}.styles.css (scopes match the generated markup)");
-        return scoped.Length;
+        return jsModules with { ScopedStylesheets = scoped.Length };
+    }
+
+    /// <summary>
+    /// The SDK's JS MODULE asset kind: <c>Foo.razor.js</c> beside <c>Foo.razor</c> (and
+    /// <c>Foo.cshtml.js</c> beside <c>Foo.cshtml</c>), emitted at the same project-relative path
+    /// under <c>wwwroot/</c> that <c>dotnet publish</c> lays it at.
+    ///
+    /// <para>🚨 An UNPAIRED JS module is a REFUSAL, by name — the SDK's own <c>BLAZOR106</c>
+    /// ("was defined but no associated razor component or view was found for it"), measured to be
+    /// an error on SDK 10.0.400 and to fire for a file under <c>wwwroot/</c> as well as beside a
+    /// component. Reproducing the refusal matters more than reproducing the copy: the shape that
+    /// reaches production is a component RENAMED without its JS, and passing that silently is the
+    /// same 404 this method exists to prevent, arriving from the other direction.</para>
+    ///
+    /// <para>A JS module whose Razor item lives under <c>wwwroot/</c> already rode verbatim above;
+    /// copying it again would put it at <c>wwwroot/wwwroot/…</c>, so it is counted as paired and
+    /// skipped. A Razor item from OUTSIDE the project directory (a <c>..\Shared</c> link) is a
+    /// refusal rather than a write that escapes the output folder.</para>
+    /// </summary>
+    private static StaticAssetResult EmitJsModules(
+        string target, ProjectFile.Model model, Sink sink, string name)
+    {
+        if (model.JsModuleFiles.IsEmpty)
+            return new StaticAssetResult(0, 0, null);
+
+        var paired = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var emitted = 0;
+        foreach (var item in model.RazorItems)
+        {
+            var source = item.Path + ".js";
+            if (!File.Exists(source))
+                continue;
+            paired.Add(Path.GetFullPath(source));
+            // Already carried by the verbatim wwwroot copy — emitting it again would nest it.
+            var segments = item.TargetPath.Split(
+                Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (segments is [var first, ..] && first.Equals("wwwroot", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var destination = Path.GetFullPath(Path.Combine(target, item.TargetPath + ".js"));
+            if (!destination.StartsWith(Path.GetFullPath(target) + Path.DirectorySeparatorChar,
+                    StringComparison.Ordinal))
+                return new StaticAssetResult(0, 0,
+                    $"the JS module '{source}' belongs to a Razor item OUTSIDE the project directory "
+                    + $"('{item.TargetPath}'), so the path the SDK would publish it at escapes the "
+                    + "module's own wwwroot. Link the component into the project, or give the file "
+                    + "a home under it.");
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(source, destination, overwrite: true);
+            emitted++;
+        }
+
+        var orphans = model.JsModuleFiles
+            .Where(file => !paired.Contains(Path.GetFullPath(file)))
+            .ToImmutableArray();
+        if (!orphans.IsEmpty)
+            return new StaticAssetResult(0, 0,
+                $"{orphans.Length} JS module file(s) were defined but no associated Razor component "
+                + "or view was found for them — the SDK's BLAZOR106, which is an error there too: "
+                + string.Join(", ", orphans.Select(f => Path.GetRelativePath(model.Directory, f)))
+                + ". A JS module that pairs with nothing never ships, and the only place that shows "
+                + "up is a browser's `Failed to fetch dynamically imported module` (#2384). Rename "
+                + "the file to match its component, or delete it.");
+
+        if (emitted > 0)
+            sink.Info($"[{name}] js modules: {emitted} collocated *.razor.js → wwwroot/<relative> "
+                + "(the path the SDK publishes them at, which the host serves at _content/<Name>/…)");
+        return new StaticAssetResult(0, emitted, null);
     }
 
     /// <summary>
