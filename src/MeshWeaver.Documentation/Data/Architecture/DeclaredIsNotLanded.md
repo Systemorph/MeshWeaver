@@ -154,10 +154,34 @@ default, server-side in `RegistryPackageSource` — and its contract is explicit
 from the package simply don't appear in the result"*. A requested path the source does not serve (a
 serving-side casing difference, a stale registry cache, a bundle that disagrees with its own lock)
 therefore vanished with no exception and no log line, after which the record was stamped with the
-full declared map anyway. The returned set is now compared against the requested one and the
-shortfall is named at Error. It reports only; it never fails the update — the install that did run
-is a fact, and collapsing "landed short" into "failed" would make a working update a new way to
-break.
+full declared map anyway. The returned set is now compared against the requested one, the
+shortfall is named at Error, and the incremental update **fails** into a full install rather than
+stamping that record. (A first reading — "report only; the install that did run is a fact" — did not
+survive the next step: `InstallNodeRepoDelta` stamps the new map as the baseline unconditionally, so
+a file that never travelled while its OLD node survived would read as complete and diff clean on
+every later update.)
+
+### 🚨 …and the lock's module sources were exactly such paths (MeshWeaver#4429)
+
+A mixed package's `manifest.lock` declares its module's `src/<Module>/…` sources — and the in-tree
+siblings that ride its bundle — in the SAME `files` map as its node files, so that a source-only
+commit moves the module version (Plugins#878). No content source serves them: `NodeRepoPackageSource`
+keeps only `{Id}/…`, the registry's `/api/plugins/files` answers from it, and the sources travel
+compiled, in the module bundle. The delta nevertheless asked for every changed key. Before the
+shortfall guard a changed source therefore quietly failed to arrive — harmless, because the bundle
+carried it; after it, every such update answered *"the source returned 0 of the 1 file(s) asked
+for"* at Error and fell back to a full install that recompiles every type in the package. Measured on
+memex.systemorph.com at 2026-09-15T14:12Z for `Edu` (`src/MeshWeaver.Courses/CourseAssetService.cs`),
+on two pods. `Edu/manifest.lock` carries 273 `src/…` entries beside 117 `Edu/…` ones, 234 of them the
+AI engine's, so an engine commit reached Edu the same way.
+
+The delta's fetch set now drops them with `PackageInstaller.IsModuleSourcePath` — the predicate the
+node mapping, the delta prune and the completeness sweep already share (#4101) — while the record
+still stamps them, so the next diff is clean. The guard is unchanged: whatever the fetch still asks
+for is a file the source should have served. Pinned by
+`InstallCompletenessTest.AModuleSourceChange_UpdatesIncrementally_WithoutAskingTheContentSourceForIt`,
+which drives the production `NodeRepoPackageSource` through a source-only update and a
+content-plus-source one.
 
 ## The rule this generalises to
 

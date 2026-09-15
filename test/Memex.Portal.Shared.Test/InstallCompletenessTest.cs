@@ -8,6 +8,7 @@ using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
+using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -1527,4 +1528,207 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
             "detection must not depend on someone listening");
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    //  #4429 — a module SOURCE rides the bundle, never the content fetch
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private const string MixedPkg = "MixedSourcePkg";
+    private const string MixedModule = "MeshWeaver.MixedSourcePkg";
+    private const string MixedHashV1 = "5555555555555555";
+    private const string MixedHashV2 = "6666666666666666";
+    private const string MixedHashV3 = "7777777777777777";
+    private const string MixedSourceFile = $"src/{MixedModule}/CourseAssetService.cs";
+    private const string MixedGuideFile = $"{MixedPkg}/Guide.md";
+    private const string MixedGuidePath = $"{MixedPkg}/Guide";
+    private const string MixedManifestFile = $"{MixedPkg}/{ModuleManifest.FileName}";
+
+    private static PackageManifest MixedCandidate(string moduleVersion) => new()
+    {
+        Id = MixedPkg,
+        Name = MixedPkg,
+        Kind = PackageKind.NodeRepo,
+        TargetPartition = MixedPkg,
+        SourceFolder = MixedPkg,
+        Module = MixedModule,
+        Version = "1.0.0",
+        ModuleVersion = moduleVersion,
+    };
+
+    /// <summary>
+    /// The repository at one generation — the WHOLE tree, <c>src/</c> included, which is what the
+    /// registry's git read sees. The lock is the shape <c>gen-manifests.py</c> writes for a MIXED
+    /// package (Plugins#878): node files under <c>{Id}/</c> and the module's own sources under
+    /// <c>src/&lt;Module&gt;/</c> in ONE <c>files</c> map, so a source-only commit moves the module
+    /// version. <c>Edu/manifest.lock</c> on 2026-09-15 carried 117 <c>Edu/…</c> entries and 273
+    /// <c>src/…</c> ones.
+    /// </summary>
+    private static RepoSnapshot MixedRepo(
+        string moduleVersion, string sourceHash, string guideHash, string guideBody) =>
+        new($"commit-{moduleVersion}",
+        [
+            new RepoFile(MixedManifestFile, $$"""
+                {
+                  "module": "{{MixedPkg}}",
+                  "moduleVersion": "{{moduleVersion}}",
+                  "version": "1.0.0",
+                  "files": {
+                    "{{MixedPkg}}/index.json": "aaa",
+                    "{{MixedGuideFile}}": "{{guideHash}}",
+                    "{{MixedSourceFile}}": "{{sourceHash}}"
+                  }
+                }
+                """),
+            new RepoFile($"{MixedPkg}/index.json", $$"""
+                {
+                  "id": "{{MixedPkg}}",
+                  "path": "{{MixedPkg}}",
+                  "nodeType": "Space",
+                  "name": "Mixed package",
+                  "state": "Active"
+                }
+                """),
+            new RepoFile(MixedGuideFile, guideBody),
+            // In the repository, and — by construction — never in what the content source serves.
+            new RepoFile(MixedSourceFile,
+                $"namespace {MixedModule};\n\npublic sealed class CourseAssetService {{ }} // {sourceHash}\n"),
+        ]);
+
+    /// <summary>
+    /// The PRODUCTION node-repo source, observed. Every fetch the installer actually runs is
+    /// recorded on SUBSCRIBE: an unfiltered one is a full install (<c>null</c>), a filtered one
+    /// carries the paths it asked for. The filtering itself is <see cref="NodeRepoPackageSource"/>'s
+    /// own (<c>{Id}/…</c> only) and the interface default's — nothing here decides what is served.
+    /// </summary>
+    private sealed class ObservedSource(IPackageSource inner) : IPackageSource
+    {
+        private readonly ConcurrentQueue<ImmutableList<string>?> fetches = new();
+
+        /// <summary>Every fetch run so far, in order; <c>null</c> = the whole package.</summary>
+        public IReadOnlyList<ImmutableList<string>?> Fetches => fetches.ToList();
+
+        public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
+            inner.ListPackages(gitRef);
+
+        public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(
+            PackageManifest package, string gitRef) =>
+            Observable.Defer(() =>
+            {
+                fetches.Enqueue(null);
+                return inner.FetchPackageFiles(package, gitRef);
+            });
+
+        public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(
+            PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
+            Observable.Defer(() =>
+            {
+                fetches.Enqueue(paths?.ToImmutableList());
+                return inner.FetchPackageFiles(package, gitRef, paths);
+            });
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE REGRESSION (MeshWeaver#4429).</b> A mixed package whose update changes ONLY a
+    /// module source must update incrementally — it must not ask the content source for the source
+    /// file, and must not fall back to a full install.
+    ///
+    /// <para><b>Fails on main.</b> There, <c>IncrementalUpdate</c> fetches every key of
+    /// <c>delta.AddedOrChangedFiles</c>, and a changed <c>src/&lt;Module&gt;/…</c> is one. The
+    /// content source serves only <c>{Id}/…</c> — <see cref="NodeRepoPackageSource"/> filters to the
+    /// package folder, and the registry's <c>/api/plugins/files</c> answers from it — so the fetch
+    /// returns 0 of 1, <c>EnsureFetchComplete</c> throws (correctly: it guards a real shortfall), and
+    /// the caller falls back to a FULL install. memex.systemorph.com, 2026-09-15T14:12Z:
+    /// <c>Updating Edu incrementally: the source returned 0 of the 1 file(s) asked for —
+    /// [src/MeshWeaver.Courses/CourseAssetService.cs] did NOT travel</c>, on two pods. Every mixed
+    /// package pays it on every update that touches a source — and a module's bundle carries its
+    /// riding siblings too, so an engine change moves 234 <c>src/MeshWeaver.AI/…</c> entries in the
+    /// Edu lock alone.</para>
+    ///
+    /// <para>Generation three is the control in the other direction: a CONTENT file that moves
+    /// beside a source is still asked for and still lands, so the fix narrows the fetch to what the
+    /// source serves and does not stop fetching.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AModuleSourceChange_UpdatesIncrementally_WithoutAskingTheContentSourceForIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var generation = MixedRepo(MixedHashV1, "src-1", "g-1", "# Guide\n\nGeneration one.");
+        var source = new ObservedSource(
+            new NodeRepoPackageSource((_, _, _, _) => Observable.Return(generation), repoUrl: "local"));
+
+        await CatalogLayoutAreas.InstallOrUpdate(
+                Mesh, source, "HEAD", MixedCandidate(MixedHashV1), new RecordingLogger())
+            .Should().Within(TestTimeouts.CrossSilo)
+            .Emit("the first install must land before anything about an update can be measured",
+                cancellationToken: ct);
+        (await WaitForNode(MixedGuidePath, present: true)).Should().BeTrue(
+            "the package really installed — a green update over an empty partition would prove nothing");
+
+        var installed = await ReadRecord(MixedPkg);
+        installed.Should().NotBeNull("the installer stamps an install record");
+        installed!.ModuleVersion.Should().Be(MixedHashV1);
+        installed.InstalledFiles.Should().NotBeNull().And.ContainKey(MixedSourceFile,
+            "the record keeps the module source's token — that is what makes the NEXT diff name a "
+            + "source-only change at all; without it this test would reach a full install for a "
+            + "different reason (no baseline) and measure nothing about #4429");
+        installed.InstalledFiles![MixedSourceFile].Should().Be("src-1");
+
+        // ── Generation two: ONLY the module source moves — the Edu 1.10.9 → 1.10.10 shape.
+        generation = MixedRepo(MixedHashV2, "src-2", "g-1", "# Guide\n\nGeneration one.");
+        var before = source.Fetches.Count;
+        var sourceOnlyLog = new RecordingLogger();
+        await CatalogLayoutAreas.InstallOrUpdate(
+                Mesh, source, "HEAD", MixedCandidate(MixedHashV2), sourceOnlyLog)
+            .Should().Within(TestTimeouts.CrossSilo)
+            .Emit("a source-only update has to complete", cancellationToken: ct);
+        var update = source.Fetches.Skip(before).ToList();
+
+        update.Should().Contain(f => f != null && f.Contains(MixedManifestFile),
+            "the control: the incremental exit reads manifest.lock first — without that read the "
+            + "update took some other exit and nothing below would be about it");
+        update.Count(f => f is null).Should().Be(0,
+            "THE assertion: a change to a module source must not force a FULL install. On main the "
+            + "source is asked for, 0 of 1 comes back, and the update falls back to a full install "
+            + "— every mixed package, on every update that touches its sources (MeshWeaver#4429). "
+            + $"Fetches run: [{string.Join(" | ", update.Select(f => f is null ? "FULL" : string.Join(", ", f)))}]");
+        update.Where(f => f is not null).SelectMany(f => f!)
+            .Should().NotContain(p => PackageInstaller.IsModuleSourcePath(p),
+                "a module source is compiled into the module bundle and delivered by the module "
+                + "lane; the content source serves only the package folder, so asking it for a "
+                + "source can only ever come back empty");
+        sourceOnlyLog.Entries(LogLevel.Error).Should().NotContain(m => m.Contains("did NOT travel"),
+            "nothing was asked for that the source does not serve, so nothing can be short");
+        sourceOnlyLog.Entries(LogLevel.Warning)
+            .Should().NotContain(m => m.Contains("falling back to full install"));
+
+        var afterSourceOnly = await ReadRecord(MixedPkg);
+        afterSourceOnly!.ModuleVersion.Should().Be(MixedHashV2,
+            "the update moved the package forward on the incremental exit");
+        afterSourceOnly.InstalledFiles![MixedSourceFile].Should().Be("src-2",
+            "the record still declares the source at its NEW token — true, because the module "
+            + "bundle is what carries it — so the next diff is clean and does not ask again");
+
+        // ── Generation three: a content file moves BESIDE a source. It must still be fetched.
+        generation = MixedRepo(MixedHashV3, "src-3", "g-3", "# Guide\n\nGeneration THREE.");
+        before = source.Fetches.Count;
+        var both = await CatalogLayoutAreas.InstallOrUpdate(
+                Mesh, source, "HEAD", MixedCandidate(MixedHashV3), new RecordingLogger())
+            .Timeout(TestTimeouts.CrossSilo)
+            .Await(ct);
+        var mixedUpdate = source.Fetches.Skip(before).ToList();
+
+        mixedUpdate.Count(f => f is null).Should().Be(0,
+            "a content-and-source update stays incremental too");
+        var asked = mixedUpdate.Where(f => f is not null).SelectMany(f => f!).ToList();
+        asked.Should().Contain(MixedGuideFile,
+            "the negative control of the filter: the CONTENT file that moved is still asked for — "
+            + "excluding module sources narrows the fetch to what the source serves, it must not "
+            + "stop fetching what it does serve");
+        asked.Should().NotContain(p => PackageInstaller.IsModuleSourcePath(p));
+        both.WrittenPaths.Should().Contain(MixedGuidePath,
+            "the changed content node was written by the incremental update");
+        var afterBoth = await ReadRecord(MixedPkg);
+        afterBoth!.ModuleVersion.Should().Be(MixedHashV3);
+        afterBoth.InstalledFiles![MixedGuideFile].Should().Be("g-3");
+        afterBoth.InstalledFiles![MixedSourceFile].Should().Be("src-3");
+    }
 }
