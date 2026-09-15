@@ -420,12 +420,15 @@ is): a `global.json` in a **sibling** directory of the cwd does **not** apply �
 question two reviews got wrong in opposite directions. **Two** core-owned reusable workflows invoke
 `dotnet test` against satellite suites — `node-repo-module-pack.yml` (a module's sibling `*.Test`
 project, ×2 call sites) and `node-repo-platform-canary.yml` (the scheduled pin-vs-main canary) — and
-both run with cwd = the **caller's** checkout while keeping the platform in a **sibling** checkout
-(`$GITHUB_WORKSPACE/meshweaver`, `…/core-pin`, `…/core-main`). So core's own `global.json` never
-reaches them by itself; the **caller's** does, which means a satellite adding one is exactly the
-event that would have. Both lanes read the caller's `global.json` and choose their own flags —
-VSTest (`-warnaserror`, `--logger "trx;…"`) when nothing selects Microsoft.Testing.Platform, and
-xunit's MTP reporter (`--report-xunit-trx`, `--report-xunit-trx-filename`) when something does.
+both keep the platform in a **sibling** checkout (`$GITHUB_WORKSPACE/meshweaver`, `…/core-pin`,
+`…/core-main`), and `dotnet test` reads its runner from the first `global.json` walking up from its
+**cwd**. So the rule both lanes apply is: read the caller's `global.json` **and** the platform's;
+run under Microsoft.Testing.Platform when either selects it, with xunit's MTP reporter
+(`--report-xunit-trx`, `--report-xunit-trx-filename`), otherwise under VSTest (`-warnaserror`,
+`--logger "trx;…"`). The cwd is the **caller's checkout by default**, and the **platform's
+checkout only when the platform alone selects MTP**, which is the one way to make its
+`global.json` the one found. Both are executed against temp checkouts in CI's own shell
+(`.github/scripts/test-module-pack-test-runner.py`, `.github/scripts/test-platform-canary.py`).
 
 🚨 **"Nothing about a 3.x caller changes" was false, and it darkened main-cd the hour the upgrade
 merged (#4414).** A satellite does not pick its own xunit.v3 version: it builds with
@@ -443,7 +446,12 @@ absolute path, which makes that `global.json` the one found. Measured: from the 
 refusal above and no trx; from the platform's, 36 of 36 run and `ledger.trx` written. The build is
 untouched — `Directory.Build.props` and the NuGet config resolve from the project's directory, not
 the cwd. A repo that moves its own runner still lands no core PR; a repo that does not move is
-carried by the platform it compiles against.
+carried by the platform it compiles against — for the RUNNER. 🚨 Not for its code: under xunit.v3
+4.x `xUnit1069` is an **error by default**, not a warning `-warnaserror` promotes (measured
+2026-09-15, MeshWeaver.Plugins' `MeshWeaver.Courses.Test` built with no `-warnaserror` against core
+main: 3 × `error xUnit1069`). So every satellite suite with a timed test that ignores
+`TestContext.Current.CancellationToken` stops COMPILING the day its platform set carries 4.x — and
+main-cd builds MeshWeaver.Plugins' module suites against core main, so it meets that first.
 
 Three more measurements the lanes are built on, same SDK and day: `-p:` properties **do** reach the
 build under MTP (falsified with `-p:LangVersion=7.0` → `error CS8630`, exit 1), so
