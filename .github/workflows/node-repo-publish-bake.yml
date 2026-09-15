@@ -1351,6 +1351,8 @@ jobs:
           MODULE_COUNT=0
           ASSET_MODULES=0
           ASSET_FILES=0
+          NATIVE_MODULES=0
+          NATIVE_FILES=0
           # ───── ONE BUILD PER ASSEMBLY NAME, ACROSS THE WHOLE COMPOSED SET (MeshWeaver#3732) ─────
           # 🚨 A module-owned `MeshWeaver.*` sibling RIDES every bundle that references it, and some
           # of those siblings are ANOTHER package's declared module (Doc/Architecture/
@@ -1410,8 +1412,14 @@ jobs:
               printf '%s %s %s %s\n' "$simple" "$(digest_of "$dll")" "$(basename "$b")" \
                 "$(if [ "$simple" = "$name" ]; then echo declared; else echo riding; fi)" >> "$DIGESTS"
             done < <(find "$u/meshweaver/modules" -maxdepth 1 -type f \( -name 'MeshWeaver.*.dll' -o -name 'MeshWeaver.dll' \) | sort)
-            mkdir -p "$EXT/$name"
-            cp -R "$u"/meshweaver/modules/. "$EXT/$name/"
+            # 🚨 ONE LEVEL DEEPER THAN IT LOOKS (MeshWeaver#4126): the module lands under
+            # `<ext>/modules/<Name>/`, never `<ext>/<Name>/`. `ModuleNativeAssets` derives the
+            # module folder from the REQUESTING assembly's location and accepts it only when its
+            # PARENT is named `modules` — the same shape ModuleLandingService writes and the image
+            # publish lays out. Composed at the shallower path, a module's natives ride the bundle,
+            # land on disk, and are never probed.
+            mkdir -p "$EXT/modules/$name"
+            cp -R "$u"/meshweaver/modules/. "$EXT/modules/$name/"
             # 🚨 A module bundle carries its STATIC WEB ASSETS separately from the flat closure,
             # under `meshweaver/moduleassets/` (NuGetPackageWriter.ModuleAssetFolder), and they keep
             # their MODULE-RELATIVE path — `wwwroot/x.js`, `wwwroot/_content/<Dep>/y.css`. That is
@@ -1424,7 +1432,7 @@ jobs:
             # the collaboration views into MeshWeaver.Markdown.Collaboration (MeshWeaver#3514).
             assets=0
             if [ -d "$u/meshweaver/moduleassets" ]; then
-              cp -R "$u"/meshweaver/moduleassets/. "$EXT/$name/"
+              cp -R "$u"/meshweaver/moduleassets/. "$EXT/modules/$name/"
               # Fail CLOSED, per file, against a DENOMINATOR: what the bundle ships is the
               # expectation, what the module folder holds is the measurement. A landing that copied
               # nothing must go RED here rather than report a green zero — an uncounted zero is
@@ -1433,15 +1441,37 @@ jobs:
               assets=$(wc -l < "${u}.shipped-assets" | tr -d ' ')
               missing=0
               while IFS= read -r rel; do
-                [ -f "$EXT/$name/$rel" ] || { echo "::error::$name: shipped static asset '$rel' did not land at /ext/$name/$rel"; missing=$((missing + 1)); }
+                [ -f "$EXT/modules/$name/$rel" ] || { echo "::error::$name: shipped static asset '$rel' did not land at /ext/modules/$name/$rel"; missing=$((missing + 1)); }
               done < "${u}.shipped-assets"
-              [ "$missing" -eq 0 ] || { echo "::error::$(basename "$b"): $missing of $assets shipped static asset(s) are missing from /ext/$name — a browser rendering against this mesh would 404 them"; exit 1; }
+              [ "$missing" -eq 0 ] || { echo "::error::$(basename "$b"): $missing of $assets shipped static asset(s) are missing from /ext/modules/$name — a browser rendering against this mesh would 404 them"; exit 1; }
               [ "$assets" -eq 0 ] || ASSET_MODULES=$((ASSET_MODULES + 1))
             fi
             ASSET_FILES=$((ASSET_FILES + assets))
+            # 🚨 …AND ITS RID-SPECIFIC NATIVE PAYLOADS, under `meshweaver/modulenatives/`
+            # (NuGetPackageWriter.ModuleNativeFolder, MeshWeaver#4126), keeping the module-relative
+            # path `runtimes/<rid>/native/<file>`. That path is not decoration: `ModuleNativeAssets`
+            # composes its probe from exactly those four segments under the module folder and has no
+            # recursive walk, so a payload landed anywhere else reads as shipped and behaves as
+            # absent — a module that loads, renders, and throws DllNotFoundException at its first
+            # P/Invoke with nothing in any log connecting the two.
+            natives=0
+            if [ -d "$u/meshweaver/modulenatives" ]; then
+              cp -R "$u"/meshweaver/modulenatives/. "$EXT/modules/$name/"
+              # Fail CLOSED per file against a DENOMINATOR, exactly as the assets above: what the
+              # bundle ships is the expectation, what the module folder holds is the measurement.
+              ( cd "$u/meshweaver/modulenatives" && find . -type f ) | sed 's|^\./||' > "${u}.shipped-natives"
+              natives=$(wc -l < "${u}.shipped-natives" | tr -d ' ')
+              missing=0
+              while IFS= read -r rel; do
+                [ -f "$EXT/modules/$name/$rel" ] || { echo "::error::$name: shipped native payload '$rel' did not land at /ext/modules/$name/$rel"; missing=$((missing + 1)); }
+              done < "${u}.shipped-natives"
+              [ "$missing" -eq 0 ] || { echo "::error::$(basename "$b"): $missing of $natives shipped native payload(s) are missing from /ext/modules/$name — this module throws DllNotFoundException at its first P/Invoke"; exit 1; }
+              [ "$natives" -eq 0 ] || NATIVE_MODULES=$((NATIVE_MODULES + 1))
+            fi
+            NATIVE_FILES=$((NATIVE_FILES + natives))
             MODULE_COUNT=$((MODULE_COUNT + 1))
-            MODULE_ARGS="$MODULE_ARGS --module /ext/$name/$name.dll"
-            echo "external module composed: $name ($(basename "$b")) — $assets static asset file(s)"
+            MODULE_ARGS="$MODULE_ARGS --module /ext/modules/$name/$name.dll"
+            echo "external module composed: $name ($(basename "$b")) — $assets static asset file(s), $natives native payload(s)"
             # 🚨 The bytes this bake composes are the bytes its publication SEALS (modules/<pkg>.module.nupkg,
             # MeshWeaver#2698): a consumer pinned to this identity composes exactly these, never the
             # registry's. Keyed by PACKAGE id, which is what a consumer asks for (registry-modules).
@@ -1489,7 +1519,7 @@ jobs:
             echo "::error::the composed module set carries $DIVERGED assembly name(s) at more than one build. The bake would stamp every NodeType against whichever copy it loaded first, and every consumer that loaded another would decline them. Build the whole set in ONE compilation, or stop the divergent copy riding — Doc/Architecture/ModuleOwnedSiblingsRide."
             exit 1
           fi
-          echo "external modules: $MODULE_COUNT composed, $ASSET_MODULES of them carrying static web assets, $ASSET_FILES asset file(s) landed module-relative under /ext/<module>/"
+          echo "external modules: $MODULE_COUNT composed, $ASSET_MODULES of them carrying static web assets, $ASSET_FILES asset file(s), $NATIVE_MODULES carrying native payloads, $NATIVE_FILES native file(s) landed module-relative under /ext/modules/<module>/"
           # 🚨 The SEALED set is a different population from the COMPOSED set, and both denominators
           # are printed: the verdict above covers everything the bake loads; the seal carries only
           # what this repository owns. A satellite that owns no module seals an EMPTY set — which a
