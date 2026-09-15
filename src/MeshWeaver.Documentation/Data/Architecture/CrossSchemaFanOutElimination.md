@@ -60,8 +60,22 @@ schema(s)".
 | 1 | **Notification bell + panel** — `NotificationCenter.razor` / `NotificationCenterPanel.razor` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Portal`) | was `nodeType:Notification sort:CreatedAt-desc` — unanchored, unbounded, LIVE | `notifications` | **DONE** — [Addressed Notifications](/Doc/Architecture/AddressedNotifications) (#3156/#3216/#3238). Two pinned legs, `namespace:{viewer}/_Notification` and (global admins only) `namespace:Admin/_Notification`; the grace-list line is deleted |
 | 2 | **Security fold globals** — `SecurityQueries.Roles` / `.Memberships` / `.GatedNodes(type)` (per gated type!) via `PermissionEvaluator` | `nodeType:Role scope:subtree … complete`, `nodeType:GroupMembership …`, `nodeType:{gated} …` | `mesh_nodes` | **To eliminate** — see plan 2 |
 | 3 | **Root-scope grants/policies** — `SecurityQueries.RootAssignments` / `.RootPolicy` | `namespace:_Access nodeType:AccessAssignment …` / `path:_Policy nodeType:PartitionAccessPolicy …` | `system_access.access` / — | **Done** 2026-09-02 (#2194) — the grants leg never fanned out (the router pins `_Access` to its registered schema); the policy leg was `namespace: id:_Policy`, path-less, and DID fan out 179×/5 min for a row that cannot exist on Postgres — now read by path, see below |
-| 4 | `node_type ILIKE $1` wildcard (seen live; caller not yet named) | suffix/wildcard nodeType | `mesh_nodes` | **Identify via the shape log** (Plugins #1035), then anchor or fold into plan 2 |
+| 4 | `node_type ILIKE $1` wildcard — **named**: MeshWeaver.SocialMedia's `ScheduledPostWatcher` (the scheduled-post watch, not the `PostStatsRefresher`/`PastPostIngestJob` the incident guessed) | was `nodeType:*Post select:…content,lastModifiedBy`, path-less | `mesh_nodes` | **Anchored** 2026-09-07 (`MeshWeaver.SocialMedia@e11bd39`, #3545) — `ScheduledPostWatcher.PostsQuery(partition)` reads `namespace:{partition} scope:descendants nodeType:*Post …`, one query per publishing partition, and its armed-timer listing is path-anchored too |
 | 5 | `Admin/Menu/{X}` per-render route misses | point probes | `mesh_nodes` | **Fixed** 2026-08-29 (`83b1892be`, anchored existence query) |
+| 6 | **Hosting fleet pages + build broadcaster** (MeshWeaver.Plugins) — `HostingAdminLayoutAreas.Snapshot` (nine call sites on the Fleet and Fleet Console pages), `FleetConsoleLogic.*Query`, `PlatformBuildInboxWatcher.DeploymentsQuery` | was `nodeType:Hosting/Deployment[ scope:subtree]` and four siblings, bare | `mesh_nodes` | **Declared** 2026-09-15 (MeshWeaver.Plugins#1918, #3545) — a deployment record lives wherever its owner lives, so the set of partitions IS the answer: `MeshWideQuery.Declare`/`OfType`. On a refusing host the bare form faulted and the snapshot rendered an EMPTY fleet |
+| 7 | **Portal search box** (MeshWeaver.Plugins) — Blazor `MeshSearch`, the unbound `SearchBoxView`, portal-next `SearchBar` | was `source:accessed scope:descendants … context:search limit:N` and `*{text}* scope:descendants context:search is:main limit:50`, bare, per debounced keystroke | `mesh_nodes` + `user_activity` | **Declared** 2026-09-15 (MeshWeaver.Plugins#1918, #3545) — it searches everything the viewer can read; RLS still narrows the union. Cheaper still: narrow the accessed leg to the partitions the viewer's UserActivity rows name |
+
+🚨 **Rows 6 and 7 were invisible to the static census, and that is the lesson of #3545.**
+MeshWeaver.Plugins' `UnanchoredQueryAllowFileTest` and `ShellQueryShapesTest` scan `src/` — the
+compiled projects. The Hosting callers in row 6 live in NodeType `Source/*.cs` trees, which compile
+at runtime in the portal and which no census reads, and the search box's free-text query starts
+with `*`, which the shell census does not recognise as a query. So they surfaced only as log lines.
+And the log incident folded every unanchored caller onto ONE fingerprint — the exception quotes the
+query and the masking rules ate the only token that told callers apart — so #3545 reopened under
+its `*Post` title whatever anybody fixed. The identity now keeps `nodeType:` terms
+(MeshWeaver.Plugins `8944f145e`, 2026-09-13); a caller with no `nodeType:` term, like the search
+box, still shares one fingerprint with every other such caller. Read an unanchored incident's
+**samples**, never its title.
 
 Each of these small sets is **tiny and rarely changing** — the fold's global reads return under
 ~50 rows; the bell's thousands of rows are its own defect — fetched the most expensive way the
