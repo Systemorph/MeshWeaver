@@ -44,6 +44,7 @@ public sealed class ContainerReferenceSet
         ImmutableDictionary<string, ImmutableArray<string>> packageAssemblies,
         ImmutableDictionary<string, ImmutableArray<string>> packageDependencies,
         ImmutableDictionary<string, ImmutableArray<string>> packageNatives,
+        ImmutableDictionary<string, ImmutableArray<string>> packageUncarried,
         ImmutableDictionary<string, string> assembliesByName,
         ImmutableHashSet<string> frameworkAssemblyNames,
         string platformAssemblyVersion)
@@ -53,6 +54,7 @@ public sealed class ContainerReferenceSet
         PackageAssemblies = packageAssemblies;
         PackageDependencies = packageDependencies;
         PackageNatives = packageNatives;
+        PackageUncarried = packageUncarried;
         AssembliesByName = assembliesByName;
         FrameworkAssemblyNames = frameworkAssemblyNames;
         PlatformAssemblyVersion = platformAssemblyVersion;
@@ -86,6 +88,21 @@ public sealed class ContainerReferenceSet
     /// DECLARE the CVE-patched engine.</para>
     /// </summary>
     public ImmutableDictionary<string, ImmutableArray<string>> PackageNatives { get; }
+
+    /// <summary>
+    /// Package id → what it DECLARES that this lane does not carry, as worded findings
+    /// (<see cref="NativeContributions.UncarriedBy"/>, #4367/#4445) — a native at a layout the loader
+    /// does not probe, or a RID-specific managed assembly left in <c>runtimeTargets</c>. Reported,
+    /// never refused, until a measured container wave arms a refusal.
+    /// </summary>
+    public ImmutableDictionary<string, ImmutableArray<string>> PackageUncarried { get; }
+
+    /// <summary>The worded findings <paramref name="packageId"/>'s node carries in this
+    /// container's deps.json (<see cref="PackageUncarried"/>), empty when none.</summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>The findings.</returns>
+    public ImmutableArray<string> UncarriedOf(string packageId) =>
+        PackageUncarried.TryGetValue(packageId, out var findings) ? findings : [];
 
     /// <summary>Assembly simple name → the file backing it (case-insensitive).</summary>
     public ImmutableDictionary<string, string> AssembliesByName { get; }
@@ -148,8 +165,8 @@ public sealed class ContainerReferenceSet
                 + "is a failure rather than an empty build.");
 
         var deps = DepsFile(app);
-        var (packageVersions, packageAssemblies, packageDependencies, packageNatives, platformVersion) =
-            ReadDeps(deps);
+        var (packageVersions, packageAssemblies, packageDependencies, packageNatives, packageUncarried,
+             platformVersion) = ReadDeps(deps);
 
         // The reference set is the union of three things the container supplies, in increasing
         // priority: the SHARED FRAMEWORKS installed in it, the assemblies this process was
@@ -192,6 +209,7 @@ public sealed class ContainerReferenceSet
             packageAssemblies,
             packageDependencies,
             packageNatives,
+            packageUncarried,
             byName.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase),
             frameworkNames.ToImmutable(),
             platformVersion);
@@ -268,6 +286,7 @@ public sealed class ContainerReferenceSet
                     ImmutableDictionary<string, ImmutableArray<string>> Assemblies,
                     ImmutableDictionary<string, ImmutableArray<string>> Dependencies,
                     ImmutableDictionary<string, ImmutableArray<string>> Natives,
+                    ImmutableDictionary<string, ImmutableArray<string>> Uncarried,
                     string PlatformAssemblyVersion)
         ReadDeps(string path)
     {
@@ -316,6 +335,8 @@ public sealed class ContainerReferenceSet
                 StringComparer.OrdinalIgnoreCase);
             var natives = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(
                 StringComparer.OrdinalIgnoreCase);
+            var uncarried = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(
+                StringComparer.OrdinalIgnoreCase);
             var bindingIdentities = new SortedSet<string>(StringComparer.Ordinal);
             foreach (var entry in runtimeTarget.EnumerateObject())
             {
@@ -334,6 +355,10 @@ public sealed class ContainerReferenceSet
                 // had the identical bug in the identical place.
                 if (NativeContributions.DeclaredBy(entry.Value) is { IsEmpty: false } declared)
                     natives[entryId] = declared;
+                // …and what it declares that this lane does NOT carry, named (#4445) — before the
+                // same short-circuit, for the same reason.
+                if (NativeContributions.UncarriedBy(entry.Value, entryId) is { IsEmpty: false } dropped)
+                    uncarried[entryId] = dropped;
                 if (!entry.Value.TryGetProperty("runtime", out var runtime)
                     || runtime.ValueKind != JsonValueKind.Object)
                     continue;
@@ -362,7 +387,7 @@ public sealed class ContainerReferenceSet
                     + "to emit a reference set.");
 
             return (versions.ToImmutable(), assemblies.ToImmutable(), dependencies.ToImmutable(),
-                natives.ToImmutable(), bindingIdentities.Single());
+                natives.ToImmutable(), uncarried.ToImmutable(), bindingIdentities.Single());
         }
     }
 

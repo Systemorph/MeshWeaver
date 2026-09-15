@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.Plugin.Build;
 
@@ -75,8 +76,8 @@ public static class DepsClosure
 {
     /// <summary>The derived closure: runtime file names to bundle beside the entry DLL, plus the
     /// MeshWeaver.* nodes the walk stopped at (diagnostic — printed so a pack log shows the
-    /// split), plus warnings for nodes with native <c>runtimeTargets</c> the bundle does not
-    /// carry, plus the PACKAGE UNIVERSE — every runtime file of every non-MeshWeaver package node
+    /// split), plus the TEXT of every declared asset the derivation does not carry (the same
+    /// findings, structured, are <see cref="Result.Uncarried"/>), plus the PACKAGE UNIVERSE — every runtime file of every non-MeshWeaver package node
     /// in the whole graph. The universe is the packer's lane witness: a folder that materializes
     /// package assets at all (a publish folder, a CopyLocalLockFileAssemblies build) contains SOME
     /// of it, however framework-trimmed the module's own dependencies are — so "none of the
@@ -102,6 +103,129 @@ public static class DepsClosure
         /// <see cref="NativeAsset.RelativePath"/> is already the layout it is looking for.</para>
         /// </summary>
         public IReadOnlyList<NativeAsset> Natives { get; init; } = [];
+
+        /// <summary>
+        /// 🚨 Every asset the reachable closure DECLARES that this derivation does not carry — the
+        /// two shapes a bundle cannot carry by derivation (<see cref="UncarriedKind"/>). Structured
+        /// rather than text so the packer can ask the one question that decides the pack: does
+        /// something the caller NAMED carry it instead (#4367)? <see cref="Warnings"/> holds the
+        /// same findings in words, one <see cref="UncarriedAsset.Describe"/> each, so the two can
+        /// never disagree.
+        ///
+        /// <para>An <c>init</c> property for the same binary-compatibility reason as
+        /// <see cref="Natives"/>.</para>
+        /// </summary>
+        public IReadOnlyList<UncarriedAsset> Uncarried { get; init; } = [];
+    }
+
+    /// <summary>The two shapes a module bundle cannot carry BY DERIVATION (#4126, #4367).</summary>
+    public enum UncarriedKind
+    {
+        /// <summary>A RID-specific MANAGED assembly (<c>assetType: "runtime"</c> under
+        /// <c>runtimeTargets</c>): the flat closure has one slot per assembly name and no way to
+        /// choose a RID at pack time.</summary>
+        RidSpecificManaged,
+
+        /// <summary>A native payload declared at a layout the module loader does not probe —
+        /// anything but exactly <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c>.</summary>
+        UnprobedNative,
+    }
+
+    /// <summary>
+    /// One asset the module's reachable closure declares and the derivation does not carry.
+    /// <c>module-pack</c> REFUSES the pack for it unless something the caller named carries it —
+    /// <c>--with</c> for either shape, <c>--with-native</c> for a native (#4367).
+    /// </summary>
+    /// <param name="Kind">Which of the two shapes.</param>
+    /// <param name="Package">The package that declares it.</param>
+    /// <param name="RelativePath">The deps.json key, <c>/</c>-separated, verbatim.</param>
+    /// <param name="Rid">The RID the declaration is for — its <c>rid</c> property, else the
+    /// segment after <c>runtimes/</c>; empty when neither states one.</param>
+    public sealed record UncarriedAsset(
+        UncarriedKind Kind, string Package, string RelativePath, string Rid)
+    {
+        /// <summary>The declared file's name — the value <c>--with</c> takes, since the flat
+        /// module folder is where the file has to sit for that flag to carry it.</summary>
+        public string FileName => RelativePath.Split('/')[^1];
+
+        /// <summary>
+        /// For an <see cref="UncarriedKind.UnprobedNative"/>: where the loader WOULD find the
+        /// same file for the same RID — <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c>, the value
+        /// <c>--with-native</c> takes. Null for a managed asset (a RID-specific assembly is not a
+        /// native and has no probed layout), and for a native whose RID or file name cannot form
+        /// that layout (no RID stated, or a traversal segment) — for those, <c>--with</c> is the
+        /// only carrier.
+        /// </summary>
+        public string? ProbedPath
+        {
+            get
+            {
+                if (Kind != UncarriedKind.UnprobedNative)
+                    return null;
+                var probed = $"runtimes/{Rid}/native/{FileName}";
+                return IsProbedNativeLayout(probed) ? probed : null;
+            }
+        }
+
+        /// <summary>
+        /// The finding in words — what is not carried, why, and the step that carries it. 🚨 Every
+        /// step it names must SATISFY the pack's refusal, and each one does: the refusal is lifted by
+        /// exactly <c>--with <see cref="FileName"/></c> or, for a native,
+        /// <c>--with-native <see cref="ProbedPath"/></c> — and in the shared lane, which composes the
+        /// pack arguments itself, by the csproj items it turns into those flags
+        /// (<c>MeshWeaverPackWith</c> / <c>MeshWeaverPackWithNative</c>, read by
+        /// <c>node-repo-module-pack.yml</c>). Advice that names any other step blocks a module the
+        /// message claims to unblock. The finding itself is the one spelling both lanes share
+        /// (<see cref="UncarriedAssetFindings"/>).
+        /// </summary>
+        public string Describe() => Kind switch
+        {
+            UncarriedKind.RidSpecificManaged =>
+                UncarriedAssetFindings.RidSpecificManaged(Package, RelativePath)
+                + " The pack will not choose one silently, so state which copy occupies that slot. "
+                + "Packing locally: copy the file into the module folder root before packing (or "
+                + "keep the RID-agnostic copy already there, if that is the one the module needs) "
+                + $"and name it with --with {FileName} (--with takes a plain file name; it refuses a "
+                + "path). "
+                + SharedLane("$(PublishDir)", $"<MeshWeaverPackWith Include=\"{FileName}\" />")
+                + " — or the MeshWeaverPackWith item alone, to keep the RID-agnostic copy.",
+            _ =>
+                UncarriedAssetFindings.UnprobedNative(Package, RelativePath)
+                + " Carry it where the loader looks. Packing locally: "
+                + (ProbedPath is { } probed
+                    ? $"lay it out at {probed} and name it with --with-native {probed}, or "
+                    : "")
+                + $"copy it to the module folder root and name it with --with {FileName} (the "
+                + "loader's LAST probe is that flat folder). "
+                + (ProbedPath is { } slot
+                    ? SharedLane($"$(PublishDir)runtimes/{Rid}/native",
+                        $"<MeshWeaverPackWithNative Include=\"{slot}\" />")
+                    : SharedLane("$(PublishDir)", $"<MeshWeaverPackWith Include=\"{FileName}\" />")),
+        };
+
+        /// <summary>
+        /// The shared lane's half of the remedy, as csproj lines a module author can paste.
+        /// <c>node-repo-module-pack.yml</c> packs the module's PORTABLE publish folder and composes
+        /// the pack arguments itself, so the module states its carrier where the lane reads it —
+        /// its own csproj. A portable publish lays every <c>runtimeTargets</c> asset out at its
+        /// declared key (measured 2026-09-15 on SDK 10.0.400 for both shapes:
+        /// <c>System.IO.Ports</c>' <c>runtimes/unix/lib/net9.0/System.IO.Ports.dll</c>, and a
+        /// native at <c>runtimes/linux-x64/nativeassets/net10.0/</c>), so a copy after Publish
+        /// from <c>$(PublishDir)&lt;that key&gt;</c> needs no package-cache path, and the item names
+        /// the result.
+        /// </summary>
+        private string SharedLane(string destinationFolder, string packItem) =>
+            "In the shared lane (node-repo-module-pack), which packs the module's publish folder, "
+            + $"put it in the module's csproj — the publish lays this file out at {RelativePath}, so "
+            + $"copy it after Publish and name it: <Target Name=\"{TargetName}\" "
+            + $"AfterTargets=\"Publish\"><Copy SourceFiles=\"$(PublishDir){RelativePath}\" "
+            + $"DestinationFolder=\"{destinationFolder}\" /></Target><ItemGroup>{packItem}</ItemGroup>";
+
+        /// <summary>An MSBuild target name unique to this finding, so two pasted snippets never
+        /// collide (MSBuild keeps the LAST definition of a target name, silently).</summary>
+        private string TargetName =>
+            "MeshWeaverPackCarry_" + string.Concat(
+                $"{Package}_{Rid}_{FileName}".Select(c => char.IsAsciiLetterOrDigit(c) ? c : '_'));
     }
 
     /// <summary>
@@ -134,8 +258,8 @@ public static class DepsClosure
         List<string> Dependencies,
         List<string> RuntimeFiles,
         IReadOnlyList<NativeAsset> Natives,
-        IReadOnlyList<string> RidSpecificManaged,
-        IReadOnlyList<string> UnreachableNatives,
+        IReadOnlyList<(string Path, string Rid)> RidSpecificManaged,
+        IReadOnlyList<(string Path, string Rid)> UnreachableNatives,
         string? LibraryType);
 
     /// <summary>
@@ -216,7 +340,7 @@ public static class DepsClosure
 
         var files = new List<string>();
         var natives = new List<NativeAsset>();
-        var warnings = new List<string>();
+        var uncarried = new List<UncarriedAsset>();
         foreach (var name in ownReachable.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
         {
             // 🚨 NO `RuntimeFiles.Count == 0` SHORT-CIRCUIT. It used to sit here, and it made the
@@ -228,32 +352,19 @@ public static class DepsClosure
                 continue;
             files.AddRange(node.RuntimeFiles);
             natives.AddRange(node.Natives);
-            // 🚨 What is STILL dropped, now that the natives are not: a RID-specific MANAGED
-            // assembly (`assetType: "runtime"` under runtimeTargets). The flat closure carries one
-            // file per name, and there is no flat answer to "which RID's copy" — so these stay out
-            // and are NAMED. Reporting them is the point: the warning this replaced could not fire
-            // for a pure-native package at all, and a drop nobody is told about is how a module
-            // lands that faults at first use.
-            // 🚨 Both messages name a step the reader can actually TAKE. `--with` accepts a plain
-            // file name inside the module folder and REFUSES any path component, so "name it with
-            // --with" is not executable for a value that is a `runtimes/<rid>/…` path — the copy
-            // has to be flattened into the module folder first, and saying so is the difference
-            // between advice and a dead end.
-            foreach (var dropped in node.RidSpecificManaged)
-                warnings.Add(
-                    $"'{name}' declares a RID-specific MANAGED asset the bundle does not carry: "
-                    + $"{dropped}. The module's flat closure has one slot per assembly name and no "
-                    + "way to choose a RID at pack time. If the module needs that RID's copy, copy "
-                    + "the file into the module folder root before packing and name it with "
-                    + "--with <file name> (--with takes a plain file name; it refuses a path).");
-            foreach (var unreachable in node.UnreachableNatives)
-                warnings.Add(
-                    $"'{name}' declares a native asset at '{unreachable}', which is NOT the layout "
-                    + "the module loader probes (exactly runtimes/<rid>/native/<file>) — it is not "
-                    + "carried, because bytes at a path nothing looks at read as shipped and behave "
-                    + "as absent. If the module needs it, copy it to the module folder root and "
-                    + "name it with --with <file name>: the loader's LAST probe is that flat "
-                    + "folder.");
+            // 🚨 What the derivation still does NOT carry, now that the probed natives are: a
+            // RID-specific MANAGED assembly (`assetType: "runtime"` under runtimeTargets — the flat
+            // closure carries one file per name, and there is no flat answer to "which RID's
+            // copy"), and a native at a layout the loader never probes. Both are NAMED, as data:
+            // module-pack REFUSES the pack for each one unless something the caller named carries
+            // it (#4367), so the finding has to say exactly which step lifts the refusal — see
+            // UncarriedAsset.Describe. `--with` accepts a plain file name inside the module folder
+            // and REFUSES any path component, so the copy has to be flattened into the module
+            // folder first, and saying so is the difference between advice and a dead end.
+            foreach (var (path, rid) in node.RidSpecificManaged)
+                uncarried.Add(new UncarriedAsset(UncarriedKind.RidSpecificManaged, name, path, rid));
+            foreach (var (path, rid) in node.UnreachableNatives)
+                uncarried.Add(new UncarriedAsset(UncarriedKind.UnprobedNative, name, path, rid));
         }
         var excluded = platformStops.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
@@ -278,10 +389,11 @@ public static class DepsClosure
         return new Result(
             files.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             excluded,
-            warnings,
+            [.. uncarried.Select(u => u.Describe())],
             universe)
         {
             Natives = carried,
+            Uncarried = uncarried,
         };
     }
 
@@ -317,10 +429,7 @@ public static class DepsClosure
             if (path.EndsWith(".a", StringComparison.OrdinalIgnoreCase)
                 || path.EndsWith(".lib", StringComparison.OrdinalIgnoreCase))
                 continue;
-            var rid = entry.Value.TryGetProperty("rid", out var r) ? r.GetString() ?? "" : "";
-            if (string.IsNullOrEmpty(rid))
-                rid = path.Split('/') is [_, var fromPath, ..] ? fromPath : "";
-            found.Add(new NativeAsset(path, rid, package));
+            found.Add(new NativeAsset(path, RidOf(entry.Value, path), package));
         }
         return found;
     }
@@ -330,12 +439,12 @@ public static class DepsClosure
     /// Static libraries are excluded here too: they are link-time inputs, and naming one as
     /// "unreachable" would send a reader looking for a load path that was never wanted.
     /// </summary>
-    private static IReadOnlyList<string> UnreachableNativesOf(JsonElement node)
+    private static IReadOnlyList<(string Path, string Rid)> UnreachableNativesOf(JsonElement node)
     {
         if (!node.TryGetProperty("runtimeTargets", out var targets)
             || targets.ValueKind != JsonValueKind.Object)
             return [];
-        var found = new List<string>();
+        var found = new List<(string Path, string Rid)>();
         foreach (var entry in targets.EnumerateObject())
         {
             if (!entry.Value.TryGetProperty("assetType", out var assetType)
@@ -346,7 +455,7 @@ public static class DepsClosure
                 || path.EndsWith(".a", StringComparison.OrdinalIgnoreCase)
                 || path.EndsWith(".lib", StringComparison.OrdinalIgnoreCase))
                 continue;
-            found.Add(path);
+            found.Add((path, RidOf(entry.Value, path)));
         }
         return found;
     }
@@ -355,17 +464,33 @@ public static class DepsClosure
     /// The RID-specific MANAGED assets a node declares (<c>assetType: "runtime"</c> under
     /// <c>runtimeTargets</c>) — reported, not carried. See the warning at the call site.
     /// </summary>
-    private static IReadOnlyList<string> RidSpecificManagedOf(JsonElement node)
+    private static IReadOnlyList<(string Path, string Rid)> RidSpecificManagedOf(JsonElement node)
     {
         if (!node.TryGetProperty("runtimeTargets", out var targets)
             || targets.ValueKind != JsonValueKind.Object)
             return [];
-        var found = new List<string>();
+        var found = new List<(string Path, string Rid)>();
         foreach (var entry in targets.EnumerateObject())
             if (entry.Value.TryGetProperty("assetType", out var assetType)
                 && string.Equals(assetType.GetString(), "runtime", StringComparison.OrdinalIgnoreCase))
-                found.Add(entry.Name.Replace('\\', '/'));
+            {
+                var path = entry.Name.Replace('\\', '/');
+                found.Add((path, RidOf(entry.Value, path)));
+            }
         return found;
+    }
+
+    /// <summary>The RID a <c>runtimeTargets</c> entry is for: its <c>rid</c> property, else the
+    /// segment after <c>runtimes/</c> in its key, else empty. Only a <c>runtimes/</c> key names a
+    /// RID by position — reading the second segment of any other key would mint one from a folder
+    /// name, and <see cref="UncarriedAsset.ProbedPath"/> would then advise a slot no host
+    /// probes.</summary>
+    private static string RidOf(JsonElement entry, string path)
+    {
+        var rid = entry.TryGetProperty("rid", out var r) ? r.GetString() ?? "" : "";
+        if (string.IsNullOrEmpty(rid))
+            rid = path.Split('/') is ["runtimes", var fromPath, ..] ? fromPath : "";
+        return rid;
     }
 
     // ONE spelling of "the platform side owns this name", shared with the platform-shipped witness

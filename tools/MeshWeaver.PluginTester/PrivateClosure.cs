@@ -77,6 +77,16 @@ public static class PrivateClosure
         /// declared does not degrade, it throws <c>DllNotFoundException</c> at the first P/Invoke.
         /// </summary>
         public ImmutableArray<string> NativesMissing { get; init; } = [];
+
+        /// <summary>
+        /// 🚨 What the walk reached that a package DECLARES and this lane does NOT carry — a native
+        /// at a layout the loader does not probe, or a RID-specific MANAGED assembly — as worded
+        /// findings (#4367, #4445). The SDK lane REFUSES the pack on the same findings (same
+        /// wording, <c>UncarriedAssetFindings</c>); this lane NAMES them as warnings until a
+        /// measured container wave arms a refusal here. Until this existed it dropped both without
+        /// a line, so no such wave could be measured.
+        /// </summary>
+        public ImmutableArray<string> Uncarried { get; init; } = [];
     }
 
     /// <summary>One native payload riding the bundle.</summary>
@@ -112,6 +122,7 @@ public static class PrivateClosure
         // distinct loadable libraries and folding them together would drop one.
         var natives = new Dictionary<string, NativeRide>(StringComparer.Ordinal);
         var nativesMissing = new SortedSet<string>(StringComparer.Ordinal);
+        var uncarried = new SortedSet<string>(StringComparer.Ordinal);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var pending = new Stack<string>(packageIds);
 
@@ -174,6 +185,11 @@ public static class PrivateClosure
                     nativesMissing.Add(declared);
             }
 
+            // …and what either record says this package declares that neither can carry here —
+            // named, never passed over (#4445).
+            foreach (var finding in container.UncarriedOf(id).Concat(shelf?.UncarriedOf(id) ?? []))
+                uncarried.Add(finding);
+
             // Both records are followed: the shelf pins additional libraries, the image pins
             // everything it carries, and a package can be known to one and not the other.
             foreach (var dependency in container.DependenciesOf(id))
@@ -190,6 +206,7 @@ public static class PrivateClosure
         {
             Natives = [.. natives.Values.OrderBy(n => n.RelativePath, StringComparer.Ordinal)],
             NativesMissing = [.. nativesMissing],
+            Uncarried = [.. uncarried],
         };
     }
 

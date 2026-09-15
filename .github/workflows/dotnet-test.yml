@@ -2437,6 +2437,16 @@ jobs:
     # evidence comparator's cases, which no workflow ran until now.
     - name: "Execute module-pack's test-runner selection against temp checkouts"
       run: python3 .github/scripts/test-module-pack-test-runner.py
+    # The SDK path's per-module pack additions (#4367): `module-pack --deps-closure` REFUSES a
+    # RID-specific managed asset or an unprobed native unless something the module NAMES carries
+    # it, and this lane composes the pack arguments itself — so the module states the carrier in
+    # its csproj (MeshWeaverPackWith / MeshWeaverPackWithNative) and the lane turns each item into
+    # --with / --with-native. Without that read the refusal would prescribe a step no CI-built module
+    # can take. The harness EXTRACTS the block between its markers (red if it cannot find exactly
+    # one, inside the sdk) case) and runs it under bash with `dotnet` stubbed to MSBuild's measured
+    # -getItem JSON shape and the real jq — plus a falsification arm that deletes the append.
+    - name: "Execute module-pack's per-module pack additions against temp csprojs"
+      run: python3 .github/scripts/test-module-pack-with.py
     - name: "Execute the platform canary's evidence and runner code"
       run: python3 .github/scripts/test-platform-canary.py
 
