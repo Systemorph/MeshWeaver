@@ -43,6 +43,8 @@
 #                                                             nothing about the connection that fails
 #  17. no wait-for-postgres probes memex-postgres-service unless the chart renders it  or the gate
 #                                                             spins forever on a name that never resolves
+#  18. an ingress naming a tlsSecret names an ISSUER for it   or the host is served another
+#                                                             instance's certificate (chart refusal)
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -127,6 +129,12 @@ COMBOS=(
   # here is the chart's in-cluster default, and pearl's pods waited forever for memex-postgres-service.
   # Invariants 16 and 17 assert the probe is the record-rendered MEMEX_HOST and never that Service.
   "a Key Vault connection string, record-driven (the pearl shape, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.keyvault-connection-string.yaml"
+  # 🚨 A public host and its certificate (pearl, 2026-09-15). The ingress must ASK cert-manager for
+  # the Secret it names in spec.tls; an ingress that names one nobody issues is served the
+  # controller's fallback — another instance's certificate — and every browser refuses it. The
+  # opt-out shape is here too, because "no issuer" must be a statement, never an omission.
+  "a public host issued by cert-manager (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-issuer.yaml"
+  "a host whose TLS Secret is pre-provisioned (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-preprovisioned.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -189,6 +197,7 @@ REFUSALS=(
   "AdoNet on an external database with no connection string in values (the #3780 render)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.adonet-external-db-no-connection-string.yaml|MeshWeaver#3780"
   "an external database with neither a values connection string nor a MEMEX_HOST (the pearl refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-no-host.yaml|names no external database host"
   "an external database whose values string names the in-cluster Service (the explicit-placeholder refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-explicit-in-cluster-host.yaml|names the in-cluster Service memex-postgres-service"
+  "a TLS secret with no issuer reaching the ingress (the pearl certificate refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-no-issuer.yaml|NO issuer reaches the ingress"
 )
 refused=0
 for entry in "${REFUSALS[@]}"; do

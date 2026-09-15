@@ -297,6 +297,34 @@ public sealed record IngressSpec
     public string? TlsSecret { get; init; }
 
     /// <summary>
+    /// The cert-manager <c>ClusterIssuer</c> that issues <see cref="TlsSecret"/>, rendered into the
+    /// ingress as <c>cert-manager.io/cluster-issuer</c>. <b>Defaults to
+    /// <see cref="DefaultClusterIssuer"/></b>, so an instance declared with a host and a TLS secret
+    /// asks for its certificate without anyone writing an annotation — and a record written before
+    /// this field existed gets one too, because an absent JSON member leaves this initializer
+    /// standing.
+    ///
+    /// <para>🚨 This is a DEFAULT, not an override: a hand-written
+    /// <c>cert-manager.io/cluster-issuer</c> in <see cref="Annotations"/> wins, so a record that
+    /// names its own issuer keeps it. <c>none</c> is the explicit opt-out for a Secret created by
+    /// other means (a self-signed local install, a certificate uploaded by hand) — the ingress then
+    /// asks cert-manager for nothing, deliberately.</para>
+    ///
+    /// <para>Why it is typed rather than "just an annotation": a Provision renders the values from
+    /// THIS record, never from a repository overlay. pearl.meshweaver.cloud had the issuer in its
+    /// overlay and not on its record, so the rendered ingress asked for no certificate and the
+    /// controller served another host's for nine hours (2026-09-15).</para>
+    /// </summary>
+    [Description("cert-manager ClusterIssuer for the TLS secret — 'none' opts out")]
+    public string? ClusterIssuer { get; init; } = DefaultClusterIssuer;
+
+    /// <summary>The fleet's ClusterIssuer: Let's Encrypt's production endpoint, what every public host is issued from.</summary>
+    public const string DefaultClusterIssuer = "letsencrypt-prod";
+
+    /// <summary>The value of <see cref="ClusterIssuer"/> that means "ask cert-manager for nothing".</summary>
+    public const string NoClusterIssuer = "none";
+
+    /// <summary>
     /// Controller annotations. The OIDC login callback answers with several large Set-Cookie
     /// headers; a large claims set exceeds nginx's default 4k proxy_buffer_size and the LOGIN
     /// answers 502, deterministically per user (2026-08-23) — hence

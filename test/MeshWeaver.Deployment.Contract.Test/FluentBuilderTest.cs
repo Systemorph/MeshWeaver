@@ -11,6 +11,52 @@ namespace MeshWeaver.Deployment.Contract.Test;
 /// </summary>
 public class FluentBuilderTest
 {
+    /// <summary>
+    /// A new instance ASKS FOR ITS CERTIFICATE without anyone saying so. The issuer is a record
+    /// default, not something an overlay writes as an annotation: pearl.meshweaver.cloud had the
+    /// annotation in its checked-in overlay and not on its record, a Provision renders from the
+    /// record, and the host was served another instance's certificate for nine hours
+    /// (2026-09-15). The default is what makes that shape unreachable for the next instance.
+    /// </summary>
+    [Fact]
+    public void AnInstanceWithATlsSecretAsksForItsCertificateByDefault()
+    {
+        // Declared with nothing but a host and a TLS secret.
+        var declared = new DeploymentContent()
+            .WithHost("portal.example.com")
+            .WithIngress(className: "nginx", tlsSecret: "portal-tls");
+        Assert.Equal(IngressSpec.DefaultClusterIssuer, declared.Ingress!.ClusterIssuer);
+
+        // The bare shape carries it too — a record that never calls WithIngress, and a record
+        // written before the field existed, both deserialize onto this initializer.
+        Assert.Equal(IngressSpec.DefaultClusterIssuer, new IngressSpec().ClusterIssuer);
+        var old = DeploymentRecordJson.Read("""
+            {"host":"portal.example.com","ingress":{"className":"nginx","tlsSecret":"portal-tls",
+             "annotations":{"nginx.ingress.kubernetes.io/proxy-buffer-size":"16k"}}}
+            """);
+        Assert.Equal(IngressSpec.DefaultClusterIssuer, old!.Ingress!.ClusterIssuer);
+    }
+
+    /// <summary>
+    /// The default never overrides a decision. An explicit issuer stands, and <c>none</c> — the
+    /// opt-out for a Secret created by other means — survives the round trip rather than being
+    /// helpfully replaced by the fleet's issuer.
+    /// </summary>
+    [Fact]
+    public void AnExplicitIssuerStandsAndNoneIsKept()
+    {
+        var staging = new DeploymentContent().WithIngress(tlsSecret: "portal-tls", clusterIssuer: "letsencrypt-staging");
+        Assert.Equal("letsencrypt-staging", staging.Ingress!.ClusterIssuer);
+
+        var optedOut = new DeploymentContent().WithIngress(tlsSecret: "portal-tls", clusterIssuer: IngressSpec.NoClusterIssuer);
+        Assert.Equal(IngressSpec.NoClusterIssuer, optedOut.Ingress!.ClusterIssuer);
+        var reread = DeploymentRecordJson.Read(DeploymentRecordJson.Write(optedOut));
+        Assert.Equal(IngressSpec.NoClusterIssuer, reread!.Ingress!.ClusterIssuer);
+
+        // And a later call that says nothing about the issuer leaves the decision alone.
+        Assert.Equal("letsencrypt-staging", staging.WithIngress(className: "nginx").Ingress!.ClusterIssuer);
+    }
+
     [Fact]
     public void EveryTransformLeavesItsInputUntouched()
     {
