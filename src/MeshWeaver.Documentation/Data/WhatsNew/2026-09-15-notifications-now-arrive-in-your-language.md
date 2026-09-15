@@ -1,16 +1,16 @@
 ---
-Name: Notifications now arrive in your language
+Name: Notification emails arrive in your language, and the bell is ready to follow
 Category: Fix
-Description: Every row in the notification bell was written in English, whatever language you read the portal in — an update reminder, a failed import, a share someone sent you. Notifications now carry what they mean rather than a finished English sentence, so the bell renders each one in the language of whoever opens it, and the matching email arrives in the recipient's own language.
-Icon: Alert
+Description: Every notification was written as a finished English sentence, whatever language you read the portal in. Notification emails now arrive in the recipient's own language — subject, body, button and footer — and notifications themselves now carry what they mean rather than English text, so the bell renders each row in the reader's language as soon as the portal update carrying the new bell lands.
+Icon: Mail
 Order: -20260915
 ---
 
-# Notifications now arrive in your language
+# Notification emails arrive in your language, and the bell is ready to follow
 
-The portal renders its buttons, menus and settings in your language — but the **notification bell**
-did not. Every row in it was English: *"Update available: …"*, *"Startup import failed: …"*,
-*"You've been given access to …"*. So did the emails those notifications send.
+The portal renders its buttons, menus and settings in your language — but **notifications** did not.
+Every row in the bell was English: *"Update available: …"*, *"Startup import failed: …"*, *"You've
+been given access to …"*, and so was the email each one sent.
 
 ## Why it happened, and why it was not simply an overlooked string
 
@@ -23,12 +23,15 @@ That is also why a handful of these notifications *looked* translated and still 
 text existed, it was simply chosen at the moment of writing, when the only answer available was
 "English".
 
-## What changed
+## What you get today
 
-A notification now stores **what it means** — which message it is, and the details that go in it
-(*which* module, *which* partition, *how many* errors) — instead of a finished sentence. The bell
-puts the sentence together when you open it, in **your** language, with those details filled in.
-This covers the reminders you actually see:
+**Notification emails follow the recipient.** An email has exactly one reader, and the portal knows
+who — so the subject, the body, the button and both footer lines are now written in **that person's**
+language rather than the server's. This is live with this update.
+
+**Notifications now carry what they mean.** Instead of a finished English sentence, a notification
+stores which message it is and the details that belong in it — *which* module, *which* partition,
+*how many* errors. That covers the reminders you actually see:
 
 - plugin and module updates — available, held back, or needing a global administrator
 - a module discovered, added, refused or no longer offered by its repository
@@ -37,8 +40,11 @@ This covers the reminders you actually see:
   placeholder
 - someone giving you access to a page or space
 
-**Emails follow the recipient.** A notification email has exactly one reader, so it is written in
-*that* person's language — subject, body, the button and the footer note — rather than the server's.
+## What follows
+
+The **bell itself** puts those pieces together into a sentence, and it picks up the new information
+with the portal update that follows this one. Until then every row still shows the English it was
+written with — nothing is missing or broken, it is simply not translated yet.
 
 ## What stays in English
 
@@ -48,5 +54,5 @@ arrived, in every language, which is more honest than a half-translation. Where 
 inside a sentence the portal *did* write, the sentence around it is translated and the fragment is
 left as it is.
 
-Older notifications already in your bell keep the wording they were written with — nothing was
-rewritten or lost. New ones arrive in your language from now on.
+Notifications already in your bell keep the wording they were written with — nothing was rewritten
+or lost.
