@@ -1,0 +1,17 @@
+# FIXTURE for check-chart-invariants.sh — the control instance on the ACTIONS executor
+# (Plugins#1738), the shape memex.systemorph.com moves to.
+#
+# The operator Job is OFF: no Job in the ops namespace, no jobrunner token, no cluster credential in
+# the portal. Lifecycle actions go to Systemorph/Memex aks-ops.yml through the systemorph-com GitHub
+# App instead, and the only thing the pod needs to know is which executor to use and who may approve
+# their own request. Invariant 17 asserts the Job-path keys stay unrendered; the evidence check in
+# the driver asserts this render carries `Hosting__Operator__Executor: "Actions"`.
+# Placeholders, no credential.
+#
+# Written LOOSELY on purpose: the chart must case-fold the executor and trim the maintainer the
+# same way the record's derivation does (HostingOperatorSpec.TryCanonicalExecutor), and the
+# evidence check asserts the canonical `"Actions"` and the exact `"maintainer-id"`.
+hostingOperator:
+  enabled: false
+  executor: "actions"
+  maintainer: "  maintainer-id  "

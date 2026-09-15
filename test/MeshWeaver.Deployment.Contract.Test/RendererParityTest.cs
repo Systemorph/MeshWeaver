@@ -182,6 +182,7 @@ public class RendererParityTest
             .WithSocialLinkedIn("linkedin")
             .WithAi(a => a.OpenRouter(["anthropic/claude-sonnet-4"]).Anthropic(["claude-sonnet-4"], enabled: true).AzureFoundry(["gpt-5"], enabled: true).AzureAis(["deepseek"]).Tiers("heavy", "standard", "light", "utility"))
             .WithOperator(true, "hosting", "hosting-operator", "ghcr.io/systemorph/hosting-operator:1")
+            .WithOperatorExecutor("Job", "maintainer")
             .WithTelemetry("http://otel:4317", "grpc")
             .WithBackupStore("stbackups")
             .WithIdlePolicy(30, 90)

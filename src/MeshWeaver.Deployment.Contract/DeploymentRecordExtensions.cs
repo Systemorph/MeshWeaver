@@ -495,6 +495,24 @@ public static class DeploymentRecordExtensions
         return d with { Operator = o with { Enabled = enabled, Namespace = ns ?? o.Namespace, ServiceAccount = serviceAccount ?? o.ServiceAccount, Image = image ?? o.Image, Environment = env } };
     }
 
+    /// <summary>
+    /// Which executor runs this instance's lifecycle actions, <c>Job</c> (the in-cluster operator
+    /// Job that <see cref="WithOperator"/> arms) or <c>Actions</c> (<c>aks-ops.yml</c> through the
+    /// GitHub App, which runs with the operator disabled), and the one user id that may approve its
+    /// own request. Leaves <see cref="HostingOperatorSpec.Enabled"/> as it is. Anything but Job or
+    /// Actions throws: the portal reads every other value as Job, so a misspelling would silently
+    /// keep the path this switch exists to leave. The maintainer is trimmed: null keeps the current
+    /// one, blank clears it.
+    /// </summary>
+    public static DeploymentContent WithOperatorExecutor(this DeploymentContent d, string executor, string? maintainer = null)
+    {
+        if (!HostingOperatorSpec.TryCanonicalExecutor(executor, out var canonical) || canonical is null)
+            throw new ArgumentException($"operator executor '{executor}' is neither Job nor Actions", nameof(executor));
+        var o = d.Operator ?? new HostingOperatorSpec();
+        var who = maintainer is null ? o.Maintainer : string.IsNullOrWhiteSpace(maintainer) ? null : maintainer.Trim();
+        return d with { Operator = o with { Executor = canonical, Maintainer = who } };
+    }
+
     /// <summary>The container registry this instance HOSTS (the public instance only).</summary>
     public static DeploymentContent WithRegistry(this DeploymentContent d, Func<RegistrySpec, RegistrySpec> configure) =>
         d with { Registry = configure(d.Registry ?? new RegistrySpec()) };

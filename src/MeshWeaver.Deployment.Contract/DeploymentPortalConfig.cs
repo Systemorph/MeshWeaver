@@ -422,6 +422,20 @@ public static class DeploymentPortalConfig
         if (d.Operator is { Enabled: true })
             Set("Hosting__Operator__Enabled", "true");
 
+        // The executor switch (Plugins#1738), independent of Enabled: the Actions executor runs with
+        // the in-cluster Job disabled. Blank emits nothing, and the portal and the chart then both
+        // mean Job. ActionsExecutor reads Hosting:Operator:Executor and Hosting:Operator:Maintainer.
+        // Canonicalised HERE, not only in WithOperatorExecutor: a record read from JSON or built
+        // with an initializer never passes the transform, and the Aspire path hands this value
+        // straight to the container. A misspelling fails closed on both renderers.
+        if (d.Operator is { } operatorSpec)
+        {
+            if (!HostingOperatorSpec.TryCanonicalExecutor(operatorSpec.Executor, out var operatorExecutor))
+                throw new InvalidOperationException($"operator executor '{operatorSpec.Executor}' is neither Job nor Actions. The portal reads every other value as Job, so it would silently keep the in-cluster operator Job.");
+            Set("Hosting__Operator__Executor", operatorExecutor);
+            Set("Hosting__Operator__Maintainer", string.IsNullOrWhiteSpace(operatorSpec.Maintainer) ? null : operatorSpec.Maintainer.Trim());
+        }
+
         foreach (var (key, value) in d.ExtraPortalConfig)
             if (!c.Keys.Contains(key, StringComparer.OrdinalIgnoreCase))
                 c[key] = value ?? "";
