@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
+using Microsoft.Extensions.Configuration;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -40,7 +41,18 @@ public class NotificationDispatchLocalizationTest(ITestOutputHelper output) : Mo
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            .ConfigureServices(services => services.AddSingleton<IEmailSender>(mail));
+            .ConfigureServices(services => services
+                .AddSingleton<IEmailSender>(mail)
+                // 🚨 The CTA button is emitted only when a base URL resolves, so without this the
+                // email carries no button — and an assertion about the CTA LABEL would pass by
+                // asserting nothing was there. Same shape WebhookInboxTest uses for its secret.
+                .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["Portal:BaseUrl"] = BaseUrl,
+                    }).Build()));
+
+    private const string BaseUrl = "https://portal.test";
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -100,7 +112,17 @@ public class NotificationDispatchLocalizationTest(ITestOutputHelper output) : Mo
             + "leave the direct-write tests green while every viewer read English");
         stored.MessageKey.Should().Be("notification.accessGranted.body");
         stored.TitleArgs.Should().ContainKey("name");
+        // 🚨 BOTH message argument names, and the SUBSTITUTED values. A dispatch that carried the
+        // keys but dropped the arguments would satisfy every key assertion above and render
+        // "Sie haben jetzt {role}-Zugriff auf „{name}“." to the reader — GetNamed deliberately keeps
+        // an unbound name VISIBLE, so the damage is a literal placeholder, not a blank.
+        stored.MessageArgs.Should().ContainKey("role");
+        stored.MessageArgs.Should().ContainKey("name");
+        stored.LocalizedMessage("de").Should().Contain("Editor").And.Contain("TeamSpace");
+        stored.LocalizedMessage("de").Should().NotContain("{",
+            "an unbound named argument survives as a literal {name} in the rendered sentence");
         stored.LocalizedTitle("de").Should().NotBe(stored.LocalizedTitle("en"));
+        stored.LocalizedMessage("de").Should().NotBe(stored.LocalizedMessage("en"));
         stored.Title.Should().Be(stored.LocalizedTitle("en"),
             "the stored English is still the fallback and still what the key renders in English");
     }
@@ -146,6 +168,20 @@ public class NotificationDispatchLocalizationTest(ITestOutputHelper output) : Mo
             "the subject must be the recipient's language, resolved off THEIR User.Locale");
         sent.Subject.Should().NotBe("You've been given access to Quarterly Report",
             "resolving against the server default is the defect #4373 is about");
+        // 🚨 The BODY and the CTA LABEL, not just the subject. Each is resolved by its own call
+        // (`message.Localize`, `Rendered(ctaLabel, …)`), so a regression flattening either one to
+        // English would leave a subject-only assertion green — a half-German mail.
+        sent.Body.Should().Contain("Sie haben jetzt Editor-Zugriff",
+            "the body is resolved by its own Localize call and needs its own assertion");
+        sent.Body.Should().NotContain("You now have Editor access");
+        // The template HTML-encodes, so assert the encoded form of the German CTA ("Öffnen" → "&#214;").
+        sent.Body.Should().Contain("Quarterly Report &#246;ffnen",
+            "the CTA label is resolved by a third call and needs a third assertion");
+        sent.Body.Should().NotContain(">Open Quarterly Report<");
+        sent.Body.Should().Contain($"{BaseUrl}/Quarterly Report",
+            "the control on the assertion above: a button that was never rendered would make the "
+            + "German-label check pass by checking nothing — the CTA is emitted only when a base "
+            + "URL resolves, which is why this mesh configures one");
         // The template HTML-encodes every caller string, so assert on a distinctive un-encoded
         // fragment rather than on the whole sentence ("öffnen" arrives as "&#246;ffnen").
         sent.Body.Should().Contain("Neu bei Memex?",

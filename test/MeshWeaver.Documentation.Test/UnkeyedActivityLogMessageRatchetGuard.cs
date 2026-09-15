@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -324,15 +325,13 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     public void EveryNotificationKeyNamedInSourceIsInTheEnglishCatalog()
     {
         var root = SourceScan.FindRepoRoot();
-        var named = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var file in SourceScan.SourceFiles(root, ScannedRoots))
-        {
-            var text = ReadOrEmpty(file);
-            if (!text.Contains("notification.", StringComparison.Ordinal))
-                continue;
-            foreach (Match m in NotificationKeyLiteral.Matches(text))
-                named.Add(m.Groups[1].Value);
-        }
+        // A projection, not an accumulator — the repository bans mutable collections in `test/` as
+        // well as in `src/`, and this scan has no reason to be one.
+        var named = SourceScan.SourceFiles(root, ScannedRoots)
+            .Select(ReadOrEmpty)
+            .Where(text => text.Contains("notification.", StringComparison.Ordinal))
+            .SelectMany(text => NotificationKeyLiteral.Matches(text).Select(m => m.Groups[1].Value))
+            .ToImmutableHashSet(StringComparer.Ordinal);
 
         var whole = named.Where(k => !k.EndsWith('.')).ToArray();
         var prefixes = named.Where(k => k.EndsWith('.')).ToArray();
@@ -358,7 +357,8 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// 🚨 Every language's rendering of an <c>activity.*</c> key must name the SAME placeholders.
+    /// 🚨 Every language's rendering of a PERSISTED key — <c>activity.*</c> or
+    /// <c>notification.*</c> — must name the SAME placeholders.
     /// A translator who drops <c>{path}</c> silently deletes the one piece of information the line
     /// carries — "Kein Node unter dem Pfad" tells a German operator nothing — and one who mistypes
     /// it leaves a literal <c>{ptah}</c> on screen. Neither is visible to <c>LocalizationTest</c>,
@@ -371,22 +371,22 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     /// deliberate and a count check would be the right test instead.</para>
     /// </summary>
     [Fact]
-    public void EveryActivityKeyNamesTheSamePlaceholdersInEveryLanguage()
+    public void EveryPersistedKeyNamesTheSamePlaceholdersInEveryLanguage()
     {
         var placeholder = new Regex(@"\{([A-Za-z_][A-Za-z0-9_]*)\}",
             RegexOptions.CultureInvariant);
-        var activityKeys = LocalizationCatalog.Keys
+        var persistedKeys = LocalizationCatalog.Keys
             .Where(k => k.StartsWith("activity.", StringComparison.Ordinal)
                         || k.StartsWith("notification.", StringComparison.Ordinal))
             .OrderBy(k => k, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.True(activityKeys.Length > 0,
+        Assert.True(persistedKeys.Length > 0,
             "the English catalog carries no activity.*/notification.* key — this check would pass "
             + "on nothing");
 
         var mismatches = new List<string>();
-        foreach (var key in activityKeys)
+        foreach (var key in persistedKeys)
         {
             var expected = Names(LocalizationCatalog.Get(key, Locales.Default));
             foreach (var locale in Locales.Supported.Where(l => l != Locales.Default))
