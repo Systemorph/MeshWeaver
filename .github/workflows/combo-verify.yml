@@ -291,8 +291,16 @@ jobs:
     needs: [preflight, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # 🚨 `result == 'success'` is NOT "verified" on this job, and the reporter below depends on the
+    # difference. This job exits 0 for TWO different facts: a real verification, and "no candidate"
+    # (the triggering CD published nothing, so there was nothing to check). Collapsing them is the
+    # exact defect the job's own body refuses three lines down — and it would make `combo-green`
+    # CLOSE a standing `ci-combo-unverified` alert on a run that verified nothing.
+    outputs:
+      verified: ${{ steps.verdict.outputs.verified }}
     steps:
       - name: The verdict, and it can fail
+        id: verdict
         env:
           PREFLIGHT: ${{ needs.preflight.result }}
           VERIFY: ${{ needs.verify.result }}
@@ -323,6 +331,7 @@ jobs:
               echo "**No candidate.** The triggering CD run concluded \`$TRIGGER\`, so there is"
               echo "nothing to verify. This is not an unverified roll — no roll was produced."
             } >>"$GITHUB_STEP_SUMMARY"
+            echo "verified=false" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$PREFLIGHT" = "skipped" ]; then
@@ -346,4 +355,85 @@ jobs:
             echo "::error::the preflight passed but named ZERO instances — that is a vacuous green, not a verification."
             exit 1
           fi
+          echo "verified=true" >>"$GITHUB_OUTPUT"
           echo "Every declared instance has a landed combo verdict for its roll target."
+
+  # ── The audience (#4395) ────────────────────────────────────────────────────────────────────────
+  #
+  # 🚨 THIS LANE'S RED USED TO LAND IN AN EMPTY ROOM. `combo-verify` triggers on `workflow_run` and
+  # `workflow_dispatch` only, so no pull request, no reviewer and no required-check list is attached
+  # to any of its runs: every verdict above — including "every roll in the fleet is still
+  # UNVERIFIED" — went into the Actions history and nowhere else. That is the twin of a
+  # skip-trapdoor, and the fleet has already paid for it once: `node-repo-platform-ref-bump.yml` had
+  # every other property the rule demands and had still NEVER ONCE SUCCEEDED (#3568,
+  # MeshWeaver.Plugins#1462), because red-on-a-trigger-with-no-PR is red nobody reads.
+  #
+  # 🚨 BRANCHING ON THE VERDICT'S RESULT, NOT ON `if: failure()`. A failure-only reporter never
+  # CLEARS a stale alert, and an alert that is no longer true is how the next real one gets skimmed
+  # past — the same defect one level out. Two jobs, one per outcome, exactly as every satellite's
+  # `ci-red`/`ci-green` pair is wired.
+  #
+  # 🚨 ITS OWN LABEL, `ci-combo-unverified`. The ledger finds, appends, reopens and closes by label
+  # AND title AND its ownership mark, so a lane sharing `ci-main-red` with a repo's main build would
+  # let either close the other's story. (`ci-failure` is refused by the script outright — that is
+  # main-cd.yml's delivery alert.)
+  #
+  # 🚨 THE UNPROVISIONED RED IS IN SCOPE, DELIBERATELY. #3848 records that this lane's inputs are not
+  # provisioned, so today the preflight fails whenever a candidate exists and this reporter will file.
+  # That is the point: an unprovisioned verification lane is a real, unfixed condition, and it is
+  # currently invisible — which is the whole of #4395. It produces ONE issue with dated entries, not
+  # one issue per run. If the entry cadence proves noisy, the remedy is to PROVISION the lane
+  # (#3848), never to silence the reporter; a reporter that suppresses the condition it exists to
+  # announce is the silence it was built to end.
+  #
+  # No `continue-on-error:` and no input-shaped `if:` on either job: an alerting path that swallows
+  # its own failure re-creates the silence one level up.
+  combo-red:
+    name: "The combo verdict has an audience: one issue, one signed event"
+    needs: [verdict]
+    if: always() && needs.verdict.result == 'failure'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
+    with:
+      outcome: failure
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      label: ci-combo-unverified
+      issue-title: "ci-combo-unverified: the fleet's rolls are not combo-verified"
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: main
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+
+  # 🚨 GATED ON `verified`, NOT ON `result`. The verdict exits 0 both when it verified everything
+  # and when there was NO CANDIDATE — and closing a standing "the fleet's rolls are not
+  # combo-verified" alert on a run that verified nothing is the same false clear this whole change
+  # exists to stop. Only a real landed verification clears the ledger.
+  combo-green:
+    name: "Combo verification landed: close the ledger"
+    needs: [verdict]
+    if: always() && needs.verdict.result == 'success' && needs.verdict.outputs.verified == 'true'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
+    with:
+      outcome: success
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      label: ci-combo-unverified
+      issue-title: "ci-combo-unverified: the fleet's rolls are not combo-verified"
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: main
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
