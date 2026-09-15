@@ -2,7 +2,7 @@
 nodeType: Markdown
 name: A Module's Static Web Assets
 category: Architecture
-description: A module's CSS/JS ride the bundle in their own folder and must land MODULE-RELATIVE beside the entry assembly, or the module loads perfectly and 404s every asset it ships behind one Debug line. The four hops, the four landing sites, and the measured denominator.
+description: A module's CSS/JS ride the bundle in their own folder and must land MODULE-RELATIVE beside the entry assembly, or the module loads perfectly and 404s every asset it ships behind one Debug line. The three asset kinds (two of which no directory walk can see), the four hops, the four landing sites, and the measured denominator.
 icon: /static/NodeTypeIcons/code.svg
 ---
 
@@ -45,6 +45,10 @@ Two folders, on purpose, and their shapes are opposite: **module files are FLAT*
 one module, its manifest names every file), while **assets keep their module-relative path**,
 because a pack's own component source hard-codes the URL it will request.
 
+🚨 **Hop 1 is a DIRECTORY WALK, so the producer above it owes it three asset kinds, not one** — see
+*The three asset kinds* below. A walk cannot see an asset that exists only because a build step
+computed it, and two of the three are exactly that.
+
 **2 — Bundle.** `meshweaver/modules/` holds the closure. `meshweaver/moduleassets/` holds the asset
 tree. Nothing under the first implies anything about the second, and the two counts do not
 correlate: measured on one real run, `MeshWeaver.AI.AzureFoundry` carries **82 assemblies and
@@ -63,6 +67,43 @@ assembly that was actually loaded** — not at a name-derived path, because land
 onto `_content/<Name>/…`, and its DEPENDENCIES' assets (already at `wwwroot/_content/<Dep>/…`) are
 served at that same path **only when the host does not already provide `<Dep>`**, so a module can
 never shadow a platform asset.
+
+## The three asset kinds, and the two that are COMPUTED
+
+The Razor SDK produces three kinds of static web asset for a view pack, and only the first is a
+file anyone put in a folder. Measured against SDK 10.0.400 on 2026-09-15 with a probe RCL
+(`dotnet publish` of a project holding `Components/Badge.razor{,.css,.js}` and
+`wwwroot/sub/vendor.js`):
+
+| Kind | Authored as | `dotnet publish` lays it at | Served at |
+|---|---|---|---|
+| 1 — the project's own `wwwroot` | `wwwroot/sub/vendor.js` | `publish/wwwroot/sub/vendor.js` | `_content/<Name>/sub/vendor.js` |
+| 2 — **collocated JS module** | `Components/Badge.razor.js`, beside `Badge.razor` | `publish/wwwroot/Components/Badge.razor.js` | `_content/<Name>/Components/Badge.razor.js` |
+| 3 — **scoped-CSS aggregate** | every `*.razor.css` | `publish/wwwroot/<AssemblyName>.styles.css` | `_content/<Name>/<AssemblyName>.styles.css` |
+
+Kinds 2 and 3 live nowhere under the project's `wwwroot/`. The SDK computes them, and a producer
+that is not the SDK has to compute them too — which is the whole story of this page's two
+incidents:
+
+- **#2221 dropped kind 3.** A converted pack landed, loaded and rendered UNSTYLED.
+- **#2384 dropped kind 2.** `mw-plugin-test build-project` — the in-image builder the `container`
+  lane compiles every view pack with — reproduced kinds 1 and 3 and not kind 2, so
+  `ProjectBuild.EmitStaticAssets` emitted a `wwwroot/` the packer happily swept while the one file
+  the view imports was not in it. Every `MapControl` on the OpenStreetMap renderer threw
+  `Failed to fetch dynamically imported module` in `OnAfterRenderAsync` and rendered nothing.
+
+🚨 **The SDK lane never had this defect, and reading a static-web-assets manifest would not have
+found it.** `dotnet publish` materialises all three kinds under `publish/wwwroot/` at the relative
+path they are served at, so hop 1's directory walk over that folder is complete by construction —
+while the in-image builder writes **no** `*.staticwebassets.*.json` at all, so there is no manifest
+to read on the lane that was actually broken. The fix belongs in the producer, and hop 1 stays a
+walk with a stated precondition: *every kind is already under `<out>/wwwroot` at its served path.*
+
+🚨 **An unpaired `*.razor.js` is an ERROR, not a dropped file.** `BLAZOR106` — *"The JS module file
+… was defined but no associated razor component or view was found for it"* — and measured to fire
+for a file under `wwwroot/` exactly as for one beside a component. `ProjectBuild.EmitJsModules`
+reproduces that refusal, because the shape that reaches production is a component renamed away from
+its JS, and passing that silently is the same 404 arriving from the other direction.
 
 ## The invariant, in one line
 
@@ -107,7 +148,7 @@ Measured across the platform's CI on 2026-09-07:
 | `node-repo-gate.yml` → `ext-modules` | `--module /ext/<Name>/<Name>.dll` into a running mesh | **Yes** — fixed by #3514 |
 | `node-repo-publish-bake.yml` → `ext-modules` | same, for the compile surface | **Yes** — fixed by #3514 |
 | `node-repo-compile-check.yml` | `cp modules/*.dll refs/` — a Roslyn REFERENCE SET | No. Nothing is served; a reference set has no request path. |
-| `node-repo-module-pack.yml` | asserts the entry DLL is present in a freshly packed bundle | No. It inspects, it does not land. |
+| `node-repo-module-pack.yml` | asserts the entry DLL is present in a freshly packed bundle, and (since #2384) that the bundle declares every asset the project tree implies | No. It inspects, it does not land — but it is the ONLY site that can see an asset the producer never emitted. |
 | `ModuleLandingService` (runtime) | the production path | Already correct |
 | `ServedModuleBytes` (runtime) | reads the sealed bundle | Already correct |
 
@@ -122,7 +163,35 @@ points a browser at it (MeshWeaver.Plugins#1440). See
 [Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture): never hand-roll a repo's
 build; call the shared lane.
 
-## The gate
+## The gates — one per hop, because a green at hop 3 says nothing about hop 1
+
+| Hop | Gate | Proven by |
+|---|---|---|
+| 1 — the PRODUCER emits all three kinds | `CollocatedJsModuleTest` + `ScopedCssTest` (`test/MeshWeaver.PluginTester.Test`) — they RUN `ProjectBuild` and read the emitted tree | reverting the emitter turns 5 of its 6 cases red (both `.razor.js` and `.cshtml.js`) and leaves the assetless control green |
+| 1 — the BUNDLE declares what the tree implies | `.github/scripts/check-bundle-static-assets.py`, in every satellite's pack lane, per file, both compilers, no precondition | its `--self-test`: 14 cases, 6 of which MUST fail the gate |
+| 3 — the LANE lands what the bundle ships | `.github/scripts/test-module-asset-landing.py` | two falsification arms per lane, each mutating the real step |
+| 4 — the HOST serves what landed | `PluginBundlePublishAssetsTest` (`test/Memex.Portal.Shared.Test`) | a bundle with no assets lands no `wwwroot` |
+
+🚨 **They do not substitute for one another, and #2384 is the proof.** Hop 3's harness builds its
+own synthetic bundles — its `realistic_assets()` fixture even contains a collocated-JS-shaped file —
+so it was green throughout, correctly: the lane it tests lands every asset a bundle carries, and the
+bundle carried none of this kind. *A harness that is handed its input cannot notice the input is
+short.* Only a gate reading the PROJECT TREE can.
+
+Run against the four affected packs' real source trees in MeshWeaver.Plugins `origin/main`, with
+the manifest the pre-fix emitter produced (2026-09-15):
+
+| pack | implied by the tree | declared pre-fix | named missing |
+|---|---|---|---|
+| `MeshWeaver.Blazor.OpenStreetMap` | 8 (7 wwwroot + 1 JS module) | 7 | `OpenStreetMapView.razor.js` |
+| `MeshWeaver.Blazor.GoogleMaps` | 2 (1 JS module + 1 aggregate) | 1 | `GoogleMapView.razor.js` |
+| `MeshWeaver.Blazor.AppleMaps` | 1 (1 JS module) | 0 | `AppleMapView.razor.js` |
+| `MeshWeaver.Blazor.Chat` | 5 (2 wwwroot + 2 JS modules + 1 aggregate) | 3 | `ChatMessageList.razor.js`, `ThreadChatView.razor.js` |
+
+Five files, exactly the five that answered **404** on memex.meshweaver.cloud the same day. The old
+`length > 0` check read 7, 1, *(skipped)* and 3 — four green ticks over the same bytes.
+
+### Hop 3's harness
 
 `.github/scripts/test-module-asset-landing.py` EXECUTES the lanes' landing rather than asserting
 about it, and runs in `dotnet-test.yml` beside the other workflow-shell gates.
@@ -157,11 +226,21 @@ through the extracted lane step:
 | with the fix | 30 | 6 | 294 | **294** |
 | pre-fix | 30 | 6 | 294 | **0**, exit code **0** |
 
-The 6: `MeshWeaver.Blazor.Chat` (283 — its editor JS and its dependencies' namespaced assets),
-`MeshWeaver.Blazor.OpenStreetMap` (7 — the `.razor.js` of #2384's class), and
-`MeshWeaver.Blazor.Analysis` / `.EntityViews` / `.Graph` / `.Radzen` (1 each — the scoped-CSS
-aggregate). The other 24 ship no assets at all, which is why the pre-fix lane could look healthy:
-**80% of the population is a legitimate zero.**
+The 6: `MeshWeaver.Blazor.Chat` (283 — its dependencies' namespaced assets), and
+`MeshWeaver.Blazor.OpenStreetMap` (7) plus `MeshWeaver.Blazor.Analysis` / `.EntityViews` /
+`.Graph` / `.Radzen` (1 each — the scoped-CSS aggregate). The other 24 ship no assets at all, which
+is why the pre-fix lane could look healthy: **80% of the population is a legitimate zero.**
+
+🚨 **Two annotations in the 2026-09-07 reading were WRONG, and correcting them is half of #2384.**
+OpenStreetMap's 7 were annotated *"the `.razor.js` of #2384's class"* — but
+`git ls-tree -r origin/main src/MeshWeaver.Blazor.OpenStreetMap/wwwroot/` is **7** exactly (5
+Leaflet images + `leaflet.css` + `leaflet-src.esm.js`), so seven *is* the `wwwroot` tree with no
+room for `OpenStreetMapView.razor.js`. And the `ChatMessageList.razor.js → 200` row in *Closing the
+loop* below was measured against a Chat **1.0.23** bundle produced by the SDK lane; Chat is
+`build: container` now, and on 2026-09-15 that URL answers **404** in production. The lesson is not
+that the numbers were sloppy — they were read correctly off the artefacts in hand — it is that
+*a count is not a membership test*: 7 of 8 and 7 of 7 print identically. That is why the pack lane's
+assertion is now per file (`check-bundle-static-assets.py`) rather than `length > 0`.
 
 The second row is the whole point. The pre-fix lane exited **0** having landed **none** of the 294
 files — green, and wrong, with nothing in its log to distinguish it from the 24 modules for which
@@ -178,7 +257,7 @@ URL. Against `MeshWeaver.Blazor.Chat` 1.0.23 (23 assemblies, 283 assets, 5 mount
 |---|---|---|
 | `_content/MeshWeaver.Markdown.Collaboration/Components/collaborativeMarkdownView.js` — #3514's literal stack trace | **200**, `text/javascript`, 12,391 B, byte-identical | **404** |
 | `_content/MeshWeaver.Blazor.Chat/chatResizer.js` (own asset, re-based) | **200**, 4,273 B, byte-identical | **404** |
-| `_content/MeshWeaver.Blazor.Chat/ChatMessageList.razor.js` (collocated JS) | **200**, 22,739 B, byte-identical | **404** |
+| `_content/MeshWeaver.Blazor.Chat/ChatMessageList.razor.js` (collocated JS) — ⚠️ see the correction above: true of that **SDK-built** 1.0.23 bundle, **404** in production since Chat moved to the container lane | **200**, 22,739 B, byte-identical | **404** |
 | `_content/MeshWeaver.Blazor.Chat/background.png` (binary) | **200**, byte-identical | **404** |
 | same URL with `Accept-Encoding: br` | **200** + `Content-Encoding: br`, byte-identical to the landed `.br` sibling | **404** |
 | `_content/MeshWeaver.Blazor.Chat/does-not-exist.js` (negative control) | **404** | **404** |
@@ -189,6 +268,20 @@ everything would satisfy them all.
 And the pre-fix host's entire complaint, at **Debug**:
 `Module MeshWeaver.Blazor.Chat contributes no static assets — no wwwroot at …/MeshWeaver.Blazor.Chat/wwwroot`.
 That single line is what a whole outage looked like from the inside.
+
+## If you are writing a PRODUCER of module bundles
+
+Anything that compiles a view pack outside `dotnet publish` owes hop 1 all three kinds:
+
+1. Copy the project's `wwwroot/**` verbatim.
+2. Emit each collocated `Foo.razor.js` at `wwwroot/<its path relative to the project>` — and
+   REFUSE an unpaired one by name, as the SDK does.
+3. Emit `wwwroot/<AssemblyName>.styles.css` when the project has any `*.razor.css`, under the same
+   scope the generator stamped into the markup.
+
+`ProjectBuild.EmitStaticAssets` is the reference implementation. **Do not reach for the SDK's
+`*.staticwebassets.*.json` instead** — a builder that is not the SDK writes none, and one that is
+has already put every kind on disk where hop 1 looks.
 
 ## If you are landing a module bundle yourself
 
