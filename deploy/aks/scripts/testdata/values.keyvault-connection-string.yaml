@@ -1,0 +1,43 @@
+# FIXTURE for check-chart-invariants.sh — a RECORD-DRIVEN instance whose database connection string
+# arrives from KEY VAULT, not from the values (the pearl shape, 2026-09-15).
+#
+# 🚨 The shape every Provision since MeshWeaver.Plugins#1721 renders, and the one no combination here
+# rendered. The record renders the database ADDRESS into config.<half>.MEMEX_HOST (the Hosting
+# plugin's HelmValues.DatabaseHost: databaseServer + .postgres.database.azure.com), while the
+# connection STRING — with its password — is the vault object `<prefix>db-connection`, mapped as
+# `ConnectionStrings__memex` on a CSI SecretProviderClass whose synced Secret comes AFTER the chart's
+# own Secret in envFrom, and therefore wins. The values carry no `secrets.<half>.ConnectionStrings__*`.
+#
+# What that produced on chart 0a45bccfc (MeshWeaver#4173 derived the probe from the VALUES'
+# connection string, which here is the chart's in-cluster default): the migration Job and the
+# portal pod both looped
+#
+#     waiting for postgres at memex-postgres-service:5432
+#     nc: bad address 'memex-postgres-service'
+#
+# forever, on a release that renders no such Service. The fix probes config.<half>.MEMEX_HOST in
+# exactly this case; invariants 16 and 17 assert it. Names only — no credential, no real vault.
+postgres:
+  enabled: false
+config:
+  memex_portal:
+    MEMEX_HOST: "memexaks-pg.postgres.database.azure.com"
+    MEMEX_PORT: "5432"
+    MEMEX_DATABASENAME: "pearl"
+  memex_migration:
+    MEMEX_HOST: "memexaks-pg.postgres.database.azure.com"
+    MEMEX_PORT: "5432"
+    MEMEX_DATABASENAME: "pearl"
+keyVaultSecrets:
+  vaultName: "example-vault"
+  tenantId: "00000000-0000-0000-0000-000000000000"
+  identityClientId: "00000000-0000-0000-0000-000000000001"
+  name: "pearl-portal-keyvault"
+  syncedSecret: "pearl-portal-keyvault"
+  volumeName: "kv-portal-keyvault"
+  mountPath: "/mnt/kv-portal-keyvault"
+  secrets:
+    - key: "ConnectionStrings__memex"
+      vaultSecret: "pearl-db-connection"
+    - key: "Ai__KeyProtection__MasterKey"
+      vaultSecret: "pearl-Ai-KeyProtection-MasterKey"

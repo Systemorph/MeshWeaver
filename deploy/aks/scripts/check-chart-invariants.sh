@@ -41,7 +41,9 @@
 #  15. a replica floor > 1 implies anti-affinity / spread    or every replica shares one node
 #  16. wait-for-postgres probes EVERY host the pod's connection strings name  or Init:1/1 proves
 #                                                             nothing about the connection that fails
-#  17. the operator EXECUTOR renders whatever `enabled` says  or Actions never reaches the pod that
+#  17. no wait-for-postgres probes memex-postgres-service unless the chart renders it  or the gate
+#                                                             spins forever on a name that never resolves
+#  18. the operator EXECUTOR renders whatever `enabled` says  or Actions never reaches the pod that
 #                                                             switched the operator Job off
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
@@ -121,11 +123,17 @@ COMBOS=(
   # gate was blind to — the probe read config.MEMEX_HOST while the boot opened two SECRET
   # connection strings naming neither. Invariant 16 asserts the probe covers both.
   "a dedicated orleans server (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.dedicated-orleans-host.yaml"
+  # 🚨 The Key Vault case (pearl, 2026-09-15): an external database whose connection string comes
+  # from a CSI SecretProviderClass, not from the values — the shape of EVERY record-driven Provision,
+  # and the one no combination here rendered. #4173 derived the probe from the values' string, which
+  # here is the chart's in-cluster default, and pearl's pods waited forever for memex-postgres-service.
+  # Invariants 16 and 17 assert the probe is the record-rendered MEMEX_HOST and never that Service.
+  "a Key Vault connection string, record-driven (the pearl shape, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.keyvault-connection-string.yaml"
   # 🚨 The control instance on the ACTIONS executor (Plugins#1738): the operator Job OFF and the
   # executor switched to aks-ops.yml through the GitHub App. The only combination that sets
   # `hostingOperator.executor`, so without it the one render that must carry
   # `Hosting__Operator__Executor: "Actions"` beside `Hosting__Operator__Enabled: "false"` exists
-  # nowhere. Invariant 17 checks the key in EVERY render; the evidence check below the loop
+  # nowhere. Invariant 18 checks the key in EVERY render; the evidence check below the loop
   # asserts that this one rendered Actions.
   "the Actions executor with the operator Job off (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-actions-executor.yaml"
   # A whitespace-only maintainer: the one render where "only when set" can be observed failing, if
@@ -172,7 +180,7 @@ if [ "$rendered" -lt "${#COMBOS[@]}" ]; then
   report "only $rendered of ${#COMBOS[@]} values combinations rendered — treating as FAILURE rather than reporting 'no contradictions' on partial evidence"
 fi
 
-# The executor evidence (Plugins#1738). Invariant 17 holds in every render, but it holds just as
+# The executor evidence (Plugins#1738). Invariant 18 holds in every render, but it holds just as
 # well if NO render ever says Actions, or if the maintainer always rendered a non-blank default. So
 # three renders above are read by NAME (not re-rendered):
 #   * the Actions fixture, written loosely on purpose (`actions`, a padded maintainer), must render
@@ -220,6 +228,8 @@ fi
 # ---------------------------------------------------------------------------
 REFUSALS=(
   "AdoNet on an external database with no connection string in values (the #3780 render)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.adonet-external-db-no-connection-string.yaml|MeshWeaver#3780"
+  "an external database with neither a values connection string nor a MEMEX_HOST (the pearl refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-no-host.yaml|names no external database host"
+  "an external database whose values string names the in-cluster Service (the explicit-placeholder refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-explicit-in-cluster-host.yaml|names the in-cluster Service memex-postgres-service"
   # Plugins#1738: an executor the portal would silently read as Job must fail the render.
   "a misspelled operator executor|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-executor-misspelled.yaml|must be Job or Actions"
 )

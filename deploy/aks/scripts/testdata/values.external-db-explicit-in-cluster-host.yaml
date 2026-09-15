@@ -1,0 +1,22 @@
+# REFUSAL CONTROL for check-chart-invariants.sh — an EXTERNAL database whose values connection
+# string names the IN-CLUSTER Service anyway.
+#
+# `postgres.enabled: false`, so `memex-postgres-service` is not rendered — yet the values carry an
+# explicit `Host=memex-postgres-service` (typically the chart's own placeholder copied into an
+# overlay by hand). The values-string path of the probe would take it at its word and render a
+# wait-for-postgres that can neither succeed nor fail (pearl, 2026-09-15 is the same spin reached
+# through the defaulted MEMEX_HOST). The chart must REFUSE, and check-chart-invariants.sh asserts
+# the refusal carries `names the in-cluster Service memex-postgres-service`. Raised by Copilot on
+# MeshWeaver#4416. A green render of this file is the regression. No credential anywhere.
+postgres:
+  enabled: false
+config:
+  memex_portal:
+    MEMEX_HOST: "pg.example.test"
+  memex_migration:
+    MEMEX_HOST: "pg.example.test"
+secrets:
+  memex_portal:
+    ConnectionStrings__memex: "Host=memex-postgres-service;Port=5432;Database=memex"
+  memex_migration:
+    ConnectionStrings__memex: "Host=memex-postgres-service;Port=5432;Database=memex"

@@ -4,7 +4,7 @@
 # The operator Job is OFF: no Job in the ops namespace, no jobrunner token, no cluster credential in
 # the portal. Lifecycle actions go to Systemorph/Memex aks-ops.yml through the systemorph-com GitHub
 # App instead, and the only thing the pod needs to know is which executor to use and who may approve
-# their own request. Invariant 17 asserts the Job-path keys stay unrendered; the evidence check in
+# their own request. Invariant 18 asserts the Job-path keys stay unrendered; the evidence check in
 # the driver asserts this render carries `Hosting__Operator__Executor: "Actions"`.
 # Placeholders, no credential.
 #

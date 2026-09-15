@@ -3380,22 +3380,42 @@ jobs:
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
-          # 🚨 THE RUNNER IS THE CALLER'S CHOICE, and `dotnet test` reads it from the first
-          # `global.json` found walking UP from the CURRENT DIRECTORY. Measured on the .NET
-          # 10.0.400 SDK, 2026-09-15: a `global.json` in a SIBLING directory does NOT apply
-          # (`dotnet test --help` still announces ".NET Test Command for VSTest"); one in the cwd
-          # or an ancestor does. This step runs with cwd = the CALLER's checkout and keeps the
-          # platform in a sibling one ($GITHUB_WORKSPACE/meshweaver), so the platform's own
-          # `global.json` — the one core added with xunit.v3 4.x — never reaches this command, and
-          # the caller's is the only one that can. Hard-coding either set of flags breaks the lane
-          # the day a repo moves: under Microsoft.Testing.Platform BOTH `--logger` and
-          # `-warnaserror` were measured to end the run as `Zero tests ran`, exit 5 — no trx,
-          # nothing executed — which this lane would record as "the module's own suite failed".
-          # `-p:` properties reach the build under both runners (falsified with
-          # `-p:LangVersion=7.0` → `error CS8630`), and xunit's trx reporter writes the same
-          # TeamTest/2010 schema the ledger parses, so only the reporter flags differ.
+          # 🚨 THE RUNNER FOLLOWS THE TEST FRAMEWORK, AND THE PLATFORM PINS THE FRAMEWORK (#4414).
+          # `dotnet test` reads its runner from the first `global.json` found walking UP from the
+          # CURRENT DIRECTORY (measured on the .NET 10.0.400 SDK, 2026-09-15: one in a SIBLING
+          # directory does not apply). This step's cwd is the CALLER's checkout and the platform sits
+          # in a sibling one ($GITHUB_WORKSPACE/meshweaver), so the platform's `global.json` never
+          # reaches the command by itself. But the suite compiles with `-p:MeshWeaverRoot=` the
+          # platform, so its xunit.v3 version is the PLATFORM's Directory.Packages.props, not the
+          # caller's — and xunit.v3 4.x (core #4365) refuses the VSTest target on .NET 10 outright
+          # ("Testing with VSTest target is no longer supported by Microsoft.Testing.Platform").
+          # Reading the caller's `global.json` alone ran MeshWeaver.Plugins, which has none, under
+          # VSTest against a framework that refuses it: main-cd failed every module suite with
+          # nothing executed (#4414, 2026-09-15).
+          # So the runner is Microsoft.Testing.Platform when EITHER checkout selects it. When only
+          # the platform does, the command runs FROM the platform checkout on the suite's absolute
+          # path, and that cwd's `global.json` is the one found (measured: positional path, trx
+          # written, 36 of 36 run). What the build reads — Directory.Build.props, the NuGet config —
+          # resolves from the PROJECT's directory, not the cwd, so nothing else moves.
+          # Under Microsoft.Testing.Platform BOTH `--logger` and `-warnaserror` were measured to end
+          # the run as `Zero tests ran`, exit 5 — no trx, nothing executed — which this lane would
+          # record as "the module's own suite failed". `-p:` properties reach the build under both
+          # runners (falsified with `-p:LangVersion=7.0` → `error CS8630`), and xunit's trx reporter
+          # writes the same TeamTest/2010 schema the ledger parses, so only the reporter flags differ.
+          selects_mtp() {
+            [ -f "$1/global.json" ] && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get('test',{}).get('runner') == 'Microsoft.Testing.Platform' else 1)" "$1/global.json"
+          }
+          TEST_RUNNER=VSTest
+          TEST_CWD="$PWD"
+          if selects_mtp "$PWD"; then
+            TEST_RUNNER=Microsoft.Testing.Platform
+          elif selects_mtp "$GITHUB_WORKSPACE/meshweaver"; then
+            TEST_RUNNER=Microsoft.Testing.Platform
+            TEST_CWD="$GITHUB_WORKSPACE/meshweaver"
+          fi
+          echo "test runner: $TEST_RUNNER — dotnet test runs from $TEST_CWD"
           test_flags() {
-            if [ -f global.json ] && python3 -c "import json,sys; sys.exit(0 if json.load(open('global.json')).get('test',{}).get('runner') == 'Microsoft.Testing.Platform' else 1)"; then
+            if [ "$TEST_RUNNER" = Microsoft.Testing.Platform ]; then
               printf '%s\n' --report-xunit-trx --report-xunit-trx-filename ledger.trx --results-directory "$1"
             else
               printf '%s\n' -warnaserror --logger "trx;LogFileName=ledger.trx" --results-directory "$1"
@@ -3415,6 +3435,10 @@ jobs:
               if [ -d "$tests" ]; then
                 # The trx is the ledger's evidence: counts, and the FAILED names a follower is handed.
                 mapfile -t flags < <(test_flags "$RUNNER_TEMP/trx/$MODULE")
+                # Absolute BEFORE the cd — the suite path was relative to the caller's checkout. This
+                # subshell's cwd and `tests` are its own; the evidence steps below read the relative one.
+                tests="$(cd "$tests" && pwd)"
+                cd "$TEST_CWD"
                 dotnet test "$tests" -c Release \
                   -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver "${flags[@]}"
               else
@@ -4235,22 +4259,42 @@ jobs:
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
-          # 🚨 THE RUNNER IS THE CALLER'S CHOICE, and `dotnet test` reads it from the first
-          # `global.json` found walking UP from the CURRENT DIRECTORY. Measured on the .NET
-          # 10.0.400 SDK, 2026-09-15: a `global.json` in a SIBLING directory does NOT apply
-          # (`dotnet test --help` still announces ".NET Test Command for VSTest"); one in the cwd
-          # or an ancestor does. This step runs with cwd = the CALLER's checkout and keeps the
-          # platform in a sibling one ($GITHUB_WORKSPACE/meshweaver), so the platform's own
-          # `global.json` — the one core added with xunit.v3 4.x — never reaches this command, and
-          # the caller's is the only one that can. Hard-coding either set of flags breaks the lane
-          # the day a repo moves: under Microsoft.Testing.Platform BOTH `--logger` and
-          # `-warnaserror` were measured to end the run as `Zero tests ran`, exit 5 — no trx,
-          # nothing executed — which this lane would record as "the module's own suite failed".
-          # `-p:` properties reach the build under both runners (falsified with
-          # `-p:LangVersion=7.0` → `error CS8630`), and xunit's trx reporter writes the same
-          # TeamTest/2010 schema the ledger parses, so only the reporter flags differ.
+          # 🚨 THE RUNNER FOLLOWS THE TEST FRAMEWORK, AND THE PLATFORM PINS THE FRAMEWORK (#4414).
+          # `dotnet test` reads its runner from the first `global.json` found walking UP from the
+          # CURRENT DIRECTORY (measured on the .NET 10.0.400 SDK, 2026-09-15: one in a SIBLING
+          # directory does not apply). This step's cwd is the CALLER's checkout and the platform sits
+          # in a sibling one ($GITHUB_WORKSPACE/meshweaver), so the platform's `global.json` never
+          # reaches the command by itself. But the suite compiles with `-p:MeshWeaverRoot=` the
+          # platform, so its xunit.v3 version is the PLATFORM's Directory.Packages.props, not the
+          # caller's — and xunit.v3 4.x (core #4365) refuses the VSTest target on .NET 10 outright
+          # ("Testing with VSTest target is no longer supported by Microsoft.Testing.Platform").
+          # Reading the caller's `global.json` alone ran MeshWeaver.Plugins, which has none, under
+          # VSTest against a framework that refuses it: main-cd failed every module suite with
+          # nothing executed (#4414, 2026-09-15).
+          # So the runner is Microsoft.Testing.Platform when EITHER checkout selects it. When only
+          # the platform does, the command runs FROM the platform checkout on the suite's absolute
+          # path, and that cwd's `global.json` is the one found (measured: positional path, trx
+          # written, 36 of 36 run). What the build reads — Directory.Build.props, the NuGet config —
+          # resolves from the PROJECT's directory, not the cwd, so nothing else moves.
+          # Under Microsoft.Testing.Platform BOTH `--logger` and `-warnaserror` were measured to end
+          # the run as `Zero tests ran`, exit 5 — no trx, nothing executed — which this lane would
+          # record as "the module's own suite failed". `-p:` properties reach the build under both
+          # runners (falsified with `-p:LangVersion=7.0` → `error CS8630`), and xunit's trx reporter
+          # writes the same TeamTest/2010 schema the ledger parses, so only the reporter flags differ.
+          selects_mtp() {
+            [ -f "$1/global.json" ] && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get('test',{}).get('runner') == 'Microsoft.Testing.Platform' else 1)" "$1/global.json"
+          }
+          TEST_RUNNER=VSTest
+          TEST_CWD="$PWD"
+          if selects_mtp "$PWD"; then
+            TEST_RUNNER=Microsoft.Testing.Platform
+          elif selects_mtp "$GITHUB_WORKSPACE/meshweaver"; then
+            TEST_RUNNER=Microsoft.Testing.Platform
+            TEST_CWD="$GITHUB_WORKSPACE/meshweaver"
+          fi
+          echo "test runner: $TEST_RUNNER — dotnet test runs from $TEST_CWD"
           test_flags() {
-            if [ -f global.json ] && python3 -c "import json,sys; sys.exit(0 if json.load(open('global.json')).get('test',{}).get('runner') == 'Microsoft.Testing.Platform' else 1)"; then
+            if [ "$TEST_RUNNER" = Microsoft.Testing.Platform ]; then
               printf '%s\n' --report-xunit-trx --report-xunit-trx-filename ledger.trx --results-directory "$1"
             else
               printf '%s\n' -warnaserror --logger "trx;LogFileName=ledger.trx" --results-directory "$1"
@@ -4273,6 +4317,10 @@ jobs:
             set +e
             ( set -euo pipefail
               mapfile -t flags < <(test_flags "$RUNNER_TEMP/trx/$MODULE")
+              # Absolute BEFORE the cd — the suite path was relative to the caller's checkout. This
+              # subshell's cwd and `tests` are its own; the evidence steps below read the relative one.
+              tests="$(cd "$tests" && pwd)"
+              cd "$TEST_CWD"
               dotnet test "$tests" -c Release \
                 -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver "${flags[@]}"
             )

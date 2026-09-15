@@ -325,7 +325,7 @@ data:
   namespace, no jobrunner token, no cluster credential in the portal. Rendered inside the block, the
   switch would reach the pod only on an installation that still arms the Job it replaces, which is
   the one shape it exists to leave. Until this line the chart named no such key, so the pod read Job
-  whatever the overlay declared: the `Modules__Root` class again (invariant 8), now invariant 17 of
+  whatever the overlay declared: the `Modules__Root` class again (invariant 8), now invariant 18 of
   check-chart-invariants.
 
   Both values follow the record's rule (HostingOperatorSpec.TryCanonicalExecutor), so the two
