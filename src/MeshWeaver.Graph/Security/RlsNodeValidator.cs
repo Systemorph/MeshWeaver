@@ -76,7 +76,13 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
         if (userId == WellKnownUsers.System)
             return Observable.Return(NodeValidationResult.Valid());
 
-        if (!string.IsNullOrEmpty(userId))
+        // 🚨 AUTHENTICATED, never "non-empty": a pseudo-identity owns nothing. The logged-out caller
+        // arrives NAMED (WellKnownUsers.Anonymous), so the old `!IsNullOrEmpty(userId)` gate let an
+        // anonymous caller create a root named `Anonymous` — matching `nodePath == userId` below —
+        // past every access rule, and be granted Admin on it. (Found in review of the in-mesh
+        // partition-owner create; pinned by AnAnonymousCaller_CannotClaimAPartitionNamedAfterThe-
+        // PseudoIdentity.)
+        if (WellKnownUsers.IsAuthenticated(userId))
         {
             if (!string.IsNullOrEmpty(context.Node.MainNode)
                 && string.Equals(context.Node.MainNode, userId, StringComparison.OrdinalIgnoreCase))
@@ -262,18 +268,26 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
     /// grants nothing beyond what any signed-in user already has — creating a Space.
     /// "Authenticated" is <see cref="WellKnownUsers.IsAuthenticated"/>: the logged-out caller
     /// arrives NAMED, so "has a user id" would grant this to the internet.</para>
+    ///
+    /// <para>🚨 An UNAUTHENTICATED caller is REFUSED here outright — never handed on to the standard
+    /// check. Creating a partition is unavailable to a visitor regardless of grants, which is what
+    /// <c>SpaceAccessRule</c> says for a Space; delegating would let an <c>Anonymous</c> grant on the
+    /// root scope decide it.</para>
     /// </summary>
     private IObservable<NodeValidationResult?> CheckPartitionOwnerCreate(NodeValidationContext context, string? userId)
     {
         if (context.Operation != NodeOperation.Create
-            || !string.IsNullOrEmpty(context.Node.Namespace)
-            || !WellKnownUsers.IsAuthenticated(userId))
+            || !string.IsNullOrEmpty(context.Node.Namespace))
             return Observable.Return<NodeValidationResult?>(null);
 
+        var authenticated = WellKnownUsers.IsAuthenticated(userId);
         return PartitionOwningTypes.OwnsPartition(_hub, context.Node.NodeType)
             .Select(owns => owns switch
             {
-                true => NodeValidationResult.Valid(),
+                true when authenticated => NodeValidationResult.Valid(),
+                true => NodeValidationResult.Unauthorized(LocalizationCatalog.Get(
+                    "access.partitionCreate.signInRequired", context.AccessContext?.Locale,
+                    context.Node.Path)),
                 null => PartitionOwningTypes.Undetermined(context),
                 false => (NodeValidationResult?)null,
             });

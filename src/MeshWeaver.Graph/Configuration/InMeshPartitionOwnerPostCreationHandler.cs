@@ -22,15 +22,19 @@ namespace MeshWeaver.Graph.Configuration;
 /// <c>src/</c>; a static owning type (<c>Space</c>, <c>User</c>) brings its own handler, and running
 /// this one as well would write a second grant that collides with the first.</para>
 ///
-/// <para>Whether the type actually owns its partition is read from its declaration
-/// (<see cref="PartitionOwningTypes"/>) inside <see cref="Handle"/>, not guessed from the shape: a
-/// top-level node of a non-owning type can still be written by System (a package root imported by
-/// the installer, which provisions its own partition), and that must not gain a second, competing
-/// <c>Admin/Partition</c> definition.</para>
+/// <para>🚨 <b>For a non-System creator, ownership must be POSITIVELY re-established, or the create
+/// fails.</b> The validators let a non-System caller create a top-level node only when its type owns
+/// a partition, so a declaration that reads "not owning" (or does not answer) here contradicts the
+/// decision that let the root be written. Completing quietly would return an ownerless partition —
+/// the very defect this handler exists to prevent — so both answers FAULT the create
+/// (<see cref="FailsCreateOnError"/>).</para>
 ///
 /// <para>System-created roots are skipped, as <see cref="SpaceNodeType"/> skips them: System needs no
-/// grant, and the platform paths that write owning roots as System (import, migration) own their
-/// partition bookkeeping.</para>
+/// grant, and the platform paths that write partition roots as System (import, migration, a package
+/// root whose partition the installer provisions) own their partition bookkeeping — they must not
+/// gain a second, competing <c>Admin/Partition</c> definition from here. That is also why the
+/// definition is written from <see cref="Handle"/>, which knows the creator, and not from
+/// <c>GetAdditionalNodes</c>, which does not.</para>
 /// </summary>
 public sealed class InMeshPartitionOwnerPostCreationHandler(
     IMessageHub hub,
@@ -61,15 +65,10 @@ public sealed class InMeshPartitionOwnerPostCreationHandler(
             return Observable.Empty<Unit>();
 
         return PartitionOwningTypes.OwnsPartition(hub, createdNode.NodeType)
-            .SelectMany(owns => owns switch
-            {
-                true => Establish(createdNode, createdBy),
-                false => Observable.Empty<Unit>(),
-                null => Observable.Throw<Unit>(new InvalidOperationException(
-                    $"Whether '{createdNode.NodeType}' owns its partition could not be established, so "
-                    + $"'{createdNode.Path}' was created without its owner grant. Its NodeType definition "
-                    + "did not answer; retry the create.")),
-            });
+            .SelectMany(owns => owns == true
+                ? Establish(createdNode, createdBy)
+                : Observable.Throw<Unit>(new InvalidOperationException(Text(
+                    "access.partitionCreate.ownerUnestablished", createdNode.Path, createdNode.NodeType))));
     }
 
     private IObservable<Unit> Establish(MeshNode root, string? createdBy)
@@ -77,9 +76,8 @@ public sealed class InMeshPartitionOwnerPostCreationHandler(
         // No creator identity → nobody can be made the owner, and an ownerless partition is exactly
         // the defect this handler exists to prevent. Fail the create (FailsCreateOnError).
         if (string.IsNullOrEmpty(createdBy))
-            return Observable.Throw<Unit>(new InvalidOperationException(
-                $"Cannot create '{root.Path}' without a creator identity to grant ownership to. "
-                + "The create request carried no AccessContext.ObjectId (and was not System-impersonated)."));
+            return Observable.Throw<Unit>(new InvalidOperationException(Text(
+                "access.partitionCreate.noCreator", root.Path)));
 
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
@@ -91,7 +89,8 @@ public sealed class InMeshPartitionOwnerPostCreationHandler(
         // Observable.Using(access.ImpersonateAsSystem, …), which latches System onto the create flow
         // that invoked this handler (#4061; see SpaceGrantScopeDoesNotLatchTheCreateFlowTest). Each
         // write enters its own System scope at Subscribe and leaves it on the way out; Concat keeps
-        // them in order — the owner first, then the routing announcement.
+        // them in order — the owner first, then the routing announcement. Both are cross-hub creates
+        // composed reactively, the same shape Space's creator grant has always used.
         return access
             .RunAsSystem(() => mesh.CreateNode(grant)
                 .Do(_ => logger?.LogInformation(
@@ -100,4 +99,8 @@ public sealed class InMeshPartitionOwnerPostCreationHandler(
             .Concat(access.RunAsSystem(() => mesh.CreateNode(definition)))
             .Select(_ => Unit.Default);
     }
+
+    /// <summary>The failure text in the creator's language — it becomes the create's response.</summary>
+    private string Text(string key, params object?[] args) =>
+        LocalizationCatalog.Get(key, hub.ServiceProvider.GetService<AccessService>().ViewerLocale(), args);
 }

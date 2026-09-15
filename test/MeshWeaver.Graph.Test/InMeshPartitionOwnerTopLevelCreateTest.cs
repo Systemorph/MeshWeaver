@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -13,13 +14,14 @@ namespace MeshWeaver.Graph.Test;
 
 /// <summary>
 /// 🚨 <b>A top-level instance of a partition-owning NodeType declared in mesh CONTENT can be
-/// created by an ordinary signed-in user — exactly as a Space can.</b>
+/// created by an ordinary signed-in user — exactly as a Space can — and by nobody who is not
+/// signed in.</b>
 ///
 /// <para><b>The defect.</b> <c>Crm/Client</c> declares <c>ownsPartition: true</c> in its
 /// <see cref="NodeTypeDefinition"/>, and the CRM guide's recipe for a new client is a top-level
 /// <c>create</c>. On memex.systemorph.com that create was refused for EVERYONE — platform admins
-/// included — with <c>Access denied: Create permission required for node 'Notus'</c>. Three places
-/// knew what "owns a partition" means, and all three only asked the STATIC registry:</para>
+/// included — with <c>Access denied: Create permission required for node 'Notus'</c>. Every check on
+/// the create path asked only the STATIC registry whether a type owns its partition:</para>
 /// <list type="number">
 ///   <item><c>RlsNodeValidator</c>: only <c>Space</c> carries an access rule that lets an
 ///     authenticated identity create a top-level instance; any other owning type fell to the
@@ -32,13 +34,14 @@ namespace MeshWeaver.Graph.Test;
 /// </list>
 ///
 /// <para>The type here is created at RUNTIME as a persisted <c>NodeType</c> node — never through
-/// <c>AddMeshNodes</c>, which would make it static and let every one of the three lookups pass by
-/// accident. The creator is an identity that holds NOTHING anywhere; that it can then write a
-/// child is the proof that it became the partition's Admin and that the partition is routable.</para>
+/// <c>AddMeshNodes</c>, which would make it static and let every one of those lookups pass by
+/// accident. The creator is an identity that holds NOTHING anywhere; that it can then write a child
+/// is the proof that it became the partition's Admin and that the partition is routable.</para>
 ///
 /// <para>Security fixture: <see cref="MonolithMeshTestBase.ConfigureMeshBase"/>, NOT the default
-/// <c>ConfigureMesh</c>, which adds public admin access and would make every refusal below pass
-/// trivially.</para>
+/// <c>ConfigureMesh</c>, which adds public admin access and would make every refusal pass trivially.
+/// Every refusal is asserted by WHAT refused it — a timeout or an unrelated fault is not a refusal
+/// and must fail the test.</para>
 /// </summary>
 public class InMeshPartitionOwnerTopLevelCreateTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -93,11 +96,24 @@ public class InMeshPartitionOwnerTopLevelCreateTest(ITestOutputHelper output) : 
             + "the static registry would pass and this test would prove nothing");
     }
 
-    private ValueTask<Exception?> RefusedAs(AccessContext who, MeshNode node, CancellationToken ct) =>
-        Record.ExceptionAsync(() => Access.RunAs(who, () => MeshService.CreateNode(node))
+    /// <summary>
+    /// The create's failure, asserted to BE a refusal: not a timeout, and naming the node. Anything
+    /// else — the budget running out, an unrelated fault — would let a negative control pass while
+    /// the rule under test never answered.
+    /// </summary>
+    private async Task<string> RefusedAs(AccessContext who, MeshNode node, CancellationToken ct)
+    {
+        var failure = await Record.ExceptionAsync(() => Access.RunAs(who, () => MeshService.CreateNode(node))
             .Take(1)
             .Timeout(RefusalBudget)
             .Await(ct));
+
+        failure.Should().NotBeNull($"the create of '{node.Path}' must be refused, and it succeeded");
+        failure.Should().NotBeOfType<TimeoutException>(
+            "a create that never answered is not a refusal — the rule under test did not decide");
+        failure!.Message.Should().Contain(node.Path, "the refusal names the node it refused");
+        return failure.Message;
+    }
 
     /// <summary>
     /// THE property: an ordinary user creates a top-level instance of an in-mesh owning type, and
@@ -133,24 +149,22 @@ public class InMeshPartitionOwnerTopLevelCreateTest(ITestOutputHelper output) : 
                 + "'{id}/page'' an ownerless partition answers",
                 cancellationToken: TestContext.Current.CancellationToken);
 
-        var queryCore = Mesh.ServiceProvider.GetRequiredService<IMeshQueryCore>();
-        var grant = await queryCore
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:acmepartner/_Access/{Probe.ObjectId}_Access"), Mesh.JsonSerializerOptions)
-            .Take(1)
-            .Should().Within(TestTimeouts.CrossSilo).Emit(cancellationToken: TestContext.Current.CancellationToken);
-        var assignment = grant.Items.Single().ContentAs<AccessAssignment>(Mesh.JsonSerializerOptions);
-        assignment!.Roles.Should().ContainSingle(r => r.Role == Role.Admin.Id && !r.Denied,
-            "the creator becomes the partition's Admin, as a Space's creator does");
+        // Read the known paths from the AUTHORITATIVE stream, never from a query whose index trails
+        // the store — its first emission can predate the post-creation writes.
+        await Mesh.GetWorkspace().GetMeshNodeStream($"acmepartner/_Access/{Probe.ObjectId}_Access")
+            .Where(n => n?.Content is AccessAssignment a
+                        && a.AccessObject == Probe.ObjectId
+                        && a.Roles.Any(r => r.Role == Role.Admin.Id && !r.Denied))
+            .Should().Within(TestTimeouts.CrossSilo).Emit(
+                "the creator becomes the partition's Admin, as a Space's creator does",
+                cancellationToken: TestContext.Current.CancellationToken);
 
-        var definition = await queryCore
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{PartitionNodeType.Namespace}/acmepartner"), Mesh.JsonSerializerOptions)
-            .Take(1)
-            .Should().Within(TestTimeouts.CrossSilo).Emit(cancellationToken: TestContext.Current.CancellationToken);
-        definition.Items.Should().ContainSingle(
-            "the partition is announced to routing with its Admin/Partition/{id} definition, "
-            + "exactly as a Space's is — without it the partition is half-provisioned");
+        await Mesh.GetWorkspace().GetMeshNodeStream($"{PartitionNodeType.Namespace}/acmepartner")
+            .Where(n => n?.Content is PartitionDefinition { Namespace: "acmepartner" })
+            .Should().Within(TestTimeouts.CrossSilo).Emit(
+                "the partition is announced to routing with its Admin/Partition/{id} definition, "
+                + "exactly as a Space's is — without it the partition is half-provisioned",
+                cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>Control: a type that does NOT own a partition is still refused at the top level.</summary>
@@ -159,15 +173,18 @@ public class InMeshPartitionOwnerTopLevelCreateTest(ITestOutputHelper output) : 
     {
         await SeedTypes();
 
-        var failure = await RefusedAs(Probe, new MeshNode("loosewidget")
+        var message = await RefusedAs(Probe, new MeshNode("loosewidget")
         {
             Name = "Loose Widget",
             NodeType = NonOwnerType,
             State = MeshNodeState.Active,
         }, TestContext.Current.CancellationToken);
 
-        failure.Should().NotBeNull(
-            "top-level ⟺ owns a partition: content never lands at the root as a bare node");
+        Assert.True(
+            message.Contains("top level", StringComparison.Ordinal)
+            || message.Contains("Create permission required", StringComparison.Ordinal),
+            "top-level ⟺ owns a partition: content never lands at the root as a bare node, and the "
+            + $"refusal must be the access rule's or the write guard's — nothing else. Got: {message}");
     }
 
     /// <summary>Control: an unauthenticated caller cannot create a partition, owning type or not.</summary>
@@ -176,25 +193,50 @@ public class InMeshPartitionOwnerTopLevelCreateTest(ITestOutputHelper output) : 
     {
         await SeedTypes();
 
-        var failure = await RefusedAs(Nobody, new MeshNode("anonpartner")
+        var message = await RefusedAs(Nobody, new MeshNode("anonpartner")
         {
             Name = "Anonymous Partner",
             NodeType = OwnerType,
             State = MeshNodeState.Active,
         }, TestContext.Current.CancellationToken);
 
-        failure.Should().NotBeNull(
-            "'any authenticated identity' excludes the logged-out caller, who arrives named "
-            + WellKnownUsers.Anonymous);
+        message.Should().Contain("signed-in",
+            "partition creation is refused to a visitor OUTRIGHT, not handed to the permission fold "
+            + "where an Anonymous grant could decide it");
     }
 
     /// <summary>
-    /// Control: Space is unchanged — still creatable by an ordinary user, and granted ONCE. Space is
-    /// static and has its own post-creation handler; the generic in-mesh path must not run for it
-    /// too, or the second grant would collide with the first and fail the create.
+    /// 🚨 Control, and a hole this change must not widen: an anonymous caller choosing the id
+    /// <c>Anonymous</c>. The own-scope shortcut ("every user owns the partition named after their id")
+    /// used to accept ANY non-empty id — and <c>Anonymous</c> is non-empty — so this create bypassed
+    /// every access rule and would have handed the <c>Anonymous</c> subject Admin on a new partition.
+    /// A pseudo-identity owns nothing.
     /// </summary>
     [Fact(Timeout = 180_000)]
-    public async Task ASpace_IsUnchanged_AndGrantedExactlyOnce()
+    public async Task AnAnonymousCaller_CannotClaimAPartitionNamedAfterThePseudoIdentity()
+    {
+        await SeedTypes();
+
+        var message = await RefusedAs(Nobody, new MeshNode(WellKnownUsers.Anonymous)
+        {
+            Name = "Anonymous",
+            NodeType = OwnerType,
+            State = MeshNodeState.Active,
+        }, TestContext.Current.CancellationToken);
+
+        message.Should().Contain("signed-in",
+            "the own-scope shortcut must not treat the pseudo-identity 'Anonymous' as a user who "
+            + "owns the partition of the same name");
+    }
+
+    /// <summary>
+    /// Control: Space is unchanged — still creatable by an ordinary user, and granted by Space's OWN
+    /// handler. The in-mesh handler must not run for it too: the grant path is deterministic
+    /// (<c>{id}/_Access/{creator}_Access</c>), so a second grant would collide with the first and —
+    /// the grant being <c>FailsCreateOnError</c> — fail this very create.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ASpace_IsUnchanged_AndGrantedByItsOwnHandler()
     {
         await Access.RunAs(Probe, () => MeshService.CreateNode(new MeshNode("probespace")
             {
@@ -204,14 +246,14 @@ public class InMeshPartitionOwnerTopLevelCreateTest(ITestOutputHelper output) : 
                 Content = new Space(),
             }))
             .Should().Within(TestTimeouts.CrossSilo).Emit(
-                "Space's own access rule still lets an ordinary user create one",
+                "Space's own access rule still lets an ordinary user create one, and only one "
+                + "creator grant is written (a second would collide and fail the create)",
                 cancellationToken: TestContext.Current.CancellationToken);
 
-        var grants = await Mesh.ServiceProvider.GetRequiredService<IMeshQueryCore>()
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                "namespace:probespace/_Access nodeType:AccessAssignment"), Mesh.JsonSerializerOptions)
-            .Take(1)
-            .Should().Within(TestTimeouts.CrossSilo).Emit(cancellationToken: TestContext.Current.CancellationToken);
-        grants.Items.Should().ContainSingle("one creator grant, from Space's own handler");
+        await Mesh.GetWorkspace().GetMeshNodeStream($"probespace/_Access/{Probe.ObjectId}_Access")
+            .Where(n => n?.Content is AccessAssignment a && a.AccessObject == Probe.ObjectId)
+            .Should().Within(TestTimeouts.CrossSilo).Emit(
+                "the Space's creator is its Admin",
+                cancellationToken: TestContext.Current.CancellationToken);
     }
 }

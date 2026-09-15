@@ -177,19 +177,17 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
         {
             NodeValidationResult RefuseNonOwning()
             {
-                var ownSpace = string.IsNullOrEmpty(userId)
-                    ? $"your own space ('<your-id>/{context.Node.Id}')"
-                    : $"your own space ('{userId}/{context.Node.Id}')";
+                var ownPath = string.IsNullOrEmpty(userId)
+                    ? $"<your-id>/{context.Node.Id}"
+                    : $"{userId}/{context.Node.Id}";
                 _logger.LogWarning(
                     "PartitionWriteGuard: blocked top-level Create by {User} of non-partition node '{Path}' (NodeType {NodeType})",
                     userId ?? "(anonymous)", context.Node.Path, context.Node.NodeType ?? "(untyped)");
+                // Worded in the CALLER's language — this is the message the create returns to them.
                 return NodeValidationResult.Invalid(
-                    $"Cannot create '{context.Node.Path}' at the top level: the root namespace ('') is reserved for " +
-                    $"partition roots, so a top-level node MUST be of a partition-owning type. A " +
-                    $"'{context.Node.NodeType ?? "untyped"}' node does not own a partition — only a type whose definition " +
-                    $"declares ownsPartition does (Space, User, or a type declared in mesh content such as a CRM client). " +
-                    $"Create it as a Space (inspect the required shape via its content schema at 'Space/schema'), or put " +
-                    $"your content in {ownSpace}.",
+                    LocalizationCatalog.Get(
+                        "access.partitionCreate.notOwningTopLevel", context.AccessContext?.Locale,
+                        context.Node.Path, context.Node.NodeType ?? "untyped", ownPath),
                     NodeRejectionReason.InvalidPath);
             }
 
