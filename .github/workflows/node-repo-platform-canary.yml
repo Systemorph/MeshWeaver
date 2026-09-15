@@ -203,15 +203,16 @@ jobs:
 
 
           def selects_testing_platform(repo):
-              """Does THIS repo opt `dotnet test` into Microsoft.Testing.Platform?
+              """Does the `global.json` at the root of `repo` opt `dotnet test` into
+              Microsoft.Testing.Platform?
 
-              🚨 The runner is the CALLER'S choice, and it is read from the first `global.json`
-              found walking UP from the CURRENT DIRECTORY. Measured on the .NET 10.0.400 SDK,
-              2026-09-15: a `global.json` in a SIBLING directory does NOT apply (`dotnet test
-              --help` still announces ".NET Test Command for VSTest"), while one in the cwd or an
-              ancestor does. This lane runs `dotnet test` with cwd = the caller's checkout and
-              keeps the platform in a SIBLING checkout, so the platform's own `global.json` — the
-              one core added with xunit.v3 4.x — never reaches this command. The caller's does.
+              🚨 `dotnet test` reads its runner from the first `global.json` found walking UP from
+              the CURRENT DIRECTORY. Measured on the .NET 10.0.400 SDK, 2026-09-15: one in a
+              SIBLING directory does NOT apply (`dotnet test --help` still announces ".NET Test
+              Command for VSTest"), while one in the cwd or an ancestor does. This lane keeps the
+              caller in one checkout and each platform arm in a SIBLING one, so the arm's own
+              `global.json` never reaches a command run from the caller's. See `test_runner` for
+              why BOTH are read (#4414).
 
               Why it has to be read rather than assumed: under Microsoft.Testing.Platform both
               `--logger` and `-warnaserror` were measured to end the run as `Zero tests ran`,
@@ -232,6 +233,33 @@ jobs:
               return selected == "Microsoft.Testing.Platform"
 
 
+          def test_runner(repo, platform):
+              """(runs under Microsoft.Testing.Platform?, the cwd `dotnet test` must run from).
+
+              🚨 THE RUNNER FOLLOWS THE TEST FRAMEWORK, AND THE PLATFORM PINS THE FRAMEWORK (#4414).
+              A suite builds with `-p:MeshWeaverRoot=` the arm's platform checkout, so its xunit.v3
+              version is that PLATFORM's Directory.Packages.props, not the caller's — and xunit.v3
+              4.x (core #4365) refuses the VSTest target on .NET 10 outright ("Testing with VSTest
+              target is no longer supported by Microsoft.Testing.Platform"). Reading the caller's
+              `global.json` alone ran a caller that has none — MeshWeaver.Plugins, 2026-09-15 —
+              under VSTest against a framework that refuses it; in main-cd that failed every
+              module suite with nothing executed. Here it would have made the MAIN arm
+              "incomplete" on every suite the day main moved, which is the one comparison this
+              lane exists to make.
+
+              So the runner is Microsoft.Testing.Platform when EITHER checkout selects it. When
+              only the platform does, the command runs FROM the platform checkout on the suite's
+              absolute path, and that cwd's `global.json` is the one found (measured: positional
+              path, trx written, 36 of 36 run). The build is untouched: what it reads resolves from
+              the PROJECT's directory, not the cwd.
+              """
+              if selects_testing_platform(repo):
+                  return True, repo
+              if selects_testing_platform(platform):
+                  return True, platform
+              return False, repo
+
+
           def run_arm():
               suites = [x.strip() for x in os.environ["SUITES"].splitlines() if x.strip()]
               if not suites or len(suites) != len(set(suites)):
@@ -240,7 +268,9 @@ jobs:
               scratch = Path(os.environ["RUNNER_TEMP"])
               core = os.environ["CORE"]
               repo = workspace / ("repo" if core == "core-pin" else "repo-main")
-              testing_platform = selects_testing_platform(repo)
+              testing_platform, test_cwd = test_runner(repo, workspace / core)
+              print(f"{core}: test runner "
+                    f"{'Microsoft.Testing.Platform' if testing_platform else 'VSTest'}, run from {test_cwd}")
               evidence = {}
               for index, suite in enumerate(suites):
                   directory = scratch / f"canary-{core}-{index}"
@@ -250,7 +280,7 @@ jobs:
                             f"-p:MeshWeaverRoot={workspace / core}/"]
                   # `dotnet build` above keeps -warnaserror under BOTH runners; only the test
                   # invocation differs, and only in the reporter flags.
-                  command = ["dotnet", "test", suite, "--no-build", "-c", "Release", "-p:CIRun=true",
+                  command = ["dotnet", "test", str((repo / suite).resolve()), "--no-build", "-c", "Release", "-p:CIRun=true",
                              f"-p:MeshWeaverRoot={workspace / core}/"] + (
                       ["--report-xunit-trx", "--report-xunit-trx-filename", "results.trx",
                        "--results-directory", str(directory)] if testing_platform else
@@ -277,7 +307,7 @@ jobs:
                           continue
                       build_passed = True
                       with log.open("w") as output:
-                          result = subprocess.run(command, cwd=repo, stdout=output,
+                          result = subprocess.run(command, cwd=test_cwd, stdout=output,
                                                   stderr=subprocess.STDOUT, timeout=480)
                       evidence[suite] = {"build": "passed", "results": read_results(directory / "results.trx", result.returncode)}
                   except (OSError, ValueError, ET.ParseError, subprocess.TimeoutExpired) as error:
