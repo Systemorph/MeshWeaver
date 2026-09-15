@@ -2162,6 +2162,20 @@ jobs:
     - name: "The combo-verify preflight names what to provision, and the verdict merge loses nothing"
       run: python3 .github/scripts/check-combo-verify.py --root .
 
+    # 🚨 WHICH instances that lane covers is DERIVED from the fleet's deployment overlays (#3848),
+    # not listed in a repository variable — the pin #3842 rules out, and one that was already an
+    # installation short of the fleet on the day it was specified. The derivation needs the
+    # fleet-reader token, so it cannot run on a pull request; what runs here is its falsification.
+    # Every arm that must REFUSE is driven: an unreadable repository (NOBODY LOOKED is not a
+    # measured zero), an ambiguous or duplicated declaration, a live installation with no ingress
+    # host, a stale instances.json entry, and — the one the whole lane exists for — a derivation
+    # that would come back EMPTY, because an empty matrix skips the verify job and GitHub paints a
+    # skipped job the same colour as a passed one. The overlay extractor is driven over two known
+    # fixtures and then BLINDED, so "the extractor stopped matching" can never arrive wearing "the
+    # fleet declares no installations".
+    - name: "The combo-verification roster derivation refuses an empty fleet (self-test)"
+      run: python3 .github/scripts/derive-combo-instances.py --self-test
+
     # 🚨 A Dependabot run resolves `secrets.X` against a SECOND, SEPARATE store (Settings → Secrets
     # and variables → **Dependabot**), which is a PARTIAL mirror of the Actions one — and there is no
     # Dependabot *variables* store, so only `secrets.` is doubled. #3399 (a recurrence of #2249) had
