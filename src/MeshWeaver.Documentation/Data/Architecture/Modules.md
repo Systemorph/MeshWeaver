@@ -1009,8 +1009,8 @@ warehouses modules for newer platforms. The older upload competes for the head's
 slot instead, and the index lists head and retained fallback at their own versions, each download
 resolving its own generation. A head whose entry assembly is missing is healed by the next valid
 upload, and unknown versions keep the legacy behaviour. The full rule, the fallback choice, what a
-deliberate rollback now means, and the unresolved cross-replica case (#4026) are in
-[Module Adoption Policy](../ModuleAdoptionPolicy).
+deliberate rollback now means, and how the cross-replica case is closed (#4026 — a record per
+landing, the head derived from them) are in [Module Adoption Policy](../ModuleAdoptionPolicy).
 
 The remaining blind spot (a registry that states no identity) is closed **where it is created**, not
 by churning consumers: a bundle that cannot say what it was built against must not be publishable.
