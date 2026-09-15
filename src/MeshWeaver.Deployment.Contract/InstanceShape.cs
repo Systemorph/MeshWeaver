@@ -717,6 +717,24 @@ public sealed record HostingOperatorSpec
     /// </summary>
     [Description("Maintainer: the one user id that may approve its own request")]
     public string? Maintainer { get; init; }
+
+    /// <summary>
+    /// THE executor rule, shared by <see cref="DeploymentRecordExtensions.WithOperatorExecutor"/>
+    /// and <see cref="DeploymentPortalConfig.PortalConfig"/> (so by both renderers): trimmed and
+    /// case-folded to <c>Job</c> or <c>Actions</c>; null for blank, which the portal and the chart
+    /// both read as Job. Returns false, with the trimmed value in <paramref name="canonical"/>, for
+    /// anything else: the portal reads every value but <c>Actions</c> as Job, so a misspelling must
+    /// be refused rather than delivered. Pure.
+    /// </summary>
+    public static bool TryCanonicalExecutor(string? raw, out string? canonical)
+    {
+        var value = (raw ?? "").Trim();
+        canonical = value.Length == 0 ? null
+            : string.Equals(value, "Actions", StringComparison.OrdinalIgnoreCase) ? "Actions"
+            : string.Equals(value, "Job", StringComparison.OrdinalIgnoreCase) ? "Job"
+            : value;
+        return canonical is null or "Job" or "Actions";
+    }
 }
 
 /// <summary>OpenTelemetry export.</summary>

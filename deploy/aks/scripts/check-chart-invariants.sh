@@ -128,6 +128,9 @@ COMBOS=(
   # nowhere. Invariant 17 checks the key in EVERY render; the evidence check below the loop
   # asserts that this one rendered Actions.
   "the Actions executor with the operator Job off (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-actions-executor.yaml"
+  # A whitespace-only maintainer: the one render where "only when set" can be observed failing, if
+  # the template stops trimming. The evidence check asserts it renders NO maintainer key.
+  "a whitespace-only operator maintainer (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-maintainer-blank.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -169,22 +172,33 @@ if [ "$rendered" -lt "${#COMBOS[@]}" ]; then
   report "only $rendered of ${#COMBOS[@]} values combinations rendered — treating as FAILURE rather than reporting 'no contradictions' on partial evidence"
 fi
 
-# The executor evidence (Plugins#1738): invariant 17 holds in every render, but it holds just as
-# well if NO render ever says Actions. So one combination must render the Actions executor with the
-# operator Job switched off, which is the shape memex.systemorph.com moves to. Read from the
-# rendered ConfigMaps above, not re-rendered.
-actions_rendered=0
-for r in "$WORK"/*.yaml; do
-  [ -f "$r" ] || continue
-  if grep -q '^  Hosting__Operator__Executor: "Actions"$' "$r" \
-     && grep -q '^  Hosting__Operator__Enabled: "false"$' "$r"; then
-    actions_rendered=1
+# The executor evidence (Plugins#1738). Invariant 17 holds in every render, but it holds just as
+# well if NO render ever says Actions, or if the maintainer always rendered a non-blank default. So
+# three renders above are read by NAME (not re-rendered):
+#   * the Actions fixture, written loosely on purpose (`actions`, a padded maintainer), must render
+#     the canonical Executor "Actions" beside Enabled "false" and the TRIMMED maintainer exactly;
+#   * the whitespace-only maintainer and the chart defaults must render NO maintainer key.
+render_of() { echo "$WORK/$(echo "$1" | tr -c 'a-zA-Z0-9' '-').yaml"; }
+actions_render="$(render_of "the Actions executor with the operator Job off (fixture)")"
+executor_evidence=0
+if [ -f "$actions_render" ] \
+   && grep -q '^  Hosting__Operator__Executor: "Actions"$' "$actions_render" \
+   && grep -q '^  Hosting__Operator__Enabled: "false"$' "$actions_render" \
+   && grep -q '^  Hosting__Operator__Maintainer: "maintainer-id"$' "$actions_render"; then
+  executor_evidence=$((executor_evidence + 1))
+else
+  report "the Actions fixture did not render Executor=\"Actions\", Enabled=\"false\" and the trimmed Maintainer=\"maintainer-id\" — the executor switch or its maintainer does not reach a pod that disabled the operator Job"
+fi
+for combo in "a whitespace-only operator maintainer (fixture)" "self-host (neutral chart defaults)"; do
+  r="$(render_of "$combo")"
+  if [ -f "$r" ] && ! grep -q '^  Hosting__Operator__Maintainer:' "$r"; then
+    executor_evidence=$((executor_evidence + 1))
+  else
+    report "'$combo' renders a Hosting__Operator__Maintainer key, or did not render at all — an unset or blank maintainer must render NO key"
   fi
 done
-if [ "$actions_rendered" -eq 1 ]; then
-  ok "the Actions executor reaches the ConfigMap with the operator Job off"
-else
-  report "no combination rendered Hosting__Operator__Executor=\"Actions\" beside Hosting__Operator__Enabled=\"false\" — the executor switch cannot reach a pod that disabled the operator Job"
+if [ "$executor_evidence" -eq 3 ]; then
+  ok "the executor reaches the ConfigMap with the operator Job off; the maintainer renders trimmed, and only when set"
 fi
 
 # ---------------------------------------------------------------------------

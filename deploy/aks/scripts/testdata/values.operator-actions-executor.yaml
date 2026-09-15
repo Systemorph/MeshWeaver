@@ -7,7 +7,11 @@
 # their own request. Invariant 17 asserts the Job-path keys stay unrendered; the evidence check in
 # the driver asserts this render carries `Hosting__Operator__Executor: "Actions"`.
 # Placeholders, no credential.
+#
+# Written LOOSELY on purpose: the chart must case-fold the executor and trim the maintainer the
+# same way the record's derivation does (HostingOperatorSpec.TryCanonicalExecutor), and the
+# evidence check asserts the canonical `"Actions"` and the exact `"maintainer-id"`.
 hostingOperator:
   enabled: false
-  executor: "Actions"
-  maintainer: "maintainer-id"
+  executor: "actions"
+  maintainer: "  maintainer-id  "

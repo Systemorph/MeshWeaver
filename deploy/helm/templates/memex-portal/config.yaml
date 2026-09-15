@@ -328,16 +328,22 @@ data:
   whatever the overlay declared: the `Modules__Root` class again (invariant 8), now invariant 17 of
   check-chart-invariants.
 
-  A value other than Job or Actions is REFUSED. ActionsExecutor.ExecutorOf reads anything but
-  "Actions" as Job, so a misspelling would silently keep the in-cluster path. The maintainer (the one
-  user id that may approve its own request) renders only when set; absent means nobody may. */}}
-{{- $operatorExecutor := (.Values.hostingOperator).executor | default "Job" }}
-{{- if not (has $operatorExecutor (list "Job" "Actions")) }}
-{{- fail (printf "hostingOperator.executor is %q, and it must be Job or Actions. The portal reads every other value as Job (ActionsExecutor.ExecutorOf), so this render would silently keep the in-cluster operator Job instead of the Actions lane it asks for." $operatorExecutor) }}
+  Both values follow the record's rule (HostingOperatorSpec.TryCanonicalExecutor), so the two
+  renderers agree: the executor is trimmed and case-folded, and blank means Job. Any other value is
+  REFUSED, because ActionsExecutor.ExecutorOf reads anything but "Actions" as Job and a misspelling
+  would silently keep the in-cluster path. The maintainer (the one user id that may approve its own
+  request) is trimmed and renders only when non-blank; absent means nobody may. */}}
+{{- $operatorExecutorRaw := (.Values.hostingOperator).executor | default "" | toString | trim }}
+{{- $operatorExecutor := "Job" }}
+{{- if eq (lower $operatorExecutorRaw) "actions" }}
+{{- $operatorExecutor = "Actions" }}
+{{- else if and $operatorExecutorRaw (ne (lower $operatorExecutorRaw) "job") }}
+{{- fail (printf "hostingOperator.executor is %q, and it must be Job or Actions. The portal reads every other value as Job (ActionsExecutor.ExecutorOf), so this render would silently keep the in-cluster operator Job instead of the Actions lane it asks for." $operatorExecutorRaw) }}
 {{- end }}
   Hosting__Operator__Executor: "{{ $operatorExecutor }}"
-{{- with (.Values.hostingOperator).maintainer }}
-  Hosting__Operator__Maintainer: "{{ . }}"
+{{- $operatorMaintainer := (.Values.hostingOperator).maintainer | default "" | toString | trim }}
+{{- if $operatorMaintainer }}
+  Hosting__Operator__Maintainer: {{ $operatorMaintainer | quote }}
 {{- end }}
 {{- if (.Values.hostingOperator).enabled }}
 {{- if not (.Values.hostingOperator).image }}

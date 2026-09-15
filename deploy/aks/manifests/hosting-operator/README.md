@@ -62,10 +62,11 @@ lifecycle actions (Plugins#1738):
 
 The chart renders `Hosting__Operator__Executor` outside the `enabled` block, because the Actions
 executor is meant to run with the Job switched off. `hostingOperator.maintainer` (record:
-`operator.maintainer`) names the one user id that may approve its own request, and renders only when
-set. Any executor other than `Job` or `Actions` fails the render, since the portal reads every other
-value as `Job`. `check-chart-invariants.sh` asserts both halves (invariant 17 and the Actions
-fixture).
+`operator.maintainer`) names the one user id that may approve its own request. It is trimmed, and
+renders only when non-blank. The executor is trimmed and case-folded, exactly as the record's
+derivation does it. Any other executor than `Job` or `Actions` fails the render, since the portal
+reads every other value as `Job`. `check-chart-invariants.sh` asserts both halves: invariant 17, the
+Actions and blank-maintainer fixtures, and the misspelled-executor refusal.
 
 ## The image is published on every push to `main`
 

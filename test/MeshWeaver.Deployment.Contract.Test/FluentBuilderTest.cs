@@ -84,6 +84,22 @@ public class FluentBuilderTest
 
         // The portal reads anything but "Actions" as Job, so a misspelling must not reach it.
         Assert.Throws<ArgumentException>(() => new DeploymentContent().WithOperatorExecutor("Action"));
+
+        // The maintainer is trimmed on the way in; null keeps it, blank clears it.
+        Assert.Equal("rbuergi", new DeploymentContent().WithOperatorExecutor("Actions", "  rbuergi ").Operator!.Maintainer);
+        Assert.Null(record.WithOperatorExecutor("Actions", "  ").Operator!.Maintainer);
+
+        // A record that never passed the transform (JSON, an initializer) renders the same way on
+        // both renderers, and a misspelling fails closed on both rather than reaching the portal.
+        var raw = new DeploymentContent { Operator = new HostingOperatorSpec { Executor = " actions ", Maintainer = " rbuergi " } };
+        var misspelled = new DeploymentContent { Operator = new HostingOperatorSpec { Executor = "Action" } };
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+        {
+            var config = DeploymentPortalConfig.PortalConfig(raw, options);
+            Assert.Equal("Actions", config["Hosting__Operator__Executor"]);
+            Assert.Equal("rbuergi", config["Hosting__Operator__Maintainer"]);
+            Assert.Throws<InvalidOperationException>(() => DeploymentPortalConfig.PortalConfig(misspelled, options));
+        }
     }
 
     [Fact]
