@@ -53,7 +53,7 @@ public class ChatClearSkillNewComposerTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await SeedComposerOnMeshWeaverAsync();
+        await using var context = await SeedComposerOnMeshWeaverAsync(TestContext.Current.CancellationToken);
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 950);
         await page.GotoAsync($"{fixture.BaseUrl}/User/{fixture.UserId}",
@@ -99,9 +99,9 @@ public class ChatClearSkillNewComposerTest(PortalFixture fixture)
     /// <summary>Authenticated context with the per-user composer seeded and PATCHed onto MeshWeaver + a
     /// model, and any leftover draft cleared — so the test starts from a clean new-chat composer regardless
     /// of run order in the shared collection.</summary>
-    private async Task<IBrowserContext> SeedComposerOnMeshWeaverAsync()
+    private async Task<IBrowserContext> SeedComposerOnMeshWeaverAsync(CancellationToken cancellationToken)
     {
-        var context = await fixture.NewAuthenticatedContextAsync();
+        var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: cancellationToken);
         var token = await fixture.MintTokenAsync(context);
         try { await fixture.CreateNodeAsync(context, token, ComposerSeedJson); }
         catch (InvalidOperationException) { /* already seeded — fine */ }

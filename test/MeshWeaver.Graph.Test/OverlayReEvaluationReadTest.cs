@@ -75,7 +75,7 @@ public class OverlayReEvaluationReadTest(ITestOutputHelper output) : MonolithMes
             var read = NodeTypeEnrichmentHelpers.AuthoritativeTypeRead(Mesh, NodeTypePath);
             read.Should().NotBeNull();
 
-            var node = await read!().Should().Emit();
+            var node = await read!().Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
             node.Should().NotBeNull(
                 "the re-evaluation is infrastructure — it runs under the System identity like every "
@@ -100,7 +100,7 @@ public class OverlayReEvaluationReadTest(ITestOutputHelper output) : MonolithMes
         await CreateTypeNode("Coupon", TestPartition);
 
         var read = NodeTypeEnrichmentHelpers.AuthoritativeTypeRead(Mesh, NodeTypePath);
-        (await read!().Should().Emit()).Should().BeNull();
+        (await read!().Should().Emit(cancellationToken: TestContext.Current.CancellationToken)).Should().BeNull();
     }
 
     /// <summary>
@@ -110,7 +110,7 @@ public class OverlayReEvaluationReadTest(ITestOutputHelper output) : MonolithMes
     public async Task AnEmptyResult_IsNull_NotAHealSignal()
     {
         var read = NodeTypeEnrichmentHelpers.AuthoritativeTypeRead(Mesh, $"{TestPartition}/NothingHereAtAll");
-        (await read!().Should().Emit()).Should().BeNull();
+        (await read!().Should().Emit(cancellationToken: TestContext.Current.CancellationToken)).Should().BeNull();
     }
 }
 

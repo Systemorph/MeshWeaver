@@ -83,7 +83,7 @@ public class PluginBundleAnchorTest(ITestOutputHelper output) : MonolithMeshTest
             .Timeout(TimeSpan.FromSeconds(60))
             .Await();
 
-    private Task<InstallResult> InstallPackage(string id, string? source) =>
+    private Task<InstallResult> InstallPackage(string id, string? source, CancellationToken cancellationToken) =>
         PackageInstaller.Install(
                 Mesh,
                 new PackageManifest
@@ -101,7 +101,7 @@ public class PluginBundleAnchorTest(ITestOutputHelper output) : MonolithMeshTest
                 "HEAD")
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(120))
-            .Await();
+            .Await(cancellationToken);
 
     /// <summary>Removes the install record through the installer's own sanctioned route — the
     /// CACHE, deleted, leaving the installed content and its partition exactly where they were.</summary>
@@ -183,7 +183,7 @@ public class PluginBundleAnchorTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 300_000)]
     public async Task AnEntitledCallerWithNoInstallRecordIsStillServed()
     {
-        await InstallPackage(AnchoredPackage, PlatformSource);
+        await InstallPackage(AnchoredPackage, PlatformSource, TestContext.Current.CancellationToken);
         (await RemoveInstallRecord(AnchoredPackage)).Should().BeTrue(
             "the test's premise is that the CACHE is gone");
 
@@ -222,7 +222,7 @@ public class PluginBundleAnchorTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 300_000)]
     public async Task AnUnreachableRegistryDoesNotDeny()
     {
-        await InstallPackage(AnchoredPackage, PlatformSource);
+        await InstallPackage(AnchoredPackage, PlatformSource, TestContext.Current.CancellationToken);
         var key = await RegisterInstance(GrantedInstance, $"{PlatformSource}/*");
 
         var app = await StartBundleHost(Failing(PlatformSource, "the registry is down"));
@@ -264,7 +264,7 @@ public class PluginBundleAnchorTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 300_000)]
     public async Task ACallerWhoIsNotEntitledStillSeesNothing()
     {
-        await InstallPackage(PaidPackage, PaidSource);
+        await InstallPackage(PaidPackage, PaidSource, TestContext.Current.CancellationToken);
         var key = await RegisterInstance(GrantedInstance, $"{PlatformSource}/*");
 
         var app = await StartBundleHost(
@@ -297,7 +297,7 @@ public class PluginBundleAnchorTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 300_000)]
     public async Task TheThirdStateIsIndistinguishableOnTheWire()
     {
-        await InstallPackage(PaidPackage, PaidSource);
+        await InstallPackage(PaidPackage, PaidSource, TestContext.Current.CancellationToken);
         var key = await RegisterInstance(GrantedInstance, $"{PlatformSource}/*");
 
         var app = await StartBundleHost(Failing(PlatformSource, "the registry is down"));

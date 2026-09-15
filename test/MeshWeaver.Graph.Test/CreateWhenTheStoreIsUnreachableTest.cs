@@ -211,14 +211,14 @@ public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : Mon
     /// node-operations hub — and returns the RESPONSE rather than an exception, because the rejection
     /// reason is the thing under test and <c>IMeshService.CreateNode</c> throws it away.
     /// </summary>
-    private async Task<CreateNodeResponse> Create(MeshNode node)
+    private async Task<CreateNodeResponse> Create(MeshNode node, CancellationToken cancellationToken)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var response = await access
             .RunAsSystem(() => ObserveNodeOperation(new CreateNodeRequest(node)))
             .FirstAsync()
             .Select(d => d.Message)
-            .Timeout(90.Seconds()).Await();
+            .Timeout(90.Seconds()).Await(cancellationToken);
         Output.WriteLine(
             $"create {node.Path} success={response.Success} reason={response.RejectionReason} "
             + $"error={response.Error}");
@@ -226,14 +226,14 @@ public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : Mon
     }
 
     /// <summary>The bulk sibling — the verb every installer and static-repo import travels.</summary>
-    private async Task<CreateNodesResponse> CreateMany(params MeshNode[] nodes)
+    private async Task<CreateNodesResponse> CreateMany(CancellationToken cancellationToken, params MeshNode[] nodes)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var response = await access
             .RunAsSystem(() => ObserveNodeOperation(new CreateNodesRequest([.. nodes])))
             .FirstAsync()
             .Select(d => d.Message)
-            .Timeout(90.Seconds()).Await();
+            .Timeout(90.Seconds()).Await(cancellationToken);
         Output.WriteLine(
             $"createMany {nodes.Length} success={response.Success} reason={response.RejectionReason} "
             + $"error={response.Error}");
@@ -255,7 +255,7 @@ public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : Mon
     [Fact(Timeout = 240000)]
     public async Task ACreateWhoseStoreIsUnreachable_IsAnsweredUnavailable_NotUnknown()
     {
-        var response = await Create(Page(NewId(Unreachable)));
+        var response = await Create(Page(NewId(Unreachable)), TestContext.Current.CancellationToken);
 
         response.Success.Should().BeFalse("the store was unreachable, so nothing was created");
         response.RejectionReason.Should().Be(NodeCreationRejectionReason.Unavailable,
@@ -273,7 +273,7 @@ public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : Mon
     [Fact(Timeout = 240000)]
     public async Task TheAnswerSaysNothingWasWritten_AndThatTheSameIdMayBeRetried()
     {
-        var response = await Create(Page(NewId(Unreachable)));
+        var response = await Create(Page(NewId(Unreachable)), TestContext.Current.CancellationToken);
 
         response.Error.Should().NotBeNull();
         response.Error!.Should().Contain("unreachable",
@@ -294,7 +294,7 @@ public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : Mon
     [Fact(Timeout = 240000)]
     public async Task ARealQueryError_IsStillReportedAsAnUnexpectedFailure()
     {
-        var response = await Create(Page(NewId(BrokenQuery)));
+        var response = await Create(Page(NewId(BrokenQuery)), TestContext.Current.CancellationToken);
 
         response.Success.Should().BeFalse();
         response.RejectionReason.Should().Be(NodeCreationRejectionReason.Unknown,
@@ -312,11 +312,11 @@ public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : Mon
     {
         var id = "healthy" + Guid.NewGuid().ToString("N")[..8];
 
-        var response = await Create(Page(id));
+        var response = await Create(Page(id), TestContext.Current.CancellationToken);
 
         response.Success.Should().BeTrue(
             $"the faulting adapter only fails the marked paths — {response.Error}");
-        (await ReadNode(PathOf(id)).FirstAsync().Timeout(60.Seconds()).Await())
+        (await ReadNode(PathOf(id)).FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken))
             .Should().NotBeNull("the create landed and must be readable back");
     }
 
@@ -330,6 +330,7 @@ public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : Mon
     public async Task ABulkCreateWhoseStoreIsUnreachable_IsAlsoAnsweredUnavailable()
     {
         var response = await CreateMany(
+            TestContext.Current.CancellationToken,
             Page("bulkhealthy" + Guid.NewGuid().ToString("N")[..8]),
             Page(NewId(Unreachable)));
 

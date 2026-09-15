@@ -128,7 +128,7 @@ public class GateDiscoveryEqualsBakeDiscoveryTest(ITestOutputHelper output)
         {
             // ── the BAKER's discovery: exactly what TreeBake.BakeAll folds over (`compilable`) ──
             var snapshot = LocalNodeRepo.LoadSync(repo);
-            var packages = await LocalNodeRepo.DiscoverPackages(snapshot).FirstAsync().Await();
+            var packages = await LocalNodeRepo.DiscoverPackages(snapshot).FirstAsync().Await(TestContext.Current.CancellationToken);
             var skipped = new List<string>();
             var bakeDiscovered = TreeNodeLoader
                 .Load(snapshot, packages, (path, reason) => skipped.Add($"{path}: {reason}"))
@@ -144,7 +144,7 @@ public class GateDiscoveryEqualsBakeDiscoveryTest(ITestOutputHelper output)
             var gateDiscovered = new List<string>();
             foreach (var package in packages)
             {
-                var files = await source.FetchPackageFiles(package, "HEAD").FirstAsync().Await();
+                var files = await source.FetchPackageFiles(package, "HEAD").FirstAsync().Await(TestContext.Current.CancellationToken);
                 gateDiscovered.AddRange(
                     PluginGateRunner.DiscoverNodeTypes(package, files).Select(t => t.Path));
             }
@@ -188,10 +188,10 @@ public class GateDiscoveryEqualsBakeDiscoveryTest(ITestOutputHelper output)
         try
         {
             var snapshot = LocalNodeRepo.LoadSync(repo);
-            var packages = await LocalNodeRepo.DiscoverPackages(snapshot).FirstAsync().Await();
+            var packages = await LocalNodeRepo.DiscoverPackages(snapshot).FirstAsync().Await(TestContext.Current.CancellationToken);
             var source = new NodeRepoPackageSource(
                 (_, _, _, _) => Observable.Return(snapshot), repoUrl: "local");
-            var files = await source.FetchPackageFiles(packages[0], "HEAD").FirstAsync().Await();
+            var files = await source.FetchPackageFiles(packages[0], "HEAD").FirstAsync().Await(TestContext.Current.CancellationToken);
             var gate = PluginGateRunner.DiscoverNodeTypes(packages[0], files);
 
             // The count IS the assertion — `0 type(s)` was the silent pass.

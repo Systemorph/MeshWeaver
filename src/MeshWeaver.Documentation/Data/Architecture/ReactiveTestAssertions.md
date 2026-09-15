@@ -84,11 +84,13 @@ For the surrounding test-writing rules, see [Writing Tests](/Doc/Architecture/Wr
 |---|---|---|
 | `obs.Should()` / `obs.Should(timeout)` | `ObservableAssertions<T>` | Begin an assertion chain (default timeout 10 s). Synchronous. |
 | `.Within(timeout)` | `ObservableAssertions<T>` | Override the wait deadline for the rest of the chain. Synchronous. |
-| `.Emit(because?)` | `Task<T>` | Await the first emission; return it. Fails on timeout or empty completion. |
-| `.Match(x => pred, because?)` | `Task<T>` | Await the first emission satisfying `pred`; return it. **The workhorse** — fold the assertion into the predicate. |
-| `.Be(expected, because?)` | `Task<ObservableAssertions<T>>` | First emission must equal `expected`. |
-| `.Complete(because?)` | `Task<ObservableAssertions<T>>` | Stream must complete within the timeout (no value required). |
-| `.NotEmit(within: t, because?)` | `Task<ObservableAssertions<T>>` | Nothing must arrive within `t` — the **one** place a fixed wait is correct. Keep `t` short. |
+| `.Emit(because?, cancellationToken?)` | `Task<T>` | Await the first emission; return it. Fails on timeout or empty completion. |
+| `.Match(x => pred, because?, cancellationToken?)` | `Task<T>` | Await the first emission satisfying `pred`; return it. **The workhorse** — fold the assertion into the predicate. |
+| `.Be(expected, because?, cancellationToken?)` | `Task<ObservableAssertions<T>>` | First emission must equal `expected`. |
+| `.Complete(because?, cancellationToken?)` | `Task<ObservableAssertions<T>>` | Stream must complete within the timeout (no value required). |
+| `.NotEmit(within: t, because?, cancellationToken?)` | `Task<ObservableAssertions<T>>` | Nothing must arrive within `t` — the **one** place a fixed wait is correct. Keep `t` short. |
+
+Every terminal wait takes a trailing `cancellationToken`. It cancels the WAIT, not the stream: the awaited task settles as cancelled (`OperationCanceledException`) and the subscription is dropped. A test that declares a `Timeout` passes `TestContext.Current.CancellationToken` there — xunit.v3 4.x cancels it when the timeout fires, and its `xUnit1069` analyzer makes a `Timeout` that never consumes the token a build error (see [Writing Tests, Rule 2a](/Doc/Architecture/WritingTests)). A cancelled wait is never re-described as "did not emit", and `NotEmit` never reads it as a pass.
 
 ```csharp
 [Fact]
@@ -127,7 +129,7 @@ In practice that means the following substitutions:
 - Stream waits → `await obs.Should().Match(...)`
 - Cold observable-returning calls (`IMeshService.CreateNode/UpdateNode/DeleteNode`, `hub.Observe(...)`, `ReadNode`) → `await ….Should().Emit()` — the subscribe *is* the work
 - Request/response polling loops → `await Observable.Interval(...).SelectMany(...).Should().Match(...)`
-- `CancellationToken` declarations → deleted (the assertion's `.Within(t)` is the deadline)
+- Hand-made `CancellationTokenSource` deadlines → deleted (the assertion's `.Within(t)` is the deadline). The test's OWN token stays: a test with a `Timeout` passes `TestContext.Current.CancellationToken` as the terminal call's `cancellationToken`
 
 `hub.Observe(...)` and the `IMeshService` write methods return `IObservable<T>`, **not** `Task<T>`. Awaiting the observable *directly* looks like a normal `Task` await but isn't — Rx's awaiter yields the *last* value, so it silently waits for completion rather than the first matching emission. Go through `.Should()` instead.
 

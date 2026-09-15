@@ -38,17 +38,17 @@ public class PlatformAgentsVisibleInPickerTest(PortalFixture fixture)
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
         // The installing admin sees them …
-        await AssertAgentPickerListsPlatformAgentsAsync(personId: null);
+        await AssertAgentPickerListsPlatformAgentsAsync(personId: null, TestContext.Current.CancellationToken);
 
         // … and so does a DIFFERENT signed-in person, who installed nothing and holds no grant.
         // This is the sglauser case: everyone in the portal, not just whoever provisioned it.
-        await AssertAgentPickerListsPlatformAgentsAsync(personId: "Sandra");
+        await AssertAgentPickerListsPlatformAgentsAsync(personId: "Sandra", TestContext.Current.CancellationToken);
     }
 
-    private async Task AssertAgentPickerListsPlatformAgentsAsync(string? personId)
+    private async Task AssertAgentPickerListsPlatformAgentsAsync(string? personId, CancellationToken cancellationToken)
     {
         var who = personId ?? fixture.UserId;
-        await using var context = await fixture.NewAuthenticatedContextAsync(personId);
+        await using var context = await fixture.NewAuthenticatedContextAsync(personId, cancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         // Pin the MeshWeaver harness: under a CLI harness "/agent" is forwarded to the CLI instead

@@ -115,7 +115,7 @@ public class PackageInstallRebuildsDependentsTest(ITestOutputHelper output) : Mo
             })
             .Should().Within(60.Seconds())
             .Emit("the dependent type must exist BEFORE the provider updates — that is the whole "
-                  + "premise: it is already running an assembly built from the provider's sources");
+                  + "premise: it is already running an assembly built from the provider's sources", cancellationToken: TestContext.Current.CancellationToken);
 
         // The closure enumerates types from the query INDEX, which trails the store. Waiting for
         // the dependent to be listed is this test's precondition, not a settle: without it the
@@ -125,7 +125,7 @@ public class PackageInstallRebuildsDependentsTest(ITestOutputHelper output) : Mo
                 string.Equals(n.Path, ConsumerType, StringComparison.OrdinalIgnoreCase)))
             .FirstAsync()
             .Timeout(60.Seconds())
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         // ── The provider package's install. A node repo: the files ARE nodes at their canonical
         //    paths. Its NodeType arrives with UNTYPED content on purpose (see UntypedNodeTypeJson).
@@ -147,7 +147,7 @@ public class PackageInstallRebuildsDependentsTest(ITestOutputHelper output) : Mo
                 ],
                 "HEAD")
             .Should().Within(180.Seconds())
-            .Emit("the install itself must complete before anything about releases can be read");
+            .Emit("the install itself must complete before anything about releases can be read", cancellationToken: TestContext.Current.CancellationToken);
 
         result.WrittenPaths.Should().Contain(SharedSource,
             "the shared compile input is what makes every dependent stale — if it was not written "
@@ -163,7 +163,7 @@ public class PackageInstallRebuildsDependentsTest(ITestOutputHelper output) : Mo
                 + "package's sources, must be rebuilt by that install. Releasing only the types "
                 + "the installer just wrote leaves it on the assembly it already had — the "
                 + "2026-08-25 Store outage, where every Store type recompiled green and the page "
-                + "still rendered empty");
+                + "still rendered empty", cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>

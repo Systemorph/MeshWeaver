@@ -100,7 +100,8 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
     /// <c>ReadBuildGo</c> reads, which is the one record a peer cluster shares with the builder.
     /// </summary>
     /// <param name="ready">The per-fingerprint GO history to record, or null for a root with none.</param>
-    private Task WriteTheDurableBuildRoot(ImmutableDictionary<string, BuildGo>? ready)
+    private Task WriteTheDurableBuildRoot(
+        ImmutableDictionary<string, BuildGo>? ready, CancellationToken cancellationToken)
     {
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var root = new MeshNode("Build", "Admin")
@@ -113,7 +114,7 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
                 Ready = ready,
             },
         };
-        return storage.Write(root, Mesh.JsonSerializerOptions).Await();
+        return storage.Write(root, Mesh.JsonSerializerOptions).Await(cancellationToken);
     }
 
     private static ImmutableDictionary<string, BuildGo> Go(params string[] fingerprints) =>
@@ -121,11 +122,14 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
             ImmutableDictionary<string, BuildGo>.Empty,
             (map, fp) => map.Add(fp, new BuildGo(fp, GoWrittenAt, Detail: "baked by a peer process")));
 
-    private Task<IList<PreWarmOutcome>> DriveTheDoor(ILogger? logger = null) =>
-        DriveTheDoor(Definitions, logger);
+    private Task<IList<PreWarmOutcome>> DriveTheDoor(
+        ILogger? logger = null, CancellationToken cancellationToken = default) =>
+        DriveTheDoor(Definitions, logger, cancellationToken);
 
     private Task<IList<PreWarmOutcome>> DriveTheDoor(
-        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions, ILogger? logger = null) =>
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        ILogger? logger = null,
+        CancellationToken cancellationToken = default) =>
         BuildProtocolDriver.WhenTheSubscriptionDoorIsShut(
                 Observable.Throw<PreWarmOutcome>(TheSubscriptionDoorIsShut()),
                 Mesh,
@@ -134,7 +138,7 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
                 Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>(),
                 logger)
             .ToList()
-            .Await();
+            .Await(cancellationToken);
 
     // ── the grant ───────────────────────────────────────────────────────────────────────────────
 
@@ -152,9 +156,9 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
     [Fact(Timeout = 60_000)]
     public async Task ADurableGoForThisFingerprint_GrantsReadiness()
     {
-        await WriteTheDurableBuildRoot(Go(AnotherFingerprint, MyFingerprint));
+        await WriteTheDurableBuildRoot(Go(AnotherFingerprint, MyFingerprint), TestContext.Current.CancellationToken);
 
-        var outcomes = await DriveTheDoor();
+        var outcomes = await DriveTheDoor(cancellationToken: TestContext.Current.CancellationToken);
 
         outcomes.Should().NotBeEmpty(
             "the durable GO opens the door ONTO the share probe — a door that grants without "
@@ -177,9 +181,9 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
     [Fact(Timeout = 60_000)]
     public async Task NoDurableGo_StillRefusesReadiness()
     {
-        await WriteTheDurableBuildRoot(ready: null);
+        await WriteTheDurableBuildRoot(ready: null, TestContext.Current.CancellationToken);
 
-        var refuse = () => DriveTheDoor();
+        var refuse = () => DriveTheDoor(cancellationToken: TestContext.Current.CancellationToken);
 
         var thrown = await refuse.Should().ThrowAsync<BuildCoordinationUnreachableException>(
             "a process that reached NEITHER door has verified nothing and must never claim it did");
@@ -199,9 +203,9 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
     [Fact(Timeout = 60_000)]
     public async Task AGoForAnotherFingerprint_StillRefusesReadiness()
     {
-        await WriteTheDurableBuildRoot(Go(AnotherFingerprint));
+        await WriteTheDurableBuildRoot(Go(AnotherFingerprint), TestContext.Current.CancellationToken);
 
-        var refuse = () => DriveTheDoor();
+        var refuse = () => DriveTheDoor(cancellationToken: TestContext.Current.CancellationToken);
 
         await refuse.Should().ThrowAsync<BuildCoordinationUnreachableException>(
             "someone else's GO says nothing about whether THIS image's NodeTypes build");
@@ -223,13 +227,13 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
     [Fact(Timeout = 60_000)]
     public async Task NoDurableGo_StillRefuses_EvenWhenTheShareIsFullyBaked()
     {
-        await WriteTheDurableBuildRoot(ready: null);
+        await WriteTheDurableBuildRoot(ready: null, TestContext.Current.CancellationToken);
 
         const string bakedType = "TestData/BakedWidget";
         const long stagedVersion = 11;
         await Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>()
             .Put(bakedType, stagedVersion, [0x4D, 0x5A, 0x00, 0x00], null)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         // Recorded assembly + bytes on the share ⇒ the probe classifies this Baked, so nothing is
         // gate-relevant. The refusal below can therefore only come from the witness's answer.
@@ -242,7 +246,7 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
                 LastCompiledVersion = stagedVersion,
             });
 
-        var refuse = () => DriveTheDoor(baked);
+        var refuse = () => DriveTheDoor(baked, cancellationToken: TestContext.Current.CancellationToken);
 
         await refuse.Should().ThrowAsync<BuildCoordinationUnreachableException>(
             "a witness that ANSWERED 'no GO for this image' is a real negative, and a pod does not "
@@ -261,10 +265,10 @@ public class PreWarmerReadsTheDurableGoTest(ITestOutputHelper output) : Monolith
     [Fact(Timeout = 60_000)]
     public async Task AnUnreachableNodeIsStillReportedLoudly_EvenWhenTheDurableGoGrants()
     {
-        await WriteTheDurableBuildRoot(Go(MyFingerprint));
+        await WriteTheDurableBuildRoot(Go(MyFingerprint), TestContext.Current.CancellationToken);
         var recorder = new RecordingLogger();
 
-        await DriveTheDoor(recorder);
+        await DriveTheDoor(recorder, TestContext.Current.CancellationToken);
 
         recorder.Entries.Should().Contain(
             e => e.Level >= LogLevel.Warning && e.Message.Contains("UNREACHABLE"),

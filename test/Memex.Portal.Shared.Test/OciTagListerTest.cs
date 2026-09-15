@@ -609,7 +609,7 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             new AlwaysAvailable(Mesh, new ConfigurationBuilder().Build()),
             new OciTagLister(Mesh, options, Mesh.ServiceProvider.GetService<ILogger<OciTagLister>>()));
 
-        await service.StartAsync(CancellationToken.None);
+        await service.StartAsync(TestContext.Current.CancellationToken);
         try
         {
             var boot = log.Lines.Should().ContainSingle(l => l.Contains("[SelfUpdate] starting"),

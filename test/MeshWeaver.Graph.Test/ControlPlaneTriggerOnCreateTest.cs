@@ -112,7 +112,7 @@ public class ControlPlaneTriggerOnCreateTest(ITestOutputHelper output) : Monolit
         var path = $"{TestPartition}/{id}";
 
         await NodeFactory.CreateNode(Probe(id, action: "")).Take(1)
-            .Should().Within(60.Seconds()).Emit("the probe node is created");
+            .Should().Within(60.Seconds()).Emit("the probe node is created", cancellationToken: TestContext.Current.CancellationToken);
 
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Update(live =>
@@ -120,10 +120,10 @@ public class ControlPlaneTriggerOnCreateTest(ITestOutputHelper output) : Monolit
                 var c = live.ContentAs<TriggerProbeContent>(Mesh.JsonSerializerOptions);
                 return c is null ? live : live with { Content = c with { RequestedAction = "Go" } };
             })
-            .Should().Within(60.Seconds()).Emit("the canonical write lands");
+            .Should().Within(60.Seconds()).Emit("the canonical write lands", cancellationToken: TestContext.Current.CancellationToken);
 
         await watcherRan.Should().Within(60.Seconds())
-            .Emit("a trigger set by a patch reaches the node's own control plane");
+            .Emit("a trigger set by a patch reaches the node's own control plane", cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -143,9 +143,9 @@ public class ControlPlaneTriggerOnCreateTest(ITestOutputHelper output) : Monolit
         var id = "CreateProbe" + Guid.NewGuid().ToString("N")[..8];
 
         await NodeFactory.CreateNode(Probe(id, action: "Go")).Take(1)
-            .Should().Within(60.Seconds()).Emit("the probe node is created");
+            .Should().Within(60.Seconds()).Emit("the probe node is created", cancellationToken: TestContext.Current.CancellationToken);
 
         await watcherRan.Should().Within(60.Seconds())
-            .Emit("a request filed through the API must reach its own control plane");
+            .Emit("a request filed through the API must reach its own control plane", cancellationToken: TestContext.Current.CancellationToken);
     }
 }

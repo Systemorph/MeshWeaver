@@ -79,7 +79,8 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     {
         // Disposed: this overload arms an internal timer, and an undisposed source keeps it
         // alive past the test (Copilot review, #2268).
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(150));
         var ct = deadline.Token;
         var cluster = fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "the delivery has to CROSS silos, or "
@@ -161,7 +162,8 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     {
         // Disposed: this overload arms an internal timer, and an undisposed source keeps it
         // alive past the test (Copilot review, #2268).
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(150));
         var ct = deadline.Token;
         var cluster = fixture.Cluster;
         var address = new Address("client", $"moving-{Guid.NewGuid():N}");
@@ -253,7 +255,8 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     {
         // Disposed: this overload arms an internal timer, and an undisposed source keeps it
         // alive past the test (Copilot review, #2268).
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(150));
         var ct = deadline.Token;
         var cluster = fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "the NACK has to CROSS silos — a "

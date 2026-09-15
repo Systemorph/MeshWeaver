@@ -119,7 +119,7 @@ public class SelfUpdateChecksOnlyAtDecisionPointsTest(ITestOutputHelper output) 
     [Fact(Timeout = 240_000)]
     public async Task UnderNone_ABuildCompletion_IsNotACheck()
     {
-        await Seed(UpdatePolicyKind.None);
+        await Seed(UpdatePolicyKind.None, TestContext.Current.CancellationToken);
         await using var run = await Start();
 
         await run.FirstCheck;
@@ -129,7 +129,7 @@ public class SelfUpdateChecksOnlyAtDecisionPointsTest(ITestOutputHelper output) 
         await run.LaterChecks.Should().NotEmit(TestTimeouts.Quick,
             "under None a build completion can neither roll nor restart (MayRestartAfter is false "
             + "for UpdatesDisabled), so all it could do is rewrite a verdict the node already "
-            + "carries — 158 times in 5 h on memex, from both replicas, onto one leaf");
+            + "carries — 158 times in 5 h on memex, from both replicas, onto one leaf", cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -139,7 +139,7 @@ public class SelfUpdateChecksOnlyAtDecisionPointsTest(ITestOutputHelper output) 
     [Fact(Timeout = 240_000)]
     public async Task UnderContinuous_ABuildCompletion_IsACheck()
     {
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         await using var run = await Start();
 
         await run.FirstCheck;
@@ -157,11 +157,11 @@ public class SelfUpdateChecksOnlyAtDecisionPointsTest(ITestOutputHelper output) 
     [Fact(Timeout = 240_000)]
     public async Task UnderNone_TheRecordStillCarriesTheDisabledVerdict()
     {
-        await Seed(UpdatePolicyKind.None);
+        await Seed(UpdatePolicyKind.None, TestContext.Current.CancellationToken);
         await using var run = await Start();
 
         await run.FirstCheck;
-        var content = await WaitForContent(c => c.LastCheckVerdict is not null);
+        var content = await WaitForContent(c => c.LastCheckVerdict is not null, TestContext.Current.CancellationToken);
 
         content.LastCheckVerdict.Should().Contain("updates are disabled",
             "the durable half of the report is what an operator reads on the Updates tab");
@@ -178,7 +178,7 @@ public class SelfUpdateChecksOnlyAtDecisionPointsTest(ITestOutputHelper output) 
     [Fact(Timeout = 240_000)]
     public async Task UnderNone_TheSafetyNet_StillChecks()
     {
-        await Seed(UpdatePolicyKind.None);
+        await Seed(UpdatePolicyKind.None, TestContext.Current.CancellationToken);
         await using var run = await Start();
 
         await run.FirstCheck;
@@ -186,7 +186,8 @@ public class SelfUpdateChecksOnlyAtDecisionPointsTest(ITestOutputHelper output) 
         run.PushSafetyNet();
 
         await run.LaterChecks.FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
-        var content = await WaitForContent(c => c.LastCheckTrigger == nameof(SelfUpdateTrigger.SafetyNet));
+        var content = await WaitForContent(
+            c => c.LastCheckTrigger == nameof(SelfUpdateTrigger.SafetyNet), TestContext.Current.CancellationToken);
         content.LastCheckVerdict.Should().Contain("updates are disabled");
     }
 
@@ -300,7 +301,7 @@ public class SelfUpdateChecksOnlyAtDecisionPointsTest(ITestOutputHelper output) 
         return new Run(service, builds, safetyNet, checks, connection);
     }
 
-    private Task Seed(UpdatePolicyKind policy)
+    private Task Seed(UpdatePolicyKind policy, CancellationToken cancellationToken)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var node = new MeshNode(UpdatePolicyNodeType.NodeId, UpdatePolicyNodeType.AdminPartition)
@@ -321,10 +322,11 @@ public class SelfUpdateChecksOnlyAtDecisionPointsTest(ITestOutputHelper output) 
             })
             .FirstAsync()
             .Timeout(Budget)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
     }
 
-    private Task<UpdatePolicyContent> WaitForContent(Func<UpdatePolicyContent, bool> predicate) =>
+    private Task<UpdatePolicyContent> WaitForContent(
+        Func<UpdatePolicyContent, bool> predicate, CancellationToken cancellationToken) =>
         Observable.Create<UpdatePolicyContent>(observer =>
             {
                 using (Access.ImpersonateAsSystem())
@@ -337,5 +339,5 @@ public class SelfUpdateChecksOnlyAtDecisionPointsTest(ITestOutputHelper output) 
             .Where(predicate)
             .FirstAsync()
             .Timeout(Budget)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
 }

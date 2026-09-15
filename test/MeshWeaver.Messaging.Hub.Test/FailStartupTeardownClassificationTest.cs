@@ -58,6 +58,7 @@ public class FailStartupTeardownClassificationTest(ITestOutputHelper output) : H
     [Fact(Timeout = 30000)]
     public void FailStartup_WithTeardownDisposal_CancelsStarted_InsteadOfFaultingIt()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var hub = CreateUnstartedHub(out var gate);
         try
         {
@@ -81,6 +82,7 @@ public class FailStartupTeardownClassificationTest(ITestOutputHelper output) : H
     [Fact(Timeout = 30000)]
     public void FailStartup_WithWrappedDisposal_IsAlsoClassifiedAsCancellation()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var hub = CreateUnstartedHub(out var gate);
         try
         {
@@ -104,6 +106,7 @@ public class FailStartupTeardownClassificationTest(ITestOutputHelper output) : H
     [Fact(Timeout = 30000)]
     public void FailStartup_WithRealError_StillFaultsStarted_ForDependentsToObserve()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var hub = CreateUnstartedHub(out var gate);
         try
         {

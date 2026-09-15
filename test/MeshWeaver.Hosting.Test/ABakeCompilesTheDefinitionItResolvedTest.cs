@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -85,7 +86,8 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
     };
 
     /// <summary>A library whose ONE shared file the consumer may pull in, and the consumer itself.</summary>
-    private async Task Seed(string consumerCode, IReadOnlyList<string>? consumerSources)
+    private async Task Seed(
+        string consumerCode, IReadOnlyList<string>? consumerSources, CancellationToken cancellationToken)
     {
         foreach (var node in new[]
                  {
@@ -96,7 +98,8 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
                      Code("Main", $"{TypePath}/Source", consumerCode),
                  })
             await MeshService.CreateNode(node).Take(1)
-                .Should().Within(TestTimeouts.Convergence).Emit($"{node.Path} must exist before the sweep reads it");
+                .Should().Within(TestTimeouts.Convergence)
+                .Emit($"{node.Path} must exist before the sweep reads it", cancellationToken);
     }
 
     /// <summary>
@@ -104,7 +107,8 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
     /// <see cref="DynamicTypePreWarmer.DynamicTypesOf"/> — waited on until the listing shows the state
     /// under test (the index trails the store, so "listed" implies "stored").
     /// </summary>
-    private async Task<DynamicTypePreWarmer.DynamicTypes> Enumerate(Func<NodeTypeDefinition, bool> state, string because)
+    private async Task<DynamicTypePreWarmer.DynamicTypes> Enumerate(
+        Func<NodeTypeDefinition, bool> state, string because, CancellationToken cancellationToken)
         => await Observable.Interval(200.Milliseconds()).StartWith(0L)
             .SelectMany(_ => MeshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{TypePath}").AsSystem())
@@ -112,9 +116,9 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
             .Select(change => DynamicTypePreWarmer.DynamicTypesOf(change.Items, Mesh.JsonSerializerOptions, null))
             .Where(types => types.Definitions.TryGetValue(TypePath, out var d) && d is not null && state(d))
             .FirstAsync()
-            .Should().Within(TestTimeouts.Convergence).Emit(because);
+            .Should().Within(TestTimeouts.Convergence).Emit(because, cancellationToken);
 
-    private async Task UntilListed(string path, string marker)
+    private async Task UntilListed(string path, string marker, CancellationToken cancellationToken)
         => await Observable.Interval(200.Milliseconds()).StartWith(0L)
             .SelectMany(_ => MeshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}").AsSystem())
@@ -122,35 +126,40 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
             .Where(change => change.Items.Any(n =>
                 n.ContentAs<CodeConfiguration>(Mesh.JsonSerializerOptions)?.Code?.Contains(marker) == true))
             .FirstAsync()
-            .Should().Within(TestTimeouts.Convergence).Emit($"the discovery pass must be able to see '{marker}' in {path}");
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit($"the discovery pass must be able to see '{marker}' in {path}", cancellationToken);
 
     /// <summary>The module update, landing in the order a repository sync lands it: the file, then the definition.</summary>
-    private async Task LandTheUpdate(string newCode, IReadOnlyList<string> newSources)
+    private async Task LandTheUpdate(
+        string newCode, IReadOnlyList<string> newSources, CancellationToken cancellationToken)
     {
         var workspace = Mesh.GetWorkspace();
         await workspace.GetMeshNodeStream(MainPath)
             .Update(node => node with { Content = new CodeConfiguration { Language = "csharp", Code = newCode } })
-            .Should().Within(TestTimeouts.Convergence).Emit("the source half of the update lands");
+            .Should().Within(TestTimeouts.Convergence).Emit("the source half of the update lands", cancellationToken);
         await workspace.GetMeshNodeStream(TypePath)
             .Update(node => node with
             {
                 Content = node.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)! with { Sources = newSources },
             })
-            .Should().Within(TestTimeouts.Convergence).Emit("the definition half of the update lands");
+            .Should().Within(TestTimeouts.Convergence).Emit("the definition half of the update lands", cancellationToken);
     }
 
     /// <summary>The sweep's batch pass for this one type: discovery from the ENUMERATED definitions, then the compile.</summary>
     private async Task<(IReadOnlyList<MeshNode> Batch, PreWarmOutcome Outcome)> Bake(
-        DynamicTypePreWarmer.DynamicTypes enumerated, TimeSpan? budget = null)
+        DynamicTypePreWarmer.DynamicTypes enumerated, TimeSpan? budget = null,
+        CancellationToken cancellationToken = default)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var sets = await NodeTypeBatchBake
             .ResolveSources(MeshService, access, enumerated.Definitions, [TypePath], null)
-            .Should().Within(TestTimeouts.Convergence).Emit("the batched discovery pass must establish the source sets");
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the batched discovery pass must establish the source sets", cancellationToken);
         var batch = sets.TryGetValue(TypePath, out var set) ? set : [];
         var outcome = await NodeTypeBatchBake
             .BakeOne(Mesh, enumerated.Nodes[TypePath], batch, budget ?? PerTypeBudget, null)
-            .Should().Within(PerTypeBudget + TimeSpan.FromMinutes(1)).Emit("BakeOne always reaches exactly one outcome");
+            .Should().Within(PerTypeBudget + TimeSpan.FromMinutes(1))
+            .Emit("BakeOne always reaches exactly one outcome", cancellationToken);
         Output.WriteLine("batch set: {0}", string.Join(", ", batch.Select(n => n.Path)));
         Output.WriteLine("outcome: {0} — {1}", outcome.Status, outcome.Detail ?? "(no detail)");
         return (batch, outcome);
@@ -166,16 +175,19 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
     [InlineData(CallsWhatNothingDeclares, PreWarmStatus.CompileError)]
     public async Task ADefinitionThatMovedDuringTheSweep_IsJudgedAsItNowStands(string newCode, PreWarmStatus expected)
     {
-        await Seed(SelfContained, consumerSources: null);
+        await Seed(SelfContained, consumerSources: null, cancellationToken: TestContext.Current.CancellationToken);
         var enumerated = await Enumerate(d => d.Sources is null,
-            "the sweep enumerates the type BEFORE the module update, with no declared sources");
+            "the sweep enumerates the type BEFORE the module update, with no declared sources",
+            TestContext.Current.CancellationToken);
 
-        await LandTheUpdate(newCode, [OwnSource, SharedEntry]);
-        await UntilListed(MainPath, newCode == CallsTheSharedFile ? "LibAnswers.Answer()" : "NotDeclaredAnywhere");
+        await LandTheUpdate(newCode, [OwnSource, SharedEntry], TestContext.Current.CancellationToken);
+        await UntilListed(MainPath, newCode == CallsTheSharedFile ? "LibAnswers.Answer()" : "NotDeclaredAnywhere",
+            TestContext.Current.CancellationToken);
         await Enumerate(d => d.Sources?.Contains(SharedEntry) == true,
-            "the updated definition is stored before the compile runs — as v471 was, ~1 min before the pod compiled");
+            "the updated definition is stored before the compile runs — as v471 was, ~1 min before the pod compiled",
+            TestContext.Current.CancellationToken);
 
-        var (batch, outcome) = await Bake(enumerated);
+        var (batch, outcome) = await Bake(enumerated, cancellationToken: TestContext.Current.CancellationToken);
 
         batch.Select(n => n.Path).Should().Contain(MainPath).And.NotContain(SharedPath,
             "precondition — the pass selected the set with the ENUMERATED queries, which never named the shared "
@@ -191,12 +203,12 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
     [Fact(Timeout = 300_000)]
     public async Task ADefinitionThatDidNotMove_CompilesFromTheBatchSet()
     {
-        await Seed(CallsTheSharedFile, [OwnSource, SharedEntry]);
-        await UntilListed(MainPath, "LibAnswers.Answer()");
+        await Seed(CallsTheSharedFile, [OwnSource, SharedEntry], TestContext.Current.CancellationToken);
+        await UntilListed(MainPath, "LibAnswers.Answer()", TestContext.Current.CancellationToken);
         var enumerated = await Enumerate(d => d.Sources?.Contains(SharedEntry) == true,
-            "the sweep enumerates the already-updated definition");
+            "the sweep enumerates the already-updated definition", TestContext.Current.CancellationToken);
 
-        var (batch, outcome) = await Bake(enumerated);
+        var (batch, outcome) = await Bake(enumerated, cancellationToken: TestContext.Current.CancellationToken);
 
         batch.Select(n => n.Path).Should().Contain(new[] { MainPath, SharedPath },
             "the batch resolves the single-node shared= entry through its path: leg");
@@ -207,12 +219,12 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
     [Fact(Timeout = 300_000)]
     public async Task AGenuineCompileError_StillGates()
     {
-        await Seed(CallsWhatNothingDeclares, [OwnSource, SharedEntry]);
-        await UntilListed(MainPath, "NotDeclaredAnywhere");
+        await Seed(CallsWhatNothingDeclares, [OwnSource, SharedEntry], TestContext.Current.CancellationToken);
+        await UntilListed(MainPath, "NotDeclaredAnywhere", TestContext.Current.CancellationToken);
         var enumerated = await Enumerate(d => d.Sources?.Contains(SharedEntry) == true,
-            "the sweep enumerates the definition it compiles");
+            "the sweep enumerates the definition it compiles", TestContext.Current.CancellationToken);
 
-        var (_, outcome) = await Bake(enumerated);
+        var (_, outcome) = await Bake(enumerated, cancellationToken: TestContext.Current.CancellationToken);
 
         outcome.Status.Should().Be(PreWarmStatus.CompileError, outcome.Detail ?? "(no detail)");
         outcome.Detail.Should().Contain("NotDeclaredAnywhere");
@@ -228,19 +240,20 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
     [Fact(Timeout = 300_000)]
     public async Task ASourceEditedUnderUnchangedQueries_IsCompiledAsItNowStands()
     {
-        await Seed(CallsWhatNothingDeclares, consumerSources: null);
-        await UntilListed(MainPath, "NotDeclaredAnywhere");
-        var enumerated = await Enumerate(d => d.Sources is null, "the sweep enumerates the type");
+        await Seed(CallsWhatNothingDeclares, consumerSources: null, cancellationToken: TestContext.Current.CancellationToken);
+        await UntilListed(MainPath, "NotDeclaredAnywhere", TestContext.Current.CancellationToken);
+        var enumerated = await Enumerate(d => d.Sources is null, "the sweep enumerates the type",
+            TestContext.Current.CancellationToken);
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var sets = await NodeTypeBatchBake
             .ResolveSources(MeshService, access, enumerated.Definitions, [TypePath], null)
-            .Should().Within(TestTimeouts.Convergence).Emit("the batch resolves the broken edit");
+            .Should().Within(TestTimeouts.Convergence).Emit("the batch resolves the broken edit", cancellationToken: TestContext.Current.CancellationToken);
         var batch = sets[TypePath];
 
         // The repair lands under the SAME queries, after the batch took its set.
         await Mesh.GetWorkspace().GetMeshNodeStream(MainPath)
             .Update(node => node with { Content = new CodeConfiguration { Language = "csharp", Code = SelfContained } })
-            .Should().Within(TestTimeouts.Convergence).Emit("the repair lands");
+            .Should().Within(TestTimeouts.Convergence).Emit("the repair lands", cancellationToken: TestContext.Current.CancellationToken);
         var repaired = await Observable.Interval(200.Milliseconds()).StartWith(0L)
             .SelectMany(_ => MeshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{MainPath}").AsSystem()).Take(1))
@@ -248,7 +261,7 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
                 n.ContentAs<CodeConfiguration>(Mesh.JsonSerializerOptions)?.Code == SelfContained))
             .Where(n => n is not null)
             .FirstAsync()
-            .Should().Within(TestTimeouts.Convergence).Emit("the repair is listed");
+            .Should().Within(TestTimeouts.Convergence).Emit("the repair is listed", cancellationToken: TestContext.Current.CancellationToken);
         var repairedVersion = NodeTypeDefinition.SourceVersionOf(repaired!);
 
         // The type's own sources watcher records the repair — its hub activated by reading its stream.
@@ -256,13 +269,14 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
             _ => { }, ex => Output.WriteLine("type stream faulted: {0}", ex.Message));
         await Enumerate(d => d.CurrentSourceVersions is { } record
                 && record.TryGetValue(MainPath, out var v) && v == repairedVersion,
-            "the type's source-version record names the repair before the compile runs");
+            "the type's source-version record names the repair before the compile runs",
+            TestContext.Current.CancellationToken);
 
         batch.Select(n => n.ContentAs<CodeConfiguration>(Mesh.JsonSerializerOptions)?.Code)
             .Should().Contain(CallsWhatNothingDeclares, "precondition — the batch still holds the broken edit");
         var outcome = await NodeTypeBatchBake
             .BakeOne(Mesh, enumerated.Nodes[TypePath], batch, PerTypeBudget, null)
-            .Should().Within(PerTypeBudget + TimeSpan.FromMinutes(1)).Emit("BakeOne always reaches exactly one outcome");
+            .Should().Within(PerTypeBudget + TimeSpan.FromMinutes(1)).Emit("BakeOne always reaches exactly one outcome", cancellationToken: TestContext.Current.CancellationToken);
         Output.WriteLine("outcome: {0} — {1}", outcome.Status, outcome.Detail ?? "(no detail)");
 
         outcome.Status.Should().Be(PreWarmStatus.Compiled,
@@ -278,13 +292,15 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
     [Fact(Timeout = 300_000)]
     public async Task AMovedDefinitionWhoseSourcesCannotBeEstablished_IsNotEvaluated()
     {
-        await Seed(SelfContained, consumerSources: null);
-        var enumerated = await Enumerate(d => d.Sources is null, "the sweep enumerates the type first");
-        await LandTheUpdate(CallsTheSharedFile, [OwnSource, SharedEntry]);
-        await UntilListed(MainPath, "LibAnswers.Answer()");
-        await Enumerate(d => d.Sources?.Contains(SharedEntry) == true, "the moved definition is stored");
+        await Seed(SelfContained, consumerSources: null, cancellationToken: TestContext.Current.CancellationToken);
+        var enumerated = await Enumerate(d => d.Sources is null, "the sweep enumerates the type first",
+            TestContext.Current.CancellationToken);
+        await LandTheUpdate(CallsTheSharedFile, [OwnSource, SharedEntry], TestContext.Current.CancellationToken);
+        await UntilListed(MainPath, "LibAnswers.Answer()", TestContext.Current.CancellationToken);
+        await Enumerate(d => d.Sources?.Contains(SharedEntry) == true, "the moved definition is stored",
+            TestContext.Current.CancellationToken);
 
-        var (_, outcome) = await Bake(enumerated, TimeSpan.FromMilliseconds(800));
+        var (_, outcome) = await Bake(enumerated, TimeSpan.FromMilliseconds(800), TestContext.Current.CancellationToken);
 
         outcome.Status.Should().Be(PreWarmStatus.TimedOut,
             $"an unestablished input is not a verdict about the code ({outcome.Detail})");
@@ -299,23 +315,24 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
     public async Task ATypePrunedDuringTheSweep_IsRemoved_AndNotRecreated()
     {
         await MeshService.CreateNode(TypeNode($"Consumer{suffix}", null)).Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit("the type exists when the sweep enumerates it");
-        var enumerated = await Enumerate(_ => true, "the sweep enumerates the type");
+            .Should().Within(TestTimeouts.Convergence).Emit("the type exists when the sweep enumerates it", cancellationToken: TestContext.Current.CancellationToken);
+        var enumerated = await Enumerate(_ => true, "the sweep enumerates the type",
+            TestContext.Current.CancellationToken);
 
         await MeshService.DeleteNode(TypePath).Take(1).DefaultIfEmpty()
-            .Should().Within(TestTimeouts.Convergence).Emit("the repository prunes the type");
+            .Should().Within(TestTimeouts.Convergence).Emit("the repository prunes the type", cancellationToken: TestContext.Current.CancellationToken);
         await Observable.Interval(200.Milliseconds()).StartWith(0L)
             .SelectMany(_ => DynamicTypePreWarmer.TypeNodeExists(Mesh, TypePath, null).Take(1))
             .Where(exists => !exists)
             .FirstAsync()
-            .Should().Within(TestTimeouts.Convergence).Emit("the prune is visible to a listing");
+            .Should().Within(TestTimeouts.Convergence).Emit("the prune is visible to a listing", cancellationToken: TestContext.Current.CancellationToken);
 
-        var (_, outcome) = await Bake(enumerated);
+        var (_, outcome) = await Bake(enumerated, cancellationToken: TestContext.Current.CancellationToken);
 
         outcome.Status.Should().Be(PreWarmStatus.Removed, outcome.Detail ?? "(no detail)");
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var row = await storage.Read(TypePath, Mesh.JsonSerializerOptions).Take(1).DefaultIfEmpty()
-            .Should().Within(TestTimeouts.Convergence).Emit("the storage read answers");
+            .Should().Within(TestTimeouts.Convergence).Emit("the storage read answers", cancellationToken: TestContext.Current.CancellationToken);
         row.Should().BeNull("the bake must not re-create a type its repository pruned");
     }
 }

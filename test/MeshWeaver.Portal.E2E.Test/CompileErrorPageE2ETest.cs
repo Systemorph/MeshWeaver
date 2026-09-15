@@ -21,7 +21,7 @@ public class CompileErrorPageE2ETest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         // Unique ids so reruns against a persisted portal don't collide.

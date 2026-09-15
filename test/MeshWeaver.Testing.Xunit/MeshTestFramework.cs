@@ -45,7 +45,7 @@ public class MeshTestFramework : XunitTestFramework
     {
         ArgumentNullException.ThrowIfNull(assembly);
         return new MeshTestFrameworkExecutor(
-            new XunitTestAssembly(assembly, configFileName, assembly.GetName().Version));
+            new XunitTestAssembly(assembly, configFileName, version: assembly.GetName().Version));
     }
 }
 

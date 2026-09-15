@@ -73,7 +73,7 @@ public class ShutdownWindowAdmissionTest : HubTestBase
     public async Task ADisposeRequestPostedInsideTheShutdownWindow_IsRefusedAtIntake()
     {
         var address = new Address("shutdown-window", "refused");
-        var victim = await StartedVictim(address);
+        var victim = await StartedVictim(address, TestContext.Current.CancellationToken);
 
         // 🚨 The window, made deterministic rather than raced. A RegisterForDisposal registrant
         // runs inside DisposeImpl(), which is the ShutDown case of HandleShutdownCore — i.e. a few
@@ -89,7 +89,7 @@ public class ShutdownWindowAdmissionTest : HubTestBase
         });
 
         victim.Dispose();
-        await WaitUntilDead(victim);
+        await WaitUntilDead(victim, TestContext.Current.CancellationToken);
 
         // POSITIVE CONTROL #1 — the post was really made, and really made inside the window. Without
         // this the two absence assertions below would pass on a fixture whose registrant never ran.
@@ -129,7 +129,7 @@ public class ShutdownWindowAdmissionTest : HubTestBase
     public async Task ADisposeRequestArrivingBeforeTeardownBegins_StillRecyclesTheHub()
     {
         var address = new Address("shutdown-window", "accepted");
-        var victim = await StartedVictim(address);
+        var victim = await StartedVictim(address, TestContext.Current.CancellationToken);
 
         victim.RunLevel.Should().Be(MessageHubRunLevel.Started,
             "the control arm is about a hub that has NOT begun disposing — the whole point of the "
@@ -137,13 +137,13 @@ public class ShutdownWindowAdmissionTest : HubTestBase
 
         Mesh.Post(new DisposeRequest(), o => o.WithTarget(address));
 
-        await WaitUntilDead(victim);
+        await WaitUntilDead(victim, TestContext.Current.CancellationToken);
         victim.RunLevel.Should().Be(MessageHubRunLevel.Dead,
             "a routed DisposeRequest to a live hub is a recycle and must still be handled — a gate "
             + "that refused this would have traded a false Error for a hub nobody can recycle");
     }
 
-    private async Task<IMessageHub> StartedVictim(Address address)
+    private async Task<IMessageHub> StartedVictim(Address address, CancellationToken cancellationToken)
     {
         var victim = Mesh.GetHostedHub(address, c => c
             // Plumbing-only fixture with no signed-in user, exactly like the hubs HubTestBase
@@ -159,7 +159,7 @@ public class ShutdownWindowAdmissionTest : HubTestBase
         // (RunLevel < Started), which is a different path entirely.
         await victim.Observe(new Ping(), o => o.WithTarget(address))
             .Should().Within(TestTimeouts.Quick)
-            .Emit("the hub must answer once before the test touches its teardown");
+            .Emit("the hub must answer once before the test touches its teardown", cancellationToken);
         return victim;
     }
 
@@ -172,12 +172,12 @@ public class ShutdownWindowAdmissionTest : HubTestBase
     /// thread, inside the hub's ShutDown <c>try</c>/<c>catch</c>, where a failing assertion would be
     /// swallowed and logged as "Error during shutdown of hub".
     /// </summary>
-    private static Task WaitUntilDead(IMessageHub victim) =>
+    private static Task WaitUntilDead(IMessageHub victim, CancellationToken cancellationToken) =>
         Observable.Interval(TimeSpan.FromMilliseconds(25)).StartWith(0L)
             .Where(_ => victim.RunLevel == MessageHubRunLevel.Dead)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
 
     /// <summary>
     /// The run level a disposal registrant observed when it posted. A plain volatile int — nothing

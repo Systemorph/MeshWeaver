@@ -33,7 +33,7 @@ public class BusinessRulesBalanceSheetE2ETest(PortalFixture fixture, ITestOutput
         Assert.SkipUnless(Directory.Exists(SampleRoot),
             $"PensionFund sample not found at {SampleRoot} — run from the repo tree.");
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         // ── 1. Seed the sample verbatim: type definitions first, then their Source code
@@ -67,7 +67,7 @@ public class BusinessRulesBalanceSheetE2ETest(PortalFixture fixture, ITestOutput
 
         await SeedFileAsync(context, token, Path.Combine(SampleRoot, "Statement.json"));
         Assert.True(await fixture.WaitUntilReadableAsync(context, token, "PensionFund/Statement",
-            TimeSpan.FromSeconds(60)), "the seeded Statement instance must become readable");
+            TimeSpan.FromSeconds(60), cancellationToken: TestContext.Current.CancellationToken), "the seeded Statement instance must become readable");
 
         // ── 3. Drive the GUI: the report page must render the SCOPE-COMPUTED numbers.
         var page = await context.NewPageAsync();

@@ -75,9 +75,9 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
         try
         {
             SealPublication(root, ConsumerIdentity);
-            await InstallPackage();
+            await InstallPackage(TestContext.Current.CancellationToken);
             var key = await RegisterInstance($"{Source}/*");
-            await using var app = await StartHost(root);
+            await using var app = await StartHost(root, TestContext.Current.CancellationToken);
 
             var index = await ReadIndex(app, key, ConsumerIdentity);
 
@@ -123,9 +123,9 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
         try
         {
             SealPublication(root, ConsumerIdentity);          // a lane that is NOT the one asked for
-            await InstallPackage();
+            await InstallPackage(TestContext.Current.CancellationToken);
             var key = await RegisterInstance($"{Source}/*");
-            await using var app = await StartHost(root);
+            await using var app = await StartHost(root, TestContext.Current.CancellationToken);
 
             var index = await ReadIndex(app, key, UnsealedIdentity);
 
@@ -173,9 +173,9 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
         try
         {
             SealPublication(root, ConsumerIdentity);
-            await InstallPackage();
+            await InstallPackage(TestContext.Current.CancellationToken);
             var key = await RegisterInstance($"{Source}/*");
-            await using var app = await StartHost(root);
+            await using var app = await StartHost(root, TestContext.Current.CancellationToken);
 
             var index = await ReadIndex(app, key, identity: null);
 
@@ -208,9 +208,9 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
         try
         {
             SealPublication(root, ConsumerIdentity);
-            await InstallPackage();
+            await InstallPackage(TestContext.Current.CancellationToken);
             var key = await RegisterInstance($"{Source}/*");
-            await using var app = await StartHost(root);
+            await using var app = await StartHost(root, TestContext.Current.CancellationToken);
 
             var lane = $"?identity={Uri.EscapeDataString(identity)}"
                        + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
@@ -247,9 +247,9 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
                 root, ConsumerIdentity, source: "education",
                 nodeTypePath: Package + "/FromTheOtherSource", fingerprint: "fp-other");
             SealPublication(root, ConsumerIdentity);      // the granted source, "plugins"
-            await InstallPackage();                       // its install record says Source = plugins
+            await InstallPackage(TestContext.Current.CancellationToken);                       // its install record says Source = plugins
             var key = await RegisterInstance($"{Source}/*");
-            await using var app = await StartHost(root);
+            await using var app = await StartHost(root, TestContext.Current.CancellationToken);
 
             var index = await ReadIndex(app, key, ConsumerIdentity);
             var url = BundleUrl(index);
@@ -285,9 +285,9 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
             SealPublication(
                 root, ConsumerIdentity,
                 manifestIdentity: "s99999999999999999999999999999999");   // mislabelled
-            await InstallPackage();
+            await InstallPackage(TestContext.Current.CancellationToken);
             var key = await RegisterInstance($"{Source}/*");
-            await using var app = await StartHost(root);
+            await using var app = await StartHost(root, TestContext.Current.CancellationToken);
 
             var index = await ReadIndex(app, key, ConsumerIdentity);
             var url = BundleUrl(index);
@@ -354,7 +354,7 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
     private static byte[] AssemblyBytes() =>
         File.ReadAllBytes(typeof(BundleWriter).Assembly.Location);
 
-    private Task<InstallResult> InstallPackage() =>
+    private Task<InstallResult> InstallPackage(CancellationToken cancellationToken) =>
         PackageInstaller.Install(
                 Mesh,
                 new PackageManifest
@@ -372,7 +372,7 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
                 "HEAD")
             .FirstAsync()
             .Timeout(TestTimeouts.CrossSilo)
-            .Await();
+            .Await(cancellationToken);
 
     private Task<string> RegisterInstance(params string[] defaultGrants) =>
         new MeshWeaverInstanceService(
@@ -390,7 +390,7 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
             .Timeout(TestTimeouts.Convergence)
             .Await();
 
-    private async Task<WebApplication> StartHost(string publishedRoot)
+    private async Task<WebApplication> StartHost(string publishedRoot, CancellationToken cancellationToken)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -403,7 +403,7 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
             Mesh, Mesh.ServiceProvider.GetRequiredService<ILogger<InstanceRegistryAuthenticator>>()));
         var app = builder.Build();
         app.MapPluginBundles();
-        await app.StartAsync();
+        await app.StartAsync(cancellationToken);
         return app;
     }
 

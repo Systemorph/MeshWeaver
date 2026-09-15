@@ -59,7 +59,7 @@ public class AccessControlGrantByEmailTest(ITestOutputHelper output) : MonolithM
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         using (accessService.ImpersonateAsSystem())
-            await CreateTargetNode(meshService).Should().Emit();
+            await CreateTargetNode(meshService).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // Arm the runner BEFORE the triggering write so the live change-feed path fires the grant.
         using var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
@@ -97,7 +97,7 @@ public class AccessControlGrantByEmailTest(ITestOutputHelper output) : MonolithM
                 NodeType = "User",
                 Name = "Newcomer",
                 Content = new User { Email = InviteeEmail, FullName = "Newcomer" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // Wait for the subscription to reach its terminal state first (race-free — the grant completes
         // BEFORE the Fired write, so once Fired is observed the AccessAssignment already exists; a stream
@@ -132,13 +132,13 @@ public class AccessControlGrantByEmailTest(ITestOutputHelper output) : MonolithM
 
         using (accessService.ImpersonateAsSystem())
         {
-            await CreateTargetNode(meshService).Should().Emit();
+            await CreateTargetNode(meshService).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
             await meshService.CreateNode(new MeshNode(InviteeId)
             {
                 NodeType = "User",
                 Name = "Newcomer",
                 Content = new User { Email = InviteeEmail, FullName = "Newcomer" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
         }
 
         // Wait until the account is queryable by email (the primitive looks it up that way).

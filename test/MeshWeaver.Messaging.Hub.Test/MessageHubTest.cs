@@ -1,4 +1,4 @@
-﻿using System.Threading;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
@@ -222,13 +222,13 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         for (var i = 0; i < 800; i++)
             victim.Post(new WedgeEvent(), o => o.WithTarget(victim.Address));
         // Let the first turn start so the backlog is genuinely in the queue when Dispose posts.
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         var disposeSw = System.Diagnostics.Stopwatch.StartNew();
         victim.Dispose();
 
         // The phased path queues behind the backlog; disposal completes once it has drained.
-        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(45.Seconds());
+        await victim.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(45.Seconds(), TestContext.Current.CancellationToken);
         disposeSw.Stop();
 
         // Sanity: the backlog must genuinely outlast the stall window, or the detector never looked.
@@ -462,17 +462,17 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
             // 1) Park the victim's action block so its ShutdownRequest queues behind the turn.
             victim.Post(new BlockTurnRequest(), o => o.WithTarget(victim.Address));
             await blockHandlerEntered.Should().Within(10.Seconds())
-                .Emit("the block handler must occupy the turn thread before we dispose");
+                .Emit("the block handler must occupy the turn thread before we dispose", cancellationToken: TestContext.Current.CancellationToken);
             // 2) Dispose — the phased machine cannot advance until the turn returns.
             var disposeSw = System.Diagnostics.Stopwatch.StartNew();
             victim.Dispose();
             // 3) After one stall budget the detector cancels the turn; the handler returns; the
             //    ordinary phases run: DisposeImpl (own disposables) and DisposeHostedHubs (children).
             await ownDisposed.Should().Within(25.Seconds())
-                .Emit("once the cancelled turn returns, the ShutDown phase runs DisposeImpl — the hub's own subscriptions must not leak");
+                .Emit("once the cancelled turn returns, the ShutDown phase runs DisposeImpl — the hub's own subscriptions must not leak", cancellationToken: TestContext.Current.CancellationToken);
             await childDisposed.Should().Within(25.Seconds())
-                .Emit("once the cancelled turn returns, the DisposeHostedHubs phase disposes hosted hubs — their keep-alive heartbeats must not leak");
-            await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(25.Seconds());
+                .Emit("once the cancelled turn returns, the DisposeHostedHubs phase disposes hosted hubs — their keep-alive heartbeats must not leak", cancellationToken: TestContext.Current.CancellationToken);
+            await victim.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(25.Seconds(), TestContext.Current.CancellationToken);
             disposeSw.Stop();
 
             Volatile.Read(ref cancellationObserved).Should().Be(1,

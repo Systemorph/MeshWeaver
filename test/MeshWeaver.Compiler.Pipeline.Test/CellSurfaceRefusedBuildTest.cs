@@ -90,14 +90,14 @@ public class CellSurfaceRefusedBuildTest(ITestOutputHelper output) : MonolithMes
                         """,
                 },
             }))
-            .Should().Within(60.Seconds()).Emit();
+            .Should().Within(60.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var compiled = await Mesh.GetMeshNodeStream(TypePath)
             .Should().Within(120.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition
             {
                 CompilationStatus: CompilationStatus.Ok or CompilationStatus.Error
-            });
+            }, cancellationToken: TestContext.Current.CancellationToken);
         ((NodeTypeDefinition)compiled.Content!).CompilationStatus.Should().Be(CompilationStatus.Ok,
             $"the pack must compile; error: {((NodeTypeDefinition)compiled.Content!).CompilationError}");
 
@@ -116,12 +116,12 @@ public class CellSurfaceRefusedBuildTest(ITestOutputHelper output) : MonolithMes
                 CurrentSourceFingerprint = "livefingerprintB",
                 BuildProvenance = BuildProvenance.AdoptionRefused,
             })
-            .Should().Within(60.Seconds()).Emit();
+            .Should().Within(60.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
         await Mesh.GetMeshNodeStream(TypePath).Should().Within(60.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition
             {
                 BuildProvenance: BuildProvenance.AdoptionRefused
-            });
+            }, cancellationToken: TestContext.Current.CancellationToken);
 
         (await CellSurfaceContainsThePack()).Should().BeFalse(
             "a build PROVEN to come from other source must not be joined into a kernel session — "

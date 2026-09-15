@@ -270,7 +270,7 @@ public class RoutingQuiescenceTest
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
 
-        await ((ILifecycleObserver)participant).OnStop(cancelled.Token).WaitAsync(Bound);
+        await ((ILifecycleObserver)participant).OnStop(cancelled.Token).WaitAsync(Bound, TestContext.Current.CancellationToken);
 
         logger.Entries.Should().Contain(
             e => e.Level == LogLevel.Warning && e.Message.Contains("NON-gracefully", StringComparison.Ordinal));
@@ -296,7 +296,7 @@ public class RoutingQuiescenceTest
 
         hostBudget.Cancel();
 
-        await stop.WaitAsync(Bound);
+        await stop.WaitAsync(Bound, TestContext.Current.CancellationToken);
         logger.Entries.Should().Contain(
             e => e.Level == LogLevel.Warning && e.Message.Contains("shutdown budget expired", StringComparison.Ordinal));
     }
@@ -320,7 +320,7 @@ public class RoutingQuiescenceTest
                 deliveryId: "d-2638-leg",
                 postFailureToSender: (_, _) => { },
                 logger: NullLogger.Instance)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         leg.IsCompleted.Should().BeFalse(
             "the leg must remain in flight while the grain call is pending — a detached delivery is "
@@ -328,7 +328,7 @@ public class RoutingQuiescenceTest
 
         answered.SetResult(new MessageDelivery<string>());
 
-        await leg.WaitAsync(Bound);
+        await leg.WaitAsync(Bound, TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -349,8 +349,8 @@ public class RoutingQuiescenceTest
                 logger: NullLogger.Instance,
                 backoff: _ => TimeSpan.Zero,
                 scheduler: System.Reactive.Concurrency.Scheduler.Immediate)
-            .Await()
-            .WaitAsync(Bound);
+            .Await(TestContext.Current.CancellationToken)
+            .WaitAsync(Bound, TestContext.Current.CancellationToken);
 
         var nack = nacks.Should().ContainSingle().Subject;
         nack.Type.Should().Be(ErrorType.Failed);

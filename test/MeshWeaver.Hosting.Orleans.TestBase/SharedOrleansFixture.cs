@@ -81,8 +81,15 @@ public class SharedOrleansFixture : IAsyncLifetime
     /// <summary>Constructs the default cluster — one silo, the shared configurator.</summary>
     public SharedOrleansFixture() { }
 
-    /// <summary>Constructs the cluster a caller DESCRIBED, rather than one a subclass hard-codes.</summary>
-    public SharedOrleansFixture(OrleansClusterShape shape) => this.shape = shape;
+    /// <summary>
+    /// Constructs the cluster a caller DESCRIBED, rather than one a subclass hard-codes.
+    /// <para>🚨 <c>internal</c>, not <c>public</c>: xunit constructs a collection fixture through its
+    /// SINGLE public constructor (xUnit1056), so the parameterless one above is the only public
+    /// entry. The shape-driven one is reached through <see cref="OrleansMeshTestBase.CreateFixture"/>,
+    /// which lives in this assembly; a rig in another repository subclasses the fixture and answers
+    /// the hooks below instead.</para>
+    /// </summary>
+    internal SharedOrleansFixture(OrleansClusterShape shape) => this.shape = shape;
 
     /// <summary>
     /// Subclass hook: the silo configurator this cluster is built with. Orleans instantiates it via

@@ -44,6 +44,7 @@ public class PermissionFoldGateTests
     [Fact(Timeout = 30000)]
     public void Take1_alone_runs_the_continuation_INSIDE_the_folds_gate()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var foldGate = new object();
         var insideGate = false;
         var onSubscriberThread = false;
@@ -79,7 +80,7 @@ public class PermissionFoldGateTests
             .Subscribe(p => observed.TrySetResult(
                 (Monitor.IsEntered(foldGate), p)));
 
-        var result = await observed.Task.WaitAsync(RxFanOutInversionHarness.DeadlockBound);
+        var result = await observed.Task.WaitAsync(RxFanOutInversionHarness.DeadlockBound, TestContext.Current.CancellationToken);
 
         // "Outside the gate" IS Monitor.IsEntered == false: an inline in-gate delivery would run
         // on the gate-holding thread, where IsEntered is true. Deliberately NO thread-id
@@ -114,7 +115,7 @@ public class PermissionFoldGateTests
             .TakeDecisionOutsideGate()
             .Subscribe(_ => observed.TrySetResult(identity.Value));
 
-        var seen = await observed.Task.WaitAsync(RxFanOutInversionHarness.DeadlockBound);
+        var seen = await observed.Task.WaitAsync(RxFanOutInversionHarness.DeadlockBound, TestContext.Current.CancellationToken);
 
         seen.Should().Be("user-1",
             "the continuation performs writes under the caller's identity — an AsyncLocal that "
@@ -145,7 +146,7 @@ public class PermissionFoldGateTests
                 .FoldEmittingInsideGate(ownFoldGate, Permission.All)
                 .TakeDecisionOutsideGate(),
             subscribe: handler => fanOut.Subscribe(handler),
-            publish: tag => fanOut.OnNext(tag));
+            publish: tag => fanOut.OnNext(tag)).WaitAsync(TestContext.Current.CancellationToken);
 
         bothCompleted.Should().BeTrue(
             "a permission-gated handler must not run its body inside the evaluator's fold gate — "
@@ -169,7 +170,7 @@ public class PermissionFoldGateTests
                 .FoldEmittingInsideGate(ownFoldGate, Permission.All)
                 .TakeDecisionOutsideGate(),
             subscribe: handler => feed.Subscribe(e => handler(e.Path)),
-            publish: tag => feed.Publish(MeshChangeEvent.Deleted(tag)));
+            publish: tag => feed.Publish(MeshChangeEvent.Deleted(tag))).WaitAsync(TestContext.Current.CancellationToken);
 
         bothCompleted.Should().BeTrue(
             "two per-node hubs deleting concurrently must both complete — this is the exact "
@@ -198,6 +199,7 @@ public class PermissionFoldGateTests
     [Fact(Timeout = 30000)]
     public void Mesh_change_feed_delivers_synchronously_on_the_publishers_thread()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         using var feed = new InProcessMeshChangeFeed();
 
         var publisherThread = Environment.CurrentManagedThreadId;

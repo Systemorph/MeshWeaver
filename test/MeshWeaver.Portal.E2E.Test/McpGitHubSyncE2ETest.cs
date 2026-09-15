@@ -26,7 +26,7 @@ public class McpGitHubSyncE2ETest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         var space = "mcpghe2e";
@@ -80,7 +80,7 @@ public class McpGitHubSyncE2ETest(PortalFixture fixture)
         // ── The Activity node materializes and reaches a terminal Status through the real portal ──
         // (Failed, because no repository is configured — the CORRECT outcome; the point is that the
         //  headless MCP trigger created + drove the activity under the token identity.)
-        var readable = await fixture.WaitUntilReadableAsync(context, token, activityPath!, TimeSpan.FromSeconds(60));
+        var readable = await fixture.WaitUntilReadableAsync(context, token, activityPath!, TimeSpan.FromSeconds(60), cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(readable, $"Activity node {activityPath} never became readable.");
 
         var terminal = await WaitForTerminalStatusAsync(context, token, activityPath!, TimeSpan.FromSeconds(90));

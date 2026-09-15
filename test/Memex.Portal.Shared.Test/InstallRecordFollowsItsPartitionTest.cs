@@ -65,7 +65,7 @@ public class InstallRecordFollowsItsPartitionTest(ITestOutputHelper output) : Mo
     /// Writes what an install leaves behind: the record in the <c>Plugins</c> partition, the
     /// partition root, and one child so the delete has a real subtree to drain.
     /// </summary>
-    private async Task<string> Install()
+    private async Task<string> Install(CancellationToken cancellationToken)
     {
         var packageId = NewPackageId();
         var manifest = new PackageManifest
@@ -84,36 +84,36 @@ public class InstallRecordFollowsItsPartitionTest(ITestOutputHelper output) : Mo
                     State = MeshNodeState.Active,
                     Content = manifest,
                 }))
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
         await CreateAsSystem(new MeshNode(packageId)
         {
             Name = manifest.Name,
             NodeType = PluginLikeNodeType,
             State = MeshNodeState.Active,
-        });
+        }, cancellationToken);
         await CreateAsSystem(new MeshNode("Page", packageId)
         {
             Name = "Page",
             NodeType = "Markdown",
             State = MeshNodeState.Active,
             Content = new MarkdownContent { Content = "# page" },
-        });
+        }, cancellationToken);
 
-        (await Exists(RecordPath(packageId))).Should().BeTrue(
+        (await Exists(RecordPath(packageId), cancellationToken)).Should().BeTrue(
             "the fixture must actually record the install, or the assertions below prove nothing");
         Output.WriteLine($"installed '{packageId}' with record {RecordPath(packageId)}");
         return packageId;
     }
 
-    private async Task<CreateNodeResponse> CreateAsSystem(MeshNode node)
+    private async Task<CreateNodeResponse> CreateAsSystem(MeshNode node, CancellationToken cancellationToken = default)
     {
         var response = await Access
             .RunAsSystem(() => ObserveNodeOperation(new CreateNodeRequest(node)))
             .FirstAsync()
             .Select(d => d.Message)
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(cancellationToken);
         response.Success.Should().BeTrue($"the fixture write '{node.Path}' must land: {response.Error}");
         return response;
     }
@@ -137,8 +137,8 @@ public class InstallRecordFollowsItsPartitionTest(ITestOutputHelper output) : Mo
         response.Success.Should().BeTrue($"the delete itself must succeed: {response.Error}");
     }
 
-    private async Task<bool> Exists(string path) =>
-        await Persistence.Exists(path).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+    private async Task<bool> Exists(string path, CancellationToken cancellationToken = default) =>
+        await Persistence.Exists(path).FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
     /// <summary>
     /// 🚨 <b>THE FALSIFIER.</b> On the pre-fix code the delete succeeds, the partition's nodes are
@@ -148,7 +148,7 @@ public class InstallRecordFollowsItsPartitionTest(ITestOutputHelper output) : Mo
     [Fact(Timeout = 240000)]
     public async Task DeletingAnInstalledPartition_RemovesItsInstallRecord()
     {
-        var packageId = await Install();
+        var packageId = await Install(TestContext.Current.CancellationToken);
 
         await DeleteAsSystem(packageId);
 
@@ -167,7 +167,7 @@ public class InstallRecordFollowsItsPartitionTest(ITestOutputHelper output) : Mo
     [Fact(Timeout = 240000)]
     public async Task DeletingANestedNode_LeavesTheInstallRecordAlone()
     {
-        var packageId = await Install();
+        var packageId = await Install(TestContext.Current.CancellationToken);
 
         await DeleteAsSystem($"{packageId}/Page");
 
@@ -184,8 +184,8 @@ public class InstallRecordFollowsItsPartitionTest(ITestOutputHelper output) : Mo
     [Fact(Timeout = 240000)]
     public async Task DeletingADifferentPartition_LeavesOtherInstallRecordsAlone()
     {
-        var kept = await Install();
-        var deleted = await Install();
+        var kept = await Install(TestContext.Current.CancellationToken);
+        var deleted = await Install(TestContext.Current.CancellationToken);
 
         await DeleteAsSystem(deleted);
 
@@ -205,6 +205,7 @@ public class InstallRecordFollowsItsPartitionTest(ITestOutputHelper output) : Mo
     [Fact(Timeout = 60000)]
     public void TwoStructuralTeardownsCoverAnArbitraryPartitionRoot()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var handlers = Mesh.ServiceProvider.GetServices<INodePostDeletionHandler>().ToList();
         var probe = new MeshNode("ProbePartition")
         {
