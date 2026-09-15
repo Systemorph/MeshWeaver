@@ -1371,7 +1371,10 @@ public static class CatalogLayoutAreas
 
     /// <summary>
     /// The manifest-diff fast path: fetch only <c>manifest.lock</c>, diff, fetch only the changed
-    /// files — <b>plus the declared files whose node is ABSENT from the mesh</b> (MeshWeaver#4259).
+    /// CONTENT files — <b>plus the declared files whose node is ABSENT from the mesh</b>
+    /// (MeshWeaver#4259). A changed module source (<c>src/&lt;Module&gt;/…</c>) is never fetched:
+    /// it travels compiled, in the module bundle, and the content source does not serve it
+    /// (MeshWeaver#4429).
     ///
     /// <para>🚨 <b>The diff alone is a comparison of two DECLARATIONS.</b>
     /// <c>newManifest.DiffFrom(record.InstalledFiles)</c> asks what the source changed since the
@@ -1417,6 +1420,25 @@ public static class CatalogLayoutAreas
                         $"Package '{pkg.Id}' ships no parseable {ModuleManifest.FileName}.");
 
                 var delta = newManifest.DiffFrom(record.InstalledFiles);
+
+                // 🚨 #4429 — A MODULE SOURCE IS A CHANGE TOKEN, NEVER A FILE TO FETCH.
+                // gen-manifests.py folds a mixed package's `src/<Module>/…` — and the in-tree
+                // siblings that ride its bundle — into the SAME `files` map as its node files, so a
+                // source-only commit moves the module version (Plugins#878/#1118). Those files are
+                // compiled into the module bundle and arrive through the module lane (WithModule →
+                // AdoptModule); the content source serves only `{Id}/…` (NodeRepoPackageSource keeps
+                // the package folder, and the registry's /files answers from it). Asked for one, it
+                // can only ever return 0 of N — which EnsureFetchComplete, correctly, refuses — so
+                // every update that touched a source fell back to a FULL install and recompiled every
+                // type in the package: `Edu` on memex.systemorph.com, 2026-09-15T14:12Z, for
+                // `src/MeshWeaver.Courses/CourseAssetService.cs`. They stay in the record
+                // (InstallNodeRepoDelta stamps newManifest.Files whole) so the next diff is clean;
+                // they never enter the fetch. The ONE predicate the node mapping, the delta prune and
+                // InstallCompleteness already share (#4101).
+                var changedContent = delta.AddedOrChangedFiles
+                    .Where(f => !PackageInstaller.IsModuleSourcePath(f))
+                    .ToImmutableSortedSet(StringComparer.Ordinal);
+                var changedModuleSources = delta.AddedOrChangedFiles.Count - changedContent.Count;
 
                 // A change to the package's SHARED Source/Test (partition-level compile inputs)
                 // affects every type in the package — the full install's release-all handles that;
@@ -1472,7 +1494,7 @@ public static class CatalogLayoutAreas
                     .SelectMany(present =>
                     {
                         var restore = InstallCompleteness.FilesToRestore(
-                            newManifest.Files, delta.AddedOrChangedFiles, present, parsers);
+                            newManifest.Files, changedContent, present, parsers);
 
                         // 🚨 The SAME rule the changed-file guard above applies, and for the same
                         // reason: a package's shared Source/Test are compile inputs for EVERY type
@@ -1503,12 +1525,14 @@ public static class CatalogLayoutAreas
                                 pkg.Id, restore.Count, declaredNodePaths.Count,
                                 string.Join(", ", restore.Take(InstallCompleteness.MaxNamedInALine)));
 
-                        var wanted = delta.AddedOrChangedFiles.Union(restore);
+                        var wanted = changedContent.Union(restore);
                         logger?.LogInformation(
-                            "Updating {Id} incrementally: {Changed} changed file(s), {Restored} "
-                            + "restored, {Removed} removed → module {ModuleVersion}.",
-                            pkg.Id, delta.AddedOrChangedFiles.Count, restore.Count,
-                            delta.RemovedFiles.Count, newManifest.ModuleVersion);
+                            "Updating {Id} incrementally: {Changed} changed content file(s), "
+                            + "{Restored} restored, {Removed} removed; {ModuleSources} changed module "
+                            + "source(s) travel in the module bundle, not the fetch → module "
+                            + "{ModuleVersion}.",
+                            pkg.Id, changedContent.Count, restore.Count,
+                            delta.RemovedFiles.Count, changedModuleSources, newManifest.ModuleVersion);
 
                         return (wanted.Count == 0
                                 ? Observable.Return((IReadOnlyList<PackageFile>)[])
@@ -1546,6 +1570,13 @@ public static class CatalogLayoutAreas
     /// absent-shared-source arm uses a few lines above: the caller catches it and falls back to a
     /// FULL install, which rewrites everything and writes a record that is true. The user gets an
     /// updated package either way; only the silent-stale path is removed.</para>
+    ///
+    /// <para>🚨 <b>A module source never reaches <paramref name="wanted"/></b> (MeshWeaver#4429).
+    /// The lock declares a mixed package's <c>src/&lt;Module&gt;/…</c> beside its node files, but
+    /// they travel in the module bundle and no content source serves them; the caller drops them
+    /// with <see cref="PackageInstaller.IsModuleSourcePath"/> before it asks. Until it did, this
+    /// guard turned every update that touched a module source into a full install. So a shortfall
+    /// here is always a file the source SHOULD have served.</para>
     /// </summary>
     /// <param name="packageId">The package being updated.</param>
     /// <param name="wanted">The paths the fetch asked for.</param>
