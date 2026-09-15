@@ -114,7 +114,7 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
 
     rows: list[dict[str, str]] = []
     excluded: list[tuple[str, str, str]] = []
-    hosts: dict[str, str] = {}
+    hosts: dict[str, tuple[str, str]] = {}
     for instance in sorted(instances, key=lambda i: i.id):
         if instance.state != "live":
             excluded.append((instance.id, instance.state, instance.reason))
@@ -135,13 +135,19 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
         # report, because the overlay is the record.
         host_key = instance.host.rstrip(".").lower()
         if host_key in hosts:
+            # 🚨 AND THE MESSAGE CARRIES BOTH SPELLINGS AS WRITTEN. This is the ONLY output on this
+            # path — the run stops here — and whoever has to fix it is looking for a line in a
+            # `values*.yaml`, which the canonical form may not match. So name each installation with
+            # the host ITS OWN overlay wrote, and the key they collide on separately.
+            first_id, first_host = hosts[host_key]
             blockers.append(
-                f"installations `{hosts[host_key]}` and `{instance.id}` both resolve to "
-                f"https://{host_key}. One of them would be verified under a name whose "
+                f"installations `{first_id}` (https://{first_host}) and `{instance.id}` "
+                f"(https://{instance.host}) both resolve to the same host `{host_key}` — a "
+                "hostname is case-insensitive. One of them would be verified under a name whose "
                 "instance key and admin token belong to the other, and its verdict would land on "
                 "the wrong `Admin/UpdatePolicy`.")
             continue
-        hosts[host_key] = instance.id
+        hosts[host_key] = (instance.id, instance.host)
         rows.append({"name": instance.id, "baseUrl": f"https://{instance.host}"})
 
     if not rows and not blockers:
@@ -302,8 +308,11 @@ def self_test() -> int:
         ("memex", "Same.Example.COM.", "deployments/aks/memex/values.memex.yaml"),
         ("twin", "same.example.com", "deployments/aks/twin/values.twin.yaml")])], {})
     check(rows == [{"name": "memex", "baseUrl": "https://Same.Example.COM."}]
-          and any("resolve to" in b for b in blockers),
-          "one host in two spellings is a RED, and the overlay's own spelling survives")
+          and any("resolve to the same host" in b
+                  and "https://Same.Example.COM." in b and "https://same.example.com" in b
+                  for b in blockers),
+          "one host in two spellings is a RED naming BOTH spellings as written, and the "
+          "overlay's own spelling survives")
 
     # A roster entry naming nothing exempts nothing and hides the next one.
     rows, _, blockers = derive(TWO_LIVE, {"ghost": ("retired", "long gone", "")})
