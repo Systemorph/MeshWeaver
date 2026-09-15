@@ -446,12 +446,16 @@ absolute path, which makes that `global.json` the one found. Measured: from the 
 refusal above and no trx; from the platform's, 36 of 36 run and `ledger.trx` written. The build is
 untouched — `Directory.Build.props` and the NuGet config resolve from the project's directory, not
 the cwd. A repo that moves its own runner still lands no core PR; a repo that does not move is
-carried by the platform it compiles against — for the RUNNER. 🚨 Not for its code: under xunit.v3
-4.x `xUnit1069` is an **error by default**, not a warning `-warnaserror` promotes (measured
-2026-09-15, MeshWeaver.Plugins' `MeshWeaver.Courses.Test` built with no `-warnaserror` against core
-main: 3 × `error xUnit1069`). So every satellite suite with a timed test that ignores
-`TestContext.Current.CancellationToken` stops COMPILING the day its platform set carries 4.x — and
-main-cd builds MeshWeaver.Plugins' module suites against core main, so it meets that first.
+carried by the platform it compiles against — for the RUNNER. Its code needs one more thing:
+`xUnit1069` is a **warning** by default, and it stops a build only where warnings are errors. Core's
+`test/Directory.Build.props` does not import the root, so core's test projects never had
+`TreatWarningsAsErrors`; MeshWeaver.Plugins' `*.Test` projects live under `src/` and inherited it,
+so the same rule was `error xUnit1069` there (measured 2026-09-15, `MeshWeaver.AI.Test` against
+core main: 269 distinct sites). MeshWeaver.Plugins#1920 aligned its test projects with core's
+policy; after it, main-cd run 34964034139 built the same suites with the advisories as warnings and
+ran them green. A satellite that applies warnings-as-errors to its tests meets the rule as an error
+the day its platform set carries 4.x. The warnings are not the finish line either: a timed test that
+ignores the token still outlives its verdict, so each one is threaded, as core did for its 707.
 
 Three more measurements the lanes are built on, same SDK and day: `-p:` properties **do** reach the
 build under MTP (falsified with `-p:LangVersion=7.0` → `error CS8630`, exit 1), so
