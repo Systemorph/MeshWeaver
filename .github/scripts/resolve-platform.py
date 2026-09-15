@@ -53,6 +53,25 @@ Every skip is PRINTED with its reason, the chosen set is written to the job log 
 summary, and running out of candidates is a RED job naming what was looked for — never a silent
 green and never a fallback to a moving tag nobody named.
 
+A STALE LISTING IS REFUSED, NEVER RESOLVED FROM (MeshWeaver#4433)
+-----------------------------------------------------------------
+GitHub can serve page 1 of the run listing from a stale snapshot. Measured twice on 2026-09-15:
+page 1 began ~260 runs behind the newest (#8423 and #8420 while #8676 was sealed), a re-read
+minutes later was correct, and the walk above took the first sealed set it met — a set three days
+old, reported as the newest. With a floor that is a red naming the floor; without one (every
+satellite but Plugins) it is a SILENT compile, test and publish against an old platform. So page 1
+is checked against two facts the listing cannot fake, and a listing that fails either is RED:
+
+  * AGE — core CD runs on `main` at least hourly (an hourly `schedule` plus every main build;
+    measured over 300 runs, 09-11 → 09-15: the widest gap was 1.7 h). A page whose newest main run
+    is older than LISTING_MAX_AGE_HOURS cannot be the newest page;
+  * the CEILING, when one was asked for — the run this repository's `main` has already PASSED on
+    exists, so a page whose newest run is older than it is provably stale.
+
+A freeze is exempt (it names one set, and an incident is when it must keep working), and a
+freshness check keeps its baseline on this refusal like on any other. The resolver does not
+re-read: the red is the harmless answer, and a re-run of the job reads the listing again.
+
 FRESHNESS — A RE-RUN MUST NOT TEST A STALE SET
 ----------------------------------------------
 With `PLATFORM_BASELINE` set (JSON: the outputs of the job that resolved first — `plan` in the gate,
@@ -114,6 +133,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from typing import Callable, NamedTuple
 
 CORE_REPO = "Systemorph/MeshWeaver"
@@ -218,6 +238,21 @@ def github_fetch_with(token: str) -> Fetch:
                     time.sleep(wait)
                     last = error
                     continue
+                # 🚨 A 5xx is GitHub failing to answer, not an answer — the same class as the
+                # transport faults below, and retried the same bounded way. It used to fall through
+                # to the verdict text, which blamed a revoked token, a rate limit or a renamed
+                # workflow for a single 502 and took eight downstream gates red with it
+                # (MeshWeaver.Plugins run 35000489240, `…/actions/runs/34937373355/jobs → HTTP 502`).
+                if error.code >= 500:
+                    last = error
+                    if attempt < 3:
+                        print(f"GET {path} → HTTP {error.code} (GitHub server error) — retrying in "
+                              f"{5 * (attempt + 1)}s")
+                        time.sleep(5 * (attempt + 1))
+                        continue
+                    raise ResolutionError(
+                        f"GET {path} → HTTP {error.code} (GitHub server error) on all {attempt + 1} "
+                        "attempts — the API is failing, not the platform. Re-run this job.") from error
                 raise ResolutionError(
                     f"GET {path} → HTTP {error.code}. {CORE_REPO} is public, so this is a revoked "
                     "token, an exhausted rate limit, or a renamed workflow — not a missing "
@@ -234,6 +269,48 @@ def cd_runs(fetch: Fetch, page: int) -> list[dict]:
     data = fetch(f"/repos/{CORE_REPO}/actions/workflows/{CORE_CD_WORKFLOW}/runs"
                  f"?branch={CORE_BRANCH}&per_page=100&page={page}")
     return list(data.get("workflow_runs") or [])
+
+
+# Core CD runs on `main` at least hourly (see the module docstring: the widest gap in 300 measured
+# runs was 1.7 h), so a page 1 whose newest main run is older than this is a stale snapshot. Wide on
+# purpose: a false refusal reds every satellite at once, and the stale pages measured were ~3 days
+# behind.
+LISTING_MAX_AGE_HOURS = 12
+
+
+def _created(run: dict) -> float | None:
+    stamp = str(run.get("created_at") or "")
+    if not stamp:
+        return None
+    try:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float) -> str | None:
+    """Why page 1 of the main-cd listing cannot be the newest page, or None when nothing proves it.
+
+    Both facts are independent of the page itself: the clock, and a run number this repository's
+    own `main` has already passed on. Rows without `created_at` cannot be aged; a page with none
+    is judged by the ceiling alone (the live API always sends it — the self-test fixtures don't)."""
+    main_runs = [r for r in runs if r.get("head_branch") in (None, CORE_BRANCH)]
+    if not main_runs:
+        return None
+    newest = max(int(r["run_number"]) for r in main_runs)
+    if passed_ceiling is not None and newest < passed_ceiling:
+        return (f"its newest run is main-cd #{newest}, but this repository's `main` has already "
+                f"passed on core CD #{passed_ceiling}, which the page does not contain")
+    stamps = [(stamp, r) for r in main_runs for stamp in [_created(r)] if stamp is not None]
+    if not stamps:
+        return None
+    stamp, run = max(stamps, key=lambda pair: pair[0])
+    hours = (now - stamp) / 3600
+    if hours > LISTING_MAX_AGE_HOURS:
+        return (f"its newest run, main-cd #{int(run['run_number'])}, was created "
+                f"{run.get('created_at')} — {hours:.0f} h ago, while core CD runs on {CORE_BRANCH} at "
+                f"least hourly (refused beyond {LISTING_MAX_AGE_HOURS} h)")
+    return None
 
 
 def run_jobs_of(fetch: Fetch, repo: str, run_id: int) -> list[dict]:
@@ -828,6 +905,17 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
         runs = cd_runs(fetch, page)
         if not runs:
             break
+        # 🚨 PAGE 1 IS WHERE "NEWEST" IS DECIDED, so it is the page checked (#4433). A freeze names
+        # one set and must keep working in an incident, so it is not refused here.
+        why_stale = stale_listing(runs, passed_ceiling, now()) if page == 1 and not freeze_kind else None
+        if why_stale:
+            raise ResolutionError(
+                f"GitHub served a STALE run listing (MeshWeaver#4433): page 1 of {CORE_CD_WORKFLOW} "
+                f"runs on {CORE_REPO} {CORE_BRANCH} cannot be the newest — {why_stale}. Resolving "
+                "from it would take an old set and report it as the newest (measured 2026-09-15: "
+                "page 1 began ~260 runs behind, twice, and a re-read minutes later was correct). "
+                "Re-run this job; the resolver refuses rather than re-reading, because this red is "
+                "the harmless answer and a silently old platform is not.")
         for run in runs:
             if run.get("head_branch") not in (None, CORE_BRANCH):
                 continue
@@ -1206,10 +1294,15 @@ def write_outputs(chosen: Chosen, tester: str, portal: str, migration: str | Non
 # ───────────────────────────────── self-test ──────────────────────────────────────────────
 
 def _run(number: int, sha: str, status: str = "completed", conclusion: str = "success",
-         branch: str = "main") -> dict:
-    return {"id": 1000 + number, "run_number": number, "head_sha": sha, "status": status,
-            "conclusion": conclusion, "head_branch": branch,
-            "html_url": f"https://github.com/{CORE_REPO}/actions/runs/{1000 + number}"}
+         branch: str = "main", created_at: str | None = None) -> dict:
+    # `created_at` is ABSENT unless a case sets it: a dated default would age past
+    # LISTING_MAX_AGE_HOURS on the wall clock and red every case the day after it was written.
+    row = {"id": 1000 + number, "run_number": number, "head_sha": sha, "status": status,
+           "conclusion": conclusion, "head_branch": branch,
+           "html_url": f"https://github.com/{CORE_REPO}/actions/runs/{1000 + number}"}
+    if created_at is not None:
+        row["created_at"] = created_at
+    return row
 
 
 def _jobs(promote="success", verify="success", bake="success", plugins="success") -> list[dict]:
@@ -1257,6 +1350,11 @@ def _registry(present: dict[tuple[str, str], str]) -> Resolve:
     def resolve(image: str, tag: str) -> str | None:
         return present.get((image.rsplit("/", 1)[1], tag))
     return resolve
+
+
+def code_blames_token(text: str) -> bool:
+    """The 4xx verdict's wording — which a 5xx must never carry."""
+    return "revoked token" in text
 
 
 def self_test() -> int:
@@ -1591,6 +1689,88 @@ def self_test() -> int:
          lambda: choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
                         freeze="3.0.0-ci.8207", log=logs.append, passed_ceiling=8203),
          lambda c: c.set_name == "3.0.0-ci.8207" and c.lag == "")
+
+    # ── a transient GitHub 5xx is retried and named; a 4xx is a verdict on the first answer ──
+    import io
+    real_urlopen, real_sleep = urllib.request.urlopen, time.sleep
+
+    def http_error(code: int) -> urllib.error.HTTPError:
+        return urllib.error.HTTPError("https://api.github.com/x", code, "err", {}, io.BytesIO(b""))
+
+    def scripted(codes: list[int]):
+        calls = {"n": 0}
+
+        def urlopen(request, timeout=0):
+            calls["n"] += 1
+            code = codes[calls["n"] - 1] if calls["n"] <= len(codes) else 200
+            if code != 200:
+                raise http_error(code)
+            return io.BytesIO(b'{"ok": true}')
+        return urlopen, calls
+
+    try:
+        time.sleep = lambda _seconds: None                      # type: ignore[assignment]
+        for label, codes, want_ok, want_calls, says in (
+            ("a 502 then a 200 is retried and answers", [502], True, 2, None),
+            ("three 5xx then a 200 is still answered (bounded, 4 attempts)", [502, 503, 500], True, 4, None),
+            ("four 5xx is RED naming the SERVER, never the token", [502, 502, 502, 502], False, 4,
+             "GitHub server error"),
+            ("a 404 is a verdict on the FIRST answer — not retried", [404], False, 1, "revoked token"),
+        ):
+            total += 1
+            opener, calls = scripted(codes)
+            urllib.request.urlopen = opener                     # type: ignore[assignment]
+            try:
+                answer = github_fetch_with("t")("/repos/x/y")
+                ok, text = answer == {"ok": True}, ""
+            except ResolutionError as error:
+                ok, text = False, str(error)
+            if ok != want_ok or calls["n"] != want_calls or (says and says not in text) \
+                    or (not want_ok and code_blames_token(text) and says != "revoked token"):
+                failures.append(f"{label}: ok={ok} calls={calls['n']} message={text[:160]!r}")
+    finally:
+        urllib.request.urlopen, time.sleep = real_urlopen, real_sleep
+
+    # ── a STALE listing (#4433): page 1 served from an old snapshot is refused, never resolved ──
+    made = "2026-09-12T12:00:00Z"
+    made_at = datetime.fromisoformat(made.replace("Z", "+00:00")).timestamp()
+    aged = [_run(8207, A, created_at=made), _run(8203, B, created_at="2026-09-12T11:00:00Z")]
+    three_days = lambda: made_at + 72 * 3600        # noqa: E731
+    case("a page 1 whose newest main run is 3 days old is RED, naming the staleness", False,
+         lambda: choose(_fetch_for(aged, sealed_two), _registry(full), tester, portal,
+                        log=logs.append, now=three_days),
+         lambda message: "STALE" in message and "#4433" in message and "#8207" in message
+                         and made in message)
+    case("…the SAME page 11 h old is the newest page and resolves unchanged", True,
+         lambda: choose(_fetch_for(aged, sealed_two), _registry(full), tester, portal,
+                        log=logs.append, now=lambda: made_at + 11 * 3600),
+         lambda c: c.set_name == "3.0.0-ci.8207")
+    case("…a FREEZE is not refused on it — an incident is when a freeze must keep working", True,
+         lambda: choose(_fetch_for(aged, sealed_two), _registry(full), tester, portal,
+                        freeze="3.0.0-ci.8203", log=logs.append, now=three_days),
+         lambda c: c.set_name == "3.0.0-ci.8203")
+    case("a page FRESH by age whose newest run is below main's passed ceiling is RED", False,
+         lambda: choose(_fetch_for(aged, sealed_two), _registry(full), tester, portal,
+                        log=logs.append, now=lambda: made_at + 3600, passed_ceiling=8676),
+         lambda message: "STALE" in message and "#8676" in message and "#8207" in message)
+    case("…a ceiling AT the page's newest run is not staleness", True,
+         lambda: choose(_fetch_for(aged, sealed_two), _registry(full), tester, portal,
+                        log=logs.append, now=lambda: made_at + 3600, passed_ceiling=8207),
+         lambda c: c.set_name == "3.0.0-ci.8207")
+    case("the AGE is read from the newest-created row, whatever the page order", False,
+         lambda: choose(_fetch_for(list(reversed(aged)), sealed_two), _registry(full), tester,
+                        portal, log=logs.append, now=three_days),
+         lambda message: "STALE" in message and made in message)
+    total += 1
+    stale_rows, stale_override = refresh(
+        {"run-number": "8203", "set": "3.0.0-ci.8203"},
+        lambda: choose(_fetch_for(aged, sealed_two), _registry(full), tester, portal,
+                       log=logs.append, now=three_days),
+        log=logs.append, rows_of=lambda c: output_rows(c, tester, portal))
+    if stale_override or stale_rows.get("set") != "3.0.0-ci.8203" \
+            or not any("STALE" in line for line in logs):
+        failures.append("a freshness check on a STALE listing must keep its baseline and say why — "
+                        f"override={stale_override}, set={stale_rows.get('set')!r}")
 
     # The OUTPUT of a default run must be what it was: one inert `lag=` key and the unchanged
     # closing sentence. A run that DID follow main says so instead — the summary may never carry a
@@ -2031,8 +2211,11 @@ def self_test() -> int:
           "rather than falling back when main has passed nothing, the OPTIONAL source verification "
           "reads no job log unless asked for and passes over a set it cannot attribute, a main run "
           "whose annotations name two DIFFERENT sets is SKIPPED rather than guessed at, a set below "
-          "this repository's declared FLOOR is refused on every path including under a freeze, and "
-          "every dead end is RED naming why.")
+          "this repository's declared FLOOR is refused on every path including under a freeze, a transient "
+          "GitHub 5xx is retried (bounded) and named as a server error, a run "
+          "listing whose page 1 is provably STALE (its newest run over 12 h old, or older than the "
+          "set main has passed) is refused rather than resolved from, and every dead end is RED "
+          "naming why.")
     return 0
 
 
