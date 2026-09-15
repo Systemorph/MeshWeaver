@@ -454,7 +454,10 @@ class GitHub:
 
 def owned_issues(gh, label: str, title: str) -> tuple[list[Issue], list[Issue]]:
     """(the issues this ledger owns, the same-label issues it does NOT and will never touch)."""
-    seen = gh.labelled_issues(label)
+    # One entry per issue NUMBER. The listing is several pages sorted by `updated`, so an issue
+    # updated WHILE it is read can move pages and appear twice; two copies of #N would make the
+    # fold treat #N as its own duplicate and close the only ledger (Copilot on #4434).
+    seen = list({i.number: i for i in gh.labelled_issues(label)}.values())
     mine = [i for i in seen if owns(i, label, title)]
     foreign = [i for i in seen if not owns(i, label, title)]
     return mine, foreign
@@ -495,6 +498,13 @@ def fold_duplicates(gh, matching: list[Issue], title: str, label: str) -> tuple[
     one is folded into the oldest — its entries appended there, a comment on each side naming the
     other, the newer one closed as not planned — before the verdict is taken. Both issues are
     re-proven ours at the moment of each write, like every other write here.
+
+    KNOWN LIMIT, not new with the fold: two ledger runs can still interleave a read-then-write on
+    the SAME issue — the append path always could — because the Issues API has no compare-and-swap
+    on a body. The fold never sets the keeper's state, so it cannot re-open a ledger a green run
+    just closed; at worst one entry is lost, which the Actions tab still lists. A `concurrency:`
+    group would serialize writers but CANCELS an older pending run, i.e. drops a whole entry, so
+    it is not the fix either.
 
     Returns (the owned issues as they stand after folding, the numbers folded away)."""
     open_ones = sorted((i for i in matching if i.state == "open"), key=lambda i: i.number)
@@ -941,6 +951,17 @@ def self_test() -> int:
     before = gh15.writes
     m15, folded15 = fold_duplicates(gh15, owned_issues(gh15, label, title)[0], title, label)
     check("one open ledger -> nothing folded, nothing written", folded15 == [] and gh15.writes == before)
+
+    # 16. the listing returns one open ledger TWICE (it moved pages while being read)
+    class _DupFake(_Fake):
+        def labelled_issues(self, label):
+            listed = super().labelled_issues(label)
+            return listed + listed[:1]
+    gh16 = _DupFake([owned_open(601, run("failure", [job]))])
+    m16, folded16 = fold_duplicates(gh16, owned_issues(gh16, label, title)[0], title, label)
+    apply(gh16, run("failure", [job]), decide("failure", m16, now, 7), title, label, now, 7)
+    check("a ledger listed twice is never folded into itself (one open, appended once)",
+          folded16 == [] and gh16.issues[601].state == "open" and len(entries_of(gh16.issues[601].body)) == 2)
 
     if fails:
         print("::error title=ci-failure-ledger self-test::" + "; ".join(fails), file=sys.stderr)
