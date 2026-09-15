@@ -298,6 +298,15 @@ instancesAdmin:
 # could not find — by design: an unconfigured mesh cannot be talked into provisioning.
 hostingOperator:
   enabled: false
+  # WHICH EXECUTOR runs the lifecycle actions (Plugins#1738). Read OUTSIDE `enabled`:
+  #   Job     the in-cluster operator Job (needs enabled: true, image, and the jobrunner token)
+  #   Actions Systemorph/Memex aks-ops.yml, dispatched through the systemorph-com GitHub App and
+  #           approved in the mesh. Runs with enabled: false, so no Job, no token, no cluster grant.
+  # Anything else FAILS the render: the portal reads every other value as Job.
+  executor: "Job"
+  # The ONE user id that may approve its own request on the Actions path (a single-admin
+  # installation). Empty renders no key, and then the approver must differ from the requester.
+  maintainer: ""
   # The ops namespace and the Job's (powerful) ServiceAccount. Both appear VERBATIM in the
   # federated credential's subject, which Azure matches as a string — rename either and the token
   # exchange fails at run time with an error naming neither.
