@@ -31,7 +31,7 @@ public class ChatSurvivesSubmitTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
         try { await fixture.CreateNodeAsync(context, token, ComposerSeedJson(fixture.UserId)); }
         catch (InvalidOperationException) { /* already seeded — fine */ }
@@ -74,7 +74,7 @@ public class ChatSurvivesSubmitTest(PortalFixture fixture)
         {
             if (page.Url.Contains("/login", StringComparison.OrdinalIgnoreCase)) { outcome = "login-redirect"; break; }
             if (await userBubble.CountAsync() > 0) { outcome = "bubble"; break; }
-            await Task.Delay(250);
+            await Task.Delay(250, TestContext.Current.CancellationToken);
         }
 
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/chat-survives-submit.png", FullPage = true });

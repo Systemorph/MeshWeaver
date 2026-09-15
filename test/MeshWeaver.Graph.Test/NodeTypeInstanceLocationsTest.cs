@@ -90,10 +90,10 @@ public class NodeTypeInstanceLocationsTest(ITestOutputHelper output) : MonolithM
             .Should().Equal(location);
 
         await MeshService.CreateNode(parsed!).Take(1)
-            .Should().Within(60.Seconds()).Emit("the declaration installs like any other NodeType node");
+            .Should().Within(60.Seconds()).Emit("the declaration installs like any other NodeType node", cancellationToken: TestContext.Current.CancellationToken);
 
         var stored = await Mesh.GetWorkspace().GetMeshNodeStream(path)
-            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds()).Await();
+            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
         stored!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!.InstanceLocations
             .Should().Equal(new[] { location }, "the declaration must round-trip through persistence");
 
@@ -102,7 +102,7 @@ public class NodeTypeInstanceLocationsTest(ITestOutputHelper output) : MonolithM
         var projected = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Select(_ => Projection.LocationsFor(path))
             .Where(locations => locations is not null)
-            .FirstAsync().Timeout(60.Seconds()).Await();
+            .FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
         projected.Should().Equal(location);
     }
 

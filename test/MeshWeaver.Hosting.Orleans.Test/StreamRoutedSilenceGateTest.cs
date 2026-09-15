@@ -62,8 +62,8 @@ public class StreamRoutedSilenceGateTest(ITestOutputHelper output) : OrleansMesh
         Func<Task> post = () => sender
             .Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(ghost))
             .FirstAsync()
-            .Await()
-            .WaitAsync(30.Seconds());
+            .Await(TestContext.Current.CancellationToken)
+            .WaitAsync(30.Seconds(), TestContext.Current.CancellationToken);
 
         var thrown = await post.Should().ThrowAsync<Exception>(
             "a delivery that cannot be delivered must produce an ANSWER — silence is the one "
@@ -98,8 +98,8 @@ public class StreamRoutedSilenceGateTest(ITestOutputHelper output) : OrleansMesh
         var response = await sender
             .Observe(new PingRequest(), o => o.WithTarget(receiver.Address))
             .FirstAsync()
-            .Await()
-            .WaitAsync(30.Seconds());
+            .Await(TestContext.Current.CancellationToken)
+            .WaitAsync(30.Seconds(), TestContext.Current.CancellationToken);
 
         response.Message.Should().NotBeNull(
             "a registered stream-routed hub must still be reachable — the subscriber check is a "

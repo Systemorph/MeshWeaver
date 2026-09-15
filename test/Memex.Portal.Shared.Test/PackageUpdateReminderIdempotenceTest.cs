@@ -182,7 +182,7 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
         IPackageSource source, string candidate, string provenance, ILogger logger)
         => await PackageUpdateReconciler
             .ReconcileInstalled(Mesh, source, "HEAD", [Candidate(candidate)], provenance, logger)
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     private static PackageManifest Candidate(string moduleVersion) => new()
     {
@@ -214,7 +214,7 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
         };
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         await access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(record))
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
     }
 
     private async Task SetMarker(string value)
@@ -223,7 +223,7 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
         await access
             .RunAsSystem(() => Mesh.GetMeshNodeStream(RecordPath)
                 .Update<PackageManifest>(current => current with { NotifiedModuleVersion = value }))
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>The user dismissing the bell — the same field the bell list flips on click.</summary>
@@ -233,20 +233,20 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
         await access
             .RunAsSystem(() => Mesh.GetMeshNodeStream(notificationPath)
                 .Update<Notification>(current => current with { IsRead = true }))
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
     }
 
     private async Task AwaitRead(string notificationPath, bool expected) =>
         await Mesh.GetMeshNodeStream(notificationPath)
             .Select(n => n.ContentAs<Notification>(Json)?.IsRead)
             .Where(v => v == expected)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     private async Task AwaitMarker(string expected) =>
         await Mesh.GetMeshNodeStream(RecordPath)
             .Select(n => n.ContentAs<PackageManifest>(Json)?.NotifiedModuleVersion)
             .Where(v => string.Equals(v, expected, StringComparison.Ordinal))
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     /// <summary>This package's reminders on the PLATFORM bell, read LIVE through a children query
     /// (a query never storms on a parent that does not exist yet, and it re-emits on every write),

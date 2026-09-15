@@ -1,5 +1,6 @@
 ﻿using System.Reactive;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -162,7 +163,9 @@ internal static class PackageUpdateReconciler
         if (string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
             return Observable.Return(Unit.Default);
 
-        var detail = Describe(pkg, record);
+        var delta = DescribeDelta(pkg, record);
+        var detail = Describe(delta);
+        var name = pkg.Name ?? pkg.Id;
 
         var policy = record.EffectiveUpdatePolicy;
         logger?.LogInformation(
@@ -173,12 +176,48 @@ internal static class PackageUpdateReconciler
         // which governs the image roll alone since 2026-09-14.
         return policy switch
         {
-            PackageUpdatePolicy.Auto => Apply(hub, meshService, accessService, source, sourceRef, pkg, record,
-                recordPath, provenance, detail, logger),
+            // 🚨 …and the policy decides only whether this lane WANTS to write. Whether it MAY is a
+            // second question, and #4355 is what it cost to leave unasked: a partition whose content
+            // a sync source keeps at the sealed commit has an owner already, and this lane writing
+            // into it is a second writer with its own books. The apply is therefore gated on
+            // ownership and DEGRADES TO THE REMINDER — never a silent skip, and never a write that
+            // lands sources this instance has no proven bundle for. Only the unattended apply is
+            // gated: a human clicking Update is the documented escape (Doc/Architecture/SyncRefContract
+            // draws the same line), and it goes through the full install, never a delta.
+            //
+            // The CANDIDATE's target partition, because that is where this apply's writes would
+            // land — not the record's, which is the partition an existing baseline describes and is
+            // the question CatalogLayoutAreas asks. They are the same for every package that does
+            // not move partitions, and where they differ each side asks about the one it means.
+            PackageUpdatePolicy.Auto => PartitionContentOwnership
+                .Observe(hub, PackageInstaller.TargetPartitionOf(pkg.Id, pkg), pkg.Id, logger)
+                .SelectMany(ownership => ownership.InstallerOwnsTheContent
+                    ? Apply(hub, meshService, accessService, source, sourceRef, pkg, record,
+                        recordPath, provenance, delta, logger)
+                    : Notify(
+                        hub, meshService, accessService, recordPath, pkg, record, SyncOwnedPartitionKind,
+                        LocalizableText.Keyed(
+                            $"Update held: {name}",
+                            "notification.packageUpdate.held.title", ("name", name)),
+                        LocalizableText.Keyed(
+                            $"A new build of {name} is available ({detail}), and this package "
+                            + "is set to update automatically — but it was NOT applied. "
+                            + ownership.Because + ". Applying it here would leave two writers with "
+                            + "separate records of one partition (MeshWeaver#4355). " + provenance + ".",
+                            BodyKey("held", delta),
+                            ("name", name), ("changed", delta?.Changed), ("removed", delta?.Removed),
+                            ("because", ownership.Because), ("provenance", provenance)),
+                        logger)),
             PackageUpdatePolicy.Notify => Notify(
                 hub, meshService, accessService, recordPath, pkg, record, UpdateAvailableKind,
-                $"Update available: {pkg.Name ?? pkg.Id}",
-                $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}). {provenance}.",
+                LocalizableText.Keyed(
+                    $"Update available: {name}",
+                    "notification.packageUpdate.available.title", ("name", name)),
+                LocalizableText.Keyed(
+                    $"A new build of {name} is available ({detail}). {provenance}.",
+                    BodyKey("available", delta),
+                    ("name", name), ("changed", delta?.Changed), ("removed", delta?.Removed),
+                    ("provenance", provenance)),
                 logger),
             // Pinned: the update exists, the log says so, and nothing else moves — no notification
             // either, because the administrator chose not to be reminded.
@@ -189,9 +228,10 @@ internal static class PackageUpdateReconciler
     /// <summary>
     /// What actually changed, for the reminder's message — computed without re-fetching anything:
     /// the installed side is on the record (<c>InstalledFiles</c>), the candidate side rode in on
-    /// the catalog entry (<c>ManifestFiles</c>).
+    /// the catalog entry (<c>ManifestFiles</c>). <c>null</c> when the file-level delta cannot be
+    /// told (one side carries no file list), which is a DIFFERENT sentence, not a zero.
     /// </summary>
-    private static string Describe(PackageManifest pkg, PackageManifest record)
+    private static (int Changed, int Removed)? DescribeDelta(PackageManifest pkg, PackageManifest record)
     {
         var changed = 0;
         var removed = 0;
@@ -205,10 +245,22 @@ internal static class PackageUpdateReconciler
                     removed++;
         }
 
-        return changed + removed > 0
-            ? $"{changed} file(s) changed, {removed} removed"
-            : "content changed";
+        return changed + removed > 0 ? (changed, removed) : null;
     }
+
+    /// <summary>The English rendering of <see cref="DescribeDelta"/> — the log line, and the
+    /// fallback half of the reminder's localizable body.</summary>
+    private static string Describe((int Changed, int Removed)? delta)
+        => delta is { } d ? $"{d.Changed} file(s) changed, {d.Removed} removed" : "content changed";
+
+    /// <summary>
+    /// The catalog key for a reminder body. 🚨 TWO keys per kind, selected by whether the
+    /// file-level delta is known — never one key taking a composed <c>{detail}</c> argument: an
+    /// English clause spliced into a translated sentence lands as English inside German word order
+    /// (Doc/Architecture/Localization, "a conditional clause gets its own key").
+    /// </summary>
+    private static string BodyKey(string kind, (int Changed, int Removed)? delta)
+        => $"notification.packageUpdate.{kind}.body{(delta is null ? "Content" : "Files")}";
 
     /// <summary>
     /// Unattended install of a changed module — reached only for a record that opted in.
@@ -228,9 +280,10 @@ internal static class PackageUpdateReconciler
         PackageManifest record,
         string recordPath,
         string provenance,
-        string detail,
+        (int Changed, int Removed)? delta,
         ILogger? logger)
     {
+        var detail = Describe(delta);
         logger?.LogInformation(
             "Package update: auto-updating {Id} to {Version} ({Detail}); authorized by {Principal}.",
             pkg.Id, pkg.ModuleVersion, detail, record.AuthorizedBy ?? "(nobody)");
@@ -249,12 +302,19 @@ internal static class PackageUpdateReconciler
                 {
                     logger?.LogWarning(
                         "Package update: auto-update of {Id} REFUSED — {Reason}", pkg.Id, ex.Message);
+                    var name = pkg.Name ?? pkg.Id;
                     return Notify(
                         hub, meshService, accessService, recordPath, pkg, record,
                         AuthorizationRequiredKind,
-                        $"Update needs a Global Admin: {pkg.Name ?? pkg.Id}",
-                        $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}), but it is a "
-                        + "commercial package and was not applied automatically. " + ex.Message,
+                        LocalizableText.Keyed(
+                            $"Update needs a Global Admin: {name}",
+                            "notification.packageUpdate.authorizationRequired.title", ("name", name)),
+                        LocalizableText.Keyed(
+                            $"A new build of {name} is available ({detail}), but it is a "
+                            + "commercial package and was not applied automatically. " + ex.Message,
+                            BodyKey("authorizationRequired", delta),
+                            ("name", name), ("changed", delta?.Changed), ("removed", delta?.Removed),
+                            ("reason", ex.Message)),
                         logger);
                 }
 
@@ -270,6 +330,15 @@ internal static class PackageUpdateReconciler
 
     /// <summary>The refusal that an unattended apply needs a global admin to re-authorize it.</summary>
     private const string AuthorizationRequiredKind = "authorization-required";
+
+    /// <summary>
+    /// The hold that an unattended apply declined because the target partition's content is kept by
+    /// a sync source, not by the installer (<see cref="PartitionContentOwnership"/>, #4355). A
+    /// distinct kind so it is idempotent per candidate on its OWN marker and is never folded into
+    /// the plain "update available" reminder — the two say different things to an administrator:
+    /// one is "press Update", the other is "this package will not auto-update here, and why".
+    /// </summary>
+    private const string SyncOwnedPartitionKind = "sync-owned-partition";
 
     /// <summary>
     /// Raises a system notification on the install record — the user-visible surface of an update
@@ -318,8 +387,8 @@ internal static class PackageUpdateReconciler
         PackageManifest pkg,
         PackageManifest record,
         string kind,
-        string title,
-        string body,
+        LocalizableText title,
+        LocalizableText body,
         ILogger? logger)
     {
         // Decide() has already refused an empty candidate hash, so this is a real content identity.
@@ -334,7 +403,7 @@ internal static class PackageUpdateReconciler
         return accessService
             .RunAsSystem(() => NotificationService
                 // ── Guard 2: one node per (record, kind, candidate) ──────────────────────────
-                .CreateNotification(
+                .CreateLocalizableNotification(
                     meshService, recordPath, title, body,
                     NotificationType.System, targetNodePath: recordPath,
                     // Addressed to the PLATFORM: only a platform admin can apply a plugin

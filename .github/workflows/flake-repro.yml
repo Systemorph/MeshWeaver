@@ -5,7 +5,7 @@
 # locally, but trip under the real 2-vCPU CI runner. This workflow loops one
 # suspect test ON THAT RUNNER until it fails, with logging cranked up via ENV
 # (never by editing a committed appsettings/Log* level), and uploads the FAILING
-# iteration's trx + MonolithMeshTestBase traces + blame hang-dump so the actual
+# iteration's trx + MonolithMeshTestBase traces so the actual
 # wedge is diagnosable — i.e. it manufactures the repro the fix must be proven against.
 #
 # Run it from the Actions tab (workflow_dispatch). Defaults target CodeEditRecompile;
@@ -147,12 +147,26 @@ jobs:
           for i in $(seq 1 "$iters"); do
             echo "::group::iteration $i / $iters"
             # --no-build --no-restore: run the Release binaries built above, exactly
-            # like the CI shards. blame-hang-* captures a mini-dump if the host wedges
-            # (the "unresponsive after the second compile" symptom) instead of just
-            # timing out opaquely.
+            # like the CI shards.
+            # 🚨 These are Microsoft.Testing.Platform flags, NOT VSTest ones, and the swap is not
+            # cosmetic. xunit.v3 4.x ships MTP v2, which REFUSES the VSTest target on the .NET 10
+            # SDK outright ("Testing with VSTest target is no longer supported …"), so the repo opts
+            # in through the root `global.json` and the old flags simply do not exist any more:
+            #   -l:trx                      → --report-xunit-trx (+ --report-xunit-trx-filename,
+            #                                 per ITERATION, so iteration N's evidence does not
+            #                                 overwrite the failing iteration's).
+            #   --blame-hang-timeout 120s   → --timeout 120s, which bounds the run the same way.
+            #   --blame-hang-dump-type mini → NOTHING. A mini-dump needs the
+            #     Microsoft.Testing.Extensions.HangDump extension, which this tree does not
+            #     reference. `--long-running 60` is what replaces it, and it NAMES the test still
+            #     running rather than dumping the process — so an absent .dmp in the artifact is
+            #     "no dump was ever collectable here", never "the host did not wedge". Say that out
+            #     loud rather than let a missing file read as a clean result.
             dotnet test "$proj" -c Release --no-build --no-restore \
-              --filter "$filt" -l:trx \
-              --blame-hang-timeout 120s --blame-hang-dump-type mini
+              --filter "$filt" \
+              --report-xunit-trx --report-xunit-trx-filename "iteration-$i.trx" \
+              --results-directory "$proj/TestResults" \
+              --long-running 60 --timeout 120s
             rc=$?
             echo "::endgroup::"
             ran=$((ran + 1))
@@ -194,7 +208,10 @@ jobs:
           mkdir -p repro-diagnostics
           # trx (per-iteration; the last one is the failing run since we break on fail).
           find "$REPRO_PROJECT" -name '*.trx' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
-          # blame hang mini-dump (written when the test host wedged, not just timed out).
+          # 🚨 There is no hang mini-dump to collect any more, and its ABSENCE must not read as
+          # "the host stayed healthy": MTP v2 (xunit.v3 4.x) has no --blame-hang-dump, and the
+          # extension that would provide one is not referenced here. The hung-test evidence is the
+          # `--long-running 60` lines in the step log above plus the traces collected below.
           find "$REPRO_PROJECT" -name 'blame-*.dmp' -exec cp {} repro-diagnostics/ \; 2>/dev/null || true
           # MonolithMeshTestBase phase/dispose/memory traces (the watcher + INIT/DISPOSE
           # trace that pinpoints the wedge), written to the process tempdir.

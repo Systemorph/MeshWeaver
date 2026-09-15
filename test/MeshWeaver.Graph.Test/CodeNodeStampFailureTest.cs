@@ -70,7 +70,7 @@ public class CodeNodeStampFailureTest(ITestOutputHelper output) : MonolithMeshTe
             .Materialize()
             .FirstAsync()
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         outcome.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
             "a stamp that cannot land must terminate with a VERDICT — completing as though it had "
@@ -107,7 +107,7 @@ public class CodeNodeStampFailureTest(ITestOutputHelper output) : MonolithMeshTe
                 language: "csharp")
             .FirstAsync()
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         var stamped = await ReadCell(path, c => c is { LastExecutedCodeHash: not null and not "" });
 
@@ -134,6 +134,7 @@ public class CodeNodeStampFailureTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 180_000)]
     public void TheReport_IsOneErrorThatDoesNotBlameTheRun()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var recorder = new RecordingLoggerProvider();
         var cell = new Address("rbuergi", "daily-rollup");
         const string ActivityPath = "rbuergi/_Activity/deadbeef";
@@ -183,7 +184,7 @@ public class CodeNodeStampFailureTest(ITestOutputHelper output) : MonolithMeshTe
             }))
             .FirstAsync()
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         return path;
     }
 
@@ -200,7 +201,7 @@ public class CodeNodeStampFailureTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(until)
             .FirstAsync()
             .Timeout(Bound)
-            .Await())!;
+            .Await(TestContext.Current.CancellationToken))!;
     }
 
     private static string Describe(System.Reactive.Notification<MeshNode> outcome)

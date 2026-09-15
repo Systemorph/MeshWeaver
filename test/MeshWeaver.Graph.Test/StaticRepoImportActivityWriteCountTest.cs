@@ -51,6 +51,7 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
     [Fact(Timeout = 240000)]
     public async Task ImportActivityWrites_DoNotGrowWithTheNumberOfItemsInAPhase()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var small = await ActivityWritesForConflictPhase(SmallImport);
         var large = await ActivityWritesForConflictPhase(LargeImport);
 
@@ -100,6 +101,7 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
     [Fact(Timeout = 240000)]
     public async Task AppendCost_DoesNotGrowWithTheLengthOfTheActivity()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var shortRun = await AppendAndMeasure(ShortActivity);
         var longRun = await AppendAndMeasure(LongActivity);
 

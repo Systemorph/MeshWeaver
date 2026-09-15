@@ -1,7 +1,9 @@
 ---
 Name: Create timeouts report an unknown outcome
 Category: Fix
-Description: A create request that times out no longer claims the write was not applied: the node may already be stored while its remaining creation steps or response are pending.
+Description: >-
+  A create request that times out no longer claims the write was not applied: the node may already be
+  stored while its remaining creation steps or response are pending.
 Icon: Info
 Order: -20260909
 ---

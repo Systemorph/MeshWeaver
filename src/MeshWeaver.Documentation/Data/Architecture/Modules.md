@@ -752,28 +752,88 @@ plain file name inside the module folder and REFUSES a path component, so a `run
 has to be flattened into the module folder root first — the loader's LAST probe is that flat folder.
 Saying only "name it with `--with`" would send the reader to an error.
 
-**What is NOT done, and what each remaining stage depends on:**
+#### LANDED, RE-SERVED, and derived by BOTH lanes (#4126, stages 2–4)
 
-1. **Landing** — `ModuleLandingService` does not yet lay the section out under
-   `modules/<generation>/`, and `PluginBundleClient.LandFromBundle` does not pass it. `ValidateAssetPath`
-   already accepts the shape and the write loop already handles trees, so this is signatures plus
-   `GenerationIdOf` (which must fold the natives in, or two bundles differing only in natives collide
-   on one generation directory). Depends on nothing but itself. **Until it lands, a native rides the
-   bundle and is not written to disk** — carried, declared, and ignored.
-2. **Registry re-serve** — `ModuleBundleSource.CollectVersion` and `ServedModuleBytes.FromSealed`
-   collect flat files plus `wwwroot/**`, so a registry re-serving a shelved module would not re-emit
-   the section. Depends on (1) being the layout it re-serves.
-3. **The container lane** — `ContainerReferenceSet` reads only the `runtime` section of the image's
-   deps.json and `Resolve` marks a native-only package `Supplied=false`, so a `build: container`
-   module cannot even DECLARE the CVE-patched engine. Independent of (1) and (2); it is the other
-   closure derivation.
-4. **Warning → refusal** — only once (1)–(3) are in, and not before: today a module that needs a
-   native the bundle cannot carry still has the host-supplies-it fallback, and refusing would break
-   it with no route forward.
+A carried native is now **written to disk where the loader probes it**, on every route a module
+travels, and the container derivation derives one of its own.
+
+**Landing.** `ModuleLandingService.LandModule` / `ShelveModule` take a `nativeAssets` argument and
+write it under `modules/<generation>/`, keeping the relative path; the publish endpoint reads it off
+the upload (`BundleReader.ReadModuleNativeAssets`) and a consumer's `PluginBundleClient` reads it off
+the bundle it downloaded. Three things make that safe rather than merely wired:
+
+- **The layout is validated at every door, by ONE predicate.** `NuGetPackageWriter.IsModuleNativeLayout`
+  is checked by the derivation, the packer, the bundle reader, `ModulePublish.Validate` (a named
+  400, so a publisher is told rather than the server blamed) and `ModuleLandingService` itself,
+  before a byte touches disk. A payload at any other shape is REFUSED, never landed: it would be
+  bytes that read as shipped and behave as absent.
+- **`GenerationIdOf` folds the natives in.** The generation leaf is the content address (#3656), so
+  two bundles differing ONLY in an engine must address two directories — otherwise the second
+  landing adopts the first's directory and serves the wrong engine under the right version.
+- **The landing prints a line of its own.** Everything else about a native is invisible until a
+  P/Invoke throws, so "this landing wrote N payloads, for these RIDs" is the only place a reader can
+  tell a module that ships none from a lane that dropped them.
+
+**Registry re-serve.** `ModuleBundleSource.NativeAssetsOf` reads the shelf's `runtimes/` tree (an
+ADDITIVE call, not a fourth element on `CollectVersion`'s tuple — widening that would rewrite a
+signature `MeshWeaver.Plugins` already destructures into three), `ServedModuleBytes` carries it on
+`ServedModule.Natives` from the shelf AND out of a sealed publication, and the download route writes
+the section back into the bundle it composes. A registry whose shelf holds the engine and serves a
+bundle without it would hand every consumer downstream a module that lands, loads, renders — and
+throws at the first P/Invoke.
+
+**The container derivation.** `ContainerReferenceSet` now reads the native contributions of the
+image's own deps.json, `PrivateClosure` carries them as `NativeRide`s, `ProjectBuild` lays them out
+under the pack input and names them in `module-natives.txt`, and the pack lane declares them with
+`--with-native`. 🚨 **Two deps.json shapes, and the fleet's images are the second** — measured
+2026-09-15 on a real `SQLitePCLRaw.lib.e_sqlite3` publish: a PORTABLE publish leaves 29
+`runtimeTargets` entries and a `runtimes/` tree on disk, while `-r linux-x64` (what every MeshWeaver
+image is) resolves them into a one-entry `native` section whose KEY is still
+`runtimes/linux-x64/native/libe_sqlite3.so` while the FILE sits FLAT beside the app. Reading one
+shape only answers "this image has no natives" about an image that has them.
+
+🚨 **And `Resolve` now treats a native-only package as SUPPLIED.** It matched a package by the
+ASSEMBLY it contributes, falling back to `<id>.dll`, so a package contributing only natives answered
+`Supplied = false` against an image that ships its engine — and `ProjectBuild` reds an unresolved
+`PackageReference`. That is why a `build: container` module could not even DECLARE the CVE-patched
+engine (`SQLitePCLRaw.lib.e_sqlite3` 3.53.3, GHSA-2m69-gcr7-jv3q), and why
+`MeshWeaver.AppleMessages` carried a conditional pin.
+
+🚨 **`--with-native` takes the OPPOSITE argument to `--with`, deliberately.** `--with` refuses a path
+component because the flat closure has no place for one; `--with-native` requires the path, because
+the path is what the loader probes. Two flags, and two builder manifests (`module-libs.txt`,
+`module-natives.txt`), because a lane feeding one to the other would be wrong whichever way it was
+written. The native manifest's ABSENCE is a statement — this module ships no engine — and the pack
+lane refuses a declared native with no builder provenance, exactly as it does for a non-MeshWeaver
+assembly.
+
+🚨 **The gate and publish-bake lanes compose into `/ext/modules/<Name>/`, one level deeper than
+before.** `ModuleNativeAssets` accepts a directory as a module folder only when its PARENT is named
+`modules` — the shape `ModuleLandingService` writes and the image publish lays out — so a lane
+composing at the shallower path would land a module's natives on disk and never probe them. Both
+lanes' real steps are EXECUTED against real bundle shapes by
+`.github/scripts/test-module-asset-landing.py`, which asserts the bytes, the exact four segments AND
+the depth, with a falsification arm per half.
+
+**What is NOT done:**
+
+1. **Warning → refusal** — the last stage of #4126, and still gated on evidence rather than on the
+   other stages: the pack log's "declares a RID-specific MANAGED asset the bundle does not carry" and
+   "declares a native asset at … which is NOT the layout the module loader probes" remain WARNINGS.
+   A module tripping either still has the host-supplies-it fallback, and arming the refusal before a
+   full publish wave has been measured clean takes the fleet's publishes down instead of the drops —
+   the #3240 shape, and the reason that refusal was armed on two measurements rather than on faith.
+2. **The container lane carries ONE RID's engine**, because it resolves against ONE image. A host on
+   another RID falls back to the runtime's own probing — strictly better than the nothing it carried
+   before, and stated in the builder's log rather than left to be deduced. The SDK lane, deriving
+   from a portable publish, carries every RID the package ships.
+3. **The module-libraries shelf** answers about natives (`DeclaredNativesOf` / `NativeFileFor`), but
+   no curated package declares one yet, so that half is built and unexercised.
 
 The one native family the fleet ships through the registry today (SkiaSharp, for
-`MeshWeaver.Markdown.Export`) still works because the PORTAL HOST carries the natives — the
+`MeshWeaver.Markdown.Export`) still reaches consumers through the PORTAL HOST — the
 "host happens to have it" shape the 2026-09-01 What's New called a defect for managed assemblies.
+Nothing forces it off that route yet; what changed is that a module can now bring its own.
 
 #### 🚨 Does the new section need a FORMAT VERSION? No — and that is measured, not reasoned
 
@@ -811,12 +871,11 @@ UTF-8 BOM**, and `Utf8JsonReader` skips one over a **stream** but not over a **s
 entry's bytes directly fails with `'0xEF' is an invalid start of a value`. `BundleReader` uses the
 stream overload; anything reading the manifest must do the same.
 
-**The other closure derivation — the container lane — still drops `runtimeTargets`, and that is a
-policy line rather than a data limit.** `ContainerReferenceSet` reads only the `runtime` section of
-the image's deps.json, and the `runtimeTargets` section sits in the same document; the refusal of a
-native-only `PackageReference` is `Resolve` matching a package by the ASSEMBLY it contributes, so a
-package contributing only natives answers `Supplied=false`. Nothing about the deps.json format
-prevents stage 3 — see the stage list above.
+**The other closure derivation — the container lane — used to drop `runtimeTargets`, and that was a
+policy line rather than a data limit:** `ContainerReferenceSet` read only the `runtime` section of
+the image's deps.json while `runtimeTargets` sat in the same document, and the refusal of a
+native-only `PackageReference` was `Resolve` matching a package by the ASSEMBLY it contributes.
+Both are closed — see *"LANDED, RE-SERVED, and derived by BOTH lanes"* above.
 
 ## The bundle lane — modules as Store packages (#1664)
 
@@ -950,8 +1009,8 @@ warehouses modules for newer platforms. The older upload competes for the head's
 slot instead, and the index lists head and retained fallback at their own versions, each download
 resolving its own generation. A head whose entry assembly is missing is healed by the next valid
 upload, and unknown versions keep the legacy behaviour. The full rule, the fallback choice, what a
-deliberate rollback now means, and the unresolved cross-replica case (#4026) are in
-[Module Adoption Policy](../ModuleAdoptionPolicy).
+deliberate rollback now means, and how the cross-replica case is closed (#4026 — a record per
+landing, the head derived from them) are in [Module Adoption Policy](../ModuleAdoptionPolicy).
 
 The remaining blind spot (a registry that states no identity) is closed **where it is created**, not
 by churning consumers: a bundle that cannot say what it was built against must not be publishable.

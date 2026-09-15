@@ -101,6 +101,11 @@ What actually holds the sweep off is the other conjunct.
 
 ## 4. The change-feed orphan — the write both creates it and postpones its collection
 
+🚨 Since [#1174](https://github.com/Systemorph/MeshWeaver/issues/1174) this runs only for change
+events no mirror can be held to (a delete, a recreate, a version-less recycle broadcast); a versioned
+`Updated` keeps the stream — see [Live Mirrors and the Change Feed](../LiveMirrorsAndTheChangeFeed).
+The measurement below predates that.
+
 `Workspace.EvictForPath` runs on **every** change-feed event for an owner path and removes **every
 identity's** cached stream for that owner:
 

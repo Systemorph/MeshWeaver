@@ -164,17 +164,17 @@ public class UpdateRetypeExistingContentTest(ITestOutputHelper output) : Monolit
         var path = $"{TestPartition}/{id}";
 
         await MeshService.CreateNode(Stored(id)).Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit("the node to retype must exist first");
+            .Should().Within(TestTimeouts.Convergence).Emit("the node to retype must exist first", cancellationToken: TestContext.Current.CancellationToken);
 
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
-            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         // The verdict is not the subject — what the pipeline HANDED the validator is.
         await Record.ExceptionAsync(() =>
-            MeshService.UpdateNode(ProposedRetyped(id)).Take(1).Timeout(TestTimeouts.Convergence).Await());
+            MeshService.UpdateNode(ProposedRetyped(id)).Take(1).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken));
 
         var seen = await Validator.ObservedExistingContent
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         // 🚨 Assert on the FULL name. Both records are called PackageContent — that collision IS
         // the mechanism — so a BeOfType failure would read "expected PackageContent, found
@@ -214,16 +214,16 @@ public class UpdateRetypeExistingContentTest(ITestOutputHelper output) : Monolit
         var path = $"{TestPartition}/{id}";
 
         await MeshService.CreateNode(StoredForeign(id)).Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit("the node to update must exist first");
+            .Should().Within(TestTimeouts.Convergence).Emit("the node to update must exist first", cancellationToken: TestContext.Current.CancellationToken);
 
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
-            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         await Record.ExceptionAsync(() =>
-            MeshService.UpdateNode(ProposedSameType(id)).Take(1).Timeout(TestTimeouts.Convergence).Await());
+            MeshService.UpdateNode(ProposedSameType(id)).Take(1).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken));
 
         var seen = await Validator.ObservedExistingContent
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         seen?.GetType().FullName.Should().Be(
             typeof(RetypeFrom.PackageContent).FullName,
@@ -265,16 +265,16 @@ public class UpdateRetypeExistingContentTest(ITestOutputHelper output) : Monolit
         var path = $"{TestPartition}/{id}";
 
         await MeshService.CreateNode(StoredUnderRegisteredType(id)).Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit("the node to retype must exist first");
+            .Should().Within(TestTimeouts.Convergence).Emit("the node to retype must exist first", cancellationToken: TestContext.Current.CancellationToken);
 
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
-            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         await Record.ExceptionAsync(() =>
-            MeshService.UpdateNode(ProposedRetyped(id)).Take(1).Timeout(TestTimeouts.Convergence).Await());
+            MeshService.UpdateNode(ProposedRetyped(id)).Take(1).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken));
 
         var seen = await Validator.ObservedExistingContent
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         seen.Should().BeOfType<RetypeBeforeContent>(
             "the stored bytes carry NO $type, so the only route that can type them is "

@@ -717,9 +717,20 @@ class WantedTag:
 
 @dataclass
 class Instance:
-    """One installation the fleet is expected to have, and what it turned out to be running."""
+    """One installation the fleet is expected to have, and what it turned out to be running.
+
+    🚨 THE IDENTITY IS `gh_repo:id`, NOT `id` (#3438, 2026-09-15). `Hosting__Deployment` is unique
+    inside ONE deployments repository and inside nothing larger: `Systemorph/PartnerRe.Memex` was
+    created at 2026-09-14T21:30Z and its control instance is `memex` too, which is correct — it is
+    PartnerRe's memex — and it took this lane down the same night, because a bare id keyed both to
+    one slot and the second one read as "declared by two overlays, so which host answers for it is
+    ambiguous". Neither installation was then asked anything, `memex` — the installation actually
+    exposed to the ACR purge — got no locks either, and the red sat on `pause.reEnableWhen`.
+    `label` is what a human reads: the bare id while it is unique across the fleet, the qualified
+    key the moment it is not, so a report can never name two installations the same way."""
 
     id: str
+    gh_repo: str = ""            # the deployments repository whose overlay declares it
     host: str | None = None
     source: str = ""
     state: str = "live"          # live | not-installed | retired
@@ -732,8 +743,19 @@ class Instance:
     out_of_scope: bool = False
     # Registry hosts THIS installation's overlay pins images in, other than the ACR this lane locks.
     foreign_registries: list[str] = field(default_factory=list)
+    # The same pins as (host, repository) — because a HOST is the wrong unit for `ghcr.io`, which
+    # serves `systemorph/*` (ours, published by our own CD) beside `distribution/*` (the registry
+    # service's own image, which cannot come from the registry it boots). #4323.
+    foreign_references: list[tuple[str, str]] = field(default_factory=list)
     # Those of them declared `fleet-unlockable` — the ones that make it out of scope.
     unlockable_registries: list[str] = field(default_factory=list)
+    # What every message about this installation says. Assigned once the whole fleet is known.
+    label: str = ""
+
+    @property
+    def key(self) -> str:
+        """The identity: an id is unique inside ONE deployments repository and nothing larger."""
+        return f"{self.gh_repo}:{self.id}"
 
 
 @dataclass
@@ -969,7 +991,15 @@ def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str, str]], li
     stricter, never looser, which is the only direction a hand-maintained file may fail in. #3858
     asks for the other half in as many words: *retirement is explicit and auditable; a temporarily
     unavailable portal is not treated as retired*. Silence is unavailability. Only a line here,
-    committed and reviewable, is retirement."""
+    committed and reviewable, is retirement.
+
+    🚨 AN ENTRY MAY NAME ITS `repo`, AND IT MUST WHERE TWO REPOSITORIES DECLARE THE SAME id
+    (#3438, 2026-09-15). Identity is `gh_repo:id`, so an unqualified entry can only be resolved
+    while exactly one repository in the fleet declares that id; the moment a second does, the same
+    line would exempt an installation nobody wrote it about — a silent exemption, which is the one
+    direction this file may not fail in. `build_instances` reds on that rather than picking one.
+    The key here is `owner/name:id` for a qualified entry and the bare `id` otherwise, which is why
+    an `id` may not itself contain a `:` or a `/`."""
     path = Path(root) / ".github" / "acr-retention" / ROSTER_PATH
     if not path.is_file():
         return {}, [f"the instance roster {path} is missing, so no installation can be declared "
@@ -986,8 +1016,21 @@ def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str, str]], li
         state = str(entry.get("state", "")).strip()
         reason = str(entry.get("reason", "")).strip()
         registry = str(entry.get("registry", "")).strip()
+        repo = str(entry.get("repo", "")).strip()
         if not ident:
             problems.append(f"{ROSTER_PATH}: an entry has no `id`.")
+            continue
+        if ":" in ident or "/" in ident:
+            problems.append(
+                f"{ROSTER_PATH}: `{ident}` is not an installation id — a `:` or a `/` in it would "
+                "collide with the `owner/name:id` key this file is resolved by, so an entry could "
+                "silently take the place of a qualified one. Put the repository in `repo`.")
+            continue
+        if repo and repo.count("/") != 1:
+            problems.append(
+                f"{ROSTER_PATH}: `{ident}` declares `repo: {repo!r}`, which is not an "
+                "`owner/name`. It is compared against the repository whose overlay declares the "
+                "installation, so a shorthand matches nothing and the entry exempts nobody.")
             continue
         if state not in ROSTER_STATES:
             problems.append(f"{ROSTER_PATH}: `{ident}` has state {state!r}; expected one of "
@@ -1008,17 +1051,132 @@ def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str, str]], li
             problems.append(f"{ROSTER_PATH}: `{ident}` is {state} with no `reason`. A declaration "
                             "that explains nothing is the hand list this job exists to replace.")
             continue
-        if ident in roster:
+        key = f"{repo}:{ident}" if repo else ident
+        if key in roster:
             # 🚨 LAST-WINS ON A FILE THAT GRANTS EXEMPTIONS IS A SILENT EXEMPTION. Two entries for
             # one installation let the order of a JSON array decide whether it must answer, so a
             # `live` line added above an old `retired` one changes nothing and reads as if it did.
             problems.append(
-                f"{ROSTER_PATH}: `{ident}` is declared TWICE ({roster[ident][0]} and {state}). "
+                f"{ROSTER_PATH}: `{key}` is declared TWICE ({roster[key][0]} and {state}). "
                 "Which one is in force would be decided by the order of the array, so neither is. "
                 "Delete the line that no longer applies.")
             continue
-        roster[ident] = (state, reason, "")
+        roster[key] = (state, reason, repo)
     return roster, problems
+
+
+def read_repository_roster(root: str) -> tuple[dict[str, str], list[str]]:
+    """Which repositories the fleet's deployment overlays come from — `(owner/name → reason)`.
+
+    🚨 THIS IS THE HALF THAT STOPS THE QUALIFICATION BECOMING AN EXEMPTION (#3438, 2026-09-15).
+    Keying an installation by `gh_repo:id` is what lets `Systemorph/Memex` and
+    `Systemorph/PartnerRe.Memex` each declare a `memex` — but on its own it also means a new
+    deployments repository joins the fleet SILENTLY, its installations becoming their own slots
+    with nobody having read a line about them. "A fork reds the lane" would then have been traded
+    for "a fork is invisible to it", which is the same defect wearing the other costume.
+
+    So the unit is the REPOSITORY and it is checked BOTH ways: a repository whose tree carries
+    deployment overlays and that this table does not name is a blocker, and a name here that no
+    repository in the fleet answers to is a stale line that hides the next one. The population is
+    overlay FILES, not extracted installations — a repository whose overlays this reader stopped
+    understanding would otherwise vanish from the table's reach exactly when that mattered."""
+    path = Path(root) / ".github" / "acr-retention" / ROSTER_PATH
+    if not path.is_file():
+        return {}, []          # the instance roster reader already reds on a missing file
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}, []          # …and on an unreadable one
+    repositories = document.get("repositories")
+    if repositories is None:
+        return {}, [f"{ROSTER_PATH}: no `repositories` table. Every repository whose overlays "
+                    "declare an installation has to be named there, because installation identity "
+                    "is qualified by the repository that declares it — with no table, a new "
+                    "deployments repository enters the fleet with nobody having read a line "
+                    "about it."]
+    if not isinstance(repositories, dict):
+        return {}, [f"{ROSTER_PATH}: `repositories` is not an object."]
+    table: dict[str, str] = {}
+    problems: list[str] = []
+    for repo, entry in repositories.items():
+        if not isinstance(entry, dict):
+            problems.append(f"{ROSTER_PATH}: `repositories.{repo}` is not an object.")
+            continue
+        if repo.count("/") != 1:
+            problems.append(f"{ROSTER_PATH}: `repositories.{repo}` is not an `owner/name`, so it "
+                            "is compared against nothing the fleet scan produces.")
+            continue
+        reason = str(entry.get("reason", "")).strip()
+        if not reason:
+            problems.append(
+                f"{ROSTER_PATH}: `repositories.{repo}` has no `reason`. Naming a repository whose "
+                "overlays configure live installations, without saying what it is, is the hand "
+                "list this file exists to replace.")
+            continue
+        table[repo] = reason
+    return table, problems
+
+
+def scan_is_complete(discover: bool, root: str | None) -> bool:
+    """Does THIS invocation enumerate the whole fleet? Only `--discover`, and only without `--root`.
+
+    🚨 A PURE FUNCTION BECAUSE `main()` IS NOT FALSIFIABLE (#4400 review). `--root` wins over
+    `--discover` in the branch that builds the repository list, so the two together are a
+    ONE-repository local scan wearing a discovery flag — and reading completeness off the flag alone
+    would let such a run assert that every declared repository it never looked at is gone. The
+    decision is the invocation MODE, never whether an input happens to be present, and it lives here
+    so `--self-test` can drive all four combinations."""
+    return bool(discover) and not root
+
+
+def check_repository_roster(axis2: list[OverlayScan], declared: dict[str, str],
+                            complete: bool = True) -> list[str]:
+    """Hold the `repositories` table to the repositories the fleet scan actually found, both ways.
+
+    A repository whose tree could not be READ is not compared here, and ONLY here: `build_plan` has
+    already made it a blocker, so it is never a silent pass — believing an absence measured through
+    an unreadable tree is the trap this whole script is made of. 🚨 It is still counted as REACHED,
+    though: leaving it out would make a correctly declared repository produce the stale-line blocker
+    below as well, and *"no repository the fleet scan reached carries an overlay under that name"* is
+    a false sentence about a repository the scan reached and could not read (#4396 review).
+
+    🚨 `complete` IS THE DENOMINATOR, AND THE TWO DIRECTIONS DO NOT SHARE IT. "This repository is
+    not declared" is sound over any scan — a repository that IS in front of you and unnamed is
+    unnamed. "This declaration names nobody" is only sound over the WHOLE fleet, and `--repos` and
+    `--root` deliberately scan part of it, so asserting it there would red every partial run on a
+    record that is right. It is the invocation MODE that decides — `--discover` — never whether
+    some input happens to be present, and a partial run PRINTS that it did not make the second
+    assertion, because "not checked" and "checked and clean" are the confusion this file is made
+    of."""
+    problems: list[str] = []
+    seen: set[str] = set()
+    for scan in axis2:
+        if scan.unreadable:
+            seen.add(scan.gh_repo)
+            continue           # already a blocker; an unread tree proves no absence
+        if not scan.files:
+            continue           # a repository with no deployment overlay at all
+        seen.add(scan.gh_repo)
+        if scan.gh_repo in declared:
+            continue
+        ids = sorted({ident for ident, _host, _where in scan.instances})
+        problems.append(
+            f"`{scan.gh_repo}` carries {scan.files} deployment overlay file(s)"
+            + (f" declaring installation(s) {', '.join(f'`{i}`' for i in ids)}" if ids
+               else " and declares no installation")
+            + f", and `.github/acr-retention/{ROSTER_PATH}`'s `repositories` table does not name "
+            "it. Installation identity is qualified by the repository that declares it, so a "
+            "repository nobody has declared brings its installations into this run unread — which "
+            "is how `Systemorph/PartnerRe.Memex` reached the fleet on 2026-09-14 and took this "
+            "lane down the same night. Add it, with what it is.")
+    if complete:
+        for repo in sorted(set(declared) - seen):
+            problems.append(
+                f"`.github/acr-retention/{ROSTER_PATH}` declares repository `{repo}` and no "
+                "repository the fleet scan reached carries a deployment overlay under that name. A "
+                "declaration for a repository that is gone accounts for nothing and hides the next "
+                "one — delete the line.")
+    return problems
 
 
 def probe_running_commit(host: str) -> tuple[str | None, str | None, str]:
@@ -1060,31 +1218,91 @@ def running_tag_patterns(commit: str) -> list[re.Pattern[str]]:
             re.compile(rf"^staging-{short}-[0-9]+$")]
 
 
-def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str]],
+def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str, str]],
                     probe=probe_running_commit) -> tuple[list[Instance], list[str]]:
-    """The expected installations, each asked what it is running. Discovery first, roster second."""
+    """The expected installations, each asked what it is running. Discovery first, roster second.
+
+    🚨 IDENTITY IS `gh_repo:id` (#3438, 2026-09-15). A `Hosting__Deployment` is unique inside ONE
+    deployments repository and inside nothing larger, so two repositories may each declare a
+    `memex` — `Systemorph/Memex`'s is memex.systemorph.com and `Systemorph/PartnerRe.Memex`'s is
+    partnerre.meshweaver.cloud, and both are correct. The duplicate blocker still fires, and fires
+    for what it was always about: the SAME repository declaring one id in two overlays, where the
+    ingress host really is ambiguous."""
     instances: dict[str, Instance] = {}
     blockers: list[str] = []
     for scan in axis2:
         for ident, host, where in scan.instances:
             source = f"{scan.gh_repo} {where}"
-            existing = instances.get(ident)
+            key = f"{scan.gh_repo}:{ident}"
+            existing = instances.get(key)
             if existing is not None:
                 blockers.append(
-                    f"installation `{ident}` is declared by two overlays ({existing.source} and "
-                    f"{source}), so which host answers for it is ambiguous.")
+                    f"installation `{ident}` is declared by two overlays of the SAME repository "
+                    f"({existing.source} and {source}), so which host answers for it is "
+                    "ambiguous. Identity is qualified by the declaring repository, so two "
+                    "deployments repositories may each declare an installation of this name — "
+                    "within one repository they are the same installation.")
                 continue
-            state, reason, _ = roster.get(ident, ("live", "", ""))
-            instances[ident] = Instance(id=ident, host=host, source=source, state=state,
-                                        reason=reason,
-                                        foreign_registries=sorted({
-                                            foreign_host for foreign_host, _, _, foreign_where
-                                            in scan.foreign if foreign_where == where}))
-    for ident in sorted(set(roster) - set(instances)):
-        blockers.append(
-            f"{ROSTER_PATH} declares `{ident}` ({roster[ident][0]}) and no overlay in the fleet "
-            "names it. A roster entry for an installation that no longer exists exempts nothing "
-            "and hides the next one — delete the line.")
+            instances[key] = Instance(id=ident, gh_repo=scan.gh_repo, host=host, source=source,
+                                      foreign_registries=sorted({
+                                          foreign_host for foreign_host, _, _, foreign_where
+                                          in scan.foreign if foreign_where == where}),
+                                      foreign_references=sorted({
+                                          (foreign_host, foreign_repo)
+                                          for foreign_host, foreign_repo, _, foreign_where
+                                          in scan.foreign if foreign_where == where}))
+
+    # 🚨 WHAT A HUMAN READS CAN NEVER NAME TWO INSTALLATIONS THE SAME WAY. The bare id while it is
+    # unique across the fleet — so every existing report line and error is unchanged — and the
+    # qualified key the moment it is not.
+    by_id: dict[str, list[Instance]] = {}
+    for instance in instances.values():
+        by_id.setdefault(instance.id, []).append(instance)
+    for instance in instances.values():
+        instance.label = instance.id if len(by_id[instance.id]) == 1 else instance.key
+
+    # The roster, resolved against that identity. An entry naming a `repo` matches that
+    # repository's installation and no other; an unqualified one is resolvable only while exactly
+    # one repository declares the id, because otherwise a single line would exempt an installation
+    # nobody wrote it about.
+    applied_by: dict[str, str] = {}
+    for entry_key in sorted(roster):
+        state, reason, repo = roster[entry_key]
+        if repo:
+            targets = [instances[entry_key]] if entry_key in instances else []
+        else:
+            targets = by_id.get(entry_key, [])
+            if len(targets) > 1:
+                blockers.append(
+                    f"{ROSTER_PATH} declares `{entry_key}` ({state}) with no `repo`, and "
+                    f"{len(targets)} repositories declare an installation of that name "
+                    f"({', '.join(sorted(t.gh_repo for t in targets))}). One line cannot state "
+                    "which of them is not live, and applying it to both would exempt an "
+                    "installation nobody wrote it about. Name the `repo`.")
+                continue
+        if not targets:
+            blockers.append(
+                f"{ROSTER_PATH} declares `{entry_key}` ({state}) and no overlay in the fleet "
+                "names it. A roster entry for an installation that no longer exists exempts "
+                "nothing and hides the next one — delete the line.")
+            continue
+        for target in targets:
+            # 🚨 THE ALIAS PAIR, WHICH THE READER CANNOT SEE (#4396 review). `{"id": "memex"}` and
+            # `{"id": "memex", "repo": "Systemorph/Memex"}` are two DIFFERENT keys, so the roster's
+            # own declared-twice check passes them both — and where that id is unique they resolve
+            # to the SAME installation, which is then assigned twice in key order. A contradictory
+            # `not-installed` line would win or lose by repository-name casing, and winning would
+            # skip a live installation's probe AND its running-set protection. Whether two entries
+            # alias each other is knowable only here, where the fleet's ids are known.
+            if applied_by.get(target.key):
+                blockers.append(
+                    f"{ROSTER_PATH} declares `{applied_by[target.key]}` AND `{entry_key}`, and "
+                    f"both resolve to the same installation (`{target.label}`). Which state is in "
+                    "force would be decided by the order of the keys, so neither is — and the "
+                    "loser is invisible. Keep one line.")
+                continue
+            applied_by[target.key] = entry_key
+            target.state, target.reason = state, reason
 
     for instance in instances.values():
         if instance.state != "live":
@@ -1097,7 +1315,8 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str]]
     return list(instances.values()), blockers
 
 
-def classify_foreign_registries(plan: Plan, dispositions: dict[str, tuple[str, str]]) -> None:
+def classify_foreign_registries(plan: Plan, dispositions: dict[str, tuple[str, str]],
+                                publications: dict[str, set[str]] | None = None) -> None:
     """Hold EVERY registry the fleet's overlays name to the declaration table, before anything
     decides an installation is covered.
 
@@ -1106,13 +1325,13 @@ def classify_foreign_registries(plan: Plan, dispositions: dict[str, tuple[str, s
     see: its ACR half gets locked, the run reports success, and the other half — which is also what
     it is RUNNING — is protected by nothing and named by nobody. Half covered reported as covered
     is precisely the shape this whole mechanism exists to refuse."""
-    for instance in sorted(plan.instances, key=lambda i: i.id):
+    for instance in sorted(plan.instances, key=lambda i: (i.id, i.gh_repo)):
         if instance.state != "live" or not instance.foreign_registries:
             continue
         undeclared = [host for host in instance.foreign_registries if host not in dispositions]
         if undeclared:
             plan.blockers.append(
-                f"AXIS 3 — installation `{instance.id}` pins images in "
+                f"AXIS 3 — installation `{instance.label}` pins images in "
                 f"{', '.join(undeclared)}, which `.github/acr-retention/{ROSTER_PATH}` does not "
                 "account for. An unknown registry is not a registry with nothing in it: declare it "
                 "in the `registries` table as `fleet-unlockable` (it serves our images and this "
@@ -1122,6 +1341,29 @@ def classify_foreign_registries(plan: Plan, dispositions: dict[str, tuple[str, s
         instance.unlockable_registries = [
             host for host in instance.foreign_registries
             if dispositions[host][0] == "fleet-unlockable"]
+        # 🚨 THE ARM THAT MAKES `publishes` LOAD-BEARING RATHER THAN PROSE (#4323). A host may be
+        # declared `third-party` about what the fleet PULLS and still hold repositories the fleet
+        # PUBLISHES — `ghcr.io` is exactly that. An overlay pinning one of THOSE is not a
+        # third-party pin: it is an installation running OUR images from a store nothing of ours
+        # retains and this lane cannot lock, and the `third-party` disposition would wave it
+        # through in the one branch (pins here AND there) that prints success.
+        #
+        # It fires on nobody today — measured 2026-09-15, no overlay in the fleet names a
+        # `ghcr.io/systemorph/*` image — which is precisely the claim `publishes.runFrom` makes and
+        # therefore precisely the claim that has to red when it stops being true.
+        published = publications or {}
+        pinned = sorted({f"{host}/{repo}" for host, repo in instance.foreign_references
+                         if repo in published.get(host, set())})
+        if pinned:
+            plan.blockers.append(
+                f"AXIS 3 — installation `{instance.label}` pins {', '.join(pinned)}, which "
+                f"`.github/acr-retention/{ROSTER_PATH}` declares this fleet PUBLISHES rather than "
+                "retains. Those are OUR images in a store this lane cannot lock and nothing of "
+                "ours keeps — its operator's retention is the whole of their protection — so an "
+                "installation RUNNING from them is running an unprotected set that this run would "
+                "otherwise report as covered. Point the overlay at a registry the fleet retains "
+                "(`cr.meshweaver.cloud`, or this ACR), or move the repository out of `publishes` "
+                "and declare what protects it. Doc/Architecture/FleetRegistryRetention.")
 
 
 def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
@@ -1129,19 +1371,19 @@ def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
     """Protect the closure of every image set each live installation is running.
 
     The manifests come from the inventory already read — this axis costs no extra registry call."""
-    for instance in sorted(plan.instances, key=lambda i: i.id):
+    for instance in sorted(plan.instances, key=lambda i: (i.id, i.gh_repo)):
         if instance.state != "live":
             continue
         if instance.error or not instance.commit:
             plan.blockers.append(
-                f"AXIS 3 — installation `{instance.id}` could not be accounted for: "
+                f"AXIS 3 — installation `{instance.label}` could not be accounted for: "
                 f"{instance.error or 'it answered no commit'}. An installation that did not answer "
                 "is NOT an installation running nothing: whatever it is serving is unprotected and "
                 "unnameable. Either it answers, or it is declared in "
                 f"`.github/acr-retention/{ROSTER_PATH}` with a reason.")
             continue
         patterns = running_tag_patterns(instance.commit)
-        repositories = repositories_of.get(instance.id, [])
+        repositories = repositories_of.get(instance.key, [])
         # 🚨 HALF COVERED IS NOT COVERED. An installation whose overlay pins BOTH here and in a
         # fleet-unlockable registry has part of its running set protected and part of it not, and
         # locking the half that is here while reporting success is how a partially-protected
@@ -1151,8 +1393,9 @@ def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
         # reaches an installation that still pins here.
         if repositories and instance.unlockable_registries:
             plan.blockers.append(
-                f"AXIS 3 — installation `{instance.id}` pins {len(repositories)} repository(ies) "
-                f"in the registry this run locks ({', '.join(repositories)}) AND images in "
+                f"AXIS 3 — installation `{instance.label}` pins {len(repositories)} "
+                f"repository(ies) in the registry this run locks ({', '.join(repositories)}) "
+                f"AND images in "
                 f"{', '.join(instance.unlockable_registries)}, which it cannot. Half its running "
                 "set would be protected and half would not, and the run would report success. "
                 "Finish the move, or move it back.")
@@ -1172,7 +1415,7 @@ def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
                     instance.out_of_scope = True
                     continue
                 plan.blockers.append(
-                    f"AXIS 3 — installation `{instance.id}` runs core {instance.commit[:7]} and "
+                    f"AXIS 3 — installation `{instance.label}` runs core {instance.commit[:7]} and "
                     f"its overlay ({instance.source}) pins images ONLY in "
                     f"{', '.join(instance.foreign_registries)}, every one of them declared "
                     "`third-party` — so nothing it runs is accounted for by any registry that "
@@ -1180,7 +1423,7 @@ def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
                     "one of those hosts is really `fleet-unlockable`.")
                 continue
             plan.blockers.append(
-                f"AXIS 3 — installation `{instance.id}` runs core {instance.commit[:7]} and its "
+                f"AXIS 3 — installation `{instance.label}` runs core {instance.commit[:7]} and its "
                 f"overlay ({instance.source}) pins no image at all, in ANY registry, so there is "
                 "no repository in which to protect what it runs.")
             continue
@@ -1200,7 +1443,7 @@ def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
                     entry = Wanted(acr_repo=acr_repo, digest=manifest.digest)
                     plan.wanted.append(entry)
                 entry.sources.append(
-                    f"installation `{instance.id}` is RUNNING core {instance.commit[:7]} "
+                    f"installation `{instance.label}` is RUNNING core {instance.commit[:7]} "
                     f"(tag {', '.join(sorted(matched))})")
                 # 🚨 EVERY TAG ON A RUNNING MANIFEST IS A REFERENCE THAT MAY BE THE ONE ITS POD
                 # SPEC NAMES, and from outside the cluster there is no way to tell which. The
@@ -1211,12 +1454,13 @@ def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
                 # the manifest sits locked. Protect the manifest's whole set of names.
                 for tag in sorted(manifest.tags):
                     want_tag(plan, acr_repo, tag,
-                             f"installation `{instance.id}` runs core {instance.commit[:7]}"
+                             f"installation `{instance.label}` runs core {instance.commit[:7]}"
                              + ("" if tag in matched else " (a name of that same manifest)"))
         if not instance.manifests:
             plan.blockers.append(
-                f"AXIS 3 — installation `{instance.id}` reports core {instance.commit[:7]} and NO "
-                f"manifest in {', '.join(repositories)} carries a tag for it. Either the image set "
+                f"AXIS 3 — installation `{instance.label}` reports core {instance.commit[:7]} "
+                f"and NO manifest in {', '.join(repositories)} carries a tag for it. Either the "
+                f"image set "
                 "it is running has already been purged — which is this issue happening again — or "
                 "the tag scheme moved and this axis stopped matching. Neither is a pass.")
 
@@ -1521,7 +1765,7 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
     emit(f"      …that did NOT                            {len(live) - len(answered)}"
          + ("   🚨 INVENTORY INCOMPLETE" if len(live) != len(answered) else ""))
     emit(f"      …declared not-live in instances.json     {len(declared)}"
-         + (f"  ({', '.join(f'{i.id}: {i.state}' for i in declared)})" if declared else ""))
+         + (f"  ({', '.join(f'{i.label}: {i.state}' for i in declared)})" if declared else ""))
     # 🚨 ITS OWN LINE, ALWAYS PRINTED. An installation whose images this lane cannot reach is
     # neither protected nor a failure, and those two already have lines — so without a third it
     # would be counted among the answered and read as covered. It is live, it answered, and
@@ -1534,23 +1778,23 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
     # cleanup on a premise nobody has checked — the false green this mechanism exists to refuse,
     # committed by its own report.
     emit(f"      …OUT OF THIS REGISTRY'S SCOPE (declared)  {len(out_of_scope)}"
-         + (f"  ({', '.join(f'{i.id} → {i.unlockable_registries[0]}' for i in out_of_scope)}"
+         + (f"  ({', '.join(f'{i.label} → {i.unlockable_registries[0]}' for i in out_of_scope)}"
             + " — NOT locked here, and whether anything retains that registry is UNVERIFIED)"
             if out_of_scope else ""))
-    for instance in sorted(plan.instances, key=lambda i: i.id):
+    for instance in sorted(plan.instances, key=lambda i: (i.id, i.gh_repo)):
         if instance.state != "live":
-            emit(f"        {instance.id:<18} {instance.state} — {instance.reason}")
+            emit(f"        {instance.label:<18} {instance.state} — {instance.reason}")
         elif instance.out_of_scope:
-            emit(f"        {instance.id:<18} core "
+            emit(f"        {instance.label:<18} core "
                  f"{(instance.commit or '???????')[:7]} — images in "
                  f"{', '.join(instance.unlockable_registries)}; NOT locked by this run, and "
                  "protection there is UNVERIFIED")
         elif instance.commit and not instance.error:
-            emit(f"        {instance.id:<18} core {instance.commit[:7]} "
+            emit(f"        {instance.label:<18} core {instance.commit[:7]} "
                  f"({instance.version or 'no version'}) → {len(instance.manifests)} manifest(s) "
                  "in its closure")
         else:
-            emit(f"        {instance.id:<18} 🚨 NOT ACCOUNTED FOR — {instance.error}")
+            emit(f"        {instance.label:<18} 🚨 NOT ACCOUNTED FOR — {instance.error}")
     # 🚨 THE OTHER REGISTRY'S PROTECTED SET, PRINTED — the dry run, and the only artifact a
     # lock-less registry can have (#4230). `distribution` has no `deleteEnabled`, so nothing can be
     # written INTO that registry ahead of a deleter; the derivation itself is the whole of the
@@ -1576,10 +1820,42 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
         # showed two of ghcr.io's five references are `systemorph/*` — OUR images, on a host whose
         # declaration says "never published by this fleet", while release.yml mirrors three
         # repositories there on every official release (#4323). A count alone would have hidden it.
+        publications = read_registry_publications(root)
+        rules = read_registry_rules(root)
         for host in sorted(by_host):
             references = sorted(set(by_host[host]))
             disposition = dispositions.get(host, ("undeclared", ""))[0]
-            if disposition == "fleet-unlockable":
+            # 🚨 A MIXED HOST GETS ITS REFERENCES SPLIT, NOT ONE SENTENCE OVER BOTH HALVES (#4323).
+            # `ghcr.io` serves `systemorph/*` — ours, mirrored there by our own CD — beside
+            # `distribution/*` and `oras-project/*`, which are not. Printing "declared NOT ours to
+            # retain" over our own two chart-default references is the report asserting the very
+            # thing that was false in the record, in the one artifact a reader checks it against.
+            ours = sorted({(repo, tag, where) for repo, tag, where in references
+                           if repo in publications.get(host, set())})
+            if ours:
+                emit(f"      {host} (declared {disposition}, and this fleet PUBLISHES here): "
+                     f"{len(ours)} of {len(references)} committed reference(s) are OUR OWN "
+                     "repositories — a MIRROR this fleet pushes and does not retain; the store's "
+                     "operator keeps them, no cleanup of ours protects them, and no installation "
+                     "may run from them (`publishes.runFrom`)")
+                for repo, tag, where in ours:
+                    emit(f"        {repo}:{tag}".ljust(52) + f" published by us — {where}")
+                references = [reference for reference in references if reference not in ours]
+                if not references:
+                    continue
+            rule, estate = rules.get(host, ("", ""))
+            if disposition == "fleet-unlockable" and rule == "out-of-estate":
+                # 🚨 NOT A KEEP SENTENCE FOR AN ESTATE THIS RECORD MEASURES NOTHING ABOUT (#4396
+                # review). "A cleanup must KEEP" reads as a protected set this lane derived and
+                # stands behind; for `out-of-estate` the record says the opposite in as many words,
+                # and a report contradicting the declaration it is printed beside is how a reader
+                # ends up acting on the wrong one.
+                emit(f"      {host} (declared fleet-unlockable, retention `out-of-estate`): "
+                     f"{len(references)} committed reference(s), listed and NOT a protected set. "
+                     "This registry is in an estate outside this fleet's reach; this record "
+                     "measures nothing about it and nothing here protects these. What is kept or "
+                     f"deleted there is decided by: {estate or '🚨 <the record names no estate>'}")
+            elif disposition == "fleet-unlockable":
                 emit(f"      {host} (declared fleet-unlockable): {len(references)} committed "
                      "reference(s) a cleanup must KEEP")
             elif disposition == "third-party":
@@ -1871,7 +2147,7 @@ def read_inventory(registry: Registry) -> tuple[dict[str, list[Manifest]], dict[
 
 
 def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool,
-        local_root: str | None) -> int:
+        local_root: str | None, fleet_is_complete: bool = True) -> int:
     registry = Registry(registry_name)
     registry.control_probe()          # dies red if the registry does not answer
 
@@ -1895,6 +2171,22 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
     # AXIS 3 — the installations, asked what they are RUNNING rather than what they should run.
     roster, roster_problems = read_instance_roster(local_root or ".")
     plan.blockers.extend(roster_problems)
+    # 🚨 AND THE REPOSITORIES THEY COME FROM, BEFORE ANY OF THEM IS BUILT. Installation identity is
+    # qualified by the declaring repository (#3438), so a repository nobody has declared brings its
+    # installations into this run unread — the exemption the qualification would otherwise buy.
+    repository_roster, repository_problems = read_repository_roster(local_root or ".")
+    plan.blockers.extend(repository_problems)
+    # 🚨 `fleet_is_complete` IS THE DENOMINATOR, and only `--discover` supplies one. The strict
+    # direction — a repository in front of us that the table does not name — is sound over any
+    # scan and always runs. The stale direction asserts that NOTHING ELSE in the fleet answers to
+    # a declared name, which a `--repos`/`--root` scan cannot know, so a partial run SAYS it did
+    # not make that assertion rather than making it wrongly or skipping it silently (#4396 review).
+    if not fleet_is_complete:
+        print("repository roster: PARTIAL scan — every repository in front of this run is still "
+              "held to the `repositories` table, but the STALE direction (a declared repository "
+              "nothing answers to) is NOT asserted. Only --discover enumerates the whole fleet.")
+    plan.blockers.extend(check_repository_roster(axis2, repository_roster,
+                                                 complete=fleet_is_complete))
     dispositions, disposition_problems = read_registry_dispositions(local_root or ".")
     plan.blockers.extend(disposition_problems)
     plan.instances, instance_blockers = build_instances(axis2, roster)
@@ -1906,14 +2198,15 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
             "finding `Hosting__Deployment` — never that the fleet has no installations. "
             "Run --self-test.")
     repositories_of = {
-        instance.id: sorted({repo for scan in axis2 for repo, _tag, where in scan.pins
-                             if f"{scan.gh_repo} {where}" == instance.source})
+        instance.key: sorted({repo for scan in axis2 for repo, _tag, where in scan.pins
+                              if f"{scan.gh_repo} {where}" == instance.source})
         for instance in plan.instances
     }
 
     # 🚨 AXIS 3 FIRST. `resolve_and_classify` is what splits `plan.wanted` into already-protected
     # and to-lock, so anything added to `wanted` after it runs is wanted by nobody who locks.
-    classify_foreign_registries(plan, dispositions)
+    classify_foreign_registries(plan, dispositions,
+                                read_registry_publications(local_root or "."))
     resolve_running_sets(plan, inventory, repositories_of)
     resolve_and_classify(plan, registry, inventory, inventory_errors)
     classify_tags(plan, registry)
@@ -2357,7 +2650,26 @@ def check_retention_record(root: str) -> int:
 # safety margin and an incomplete one deletes what it could not see, in the same act.
 # Design: Doc/Architecture/FleetRegistryRetention.
 
-RETENTION_RULES = {"nothing-deletes", "derived-protected-set", "not-ours"}
+# 🚨 `out-of-estate` IS THE FOURTH RULE, AND IT IS THE ONE THAT HAD TO BE EARNED (#3438,
+# 2026-09-15). `Systemorph/PartnerRe.Memex` joined the fleet on 2026-09-14 with a LIVE control
+# instance (partnerre.meshweaver.cloud, answering /api/version) whose overlay pins our portal and
+# migration images in `memexaksacrqoqqdqnhlaksg.azurecr.io` — an ACR in the `PartnerRe Memex`
+# subscription, which this lane's OIDC credential does not reach at all. Every existing rule was a
+# FALSE sentence about it: `not-ours` (the images ARE ours, mirrored), `nothing-deletes` (its
+# enumeration is held to a committed CHART this repository renders, and there is none), and
+# `derived-protected-set` (it asserts a cleanup exists that deletes only a derived complement, and
+# nobody here can say that). Leaving it undeclared reds the lane, and a false declaration is worse
+# than a red — so the vocabulary grew a word for the fact: *this registry is in an estate outside
+# this fleet's reach, what deletes from it is decided there, and this record may claim nothing
+# about it and authorize nothing in it.*
+#
+# 🚨 IT IS A TRAPDOOR IF IT CAN BE SAID ABOUT A STORE WE DO OPERATE, and that is refused from a
+# DERIVED fact rather than a declared one: a host this fleet's own publishing lanes push to may
+# never be `out-of-estate` (`cr.meshweaver.cloud` and `meshweaver.azurecr.io` are both derived push
+# targets — ARM 34 asserts the derivation sees them), and a run whose derivation cannot be trusted
+# refuses the rule rather than accepting it. That is the same reasoning that keeps
+# `operator-retained` out of this set: see PUBLICATION_RETENTION_RULES.
+RETENTION_RULES = {"nothing-deletes", "derived-protected-set", "not-ours", "out-of-estate"}
 
 # The third state of `deleters[].present`. "measured, and it is not there" and "nobody could look"
 # are different facts, and only one of them is evidence (#4315 review).
@@ -2366,11 +2678,539 @@ UNVERIFIED = "unverified"
 # Which rules a disposition may carry, and the pairing is checked BOTH ways. `third-party` means the
 # images were never ours, so the only honest statement is that there is nothing of ours to keep;
 # `fleet-unlockable` means our images live there and something has to say what keeps them — a
-# `not-ours` on one of those would be a blanket exemption wearing a retention statement's clothes.
+# `not-ours` on one of those would be a blanket exemption wearing a retention statement's clothes,
+# while `out-of-estate` says our images live there and the answer is somebody else's to give.
 RULES_FOR_DISPOSITION = {
-    "fleet-unlockable": {"nothing-deletes", "derived-protected-set"},
+    "fleet-unlockable": {"nothing-deletes", "derived-protected-set", "out-of-estate"},
     "third-party": {"not-ours"},
 }
+
+# ── The THIRD question about a registry: what this fleet PUSHES to it (#4323) ─────────────────
+#
+# `disposition` answers "can THIS lane lock that host", `retention` answers "what deletes from it".
+# Neither asks the question that turned out to be wrong about `ghcr.io` for a day: **does this
+# fleet PUBLISH there at all**. The record said of that host *"never published by this fleet"* and
+# *"Nothing this fleet produces is stored on ghcr.io"* while `main-cd.yml` pushed twelve tags across
+# three of our own repositories to it on every promoting run — measured in the job log of run
+# 34918214035 (2026-09-15T02:27Z): `mw-plugin-test`, `memex-migration` and `memex-portal-ai`, all
+# under `ghcr.io/systemorph/`.
+#
+# 🚨 THE UNIT OF `disposition` IS WHAT THE FLEET PULLS, AND THAT IS NOT AN EVASION — it is what
+# every axis of this script reads it FOR. `foreign_registries` comes off deployment overlays;
+# `classify_foreign_registries` and `resolve_running_sets` ask whether an installation's RUNNING SET
+# is accounted for. Nothing in a running set comes from a registry no overlay pins. `ghcr.io` is the
+# one host in the fleet that is genuinely MIXED — `systemorph/*` is ours, `distribution/*`,
+# `oras-project/*` and `actions/*` are not — and a single per-host disposition is false about one
+# half whichever value it takes. Measured, both halves:
+#
+#   * `third-party` is false about `systemorph/*`. That was #4323.
+#   * `fleet-unlockable` is false about `distribution/*` — AND IT REDS THE LANE. `memex-cloud` pins
+#     `meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8411` AND
+#     `ghcr.io/distribution/distribution:3.1.1@sha256:…` (the registry service's own image, which
+#     cannot come from the registry it boots). Flip the host and `resolve_running_sets` fires "half
+#     its running set would be protected and half would not" over an installation whose every image
+#     OF OURS is in this ACR and protected. `pause.reEnableWhen` is "lock-pinned-digests is green",
+#     so that false red would stand between the fleet and re-enabling cleanup — the exact shape
+#     ARM 32 exists for, manufactured by the fix.
+#
+# So the publication is declared as its OWN fact, on the same unit, and this is the derivation that
+# holds the declaration to the workflows rather than re-reading it. A record that checks itself
+# passes on the day it stops being true.
+
+# The workflows in THIS repository that push an image anywhere. Both are asserted to exist: a
+# publishing lane that was renamed and left underived would take the whole check with it silently.
+PUBLISHING_WORKFLOWS = ("main-cd.yml", "release.yml")
+
+# 🚨 ONE PUSH TARGET IS DELIBERATELY NOT IN THE `registries` TABLE, and the skip is named and
+# printed rather than silent: `meshweaver.azurecr.io` is the registry this lane LOCKS — the subject
+# of the entire script — not a foreign host it declares. Every OTHER derived target must be
+# accounted for by the table.
+LANE_REGISTRY = "meshweaver.azurecr.io"
+
+# `NS` in both workflows is the repository owner, lowercased. Resolving it needs a literal, and the
+# literal is worth nothing on its own — so the ASSIGNMENT is what is asserted: the derivation reds
+# if a workflow ever computes `NS` from something that is not the owner, which is the only way this
+# substitution could go quietly wrong.
+_NS_FROM_OWNER = re.compile(r"NS=\$\(\s*(?:printf\s+'%s'|echo)\s+'?\"?"
+                            r"(?:\$GITHUB_REPOSITORY_OWNER|\$\{\{\s*github\.repository_owner\s*\}\})")
+REPOSITORY_OWNER = "systemorph"
+
+# `--tag <ref>` in any of the three quotings a shell accepts.
+_TAG_ARGUMENT = re.compile(r"--tag\s+(?:\"([^\"]+)\"|'([^']+)'|(\S+))")
+# 🚨 `--tag` IS NOT THE ONLY PUSH, and a derivation that thinks it is misses an entire registry.
+# Every consumer-visible tag main-cd writes on the ACR is written on `cr.meshweaver.cloud` too, and
+# that half goes through `mirror-image-to-registry.sh <source> <destination>…` — no `--tag` on the
+# line. A publication mechanism the derivation cannot see is a host the table never has to account
+# for, which is this issue one register down.
+_MIRROR_CALL = re.compile(r"mirror-image-to-registry\.sh\s+(.+?)\s*(?:\\|$)")
+# …and its destinations are often an ARRAY built a line earlier (`mirror+=("…")`), so the appends
+# are collected first and `"${mirror[@]}"` is expanded from them.
+_ARRAY_APPEND = re.compile(r"(\w+)\+=\(\s*\"([^\"]+)\"\s*\)")
+_ARRAY_EXPANSION = re.compile(r"^\"?\$\{(\w+)\[@\]\}\"?$")
+# `for repo in a b c; do` — the loop that makes `$repo` on a tag line resolvable.
+_REPO_LOOP = re.compile(r"for\s+repo\s+in\s+([^;\n]+);\s*do")
+# `for pair in "memex-migration:$V_MIGRATION" "memex-portal-ai:$V_PORTAL"; do` — the same thing
+# spelled as pairs, which is how main-cd's phase D writes it.
+_PAIR_LOOP = re.compile(r"for\s+pair\s+in\s+([^;\n]+);\s*do")
+
+
+def _workflow_env(text: str) -> dict[str, str]:
+    """The top-level `env:` map of a workflow — enough to resolve `${{ env.ACR }}` in a tag."""
+    values: dict[str, str] = {}
+    inside = False
+    for line in text.splitlines():
+        if re.match(r"^env:\s*$", line):
+            inside = True
+            continue
+        if inside:
+            if line and not line[0].isspace():
+                break
+            entry = re.match(r"^\s{2}([A-Za-z_][A-Za-z0-9_]*):\s*(\S+)\s*$", line)
+            if entry:
+                values[entry.group(1)] = entry.group(2).strip("'\"")
+    return values
+
+
+# A YAML FOLDED scalar — `run: >` / `>-` / `>+` — whose body is joined into ONE shell line at
+# runtime with no backslash anywhere.
+_FOLDED_RUN = re.compile(r"^(\s*)-?\s*run:\s*>[-+]?\s*$")
+
+
+def _continued_lines(text: str) -> list[tuple[int, str]]:
+    """The file's lines as the SHELL will see them, each carrying the number it STARTS on.
+
+    Two joins, because a workflow spells one command across several physical lines in two different
+    ways and BOTH appear in these lanes:
+
+      * a shell continuation — a trailing `\\`. `mirror-image-to-registry.sh`'s destinations
+        routinely sit on the line after the source that way.
+      * 🚨 a YAML FOLDED scalar — `run: >` — which has no backslash at all and is folded into one
+        line by the YAML parser before any shell sees it. `main-cd.yml:1260` and `:1416` mirror the
+        portal and migration staging tags to the fleet registry exactly so, and read line-by-line
+        those calls publish to NOTHING (#4362 review).
+
+    A host whose only publication is spelled across lines is a host the accounting never asks
+    about — which is the very defect this derivation exists to make impossible."""
+    joined: list[tuple[int, str]] = []
+    buffer = ""
+    start = 1
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        folded = _FOLDED_RUN.match(line)
+        if folded and not buffer:
+            # Everything more-indented than the `run:` key is one folded command.
+            indent = len(folded.group(1))
+            body: list[str] = []
+            cursor = index + 1
+            while cursor < len(lines):
+                nxt = lines[cursor]
+                if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= indent:
+                    break
+                body.append(nxt.strip())
+                cursor += 1
+            joined.append((index + 1, " ".join(part for part in body if part)))
+            index = cursor
+            continue
+        if not buffer:
+            start = index + 1
+        stripped = line.rstrip()
+        if stripped.endswith("\\"):
+            buffer += stripped[:-1] + " "
+            index += 1
+            continue
+        joined.append((start, buffer + stripped))
+        buffer = ""
+        index += 1
+    if buffer:
+        joined.append((start, buffer))
+    return joined
+
+
+def publish_targets(root: str) -> tuple[dict[str, set[str]], dict[str, set[str]], list[str], int]:
+    """Every `(host, repository)` this repository's own workflows PUSH an image to.
+
+    Returns the targets by host, the PRODUCERS by host (which lane actually emits each — so a
+    record's `producedBy` is held to the derivation rather than to the presence of the host's name
+    somewhere in a file, which a comment satisfies), any problems, and the number of image
+    references read — the denominator, because "no publication found" and "nothing was parsed" are
+    the same output without it, and that is the confusion this whole family is made of.
+
+    🚨 DERIVED FROM THE WORKFLOWS, NEVER FROM THE RECORD. The record is what this checks."""
+    base = Path(root) / ".github" / "workflows"
+    targets: dict[str, set[str]] = {}
+    producers: dict[str, set[str]] = {}
+    problems: list[str] = []
+    arguments = 0
+    for name in PUBLISHING_WORKFLOWS:
+        path = base / name
+        if not path.is_file():
+            problems.append(
+                f".github/workflows/{name} is missing, and it is one of the two lanes this fleet "
+                "publishes images from. A renamed publishing workflow takes the derivation with "
+                "it — and a derivation that reads nothing reports exactly like a clean one.")
+            continue
+        text = path.read_text(encoding="utf-8")
+        environment = _workflow_env(text)
+        namespace = REPOSITORY_OWNER if _NS_FROM_OWNER.search(text) else None
+        if "$NS" in text and namespace is None:
+            problems.append(
+                f".github/workflows/{name} uses `$NS` in an image reference and does not assign it "
+                "from the repository owner. The substitution this check makes would be a guess, so "
+                "it refuses rather than deriving a namespace that is not the one being pushed to.")
+        loops = [repo for group in _REPO_LOOP.findall(text) for repo in group.split()]
+        loops += [pair.strip("\"'").split(":")[0]
+                  for group in _PAIR_LOOP.findall(text) for pair in group.split()]
+        arrays: dict[str, list[str]] = {}
+        for _, line in _continued_lines(text):
+            if line.strip().startswith("#"):
+                continue
+            for variable, value in _ARRAY_APPEND.findall(line):
+                arrays.setdefault(variable, []).append(value)
+        for number, line in _continued_lines(text):
+            if line.strip().startswith("#"):
+                continue
+            references = [next(group for group in match.groups() if group is not None)
+                          for match in _TAG_ARGUMENT.finditer(line)]
+            for call in _MIRROR_CALL.findall(line):
+                try:
+                    destinations = shlex.split(call)[1:]     # [0] is the SOURCE, not a publication
+                except ValueError:
+                    problems.append(
+                        f".github/workflows/{name}:{number} calls mirror-image-to-registry.sh with "
+                        "a command line this check could not tokenize, so its destinations — every "
+                        "one of them a publication — were never read.")
+                    continue
+                for destination in destinations:
+                    array = _ARRAY_EXPANSION.match(destination)
+                    references.extend(arrays.get(array.group(1), []) if array else [destination])
+            for reference in references:
+                arguments += 1
+                # Strip the tag: the LAST colon that is not inside a `${{ … }}` expansion.
+                image = re.sub(r":[^:/]*$", "", reference)
+                # 🚨 A WORKFLOW SPELLS ITS REGISTRY THREE WAYS AND ALL THREE APPEAR IN THESE LANES:
+                # `${{ env.ACR }}` (main-cd's tag lines), a plain shell `$ACR` / `${ACR}` exported
+                # from the SAME top-level `env:` map (release.yml:272, :275, :279), and a literal.
+                # Expanding only the first left every release-lane target reading as the host
+                # `$ACR` (#4362 review).
+                for key, value in environment.items():
+                    image = (image.replace("${{ env.%s }}" % key, value)
+                                  .replace("${%s}" % key, value)
+                                  .replace("$%s" % key, value))
+                if "/" not in image:
+                    continue
+                host, _, repository = image.partition("/")
+                # 🚨 THE UNRESOLVED CHECK COMES FIRST, AND THAT ORDER IS THE WHOLE POINT. A host
+                # still carrying `$` has no dot, so the Docker-Hub short-name test below would
+                # DISCARD it silently — a push target dropped with no error, by a derivation whose
+                # entire job is to make a dropped push target impossible. Unresolved is a PROBLEM.
+                if "${{" in host or "$" in host:
+                    problems.append(
+                        f".github/workflows/{name}:{number} pushes to a registry host this check "
+                        f"could not resolve (`{host}`). An unresolved push target is not an absent "
+                        "one — it is a publication nothing in the table has to account for.")
+                    continue
+                if "." not in host and host != "localhost":
+                    continue          # a Docker Hub short name, not a registry this fleet runs
+                if namespace:
+                    repository = repository.replace("${NS}", namespace).replace("$NS", namespace)
+                expansions = [repository]
+                if "$repo" in repository or "${repo}" in repository:
+                    expansions = [repository.replace("${repo}", name_).replace("$repo", name_)
+                                  for name_ in sorted(set(loops))] or []
+                    if not expansions:
+                        problems.append(
+                            f".github/workflows/{name}:{number} pushes `{repository}` and no "
+                            "`for repo in …` loop in the file says what `$repo` ranges over, so "
+                            "the repositories being published cannot be named.")
+                for expanded in expansions:
+                    if "$" in expanded or "${{" in expanded:
+                        problems.append(
+                            f".github/workflows/{name}:{number} pushes to `{host}/{expanded}`, a "
+                            "repository this check could not resolve to a literal name.")
+                        continue
+                    targets.setdefault(host, set()).add(expanded)
+                    producers.setdefault(host, set()).add(f".github/workflows/{name}")
+    if not targets and not problems:
+        problems.append(
+            "ZERO publication targets were derived from "
+            + ", ".join(PUBLISHING_WORKFLOWS)
+            + ". Both lanes push images today, so zero means the derivation stopped matching, not "
+              "that this fleet stopped publishing — and an empty derivation accounts for every "
+              "registry equally well.")
+    return targets, producers, problems, arguments
+
+
+# A `publishes` block's retention may ONLY be this, and it is deliberately NOT in `RETENTION_RULES`.
+# Allowing `operator-retained` as a HOST-level rule would be a trapdoor out of `nothing-deletes`:
+# any registry could then answer the second question with "somebody else's problem". It is legible
+# only about a publication into a store this fleet does not operate.
+#
+# 🚨 `out-of-estate` IS NOT THAT DOOR REOPENED, and the difference is what makes it safe: it says
+# the same thing about a store this fleet does not operate, and it is REFUSED for any host this
+# fleet's own publishing lanes push to — derived from the lanes, exactly the way `publishes` is,
+# rather than taken from the record. `cr.meshweaver.cloud` is such a host, so the one registry the
+# trapdoor would have mattered for cannot take the rule.
+PUBLICATION_RETENTION_RULES = {"operator-retained"}
+
+
+def read_registry_publications(root: str) -> dict[str, set[str]]:
+    """What each registry entry DECLARES this fleet publishes there — `(host → repositories)`.
+
+    Read leniently and used only to LABEL: `--check-registry-retention` is what holds the
+    declaration to the workflows, and a malformed entry has already reddened there."""
+    path = Path(root) / ".github" / "acr-retention" / ROSTER_PATH
+    declared: dict[str, set[str]] = {}
+    if not path.is_file():
+        return declared
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return declared
+    registries = document.get("registries")
+    # 🚨 A NON-MAPPING `registries` MUST NOT RAISE HERE. `read_registry_dispositions` already reds
+    # on that shape, and this reader runs inside the LIVE locking run — an AttributeError would
+    # replace a named blocker with a stack trace and take the whole sweep down (#4362 review).
+    if not isinstance(registries, dict):
+        return declared
+    for host, entry in registries.items():
+        if not isinstance(entry, dict):
+            continue
+        publishes = entry.get("publishes")
+        if isinstance(publishes, dict) and isinstance(publishes.get("repositories"), list):
+            # 🚨 STRIPPED, exactly as `check_publication_accounting` strips. A value written as
+            # `" systemorph/memex-portal-ai "` would otherwise satisfy the accounting arm and match
+            # NOTHING here — so an overlay could run a published repository with the ARM 34b
+            # blocker silently inert, which is a declaration that passes while protecting nobody
+            # (#4362 review).
+            declared[host] = {str(repo).strip() for repo in publishes["repositories"]
+                              if str(repo).strip()}
+    return declared
+
+
+def read_registry_rules(root: str) -> dict[str, tuple[str, str]]:
+    """What each registry entry declares about retention — `(host → (rule, estate))`.
+
+    🚨 THE `estate` IS CARRIED, NOT ONLY THE RULE (#4400 review). An `out-of-estate` line that says
+    only "outside this fleet's reach" tells a reader that nobody here answers and not WHO does, so
+    the list is unauditable exactly where it matters — the record names the estate, and the report
+    printed beside it must say the same thing.
+
+    Read leniently and used only to LABEL, exactly like `read_registry_publications`:
+    `--check-registry-retention` is what holds a rule to anything, and a malformed entry has
+    already reddened there. It exists because the report must not print *"a cleanup must KEEP"*
+    over a host whose own record says this fleet measures nothing about it (#4396 review)."""
+    path = Path(root) / ".github" / "acr-retention" / ROSTER_PATH
+    rules: dict[str, tuple[str, str]] = {}
+    if not path.is_file():
+        return rules
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return rules
+    registries = document.get("registries")
+    if not isinstance(registries, dict):
+        return rules           # `read_registry_dispositions` already reds on that shape
+    for host, entry in registries.items():
+        if not isinstance(entry, dict):
+            continue
+        retention = entry.get("retention")
+        if isinstance(retention, dict):
+            # 🚨 ONLY A NON-EMPTY STRING IS AN ESTATE (#4406 review). `str(None)` is `"None"`, so a
+            # record carrying `"estate": null` would render as `decided by: None` — a missing
+            # estate wearing the costume of a named one, in the line whose whole job is to say WHO
+            # answers. Anything that is not a string reads here as absent, and the validator below
+            # reds on it.
+            estate = retention.get("estate")
+            rules[host] = (str(retention.get("rule", "")).strip(),
+                           estate.strip() if isinstance(estate, str) else "")
+    return rules
+
+
+def check_publication_accounting(root: str, registries: dict) -> tuple[list[str], str]:
+    """Every registry THIS FLEET PUSHES TO is accounted for by the table, derived from the lanes.
+
+    🚨 THIS IS THE ARM THAT WOULD HAVE CAUGHT #4323, and it is derived rather than re-read. The
+    record said of `ghcr.io` *"never published by this fleet"* and *"Nothing this fleet produces is
+    stored on ghcr.io"* on the very day `main-cd.yml` pushed twelve tags across three of our own
+    repositories there. Both fields validated green, because every existing arm asks the record what
+    it says and this one asks the WORKFLOWS what they do.
+
+    A host we push to satisfies the table in one of two ways:
+
+      * `disposition: fleet-unlockable` — the host-level declaration already says our images live
+        there (`cr.meshweaver.cloud`), and the `retention` block already has to say what keeps them.
+      * a `publishes` block — for a host whose disposition is about what the fleet PULLS, because
+        the host is MIXED. `ghcr.io` is the fleet's only one: `systemorph/*` is ours and every other
+        namespace on it is somebody else's, and a single per-host disposition is false about one
+        half whichever value it takes.
+
+    Returns the problems and the denominator line, which is PRINTED whatever the verdict."""
+    targets, producers, problems, references = publish_targets(root)
+    # 🚨 THE POPULATION IS THE UNION, NOT THE DERIVED SET (#4362 review). Looping over derived hosts
+    # alone means that if BOTH lanes stop pushing to a host while its `publishes` block stays in the
+    # record, the host is never visited — so the promised stale check, and every validation under
+    # it, passes having inspected nothing. A whole-host stale entry is the same defect as a stale
+    # repository, one level up, and it reads exactly like a clean record.
+    declared_publishers = {host for host, entry in registries.items()
+                           if isinstance(entry, dict) and entry.get("publishes") is not None}
+    hosts = sorted((set(targets) | declared_publishers) - {LANE_REGISTRY})
+    denominator = (
+        f"publication accounting: {references} image reference(s) read across "
+        + ", ".join(PUBLISHING_WORKFLOWS)
+        + f"; {len(targets)} registry(ies) pushed to ({', '.join(sorted(targets))}); "
+        + (f"`{LANE_REGISTRY}` skipped — it is the registry this lane LOCKS, the subject of this "
+           "script rather than a foreign host it declares" if LANE_REGISTRY in targets
+           else f"`{LANE_REGISTRY}` was NOT among them, which is itself a change worth reading")
+        + f"; {len(hosts)} left for the table to account for.")
+
+    for host in hosts:
+        pushed = sorted(targets.get(host, set()))
+        entry = registries.get(host)
+        if not pushed and isinstance(entry, dict) and entry.get("publishes") is not None:
+            problems.append(
+                f"{ROSTER_PATH}: `registries.{host}` carries a `publishes` block and NOTHING in "
+                + " / ".join(PUBLISHING_WORKFLOWS) + f" pushes to `{host}` any more. A publication "
+                "record outliving its publication exempts nothing and hides the next one — delete "
+                "the block, or restore the lane.")
+            continue
+        if not isinstance(entry, dict):
+            problems.append(
+                f"{ROSTER_PATH}: this fleet PUBLISHES {len(pushed)} repository(ies) to `{host}` "
+                f"({', '.join(pushed)}) and the `registries` table does not declare that host at "
+                "all. A registry we push our own images to is not a registry with nothing of ours "
+                "in it.")
+            continue
+        disposition = str(entry.get("disposition", "")).strip()
+        publishes = entry.get("publishes")
+        if disposition == "fleet-unlockable" and publishes is None:
+            continue          # the host-level declaration already says our images live there
+        where = f"{ROSTER_PATH}: `registries.{host}`"
+        if publishes is None:
+            problems.append(
+                f"{where} is `{disposition}` and declares no `publishes` block, while this fleet "
+                f"PUSHES {len(pushed)} repository(ies) to it: {', '.join(pushed)} — derived from "
+                + " and ".join(PUBLISHING_WORKFLOWS) + ", not from this record. `third-party` and "
+                "its `not-ours` retention BOTH say nothing of ours is stored there, and that is "
+                "the false sentence #4323 is. Either the host is really `fleet-unlockable`, or — "
+                "if the host is MIXED, as `ghcr.io` is — declare `publishes` with the repositories, "
+                "the lanes that produce them, what retains them, and whether any installation runs "
+                "from them. Doc/Architecture/FleetRegistryRetention.")
+            continue
+        if not isinstance(publishes, dict):
+            problems.append(f"{where}.publishes is not an object.")
+            continue
+
+        # 🚨 EQUALITY, NOT CONTAINMENT, IN BOTH DIRECTIONS. A repository we push that the record
+        # does not name is the gap; a repository the record names and nothing pushes is a stale
+        # exemption, and a stale one hides the next one — the same doctrine the roster is held to.
+        declared = publishes.get("repositories")
+        if not isinstance(declared, list) or not declared or not all(
+                isinstance(repo, str) and repo.strip() for repo in declared):
+            problems.append(
+                f"{where}.publishes names no `repositories`. The claim IS the enumeration: a "
+                "publication block that lists nothing accounts for nothing while reading exactly "
+                "like a complete one.")
+        else:
+            named = {repo.strip() for repo in declared}
+            missing = sorted(set(pushed) - named)
+            stale = sorted(named - set(pushed))
+            if missing:
+                problems.append(
+                    f"{where}.publishes does not name {', '.join(missing)}, which "
+                    + " / ".join(PUBLISHING_WORKFLOWS) + f" push(es) to `{host}`. An unnamed "
+                    "publication is one nothing in this record has to say anything about.")
+            if stale:
+                problems.append(
+                    f"{where}.publishes names {', '.join(stale)}, which nothing in "
+                    + " / ".join(PUBLISHING_WORKFLOWS) + f" pushes to `{host}` any more. A stale "
+                    "entry exempts nothing and hides the next one — delete the line, or restore "
+                    "the publication.")
+
+        produced_by = publishes.get("producedBy")
+        if not isinstance(produced_by, list) or not produced_by:
+            problems.append(
+                f"{where}.publishes names no `producedBy`. Without the committed lane the claim "
+                "was derived from, the next reader cannot tell a publication that still happens "
+                "from one that was removed.")
+        else:
+            named_lanes = {str(candidate).strip() for candidate in produced_by
+                           if str(candidate).strip()}
+            for relative in sorted(named_lanes):
+                if not (Path(root) / relative).is_file():
+                    problems.append(
+                        f"{where}.publishes names `producedBy: {relative}`, which is not a file in "
+                        "this repository. A record pointing at a moved lane checks nothing.")
+            # 🚨 HELD TO THE DERIVATION, NOT TO THE HOST'S NAME APPEARING SOMEWHERE IN THE FILE
+            # (#4362 review). A comment mentioning `ghcr.io`, or a lane that stopped emitting it,
+            # satisfies a substring test — so a misattributed producer would read as evidence. The
+            # derived set is which lanes actually EMIT a reference to this host.
+            emitting = producers.get(host, set())
+            misattributed = sorted(named_lanes - emitting
+                                   - {lane for lane in named_lanes
+                                      if not (Path(root) / lane).is_file()})
+            unnamed = sorted(emitting - named_lanes)
+            if misattributed:
+                problems.append(
+                    f"{where}.publishes names {', '.join(misattributed)} as producing `{host}`, and "
+                    f"no image reference to that host is derived from "
+                    f"{'it' if len(misattributed) == 1 else 'them'}. A lane that no longer emits "
+                    "this host — or never did — reads as evidence while naming nothing.")
+            if unnamed:
+                problems.append(
+                    f"{where}.publishes does not name {', '.join(unnamed)}, which DOES push to "
+                    f"`{host}`. A producer the record has not seen is a publication nobody reviewed.")
+
+        if not str(publishes.get("runFrom", "")).strip():
+            problems.append(
+                f"{where}.publishes states no `runFrom`. Whether any INSTALLATION pulls its running "
+                "set from these repositories is the whole difference between a publication and a "
+                "source this lane has to protect, and leaving it unsaid lets the next reader assume "
+                "either one.")
+
+        retention = publishes.get("retention")
+        if not isinstance(retention, dict):
+            problems.append(
+                f"{where}.publishes has no `retention` block. Our artifacts are stored there, so "
+                "something has to say what keeps them — the whole point of asking the second "
+                "question of every registry (#4230) is that it may not go unasked about ours.")
+            continue
+        rule = str(retention.get("rule", "")).strip()
+        if rule not in PUBLICATION_RETENTION_RULES:
+            problems.append(
+                f"{where}.publishes.retention.rule is {rule!r}; expected one of "
+                + ", ".join(sorted(PUBLICATION_RETENTION_RULES))
+                + ". A publication into a store this fleet does not operate can make exactly one "
+                  "honest statement: that its operator retains it and we do not.")
+            continue
+        if not str(retention.get("operator", "")).strip():
+            problems.append(
+                f"{where}.publishes.retention is `{rule}` and names no `operator`. 'Somebody else "
+                "keeps it' with nobody named is the sentence that reads as an answer and is not one.")
+        if not str(retention.get("reason", "")).strip():
+            problems.append(f"{where}.publishes.retention has no `reason`.")
+        if retention.get("deleters") is not None:
+            problems.append(
+                f"{where}.publishes.retention enumerates `deleters` for a store this fleet does not "
+                "operate. We cannot measure GitHub's deletion mechanisms from a committed file, so "
+                "such a list would be a verdict about OUR artifacts resting on nothing — the same "
+                "false reassurance `not-ours` refuses.")
+        # 🚨 STRICTLY `false`, NOT MERELY "not the singleton True" (#4362 review). This file has
+        # already paid for the other spelling twice — `inForce` and `present` both written as the
+        # STRING "true", which every `is True` reader silently treats as absent. A truthy non-bool
+        # here would pass as though a cleanup were forbidden while a later consumer reads it as
+        # authorization.
+        authorized = retention.get("cleanupAuthorized")
+        if authorized is not False:
+            problems.append(
+                f"{where}.publishes.retention declares `cleanupAuthorized: {authorized!r}`, and the "
+                "only value a publication into somebody else's store may carry is the boolean "
+                "`false`. There is no cleanup of ours to authorize there — and a truthy non-boolean "
+                "(the STRING \"true\", say) is read as absent by every `is True` reader in this "
+                "file while a later consumer may read it as authorization.")
+    return problems, denominator
+
 
 # Every spelling of "delete something from a registry" this fleet could plausibly acquire.
 # 🚨 `acr purge` is DELIBERATELY ABSENT: it is legitimately present in `.github/acr-retention/`, it
@@ -2553,10 +3393,24 @@ def check_registry_retention(root: str) -> int:
         return 1
 
     problems: list[str] = []
+    # 🚨 THE THIRD QUESTION, ASKED FIRST because it is the one that was never asked (#4323): what
+    # does this fleet PUSH to each of these hosts? Derived from the publishing workflows, so it
+    # cannot be satisfied by the record agreeing with itself.
+    publication_problems, publication_denominator = check_publication_accounting(root, registries)
+    problems.extend(publication_problems)
+    # 🚨 THE DERIVED SET THAT GUARDS `out-of-estate`, READ ONCE AND ASSERTED BEFORE IT IS TRUSTED.
+    # The rule says "somebody else's estate keeps this", which may never be said about a store this
+    # fleet pushes its own images to — and the refusal has to rest on what the LANES do, not on
+    # what the record says. `LANE_REGISTRY` among the derived targets is the positive control: if
+    # the derivation cannot even see the registry this script exists to lock, it cannot be used to
+    # refuse anything, and the rule is refused instead of quietly allowed.
+    push_targets, _producers, _target_problems, _refs = publish_targets(root)
+    push_derivation_trusted = bool(push_targets) and LANE_REGISTRY in push_targets
     charts_checked = 0
     acl_rules_checked = 0
     swept_files = swept_skipped = 0
     declaring_nothing_deletes: list[str] = []
+    out_of_estate: list[tuple[str, str]] = []
     unverified_by_host: dict[str, list[str]] = {}
     for host, entry in sorted(registries.items()):
         where = f"{ROSTER_PATH}: `registries.{host}`"
@@ -2597,6 +3451,56 @@ def check_registry_retention(root: str) -> int:
                     "ours is stored there, so listing somebody else's deleters would read as a "
                     "verdict about OUR artifacts — which is the false reassurance this table "
                     "exists to refuse.")
+            continue
+
+        if rule == "out-of-estate":
+            # It claims NOTHING about deletion, so it may enumerate nothing and authorize nothing —
+            # the same two refusals `operator-retained` carries, for the same reason: we cannot
+            # measure somebody else's mechanisms from a committed file, and a list that reads as a
+            # verdict about our artifacts is the false reassurance this table exists to refuse.
+            if retention.get("deleters") is not None:
+                problems.append(
+                    f"{where}.retention is `out-of-estate` and still enumerates `deleters`. The "
+                    "whole content of this rule is that what deletes there is decided outside this "
+                    "fleet's reach; a list here would be a verdict about OUR artifacts resting on "
+                    "nothing, and nothing in this repository could re-derive it.")
+            # 🚨 A NON-STRING IS NOT AN ESTATE, AND `str()` WOULD HIDE THAT (#4406 review):
+            # `str(None)` is `"None"`, so `"estate": null` satisfied a truthiness test here AND
+            # rendered as `decided by: None` in the report — the same typed-quote-mark family as
+            # `present: "true"` one field along.
+            estate_value = retention.get("estate")
+            if not isinstance(estate_value, str) or not estate_value.strip():
+                problems.append(
+                    f"{where}.retention is `out-of-estate` and declares "
+                    f"`estate: {estate_value!r}`, which is not a non-empty string. Saying the "
+                    "answer is somebody else's without saying WHOSE — the subscription, the "
+                    "tenant, the repository that owns the decision — is the hand list again: the "
+                    "next reader cannot tell a delegation from a shrug.")
+            authorized = retention.get("cleanupAuthorized")
+            if authorized is not False:
+                problems.append(
+                    f"{where}.retention is `out-of-estate` and declares "
+                    f"`cleanupAuthorized: {authorized!r}`; it must be exactly `false`. This fleet "
+                    "cannot read that registry, so it can never be in a position to authorize "
+                    "deleting anything in it.")
+            # 🚨 AND THE ARM THAT KEEPS THIS FROM BEING A TRAPDOOR, DERIVED FROM THE LANES.
+            if not push_derivation_trusted:
+                problems.append(
+                    f"{where}.retention is `out-of-estate` and the push-target derivation over "
+                    + " / ".join(PUBLISHING_WORKFLOWS) + " could not be trusted (it did not even "
+                    f"derive `{LANE_REGISTRY}`, the registry this lane locks). This rule is "
+                    "allowed only because a host this fleet PUSHES to can be refused it; with the "
+                    "derivation broken, that refusal cannot be made, so the rule is refused "
+                    "instead. Fix the derivation.")
+            elif host == LANE_REGISTRY or host in push_targets:
+                problems.append(
+                    f"{where}.retention is `out-of-estate`, and this fleet PUSHES its own images "
+                    f"to `{host}` — derived from " + " and ".join(PUBLISHING_WORKFLOWS)
+                    + ", not from this record. A store our own lanes publish into is not an estate "
+                    "whose retention is somebody else's to state; that is exactly the trapdoor out "
+                    "of `nothing-deletes` this rule may not open. Say what keeps them.")
+            out_of_estate.append(
+                (host, estate_value.strip() if isinstance(estate_value, str) else ""))
             continue
 
         if rule == "derived-protected-set":
@@ -2787,6 +3691,7 @@ def check_registry_retention(root: str) -> int:
 
     # 🚨 THE DENOMINATOR, printed whatever the verdict. "No deleter found" and "nothing was swept"
     # are the same output without it, and that is the confusion this whole family is made of.
+    print(publication_denominator)
     print(f"registry retention: {len(registries)} registry(ies) declared "
           f"({', '.join(sorted(registries))}); {charts_checked} chart(s) re-derived; "
           f"{acl_rules_checked} ACL rule(s) read; "
@@ -2796,6 +3701,14 @@ def check_registry_retention(root: str) -> int:
     # 🚨 PRINTED WHATEVER THE VERDICT, and NOT only when the list is empty. A green run over an
     # enumeration with an open row must not read as a fully measured one — that is the same
     # not-checked-spelled-as-clean confusion one level down (#4315 review).
+    # 🚨 ALSO PRINTED WHATEVER THE VERDICT. An `out-of-estate` host is one this record deliberately
+    # says NOTHING about, and a green run must not read as a measurement of it. The same reasoning
+    # as the UNVERIFIED lines below: "not ours to answer" and "clean" are different sentences.
+    for host, estate in sorted(out_of_estate):
+        print(f"  {host}: OUT OF ESTATE — what deletes there is decided by "
+              f"{estate or '<unnamed>'}; "
+              "this record measures nothing about it, this lane locks nothing in it, and no "
+              "cleanup is authorized here.")
     for host in sorted(unverified_by_host):
         open_rows = unverified_by_host[host]
         print(f"  {host}: {len(open_rows)} mechanism(s) UNVERIFIED"
@@ -2813,6 +3726,9 @@ def check_registry_retention(root: str) -> int:
           "`maintenance:` stanza carries exactly the declared keys and windows, every ACL rule "
           "granting `delete` still names the declared principal, and no executable line anywhere "
           "runs a deletion against a registry.")
+    print("  and every registry this fleet PUSHES to is accounted for by the table — derived from "
+          "the publishing lanes rather than re-read from the record, which is the half that was "
+          "missing while `ghcr.io` read 'never published by this fleet' (#4323).")
     return 0
 
 
@@ -3116,6 +4032,8 @@ def _drive(axis1, axis2, registry: FakeRegistry, apply: bool = True,
            roster: dict[str, tuple[str, str, str]] | None = None,
            probe=None,
            dispositions: dict[str, tuple[str, str]] | None = None,
+           publications_root: str | None = None,
+           repositories: dict[str, str] | None = None,
            ) -> tuple[Plan, list[str], FakeRegistry]:
     """The SAME sequence `run()` performs, minus the report — so the self-test falsifies the real
     decision path rather than a paraphrase of it. Its per-lock chatter is swallowed; the assertions
@@ -3128,17 +4046,29 @@ def _drive(axis1, axis2, registry: FakeRegistry, apply: bool = True,
         inventory, inventory_errors = read_inventory(registry)
         plan = build_plan(axis1, axis2)
         plan.blockers.extend(extractor_control())
+        # 🚨 NO SKIP DEFAULT. An arm that is inert unless a test opts in is an arm that is inert in
+        # every OTHER arm, and this one exists precisely so a repository cannot slip through
+        # unread. So the default DECLARES the fixture's own repositories — the arm runs in every
+        # arm above and passes — and ARM 35 drives the missing and the stale case explicitly.
+        plan.blockers.extend(check_repository_roster(
+            axis2,
+            repositories if repositories is not None
+            else {scan.gh_repo: "fixture" for scan in axis2 if scan.files and not scan.unreadable}))
         plan.instances, instance_blockers = build_instances(
             axis2, roster or {}, probe or _answers())
         plan.blockers.extend(instance_blockers)
         if not plan.instances and not any(scan.unreadable for scan in axis2):
             plan.blockers.append("AXIS 3 found ZERO installations across the whole fleet.")
         repositories_of = {
-            instance.id: sorted({repo for scan in axis2 for repo, _tag, where in scan.pins
-                                 if f"{scan.gh_repo} {where}" == instance.source})
+            instance.key: sorted({repo for scan in axis2 for repo, _tag, where in scan.pins
+                                  if f"{scan.gh_repo} {where}" == instance.source})
             for instance in plan.instances
         }
-        classify_foreign_registries(plan, dispositions or {})
+        # Read the same way `run()` reads it — from a root — so ARM 29's parity check is answered
+        # by the harness doing the step, not by the harness declaring it did.
+        classify_foreign_registries(
+            plan, dispositions or {},
+            read_registry_publications(publications_root) if publications_root else {})
         resolve_running_sets(plan, inventory, repositories_of)
         resolve_and_classify(plan, registry, inventory, inventory_errors)
         classify_tags(plan, registry)
@@ -3852,12 +4782,29 @@ ingress:
                        chart_body: str | None = _GOOD_MAINTENANCE,
                        acl: str = _GOOD_ACL,
                        extra_chart: tuple[str, str] | None = None,
-                       extra_workflow: str | None = None) -> str:
+                       extra_workflow: str | None = None,
+                       publishing: dict[str, str] | None = None) -> str:
         root = Path(scratch)
         record = root / ".github" / "acr-retention"
         record.mkdir(parents=True, exist_ok=True)
         (record / ROSTER_PATH).write_text(
             json.dumps({"registries": registries, "instances": []}), encoding="utf-8")
+        # 🚨 THE PUBLISHING LANES ARE ALWAYS WRITTEN, and by DEFAULT they push only to the registry
+        # this lane LOCKS. The publication accounting runs on every invocation of the gate — it has
+        # no `if` asking whether its input exists, because that is the trapdoor this repository
+        # keeps paying for — so a fixture with no workflows at all would red every arm below over
+        # a derivation that read nothing. Pushing solely to `LANE_REGISTRY` leaves these arms
+        # testing exactly what they test, and ARM 34 supplies its own `publishing` bodies.
+        workflows = root / ".github" / "workflows"
+        workflows.mkdir(parents=True, exist_ok=True)
+        for name in PUBLISHING_WORKFLOWS:
+            if publishing is not None and name not in publishing:
+                continue          # a fixture that OMITS a lane, so "renamed away" can be driven
+            (workflows / name).write_text(
+                (publishing or {}).get(name, f'env:\n  ACR: {LANE_REGISTRY}\n'
+                 '    run: |\n'
+                 '      docker buildx imagetools create --tag "${{ env.ACR }}/memex-portal-ai:v" '
+                 '"${{ env.ACR }}/memex-portal-ai:staging"\n'), encoding="utf-8")
         if chart_body is not None:
             chart = root / _CHART
             chart.mkdir(parents=True, exist_ok=True)
@@ -4111,6 +5058,489 @@ ingress:
     check(check_registry_retention(str(HERE.parent.parent)) == 0,
           "ARM 33: this repository's own `registries` retention declaration does not validate")
 
+    # ── ARM 34: what this fleet PUBLISHES to a registry, DERIVED from the lanes (#4323) ──────────
+    # 🚨 THE ARM FOR THE DEFECT NO OTHER ARM COULD SEE. `.github/acr-retention/instances.json` said
+    # of `ghcr.io` *"never published by this fleet"* and *"Nothing this fleet produces is stored on
+    # ghcr.io"*, and BOTH fields validated green — because every arm above asks the record what it
+    # says, and nothing asked the WORKFLOWS what they do. Measured 2026-09-15 in the job log of
+    # run 34918214035 (02:27Z): main-cd's promote job pushed TWELVE tags across three of our own
+    # repositories to `ghcr.io/systemorph/`, on a run like every other promoting run. `release.yml`,
+    # the lane #4323 named, had never run at all — 0 runs — so the continuous lane is the whole of
+    # the publication and the issue's framing understated it.
+    HERE_ROOT = str(HERE.parent.parent)
+
+    # (a) THE MEASUREMENT. Derived from the committed lanes, not from the record it checks.
+    _targets, _producers, _problems, _references = publish_targets(HERE_ROOT)
+    check(not _problems,
+          f"ARM 34: the publication derivation could not read this repository's own lanes: "
+          f"{_problems}")
+    check(_references > 0,
+          "ARM 34: ZERO image references were read across the publishing workflows. A derivation "
+          "that parses nothing reports exactly like a fleet that publishes nothing — which is the "
+          "sentence #4323 is made of")
+    check(_targets.get("ghcr.io") == {"systemorph/memex-portal-ai", "systemorph/memex-migration",
+                                      "systemorph/mw-plugin-test"},
+          f"ARM 34: the three repositories this fleet pushes to ghcr.io were not derived: "
+          f"{sorted(_targets.get('ghcr.io', []))}. That set is the fact #4323 turns on")
+    check(LANE_REGISTRY in _targets,
+          f"ARM 34: the registry this lane LOCKS was not among the derived push targets: "
+          f"{sorted(_targets)}. It is skipped by name, and a skip over something that was never "
+          f"found is not a skip")
+    # 🚨 `--tag` IS NOT THE ONLY PUSH, and this is TWO arms because two separate readers decide it.
+    # `cr.meshweaver.cloud` receives every consumer-visible tag through `mirror-image-to-registry.sh`
+    # — no `--tag` anywhere on the line — and a publication mechanism the derivation cannot see is a
+    # host the accounting never has to ask about, which is this issue one register down.
+    check("cr.meshweaver.cloud" in _targets,
+          f"ARM 34: the fleet's own registry was not derived as a push target: {sorted(_targets)}. "
+          f"Its publications go through mirror-image-to-registry.sh, so a derivation that reads "
+          f"only `--tag` sees an entire registry as published-to by nothing")
+    # …and the SECOND reader: that script's destinations routinely sit on the line AFTER the source,
+    # behind a `\`. Measured 2026-09-15 by disabling the join: the host survives (phase D's call is
+    # one line) and `mw-plugin-test` DISAPPEARS — so the host's presence proves nothing about
+    # continuations and the REPOSITORY SET is what this arm has to assert. An arm whose subject is
+    # decided elsewhere passes having checked nothing.
+    check(_targets.get("cr.meshweaver.cloud") == {"memex-portal-ai", "memex-migration",
+                                                  "mw-plugin-test"},
+          f"ARM 34: the fleet's own registry was derived with "
+          f"{sorted(_targets.get('cr.meshweaver.cloud', []))} rather than all three repositories. "
+          f"`mw-plugin-test` reaches it through a mirror call whose destinations are on the "
+          f"CONTINUATION line, and it is the one repository that vanishes when the join stops")
+
+    # 🚨 A WORKFLOW SPELLS ONE COMMAND ACROSS LINES TWO WAYS, AND ONLY ONE HAS A BACKSLASH
+    # (#4362 review). `main-cd.yml:1260` and `:1416` mirror the portal and migration staging tags to
+    # the fleet registry inside a YAML FOLDED scalar — `run: >`, the arguments on the following
+    # physical lines, no continuation character anywhere — and read line-by-line those calls
+    # publish to NOTHING. Driven as a fixture rather than against the live file so the arm keeps
+    # its subject when the workflow moves.
+    _folded = ('jobs:\n  x:\n    steps:\n      - name: mirror\n        run: >\n'
+               '          .github/scripts/mirror-image-to-registry.sh\n'
+               '          "src.example/portal:staging"\n'
+               '          "folded.example/portal:staging"\n'
+               '      - name: next\n        run: echo done\n')
+    _folded_lines = dict(_continued_lines(_folded))
+    check(any("mirror-image-to-registry.sh" in line and "folded.example/portal:staging" in line
+              for line in _folded_lines.values()),
+          f"ARM 34: a YAML FOLDED `run: >` command was not joined, so a publication spelled the way "
+          f"main-cd spells its fleet-registry mirrors is derived from nothing: {_folded_lines}")
+    check(any("echo done" in line and "mirror-image-to-registry.sh" not in line
+              for line in _folded_lines.values()),
+          "ARM 34: the folded-scalar join swallowed the SIBLING step. A join that runs past the "
+          "block's indentation would merge unrelated commands and invent push targets")
+
+    # 🚨 AND THE HOST MAY BE A PLAIN SHELL VARIABLE. `release.yml` writes `"$ACR/$repo:$VERSION"`
+    # off the same top-level `env:` map that main-cd reaches as `${{ env.ACR }}`. Expanding only
+    # the expression form left `$ACR` as the host — which has no dot, so the Docker-Hub short-name
+    # test DISCARDED it silently: a push target dropped with no error by the one derivation whose
+    # job is to make a dropped push target impossible.
+    with tempfile.TemporaryDirectory() as scratch:
+        lanes = Path(scratch) / ".github" / "workflows"
+        lanes.mkdir(parents=True)
+        (lanes / "main-cd.yml").write_text(
+            'env:\n  ACR: shell.example\n'
+            '    run: |\n'
+            '      docker buildx imagetools create --tag "$ACR/portal:v" "$ACR/portal:staging"\n',
+            encoding="utf-8")
+        (lanes / "release.yml").write_text(
+            'env:\n  ACR: shell.example\n'
+            '    run: |\n'
+            '      docker buildx imagetools create --tag "${ACR}/migration:v" "x"\n',
+            encoding="utf-8")
+        _shell, _, _shell_problems, _ = publish_targets(scratch)
+        check(_shell.get("shell.example") == {"portal", "migration"},
+              f"ARM 34: a bare `$ACR` / `${{ACR}}` host was not expanded from the workflow's own "
+              f"`env:` map: {_shell} {_shell_problems}")
+
+        # …and an UNRESOLVABLE one is a PROBLEM, never a silent discard. The order of the two tests
+        # is the whole arm: an unresolved host has no dot, so the short-name test would drop it.
+        (lanes / "main-cd.yml").write_text(
+            'env:\n  ACR: shell.example\n'
+            '    run: |\n'
+            '      docker buildx imagetools create --tag "$MYSTERY/portal:v" "x"\n',
+            encoding="utf-8")
+        _, _, _unresolved, _ = publish_targets(scratch)
+        check(any("could not resolve" in problem for problem in _unresolved),
+              f"ARM 34: an UNRESOLVED registry host was silently discarded as a Docker Hub short "
+              f"name instead of reported. A push target dropped with no error is exactly the "
+              f"defect this derivation exists to make impossible: {_unresolved}")
+
+    # (b) THIS REPOSITORY'S OWN RECORD now accounts for all of it.
+    _live, _ = check_publication_accounting(HERE_ROOT, json.loads(
+        (Path(HERE_ROOT) / ".github" / "acr-retention" / ROSTER_PATH).read_text(encoding="utf-8")
+    )["registries"])
+    check(not _live,
+          f"ARM 34: this repository's own `registries` table does not account for what it "
+          f"publishes: {_live}")
+
+    # A lane that pushes to one foreign host, used by every negative below.
+    _PUBLISHING = {
+        "main-cd.yml": 'env:\n  ACR: ' + LANE_REGISTRY + '\n'
+                       '    run: |\n'
+                       '      docker buildx imagetools create --tag "ghcr.example/us/portal:v" '
+                       '"${{ env.ACR }}/portal:staging"\n',
+        "release.yml": 'env:\n  ACR: ' + LANE_REGISTRY + '\n'
+                       '    run: |\n'
+                       '      docker buildx imagetools create --tag "${{ env.ACR }}/portal:v" '
+                       '"${{ env.ACR }}/portal:staging"\n',
+    }
+
+    def _published(**overrides) -> dict:
+        block = {
+            "repositories": ["us/portal"],
+            "producedBy": [".github/workflows/main-cd.yml"],
+            "runFrom": "no installation",
+            "retention": {"rule": "operator-retained", "operator": "Someone Else",
+                          "reason": "their store, their retention", "cleanupAuthorized": False},
+        }
+        block["retention"].update(overrides.pop("retention", {}))
+        block.update(overrides)
+        return block
+
+    def _mixed(**overrides) -> dict:
+        entry = {
+            "disposition": "third-party",
+            "reason": "what we PULL here is somebody else's",
+            "publishes": _published(**overrides.pop("publishes", {})),
+            "retention": {"rule": "not-ours", "reason": "scoped to what we pull"},
+        }
+        entry.update(overrides)
+        return {"ghcr.example": entry}
+
+    def _accounting(registries: dict, publishing=_PUBLISHING) -> tuple[int, str]:
+        return _verdict(registries, publishing=publishing)
+
+    # 🚨 THE READER THAT ONLY LABELS MUST NOT RAISE, AND MUST NORMALIZE LIKE THE ONE THAT REDS
+    # (#4362 review). It runs inside the LIVE locking run, where an AttributeError would replace a
+    # named blocker with a stack trace; and a repository written with stray whitespace would satisfy
+    # the accounting arm — which strips — while matching nothing here, leaving ARM 34b's blocker
+    # silently inert over a declaration that reads complete.
+    with tempfile.TemporaryDirectory() as scratch:
+        record = Path(scratch) / ".github" / "acr-retention"
+        record.mkdir(parents=True)
+        (record / ROSTER_PATH).write_text('{"registries": ["not", "a", "mapping"]}',
+                                          encoding="utf-8")
+        check(read_registry_publications(scratch) == {},
+              "ARM 34: a non-mapping `registries` raised or returned a verdict from the lenient "
+              "publication reader. `read_registry_dispositions` reds on that shape; this one must "
+              "hand the run back its named blocker, never a stack trace")
+        (record / ROSTER_PATH).write_text(json.dumps({"registries": {"h.example": {
+            "publishes": {"repositories": ["  us/portal  ", ""]}}}}), encoding="utf-8")
+        check(read_registry_publications(scratch) == {"h.example": {"us/portal"}},
+              f"ARM 34: the publication reader did not strip its repository names the way the "
+              f"accounting arm does, so a padded value passes the gate and matches no overlay: "
+              f"{read_registry_publications(scratch)}")
+
+    # The CONTROL: a mixed host that declares its publication passes.
+    code, output = _accounting(_mixed())
+    check(code == 0,
+          f"ARM 34: a host that DECLARES what this fleet publishes there was rejected — the gate "
+          f"would red on the fix: {output}")
+    check("2 registry(ies) pushed to" in output and "1 left for the table to account for" in output,
+          f"ARM 34: the passing run printed no publication DENOMINATOR. 'nothing publishes here' "
+          f"and 'nothing was parsed' are the same output without one: {output}")
+
+    # 🚨 THE DEFECT ITSELF, as a negative control: `third-party` + `not-ours` over a host we push to.
+    _bare = _mixed()
+    _bare["ghcr.example"].pop("publishes")
+    code, output = _accounting(_bare)
+    check(code == 1 and "declares no `publishes` block" in output and "us/portal" in output,
+          f"ARM 34: a `third-party` host this fleet PUSHES THREE REPOSITORIES TO passed with a "
+          f"retention that says nothing of ours is stored there. That is #4323 exactly, and it "
+          f"validated green for a day: {output}")
+
+    # A host we push to that the table does not mention AT ALL.
+    code, output = _accounting({"other.example": {
+        "disposition": "third-party", "reason": "r",
+        "retention": {"rule": "not-ours", "reason": "r"}}})
+    check(code == 1 and "does not declare that host at all" in output,
+          f"ARM 34: a registry this fleet publishes to and the table never names was accepted: "
+          f"{output}")
+
+    # 🚨 A `fleet-unlockable` host needs NO `publishes` — its host-level declaration already says
+    # our images live there, and its `retention` block already has to say what keeps them. Without
+    # this the accounting would demand a second declaration of the same fact on cr.meshweaver.cloud.
+    code, output = _accounting({"ghcr.example": {
+        "disposition": "fleet-unlockable", "reason": "ours",
+        "retention": {"rule": "derived-protected-set", "reason": "r", "protectedSet": {"axes": [
+            {"axis": "committed pins", "derivedFrom": "overlays", "onIncomplete": "refuse"}]}}}})
+    check(code == 0,
+          f"ARM 34: a `fleet-unlockable` host was made to declare `publishes` as well, so the "
+          f"accounting demands the same fact twice: {output}")
+
+    # EQUALITY IN BOTH DIRECTIONS — a missing repository is the gap, a stale one hides the next one.
+    code, output = _accounting(_mixed(publishes={"repositories": ["us/other"]}))
+    check(code == 1 and "does not name us/portal" in output and "names us/other" in output,
+          f"ARM 34: a publication list that misses what we push AND names what we do not was "
+          f"accepted in one or both directions: {output}")
+
+    # The retention statement a publication may make, and the three it may not.
+    code, output = _accounting(_mixed(publishes={"retention": {"rule": "nothing-deletes"}}))
+    check(code == 1 and "expected one of operator-retained" in output,
+          f"ARM 34: a publication into somebody else's store claimed `nothing-deletes` — a rule "
+          f"whose evidence is a chart we render and an ACL we own, neither of which exists there: "
+          f"{output}")
+    code, output = _accounting(_mixed(publishes={"retention": {"operator": ""}}))
+    check(code == 1 and "names no `operator`" in output,
+          f"ARM 34: 'somebody else keeps it' passed with nobody named: {output}")
+    code, output = _accounting(_mixed(publishes={"retention": {
+        "deleters": [{"mechanism": "theirs", "present": False, "verdict": "none"}]}}))
+    check(code == 1 and "does not operate" in output and "deleters" in output,
+          f"ARM 34: a publication block enumerated the OPERATOR'S deleters. We cannot measure them "
+          f"from a committed file, so the list would be a verdict about OUR artifacts resting on "
+          f"nothing: {output}")
+    code, output = _accounting(_mixed(publishes={"retention": {"cleanupAuthorized": True}}))
+    check(code == 1 and "cleanupAuthorized" in output,
+          f"ARM 34: a record authorized a cleanup in a store this fleet does not operate: {output}")
+    # 🚨 AND THE STRING "true" — the spelling this file has already paid for twice, on `inForce`
+    # and on `present`. Every `is True` reader treats it as absent, so a check that rejects only
+    # the singleton lets it through as though a cleanup were forbidden (#4362 review).
+    code, output = _accounting(_mixed(publishes={"retention": {"cleanupAuthorized": "true"}}))
+    check(code == 1 and "cleanupAuthorized" in output,
+          f"ARM 34: `cleanupAuthorized` written as the STRING \"true\" passed as if it were "
+          f"`false`: {output}")
+    code, output = _accounting(_mixed(publishes={"retention": {"cleanupAuthorized": None}}))
+    check(code == 1 and "cleanupAuthorized" in output,
+          f"ARM 34: an ABSENT `cleanupAuthorized` passed — it would default to whatever the next "
+          f"reader assumes: {output}")
+
+    # 🚨 A WHOLE-HOST STALE BLOCK (#4362 review). Looping over DERIVED hosts alone meant that if
+    # both lanes stopped pushing to a host while its `publishes` block stayed, the host was never
+    # visited — so the stale check and every validation beneath it passed having inspected nothing,
+    # which reads exactly like a clean record.
+    code, output = _verdict(_mixed(), publishing={
+        "main-cd.yml": 'env:\n  ACR: ' + LANE_REGISTRY + '\n    run: |\n'
+                       '      docker buildx imagetools create --tag "${{ env.ACR }}/portal:v" "x"\n',
+        "release.yml": 'env:\n  ACR: ' + LANE_REGISTRY + '\n    run: |\n'
+                       '      docker buildx imagetools create --tag "${{ env.ACR }}/portal:w" "x"\n',
+    })
+    check(code == 1 and "publication record outliving its publication" in output,
+          f"ARM 34: a `publishes` block for a host NOTHING pushes to any more was never even "
+          f"visited, so it exempted itself: {output}")
+
+    # 🚨 `producedBy` IS HELD TO THE DERIVATION, not to the host's name appearing in the file — a
+    # comment satisfies a substring test, and a misattributed producer reads as evidence.
+    code, output = _accounting(_mixed(publishes={
+        "producedBy": [".github/workflows/main-cd.yml", ".github/workflows/release.yml"]}))
+    check(code == 1 and "no image reference to that host is derived" in output,
+          f"ARM 34: `producedBy` named a lane that pushes only to the LANE registry as a producer "
+          f"of a foreign host, and the substring test accepted it: {output}")
+    code, output = _accounting(_mixed(publishes={"producedBy": [".github/workflows/release.yml"]}))
+    check(code == 1 and ("does not name" in output or "no image reference" in output),
+          f"ARM 34: a lane that DOES push to the host went unnamed by `producedBy` and nothing "
+          f"noticed — a producer the record has not seen is a publication nobody reviewed: {output}")
+
+    # `runFrom` — the whole difference between a publication and a source this lane must protect.
+    code, output = _accounting(_mixed(publishes={"runFrom": ""}))
+    check(code == 1 and "states no `runFrom`" in output,
+          f"ARM 34: a publication block left unsaid whether any INSTALLATION runs from it: {output}")
+
+    # `producedBy` has to name a lane that actually pushes THERE.
+    code, output = _accounting(_mixed(publishes={"producedBy": [".github/workflows/gone.yml"]}))
+    check(code == 1 and "not a file in this repository" in output,
+          f"ARM 34: `producedBy` pointed at a moved lane and still checked: {output}")
+
+    # A renamed publishing lane must RED, never quietly derive nothing.
+    code, output = _verdict(_mixed(), publishing={"main-cd.yml": _PUBLISHING["main-cd.yml"]})
+    check(code == 1 or "release.yml is missing" in output,
+          f"ARM 34: a MISSING publishing lane did not red. A derivation that reads one of two "
+          f"lanes reports exactly like one that read both: {output}")
+
+    # ── ARM 34b: an installation that RUNS from a publication, and the report that names it ──────
+    # 🚨 WITHOUT THIS THE `publishes` BLOCK IS PROSE. A host declared `third-party` about what the
+    # fleet PULLS may still hold repositories the fleet PUBLISHES, and an overlay pinning one of
+    # THOSE is not a third-party pin — it is an installation running OUR images from a store
+    # nothing of ours retains, in the one branch (pins here AND there) that otherwise prints
+    # success. It fires on nobody today, which is exactly the claim `publishes.runFrom` makes.
+    _publication_scan = _scan2("Systemorph/Memex", FIXTURE_OVERLAY_FOREIGN.replace(
+        "cr.meshweaver.cloud", "ghcr.io/systemorph"),
+        "deployments/aks/memex-cloud/values.memexcloud.public.yaml")
+    plan, _, _ = _drive(clean1, clean2 + [_publication_scan],
+                        FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                        dispositions={"ghcr.io": ("third-party", "somebody else's")},
+                        publications_root=HERE_ROOT)
+    check(any("PUBLISHES rather than retains" in blocker for blocker in plan.blockers),
+          f"ARM 34b: an installation pinning `ghcr.io/systemorph/memex-portal-ai` — OUR image, on "
+          f"a host declared third-party — was waved through as somebody else's: {plan.blockers}")
+
+    # …and the NEGATIVE control: a genuinely third-party pin on the SAME host still passes. Without
+    # it the arm above could be firing on the host rather than on the repository.
+    _bootstrap_scan = _scan2("Systemorph/Memex", FIXTURE_OVERLAY_FOREIGN.replace(
+        "cr.meshweaver.cloud/memex-portal-ai", "ghcr.io/distribution/distribution").replace(
+        "cr.meshweaver.cloud/memex-migration", "ghcr.io/oras-project/oras"),
+        "deployments/aks/memex-cloud/values.memexcloud.public.yaml")
+    plan, _, _ = _drive(clean1, clean2 + [_bootstrap_scan],
+                        FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                        dispositions={"ghcr.io": ("third-party", "somebody else's")},
+                        publications_root=HERE_ROOT)
+    check(not any("PUBLISHES rather than retains" in blocker for blocker in plan.blockers),
+          f"ARM 34b: `ghcr.io/distribution/distribution` — the registry service's own image, which "
+          f"cannot come from the registry it boots — was read as one of ours. The arm would then "
+          f"be firing on the HOST, and the host is precisely the wrong unit: {plan.blockers}")
+
+    # 🚨 AND THE REPORT MUST NOT PRINT OUR OWN IMAGES UNDER "NOT ours to retain" — that is the
+    # record's false sentence reproduced in the one artifact a reader checks it against.
+    plan, _, _ = _drive(clean1, clean2 + [_publication_scan],
+                        FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                        dispositions={"ghcr.io": ("third-party", "somebody else's")},
+                        publications_root=HERE_ROOT)
+    _printed = io.StringIO()
+    with contextlib.redirect_stdout(_printed):
+        report(plan, clean1, clean2 + [_publication_scan], REGISTRY_DEFAULT, _inventory(),
+               apply=False, release_enabled=False, root=HERE_ROOT)
+    _mirror = _printed.getvalue()
+    check("this fleet PUBLISHES here" in _mirror and "published by us" in _mirror,
+          f"ARM 34b: the protected-set report did not distinguish OUR OWN repositories on a mixed "
+          f"host: {_mirror[-1500:]}")
+    _ours_block = _mirror.split("this fleet PUBLISHES here")[-1].split("\n\n")[0]
+    check("NOT ours to retain" not in _ours_block,
+          f"ARM 34b: the report printed this fleet's own published images under 'declared NOT ours "
+          f"to retain' — the record's false sentence, reproduced by the report: {_ours_block}")
+
+    # ── ARM 36: `out-of-estate` — our images in a store outside this fleet's reach (#3438) ──────
+    # 🚨 THE RULE EXISTS BECAUSE EVERY OTHER ONE WOULD HAVE BEEN FALSE about PartnerRe's estate
+    # ACR, and it is SAFE only because a host this fleet PUSHES to cannot take it — derived from
+    # the lanes rather than read from the record. Both halves are driven here: the control passes
+    # and prints, and each refusal fires on its own.
+    def _estate(**overrides) -> dict:
+        retention = {
+            "rule": "out-of-estate",
+            "estate": "the PartnerRe Memex subscription, recorded in Systemorph/PartnerRe.Memex",
+            "cleanupAuthorized": False,
+            "reason": "outside this lane's credential; the answer is theirs to give",
+        }
+        retention.update(overrides.pop("retention", {}))
+        for key in overrides.pop("drop", []):
+            retention.pop(key, None)
+        entry = {"disposition": "fleet-unlockable",
+                 "reason": "PartnerRe's estate registry; our images, which this lane "
+                           "cannot lock",
+                 "retention": retention}
+        entry.update(overrides)
+        return {"cr.example": entry}
+
+    code, output = _estate_out = _verdict(_estate())
+    check(code == 0, f"ARM 36: a well-formed `out-of-estate` declaration was REJECTED. Every other "
+                     f"rule is a FALSE sentence about a registry in somebody else's subscription, "
+                     f"so a gate that refuses this one leaves the lane red with no true answer "
+                     f"available: {output}")
+    check("OUT OF ESTATE" in output and "measures nothing about it" in output,
+          f"ARM 36: an `out-of-estate` host did not PRINT. A green run over a registry this record "
+          f"deliberately says nothing about must not read as a measurement of it — 'not ours to "
+          f"answer' and 'clean' are different sentences: {output}")
+    code, output = _verdict(_estate(retention={"deleters": [
+        {"mechanism": "their purge task", "present": False, "verdict": "we looked once"}]}))
+    check(code == 1 and "still enumerates `deleters`" in output,
+          f"ARM 36: an `out-of-estate` record enumerated somebody else's deleters. Nothing in this "
+          f"repository can re-derive that list, so it is a verdict about OUR artifacts resting on "
+          f"nothing — the false reassurance this table exists to refuse: {output}")
+    for _estate_value, _label in ((None, "ABSENT"), ({"estate": None}, "null"),
+                                  ({"estate": ""}, "empty"), ({"estate": 17}, "a number"),
+                                  ({"estate": ["them"]}, "a list")):
+        code, output = _verdict(_estate(drop=["estate"]) if _estate_value is None
+                                else _estate(retention=_estate_value))
+        check(code == 1 and "is not a non-empty string" in output,
+              f"ARM 36: 'the answer is somebody else's' passed with the estate {_label}. "
+              f"🚨 `str(None)` is the STRING \"None\", so a null estate satisfied a truthiness "
+              f"test AND rendered as `decided by: None` — a missing estate wearing the costume of "
+              f"a named one, in the line whose whole job is to say WHO answers: {output}")
+    for _authorized, _label in ((True, "true"), ("false", 'the STRING "false"'),
+                                (None, "absent")):
+        code, output = _verdict(
+            _estate(drop=["cleanupAuthorized"]) if _authorized is None
+            else _estate(retention={"cleanupAuthorized": _authorized}))
+        check(code == 1 and "must be exactly `false`" in output,
+              f"ARM 36: `cleanupAuthorized` written as {_label} passed on a registry this fleet "
+              f"cannot even read. It can never be in a position to authorize deleting there: "
+              f"{output}")
+    # 🚨 THE TRAPDOOR ARM. A host our own publishing lanes push to may not answer the second
+    # question with "somebody else's problem" — that is `nothing-deletes` escaped, and
+    # `cr.meshweaver.cloud` is exactly such a host.
+    _pushes_elsewhere = {name: ('    run: |\n'
+                                '      docker buildx imagetools create --tag '
+                                f'"{LANE_REGISTRY}/memex-portal-ai:v" "x"\n'
+                                '      docker buildx imagetools create --tag '
+                                '"cr.example/memex-portal-ai:v" "x"\n')
+                          for name in PUBLISHING_WORKFLOWS}
+    code, output = _verdict(_estate(), publishing=_pushes_elsewhere)
+    check(code == 1 and "PUSHES its own images" in output,
+          f"ARM 36: a host THIS FLEET PUBLISHES TO was allowed to declare `out-of-estate`. That is "
+          f"the trapdoor out of `nothing-deletes` the rule may not open, and the one registry it "
+          f"would have mattered for is our own: {output}")
+    # …and a derivation that cannot be trusted refuses the rule rather than allowing it.
+    _no_lane_registry = {name: ('    run: |\n'
+                                '      docker buildx imagetools create --tag '
+                                '"cr.example/memex-portal-ai:v" "x"\n')
+                         for name in PUBLISHING_WORKFLOWS}
+    code, output = _verdict(_estate(), publishing=_no_lane_registry)
+    check(code == 1 and "could not be trusted" in output,
+          f"ARM 36: the rule was ALLOWED on a run whose push-target derivation did not even derive "
+          f"`{LANE_REGISTRY}`. The refusal above is the whole of this rule's safety, and a "
+          f"derivation that cannot refuse must not permit: {output}")
+    code, output = _verdict(_estate(disposition="third-party",
+                                    retention={"rule": "out-of-estate"}))
+    check(code == 1 and "may not carry" in output,
+          f"ARM 36: a `third-party` host — one whose images were never ours — declared that OUR "
+          f"images there are somebody else's to retain: {output}")
+    # The committed record uses it, so the rule is exercised by the real file and not only by
+    # fixtures — and the host it names is NOT one this fleet publishes to.
+    _committed_registries = json.loads(
+        Path(".github/acr-retention/instances.json").read_text(encoding="utf-8"))["registries"]
+    _estate_hosts = sorted(host for host, entry in _committed_registries.items()
+                           if ((entry.get("retention") or {}).get("rule")) == "out-of-estate")
+    check(_estate_hosts,
+          "ARM 36: no committed registry declares `out-of-estate`, so the branch this repository's "
+          "own record depends on is driven by fixtures alone")
+
+    # ── ARM 36b: the REPORT says so too, and it names the estate (#4400 review) ─────────────────
+    # 🚨 ARM 36 validates the RECORD through `check_registry_retention` and never renders a line.
+    # A regression to the old *"a cleanup must KEEP"* wording — a protected-set claim over a
+    # registry whose own record says this fleet measures nothing about it — would leave the whole
+    # suite green, and the report is the one artifact a reader checks the declaration against.
+    if _estate_hosts:
+        _estate_host = _estate_hosts[0]
+        _estate_scan = _scan2("Systemorph/Estate", FIXTURE_OVERLAY_FOREIGN.replace(
+            "cr.meshweaver.cloud", _estate_host),
+            "deployments/aks/estate/values.estate.yaml")
+        plan, _, _ = _drive(clean1, clean2 + [_estate_scan],
+                            FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                            dispositions={_estate_host: ("fleet-unlockable", "their estate")},
+                            publications_root=HERE_ROOT)
+        _printed = io.StringIO()
+        with contextlib.redirect_stdout(_printed):
+            report(plan, clean1, clean2 + [_estate_scan], REGISTRY_DEFAULT, _inventory(),
+                   apply=False, release_enabled=False, root=HERE_ROOT)
+        _estate_report = _printed.getvalue()
+        _estate_block = next((line for line in _estate_report.splitlines()
+                              if line.strip().startswith(_estate_host)), "")
+        check("NOT a protected set" in _estate_block,
+              f"ARM 36b: the report printed an `out-of-estate` registry's references as a protected "
+              f"set a cleanup must KEEP. That contradicts the declaration printed beside it, in the "
+              f"artifact a reader checks the declaration against: {_estate_block or _estate_report[-900:]}")
+        check("a cleanup must KEEP" not in _estate_block,
+              f"ARM 36b: the KEEP wording survived on an `out-of-estate` host: {_estate_block}")
+        _declared_estate = str(
+            (_committed_registries[_estate_host].get("retention") or {}).get("estate", ""))
+        check(_declared_estate[:40] and _declared_estate[:40] in _estate_block,
+              f"ARM 36b: the line does not NAME the estate the record names, so a reader is told "
+              f"that nobody here answers and not WHO does — which is what makes the list "
+              f"auditable: {_estate_block}")
+        # 🚨 THE NEGATIVE CONTROL: the branch must be chosen by the RULE, not by the disposition.
+        # `cr.meshweaver.cloud` is `fleet-unlockable` too, and its references ARE a protected set.
+        _keep_scan = _scan2("Systemorph/Memex", FIXTURE_OVERLAY_FOREIGN,
+                            "deployments/aks/build/values.build.public.yaml")
+        plan, _, _ = _drive(clean1, clean2 + [_keep_scan],
+                            FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                            dispositions={"cr.meshweaver.cloud": ("fleet-unlockable", "ours")},
+                            publications_root=HERE_ROOT)
+        _printed = io.StringIO()
+        with contextlib.redirect_stdout(_printed):
+            report(plan, clean1, clean2 + [_keep_scan], REGISTRY_DEFAULT, _inventory(),
+                   apply=False, release_enabled=False, root=HERE_ROOT)
+        check("a cleanup must KEEP" in _printed.getvalue(),
+              "ARM 36b: a `fleet-unlockable` registry whose retention is NOT `out-of-estate` lost "
+              "its protected-set sentence, so the new branch is firing on the disposition rather "
+              "than on the rule — and `cr.meshweaver.cloud`'s references really are a set a "
+              "cleanup must keep")
+
     # ── ARM 31: the decided WINDOW is asserted on the record, and the assertion can fail ────────
     # 🚨 The control that matters is the one this repository's own record FAILED on 2026-09-13:
     # `--ago 7d --keep 10` over `memex-portal-ai`, the image both production portals run. It is
@@ -4266,6 +5696,228 @@ ingress:
               "ARM 24d: a duplicated roster entry was resolved by array order — which lets a stale "
               f"exemption outlive the line written to end it: {problems}")
 
+    # ── ARM 24e: TWO REPOSITORIES MAY EACH DECLARE A `memex`, and both are asked (#3438) ────────
+    # The live defect, as a fixture. `Systemorph/PartnerRe.Memex` was created 2026-09-14T21:30Z and
+    # its control instance is `memex` too — correctly, it is PartnerRe's memex — and the lane died
+    # on `declared by two overlays … which host answers for it is ambiguous`. The cost was not the
+    # red: it is that NEITHER installation was then asked anything, so `memex` — the one actually
+    # exposed to the ACR purge — got no locks either, on a run whose green is `pause.reEnableWhen`.
+    _PARTNER_OVERLAY = """
+config:
+  memex_portal:
+    Hosting__Deployment: "memex"
+portal:
+  image: "cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8622"
+ingress:
+  enabled: true
+  host: "partnerre.example.cloud"
+"""
+    pair2 = [_scan2("Systemorph/Memex", FIXTURE_OVERLAY_INSTANCE,
+                    where="deployments/aks/memex/values.memex.public.yaml"),
+             _scan2("Systemorph/PartnerRe.Memex", _PARTNER_OVERLAY,
+                    where="deployments/aks/memex/values.memex.yaml")]
+    plan, _, _ = _drive(clean1, pair2, FakeRegistry(_inventory(), FAKE_TAGS),
+                        dispositions={"cr.meshweaver.cloud": ("fleet-unlockable", "ours")})
+    check(not any("ambiguous" in b for b in plan.blockers),
+          f"ARM 24e: two DIFFERENT repositories each declaring a `memex` still collided. An "
+          f"installation id is unique inside one deployments repository and nothing larger: "
+          f"{plan.blockers}")
+    check(not plan.blockers,
+          f"ARM 24e: the cross-repository pair produced blockers: {plan.blockers}")
+    check(sorted(i.key for i in plan.instances)
+          == ["Systemorph/Memex:memex", "Systemorph/PartnerRe.Memex:memex"],
+          f"ARM 24e: the two installations were not both built: "
+          f"{sorted(i.key for i in plan.instances)}")
+    check(sorted(i.label for i in plan.instances)
+          == ["Systemorph/Memex:memex", "Systemorph/PartnerRe.Memex:memex"],
+          "ARM 24e: two installations of the same id were LABELLED the same way, so every error "
+          "and every report line about one of them would be about either")
+    # 🚨 `next(..., None)` RATHER THAN `next(...)`. Under the pre-fix identity one of these does not
+    # exist, and a StopIteration would end the suite on a traceback BEFORE any named failure is
+    # printed — a red that says nothing about which arm caught what.
+    _ours = next((i for i in plan.instances if i.gh_repo == "Systemorph/Memex"), None)
+    _theirs = next((i for i in plan.instances if i.gh_repo == "Systemorph/PartnerRe.Memex"), None)
+    check(_ours is not None and _theirs is not None,
+          "ARM 24e: one of the two repositories' installations was swallowed entirely — which is "
+          "the live defect: the second declaration is dropped and the FIRST is never asked either")
+    check(_ours is not None and _theirs is not None
+          and _ours.host == "memex.example.cloud" and _theirs.host == "partnerre.example.cloud",
+          f"ARM 24e: the two installations did not keep their own ingress hosts: "
+          f"{getattr(_ours, 'host', None)} / {getattr(_theirs, 'host', None)}")
+    check(_ours is not None and _theirs is not None
+          and bool(_ours.manifests) and _theirs.out_of_scope,
+          "ARM 24e: the pins did not follow the declaring repository — the one pinning in THIS "
+          "ACR must have a protected closure and the one pinning elsewhere must be out of scope, "
+          f"got {getattr(_ours, 'manifests', None)} / "
+          f"out_of_scope={getattr(_theirs, 'out_of_scope', None)}")
+
+    # ── ARM 24f: ONE repository declaring an id TWICE is still ambiguous, and still reds ────────
+    same2 = [_scan2("Systemorph/Memex", FIXTURE_OVERLAY_INSTANCE,
+                    where="deployments/aks/memex/values.memex.public.yaml"),
+             _scan2("Systemorph/Memex", FIXTURE_OVERLAY_INSTANCE,
+                    where="deployments/aks/memex-2/values.memex.public.yaml")]
+    plan, _, _ = _drive(clean1, same2, FakeRegistry(_inventory(), FAKE_TAGS))
+    check(any("SAME repository" in b and "ambiguous" in b for b in plan.blockers),
+          f"ARM 24f: one repository declaring `memex` in two overlays passed. Qualifying identity "
+          f"by repository must not disarm the collision it was always about: {plan.blockers}")
+    check(len(plan.instances) == 1,
+          f"ARM 24f: the duplicate was admitted as a second installation: {len(plan.instances)}")
+
+    # ── ARM 24g: the roster is resolved against `repo:id`, and cannot exempt the wrong one ──────
+    plan, _, _ = _drive(clean1, pair2, FakeRegistry(_inventory(), FAKE_TAGS),
+                        dispositions={"cr.meshweaver.cloud": ("fleet-unlockable", "ours")},
+                        roster={"Systemorph/PartnerRe.Memex:memex":
+                                ("not-installed", "never stood up", "Systemorph/PartnerRe.Memex")})
+    _states = {i.gh_repo: i.state for i in plan.instances}
+    check(_states == {"Systemorph/Memex": "live",
+                      "Systemorph/PartnerRe.Memex": "not-installed"},
+          f"ARM 24g: a roster entry naming its `repo` reached the wrong installation: {_states}")
+    plan, _, _ = _drive(clean1, pair2, FakeRegistry(_inventory(), FAKE_TAGS),
+                        dispositions={"cr.meshweaver.cloud": ("fleet-unlockable", "ours")},
+                        roster={"memex": ("not-installed", "never stood up", "")})
+    check(any("Name the `repo`" in b for b in plan.blockers),
+          f"ARM 24g: an UNQUALIFIED roster entry for an id TWO repositories declare was applied "
+          f"anyway. One line cannot say which of them is not live, and applying it to both exempts "
+          f"an installation nobody wrote it about: {plan.blockers}")
+    check(all(i.state == "live" for i in plan.instances),
+          "ARM 24g: the ambiguous roster entry exempted an installation while reporting the "
+          "ambiguity — a blocker beside an applied exemption is the exemption")
+    # …and the two shapes that would collide with the `owner/name:id` key itself.
+    with tempfile.TemporaryDirectory() as scratch:
+        folder = Path(scratch) / ".github" / "acr-retention"
+        folder.mkdir(parents=True)
+
+        def _roster_problems(body: str) -> list[str]:
+            (folder / ROSTER_PATH).write_text(body, encoding="utf-8")
+            return read_instance_roster(scratch)[1]
+
+        check(any("is not an installation id" in p for p in _roster_problems(
+                  '{"instances": [{"id": "Systemorph/X:memex", "state": "retired", '
+                  '"reason": "r"}]}')),
+              "ARM 24g: an `id` carrying the repository inline was accepted, so it could take the "
+              "place of a qualified entry while naming no repository the scan produces")
+        check(any("is not an `owner/name`" in p for p in _roster_problems(
+                  '{"instances": [{"id": "memex", "repo": "PartnerRe", "state": "retired", '
+                  '"reason": "r"}]}')),
+              "ARM 24g: a `repo` shorthand was accepted; it matches nothing, so the entry would "
+              "exempt nobody while reading as a declaration")
+
+    # ── ARM 24h: the ALIAS PAIR — two entries that RESOLVE to one installation (#4396 review) ───
+    # 🚨 The roster reader cannot see this one: `memex` and `Systemorph/Memex:memex` are different
+    # KEYS, so its own declared-twice check passes them both, and where that id is unique they
+    # resolve to the SAME installation. Assigned in key order, a contradictory `not-installed`
+    # would win or lose by repository-name casing — and winning would skip a LIVE installation's
+    # probe and its running-set protection while the run reported success.
+    plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
+                        roster={"memex-cloud": ("not-installed", "stale line", ""),
+                                "Systemorph/Memex:memex-cloud":
+                                    ("live", "", "Systemorph/Memex")})
+    check(any("both resolve to the same installation" in b for b in plan.blockers),
+          f"ARM 24h: an unqualified entry and a qualified one for the SAME installation were both "
+          f"applied, in key order, with the loser invisible: {plan.blockers}")
+
+    # ── ARM 35: the REPOSITORY roster — the half that stops qualification becoming exemption ────
+    # 🚨 WITHOUT THIS ARM THE FIX IS THE NEXT DEFECT. Keying by `gh_repo:id` is what lets two
+    # repositories each declare a `memex`; on its own it also means a new deployments repository
+    # joins the fleet silently, its installations becoming their own slots unread. Both directions
+    # are driven, and the CONTROL — a fleet whose repositories are all declared — must pass, or the
+    # arm would be a gate that reds on everything and gets ignored.
+    check(not check_repository_roster(pair2, {"Systemorph/Memex": "ours",
+                                              "Systemorph/PartnerRe.Memex": "theirs"}),
+          "ARM 35: a fully declared fleet was refused by the repository roster")
+    _missing = check_repository_roster(pair2, {"Systemorph/Memex": "ours"})
+    check(any("PartnerRe.Memex" in p and "does not name it" in p for p in _missing),
+          f"ARM 35: a repository carrying deployment overlays that the `repositories` table does "
+          f"not name passed. That is a new deployments repository entering the fleet with nobody "
+          f"having read a line about it: {_missing}")
+    _stale = check_repository_roster(pair2, {"Systemorph/Memex": "ours",
+                                             "Systemorph/PartnerRe.Memex": "theirs",
+                                             "Systemorph/Gone": "decommissioned in 2019"})
+    check(any("Systemorph/Gone" in p and "hides the next one" in p for p in _stale),
+          f"ARM 35: a declaration for a repository no overlay answers to passed — a stale line "
+          f"that accounts for nothing: {_stale}")
+    _unreadable = OverlayScan(gh_repo="Systemorph/Dark", files=0)
+    _unreadable.unreadable = "the git tree could not be read"
+    check(not check_repository_roster([_unreadable], {}),
+          "ARM 35: a repository whose tree could NOT be read was reported as an undeclared one. "
+          "An absence read through an unreadable tree is not a measured absence, and build_plan "
+          "has already made it a blocker")
+    # 🚨 …and it is still REACHED (#4396 review). Leaving it out of `seen` made a CORRECTLY declared
+    # repository produce the stale-line blocker as well, which says "no repository the fleet scan
+    # reached carries an overlay under that name" about one the scan reached and could not read —
+    # a second, contradictory sentence pointing the reader at the wrong file.
+    check(not check_repository_roster([_unreadable], {"Systemorph/Dark": "declared, unreadable"}),
+          "ARM 35: a DECLARED repository whose tree could not be read was ALSO reported as a stale "
+          "declaration. Two contradictory blockers about one repository send the reader to delete "
+          "the line that is right")
+    # ── the DENOMINATOR: only a full discovery may assert that a declaration names nobody ───────
+    _partial = check_repository_roster(pair2, {"Systemorph/Memex": "ours",
+                                               "Systemorph/PartnerRe.Memex": "theirs",
+                                               "Systemorph/NotScannedHere": "elsewhere"},
+                                       complete=False)
+    check(not _partial,
+          f"ARM 35: a PARTIAL scan (`--repos` / `--root`) asserted that a declared repository it "
+          f"never looked at is gone. Those modes deliberately scan part of the fleet, so the stale "
+          f"direction would red every partial run on a record that is right: {_partial}")
+    _partial_strict = check_repository_roster(pair2, {"Systemorph/Memex": "ours"}, complete=False)
+    check(any("PartnerRe.Memex" in p for p in _partial_strict),
+          f"ARM 35: a partial scan stopped holding the repositories IN FRONT OF IT to the table. "
+          f"The two directions have different denominators; only one of them needs the whole "
+          f"fleet: {_partial_strict}")
+    # 🚨 …and WHICH invocations supply that denominator, driven as a pure function because `main()`
+    # is argparse and nothing here can falsify it (#4400 review). `--root` wins over `--discover`
+    # in the branch that builds the repository list, so the pair is a ONE-repository local scan.
+    check(scan_is_complete(True, None), "ARM 35: `--discover` alone was not read as a full fleet")
+    check(not scan_is_complete(False, None),
+          "ARM 35: `--repos` was read as a full fleet, so a partial list would assert that every "
+          "repository it did not name is gone")
+    check(not scan_is_complete(False, "/checkout"),
+          "ARM 35: `--root` was read as a full fleet")
+    check(not scan_is_complete(True, "/checkout"),
+          "ARM 35: `--root` WITH `--discover` was read as a full fleet. `--root` wins in the branch "
+          "that builds the repository list, so that pair scans ONE repository while claiming the "
+          "denominator of the whole fleet — and every declared repository it never looked at would "
+          "read as gone")
+    # …and the same run must still be RED overall, so the skip above can never be a pass.
+    plan, _, _ = _drive(clean1, [_unreadable], FakeRegistry(_inventory(), FAKE_TAGS))
+    check(plan.blockers,
+          "ARM 35: an unreadable overlay tree produced no blocker at all, so skipping it in the "
+          "repository roster WOULD be a silent pass")
+    # 🚨 AND THE ARM MUST BE LIVE IN THE HARNESS, not only when a test opts in. `_drive` declares
+    # the fixture's own repositories by default, so every arm above runs it; drive the missing case
+    # through the FULL path to prove the blocker reaches `plan.blockers` rather than a return value.
+    plan, _, _ = _drive(clean1, pair2, FakeRegistry(_inventory(), FAKE_TAGS),
+                        dispositions={"cr.meshweaver.cloud": ("fleet-unlockable", "ours")},
+                        repositories={"Systemorph/Memex": "ours"})
+    check(any("PartnerRe.Memex" in b and "does not name it" in b for b in plan.blockers),
+          f"ARM 35: the repository roster is not on the decision path — a repository the table "
+          f"does not name reached the plan with no blocker: {plan.blockers}")
+    # The committed table: it parses, it names every repository the fleet scan found on
+    # 2026-09-15, and the committed roster entries resolve against it.
+    _repos_table, _repo_problems = read_repository_roster(".")
+    check(not _repo_problems,
+          f"ARM 35: this repository's own `repositories` table does not validate: {_repo_problems}")
+    check({"Systemorph/Memex", "Systemorph/PartnerRe.Memex", "Systemorph/MeshWeaver"}
+          <= set(_repos_table),
+          f"ARM 35: the three repositories carrying deployment overlays on 2026-09-15 are not all "
+          f"declared: {sorted(_repos_table)}")
+    with tempfile.TemporaryDirectory() as scratch:
+        folder = Path(scratch) / ".github" / "acr-retention"
+        folder.mkdir(parents=True)
+        (folder / ROSTER_PATH).write_text('{"instances": []}', encoding="utf-8")
+        check(any("no `repositories` table" in p for p in read_repository_roster(scratch)[1]),
+              "ARM 35: a roster with NO `repositories` table accounted for every repository — an "
+              "absent table and a complete one read identically")
+        (folder / ROSTER_PATH).write_text(
+            '{"repositories": {"Systemorph/Memex": {}}, "instances": []}', encoding="utf-8")
+        check(any("has no `reason`" in p for p in read_repository_roster(scratch)[1]),
+              "ARM 35: a repository declared with no reasoning was accepted, which is the hand "
+              "list this file exists to replace")
+    _committed_roster, _ = read_instance_roster(".")
+    check(any(entry[2] for entry in _committed_roster.values()),
+          "ARM 35: no committed roster entry names its `repo`, so the qualified path this "
+          "repository's own record depends on is exercised by nothing")
+
     # ── ARM 25: a roster entry naming nobody is a stale exemption, and reds ─────────────────────
     plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
                         roster={"ghost": ("retired", "decommissioned in 2019", "")})
@@ -4367,7 +6019,7 @@ env:
     # scanners and the roster file.
     run_calls = _calls(run) - {"report", "emit", "print", "Registry", "len", "bool", "sorted",
                                "set", "any", "all", "read_instance_roster",
-                               "read_registry_dispositions",
+                               "read_registry_dispositions", "read_repository_roster",
                                "scan_overlays_local", "scan_overlays_remote"}
     missing = run_calls - _calls(_drive)
     check(not missing,
@@ -4379,6 +6031,7 @@ env:
     # of the sequence. Deleting `extractor_control()` from `run()` alone left this self-test green
     # until this check existed. Name the steps the protection decision must make.
     required = {"extractor_control", "read_instance_roster", "read_registry_dispositions",
+                "read_repository_roster", "check_repository_roster",
                 "build_instances", "classify_foreign_registries",
                 "resolve_running_sets", "resolve_and_classify", "classify_tags",
                 "read_inventory", "build_plan", "apply_locks", "apply_tag_locks"}
@@ -4402,7 +6055,7 @@ env:
           "unresolved tag / indeterminate / unreadable registry all RED with nothing released, "
           "release arm off by default and live when enabled, report-only writes nothing, a lock "
           "write that exits 0 without taking and one whose read-back cannot answer are both RED "
-          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), an UNDECLARED registry REDS wherever it appears, a declared `fleet-unlockable` one is counted on its own line saying protection there is UNVERIFIED, pinning in BOTH is RED because half covered is not covered, a `*.azurecr.io` that is not this registry is foreign, helm's split repository/tag shape is read, and a reference inside a COMMENT is prose. WHAT DELETES FROM IT (#4230, the SECOND question about the same unit): every declared registry must say what deletes from it or go RED, an empty table is zero-asked rather than clean, a `nothing-deletes` enumeration in which NOTHING is `present` inspected nothing, a `present` written as the STRING \"true\" is RED, the rule and the disposition are checked against EACH OTHER in both directions, a `derived-protected-set` axis that merely WARNS on an incomplete derivation is RED because on a registry with NO LOCK that deletes more rather than protecting less — and the arm that is not about JSON: the committed CHART is re-derived, so a `kind: Job`/`kind: CronJob` rendered beside the registry (quoted or bare), a `maintenance:` window that MOVED, a NEW key in that stanza, the stanza VANISHING, and an executable deletion anywhere in `deploy/`/`.github/` each go RED while the record still reads 'nothing deletes' — with the sweep's every spelling PROVEN to match on a synthetic control, and a deleter named inside a COMMENT proven NOT to.")
+          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), an UNDECLARED registry REDS wherever it appears, a declared `fleet-unlockable` one is counted on its own line saying protection there is UNVERIFIED, pinning in BOTH is RED because half covered is not covered, a `*.azurecr.io` that is not this registry is foreign, helm's split repository/tag shape is read, and a reference inside a COMMENT is prose. WHAT DELETES FROM IT (#4230, the SECOND question about the same unit): every declared registry must say what deletes from it or go RED, an empty table is zero-asked rather than clean, a `nothing-deletes` enumeration in which NOTHING is `present` inspected nothing, a `present` written as the STRING \"true\" is RED, the rule and the disposition are checked against EACH OTHER in both directions, a `derived-protected-set` axis that merely WARNS on an incomplete derivation is RED because on a registry with NO LOCK that deletes more rather than protecting less — and the arm that is not about JSON: the committed CHART is re-derived, so a `kind: Job`/`kind: CronJob` rendered beside the registry (quoted or bare), a `maintenance:` window that MOVED, a NEW key in that stanza, the stanza VANISHING, and an executable deletion anywhere in `deploy/`/`.github/` each go RED while the record still reads 'nothing deletes' — with the sweep's every spelling PROVEN to match on a synthetic control, and a deleter named inside a COMMENT proven NOT to. WHAT THIS FLEET PUBLISHES TO IT (#4323, the THIRD question about the same unit): the push targets are DERIVED from the publishing lanes — every `--tag` and every mirror-image-to-registry.sh destination, shell continuations joined, with the two readers falsified SEPARATELY because disabling the mirror call loses a whole registry while disabling the join loses one repository — a `third-party` host this fleet pushes to with no `publishes` block is RED (that is the defect, and it validated green for a day), an undeclared push target is RED, the declared repositories are held to the derived set in BOTH directions, `operator-retained` is the only rule a publication may claim and may enumerate no deleters and authorize no cleanup, a `fleet-unlockable` host is NOT made to declare the same fact twice, a renamed lane REDS rather than deriving nothing — and the two arms that stop the block being prose: an overlay pinning one of OUR published repositories is RED while the bootstrap image on the SAME host is not, and the report never prints our own images under 'declared NOT ours to retain'. WHICH REPOSITORY DECLARES IT (#3438, the identity): an installation is `owner/name:id`, so TWO deployments repositories may each declare a `memex` and both are built, probed at their own hosts and protected against their own repository's pins — while ONE repository declaring an id in two overlays is still ambiguous and still RED, and two installations of the same id can never be LABELLED the same way. The roster resolves against that identity: an entry naming its `repo` reaches only that repository's installation, an unqualified entry for an id two repositories declare is RED rather than applied to either, and an `id` carrying a `:` or a `repo` that is not an `owner/name` is refused before it can exempt nobody while reading as a declaration. AND THE HALF THAT STOPS THE QUALIFICATION BECOMING AN EXEMPTION: every repository whose tree carries deployment overlay FILES must be named in the `repositories` table — an undeclared one is RED on the real decision path, a stale name is RED, a repository whose tree could NOT be read is skipped there and still reds the run, and the control (a fully declared fleet) passes — while the STALE direction, which needs the WHOLE fleet as its denominator, is asserted only over a full discovery, so a `--repos` / `--root` scan neither reds on a record that is right nor stays silent about not having asked. Two roster entries that RESOLVE to one installation are RED rather than applied in key order with the loser invisible, and a DECLARED repository whose tree could not be read does not also produce the contradictory stale line. OUT OF ESTATE: our images in a registry outside this fleet's reach are declared rather than described falsely — the rule PRINTS on every run, may enumerate no deleters, must name its `estate` and must carry `cleanupAuthorized: false`, and it is REFUSED for any host this fleet's own publishing lanes push to and refused outright where that derivation cannot be trusted, which is what keeps it from being a trapdoor out of `nothing-deletes` — and the report calls its references a LIST rather than \"a protected set a cleanup must KEEP\", which would contradict the declaration printed beside it.")
     return 0
 
 
@@ -4451,7 +6104,8 @@ def main() -> int:
     release_enabled = (args.release_unpinned
                        or os.environ.get("MW_ACR_RELEASE_UNPINNED", "").strip().lower() == "true")
     print(f"scanning {len(repos)} repository(ies) on both pin axes: {', '.join(repos)}")
-    return run(repos, args.registry, args.apply, release_enabled, args.root)
+    return run(repos, args.registry, args.apply, release_enabled, args.root,
+               fleet_is_complete=scan_is_complete(args.discover, args.root))
 
 
 if __name__ == "__main__":

@@ -79,13 +79,13 @@ public class DisposeDuringInitializationTest(ITestOutputHelper output) : HubTest
                 }));
 
         child.Should().NotBeNull();
-        await buildupWaiting.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
+        await buildupWaiting.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await(TestContext.Current.CancellationToken);
 
         // Dispose the parent mid-init — the transient-probe lifecycle. CancelCallbacks errors
         // the pending request with ObjectDisposedException INTO the child's still-running
         // BuildupAction, while the child is already frozen by the disposal cascade.
         parent.Dispose();
-        await parent.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
+        await parent.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await(TestContext.Current.CancellationToken);
 
         ((MessageHub)child!).InitializationError.Should().BeNull(
             "dispose-during-init is a NORMAL path for a hub inside a disposing subtree — it must "

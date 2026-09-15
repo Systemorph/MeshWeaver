@@ -123,7 +123,7 @@ public class InstanceLocationDeclarationValidatorTest(ITestOutputHelper output) 
         var node = Declaring("Role", TestPartition, "namespace:Admin");
 
         var failure = await Record.ExceptionAsync(() =>
-            MeshService.CreateNode(node).Take(1).Timeout(60.Seconds()).Await());
+            MeshService.CreateNode(node).Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken));
 
         failure.Should().NotBeNull("a ValidationFailed result must surface on the IMeshService create");
         failure!.Message.Should().Contain("'Role'").And.Contain("UnanchoredSecurityReads");

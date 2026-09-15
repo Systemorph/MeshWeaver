@@ -21,7 +21,7 @@ public class SkillCatalogDiscoverableTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         // Pin the MeshWeaver harness — under a CLI harness the "/" menu shows the harness's own commands,
@@ -42,7 +42,7 @@ public class SkillCatalogDiscoverableTest(PortalFixture fixture)
         (await PollAsync(async () =>
                 await harnessChip.CountAsync() > 0
                 && (await harnessChip.First.InnerTextAsync()).Contains("MeshWeaver", StringComparison.OrdinalIgnoreCase),
-                TimeSpan.FromSeconds(30)))
+                TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken))
             .Should().BeTrue("the composer must bind to the MeshWeaver harness so the / menu surfaces skills");
 
         // Type "/" to open the slash-command suggest (the nodeType:Skill catalog).
@@ -61,7 +61,7 @@ public class SkillCatalogDiscoverableTest(PortalFixture fixture)
             if (await rows.CountAsync() == 0) return false;
             combined = (await rows.AllInnerTextsAsync()) is { } texts ? string.Join(" | ", texts).ToLowerInvariant() : "";
             return combined.Contains("agent") && combined.Contains("model");
-        }, TimeSpan.FromSeconds(20));
+        }, TimeSpan.FromSeconds(20), cancellationToken: TestContext.Current.CancellationToken);
 
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/skill-catalog.png", FullPage = true });
 
@@ -85,13 +85,14 @@ public class SkillCatalogDiscoverableTest(PortalFixture fixture)
         await page.WaitForTimeoutAsync(800);
     }
 
-    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)
+    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             if (await predicate()) return true;
-            await Task.Delay(300);
+            await Task.Delay(300, cancellationToken);
         }
         return false;
     }

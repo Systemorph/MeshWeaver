@@ -119,6 +119,10 @@ public static class ServedModuleBytes
     /// <param name="shelfAssets">The shelf's static web assets, module-relative path and full path.</param>
     /// <param name="recorded">What the served assemblies record for this module
     /// (<see cref="RecordedFor"/>).</param>
+    /// <param name="shelfNatives">The shelf's RID-specific native payloads (#4126),
+    /// <see cref="ModuleBundleSource.NativeAssetsOf"/>. Optional for the same reason every other
+    /// argument here is positional-with-a-default: this is a public method a sibling repository
+    /// calls, and appending keeps every existing call site compiling.</param>
     /// <param name="publishedRoot">The published bundle root
     /// (<see cref="PublishedBundleCatalogue.PublishedRootConfigKey"/>), or null when this deployment
     /// consumes no CI bakes — then only the shelf exists.</param>
@@ -132,9 +136,10 @@ public static class ServedModuleBytes
         RecordedModuleId recorded,
         string? publishedRoot,
         string? identity,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IReadOnlyList<(string RelativePath, string FullPath)>? shelfNatives = null)
     {
-        var shelf = FromShelf(shelfFiles, shelfAssets);
+        var shelf = FromShelf(shelfFiles, shelfAssets, shelfNatives);
 
         // Nothing to serve, or nothing that binds it: byte-for-byte the pre-#3244 answer.
         if (string.IsNullOrWhiteSpace(moduleName) || shelf.Files.Count == 0)
@@ -172,7 +177,8 @@ public static class ServedModuleBytes
 
     private static ServedModule FromShelf(
         IReadOnlyList<string> files,
-        IReadOnlyList<(string RelativePath, string FullPath)> assets) =>
+        IReadOnlyList<(string RelativePath, string FullPath)> assets,
+        IReadOnlyList<(string RelativePath, string FullPath)>? natives) =>
         new(
             files.Select(path =>
                     new ServedModuleFile(Path.GetFileName(path), () => File.OpenRead(path)))
@@ -181,7 +187,12 @@ public static class ServedModuleBytes
                     new ServedModuleAsset(asset.RelativePath, () => File.OpenRead(asset.FullPath)))
                 .ToArray(),
             "this registry's own modules/ shelf",
-            null);
+            null)
+        {
+            Natives = (natives ?? [])
+                .Select(n => new ServedModuleAsset(n.RelativePath, () => File.OpenRead(n.FullPath)))
+                .ToArray(),
+        };
 
     /// <summary>
     /// One sealed module bundle inflated into a servable module: its <c>meshweaver/modules/</c>
@@ -236,12 +247,34 @@ public static class ServedModuleBytes
                 })
                 .ToArray();
 
+            // 🚨 The NATIVE section (#4126), read the same way and kept to the same layout rule.
+            // A sealed bundle is produced by the bake, not by this process, so a payload at
+            // anything but runtimes/<rid>/native/<file> is DROPPED here rather than re-served: the
+            // consumer's own landing refuses such a path, and re-serving one would turn a bundle
+            // that merely lacks an engine into a bundle that lands nothing at all.
+            var nativePrefix = NuGetPackageWriter.ModuleNativeFolder + "/";
+            var natives = archive.Entries
+                .Where(e => e.FullName.StartsWith(nativePrefix, StringComparison.Ordinal))
+                .Select(e => (Entry: e, Relative: e.FullName[nativePrefix.Length..]))
+                .Where(e => NuGetPackageWriter.IsModuleNativeLayout(e.Relative))
+                .OrderBy(e => e.Relative, StringComparer.Ordinal)
+                .Select(e =>
+                {
+                    var content = Inflate(e.Entry);
+                    return new ServedModuleAsset(
+                        e.Relative, () => new MemoryStream(content, writable: false));
+                })
+                .ToArray();
+
             return new ServedModule(
                 files,
                 assets,
                 $"the publication sealed for framework identity '{candidate.Identity}' by source "
                 + $"'{candidate.Source}' ({candidate.BundleName})",
-                null);
+                null)
+            {
+                Natives = natives,
+            };
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or BadImageFormatException)
         {
@@ -381,4 +414,18 @@ public sealed record ServedModule(
     IReadOnlyList<ServedModuleFile> Files,
     IReadOnlyList<ServedModuleAsset> Assets,
     string Provenance,
-    string? Divergence);
+    string? Divergence)
+{
+    /// <summary>
+    /// 🚨 The module's RID-specific NATIVE payloads (#4126), each at
+    /// <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c> — re-served from wherever these bytes came
+    /// from, so a registry hands a consumer the engine its shelf holds instead of a module that
+    /// loads and throws <c>DllNotFoundException</c> at first use.
+    ///
+    /// <para>An INIT property, not a fifth primary-constructor parameter: a parameter REPLACES a
+    /// public record's constructor signature and is a binary break across the fleet
+    /// (<c>scripts/check-record-signatures.py</c> refuses it, and every <c>with</c> expression on
+    /// this type keeps working as written).</para>
+    /// </summary>
+    public IReadOnlyList<ServedModuleAsset> Natives { get; init; } = [];
+}

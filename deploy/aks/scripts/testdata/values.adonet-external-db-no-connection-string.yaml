@@ -1,0 +1,52 @@
+# REFUSAL CONTROL for check-chart-invariants.sh — the render that took the control instance's new
+# pods down twice (MeshWeaver#3780).
+#
+# 🚨 This is what a record-driven deploy handed the chart on 2026-09-09 (helm revision 44) and
+# 2026-09-14 (revision 55): two plain replicas — so AdoNet clustering — on an EXTERNAL database
+# (`postgres.enabled: false`, the shape of every AKS namespace), with NO `secrets.<half>.*` at all,
+# because the record's render is secret-free by construction and the Key Vault values half that
+# carries the connection strings was never layered. `helm template` was perfectly happy: it
+# rendered `ConnectionStrings__orleans: Host=memex-postgres-service;…;Database=orleans` from the
+# chart's in-cluster default — a Service this release does not render — and every new pod failed
+# at silo start:
+#
+#     'MembershipTableManager' failed to start due to errors at stage 'RuntimeGrainServices (8000)'.
+#     Npgsql.NpgsqlException: Name or service not known
+#
+# The invariant checker CANNOT catch this render: the Secret carries the key (invariant 4 holds)
+# and the key names a host (invariant 16 holds); the host simply does not exist. So the chart
+# refuses it at render time, naming the missing input, and check-chart-invariants.sh asserts that
+# this file FAILS to render with a message that says `MeshWeaver#3780`. A green render of this
+# file is the regression.
+#
+# Everything below the subject is only what invariants 2–3 and 14–15 demand of any replica floor
+# above one. No credential anywhere — there is nothing here to be one.
+replicas:
+  portal: 2
+keda:
+  enabled: false
+postgres:
+  enabled: false
+config:
+  memex_portal:
+    Deployment__Orleans__Clustering: "AdoNet"
+persistence:
+  data:
+    claimName: "memex-data"
+    create: true
+    size: "128Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"
+  content:
+    claimName: "memex-content"
+    create: true
+    size: "64Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"
+    mountPath: "/mnt/content"
+  users:
+    claimName: "memex-users"
+    create: true
+    size: "32Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"

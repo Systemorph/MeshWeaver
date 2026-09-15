@@ -21,6 +21,15 @@
 # publishes the fleet's images and would be read as "delivery failed". Here the red says exactly
 # what it is, and image delivery is untouched.
 #
+# 🚨 WHICH INSTANCES IT COVERS IS DERIVED, NEVER LISTED (#3848). The roster came out of
+# `vars.COMBO_VERIFY_INSTANCES` — a hand-maintained JSON array, which is the pin #3842 rules out and
+# which fails in the direction nobody can see: an installation added to the fleet is simply absent,
+# so the lane goes green having verified everyone it was told about and nobody it was not. Measured
+# 2026-09-15, the value that variable was specified with named TWO installations while the fleet's
+# overlays declared THREE live ones. `.github/scripts/derive-combo-instances.py` now reads the same
+# `Hosting__Deployment` + `ingress.host` pair `lock-pinned-digests.py`'s AXIS 3 reads, through that
+# script's own extractor, and refuses — loudly — any derivation that would come back empty.
+#
 # 🚨 NO SKIP TRAPDOORS. There is no `continue-on-error:` on any input step and no `if:` anywhere
 # that asks whether a secret or variable is set. GitHub paints a skipped job the same colour as a
 # passed one, so "the gate never ran" and "the gate passed" would become indistinguishable. The
@@ -73,11 +82,20 @@ jobs:
       github.event_name != 'workflow_run' ||
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # An emptiness sweep, a checkout, one token mint, one recursive git tree per repository the
+    # fleet-reader App reaches (~34 on 2026-09-15) and a file read per deployment overlay (12).
+    # Seconds in practice; the fleet cap is 45 and nothing here has any business approaching it.
+    timeout-minutes: 15
     outputs:
-      instances: ${{ steps.assert.outputs.instances }}
-      count: ${{ steps.assert.outputs.count }}
+      instances: ${{ steps.roster.outputs.instances }}
+      count: ${{ steps.roster.outputs.count }}
     steps:
+      # STEP ONE OF TWO ASSERTIONS, and the split is not cosmetic. This one asks whether the inputs
+      # that come from OUTSIDE the tree exist at all; it runs FIRST, before the checkout and before
+      # the token mint, so an unprovisioned `FLEET_READER_*` reds here naming the secret instead of
+      # inside `create-github-app-token` wearing "invalid app id" — the shape that makes a
+      # provisioning task read as a workflow bug. The per-INSTANCE half cannot run yet: which
+      # instances exist is derived two steps below, not declared.
       - name: Every external input, or a red build naming what to provision
         id: assert
         env:
@@ -86,7 +104,6 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
           FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
-          COMBO_VERIFY_INSTANCES: ${{ vars.COMBO_VERIFY_INSTANCES }}
           COMBO_VERIFY_SOURCES: ${{ vars.COMBO_VERIFY_SOURCES }}
           COMBO_VERIFY_KEYS: ${{ secrets.COMBO_VERIFY_KEYS }}
           COMBO_VERIFY_TOKENS: ${{ secrets.COMBO_VERIFY_TOKENS }}
@@ -96,12 +113,11 @@ jobs:
           [ -n "${AZURE_CLIENT_ID:-}" ]       || missing+=("secrets.AZURE_CLIENT_ID          OIDC app registration for azure/login (already provisioned for main-cd)")
           [ -n "${AZURE_TENANT_ID:-}" ]       || missing+=("secrets.AZURE_TENANT_ID          the Systemorph AAD tenant (already provisioned for main-cd)")
           [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID    the subscription holding ACR meshweaver (already provisioned for main-cd)")
-          [ -n "${FLEET_READER_APP_ID:-}" ]     || missing+=("secrets.FLEET_READER_APP_ID        app id of the org's READ-ONLY fleet-reader GitHub App (Contents, Metadata, Pull requests: read), whose installation token reads the module repositories (the pair shared-rules and chart-drift use) — set it in BOTH the Actions and the Dependabot secret stores (gh secret set NAME --repo Systemorph/MeshWeaver, then again with --app dependabot)")
+          [ -n "${FLEET_READER_APP_ID:-}" ]     || missing+=("secrets.FLEET_READER_APP_ID        app id of the org's READ-ONLY fleet-reader GitHub App (Contents, Metadata, Pull requests: read), whose installation token reads the module repositories AND the deployment overlays this lane derives its roster from — set it in BOTH the Actions and the Dependabot secret stores (gh secret set NAME --repo Systemorph/MeshWeaver, then again with --app dependabot)")
           [ -n "${FLEET_READER_APP_PRIVATE_KEY:-}" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY  that App's private key (PEM), in BOTH stores like the id. NOT meshweaver-cloud's key: that App holds write and is not installed on Memex")
-          [ -n "${COMBO_VERIFY_INSTANCES:-}" ] || missing+=("vars.COMBO_VERIFY_INSTANCES      JSON array of the instances to verify: [{\"name\":\"memex\",\"baseUrl\":\"https://memex.systemorph.com\"}, …]")
-          [ -n "${COMBO_VERIFY_SOURCES:-}" ]   || missing+=("vars.COMBO_VERIFY_SOURCES        space-separated name=url for --source, e.g. plugins=https://github.com/Systemorph/MeshWeaver.Plugins")
-          [ -n "${COMBO_VERIFY_KEYS:-}" ]      || missing+=("secrets.COMBO_VERIFY_KEYS        JSON object {instance name: mwi_… instance-registry key}, one per instance above")
-          [ -n "${COMBO_VERIFY_TOKENS:-}" ]    || missing+=("secrets.COMBO_VERIFY_TOKENS      JSON object {instance name: mw_… API token of a GLOBAL ADMIN on that instance}, one per instance above")
+          [ -n "${COMBO_VERIFY_SOURCES:-}" ]   || missing+=("vars.COMBO_VERIFY_SOURCES        space-separated name=url for --source, e.g. plugins=https://github.com/Systemorph/MeshWeaver.Plugins. 🚨 NOT DERIVABLE FROM THE OVERLAYS: it maps a registry SOURCE NAME carried by an install record to the repository that source's modules come from, which only the registry holds (ComboAssembly.SourceRepositories). It is plain data, not a credential")
+          [ -n "${COMBO_VERIFY_KEYS:-}" ]      || missing+=("secrets.COMBO_VERIFY_KEYS        JSON object {instance name: mwi_… instance-registry key}, one per instance the fleet's deployment overlays DECLARE — the roster is derived, not listed, and once these are set this job prints it and names any instance a map is missing. 🚨 ISSUED, never recovered: InstanceKeys persists Hash(raw) alone, so an existing key cannot be read back — issue a new one per instance, additive and separately revocable")
+          [ -n "${COMBO_VERIFY_TOKENS:-}" ]    || missing+=("secrets.COMBO_VERIFY_TOKENS      JSON object {instance name: mw_… API token of a GLOBAL ADMIN on that instance}, one per instance the fleet's deployment overlays DECLARE, like the keys above. Removable only by the diff that moves .github/scripts/combo-verify-instance.sh off POST /api/mesh/patch and onto /api/plugins/combo-verification, and only once the verify:combo grant (#3891) exists per instance")
 
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::Combo verification cannot run — provision the following, then re-run:"
@@ -110,34 +126,83 @@ jobs:
             echo "portal's combo gate has no verdict to consult and applies the update anyway." >&2
             exit 1
           fi
+          echo "Every external input is present."
 
-          # PRESENT is not VALID. A malformed list would otherwise produce an EMPTY matrix, and an
-          # empty matrix skips the verify job — which GitHub paints green. Assert the shape here.
-          if ! jq -e 'type == "array" and length > 0' >/dev/null <<<"$COMBO_VERIFY_INSTANCES"; then
-            echo "::error::vars.COMBO_VERIFY_INSTANCES is not a non-empty JSON array: $COMBO_VERIFY_INSTANCES"
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 1 }
+
+      # Cross-repo reads are an installation token minted per run, never a stored PAT. The READ-ONLY
+      # `fleet-reader` App — the same one lock-pinned-digests.yml derives its AXIS 3 roster with, and
+      # the same one the verify job already uses for the module sources. Doc/Architecture/GitHubAppCredentials.
+      - name: Mint an installation token for the fleet
+        id: fleet-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+
+      # 🚨 THE ROSTER IS DERIVED, NOT DECLARED (#3848). It used to be `vars.COMBO_VERIFY_INSTANCES`
+      # — a hand-maintained JSON array, i.e. the pin #3842 rules out — and it was already one
+      # installation short of the fleet on the day it was specified. The script reads the same two
+      # overlay keys `lock-pinned-digests.py`'s AXIS 3 reads (`Hosting__Deployment` + `ingress.host`)
+      # THROUGH THAT SCRIPT'S OWN EXTRACTOR, so the set this lane verifies and the set the nightly
+      # lock protects cannot disagree; `.github/acr-retention/instances.json` is the only thing that
+      # removes an installation, and only by declaring it retired/not-installed with a reason.
+      # It exits 1 on ANY derivation that would come back empty — an unreadable repository, an
+      # ambiguous declaration, or a genuinely empty fleet — because an empty matrix skips the verify
+      # job and GitHub paints a skipped job the same colour as a passed one. No `continue-on-error:`.
+      - name: The instances the fleet's deployment overlays declare
+        id: derive
+        env:
+          GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/derive-combo-instances.py --discover
+
+      # STEP TWO OF TWO. The roster now exists, so this asks the question the first step could not:
+      # does every instance the fleet ACTUALLY has carry both credentials? A name present in the
+      # roster but absent from either map would otherwise fail deep inside the verify job wearing an
+      # HTTP 401 that names no secret — the shape that made an absent MW_REGISTRY_KEY read as a
+      # script bug (Reinsurance#128).
+      - name: Every derived instance has both credentials, or a red naming which
+        id: roster
+        env:
+          INSTANCES: ${{ steps.derive.outputs.instances }}
+          COMBO_VERIFY_KEYS: ${{ secrets.COMBO_VERIFY_KEYS }}
+          COMBO_VERIFY_TOKENS: ${{ secrets.COMBO_VERIFY_TOKENS }}
+        run: |
+          set -euo pipefail
+          # DERIVED is not VALID, and an absent output is not an empty fleet. A malformed or empty
+          # roster would produce an EMPTY matrix, and an empty matrix skips the verify job — which
+          # GitHub paints green. Assert the shape here; the step above already refuses to emit one.
+          if ! jq -e 'type == "array" and length > 0' >/dev/null <<<"${INSTANCES:-}"; then
+            echo "::error::the derived instance roster is not a non-empty JSON array: '${INSTANCES:-}'."
+            echo "  It is DERIVED from the fleet's deployment overlays, so there is no variable to" >&2
+            echo "  provision: read the step above, which names the repository or declaration that" >&2
+            echo "  produced nothing. An empty roster is refused rather than verified, because an" >&2
+            echo "  empty matrix skips the verify job and a skipped job is painted green." >&2
             exit 1
           fi
-          if ! jq -e 'all(.[]; has("name") and has("baseUrl"))' >/dev/null <<<"$COMBO_VERIFY_INSTANCES"; then
-            echo "::error::every entry of vars.COMBO_VERIFY_INSTANCES needs a name and a baseUrl: $COMBO_VERIFY_INSTANCES"
+          if ! jq -e 'all(.[]; has("name") and has("baseUrl"))' >/dev/null <<<"$INSTANCES"; then
+            echo "::error::every derived instance needs a name and a baseUrl: $INSTANCES"
             exit 1
           fi
 
-          # …and every instance must have BOTH credentials. A name present in the list but absent
-          # from either map would fail deep inside the verify job wearing an HTTP 401 that names no
-          # secret — the shape that made an absent MW_REGISTRY_KEY read as a script bug.
-          for key_name in $(jq -r '.[].name' <<<"$COMBO_VERIFY_INSTANCES"); do
+          for key_name in $(jq -r '.[].name' <<<"$INSTANCES"); do
             jq -e --arg n "$key_name" '.[$n] | type == "string" and length > 0' >/dev/null <<<"$COMBO_VERIFY_KEYS" \
-              || { echo "::error::secrets.COMBO_VERIFY_KEYS has no mwi_ key for instance '$key_name'"; exit 1; }
+              || { echo "::error::secrets.COMBO_VERIFY_KEYS has no mwi_ key for instance '$key_name'. The fleet declares that installation; issue it a key (it cannot be read back — InstanceKeys stores Hash(raw) alone) and add it to the map."; exit 1; }
             jq -e --arg n "$key_name" '.[$n] | type == "string" and length > 0' >/dev/null <<<"$COMBO_VERIFY_TOKENS" \
-              || { echo "::error::secrets.COMBO_VERIFY_TOKENS has no mw_ admin token for instance '$key_name'"; exit 1; }
+              || { echo "::error::secrets.COMBO_VERIFY_TOKENS has no mw_ admin token for instance '$key_name'. The fleet declares that installation; the verdict is landed with POST /api/mesh/patch, which needs a global admin on it."; exit 1; }
           done
 
-          count=$(jq -r 'length' <<<"$COMBO_VERIFY_INSTANCES")
+          count=$(jq -r 'length' <<<"$INSTANCES")
           {
-            echo "instances=$(jq -c '.' <<<"$COMBO_VERIFY_INSTANCES")"
+            echo "instances=$(jq -c '.' <<<"$INSTANCES")"
             echo "count=$count"
           } >>"$GITHUB_OUTPUT"
-          echo "All external inputs are present; $count instance(s) will be verified."
+          echo "Every derived instance carries both credentials; $count instance(s) will be verified."
 
   verify:
     name: "Verify ${{ matrix.instance.name }} against its roll target"
@@ -226,8 +291,16 @@ jobs:
     needs: [preflight, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # 🚨 `result == 'success'` is NOT "verified" on this job, and the reporter below depends on the
+    # difference. This job exits 0 for TWO different facts: a real verification, and "no candidate"
+    # (the triggering CD published nothing, so there was nothing to check). Collapsing them is the
+    # exact defect the job's own body refuses three lines down — and it would make `combo-green`
+    # CLOSE a standing `ci-combo-unverified` alert on a run that verified nothing.
+    outputs:
+      verified: ${{ steps.verdict.outputs.verified }}
     steps:
       - name: The verdict, and it can fail
+        id: verdict
         env:
           PREFLIGHT: ${{ needs.preflight.result }}
           VERIFY: ${{ needs.verify.result }}
@@ -258,6 +331,7 @@ jobs:
               echo "**No candidate.** The triggering CD run concluded \`$TRIGGER\`, so there is"
               echo "nothing to verify. This is not an unverified roll — no roll was produced."
             } >>"$GITHUB_STEP_SUMMARY"
+            echo "verified=false" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$PREFLIGHT" = "skipped" ]; then
@@ -265,15 +339,101 @@ jobs:
             exit 1
           fi
           if [ "$PREFLIGHT" != "success" ]; then
-            echo "::error::the preflight FAILED, so NO instance was verified and every roll in the fleet is still UNVERIFIED (#3544). Read the preflight job for the exact list of inputs to provision."
+            echo "::error::the preflight FAILED, so NO instance was verified and every roll in the fleet is still UNVERIFIED (#3544). Read the preflight job: it either names the inputs to provision, or names the repository/declaration whose deployment overlays the instance roster could not be derived from."
             exit 1
           fi
           if [ "$VERIFY" != "success" ]; then
             echo "::error::combo verification did not succeed for every instance (result: $VERIFY). A candidate a live instance cannot take is not delivered; read the per-instance jobs for the module that failed."
             exit 1
           fi
+          # 🚨 THE LAST BACKSTOP, AND IT SURVIVED THE MOVE TO A DERIVED ROSTER ON PURPOSE (#3848).
+          # The derivation refuses to emit an empty roster and the preflight refuses to accept one,
+          # so reaching here with zero would mean BOTH of those stopped working — which is exactly
+          # when a gate must still be able to fail. A derived zero and a declared zero paint the
+          # same green, and neither is a verification.
           if [ "${COUNT:-0}" -lt 1 ]; then
             echo "::error::the preflight passed but named ZERO instances — that is a vacuous green, not a verification."
             exit 1
           fi
+          echo "verified=true" >>"$GITHUB_OUTPUT"
           echo "Every declared instance has a landed combo verdict for its roll target."
+
+  # ── The audience (#4395) ────────────────────────────────────────────────────────────────────────
+  #
+  # 🚨 THIS LANE'S RED USED TO LAND IN AN EMPTY ROOM. `combo-verify` triggers on `workflow_run` and
+  # `workflow_dispatch` only, so no pull request, no reviewer and no required-check list is attached
+  # to any of its runs: every verdict above — including "every roll in the fleet is still
+  # UNVERIFIED" — went into the Actions history and nowhere else. That is the twin of a
+  # skip-trapdoor, and the fleet has already paid for it once: `node-repo-platform-ref-bump.yml` had
+  # every other property the rule demands and had still NEVER ONCE SUCCEEDED (#3568,
+  # MeshWeaver.Plugins#1462), because red-on-a-trigger-with-no-PR is red nobody reads.
+  #
+  # 🚨 BRANCHING ON THE VERDICT'S RESULT, NOT ON `if: failure()`. A failure-only reporter never
+  # CLEARS a stale alert, and an alert that is no longer true is how the next real one gets skimmed
+  # past — the same defect one level out. Two jobs, one per outcome, exactly as every satellite's
+  # `ci-red`/`ci-green` pair is wired.
+  #
+  # 🚨 ITS OWN LABEL, `ci-combo-unverified`. The ledger finds, appends, reopens and closes by label
+  # AND title AND its ownership mark, so a lane sharing `ci-main-red` with a repo's main build would
+  # let either close the other's story. (`ci-failure` is refused by the script outright — that is
+  # main-cd.yml's delivery alert.)
+  #
+  # 🚨 THE UNPROVISIONED RED IS IN SCOPE, DELIBERATELY. #3848 records that this lane's inputs are not
+  # provisioned, so today the preflight fails whenever a candidate exists and this reporter will file.
+  # That is the point: an unprovisioned verification lane is a real, unfixed condition, and it is
+  # currently invisible — which is the whole of #4395. It produces ONE issue with dated entries, not
+  # one issue per run. If the entry cadence proves noisy, the remedy is to PROVISION the lane
+  # (#3848), never to silence the reporter; a reporter that suppresses the condition it exists to
+  # announce is the silence it was built to end.
+  #
+  # No `continue-on-error:` and no input-shaped `if:` on either job: an alerting path that swallows
+  # its own failure re-creates the silence one level up.
+  combo-red:
+    name: "The combo verdict has an audience: one issue, one signed event"
+    needs: [verdict]
+    if: always() && needs.verdict.result == 'failure'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
+    with:
+      outcome: failure
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      label: ci-combo-unverified
+      issue-title: "ci-combo-unverified: the fleet's rolls are not combo-verified"
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: main
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+
+  # 🚨 GATED ON `verified`, NOT ON `result`. The verdict exits 0 both when it verified everything
+  # and when there was NO CANDIDATE — and closing a standing "the fleet's rolls are not
+  # combo-verified" alert on a run that verified nothing is the same false clear this whole change
+  # exists to stop. Only a real landed verification clears the ledger.
+  combo-green:
+    name: "Combo verification landed: close the ledger"
+    needs: [verdict]
+    if: always() && needs.verdict.result == 'success' && needs.verdict.outputs.verified == 'true'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
+    with:
+      outcome: success
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      label: ci-combo-unverified
+      issue-title: "ci-combo-unverified: the fleet's rolls are not combo-verified"
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: main
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}

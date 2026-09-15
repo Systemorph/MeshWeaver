@@ -81,7 +81,9 @@ public class DisposalDeadlockDiagnosticsTest : HubTestBase
         {
             Volatile.Write(ref release, 1);
         }
-        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TestTimeouts.Convergence);
+        await victim.DisposalCompleted.FirstOrDefaultAsync()
+            .Await(TestContext.Current.CancellationToken)
+            .WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
     }
 
     private sealed class DeadlockLogCapture : ILoggerProvider

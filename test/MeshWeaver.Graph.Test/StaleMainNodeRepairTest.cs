@@ -45,9 +45,9 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     /// asserts the stale pointer PERSISTED — so a fixture that the storage layer silently normalised
     /// fails here rather than turning a later assertion green for the wrong reason.
     /// </summary>
-    private async Task<MeshNode> SeedCorruptAsync(string id, string ns, string mainNode)
+    private async Task<MeshNode> SeedCorruptAsync(string id, string ns, string mainNode, CancellationToken cancellationToken = default)
     {
-        var seeded = await SeedRawAsync(id, ns, mainNode);
+        var seeded = await SeedRawAsync(id, ns, mainNode, cancellationToken);
         seeded.MainNode.Should().Be(mainNode,
             "the fixture must actually be corrupt — otherwise this suite proves nothing");
         seeded.IsStaleSelfDefaultMainNode().Should().BeTrue(
@@ -56,7 +56,7 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     /// <summary>Writes a node straight to storage and returns it as persisted.</summary>
-    private async Task<MeshNode> SeedRawAsync(string id, string ns, string mainNode)
+    private async Task<MeshNode> SeedRawAsync(string id, string ns, string mainNode, CancellationToken cancellationToken = default)
     {
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var node = new MeshNode(id, ns)
@@ -67,26 +67,26 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
             State = MeshNodeState.Active,
         };
         var written = await storage.Write(node, Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(Budget).Await();
+            .Take(1).Timeout(Budget).Await(cancellationToken);
         written.Should().NotBeNull("the storage adapter must own and accept the seeded path");
-        return await ReadRawAsync(node.Path);
+        return await ReadRawAsync(node.Path, cancellationToken);
     }
 
     /// <summary>Reads the DURABLE row — the thing the repair has to move.</summary>
-    private async Task<MeshNode> ReadRawAsync(string path)
+    private async Task<MeshNode> ReadRawAsync(string path, CancellationToken cancellationToken = default)
     {
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var node = await storage.Read(path, Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(Budget).Await();
+            .Take(1).Timeout(Budget).Await(cancellationToken);
         node.Should().NotBeNull($"'{path}' must exist in storage");
         return node!;
     }
 
     private Task<StaleMainNodeRepairReport> RepairAsync(params string[] roots)
-        => StaleMainNodeRepair.Repair(Mesh, roots).Timeout(Budget).Await();
+        => StaleMainNodeRepair.Repair(Mesh, roots).Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
     private Task<StaleMainNodeRepairReport> DetectAsync(params string[] roots)
-        => StaleMainNodeRepair.Detect(Mesh, roots).Timeout(Budget).Await();
+        => StaleMainNodeRepair.Detect(Mesh, roots).Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
     /// <summary>
     /// The mutual cycle from the issue: two Active copies of one node in different partitions, each
@@ -97,7 +97,8 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     public async Task A_cycle_pair_is_repaired_at_both_ends()
     {
         // Alpha/Skill/deployment ⇄ CycleSkill/deployment — the Hosting/Skill ⇄ Skill shape.
-        var left = await SeedCorruptAsync("deployment", "Alpha/Skill", "CycleSkill/deployment");
+        var left = await SeedCorruptAsync("deployment", "Alpha/Skill", "CycleSkill/deployment",
+            TestContext.Current.CancellationToken);
         var right = await SeedCorruptAsync("deployment", "CycleSkill", "Alpha/Skill/deployment");
 
         var report = await RepairAsync("Alpha", "CycleSkill");
@@ -121,7 +122,8 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 120000)]
     public async Task A_dangling_pointer_is_repaired_when_its_target_does_not_exist()
     {
-        var node = await SeedCorruptAsync("email", "Beta/Skill", "NoSuchPartition/email");
+        var node = await SeedCorruptAsync("email", "Beta/Skill", "NoSuchPartition/email",
+            TestContext.Current.CancellationToken);
 
         var report = await RepairAsync("Beta");
 
@@ -144,7 +146,8 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     public async Task A_pointer_to_a_node_that_does_not_point_back_is_repaired()
     {
         // The target is a perfectly healthy node in another partition — it does NOT point back.
-        var target = await SeedRawAsync("instance", "Gamma", "Gamma/instance");
+        var target = await SeedRawAsync("instance", "Gamma", "Gamma/instance",
+            TestContext.Current.CancellationToken);
         target.MainNode.Should().Be(target.Path, "the target is healthy and must stay that way");
 
         var node = await SeedCorruptAsync("instance", "Delta/Skill", "Gamma/instance");
@@ -169,7 +172,8 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 120000)]
     public async Task Healthy_nodes_and_deliberate_pointers_are_left_untouched()
     {
-        var healthy = await SeedRawAsync("readme", "Epsilon", "Epsilon/readme");
+        var healthy = await SeedRawAsync("readme", "Epsilon", "Epsilon/readme",
+            TestContext.Current.CancellationToken);
         // A deliberate pointer: MainNode's last segment is NOT this node's id, so it is a real
         // reference to another node rather than a frozen self-default.
         var deliberate = await SeedRawAsync("_Policy", "Epsilon", "Epsilon/readme");
@@ -195,7 +199,8 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 120000)]
     public async Task Detect_reports_the_finding_without_writing()
     {
-        var node = await SeedCorruptAsync("policy", "Zeta/Skill", "OtherZeta/policy");
+        var node = await SeedCorruptAsync("policy", "Zeta/Skill", "OtherZeta/policy",
+            TestContext.Current.CancellationToken);
 
         var report = await DetectAsync("Zeta");
 
@@ -216,7 +221,8 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 120000)]
     public async Task A_second_run_is_a_no_op_and_an_unaffected_mesh_is_safe()
     {
-        var node = await SeedCorruptAsync("remote", "Eta/Skill", "OtherEta/remote");
+        var node = await SeedCorruptAsync("remote", "Eta/Skill", "OtherEta/remote",
+            TestContext.Current.CancellationToken);
 
         var first = await RepairAsync("Eta");
         first.Findings.Should().ContainSingle();
@@ -254,7 +260,8 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     public async Task Findings_come_back_in_path_order()
     {
         // Seeded high-to-low, so "insertion order" and "path order" disagree.
-        await SeedCorruptAsync("zeta-item", "Mu/Skill", "OtherMu/zeta-item");
+        await SeedCorruptAsync("zeta-item", "Mu/Skill", "OtherMu/zeta-item",
+            TestContext.Current.CancellationToken);
         await SeedCorruptAsync("mid-item", "Mu/Skill", "OtherMu/mid-item");
         await SeedCorruptAsync("alpha-item", "Mu/Skill", "OtherMu/alpha-item");
 
@@ -287,7 +294,7 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
         var node = await SeedCorruptAsync("platform-update", "Kappa/Skill", "OtherKappa/platform-update");
         var elsewhere = await SeedRawAsync("bystander", "Lambda", "Lambda/bystander");
 
-        var report = await StaleMainNodeRepair.Repair(Mesh).Timeout(Budget).Await();
+        var report = await StaleMainNodeRepair.Repair(Mesh).Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
         report.Findings.Select(f => f.Path).Should().Contain(node.Path,
             "an unscoped sweep must reach a partition nobody named");
@@ -318,7 +325,8 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 120000)]
     public async Task A_repaired_node_becomes_visible_to_the_listing_that_could_not_see_it()
     {
-        var node = await SeedCorruptAsync("ci-policy", "Iota/Skill", "OtherIota/ci-policy");
+        var node = await SeedCorruptAsync("ci-policy", "Iota/Skill", "OtherIota/ci-policy",
+            TestContext.Current.CancellationToken);
         var service = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         async Task<string[]> PathsAsync(string query)

@@ -221,7 +221,7 @@ public class ServedBuildIsVerifiableTest(ITestOutputHelper output) : HubTestBase
 
     private static async Task<bool> DisposedWithinAsync(IObservable<bool> disposed, TimeSpan window)
     {
-        try { return await disposed.FirstAsync().Timeout(window).Await(); }
+        try { return await disposed.FirstAsync().Timeout(window).Await(TestContext.Current.CancellationToken); }
         catch (TimeoutException) { return false; }
     }
 

@@ -1,3 +1,4 @@
+using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -189,25 +190,50 @@ public static class BuildDeliveryHold
             ? nodeTypePath[(nodeTypePath.LastIndexOf('/') + 1)..]
             : nodeTypePath;
         var package = NodeTypeCompilationHelpers.PartitionOf(nodeTypePath);
-        var (title, message) = evt switch
+        var adopted = ModuleVersionCompatibility.Display(after.AdoptedModuleVersion);
+        var fingerprint = Short(after.CurrentSourceFingerprint);
+        var framework = NodeTypeCompilationHelpers.FrameworkVersion;
+        // 🚨 The two HOLD bodies stay VERBATIM. ServingNotice/IncompatibleNotice are declared as the
+        // operator/log wording of the record's own fields — "the page localizes its own copy from
+        // the same fields" — so keying them here would put a second, divergent translation of the
+        // same facts in the catalog. Every TITLE is keyed, and so is each body the notifier itself
+        // composes.
+        (LocalizableText Title, LocalizableText Message) texts = evt switch
         {
             DeliveryEvent.Adopted => (
-                $"{package} {ModuleVersionCompatibility.Display(after.AdoptedModuleVersion)} adopted: '{typeName}'",
-                $"A build of '{nodeTypePath}' for the current source (module version "
-                + $"{ModuleVersionCompatibility.Display(after.AdoptedModuleVersion)}, fingerprint "
-                + $"{Short(after.CurrentSourceFingerprint)}) was adopted for framework "
-                + $"{NodeTypeCompilationHelpers.FrameworkVersion}. The type is current again."),
+                LocalizableText.Keyed(
+                    $"{package} {adopted} adopted: '{typeName}'",
+                    "notification.delivery.adopted.title",
+                    ("package", package), ("version", adopted), ("typeName", typeName)),
+                LocalizableText.Keyed(
+                    $"A build of '{nodeTypePath}' for the current source (module version "
+                    + $"{adopted}, fingerprint "
+                    + $"{fingerprint}) was adopted for framework "
+                    + $"{framework}. The type is current again.",
+                    "notification.delivery.adopted.body",
+                    ("nodeTypePath", nodeTypePath), ("version", adopted),
+                    ("fingerprint", fingerprint), ("framework", framework))),
             DeliveryEvent.Compiled => (
-                $"'{typeName}' compiled from the current source",
-                $"'{nodeTypePath}' was compiled from the current source (fingerprint "
-                + $"{Short(after.CurrentSourceFingerprint)}); the build it was serving from is retired."),
+                LocalizableText.Keyed(
+                    $"'{typeName}' compiled from the current source",
+                    "notification.delivery.compiled.title", ("typeName", typeName)),
+                LocalizableText.Keyed(
+                    $"'{nodeTypePath}' was compiled from the current source (fingerprint "
+                    + $"{fingerprint}); the build it was serving from is retired.",
+                    "notification.delivery.compiled.body",
+                    ("nodeTypePath", nodeTypePath), ("fingerprint", fingerprint))),
             DeliveryEvent.HeldIncompatible => (
-                $"'{typeName}' is awaiting a bundle (incompatible build)",
-                IncompatibleNotice(after)),
+                LocalizableText.Keyed(
+                    $"'{typeName}' is awaiting a bundle (incompatible build)",
+                    "notification.delivery.heldIncompatible.title", ("typeName", typeName)),
+                LocalizableText.Verbatim(IncompatibleNotice(after))),
             _ => (
-                $"'{typeName}' is serving its last build; source moved ahead",
-                ServingNotice(after)),
+                LocalizableText.Keyed(
+                    $"'{typeName}' is serving its last build; source moved ahead",
+                    "notification.delivery.heldStale.title", ("typeName", typeName)),
+                LocalizableText.Verbatim(ServingNotice(after))),
         };
+        var (title, message) = texts;
         notifier.NotifyCompileFailed(
                 hub, recipient: recipient, mainNodePath: nodeTypePath, title: title, message: message,
                 targetNodePath: nodeTypePath)

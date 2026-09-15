@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 import tempfile
 import zipfile
@@ -350,6 +351,28 @@ def seal_upstream_too(body: str) -> str:
     return mutated
 
 
+RED_FROM_RE = re.compile(r'LEGACY_PUBLISHER_RED_FROM="([^"]*)"')
+
+
+def with_red_from(body: str, when: str) -> str | None:
+    """Return `body` with the legacy-publisher tolerance's stated end moved to `when`.
+
+    🚨 A case that depends on a DATED constant must pin it in BOTH directions, or the harness
+    measures the calendar instead of the branch. The expiry case below always moved the constant
+    into the past; the tolerance case above read the real wall clock — so at
+    `LEGACY_PUBLISHER_RED_FROM` (2026-09-15T00:00:00Z) the step correctly began REFUSING while that
+    case still asserted the pre-deadline behaviour, and `CI's own shell` went red on every open
+    pull request in the repository, on diffs that could not reach it. The date is read OFF the step
+    here rather than spelled again, so moving the constant cannot leave this file behind.
+
+    Returns `None` when the constant is absent — the caller must FAIL on that rather than run an
+    unmutated body, which would be a case that checked nothing.
+    """
+    if not RED_FROM_RE.search(body):
+        return None
+    return RED_FROM_RE.sub(f'LEGACY_PUBLISHER_RED_FROM="{when}"', body)
+
+
 def legacy_publisher_root(tmp: Path) -> str:
     """A checkout root holding a PRE-#3732 publisher at the path the step probes: the fallback must
     then seal everything, so a workflow at `@main` cannot red a satellite whose scripts-ref still
@@ -430,7 +453,14 @@ def case_upstream_copies_are_composed_never_sealed(lane: str, body: str, tmp: Pa
         # case the probe could be inverted and every case above would still pass.
         work3 = tmp / "legacy-publisher-run"
         work3.mkdir()
-        legacy = run_step(body, work3, own, upstream=upstream, cwd=legacy_publisher_root(tmp))
+        # 🚨 Pinned into the FUTURE so this case reads the BRANCH, not the CALENDAR — see
+        # `with_red_from`. Running it against the real clock is what made the harness expire.
+        tolerated = with_red_from(body, "9999-01-01T00:00:00Z")
+        if tolerated is None:
+            fail(f"{lane}: LEGACY_PUBLISHER_RED_FROM is not in the step — this case would run an "
+                 "unmutated body against the wall clock and prove nothing")
+            return
+        legacy = run_step(tolerated, work3, own, upstream=upstream, cwd=legacy_publisher_root(tmp))
         sealed3 = sorted(p.name for p in seal_dir(work3).iterdir()) if seal_dir(work3).is_dir() else []
         if legacy.returncode != 0 or sealed3 != all_sealed:
             fail(f"{lane}: with a PRE-#3732 publisher on disk the step sealed {sealed3} "
@@ -445,9 +475,8 @@ def case_upstream_copies_are_composed_never_sealed(lane: str, body: str, tmp: Pa
         # publisher is a REFUSAL, not a warning — a publisher that old means the resolved set
         # stopped advancing, which is a different defect and must not be absorbed here. Executed by
         # moving the constant into the past, so the case reads the branch rather than the clock.
-        expired = body.replace('LEGACY_PUBLISHER_RED_FROM="2026-09-15T00:00:00Z"',
-                               'LEGACY_PUBLISHER_RED_FROM="2000-01-01T00:00:00Z"')
-        if expired == body:
+        expired = with_red_from(body, "2000-01-01T00:00:00Z")
+        if expired is None:
             fail(f"{lane}: LEGACY_PUBLISHER_RED_FROM is not in the step — the tolerance has no "
                  "stated end, and this case would pass having checked nothing")
             return

@@ -82,11 +82,11 @@ public class AFrozenContentCiIsReportedTest(ITestOutputHelper output)
             Name = "Frozen content CI",
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Timeout(TestTimeouts.Convergence).Await();
+        }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         await Sync.SaveConfig(space, SyncedRepoUrl, "main", null,
                 createBranchIfMissing: false, createRepoIfMissing: false)
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         // ── 1. The repository NOTHING syncs: refusing its green run withheld nothing ──────────
         //
@@ -150,7 +150,7 @@ public class AFrozenContentCiIsReportedTest(ITestOutputHelper output)
                 WorkflowPath = ContentCi,
                 Conclusion = "success",
             },
-        }).Timeout(TestTimeouts.Convergence).Await();
+        }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         (await Deliver(SyncedRepo, PrUpdater, "dddd4444dddd4444dddd4444dddd4444dddd4444"))
             .Should().Be(0, "still not a publish signal — nothing about the gate changed");
@@ -179,7 +179,7 @@ public class AFrozenContentCiIsReportedTest(ITestOutputHelper output)
         {
             return await Webhooks
                 .Process("workflow_run", Payload(repoFullName, workflowPath, headSha))
-                .Timeout(TestTimeouts.Convergence).Await();
+                .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         }
         finally
         {

@@ -351,6 +351,15 @@ discarded stream, so no consumer loses a frame.
 - `AnUncachedConfiguredReduce_MintsOneSyncHubPerCall` keeps its frame precondition (the read must
   have data) and takes its baseline only after `host.Started`, because the baseline of a
   population count is the steady state, and a frame is evidence of a stream, not of a finished start.
+- `DataSourceStartMintingTest` pins the overrides the unpartitioned fixture cannot reach, each by
+  the same exact count after `Started`: a partitioned type-source beside an unpartitioned one on
+  one host (`APartitionedTypeSourceStart_MintsOnlyItsPrimaryStream`, 2 sources → 2 hubs) and a
+  `PartitionedHubDataSource` with two initialized partitions on a client
+  (`APartitionedHubSourceStart_MintsOneMirrorPerInitializedPartition`, 2 partitions → 2 mirrors).
+  With the four pre-fix lines restored both read **4** — one primary plus one discarded reduce per
+  stream opened — so the count is a real instrument in both directions. Note that no in-repo
+  concrete source derives from the abstract `GenericPartitionedDataSource`; the test declares its
+  own, which is why that override was previously unreachable by any test at all.
 
 The three hypotheses the issue listed are recorded here so they are not re-investigated: the client
 hub is not created by this test at all; the precondition's own reduce mints its hub synchronously in

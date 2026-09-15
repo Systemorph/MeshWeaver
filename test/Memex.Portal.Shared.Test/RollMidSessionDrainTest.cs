@@ -60,7 +60,7 @@ public class RollMidSessionDrainTest
     [Fact(Timeout = 180_000)]
     public async Task ASessionOpenWhenTheRollBegins_KeepsBeingServedUntilItCloses()
     {
-        await using var pod = await Pod.StartAsync();
+        await using var pod = await Pod.StartAsync(TestContext.Current.CancellationToken);
 
         // A user is working on this pod when Kubernetes deletes it.
         pod.Circuits.Opened();
@@ -116,7 +116,7 @@ public class RollMidSessionDrainTest
     [Fact(Timeout = 180_000)]
     public async Task ASessionThatOutlivesTheDrain_ReturnsPreStopWithGraceStillLeft()
     {
-        await using var pod = await Pod.StartAsync();
+        await using var pod = await Pod.StartAsync(TestContext.Current.CancellationToken);
 
         // A forgotten tab: this circuit never closes.
         pod.Circuits.Opened();
@@ -249,7 +249,7 @@ public class RollMidSessionDrainTest
 
         public string LogDump => string.Join("\n", sink.Lines);
 
-        public static async Task<Pod> StartAsync()
+        public static async Task<Pod> StartAsync(CancellationToken cancellationToken)
         {
             // 🚨 Fail RED, never skip. The `command -v curl || exit 0` guard in the shipped script
             // means a machine without curl would make every assertion below vacuously true — the
@@ -281,7 +281,7 @@ public class RollMidSessionDrainTest
 
             var app = builder.Build();
             app.MapDrainEndpoint();
-            await app.StartAsync();
+            await app.StartAsync(cancellationToken);
 
             var address = app.Services.GetRequiredService<IServer>()
                 .Features.Get<IServerAddressesFeature>()!.Addresses.First();

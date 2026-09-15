@@ -119,7 +119,7 @@ public class RoutingFailureReportedTest(ITestOutputHelper output) : HubTestBase(
     [Fact(Timeout = 30_000)]
     public async Task RoutingFailure_OffTarget_ReachesTheSender()
     {
-        var failure = await Nack(new StrandedRequest());
+        var failure = await Nack(new StrandedRequest(), TestContext.Current.CancellationToken);
 
         failure.Failure!.ErrorType.Should().Be(ErrorType.ShuttingDown,
             "a disposal race must reach the sender as TRANSIENT — the address may reactivate, and "
@@ -138,7 +138,7 @@ public class RoutingFailureReportedTest(ITestOutputHelper output) : HubTestBase(
     [Fact(Timeout = 30_000)]
     public async Task TheFailingSitesVerdict_IsTheOneReported()
     {
-        var failure = await Nack(new LoopedRequest());
+        var failure = await Nack(new LoopedRequest(), TestContext.Current.CancellationToken);
 
         failure.Failure!.ErrorType.Should().Be(ErrorType.RoutingLoop,
             "the classification travels with the delivery from the site that knows the condition");
@@ -153,7 +153,7 @@ public class RoutingFailureReportedTest(ITestOutputHelper output) : HubTestBase(
     [Fact(Timeout = 30_000)]
     public async Task AnAlreadyAnsweredRoutingFailure_IsNotNackedTwice()
     {
-        var failure = await Nack(new AnsweredRequest());
+        var failure = await Nack(new AnsweredRequest(), TestContext.Current.CancellationToken);
         failure.Failure!.ErrorType.Should().Be(ErrorType.NotFound);
 
         // FIFO barrier, not a sleep. Both NACKs would be posted from the SAME routing turn, so a
@@ -168,12 +168,12 @@ public class RoutingFailureReportedTest(ITestOutputHelper output) : HubTestBase(
             + "every NotFound in the mesh");
     }
 
-    private async Task<DeliveryFailureException> Nack(IRequest<Ack> request)
+    private async Task<DeliveryFailureException> Nack(IRequest<Ack> request, CancellationToken cancellationToken)
     {
         var response = Hub
             .Observe<Ack>(request, o => o.WithTarget(ServerAddress))
             .FirstAsync()
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
 
         var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
         Output.WriteLine($"{request.GetType().Name}: errorType={failure.Failure?.ErrorType} message={failure.Failure?.Message}");

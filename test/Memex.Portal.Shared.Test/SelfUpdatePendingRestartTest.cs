@@ -76,7 +76,7 @@ public class SelfUpdatePendingRestartTest(ITestOutputHelper output) : MonolithMe
     public async Task APendingRestart_RollsTheRunningImage()
     {
         AssertBehindInstalled(NothingNewer.Take(2));
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         using var root = ModuleRoot.WithPendingRestart();
         var updater = new RecordingUpdater { LastRolledAt = null };
 
@@ -100,7 +100,7 @@ public class SelfUpdatePendingRestartTest(ITestOutputHelper output) : MonolithMe
     [Fact(Timeout = 240_000)]
     public async Task APendingRestart_InsideTheRollFloor_IsDeferred()
     {
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         using var root = ModuleRoot.WithPendingRestart();
         var updater = new RecordingUpdater { LastRolledAt = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(5) };
 
@@ -116,7 +116,7 @@ public class SelfUpdatePendingRestartTest(ITestOutputHelper output) : MonolithMe
     [Fact(Timeout = 240_000)]
     public async Task NoPendingRestart_RestartsNothing()
     {
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         using var root = ModuleRoot.Clean();
         var updater = new RecordingUpdater { LastRolledAt = null };
 
@@ -135,7 +135,7 @@ public class SelfUpdatePendingRestartTest(ITestOutputHelper output) : MonolithMe
     [Fact(Timeout = 240_000)]
     public async Task AnUpdaterWithoutTheRestartSeam_ReportsTheRestartAsUnavailable()
     {
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         using var root = ModuleRoot.WithPendingRestart();
         var updater = new LegacyUpdater();
 
@@ -295,7 +295,7 @@ public class SelfUpdatePendingRestartTest(ITestOutputHelper output) : MonolithMe
         }
     }
 
-    private Task Seed(UpdatePolicyKind policy)
+    private Task Seed(UpdatePolicyKind policy, CancellationToken cancellationToken)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var node = new MeshNode(UpdatePolicyNodeType.NodeId, UpdatePolicyNodeType.AdminPartition)
@@ -317,7 +317,7 @@ public class SelfUpdatePendingRestartTest(ITestOutputHelper output) : MonolithMe
             })
             .FirstAsync()
             .Timeout(Budget)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
     }
 
     private Task<UpdatePolicyContent> WaitForContent(Func<UpdatePolicyContent, bool> predicate) =>

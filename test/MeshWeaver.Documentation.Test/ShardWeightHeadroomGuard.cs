@@ -51,6 +51,7 @@ public class ShardWeightHeadroomGuard
     [Fact(Timeout = 60000)]
     public void NoScheduledUnitRunsCloseToThePerProjectCap()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var root = SourceScan.FindRepoRoot();
         var capSeconds = ReadPerProjectCapSeconds(File.ReadAllText(Path.Combine(root, WorkflowPath)));
         var budget = capSeconds * MaxCapFraction;
@@ -90,6 +91,7 @@ public class ShardWeightHeadroomGuard
     [Fact(Timeout = 30000)]
     public void TheGuardParsesTheCapAndThePartsColumn()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         ReadPerProjectCapSeconds("( cd \"$dir\" && timeout --signal=TERM --kill-after=30s 8m \\")
             .Should().Be(480);
         ReadPerProjectCapSeconds("timeout --signal=TERM --kill-after=30s 90s \\").Should().Be(90);

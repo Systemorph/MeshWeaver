@@ -75,12 +75,29 @@ The instance → control-instance channel is the pair the Feedback hand-over int
 | `Hosting:ControlInbox:Secret` | the HMAC secret the inbox verifies — byte-identical to the control instance's `Hosting:PlatformWebhookSecret`; read at delivery time, never captured, never logged |
 
 Routes (`SelfUpdateHandover.RouteFor`, pure): **`Post`** — record id + URL + secret; **`Local`** —
-this IS the control instance: `Hosting/PlatformBuilds` is a listed `WebhookInbox:Targets` entry that
-**declares** a `SecretConfigKey` whose secret is present, so the event is delivered into its own
-inbox in-process through `WebhookInbox.Deliver`; **`None`** otherwise. 🚨 A listed target that
-declares no `SecretConfigKey` is an **unsigned** target by the inbox's own contract (#3312), never
-"the default key": delivering to it would store the event with its signature never checked, so it
-is `None`, and the missing sentence says so. A URL that carries userinfo or is not `http(s)`
+this IS the control instance: it declares NO control inbox, and `Hosting/PlatformBuilds` is a listed
+`WebhookInbox:Targets` entry that **declares** a `SecretConfigKey` whose secret is present, so the
+event is delivered into its own inbox in-process through `WebhookInbox.Deliver`; **`None`**
+otherwise.
+
+🚨 **A declared control inbox is EXCLUSIVE** (#4098): an instance that names one is a
+*consumer*, whatever it also lists, so the only routes it admits are `Post` (secret present) and
+`None` (secret absent, and the missing sentence names the key). It never falls through to `Local`.
+The shape that made this load-bearing is `build`: its inbox URL is **derived** from
+`Hosting:ReportTo`, it maps no `Hosting:ControlInbox:Secret`, and it legitimately **lists**
+`Hosting/PlatformBuilds` with a declared key whose secret is mounted — it owns the fleet's build
+queue. Falling through stored the release in **build's own** inbox, where
+`PlatformBuildInboxWatcher.PlanFor` classifies a `self-update-available` event as a non-build event
+and **deletes** it, while the boot line read `apply=control-lane (… handed to this instance's own
+Hosting/PlatformBuilds inbox …)` with a *verified* delivery and `Missing()` named nothing: a control
+plane talking to itself, read off a step that could not fail. Mounting the secret on `build` would
+have fixed one record and left the silent self-delivery reachable for the next instance that owns an
+inbox, so the refusal lives in the route. `Missing()` takes the **same** "a URL is declared" test, so
+an instance that declared neither URL key is never blamed for them.
+
+🚨 A listed target that declares no `SecretConfigKey` is an **unsigned** target by the inbox's
+own contract (#3312), never "the default key": delivering to it would store the event with its
+signature never checked, so it is `None`, and the missing sentence says so. A URL that carries userinfo or is not `http(s)`
 declares **no** inbox rather than half of one — the same whole-value rule the registry pairing uses
 (`SelfUpdateRegistryCredential`). The missing sentence names the key that was actually read: a URL
 derived from `Hosting:ReportTo` is blamed on `ReportTo`, a listed local target on its own declared

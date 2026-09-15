@@ -8,6 +8,7 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
+using Xunit;
 
 namespace MeshWeaver.Layout.Test;
 
@@ -56,7 +57,8 @@ public class LayoutAreaViewerTest(ITestOutputHelper output) : HubTestBase(output
         var text = await stream.GetControlStream($"{reference.Area}/{ViewerArea}")
             .Should().Within(10.Seconds())
             .Match(c => c is LabelControl { Data: string s } && s != "<none>",
-                "the area must render, and must know its subscriber");
+                "the area must render, and must know its subscriber",
+                    cancellationToken: TestContext.Current.CancellationToken);
         return (string)((LabelControl)text!).Data!;
     }
 

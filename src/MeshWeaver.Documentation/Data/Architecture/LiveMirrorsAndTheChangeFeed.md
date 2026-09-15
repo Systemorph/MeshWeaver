@@ -1,7 +1,11 @@
 ---
-Name: Live Mirrors and the Change Feed — Why Every Write Ends Its Own Streams
+Name: Live Mirrors and the Change Feed — Why Every Write Ended Its Own Streams
 Category: Architecture
-Description: Every cross-hub write evicts, and then disposes, the mirror of the node it wrote to — sending UnsubscribeRequest to the owner and making the owner announce StreamEndedEvent for a subscriber that is already gone. That is the RCA of #2776, the two arithmetic traps that made it read as a hub teardown, and the measurement showing why the obvious fix is wrong.
+Description: >-
+  Until #1174 every cross-hub write evicted, and then disposed, the mirror of the node it wrote to —
+  one fresh subscription, initial-state round trip and pair of sync/ hubs per write. The RCA of #2776,
+  the measurement showing why the obvious liveness gate loses writes, and the fix that landed: a
+  write base held to the version the change feed announced.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/><circle cx="8" cy="6" r="2" fill="currentColor"/><circle cx="16" cy="12" r="2" fill="currentColor"/><circle cx="10" cy="18" r="2" fill="currentColor"/></svg>
 ---
 
@@ -14,11 +18,17 @@ owner. Once open it is *live* — the owner fans every change out to it.
 
 `IMeshChangeFeed` is the other invalidation signal. The persistence layer publishes one event per
 `Created`/`Updated`/`Deleted`, and three components listen. This page is about what the third one
-does, why it looks like a defect, and why it is load-bearing anyway.
+did, why it looked like a defect, why it was load-bearing anyway — and how
+[#1174](https://github.com/Systemorph/MeshWeaver/issues/1174) replaced it.
 
-## Every cross-hub write ends its own streams
+🚨 **FIXED 2026-09-15 — the fix is the last section of this page.** A versioned `Updated` no longer evicts: the workspace records the version it
+announced and keeps the mirror, and the next write's base must reach that version. The sections
+between here and there describe the behaviour before the fix and are kept because the measurement
+that rules out the liveness gate is still the reason the fix has the shape it has.
 
-`Workspace.EvictForPath` drops **every** cached remote stream whose owner matches the changed path —
+## Every cross-hub write ended its own streams (before #1174)
+
+`Workspace.EvictForPath` dropped **every** cached remote stream whose owner matches the changed path —
 including the mirror the writer itself is using, on the writer's own write. A write leases that
 mirror only for the duration of its `Observable.Create` subscription, so:
 
@@ -79,7 +89,7 @@ subscriber:
 |---|---|
 | `MeshNodeStreamCache.ResetFailureState` | *"A healthy live entry is left untouched: the owner's sync stream already delivers routine updates, and tearing the shared handle down on every post-commit broadcast would sever live GUI subscribers."* Evicts only a **faulted** entry. |
 | `JsonSynchronizationStream`'s `Resubscribe` | Coalesced and version-gated: *"a HEALTHY subscriber receives that same write through its own subscription, so resubscribing on it is pure churn — at scale it is the storm that starved prod's hubs."* |
-| `Workspace.EvictForPath` | Evicts **unconditionally**. |
+| `Workspace.EvictForPath` (before #1174) | Evicts **unconditionally**. |
 
 So the obvious change is to give `EvictForPath` the same rule — skip a mirror that is still
 `StreamLiveness.IsUsable`. It was implemented and measured, and it is **wrong**.
@@ -110,15 +120,84 @@ them and is doing a different job than its own comment claims — it is not (onl
 the writer's freshness barrier. That is why removing it broke writes rather than merely changing
 their cost.
 
-## The real fix
+## The fix: a write base held to the announced version (#1174)
 
-Make the writer's base **version-aware** instead of buying its freshness with a full re-subscribe:
 `MeshChangeEvent` already carries `Version`, so a write can wait for the mirror to reach the
-announced version rather than throwing the mirror away to force a fresh snapshot. That is a change to
-the write path (`MeshNodeStreamHandle` / `MeshNodeStreamCache`), not to `EvictForPath`, and it is what
-would let the eviction become conditional without losing writes.
+announced version instead of throwing the mirror away to force a fresh snapshot. That is what
+landed, in two halves.
 
-Until then the churn is the price of correctness, and `EvictForPath` carries a comment saying so.
+**The workspace** (`Workspace.OnOwnerNodeChanged`) answers a commit on a mirrored owner in one of
+two ways, decided by what the commit announced, never by how the mirror looks:
+
+| Event | Answer |
+|---|---|
+| `Updated` with a version — one per write, the hot path | **Keep** the mirror and raise its floor to that version — a field of the mirror instance itself (`IAnnouncedVersionFloor`) |
+| `Deleted` (announces 0) | **Evict**, as before — the node is gone and a recreate restarts its version counter |
+| `Created` on a path already mirrored | **Evict** — a recreate is a new incarnation, whose versions say nothing about the old mirror |
+| `Updated` with version 0 (the operator recycle broadcast) | **Evict** — nothing a mirror could be held to |
+| any shape without a version or a kind | **Evict** — the pre-#1174 behaviour, the only safe one |
+
+🚨 **The floor is a field of the mirror, not an entry beside the cache.** The handler raises it on
+each instance it finds in the cache for the owner, and the write reads it off the very stream it
+acquired (`Workspace.AnnouncedVersionFor(stream)`). So a floor cannot outlive its mirror and cannot
+reach the next one: whatever removes a mirror — eviction, the mesh-node cache's idle release, a
+fault, a recycle — removes its floor with it, and a new mirror starts with none, which is right
+because it hydrates from the owner's current state, at or past every version announced before it.
+The first cut kept a per-owner map instead, and review found the window that shape cannot close: a
+removal landing between "the cache still mirrors this owner" and "record the floor" left a floor with
+no mirror behind it, which the next mirror inherited (`AnnouncedFloorLifetimeTest` reproduces it
+deterministically through a seam in exactly that window, and the same inheritance through the
+faulted-stream path — both red against the map, both green now).
+
+**The write path** (`MeshNodeStreamHandle.RebaseSource`, the same seam the #1910 conflict rebase
+uses) reads the mark once per attempt and requires the base to satisfy
+`Version > refused && Version >= announced`. A mirror that already carries the version passes at
+once; one that is a moment behind is waited for (the owner's own fan-out delivers the version — no
+round trip); the wait is bounded by `ConflictRebaseBound`, and it never parks — at the bound the
+write proceeds on the state it has, exactly as before. With no mark (a cold path, or a feed that
+never reaches the workspace) the read is byte-for-byte the old `mirror.Take(1)`.
+
+🚨 **The fallback evicts only on PROOF.** When the bound elapses, the writer evicts the mirror — the
+old freshness barrier, paid once — only if the mirror carried a node *below* the floor and nothing at
+or above it. A mirror that carried nothing at all is still *hydrating*, not behind; evicting it would
+throw away the one subscription about to deliver and make the next write hydrate yet another, which
+is the churn this fix removes, re-entered at exactly the moment the owner is slowest.
+
+🚨 **This is the opposite of the liveness gate above.** Liveness asks how the mirror *looks* and lets
+a healthy-but-behind one through, which is what lost the 25-message batch. The version floor asks the
+mirror to *prove* it carries the announced commit — and the announcement is the same event that used
+to trigger the eviction, so every commit the old barrier covered is still covered.
+
+### Measured
+
+| | before | after |
+|---|---|---|
+| Five versioned commits on one owner, leased acquire per commit (`HotPathMirrorChurnTest`) | 6 distinct mirrors | 1 mirror, 0 `SubscribeRequest`, 0 `UnsubscribeRequest` |
+| Six sequential cross-hub writes to one node on a real mesh (`HotPathWritesKeepTheirMirrorTest`) | 5 mirrors opened after the first write | 0 opened, 0 `MIRROR_BEHIND`, every write landed |
+| `StaticRepoImportActivityWriteCountTest` at `DOTNET_PROCESSOR_COUNT=4` (the liveness-gate repro) | — | passes: 2000 messages in 80 appends → version 84 (80 + 4 sealed segments), no refused re-writes |
+| A removal between locating a mirror and recording its floor, then a new mirror; and a faulted mirror rebuilt (`AnnouncedFloorLifetimeTest`) | per-owner map: the new mirror inherited floor 7, the rebuilt one 5 | floor on the instance: both start at 0 |
+
+The real-mesh arm also asserts that the floor was *in force* (the workspace's "Mirror … kept" line
+fired for the later commits) and that the owner's fanned-out version met the announced one every time
+(no `MIRROR_BEHIND`) — the second is the property the whole design rests on, and only a real owner
+can show it. Negative controls: with the source change set aside both measurements go red as shown
+in the "before" column, and with either refinement removed (`Created` evicting; proof-only
+eviction) its own arm goes red.
+
+### What it means for #1174 and #2776
+
+Each of those per-write hydrations had to complete inside the writer's 30 s
+[base-state bound](../BaseStateTimeoutCensus) while the mirror it replaced was being torn down on the
+same owner address, and a node like `{user}/_UserActivity/{user}` — written on every cold page load,
+at version 6498 in production — paid that thousands of times. That is the only mechanism in the
+code that predicts #1174's concentration on hot paths. The census from #4342 is what will confirm it
+on a rolled replica: an occurrence after this fix would have to come from a mirror that was NOT
+rebuilt per write. The `Dropping StreamEndedEvent … the target stream is gone` lines of #2776 were the
+same churn seen from the owner, and stop with it for every write-driven eviction.
+
+The #3432 retention ([The Evicted-Stream Retention](../EvictedStreamRetention)) is untouched as a
+mechanism, but it is now reached only by the events in the table that still evict — rare ones —
+rather than once per write.
 
 ## What #2776's other half was
 

@@ -63,6 +63,7 @@ public class DeclaredSourcesMissingIsNotAnImageVerdictTest
     [Fact(Timeout = 60000)]
     public void OwnSourceQueryMatchedNothing_IsAContentVerdict()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var def = Failing(ownSourcePresent: false);
 
         def.CurrentSourceVersions.Should().NotBeEmpty(
@@ -80,6 +81,7 @@ public class DeclaredSourcesMissingIsNotAnImageVerdictTest
     [Fact(Timeout = 60000)]
     public void SourcesAllPresent_StaysACompileError()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         DynamicTypePreWarmer.ClassifyCompileFailure(Failing(ownSourcePresent: true), TypePath)
             .Should().Be(PreWarmStatus.CompileError,
                 "a type whose sources are still there and do not compile is this image's problem");
@@ -89,6 +91,7 @@ public class DeclaredSourcesMissingIsNotAnImageVerdictTest
     [Fact(Timeout = 60000)]
     public void ATypeThatNeverBuilt_StaysACompileError()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         DynamicTypePreWarmer.ClassifyCompileFailure(
                 Failing(ownSourcePresent: false, everCompiled: false), TypePath)
             .Should().Be(PreWarmStatus.CompileError,
@@ -104,6 +107,7 @@ public class DeclaredSourcesMissingIsNotAnImageVerdictTest
     [Fact(Timeout = 60000)]
     public void WithoutThePath_TheClassificationStaysGating()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         DynamicTypePreWarmer.ClassifyCompileFailure(Failing(ownSourcePresent: false))
             .Should().Be(PreWarmStatus.CompileError,
                 "an unanswerable question is answered in the direction that keeps the gate intact");
@@ -118,6 +122,7 @@ public class DeclaredSourcesMissingIsNotAnImageVerdictTest
     [Fact(Timeout = 60000)]
     public void ADeclaredSourcesMissingOutcome_DoesNotGate_AndIsNamed()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var gate = new NodeTypeBakeGateState { GatesReadiness = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
@@ -144,6 +149,7 @@ public class DeclaredSourcesMissingIsNotAnImageVerdictTest
     [Fact(Timeout = 60000)]
     public void ACompileErrorOnAHealthyType_StillRefusesReadiness()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var gate = new NodeTypeBakeGateState { GatesReadiness = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 

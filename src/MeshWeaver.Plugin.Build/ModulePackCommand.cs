@@ -185,6 +185,17 @@ public static class ModulePackCommand
                   --with <fileName>           an additional closure file from <moduleOutputDir>
                                               (repeatable). <name>.dll is always included, and its
                                               .pdb rides along when present.
+                  --with-native <path>        an additional LOADABLE NATIVE payload from
+                                              <moduleOutputDir>, given as its module-relative path
+                                              runtimes/<rid>/native/<file> (repeatable). 🚨 The
+                                              opposite rule to --with, deliberately: --with refuses
+                                              a path because the flat closure has no place for one,
+                                              and this REQUIRES the path because the path is what
+                                              the module loader probes — exactly four segments,
+                                              nothing else. Use it on a lane that has no SDK
+                                              deps.json to derive from (the container path, whose
+                                              builder writes module-natives.txt); --deps-closure
+                                              derives the same thing on the SDK path.
                   --own-platform <names>      semicolon-separated MeshWeaver.* assemblies that are
                                               MODULE-OWNED (their source lives in the module's own
                                               repo, not the platform) — the deps-closure walk
@@ -232,6 +243,7 @@ public static class ModulePackCommand
         string? statedFrameworkMvid = null;
         string? sourceCommit = null;
         var extras = new List<string>();
+        var extraNatives = new List<string>();
         var ownPlatform = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         string? platformApp = null;
         var depsClosure = false;
@@ -267,6 +279,9 @@ public static class ModulePackCommand
                     break;
                 case "--with" when i + 1 < args.Length:
                     extras.Add(args[++i]);
+                    break;
+                case "--with-native" when i + 1 < args.Length:
+                    extraNatives.Add(args[++i]);
                     break;
                 case "--own-platform" when i + 1 < args.Length:
                     ownPlatform.UnionWith(args[++i]
@@ -561,6 +576,45 @@ public static class ModulePackCommand
                     + string.Join(", ", natives));
         }
 
+        // 🚨 NATIVES DECLARED BY THE CALLER (#4126) — the container lane's half. There is no SDK
+        // deps.json on that path to derive from (build-project compiles through Roslyn directly),
+        // so the builder derives the payloads from the IMAGE's and the shelf's deps.json, lays
+        // them out under the pack input and names them in module-natives.txt; this is where that
+        // provenance becomes a bundle section. Enumerating the folder instead would be wrong for
+        // the SDK path, where the publish folder legitimately holds natives belonging to
+        // PLATFORM-carried packages that the derivation deliberately excludes.
+        foreach (var native in extraNatives)
+        {
+            if (!NuGetPackageWriter.IsModuleNativeLayout(native))
+            {
+                Console.Error.WriteLine(
+                    $"error: --with-native takes a module-relative runtimes/<rid>/native/<file> "
+                    + $"path — exactly four segments — got '{native}'. Bytes at any other layout "
+                    + "are never probed by the module loader: shipped in appearance, absent in "
+                    + "behaviour. A payload that has to live elsewhere is flattened into the "
+                    + "module folder and named with --with <file name>, the loader's last probe.");
+                return 2;
+            }
+            var nativePath = Path.Combine(
+                moduleDirectory, native.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(nativePath))
+            {
+                Console.Error.WriteLine(
+                    $"error: --with-native file not found: {nativePath} — packing a module that "
+                    + "declares an engine it does not carry lands a module that throws "
+                    + "DllNotFoundException at its first P/Invoke");
+                return 2;
+            }
+            // ORDINAL: two natives differing only in case are two distinct loadable files on a
+            // case-sensitive filesystem (see DepsClosure).
+            if (!natives.Contains(native, StringComparer.Ordinal))
+                natives.Add(native);
+        }
+        if (extraNatives.Count > 0)
+            Console.WriteLine(
+                $"with-native: bundling {extraNatives.Count} declared native payload(s): "
+                + string.Join(", ", extraNatives));
+
         foreach (var extra in extras)
         {
             if (Path.GetFileName(extra) != extra)
@@ -657,6 +711,19 @@ public static class ModulePackCommand
         // collocated JS 404s. A standalone RCL publish lays them under wwwroot/ (its own assets at
         // the root, dependencies' already namespaced under wwwroot/_content/<Dep>/), which is the
         // exact shape MeshModuleStaticAssetExtensions serves from modules/<Name>/wwwroot.
+        //
+        // 🚨 THE PRECONDITION THIS WALK RESTS ON, stated because it was silently false for three
+        // weeks (#2384): EVERY asset kind must already be UNDER <out>/wwwroot at the relative path
+        // it will be served at. A directory walk cannot see an asset a producer only DECLARES, and
+        // two of the SDK's three kinds — the collocated `Foo.razor.js` and the `.styles.css`
+        // aggregate — exist nowhere in the project's own wwwroot/ tree. `dotnet publish` does
+        // materialise both there (measured against SDK 10.0.400, 2026-09-15:
+        // `Components/Badge.razor.js` lands at `publish/wwwroot/Components/Badge.razor.js`), so the
+        // SDK lane has always been complete; the CONTAINER lane's builder has to reproduce them,
+        // and `ProjectBuild.EmitStaticAssets` is where that obligation lives. Reading a
+        // static-web-assets manifest here instead would not help: the in-image builder writes none,
+        // and the lane that does write one already satisfies this walk.
+        // `check-bundle-static-assets.py` asserts the outcome per file, for both lanes.
         var assetRoot = Path.Combine(moduleDirectory, "wwwroot");
         var staticAssets = Directory.Exists(assetRoot)
             ? Directory.EnumerateFiles(assetRoot, "*", SearchOption.AllDirectories)

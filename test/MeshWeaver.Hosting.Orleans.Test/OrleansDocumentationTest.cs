@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -52,7 +52,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
         OrleansTestIdentity.SeedDefaultIdentity(Cluster);
     }
 
-    private async Task<IMessageHub> CreatePortalHubAsync()
+    private async Task<IMessageHub> CreatePortalHubAsync(CancellationToken cancellationToken)
     {
         var meshHub = Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
         var routingService = Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>();
@@ -64,7 +64,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
                 .WithInitialization(hub =>
                     hub.RegisterForDisposal(routingService.RegisterStream(hub))))!;
 
-        await Task.Delay(500);
+        await Task.Delay(500, cancellationToken);
         return portalHub;
     }
 
@@ -102,7 +102,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
     {
         var pathResolver = Cluster.Client.ServiceProvider.GetRequiredService<IPathResolver>();
 
-        var resolution = await pathResolver.ResolvePath("Doc/Architecture/BusinessRules").FirstAsync().Await();
+        var resolution = await pathResolver.ResolvePath("Doc/Architecture/BusinessRules").FirstAsync().Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"Resolution: Prefix={resolution?.Prefix}, Remainder={resolution?.Remainder}");
         resolution.Should().NotBeNull("Doc/Architecture/BusinessRules should resolve");
     }
@@ -110,7 +110,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
     [Fact(Timeout = 60000)]
     public async Task BusinessRules_LayoutArea_Loads()
     {
-        var portal = await CreatePortalHubAsync();
+        var portal = await CreatePortalHubAsync(TestContext.Current.CancellationToken);
         var address = new Address("Doc/Architecture/BusinessRules");
 
         Output.WriteLine("Pinging Doc/Architecture/BusinessRules...");

@@ -156,7 +156,7 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
                 Root = Space(partition),
                 Nodes = [Page(partition, "Kept"), Page(partition, "Retired")],
             })
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"pass 1 = {first.Outcome} ({first.Count} node(s))");
         first.Outcome.Should().Be("Imported");
 
@@ -172,7 +172,7 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
         };
         var second = await StaticRepoImporter
             .ImportSource(Mesh, afterRetirement, policy: TwoWaySince(horizon))
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine(
             $"pass 2 = {second.Outcome}, preserved {second.Preserved}, pruned [{string.Join(", ", second.PrunedPaths)}]");
 
@@ -189,7 +189,7 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
 
         var settled = await ChildrenWhen(partition,
                 children => !children.Contains(retired, StringComparer.OrdinalIgnoreCase))
-            .Timeout(120.Seconds());
+            .Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken);
         settled.Should().Contain(authored,
             "the authored node is still in the mesh after the prune that removed the retired one");
         settled.Should().Contain(kept, "and so is the file the repository still ships");
@@ -199,7 +199,7 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
         // "Skipped" — the exact state memex.systemorph.com was frozen in.
         var third = await StaticRepoImporter
             .ImportSource(Mesh, afterRetirement, policy: TwoWaySince(horizon))
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"pass 3 = {third.Outcome}, preserved {third.Preserved}");
 
         third.Outcome.Should().NotBe("Skipped",
@@ -210,7 +210,7 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
             + "to the branch head, after which no import ever looks again");
 
         var afterThird = await ChildrenWhen(partition, children => children.Contains(authored))
-            .Timeout(120.Seconds());
+            .Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken);
         afterThird.Should().Contain(authored,
             "🚨 and the re-import this fix newly causes must not be the thing that finally deletes "
             + "the authored node — the ownership test governs every pass, not just the first");
@@ -226,6 +226,7 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
     [Fact(Timeout = 300_000)]
     public async Task AConvergedImport_StillShortCircuits()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var partition = NewPartition();
         var horizon = DateTimeOffset.UtcNow.AddMinutes(-1);
         var retired = $"{partition}/Retired";

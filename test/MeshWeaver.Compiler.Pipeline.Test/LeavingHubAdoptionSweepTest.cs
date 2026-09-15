@@ -137,7 +137,7 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
         };
         await MeshService.CreateNode(typeNode)
             .SelectMany(_ => MeshService.CreateNode(SourceNode(typePath)))
-            .Should().Within(20.Seconds()).Emit();
+            .Should().Within(20.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
         // Wait for BOTH fields, not just the MVID: the live fingerprint is what the seeder's
         // pre-write check and the owner's stamp check both read, so a test that proceeds before it
         // is observable is deciding against a record it has not established.
@@ -154,7 +154,8 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
         await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition d
                         && string.Equals(d.LatestAssemblyMvid, LiveMvid, StringComparison.Ordinal)
-                        && string.Equals(d.CurrentSourceFingerprint, expected, StringComparison.Ordinal));
+                        && string.Equals(d.CurrentSourceFingerprint, expected, StringComparison.Ordinal),
+                            cancellationToken: TestContext.Current.CancellationToken);
         return expected;
     }
 

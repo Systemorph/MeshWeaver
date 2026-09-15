@@ -406,6 +406,50 @@ or acting on a user's behalf, still rides the user's identity — see the anti-p
 Pinned by `PostCreationAnnouncementContextTest`, whose negative control asserts that an ordinary
 write by the creator, through the same instrument, still arrives as the **creator**.
 
+#### 🚨 …and declaring the post's identity is only HALF of #4061 — the other half is where the ambient came from
+
+Row 1 of that table says the announcement rode "whatever the last stage left set". It is worth being
+precise about **what** left it set, because the answer is a defect of its own and fixing the post
+does not fix it: the ambient was `system-security` because the **sibling handler that ran just
+before** — `SpacePostCreationHandler`, writing the creator-Admin grant — opened its impersonation
+with `Observable.Using` around a CROSS-HUB create. That is the latch described under "An
+impersonation scope must not ESCAPE the operation it was opened for": opened on the subscribing
+thread, disposed on the owning hub's response thread, never closed on the subscriber. The subscriber
+is `MeshExtensions.RunPostCreationHandlersObs` — so **the whole remainder of the create ran as the
+platform**, and the announcement's two measured identities were simply "the latch was still in
+effect" and "it was not".
+
+So #4061 had a symptom fix and a source fix, and both are needed:
+
+| | |
+|---|---|
+| the SYMPTOM | the announcement decided against an undeclared identity → `o.WithAccessContext(WellKnownUsers.SystemContext)` (#4197) |
+| the SOURCE | the grant latched `system-security` onto the create flow → `accessService.RunAsSystem(…)`, retiring `SpaceNodeType.cs` from `test/ImpersonationScopeSites.allow` |
+
+Declaring the post's identity makes that ONE post correct. It does not make the flow correct: every
+other stage composed after the grant still inherited `Permission.All` by accident, and an accidental
+`Permission.All` fails in the direction that does not show up — a write silently succeeding where the
+user would have been refused (#1444). **Reading a fix like #4197 as "the site is handled" is the trap
+here**: the undeclared-identity row and the leaked-scope row are the same incident seen from two
+ends, and the ratchet is how you find the other end (`ImpersonationScopeSites.allow` — is the
+neighbouring handler on it?).
+
+Pinned by `SpaceGrantScopeDoesNotLatchTheCreateFlowTest`, which asserts SYNCHRONOUSLY on the
+subscribing thread that subscribing to the grant hands that thread back its own identity. Its
+negative control runs the SAME cross-hub write through the old `Observable.Using` idiom and requires
+it to latch — without that, a write that happened to complete synchronously would make the whole
+assertion vacuous, since `Using` does restore correctly when the inner observable is synchronous
+(`SystemScopeDoesNotEscapeTest`'s first case says so in as many words).
+
+**One undeclared sibling is LOCATED but not measured**, and is recorded here rather than guessed at:
+the create handler's OTHER announcement — the transient→Active confirmation fan-out, `hub.Post(
+DataChangeRequest.Update([resultNode]), o => o.WithTarget(new Address(resultNode.Path)))` in
+`MeshExtensions.CreateNode`'s subscriber — carries no identity of its own either, and it runs BEFORE
+the post-creation handler that grants the creator anything. It is the same message type behind the
+same `[RequiresPermission(Update)]` gate, so it is decided against whatever the persistence chain
+left ambient. Nobody has measured which identity it actually arrives as, or a failure caused by it;
+that measurement is the prerequisite for changing it, not a formality.
+
 ### Example 1 — `cache/mesh-node-cache` (read-only hydrator)
 
 The `MeshNodeStreamCache` pre-loads MeshNodes from storage to serve cache hits for every user. It cannot run under a user identity because it services many. It is sanctioned via:

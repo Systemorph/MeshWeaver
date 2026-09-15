@@ -1,7 +1,10 @@
 ---
 Name: Import Write Ordering (type before instance)
 Category: Architecture
-Description: Why a static-repo import writes a NodeType before the instances that name it, what happens to a type that arrives from another partition or repo, and the cycle policy — the root cause and the settled decisions behind issue #2556.
+Description: >-
+  Why a static-repo import writes a NodeType before the instances that name it, what happens to a type
+  that arrives from another partition or repo, and the cycle policy — the root cause and the settled
+  decisions behind issue #2556.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h13"/><path d="M3 12h9"/><path d="M3 18h5"/><path d="m17 10 4 4-4 4"/><path d="M21 14h-8"/></svg>
 ---
 

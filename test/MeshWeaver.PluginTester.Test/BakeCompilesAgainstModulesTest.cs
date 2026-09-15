@@ -65,6 +65,7 @@ public class BakeCompilesAgainstModulesTest(ITestOutputHelper output)
     [Fact(Timeout = 300_000)]
     public void ContentBindingAModuleType_Bakes_AndCannotWithoutTheModule()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var repo = TempDirectory("mw-module-bound-repo");
         var moduleDir = TempDirectory("mw-module-bound-module");
         var withModules = TempDirectory("mw-module-bound-bake-with");

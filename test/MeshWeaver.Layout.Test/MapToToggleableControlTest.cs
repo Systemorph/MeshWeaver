@@ -796,17 +796,20 @@ public class ReadonlyNumericRenderingTest(ITestOutputHelper output) : HubTestBas
             CreateHostAddress(), new LayoutAreaReference(NumericView));
 
         var control = await stream.GetControlStream(NumericView)
-            .Should().Within(10.Seconds()).Match(x => x is LayoutGridControl);
+            .Should().Within(10.Seconds()).Match(x => x is LayoutGridControl,
+                cancellationToken: TestContext.Current.CancellationToken);
         var grid = control.Should().BeOfType<LayoutGridControl>().Subject;
 
         foreach (var area in grid.Areas)
         {
             var cellId = area.Area.ToString()!;
-            var cell = await stream.GetControlStream(cellId).Should().Within(5.Seconds()).Match(x => x is not null);
+            var cell = await stream.GetControlStream(cellId).Should().Within(5.Seconds()).Match(x => x is not null,
+                cancellationToken: TestContext.Current.CancellationToken);
             if (cell is StackControl cellStack && cellStack.Areas.Count > 1)
             {
                 var reactiveId = cellStack.Areas.Skip(1).First().Area.ToString()!;
-                await stream.GetControlStream(reactiveId).Should().Within(5.Seconds()).Match(x => x is not null);
+                await stream.GetControlStream(reactiveId).Should().Within(5.Seconds()).Match(x => x is not null,
+                    cancellationToken: TestContext.Current.CancellationToken);
             }
         }
 

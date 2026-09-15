@@ -185,7 +185,8 @@ public class UserActionOutlivesStreamReleaseTest(ITestOutputHelper output) : Hub
         await stream.GetControlStream(ButtonArea).Should().Within(TestTimeouts.Convergence)
             .Match(c => c is not null,
                 "the owner-side LayoutAreaHost and its stream-scoped action handlers must be live "
-                + "before anything about releasing them can be measured");
+                + "before anything about releasing them can be measured",
+                    cancellationToken: TestContext.Current.CancellationToken);
 
         var ownerSyncHub = GetHost().GetHostedHub(
             SynchronizationAddress.Create(stream.StreamId), HostedHubCreation.Never);

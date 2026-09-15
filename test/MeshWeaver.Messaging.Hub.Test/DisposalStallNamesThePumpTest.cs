@@ -69,7 +69,7 @@ public class DisposalStallNamesThePumpTest : HubTestBase
             // froze the scheduler before this point would be measuring that instead.
             await victim.Observe(new Ping(), o => o.WithTarget(victim.Address))
                 .Should().Within(TestTimeouts.Quick)
-                .Emit("the hub must answer once, on its own scheduler, before that scheduler is frozen");
+                .Emit("the hub must answer once, on its own scheduler, before that scheduler is frozen", cancellationToken: TestContext.Current.CancellationToken);
             victim.RunLevel.Should().Be(MessageHubRunLevel.Started,
                 "the wedge under test is a STARTED hub whose pump stops turning — not a hub that "
                 + "never finished starting");
@@ -125,7 +125,7 @@ public class DisposalStallNamesThePumpTest : HubTestBase
             scheduler.Resume();
         }
 
-        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TestTimeouts.Convergence);
+        await victim.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
         victim.RunLevel.Should().Be(MessageHubRunLevel.Dead,
             "the wedge is in the scheduler, not in the hub — once turns are delivered again the "
             + "teardown completes normally, which is why this PR claims a nameable wedge and not a "
@@ -162,7 +162,7 @@ public class DisposalStallNamesThePumpTest : HubTestBase
         // Bring-up on a working scheduler, for the same reason as the test above.
         await victim.Observe(new Ping(), o => o.WithTarget(victim.Address))
             .Should().Within(TestTimeouts.Quick)
-            .Emit("the hub must answer once before its scheduler starts refusing");
+            .Emit("the hub must answer once before its scheduler starts refusing", cancellationToken: TestContext.Current.CancellationToken);
 
         // Every schedule from here throws. The post latches `draining`, the schedule fails, and the
         // latch must come back off — otherwise nothing this hub is ever sent can be processed again.
@@ -179,10 +179,10 @@ public class DisposalStallNamesThePumpTest : HubTestBase
             .Should().Within(TestTimeouts.Convergence)
             .Emit("a refused schedule must not latch the pump: once the scheduler accepts work "
                 + "again the hub processes messages normally. A leaked latch makes every later "
-                + "KickDrain return immediately, so this request would never be dequeued");
+                + "KickDrain return immediately, so this request would never be dequeued", cancellationToken: TestContext.Current.CancellationToken);
 
         victim.Dispose();
-        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TestTimeouts.Convergence);
+        await victim.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
         victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
     }
 

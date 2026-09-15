@@ -16,6 +16,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
+using Xunit;
 
 
 namespace MeshWeaver.Layout.Test;
@@ -242,7 +243,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // The area must resolve to a control quickly (the fix surfaces the error
         // immediately) — NOT spin on null until a timeout.
         var control = await stream.GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds()).Match(x => x is MarkdownControl);
+            .Should().Within(10.Seconds()).Match(x => x is MarkdownControl,
+                cancellationToken: TestContext.Current.CancellationToken);
 
         var text = control.Should().BeOfType<MarkdownControl>().Subject.Markdown?.ToString() ?? string.Empty;
         text.Should().Contain("failed to render",
@@ -278,7 +280,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         var control = await stream.GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds()).Match(x => x is MarkdownControl);
+            .Should().Within(10.Seconds()).Match(x => x is MarkdownControl,
+                cancellationToken: TestContext.Current.CancellationToken);
 
         var text = control.Should().BeOfType<MarkdownControl>().Subject.Markdown?.ToString() ?? string.Empty;
         text.Should().Contain("Access denied",

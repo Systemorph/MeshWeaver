@@ -1,7 +1,11 @@
 ---
 Name: A Denial Is an Answer
 Category: Architecture
-Description: A permission check on a hub that carries no evaluator grants Permission.All — which is how every session surface (MCP, REST, gRPC, CLI) shipped a pre-flight that could not fail. Plus the rule the crash on the other side taught: a refusal the mesh decided is rendered as the operation's answer, never raised as a fault.
+Description: >-
+  A permission check on a hub that carries no evaluator grants Permission.All — which is how every
+  session surface (MCP, REST, gRPC, CLI) shipped a pre-flight that could not fail. Plus the rule the
+  crash on the other side taught: a refusal the mesh decided is rendered as the operation's answer,
+  never raised as a fault.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/><path d="M4.5 4.5 19 19"/></svg>
 ---
 

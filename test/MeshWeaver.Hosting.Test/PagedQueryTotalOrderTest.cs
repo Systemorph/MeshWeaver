@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence;
@@ -68,7 +69,8 @@ public class PagedQueryTotalOrderTest
     private static MeshQueryRequest Page(int skip) =>
         new() { Query = All, Skip = skip, Limit = 3 };
 
-    private static async Task<IReadOnlyList<string>> Paths(IMeshQueryCore query, MeshQueryRequest request)
+    private static async Task<IReadOnlyList<string>> Paths(
+        IMeshQueryCore query, MeshQueryRequest request, CancellationToken cancellationToken)
     {
         var change = await query.Query<MeshNode>(request, Options)
             .FirstAsync()
@@ -77,7 +79,7 @@ public class PagedQueryTotalOrderTest
             // so this bound exists only so a regression that wedges the merge fails with a
             // timeout instead of hanging the shard.
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(cancellationToken);
         return change.Items.Select(n => n.Path!).ToList();
     }
 
@@ -95,15 +97,15 @@ public class PagedQueryTotalOrderTest
     {
         var store = new InMemoryStorageAdapter();
         foreach (var path in Stories.Prepend("Marketing"))
-            await store.Write(Node(path, path == "Marketing" ? "Group" : "Markdown"), Options).Await();
+            await store.Write(Node(path, path == "Marketing" ? "Group" : "Markdown"), Options).Await(TestContext.Current.CancellationToken);
 
         var rotating = new RotatingWalkStorageAdapter(store);
         var query = (IMeshQueryCore)new MeshQuery(
             [new StorageAdapterMeshQueryProvider(persistence: rotating)], hub: null!);
 
-        var page1 = await Paths(query, Page(0));
-        var page2 = await Paths(query, Page(3));
-        var page3 = await Paths(query, Page(6));
+        var page1 = await Paths(query, Page(0), TestContext.Current.CancellationToken);
+        var page2 = await Paths(query, Page(3), TestContext.Current.CancellationToken);
+        var page3 = await Paths(query, Page(6), TestContext.Current.CancellationToken);
 
         rotating.Rotations.Should().BeGreaterThan(1,
             "the point of this test is that the walk order CHANGED between the page queries — if "
@@ -134,9 +136,9 @@ public class PagedQueryTotalOrderTest
 
         var query = (IMeshQueryCore)new MeshQuery([forward, reversed], hub: null!);
 
-        var page1 = await Paths(query, Page(0));
-        var page2 = await Paths(query, Page(3));
-        var page3 = await Paths(query, Page(6));
+        var page1 = await Paths(query, Page(0), TestContext.Current.CancellationToken);
+        var page2 = await Paths(query, Page(3), TestContext.Current.CancellationToken);
+        var page3 = await Paths(query, Page(6), TestContext.Current.CancellationToken);
 
         var served = page1.Concat(page2).Concat(page3).ToList();
         served.Should().HaveCount(7);

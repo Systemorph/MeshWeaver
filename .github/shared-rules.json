@@ -168,6 +168,31 @@
         "the maintainer later promotes this text into a hub, change `hub` to that repo and the same",
         "gate starts enforcing the direction of inheritance instead of mere sameness."
       ]
+    },
+    {
+      "id": "never-hand-roll-ui",
+      "hub": "Systemorph/MeshWeaver",
+      "required-in": ["Systemorph/MeshWeaver"],
+      "slots": ["reference"],
+      "why": [
+        "Maintainer directive, 2026-09-15: 'please refactor to use platform layout. see also in all the",
+        "Agents.md that we make clear to always use this and not create own ui frameworks'. The occasion",
+        "was Essentials/OperationRequest's approval screen: a Stack with inline CSS and the script as",
+        "Controls.Html(<pre>) collapsed to a sliver (a scroll container in a definite-height flex column",
+        "loses its content-height floor, the trap Store's hero hit in Plugins#1192) and every block had",
+        "a different width. Core had the rule; the six other repos did not, so an agent there never read it.",
+        "",
+        "One slot, measured: `reference`. Core's 'Full reference' line links repo-relative paths",
+        "(.claude/skills/gui, the Documentation tree) that do not exist in the spokes, and Memex's",
+        "'Documentation links resolve' gate checks AGENTS.md links. The spokes point at the same docs on",
+        "the mesh (Skill/layout-area, Doc/GUI/LayoutAreas, Doc/GUI/DataBinding) as absolute URLs.",
+        "",
+        "Rolled out hub-first, NOT satellites-first: this checker refuses any marker whose id the",
+        "register does not declare, and it reads all seven repos, so six spokes landing before this entry",
+        "would have reddened every core pull request until core merged. Step 1 registers the block with",
+        "`required-in` naming only the hub (green on its own, and the id becomes known); step 2 lands the",
+        "six spoke copies; step 3 widens `required-in` to all seven."
+      ]
     }
   ]
 }

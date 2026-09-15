@@ -282,23 +282,50 @@ denominator the verdict job prints.
 
 ### The provisioning, as a one-read task
 
-All four go in the **Actions** store of `Systemorph/MeshWeaver` and **only** there:
+All three go in the **Actions** store of `Systemorph/MeshWeaver` and **only** there:
 `combo-verify.yml` fires on `workflow_run` and `workflow_dispatch` and **never** on
 `pull_request`, so its `secrets.` never resolve against the Dependabot store (there is no Dependabot
 *variables* store at all). The **three** `AZURE_*` secrets (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
 `AZURE_SUBSCRIPTION_ID`) and the two `FLEET_READER_*` secrets the same preflight asserts are
-already provisioned for `main-cd` — five of the preflight's nine inputs are therefore already in
-place, and the four below are the whole of what is missing.
+already provisioned for `main-cd`, and the roster is no longer an input at all — it is derived (the
+next section). So five of the preflight's eight inputs are already in place, and the three below
+are the whole of what is missing.
 
 | Name | Kind | Value | Where it comes from |
 |---|---|---|---|
-| `COMBO_VERIFY_INSTANCES` | variable | `[{"name":"memex","baseUrl":"https://memex.systemorph.com"},{"name":"memex-cloud","baseUrl":"https://memex.meshweaver.cloud"}]` | plain data — see the next section for why it should not be a variable at all |
-| `COMBO_VERIFY_SOURCES` | variable | space-separated `name=url`, e.g. `plugins=https://github.com/Systemorph/MeshWeaver.Plugins` | the module source repositories the verifier materialises |
-| `COMBO_VERIFY_KEYS` | secret | `{"<instance>":"mwi_…"}`, one per instance | 🚨 **ISSUED, never recovered.** An `mwi_` instance-registry key is stored hash-only (`InstanceKeys` persists `Hash(raw)`), so an existing key cannot be read back — a NEW key is issued per instance, additively, and separately revocable. |
-| `COMBO_VERIFY_TOKENS` | secret | `{"<instance>":"mw_…"}`, one per instance | an API token of a **global admin** on that instance. #3891 made this removable — see below — but the lander still uses it, so it is required until that switch lands. |
+| `COMBO_VERIFY_SOURCES` | variable | space-separated `name=url`, e.g. `plugins=https://github.com/Systemorph/MeshWeaver.Plugins` | the module source repositories the verifier materialises. 🚨 **Not derivable from the overlays, and that is a property of the data rather than of the effort spent**: it maps a registry *source NAME* carried by an install record to the repository that source's modules come from, and only the registry holds that mapping (`ComboAssembly.SourceRepositories`, consumed at `InstanceComboAssembler.cs:310`). It is plain data, not a credential. |
+| `COMBO_VERIFY_KEYS` | secret | `{"<instance>":"mwi_…"}`, one per **derived** instance | 🚨 **ISSUED, never recovered.** An `mwi_` instance-registry key is stored hash-only (`InstanceKeys` persists `Hash(raw)`), so an existing key cannot be read back — a NEW key is issued per instance, additively, and separately revocable. |
+| `COMBO_VERIFY_TOKENS` | secret | `{"<instance>":"mw_…"}`, one per **derived** instance | an API token of a **global admin** on that instance. #3891 made this removable — see below — but the lander still uses it, so it is required until that switch lands. |
 
-The names are asserted at `combo-verify.yml:96-133` and each `missing+=` line already names what to
-provision; the `verdict` job at `:254-278` separates *no candidate* from *the preflight failed* from
+🚨 **"One per instance" is now answered by the lane, not by the reader.** The preflight prints the
+derived roster before it asks for credentials, and names the instance any map is missing
+(`combo-verify.yml:194-198`). The hand-written value this page used to carry named `memex` and
+`memex-cloud` — and the fleet's overlays declared more than that on the day it was specified, which
+is the failure mode a derivation removes rather than a tidiness argument.
+
+🚨 **And what the derivation says TODAY is a refusal, which is the mechanism working.** Measured
+2026-09-15 over all three deployments repositories, the fleet declares **four live** installations:
+`build` (build.meshweaver.cloud), `memex-cloud` (memex.meshweaver.cloud) and `memex`
+(memex.systemorph.com) in `Systemorph/Memex`, **and a second `memex`** (partnerre.meshweaver.cloud)
+in `Systemorph/PartnerRe.Memex` — with `pearl` and `partnerre` excluded by their `not-installed`
+declarations in `.github/acr-retention/instances.json`.
+
+Upstream that duplicate is **legal and correct**: since [#3438](https://github.com/Systemorph/MeshWeaver/issues/3438)
+(2026-09-15) an installation's identity is `gh_repo:id`, because a `Hosting__Deployment` is unique
+inside one deployments repository and inside nothing larger, and AXIS 3 only ever asks each one what
+it is running. **Here it is fatal**, because `COMBO_VERIFY_KEYS` and `COMBO_VERIFY_TOKENS` are keyed
+by NAME: two installations sharing one would be handed the same `mwi_` key and admin token, and the
+second's verdict would land on the FIRST's `Admin/UpdatePolicy`. So the derivation REFUSES, naming
+both declaring overlays, rather than emitting two rows called `memex`. Silently qualifying the name
+to `repo:id` would be worse — it would ask for credentials under a key nobody has provisioned.
+
+Resolving it is a decision, not a workaround: rename one installation, or key the maps by the
+qualified `repo:id` and record that here. Until then the lane is red on the roster rather than on
+the credentials, and it says which two overlays collide.
+
+The names are asserted at `combo-verify.yml:99-129` (the inputs) and `:169-205` (the per-instance
+half, which cannot run before the derivation); each `missing+=` line already names what to provision.
+The `verdict` job at `:283-350` separates *no candidate* from *the preflight failed* from
 *verification did not succeed*, so a red here reads as "verification never ran, provision X" rather
 than as "verification failed". **That half of the lane is not the defect.**
 
@@ -327,21 +354,42 @@ self-update is switched back on, a candidate a live instance cannot serve is ref
 rolled. It is an argument about *priority* — this is a latent gate, not a live incident, and it
 should be read that way when it is scheduled against work that is bleeding.
 
-### 🚨 The instance list should not be a repo variable, and closing that needs NO new credential
+### 🚨 The instance roster IS derived — `vars.COMBO_VERIFY_INSTANCES` no longer exists
 
-#3842 rules out hand-maintained pins, and `vars.COMBO_VERIFY_INSTANCES` is one. The issue's own
-remainder list records step 3 — enumerate instances at run time — as *depending* on a credential
-for reading the control instance's `Deployments/*` records. **That dependency does not hold for the
-route this repository already uses.** `lock-pinned-digests.py`'s AXIS 3 derives the same roster from
-the deployment overlays — every `Hosting__Deployment:` plus its `ingress.host` — using only the
-read-only **fleet-reader** GitHub App, and `.github/acr-retention/instances.json` declares the
-installations that are deliberately not live. `combo-verify.yml` **already asserts that App's two
-secrets** (`:99-100`) and **already mints its token** (`:173-183`), so the derivation needs nothing
-that is not already in the lane.
+#3842 rules out hand-maintained pins, and `vars.COMBO_VERIFY_INSTANCES` was one. The issue's own
+remainder list recorded "enumerate instances at run time" as *depending* on a credential for reading
+the control instance's `Deployments/*` records. **That dependency never held for the route this
+repository already uses**, and the derivation is now in the lane.
 
-### 🚨 The four inputs are the WHOLE prerequisite — `verify:combo` is not one
+`.github/scripts/derive-combo-instances.py` reads the fleet's deployment overlays — every
+`Hosting__Deployment:` plus its `ingress.host` — **through `lock-pinned-digests.py`'s own AXIS 3
+extractor**, imported rather than copied, so the set this lane verifies and the set the nightly lock
+protects cannot disagree about what an installation is. It needs only the read-only **fleet-reader**
+GitHub App, whose two secrets this preflight already asserted; the preflight now also checks out the
+tree and mints that App's token (`combo-verify.yml:131-144`), which is the one structural change the
+move required — the job previously had neither.
 
-**Provisioning the four `COMBO_*` inputs makes this lane green today.** The lander does not use the
+`.github/acr-retention/instances.json` is the only thing that removes an installation from the
+roster, and only by declaring it `retired` or `not-installed` **with a reason**. 🚨 **The overlays
+are the denominator and that file only explains an absence**: an installation it does not mention is
+LIVE, so forgetting an entry makes the lane stricter (one more instance demanding a credential),
+never looser — the only direction a hand-maintained file may fail in.
+
+🚨 **Every way the derivation could come back empty is a RED, not a shorter answer.** An empty roster
+would produce an empty matrix, an empty matrix SKIPS the verify job, and GitHub paints a skipped job
+the same colour as a passed one — which is the whole of #3848. So the script exits 1, naming the
+cause, on: a repository whose overlays could not be read (NOBODY LOOKED is not a measured zero); an
+installation declared by two overlays; a roster entry naming an installation no overlay declares; a
+live installation with no `ingress.host`; two installations resolving to the same host; and zero
+live installations at all. It also drives the overlay extractor over two known fixtures on **every**
+run, so "the extractor stopped matching" can never arrive wearing "the fleet declares no
+installations". Three independent layers refuse a zero — the script, the preflight's roster step,
+and the `verdict` job's `COUNT < 1` arm — and `check-combo-verify.py` plus
+`derive-combo-instances.py --self-test` drive all of them on every pull request.
+
+### 🚨 The three remaining inputs are the WHOLE prerequisite — `verify:combo` is not one
+
+**Provisioning the three remaining `COMBO_*` inputs makes this lane green today.** The lander does not use the
 `verify:combo` route at all: `combo-verify-instance.sh` reads `roll-target` and `combo` with the
 `mwi_` instance key and then lands the verdict by `POST /api/mesh/get` + `POST /api/mesh/patch`
 with `ADMIN_TOKEN` (steps 1–4 of that script). `/api/plugins/combo-verification` and its
@@ -353,12 +401,11 @@ prerequisite that does not exist and blocks the remediation that would actually 
 
 So the remainder, in the order it can be done:
 
-1. **Provision the four inputs** (the table above). This alone produces verdicts on every declared
-   instance and ends the UNVERIFIED state. Nothing else is required.
-2. **Enumerate instances from the deployment overlays** and drop `vars.COMBO_VERIFY_INSTANCES`.
-   Needs no new credential and is independent of everything else here; it removes the
-   hand-maintained pin #3842 rules out. `check-combo-verify.py` must keep driving the
-   vacuous-green case — an empty *derived* roster is a RED, never an empty matrix.
+1. **Provision the three inputs** (the table above). This alone produces verdicts on every derived
+   instance and ends the UNVERIFIED state. Nothing else is required, and nothing in this repository
+   can substitute for it: a credential is issued at the service that holds it, not derived.
+2. ~~**Enumerate instances from the deployment overlays**~~ — **done** (#3848). The roster is
+   derived; `vars.COMBO_VERIFY_INSTANCES` is gone from the preflight and from this page.
 3. **Grant `verify:combo` to the build identity on each instance**, then **switch the lander off
    the admin token** — dropping `COMBO_VERIFY_TOKENS` from the preflight and the job env in the
    same diff, since an input asserted but no longer consumed is the no-skip-trapdoor rule in

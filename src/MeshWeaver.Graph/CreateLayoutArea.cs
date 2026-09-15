@@ -129,8 +129,11 @@ public static class CreateLayoutArea
     internal static UiControl BuildIconPreview(string icon)
     {
         const string boxStyle = "width:48px;height:48px;display:flex;align-items:center;justify-content:center;border:1px solid var(--neutral-stroke-rest);border-radius:6px;color:var(--neutral-foreground-rest);";
+        // Through MeshNodeImageHelper.SizeInlineSvg, which plates the icon (#4350) and sizes it into
+        // the 48px box — the preview has to show what the portal will actually draw, and drawn raw
+        // a currentColor outline is invisible on one of the two themes.
         if (icon.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
-            return Controls.Html($"<div style=\"{boxStyle}\">{icon}</div>");
+            return Controls.Html($"<div style=\"{boxStyle}\">{MeshNodeImageHelper.SizeInlineSvg(icon, 32)}</div>");
         if (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase) || icon.StartsWith("/")
             || icon.StartsWith("data:image", StringComparison.OrdinalIgnoreCase))
             return Controls.Html($"<div style=\"{boxStyle}\"><img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(icon)}\" style=\"max-width:32px;max-height:32px;\" /></div>");

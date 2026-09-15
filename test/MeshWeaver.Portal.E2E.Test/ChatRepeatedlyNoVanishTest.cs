@@ -21,7 +21,7 @@ public class ChatRepeatedlyNoVanishTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         // Seed the per-user composer (MeshWeaver harness → host Ollama model).
@@ -64,7 +64,7 @@ public class ChatRepeatedlyNoVanishTest(PortalFixture fixture)
             if (i % 2 == 1)
                 // wait for the round to land an assistant bubble before the next send
                 await PollAsync(async () => await page.Locator(".thread-msg-bubble").CountAsync() >= i + 1,
-                    TimeSpan.FromSeconds(90));
+                    TimeSpan.FromSeconds(90), cancellationToken: TestContext.Current.CancellationToken);
             else
                 await page.WaitForTimeoutAsync(1200);   // submit again mid-stream
 
@@ -72,7 +72,7 @@ public class ChatRepeatedlyNoVanishTest(PortalFixture fixture)
             page.Url.Should().NotContain("/login", $"login bounce after message {i} = the vanish");
             // Tolerate a momentary re-mount during a rapid mid-stream submit — the storm failure is a
             // PERMANENT teardown, so poll a few seconds for the container to be present.
-            (await PollAsync(async () => await container.CountAsync() > 0, TimeSpan.FromSeconds(8)))
+            (await PollAsync(async () => await container.CountAsync() > 0, TimeSpan.FromSeconds(8), cancellationToken: TestContext.Current.CancellationToken))
                 .Should().BeTrue($"chat container permanently vanished after message {i} — the render storm");
             // The reconnect modal is ALWAYS in the DOM (hidden); the circuit only dropped if it's actually
             // VISIBLE (or carries the `components-reconnect-show` state) — check visibility, not presence.
@@ -96,13 +96,14 @@ public class ChatRepeatedlyNoVanishTest(PortalFixture fixture)
         await page.Keyboard.TypeAsync(text);
     }
 
-    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)
+    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             if (await predicate()) return true;
-            await Task.Delay(400);
+            await Task.Delay(400, cancellationToken);
         }
         return false;
     }

@@ -1,21 +1,174 @@
 ---
 Name: Module Activation Head Ownership
 Category: Architecture
-Description: Which generation of a module a deployment runs is a decision every replica writes to one shared file, and two replicas landing different content of one module a few seconds apart lose each other's decision. The measured shape of that defect, why routing the write to an owning hub is not available, why the head must be DERIVED rather than stored, and exactly what the derivation costs.
+Description: Which generation of a module a deployment runs used to be a decision every replica wrote to one shared file, so two replicas landing different content of one module a few seconds apart lost each other's decision. Now every landing writes an immutable record of its own and the head is DERIVED from the records present. The on-disk format, how it stays readable by images already deployed, the retention rule, and why routing the write to an owning hub was not available.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6"/><path d="M5 8h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2z"/><path d="M7 20h10"/><path d="M9 16v4"/><path d="M15 16v4"/></svg>
 ---
 
 # Module Activation Head Ownership
 
-A deployment records which generation of each landed module it runs in one file per module,
-`modules/activation.d/<Name>.json`, on the RWX `/data` volume every replica shares. A landing reads
-that file at its start, decides against what it read, and replaces it at its end. The replace is
+A deployment recorded which generation of each landed module it runs in one file per module,
+`modules/activation.d/<Name>.json`, on the RWX `/data` volume every replica shares. A landing read
+that file at its start, decided against what it read, and replaced it at its end. The replace is
 atomic and **unconditional**.
 
 Within one process that is safe — landings are serialised on a cap-1 `IIoPool` slot. Across
-replicas it is a lost update, and this page is the measured shape of it, the two closing designs,
-and why only one of them is available. The issue is
-[#4026](https://github.com/Systemorph/MeshWeaver/issues/4026).
+replicas it was a lost update. The issue is
+[#4026](https://github.com/Systemorph/MeshWeaver/issues/4026), and it is **closed by deriving the
+head**: every landing now writes an immutable record of its own facts, and the head and fallback are
+computed from every record present. The first section below is the format as built and the
+compatibility story; the rest of the page is the measured defect and the design reasoning that
+chose this shape, kept because it is why the format looks the way it does.
+
+## As built — the on-disk format (#4026)
+
+```
+modules/activation.d/<Name>/<generation>.<SHA-256 of the record>.json       one landing, never rewritten
+modules/activation.d/<Name>/uninstalled.<SHA-256 of the tombstone>.tombstone one uninstall, never rewritten
+modules/activation.d/<Name>/<generation>.<SHA-256 of the verdict>.verdict    one platform's link measurement
+modules/activation.d/<Name>.json                                             the STORED entry, still written
+modules/activation.json                                                      the legacy aggregate, read only
+```
+
+Every file in `activation.d/<Name>/` is **immutable and content-addressed**: its name is the full
+SHA-256 of every field it serializes (length-prefixed, in a fixed order), so a name holds exactly one
+content and two writers of one name are writing identical bytes. That is what makes the create safe
+without an atomic primitive — .NET's no-overwrite move is `link(2)` where the file system has it and
+an existence check plus `rename(2)` where it does not (a CIFS mount). Each file's **arrival** is its
+own write time, never serialized. Temp files are staged in `activation.d/` itself, so every create
+moves that directory's write time — the fingerprint `PendingModuleActivations` memoises the read
+behind.
+
+**A landing record** (`ModuleLandingRecord`) carries only the landing's own facts — `name`, `source`,
+`packagePath`, `directory` (the generation), `version`, `frameworkMvid`, `minMeshVersion`,
+`sourceCommit` — plus two facts of the REQUEST: `yieldsToNewerHead` (true on the publish route's
+shelf, false on the adopt path, because the derivation replays each lane's own head rule) and
+`reArrivalOf` (below). No `Previous*`, no enabled flag, no loadability: those are decisions, state,
+and a fact about the platform.
+
+**An uninstall tombstone** (`ModuleUninstallRecord`) is the uninstall as an event: `name` and
+`after`, the newest event it observed, so a second uninstall is a new file rather than a no-op.
+
+**A platform verdict** (`ModulePlatformVerdict`) is one measurement of whether a generation's bytes
+link on one platform build: `name`, `directory`, `platform` (the live framework identity — the key a
+producer records beside its bytes), `linkable`, and `supersedes` (the verdict it replaces on the
+same platform). Every landing writes its own image's measurement, before its landing record.
+
+### Installed or not is the ORDER of events
+
+`ModuleActivationSidecar.DeriveEntry` runs inside `Read`, so the 82 call sites measured below get it
+with no change. The events are the landing records and the tombstones, each at its arrival — plus
+the stored `<Name>.json` **when an image that predates the records wrote it**. Current images mark
+every `<Name>.json` they write with `projectionOf` (the newest event it was projected from); an
+older image does not know the field and never writes it, so a file **without** it is that image's
+own install (a landing of the head it names) or uninstall, at the file's write time. A file **with**
+it is only a projection and is never an event.
+
+- The newest uninstall ends everything before it. **Nothing landed after it → uninstalled.**
+  Something did → installed, and only the landings after it count — which also makes the next
+  landing after an uninstall a first landing (the documented "uninstall, then publish the older
+  build" rollback), without deleting a single record.
+- So a **stale projection cannot undo an uninstall**, and a stale disabled entry cannot undo a
+  landing — Copilot's second finding on #4427. The interleaving: replica A lands and derives
+  "installed"; replica B uninstalls (tombstone, then its disabled `<Name>.json`); then A writes the
+  projection it derived before the tombstone existed. A current image orders B's tombstone after A's
+  record and reads **uninstalled**, whatever `<Name>.json` says. The mirror (B decides an
+  uninstall, A lands inside B's window, B's disabled file lands last) reads **installed** at A's
+  build. `ConcurrentUninstallTest` pins both.
+
+### 🚨 What an image that predates the records sees when the two disagree
+
+It reads `<Name>.json` alone, and that file is **last-writer-wins, as it always was** — no ordering
+can make a mutable shared file linearizable without a compare-and-swap, and the store has none. So
+in the first interleaving an older image sees the module **enabled** (A's stale projection), and in
+the mirror it sees it **disabled** (B's stale entry), until the next current-image write of that
+module's file (any landing or uninstall of it) — exactly the outcome every image got on `main` for
+the same interleavings. In the first case the uninstall's best-effort delete removed the bytes that
+projection names unless a pod held them open; the GC references stored generations too, so nothing
+it names is reclaimed under a replica that boots from it. The residue is asserted, not assumed:
+`ConcurrentUninstallTest` reads the file an older image reads and states what it says. It lasts for
+the length of a mixed-image window (a rolling update or a rollback), and it is the same race `main`
+has for every image today.
+
+### Which generation: the head is a replay, the fallback a per-platform rank
+
+Among the landings that count (one candidate per generation — the higher label wins, then the later
+arrival):
+
+- **the head is a replay** — folded in arrival order through #3996's predicate, which keeps the
+  current head only when the arriving landing is a SHELF landing ranking strictly below it (both
+  versions SemVer) and the head's bytes are present. That reproduces what a serialised sequence of
+  the same landings would have produced, including the arrival-dependent cases the rule keeps
+  (equal version = rebuild, unversioned, adopt). Every replica folds the same files, so every
+  replica reaches the same head, **whatever image it runs** — the module set (`GenerationsOf`) reads
+  heads only, so it is platform-independent too.
+- **the fallback is a rank** — bytes present, then loadable on the **reader's own platform** (its
+  newest verdict: measured "loads" above "never measured here" above measured "does not load"),
+  then the higher version, ties keeping the earlier arrival. This is the one platform-dependent part
+  of the answer, deliberately — Copilot's first finding on #4427: a verdict stored once per
+  generation, by whichever replica recorded first, froze that image's answer for every image; the
+  code was first-writer-wins while the page said last-writer. Now a replica on another image records
+  its own verdict beside the first, and each image ranks by its own. Generations a projection names
+  that no record does join as the earliest arrivals, so the first landing on a new image keeps the
+  fallback the deployment had. `LinkVerdictPerPlatformTest` stands a second image up on one volume
+  (a surface whose contract carries a type this build lacks) and pins that the old image falls back
+  to 1.6.0 while the new one falls back to 1.7.0 — at the same moment.
+- **The modules GC keeps every platform's fallback**: its reference set is the derived entry for
+  every platform a verdict exists for, plus the platform with none, plus every stored entry's
+  generations (`ReferencedGenerations`). Both images are live during a roll, and a pass on either
+  must not reclaim the other's fallback.
+
+**A re-arrival** is the one case identical records would get wrong: an adopt landing re-installing
+the generation the deployment ran before (the Store's rollback), or any landing of a bundle after an
+uninstall that followed its first arrival, finds its record already on the volume. When it would
+change the answer, it writes a NEW record whose `reArrivalOf` names the latest record with the same
+facts — a new file with its own arrival, never a touch of an existing one. When it would not (an
+identical re-publish of the head, an older shelf upload), nothing is written.
+
+### Compatibility with images already deployed
+
+| | what an image that predates the records does | why it is safe |
+|---|---|---|
+| reads | enumerates `activation.d/*.json` at the **top level** only | every record lives in a SUBDIRECTORY, and the staged temp ends `.landing.tmp` |
+| boots | loads the head the stored `<Name>.json` names | every landing still writes that file — as a projection of the head it derived, only when it changes; `projectionOf` is a field it ignores |
+| collects garbage | references the generations the stored entries name | the current GC references every platform's derived generations **and** the stored ones, a superset of what any reader reads |
+| installs / uninstalls | writes `<Name>.json` without `projectionOf` | a current image reads that as the older image's own event, at the file's write time, ordered against the records |
+
+A module with **no** landing records and no tombstones reads exactly as before, byte for byte. That
+is every module until its first landing or uninstall on an image that writes them, and it is why no
+migration pass exists.
+
+### Retention can never change the answer
+
+Without retention, deriving trades a race for unbounded growth. `CollectGarbage` retires a landing
+record or a tombstone only when **the entry derived without it is identical, for every platform** —
+the ones a verdict exists for and the one with none (`PruneLandingRecords`) — behind the same
+fail-closed read-fault counter and grace window as the generation deletes, and never a record of a
+generation the stored entry names. A verdict goes once a newer one for its generation and platform
+supersedes it, or once no remaining record names its generation. "Keep the head's and the fallback's
+records" would be WRONG: an unversioned landing moves the head whatever it follows, so a later older
+shelf landing takes the head from it, and the head then depends on a record that is neither head
+nor fallback — retiring it would flip the head with nothing having landed
+(`Retention_KeepsARecordTheHeadDependsOn_EvenWhenItIsNeitherHeadNorFallback`). Records before the
+newest uninstall change nothing and go; the tombstone itself stays while dropping it would change
+the answer (for instance while `<Name>.json` still holds a stale projection).
+
+### Measured
+
+Two `ModuleLandingService` instances — two replicas, each with its own cap-1 pool — over one landing
+root, one replica's whole operation run inside the other's window. Against the code before each
+change (the same seam applied, nothing else):
+
+| interleaving | before | after |
+|---|---|---|
+| 1.6.1 interrupted, 1.7.0 lands inside its recording window | head **1.6.1** — the regression | head 1.7.0, fallback 1.6.1 |
+| 1.7.0 interrupted, 1.6.1 lands inside its recording window | head 1.7.0, fallback **lost** (`null`) | head 1.7.0, fallback 1.6.1 |
+| the new image lands 1.7.0 after the old image measured it unloadable | new image's fallback **1.6.0** (the old image's frozen verdict) | new image 1.7.0, old image 1.6.0 |
+| an uninstall inside a landing's projection window | module **enabled** (stale projection) | uninstalled |
+| a landing inside an uninstall's projection window | module **disabled** (stale disabled entry) | installed at the new build |
+
+The second row is worth noticing: even the order that kept the right head lost the older build's
+fallback slot, so the modules GC would have reclaimed it five minutes later.
 
 ## The mechanism, at file and line
 
@@ -259,18 +412,24 @@ platform-aware resolution step. What is genuinely not local is the rest:
 answer, so a derived head flows into `Propose` exactly as a stored one does. The boot projection
 (`ProjectOntoMeshSet`) is likewise untouched.
 
-## Standing verdict
+## Verdict
 
-The defect is real, reachable only by two different contents of one module landing concurrently on
-two replicas, and unbounded once it happens (it propagates into the proposed module set). **Deriving
-the head is the only one of the named shapes that adds no new cell two replicas can both write**, and
-routing the write to an owning hub is not available in the form the issue states it, because boot
-reads the record before the mesh exists.
+The defect was real, reachable only by two different contents of one module landing concurrently on
+two replicas, and unbounded once it happened (it propagated into the proposed module set). **Deriving
+the head was the only one of the named shapes that adds no new cell two replicas can both write**, and
+routing the write to an owning hub was not available in the form the issue stated it, because boot
+reads the record before the mesh exists. It is built as described in the *As built* section at the
+top of this page: the on-disk record changes shape additively, an
+older image reads and writes exactly what it always did, and retention is stated as an invariant
+(*it never changes what `Read` answers*) rather than a list of records to keep.
 
-What is left is a scope call the maintainer has not made: **whether the on-disk activation record
-changes shape on a live fleet now**, given that the GC retention rule has to be rewritten in the same
-change and that the last four changes in this area were each written after an incident in which a
-module silently stopped shipping.
+What the design section priced and the build settled differently, after Copilot's review of
+#4427: enabled state is **not** read from the stored entry's flag — an uninstall is a tombstone
+ordered against the landings, because the stored entry is a projection any replica may overwrite
+with a stale decision; and loadability is **per platform** (`ModulePlatformVerdict`), because a
+single stored verdict froze the first image's answer for every image. The residue is the one a
+mutable shared file always has: an image that predates the records reads `<Name>.json` alone,
+last-writer-wins, for as long as a mixed-image window lasts.
 
 ## See also
 

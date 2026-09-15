@@ -248,12 +248,14 @@ public class LiveQueryHandoffDropTest
             // warm-up exists to prevent.
             await warmInitial.Should().Within(30.Seconds()).Emit(
                 "warm-up: Initial never arrived — the environment is too degraded to even JIT-prime "
-                + "this pipeline, so the gated assertions below cannot be trusted either");
+                + "this pipeline, so the gated assertions below cannot be trusted either",
+                    cancellationToken: TestContext.Current.CancellationToken);
             warmInner.Write(new MeshNode("x", "warmup/_Usage") { NodeType = "TokenUsage" }, Options)
                 .Subscribe();
             await warmLive.Should().Within(30.Seconds()).Emit(
                 "warm-up: live update never arrived — the environment is too degraded to even "
-                + "JIT-prime this pipeline, so the gated assertions below cannot be trusted either");
+                + "JIT-prime this pipeline, so the gated assertions below cannot be trusted either",
+                    cancellationToken: TestContext.Current.CancellationToken);
         }
     }
 

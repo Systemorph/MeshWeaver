@@ -66,7 +66,7 @@ public class EmailContentDiscriminatorTest(ITestOutputHelper output) : MonolithM
         var result = await Guard
             .Validate(new NodeValidationContext
             { Operation = NodeOperation.Create, Node = EmailNode(nameof(Email)) })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeTrue(
             "a cross-hub writer (a compiled plugin queueing a notification) serializes the typed "
@@ -81,7 +81,7 @@ public class EmailContentDiscriminatorTest(ITestOutputHelper output) : MonolithM
         var result = await Guard
             .Validate(new NodeValidationContext
             { Operation = NodeOperation.Create, Node = EmailNode("EmailContent") })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeFalse(
             "'EmailContent' is registered nowhere — the untypeable-blob guard must keep refusing it");

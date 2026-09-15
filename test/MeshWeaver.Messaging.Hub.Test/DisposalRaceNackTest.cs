@@ -63,7 +63,7 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task AcceptedRequest_IsServed_WhenTheHubGoesDownBeforeItsTurnRuns()
-        => await RunRace(VictimAddress, faulting: false);
+        => await RunRace(VictimAddress, faulting: false, TestContext.Current.CancellationToken);
 
     /// <summary>
     /// Door two: the delivery DOES reach its handler, which cannot complete because the hub is
@@ -75,9 +75,9 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task FaultingRequest_IsNacked_WhenTheHandlerRacesDisposal()
-        => await RunRace(FaultingAddress, faulting: true);
+        => await RunRace(FaultingAddress, faulting: true, TestContext.Current.CancellationToken);
 
-    private async Task RunRace(Address victimAddress, bool faulting)
+    private async Task RunRace(Address victimAddress, bool faulting, CancellationToken cancellationToken)
     {
         // 🚨 No hand-woven gate: handler → test is an AsyncSubject the producer completes; the
         // release travels INTO the deliberately parked action block, so it is a volatile flag
@@ -117,7 +117,7 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
             // 1. Stall the victim's turn loop.
             host.Post(new Blocker(), o => o.WithTarget(victimAddress));
             await handlerEntered.Should().Within(20.Seconds()).Emit(
-                "the blocker handler must be holding the victim's action block");
+                "the blocker handler must be holding the victim's action block", cancellationToken);
 
             // 2. Accepted while the hub is healthy, so it lands in the MAIN queue behind the
             //    stall — not in the deferred queue the #672 drain answers for.
@@ -130,7 +130,7 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
             var response = host
                 .Observe((object)request, o => o.WithTarget(victimAddress), requestId)!
                 .FirstAsync()
-                .Await(TestContext.Current.CancellationToken);
+                .Await(cancellationToken);
 
             // 🚨 …and "accepted" is OBSERVED, never assumed. `Observe` posts on the HOST, whose own
             // turn then routes the delivery down to the victim: between the two, the victim can
@@ -147,7 +147,7 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
                 .Where(trail => trail.Contains($"ENQUEUED@{victimAddress}", StringComparison.Ordinal))
                 .FirstAsync()
                 .Timeout(TestTimeouts.Convergence)
-                .Await(TestContext.Current.CancellationToken);
+                .Await(cancellationToken);
 
             // 3. Dispose. The blocker observes the shutdown and returns; the queue behind it —
             //    our request, then the ShutdownRequest — runs in order.
@@ -163,8 +163,8 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
                 served.Message.Should().BeOfType<RaceResponse>(
                     "the request was accepted, so it runs and is answered before the hub goes down "
                     + "— the shutdown waits its turn behind accepted work");
-                await victim.DisposalCompleted.FirstOrDefaultAsync().Await()
-                    .WaitAsync(TestTimeouts.Convergence);
+                await victim.DisposalCompleted.FirstOrDefaultAsync().Await(cancellationToken)
+                    .WaitAsync(TestTimeouts.Convergence, cancellationToken);
                 victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
                 return;
             }

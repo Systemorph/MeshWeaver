@@ -87,10 +87,29 @@ public static class IoPoolNames
     public const string Process = "Process";
 
     /// <summary>
-    /// Prefix for per-Postgres-storage-adapter pools (<c>pg:{adapterName}</c>). Each such
-    /// pool is capped at ONE in-flight op so the <see cref="IIoPool"/> gate mirrors the
-    /// single Npgsql connection that adapter holds (<c>MaxPoolSize=1</c>) — the gate IS the
-    /// connection. See <see cref="IoPoolOptions.MaxConcurrencyFor"/>.
+    /// Prefix for per-Postgres-storage-<b>provider</b> pools (<c>pg:{providerName}</c>). Capped at
+    /// ONE in-flight WRITE. See <see cref="IoPoolOptions.MaxConcurrencyFor"/>.
+    ///
+    /// <para>🚨 <b>The cap is half a CONNECTION BUDGET, not a mirror of one connection</b>
+    /// (measured 2026-09-15 while re-checking issue #1198's third item). This comment used to say
+    /// "the gate IS the connection… the single Npgsql connection that adapter holds
+    /// (<c>MaxPoolSize=1</c>)", and that is not what the partitioned Postgres backend wires: every
+    /// per-schema adapter shares ONE <c>NpgsqlDataSource</c> (<c>MaxPoolSize=50</c> in the portal)
+    /// and the SAME <c>pg:Postgres</c> pool, because minting a data source per <c>(schema, table)</c>
+    /// leaked a pool per hub and exhausted the server — that design was deliberately REMOVED. The
+    /// one place the old sentence is literally true is
+    /// <c>PostgreSqlChunkedContentVectorStore</c>, which does hold a dedicated
+    /// <c>MaxPoolSize=1</c> source beside its <c>pg:vector</c> pool.</para>
+    ///
+    /// <para>So the pairing to read is <c>PostgresRead</c> (16) + this (1) = 17 concurrent
+    /// connections, comfortably under the shared source's 50 — a budget, with headroom that has
+    /// never been spent against a measurement. <c>Doc/Architecture/ControlledIoPooling</c> states
+    /// this correctly and is the reference; the sentence here asserted the opposite and made a
+    /// live question look settled, which is why #1198's third item sat unmeasured for a month.
+    /// 🚨 It follows that the cap is a PROCESS-WIDE write serializer: a recursive delete's next
+    /// leaf removal queues behind unrelated writes from every other partition. Changing the number
+    /// needs the queue-wait distribution under portal load, which is not instrumented — it is not a
+    /// knob to turn on a hunch.</para>
     /// </summary>
     public const string PostgresAdapterPrefix = "pg:";
 
@@ -246,8 +265,11 @@ public sealed record IoPoolOptions
         // shared connection pool so reads can't starve writes — checked BEFORE the cap-1
         // write prefix because "pg-read:" also starts with "pg".
         name.StartsWith(IoPoolNames.PostgresReadAdapterPrefix, StringComparison.Ordinal) ? PostgresRead :
-        // Per-PG-adapter WRITE pools (pg:{adapter}) hold exactly one connection — the gate
-        // IS the single Npgsql connection, never a parallel bound on top of it.
+        // Per-PG-provider WRITE pools (pg:{provider}) take one slot: half the connection BUDGET
+        // (16 reads + 1 write, under the shared data source's MaxPoolSize=50) — NOT a mirror of a
+        // dedicated single connection, which the partitioned backend has not had since the
+        // per-(schema, table) data sources were removed as a leak. See IoPoolNames for the
+        // measurement and Doc/Architecture/ControlledIoPooling for the budget.
         name.StartsWith(IoPoolNames.PostgresAdapterPrefix, StringComparison.Ordinal) ? 1 :
         // Same prefix-shadowing order for Snowflake: "sf-read:" also starts with "sf".
         name.StartsWith(IoPoolNames.SnowflakeReadAdapterPrefix, StringComparison.Ordinal) ? SnowflakeRead :

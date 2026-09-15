@@ -1,5 +1,5 @@
 ---
-Name: Choose your portal: Blazor, the new Next shell, or both
+Name: 'Choose your portal: Blazor, the new Next shell, or both'
 Category: Feature
 Description: A deployment now composes its GUI shells — Blazor-only, Next-only, or both — and on a portal serving both, ?gui=next / ?gui=blazor switches your browser between them.
 Icon: Sparkle

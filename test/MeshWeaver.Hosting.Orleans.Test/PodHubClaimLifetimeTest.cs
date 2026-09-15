@@ -93,7 +93,7 @@ public class PodHubClaimLifetimeTest
             var now = factory.AttachCalls;
             if (now >= target)
                 return now;
-            await Task.Delay(25);
+            await Task.Delay(25, TestContext.Current.CancellationToken);
         }
         throw new TimeoutException(
             $"the claim stopped at {factory.AttachCalls} attempt(s), short of {target} — it gave up");

@@ -68,7 +68,7 @@ public class PreserveAuthorshipIsGatedTest(ITestOutputHelper output) : MonolithM
                 {
                     PreserveAuthorship = true,
                 })
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine($"refusal: success={response.Message.Success} reason={response.Message.RejectionReason} error={response.Message.Error}");
 
@@ -92,7 +92,7 @@ public class PreserveAuthorshipIsGatedTest(ITestOutputHelper output) : MonolithM
 
         Access.SetCircuitContext(EditorContext);
         var response = await ObserveNodeOperation(new CopyNodeRequest(sourcePath, targetPath))
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine($"plain copy: success={response.Message.Success} reason={response.Message.RejectionReason} error={response.Message.Error}");
 
@@ -101,7 +101,7 @@ public class PreserveAuthorshipIsGatedTest(ITestOutputHelper output) : MonolithM
             ?? "the gate is about the flag alone — an Editor may still copy, and the copy is stamped for them");
 
         var copy = await ReadNode(targetPath).Should().Within(TestTimeouts.Convergence)
-            .Match(n => n is not null, "the copy must exist");
+            .Match(n => n is not null, "the copy must exist", cancellationToken: TestContext.Current.CancellationToken);
         copy!.CreatedBy.Should().Be(EditorId,
             "a copy is a new node, stamped for whoever made it — which is exactly why it needs no "
             + "Delete on the source");
@@ -119,7 +119,7 @@ public class PreserveAuthorshipIsGatedTest(ITestOutputHelper output) : MonolithM
             Name = prefix,
             NodeType = "Markdown",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         return path;
     }
 }

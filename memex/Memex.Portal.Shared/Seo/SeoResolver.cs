@@ -253,17 +253,20 @@ public static class SeoResolver
     ///
     /// <para>The value is resolved exactly the way the in-app icon is
     /// (<see cref="MeshNodeImageHelper.ResolveContentPath"/>) — a <c>content:</c> reference becomes
-    /// the access-controlled content URL, an inline <c>&lt;svg&gt;</c> stays that same svg, a URL
-    /// stays that URL — so the tab, the card and the app can never disagree about what a node looks
-    /// like.</para>
+    /// the access-controlled content URL, a URL stays that URL, and an inline <c>&lt;svg&gt;</c>
+    /// goes through the same backplate policy the app applies (<see cref="ResolveIconSvg"/>), which
+    /// leaves an icon that paints its own plate exactly as authored — so the tab, the card and the
+    /// app can never disagree about what a node looks like.</para>
     /// </summary>
     /// <param name="node">The node whose page is being served.</param>
     /// <returns>Its own icon, or null when it carries none an <c>href</c> can point at.</returns>
     public static PageIcon? ResolveIcon(MeshNode node)
     {
         // An inline <svg> is MARKUP, not a location, so it travels as a data URI — the same
-        // mechanism App.razor already uses for the per-instance favicon. The svg itself is
-        // untouched: it is the node's icon, byte for byte.
+        // mechanism App.razor already uses for the per-instance favicon. The markup is the node's
+        // icon through the backplate policy and nothing else (see ResolveIconSvg): an authored
+        // plate survives byte for byte, and one that has none gets the same generated plate the app
+        // draws, because a tab strip is a ground this process does not control.
         if (ResolveIconSvg(node) is { } svg)
             return new PageIcon(SvgDataUri(svg), SvgMediaType);
 
@@ -292,12 +295,25 @@ public static class SeoResolver
     /// shipped glyph) is a location this process would have to fetch — over its own
     /// access-controlled route, from an anonymous request — to rasterize; a raster URL needs no
     /// rasterizing at all, because Safari reads those already.</para>
+    ///
+    /// <para>🚨 It goes through the backplate policy (<see cref="IconBackplate.Ensure"/>) — the
+    /// same policy the in-app icon passes (<see cref="MeshNodeImageHelper.ResolveRenderable"/>), so
+    /// "the tab, the card and the app can never disagree" stays true. It is not cosmetic here
+    /// (#4350): BOTH consumers of this value render on a ground this process does not control, and
+    /// neither of them has any surrounding text for a <c>currentColor</c> outline to inherit from.
+    /// In a <c>data:</c> URI the markup is a DOCUMENT, so such an icon paints in the initial color;
+    /// and <see cref="IconRasterizer.Render"/> leaves its canvas transparent precisely BECAUSE it
+    /// was told every mark carries its own plate. Measured on the pixels: a black hairline on
+    /// nothing — invisible in a dark tab strip and on a dark link-preview card, and served behind a
+    /// 200, so nothing reports it. An icon that already paints a full-bleed plate — every authored
+    /// store mark, every thread identicon — is returned byte-identical, so nothing that worked
+    /// before changes.</para>
     /// </summary>
     /// <param name="node">The node whose page is being served.</param>
     public static string? ResolveIconSvg(MeshNode node)
     {
         var icon = MeshNodeImageHelper.ResolveContentPath(node.Icon, node.Path);
-        return MeshNodeImageHelper.IsInlineSvg(icon) ? icon : null;
+        return MeshNodeImageHelper.IsInlineSvg(icon) ? IconBackplate.Ensure(icon!) : null;
     }
 
     /// <summary>The route the rasterized favicon of one node is served from.</summary>

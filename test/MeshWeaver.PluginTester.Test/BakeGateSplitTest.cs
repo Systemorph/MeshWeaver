@@ -129,7 +129,7 @@ public class BakeGateSplitTest(ITestOutputHelper output)
                 SourceSha = "deadbeef",
                 CompileTimeout = TimeSpan.FromMinutes(4),
                 RenderTimeout = TimeSpan.FromMinutes(2),
-            }).FirstAsync().Await();
+            }).FirstAsync().Await(TestContext.Current.CancellationToken);
             output.WriteLine("── gate consuming the bake ──");
             output.WriteLine(seededLog.ToString());
             Assert.Null(seeded.FatalError);
@@ -150,7 +150,7 @@ public class BakeGateSplitTest(ITestOutputHelper output)
                 SourceSha = "deadbeef",
                 CompileTimeout = TimeSpan.FromMinutes(4),
                 RenderTimeout = TimeSpan.FromMinutes(2),
-            }).FirstAsync().Await();
+            }).FirstAsync().Await(TestContext.Current.CancellationToken);
             output.WriteLine("── gate compiling for itself (the control) ──");
             output.WriteLine(controlLog.ToString());
             Assert.Null(control.FatalError);
@@ -204,6 +204,7 @@ public class BakeGateSplitTest(ITestOutputHelper output)
     [Fact(Timeout = 120_000)]
     public void ABakeThisProcessCannotAddress_IsRefusedBeforeAnyMeshIsBuilt()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var repo = CreateRepo();
         var bakeDir = TempDirectory("mw-split-address");
         try
@@ -274,6 +275,7 @@ public class BakeGateSplitTest(ITestOutputHelper output)
     [Fact(Timeout = 300_000)]
     public void OneTypesFailure_FailsThatType_NotTheWholeBake()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         // A source referencing a package from a source that does not exist: the resolver throws a
         // NuGetProtocol fault, which is neither a CompilationException nor a source-discovery one.
         const string brokenNodeType =

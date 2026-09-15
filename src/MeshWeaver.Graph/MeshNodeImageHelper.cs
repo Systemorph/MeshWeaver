@@ -239,10 +239,15 @@ public static class MeshNodeImageHelper
         return parsed?.Provider switch
         {
             // Inline svg passes through the backplate policy: an icon without a full-bleed plate
-            // gets a generated one here, at the ONE seam every surface classifies through, so a
-            // currentColor outline or a dark pictorial can never render invisibly on one theme
-            // (IconBackplate). Icons that already paint a plate — every authored store mark, every
-            // thread identicon — pass through byte-identical.
+            // gets a generated one, so a currentColor outline or a dark pictorial can never render
+            // invisibly on one theme (IconBackplate). Icons that already paint a plate — every
+            // authored store mark, every thread identicon — pass through byte-identical.
+            //
+            // 🚨 This is ONE of the two seams, not "the" seam. The other is SizeInlineSvg, which a
+            // surface that builds its own icon markup reaches for instead of classifying here.
+            // Claiming a single seam is what let #4350 happen: five surfaces in this assembly
+            // bypassed this one, and nothing connected them. Both seams plate now, and
+            // InlineSvgEmissionBackplateGuard is what keeps a third from appearing unplated.
             DomainIcon.InlineSvgProvider => new RenderableIcon(
                 IconRenderKind.InlineSvg, IconBackplate.Ensure(parsed.Id)),
             DomainIcon.UrlProvider => new RenderableIcon(IconRenderKind.Image, parsed.Id),
@@ -353,26 +358,46 @@ public static class MeshNodeImageHelper
         => !string.IsNullOrEmpty(icon) && !IsImageUrl(icon) && !IsInlineSvg(icon) && !IsFluentIconName(icon);
 
     /// <summary>
-    /// Ensures an inline <c>&lt;svg&gt;</c> renders at an explicit pixel size when injected
-    /// as a raw HTML string (e.g. <c>Controls.Html</c> surfaces, where no scoped CSS can
-    /// reach the markup). Node icons are typically authored with a <c>viewBox</c> but NO
-    /// <c>width</c>/<c>height</c>; without an intrinsic size such an svg renders at the
-    /// browser default (~300×150) and overflows/collapses — a blank tile. Injects a
-    /// <c>style</c> attribute right after the opening <c>&lt;svg</c> tag; because a
-    /// duplicate attribute's FIRST occurrence wins in HTML parsing, the injected size
-    /// takes precedence over any author-supplied inline style.
+    /// An inline <c>&lt;svg&gt;</c> icon made ready for a raw-HTML surface: through the backplate
+    /// policy (<see cref="IconBackplate.Ensure"/>), then sized to an explicit pixel box.
+    ///
+    /// <para>🚨 The plate is part of THIS function, not the caller's to remember — and that is the
+    /// fix for #4350. <see cref="ResolveRenderable"/> plated, and was described as "the ONE seam
+    /// every surface classifies through"; it was not. Five surfaces in this assembly built their
+    /// own icon markup instead of classifying — two of them reaching for this sizer, three
+    /// injecting the authored markup with nothing at all — so an ordinary house icon
+    /// (<c>stroke="currentColor"</c>, no plate of its own) inherited the surrounding text color and
+    /// rendered INVISIBLY on one of the two themes — the AppleMusic defect (2026-08-22) the
+    /// backplate was written to prevent, re-appearing at every seam that was not the one seam.
+    /// Sizing an icon into a raw-HTML box IS the moment the policy applies: there is no caller that
+    /// wants an inline icon injected unplated, so making the two inseparable here is what makes the
+    /// invariant hold by construction rather than by everyone remembering it. For an icon that
+    /// already paints its own full-bleed plate the POLICY is a no-op — <c>Ensure</c> returns the
+    /// same instance, so every authored store mark and every thread identicon keeps its own plate,
+    /// hue and glyph exactly as written; the sizing style below is then the only markup this method
+    /// adds, and adding it is the whole point of calling it.</para>
+    ///
+    /// <para>The size half: node icons are typically authored with a <c>viewBox</c> but NO
+    /// <c>width</c>/<c>height</c>, and on a raw-HTML surface (a <c>Controls.Html</c> tile) no
+    /// scoped CSS can reach the markup — without an intrinsic size such an svg renders at the
+    /// browser default (~300×150) and overflows/collapses into a blank tile. The <c>style</c>
+    /// attribute goes right after the opening <c>&lt;svg</c> tag; because a duplicate attribute's
+    /// FIRST occurrence wins in HTML parsing, the injected size takes precedence over any
+    /// author-supplied inline style.</para>
     /// </summary>
-    /// <param name="svg">The inline svg markup (anything before the first <c>&lt;svg</c> is preserved).</param>
+    /// <param name="svg">The inline svg markup (anything before the first <c>&lt;svg</c> is preserved;
+    /// a value that is not svg at all passes through untouched).</param>
     /// <param name="pixels">The square size, in CSS pixels, the svg should occupy.</param>
     public static string SizeInlineSvg(string svg, int pixels)
     {
         if (string.IsNullOrEmpty(svg))
             return svg;
-        var idx = svg.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
+        var plated = IconBackplate.Ensure(svg);
+        var idx = plated.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
         if (idx < 0)
-            return svg;
+            return plated;
         var insertAt = idx + "<svg".Length;
-        return svg.Insert(insertAt,
+        return plated.Insert(insertAt,
             $" style=\"width: {pixels}px; height: {pixels}px; display: block;\"");
     }
 

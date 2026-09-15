@@ -1,7 +1,10 @@
 ---
 Name: The health page now reports what the portal measured — and what it did not
 Category: Feature
-Description: A portal's health page now publishes two readings that previously existed only in its startup log: what its NodeType bake found, and how its source discovery behaved. A reading that is clean is printed too, so "nothing was measured" can no longer be mistaken for "everything is fine".
+Description: >-
+  A portal's health page now publishes two readings that previously existed only in its startup log:
+  what its NodeType bake found, and how its source discovery behaved. A reading that is clean is
+  printed too, so "nothing was measured" can no longer be mistaken for "everything is fine".
 Icon: Pulse
 Order: -20260911
 ---

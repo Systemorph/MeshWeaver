@@ -64,9 +64,9 @@ public class PluginBundleIndexArtifactTest(ITestOutputHelper output) : MonolithM
             .Select(r => r.RawKey)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
-    private Task<InstallResult> InstallPackage(string id) =>
+    private Task<InstallResult> InstallPackage(string id, CancellationToken cancellationToken) =>
         PackageInstaller.Install(
                 Mesh,
                 new PackageManifest
@@ -84,9 +84,9 @@ public class PluginBundleIndexArtifactTest(ITestOutputHelper output) : MonolithM
                 "HEAD")
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(120))
-            .Await();
+            .Await(cancellationToken);
 
-    private async Task<WebApplication> StartBundleHost(IPublicationArtifacts? artifacts)
+    private async Task<WebApplication> StartBundleHost(IPublicationArtifacts? artifacts, CancellationToken cancellationToken)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -98,7 +98,7 @@ public class PluginBundleIndexArtifactTest(ITestOutputHelper output) : MonolithM
 
         var app = builder.Build();
         app.MapPluginBundles();
-        await app.StartAsync();
+        await app.StartAsync(cancellationToken);
         return app;
     }
 
@@ -119,12 +119,12 @@ public class PluginBundleIndexArtifactTest(ITestOutputHelper output) : MonolithM
     [Fact(Timeout = 300_000)]
     public async Task TheIndexNamesTheArtifact_ForABundleThatWasPushed_AndNullForOneThatWasNot()
     {
-        await InstallPackage(PushedPackage);
-        await InstallPackage(PlainPackage);
+        await InstallPackage(PushedPackage, TestContext.Current.CancellationToken);
+        await InstallPackage(PlainPackage, TestContext.Current.CancellationToken);
         var key = await RegisterInstance($"{Source}/*");
 
         var app = await StartBundleHost(new RecordedArtifacts(
-            new PublicationArtifact(Source, PushedPackage, Version, Reference)));
+            new PublicationArtifact(Source, PushedPackage, Version, Reference)), TestContext.Current.CancellationToken);
         await using var _ = app;
 
         var artifacts = await ArtifactsInIndex(app, key);
@@ -139,10 +139,10 @@ public class PluginBundleIndexArtifactTest(ITestOutputHelper output) : MonolithM
     [Fact(Timeout = 300_000)]
     public async Task WithThePlatformDefault_EveryArtifactIsNull()
     {
-        await InstallPackage(PlainPackage);
+        await InstallPackage(PlainPackage, TestContext.Current.CancellationToken);
         var key = await RegisterInstance($"{Source}/*");
 
-        var app = await StartBundleHost(artifacts: null);
+        var app = await StartBundleHost(artifacts: null, cancellationToken: TestContext.Current.CancellationToken);
         await using var _ = app;
 
         var artifacts = await ArtifactsInIndex(app, key);

@@ -517,7 +517,17 @@ public sealed class PluginBundleClient
                         // activation entry so this deployment's [ModuleLoad] line can say what the
                         // loaded generation came FROM, not only what its file looks like. Absent on
                         // a bundle whose producer recorded none, which prints "(unrecorded)".
-                        manifest!.SourceCommit)
+                        manifest!.SourceCommit,
+                        // #4126 — the module's RID-specific NATIVE payloads. Same read and same
+                        // rule as the assets, for a failure one step harder: without this the
+                        // module lands complete in every visible respect, loads, and throws
+                        // DllNotFoundException at its first P/Invoke. The layout IS the contract
+                        // and is checked on both sides — the reader refuses a bundle declaring
+                        // anything but runtimes/<rid>/native/<file>, and the landing refuses it
+                        // again before a byte reaches disk.
+                        BundleReader.ReadModuleNativeAssets(bundleBytes) is { Count: > 0 } natives
+                            ? [.. natives.Select(n => (n.RelativePath, n.Bytes))]
+                            : null)
                     .Select(_ => files.Count)
                     .Do(count => _logger?.LogInformation(
                         "Module '{Module}' of {Plugin} landed ({Count} file(s), version {Version}) "

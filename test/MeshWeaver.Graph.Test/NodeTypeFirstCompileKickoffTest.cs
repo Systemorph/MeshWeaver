@@ -88,13 +88,13 @@ public class NodeTypeFirstCompileKickoffTest(ITestOutputHelper output) : Monolit
     private static MeshNode Instance() =>
         new("explorer1", TestPartition) { NodeType = NodeTypePath };
 
-    private Task<MeshNode> Verdict(MeshNode typeNode, IMeshNodeCompilationService? compiler) =>
+    private Task<MeshNode> Verdict(MeshNode typeNode, IMeshNodeCompilationService? compiler, CancellationToken cancellationToken) =>
         NodeTypeEnrichmentHelpers
             .ApplyStreamResult(
                 typeNode, Instance(), NodeTypePath, EmptyMeshConfiguration(),
                 compiler, Mesh, logger: null)
             .Take(1)
-            .Should().Within(VerdictBudget).Emit("ApplyStreamResult must always reach a verdict");
+            .Should().Within(VerdictBudget).Emit("ApplyStreamResult must always reach a verdict", cancellationToken);
 
     /// <summary>
     /// 🚨 THE REGRESSION. A NodeType that HAS source to build, on a mesh that can actually build
@@ -109,7 +109,7 @@ public class NodeTypeFirstCompileKickoffTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 60_000)]
     public async Task ParticipatingTypeAwaitingItsFirstKickoff_IsNotPinnedToTheDefaultConfiguration()
     {
-        var verdict = await Verdict(AwaitingKickoff(), Compiler);
+        var verdict = await Verdict(AwaitingKickoff(), Compiler, TestContext.Current.CancellationToken);
 
         verdict.HubConfiguration.Should().NotBeNull(
             "this NodeType declares a Configuration expression and this mesh has a compilation "
@@ -133,7 +133,7 @@ public class NodeTypeFirstCompileKickoffTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 60_000)]
     public async Task ParticipatingTypeOnAMeshThatCannotCompile_StillBindsTheDefaultChain()
     {
-        var verdict = await Verdict(AwaitingKickoff(), compiler: null);
+        var verdict = await Verdict(AwaitingKickoff(), compiler: null, cancellationToken: TestContext.Current.CancellationToken);
 
         verdict.HubConfiguration.Should().BeNull(
             "with no compilation service registered no compile can ever run, so a compile-progress "
@@ -150,7 +150,7 @@ public class NodeTypeFirstCompileKickoffTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 60_000)]
     public async Task MarkerTypeWithNoSource_StillBindsTheDefaultChain()
     {
-        var verdict = await Verdict(Marker(), Compiler);
+        var verdict = await Verdict(Marker(), Compiler, TestContext.Current.CancellationToken);
 
         verdict.HubConfiguration.Should().BeNull(
             "a definition with no Configuration, no HubConfiguration source and no Sources has "

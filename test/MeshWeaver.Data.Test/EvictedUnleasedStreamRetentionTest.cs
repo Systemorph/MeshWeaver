@@ -69,6 +69,15 @@ namespace MeshWeaver.Data.Test;
 /// the retention is fixed (by opting the unleased call sites into the lease — see
 /// <c>Doc/Architecture/EvictedStreamRetention</c> §9), the unleased arm WILL go red, and that red is
 /// the fix landing, not a regression: invert it to match the leased arm rather than deleting it.</para>
+///
+/// <para>🚨 <b>Which change events still evict — issue #1174.</b> A versioned <c>Updated</c> — one
+/// per write, i.e. the event this test USED to drive — no longer evicts: the workspace records the
+/// announced version as the next write's freshness floor and KEEPS the mirror, so there is no
+/// predecessor to park (see <see cref="AVersionedUpdate_KeepsTheUnleasedStream_SoNothingIsParked"/>).
+/// The retention itself is untouched, and it still applies to every event that DOES evict — a
+/// <c>Deleted</c>, a <c>Created</c> (recreate), and the version-less <c>Updated</c> the operator
+/// recycle broadcasts. The two characterization arms therefore drive that last shape, which keeps
+/// them measuring the mechanism rather than an event that no longer reaches it.</para>
 /// </summary>
 public class EvictedUnleasedStreamRetentionTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -136,7 +145,17 @@ public class EvictedUnleasedStreamRetentionTest(ITestOutputHelper output) : HubT
                 // The workspace resolves IMeshChangeFeed from ITS hub's service provider; the bare
                 // Data-layer HubTestBase registers none, so wire the in-process feed here.
                 .AddSingleton<IMeshChangeFeed, TestMeshChangeFeed>()
-                .Configure<SyncStreamOptions>(o => o.HeartbeatInterval = LongHeartbeat))
+                .Configure<SyncStreamOptions>(o =>
+                {
+                    o.HeartbeatInterval = LongHeartbeat;
+                    // JsonSynchronizationStream's own change-feed arm resubscribes a stream the
+                    // feed says is behind — and a CollectionReference stream carries no version,
+                    // so for it EVERY event opens that gate. Real and wanted in production; here it
+                    // would add SubscribeRequests on the SAME stream that this test's per-cycle
+                    // wait would count as a fresh mirror, so push it past the run.
+                    o.ChangeFeedResubscribeWindow = LongHeartbeat;
+                    o.ChangeFeedStalenessGrace = LongHeartbeat;
+                }))
             .AddData(data => data.AddHubSource(CreateHostAddress(),
                 ds => ds.WithType<BusinessUnit>().WithType<LineOfBusiness>()));
 
@@ -243,6 +262,52 @@ public class EvictedUnleasedStreamRetentionTest(ITestOutputHelper output) : HubT
             + $"clientSyncHubs=+{settled}");
     }
 
+    /// <summary>
+    /// 🚨 <b>What #1174 changed about this population.</b> The same unleased sequence, driven by the
+    /// event every WRITE produces — a versioned <c>Updated</c> — now leaves ONE mirror: the
+    /// workspace keeps the stream and records the announced version instead of evicting it, so
+    /// every caller in the loop gets the cached instance back and there is nothing to park. Before
+    /// #1174 this exact loop was the unleased arm above (+1 live <c>sync/</c> hub pair per write);
+    /// the retention mechanism is unchanged, it is simply no longer reached once per write.
+    /// </summary>
+    [HubFact]
+    public async Task AVersionedUpdate_KeepsTheUnleasedStream_SoNothingIsParked()
+    {
+        var (workspace, changeFeed, client) = await StartAndSettleAsync();
+        var baselineSubscribes = Volatile.Read(ref _subscribeCount);
+        var baselineUnsubscribes = Volatile.Read(ref _unsubscribeCount);
+        var baselineSyncHubs = LiveSyncHubs(client);
+
+        var first = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
+            CreateHostAddress(), new CollectionReference(nameof(BusinessUnit)));
+        await AwaitSubscribesAsync(baselineSubscribes + 1,
+            "the first resolve opens the one mirror this key is entitled to");
+
+        var sameEveryCycle = true;
+        for (var cycle = 1; cycle <= Cycles; cycle++)
+        {
+            PublishVersionedWrite(changeFeed, version: cycle + 1);
+            var again = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
+                CreateHostAddress(), new CollectionReference(nameof(BusinessUnit)));
+            sameEveryCycle &= ReferenceEquals(first, again);
+        }
+
+        var opened = Volatile.Read(ref _subscribeCount) - baselineSubscribes;
+        var closed = Volatile.Read(ref _unsubscribeCount) - baselineUnsubscribes;
+        var syncHubs = LiveSyncHubs(client) - baselineSyncHubs;
+        Output.WriteLine(
+            $"DIAG versioned: opened={opened} closed={closed} clientSyncHubs=+{syncHubs} "
+            + $"sameStream={sameEveryCycle}");
+
+        sameEveryCycle.Should().BeTrue(
+            "a versioned Updated keeps the cached mirror (#1174), so every resolve returns it");
+        opened.Should().Be(1,
+            $"{Cycles} writes on one owner must not open {Cycles} more mirrors");
+        syncHubs.Should().Be(1,
+            "ONE live mirror per (owner, reference, identity) — the cache's own invariant, and the "
+            + "number the unleased arm above exceeds once per EVICTING event");
+    }
+
     /// <summary>Activates both hubs and waits for the owner's initial snapshot, so the client's
     /// data-context init gate is open before any measurement is taken.</summary>
     private async Task<(IWorkspace Workspace, IMeshChangeFeed ChangeFeed, IMessageHub Client)>
@@ -255,7 +320,8 @@ public class EvictedUnleasedStreamRetentionTest(ITestOutputHelper output) : HubT
 
         await workspace.GetObservable<BusinessUnit>()
             .Should().Within(10.Seconds())
-            .Match(x => x.Count > 0, "the owner must serve the initial snapshot");
+            .Match(x => x.Count > 0, "the owner must serve the initial snapshot",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         return (workspace, changeFeed, client);
     }
@@ -278,16 +344,27 @@ public class EvictedUnleasedStreamRetentionTest(ITestOutputHelper output) : HubT
         Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
             .Select(_ => Volatile.Read(ref _subscribeCount))
             .Should().Within(10.Seconds())
-            .Match(c => c >= target, because);
+            .Match(c => c >= target, because, cancellationToken: TestContext.Current.CancellationToken);
 
     /// <summary>
-    /// Fires one owner-path change event. <c>Kind = Updated</c> deliberately: the workspace's own
-    /// change-feed subscription passes a <c>null</c> filter so <c>EvictForPath</c> sees every
-    /// kind, while <c>JsonSynchronizationStream</c>'s resubscribe listener ignores
-    /// <c>Updated</c> — so the SubscribeRequests counted here are this test's re-resolves and
-    /// never a coalesced resubscribe.
+    /// Fires one owner-path change event that still EVICTS: the version-less <c>Updated</c> the
+    /// operator recycle broadcasts (<c>MeshOperations</c>, <c>Version: 0</c>). A versioned
+    /// <c>Updated</c> no longer evicts (#1174) — see <see cref="PublishVersionedWrite"/>. The
+    /// <paramref name="cycle"/> only distinguishes the events' timestamps; it is not a version.
     /// </summary>
-    private static void PublishOwnerChange(IMeshChangeFeed changeFeed, int version) =>
+    private static void PublishOwnerChange(IMeshChangeFeed changeFeed, int cycle) =>
+        changeFeed.Publish(new MeshChangeEvent(
+            Namespace: HostType,
+            Id: "1",
+            Path: OwnerPath,
+            Kind: MeshChangeKind.Updated,
+            NodeType: null,
+            Version: 0,
+            Timestamp: DateTimeOffset.UtcNow.AddTicks(cycle)));
+
+    /// <summary>The event a WRITE produces: a versioned <c>Updated</c>, which the workspace answers
+    /// by recording a freshness floor and keeping the mirror (#1174).</summary>
+    private static void PublishVersionedWrite(IMeshChangeFeed changeFeed, long version) =>
         changeFeed.Publish(new MeshChangeEvent(
             Namespace: HostType,
             Id: "1",

@@ -75,7 +75,7 @@ public class DocExamplesSweepTest(PortalFixture fixture)
 
         // ONE shared authenticated context for the whole sweep (owned by the fixture): a fresh
         // context + /dev/signin per page starved the portal under the sweep's kernel-compile load.
-        var context = await fixture.SharedAuthenticatedContextAsync();
+        var context = await fixture.SharedAuthenticatedContextAsync(TestContext.Current.CancellationToken);
         // Pay the one-time Roslyn warm-up up front, not on whichever page runs first.
         await fixture.EnsureKernelWarmAsync(context);
         var page = await context.NewPageAsync();

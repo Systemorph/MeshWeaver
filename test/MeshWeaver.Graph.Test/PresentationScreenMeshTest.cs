@@ -41,7 +41,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
 
     private IMessageHub Hub => Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
-    private async Task CreateUser(string id, User content)
+    private async Task CreateUser(string id, User content, CancellationToken cancellationToken = default)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -51,7 +51,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
                 NodeType = "User",
                 Name = id,
                 Content = content,
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: cancellationToken);
     }
 
     private IObservable<PresentationScreen> ScreenOf(string viewer)
@@ -65,14 +65,14 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
             Email = "alice@acme.com",
             PresentationMode = true,
             HiddenPaths = [Space],
-        });
+        }, TestContext.Current.CancellationToken);
         // Bob is presenting too, with his own marks. Acme is not one of them.
         await CreateUser(Bob, new User
         {
             Email = "bob@acme.com",
             PresentationMode = true,
             HiddenPaths = [Other],
-        });
+        }, TestContext.Current.CancellationToken);
 
         var aliceScreen = await ScreenOf(Alice)
             .Where(s => s.Active && s.MarkedPaths.Contains(Space))
@@ -113,7 +113,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
                     HiddenPaths = [Space],
                 }
             })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var screen = await ScreenOf(Alice)
             .Where(s => s.Active && s.MarkedPaths.Contains(Space))
@@ -165,7 +165,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
             {
                 Content = PresentationPreference.SetMode(node.ContentAs<User>(options), true)
             })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // The SAME subscription source now reports the screen up — no reload, no new circuit.
         var live = await ScreenOf(Alice)
@@ -180,7 +180,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
             {
                 Content = PresentationPreference.SetMode(node.ContentAs<User>(options), false)
             })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var off = await ScreenOf(Alice)
             .Where(s => !s.Active)
@@ -197,7 +197,7 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
         // ever stopped emitting, the menu would simply never render, with nothing in any log to say
         // why: a CombineLatest stalls silently when one leg never produces a value.
         var screen = await ScreenOf("nobody-here")
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds()).Await(TestContext.Current.CancellationToken);
 
         screen.Active.Should().BeFalse();
         screen.Hides(Space).Should().BeFalse();
@@ -207,11 +207,11 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
     public async Task AnAnonymousViewerHasNoScreen_AndCostsNoProfileRead()
     {
         var anonymous = await PresentationScreenExtensions
-            .ScreenOf(Hub, WellKnownUsers.Anonymous).FirstAsync().Timeout(10.Seconds());
+            .ScreenOf(Hub, WellKnownUsers.Anonymous).FirstAsync().Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken);
         anonymous.Should().BeSameAs(PresentationScreen.Off);
 
         var none = await PresentationScreenExtensions
-            .ScreenOf(Hub, null).FirstAsync().Timeout(10.Seconds());
+            .ScreenOf(Hub, null).FirstAsync().Timeout(10.Seconds()).Await(TestContext.Current.CancellationToken);
         none.Should().BeSameAs(PresentationScreen.Off);
     }
 }

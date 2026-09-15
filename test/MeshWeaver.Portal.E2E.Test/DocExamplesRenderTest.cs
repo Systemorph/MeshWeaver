@@ -121,7 +121,7 @@ public class DocExamplesRenderTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 1000);
 

@@ -43,6 +43,7 @@ public sealed class ContainerReferenceSet
         ImmutableDictionary<string, string> packageVersions,
         ImmutableDictionary<string, ImmutableArray<string>> packageAssemblies,
         ImmutableDictionary<string, ImmutableArray<string>> packageDependencies,
+        ImmutableDictionary<string, ImmutableArray<string>> packageNatives,
         ImmutableDictionary<string, string> assembliesByName,
         ImmutableHashSet<string> frameworkAssemblyNames,
         string platformAssemblyVersion)
@@ -51,6 +52,7 @@ public sealed class ContainerReferenceSet
         PackageVersions = packageVersions;
         PackageAssemblies = packageAssemblies;
         PackageDependencies = packageDependencies;
+        PackageNatives = packageNatives;
         AssembliesByName = assembliesByName;
         FrameworkAssemblyNames = frameworkAssemblyNames;
         PlatformAssemblyVersion = platformAssemblyVersion;
@@ -68,6 +70,22 @@ public sealed class ContainerReferenceSet
     /// <summary>Package id → the package ids it depends on, per the image's deps.json. The
     /// record the private-closure walk follows (<see cref="PrivateClosure"/>) — never a guess.</summary>
     public ImmutableDictionary<string, ImmutableArray<string>> PackageDependencies { get; }
+
+    /// <summary>
+    /// Package id → the LOADABLE native payloads it contributes (#4126), each a module-relative
+    /// <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c> path exactly as the image's own deps.json
+    /// declares it.
+    ///
+    /// <para>🚨 Read from BOTH shapes a deps.json can take (<see cref="NativeContributions"/>):
+    /// the <c>native</c> section a RID-specific publish resolves — which is what every MeshWeaver
+    /// image is — and the <c>runtimeTargets</c> entries a portable one leaves. Reading only
+    /// <c>runtime</c>, as this type did until #4126, made a package whose ONLY contribution is
+    /// native invisible: <c>SQLitePCLRaw.lib.e_sqlite3</c> contributes no assembly at all, so it
+    /// resolved as "the container does not supply it" against an image that ships
+    /// <c>libe_sqlite3.so</c> in <c>/app</c>, and a <c>build: container</c> module could not even
+    /// DECLARE the CVE-patched engine.</para>
+    /// </summary>
+    public ImmutableDictionary<string, ImmutableArray<string>> PackageNatives { get; }
 
     /// <summary>Assembly simple name → the file backing it (case-insensitive).</summary>
     public ImmutableDictionary<string, string> AssembliesByName { get; }
@@ -130,7 +148,8 @@ public sealed class ContainerReferenceSet
                 + "is a failure rather than an empty build.");
 
         var deps = DepsFile(app);
-        var (packageVersions, packageAssemblies, packageDependencies, platformVersion) = ReadDeps(deps);
+        var (packageVersions, packageAssemblies, packageDependencies, packageNatives, platformVersion) =
+            ReadDeps(deps);
 
         // The reference set is the union of three things the container supplies, in increasing
         // priority: the SHARED FRAMEWORKS installed in it, the assemblies this process was
@@ -172,6 +191,7 @@ public sealed class ContainerReferenceSet
             packageVersions,
             packageAssemblies,
             packageDependencies,
+            packageNatives,
             byName.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase),
             frameworkNames.ToImmutable(),
             platformVersion);
@@ -247,6 +267,7 @@ public sealed class ContainerReferenceSet
     private static (ImmutableDictionary<string, string> Versions,
                     ImmutableDictionary<string, ImmutableArray<string>> Assemblies,
                     ImmutableDictionary<string, ImmutableArray<string>> Dependencies,
+                    ImmutableDictionary<string, ImmutableArray<string>> Natives,
                     string PlatformAssemblyVersion)
         ReadDeps(string path)
     {
@@ -293,6 +314,8 @@ public sealed class ContainerReferenceSet
                 StringComparer.OrdinalIgnoreCase);
             var dependencies = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(
                 StringComparer.OrdinalIgnoreCase);
+            var natives = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(
+                StringComparer.OrdinalIgnoreCase);
             var bindingIdentities = new SortedSet<string>(StringComparer.Ordinal);
             foreach (var entry in runtimeTarget.EnumerateObject())
             {
@@ -304,6 +327,13 @@ public sealed class ContainerReferenceSet
                 if (entry.Value.TryGetProperty("dependencies", out var edges)
                     && edges.ValueKind == JsonValueKind.Object)
                     dependencies[entryId] = [.. edges.EnumerateObject().Select(d => d.Name)];
+                // 🚨 READ BEFORE THE `runtime` SHORT-CIRCUIT BELOW (#4126). A package whose ONLY
+                // contribution is native has no `runtime` section at all — which is precisely the
+                // measured case (SQLitePCLRaw.lib.e_sqlite3) — so collecting natives after the
+                // `continue` would skip exactly the packages this exists for. The SDK derivation
+                // had the identical bug in the identical place.
+                if (NativeContributions.DeclaredBy(entry.Value) is { IsEmpty: false } declared)
+                    natives[entryId] = declared;
                 if (!entry.Value.TryGetProperty("runtime", out var runtime)
                     || runtime.ValueKind != JsonValueKind.Object)
                     continue;
@@ -332,7 +362,7 @@ public sealed class ContainerReferenceSet
                     + "to emit a reference set.");
 
             return (versions.ToImmutable(), assemblies.ToImmutable(), dependencies.ToImmutable(),
-                bindingIdentities.Single());
+                natives.ToImmutable(), bindingIdentities.Single());
         }
     }
 
@@ -342,7 +372,32 @@ public sealed class ContainerReferenceSet
     /// <param name="AssemblyPaths">The files that satisfy it, empty when it is not supplied.</param>
     /// <param name="Supplied">Whether the container supplies the package's assemblies.</param>
     public sealed record PackageResolution(
-        string Id, string? Version, ImmutableArray<string> AssemblyPaths, bool Supplied);
+        string Id, string? Version, ImmutableArray<string> AssemblyPaths, bool Supplied)
+    {
+        /// <summary>
+        /// The LOADABLE native payloads this package contributes that the container actually has
+        /// on disk (#4126) — module-relative path plus the file backing it.
+        ///
+        /// <para>🚨 A package whose only contribution is one of these is SUPPLIED. Until #4126
+        /// <see cref="Resolve"/> matched a package by the ASSEMBLY it contributes and fell back to
+        /// <c>&lt;id&gt;.dll</c>, so a native-only package answered <c>Supplied = false</c> against
+        /// an image carrying its engine — and <c>ProjectBuild</c> reds an unresolved
+        /// <c>PackageReference</c>, which is why a <c>build: container</c> module could not declare
+        /// <c>SQLitePCLRaw.lib.e_sqlite3</c> (the GHSA-2m69-gcr7-jv3q pin) at all.</para>
+        ///
+        /// <para>An INIT property, not a fifth primary-constructor parameter
+        /// (<c>scripts/check-record-signatures.py</c>).</para>
+        /// </summary>
+        public ImmutableArray<NativePayload> Natives { get; init; } = [];
+    }
+
+    /// <summary>One native payload the container carries: the module-relative path the module
+    /// loader probes, and the file on disk the bytes come from.</summary>
+    /// <param name="RelativePath"><c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c>, as the
+    /// container's own deps.json declares it.</param>
+    /// <param name="FullPath">The file in the container that holds those bytes — the preserved
+    /// layout in a portable publish, the flattened copy in a RID-specific one.</param>
+    public sealed record NativePayload(string RelativePath, string FullPath);
 
     /// <summary>
     /// Resolves a <c>PackageReference</c> against the container.
@@ -367,8 +422,47 @@ public sealed class ContainerReferenceSet
             .Select(n => AssembliesByName[n])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToImmutableArray();
-        return new PackageResolution(packageId, version, files, !files.IsEmpty);
+        // 🚨 A NATIVE contribution supplies the package too (#4126). "Supplied" answers "can this
+        // compile against the image" — and for a package that contributes no assembly there is
+        // nothing to compile against, so the honest reading of the image's own deps.json is: it
+        // ships this package's payload, the reference is satisfied, and what remains is making the
+        // bytes RIDE (PrivateClosure). The alternative was a refusal by name for a package the
+        // image demonstrably carries.
+        var natives = NativesOf(packageId);
+        return new PackageResolution(packageId, version, files, !files.IsEmpty || !natives.IsEmpty)
+        {
+            Natives = natives,
+        };
     }
+
+    /// <summary>
+    /// The native payloads <paramref name="packageId"/> contributes that this container has bytes
+    /// for — its declaration joined to the file on disk. A declared payload the container does not
+    /// actually carry is left out here and NAMED by the caller
+    /// (<see cref="PrivateClosure.Result.NativesMissing"/>), never silently treated as present.
+    /// </summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>The payloads, empty when the package declares none or the files are absent.</returns>
+    public ImmutableArray<NativePayload> NativesOf(string packageId) =>
+    [
+        .. DeclaredNativesOf(packageId)
+            .Select(relative => (Relative: relative, File: NativeFileFor(relative)))
+            .Where(x => x.File is not null)
+            .Select(x => new NativePayload(x.Relative, x.File!)),
+    ];
+
+    /// <summary>The native paths a package DECLARES in this container's deps.json, whether or not
+    /// the files are present.</summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>The declared module-relative paths.</returns>
+    public ImmutableArray<string> DeclaredNativesOf(string packageId) =>
+        PackageNatives.TryGetValue(packageId, out var declared) ? declared : [];
+
+    /// <summary>The file in this container backing one declared native path, or null.</summary>
+    /// <param name="relativePath">The module-relative path.</param>
+    /// <returns>The absolute path, or null when the container does not carry it.</returns>
+    public string? NativeFileFor(string relativePath) =>
+        NativeContributions.FileFor(AppDirectory, relativePath);
 
     /// <summary>
     /// The file backing an assembly simple name, or null when the container does not carry it.

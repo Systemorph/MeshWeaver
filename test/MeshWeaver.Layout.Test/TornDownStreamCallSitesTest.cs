@@ -67,7 +67,8 @@ public class TornDownStreamCallSitesTest(ITestOutputHelper output) : HubTestBase
     {
         var stream = OpenStream();
         await stream.GetControlStream(TestArea)
-            .Should().Within(10.Seconds()).Match(x => x is HtmlControl);
+            .Should().Within(10.Seconds()).Match(x => x is HtmlControl,
+                cancellationToken: TestContext.Current.CancellationToken);
 
         stream.IsUsable().Should().BeTrue("precondition: the stream served the area before we kill it");
         stream.Dispose();

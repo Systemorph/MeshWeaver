@@ -10,7 +10,8 @@ namespace MeshWeaver.Graph;
 ///
 /// <para>🚨 Why this exists: a monochrome <c>currentColor</c> outline — or a dark-hued pictorial —
 /// renders invisibly on one of the two themes (the AppleMusic mark vanished in dark mode,
-/// 2026-08-22). The store's icon language (a colored mark on a brand-hue <c>rx=5</c> plate with
+/// 2026-08-22; ~20 icons of one Space vanished the same way, 2026-09-14, #4350). The store's icon
+/// language (a colored mark on a brand-hue <c>rx=5</c> plate with
 /// white detail) is exactly the form that is legible on BOTH grounds, so rather than auditing every
 /// authored icon forever, the renderer guarantees the shape: an icon that already paints a
 /// full-bleed plate passes through untouched, and one that does not is wrapped — plate in a hue
@@ -22,6 +23,18 @@ namespace MeshWeaver.Graph;
 /// circuit, and in the browser tab (<see cref="MeshNodeImageHelper.IconLinkFor"/>). Thread
 /// identicons (<c>ThreadIconGenerator</c>) already open with a full-bleed rect and pass through
 /// unchanged.</para>
+///
+/// <para>🚨 WHO APPLIES IT — two seams, not one, and the difference is what #4350 was.
+/// <see cref="MeshNodeImageHelper.ResolveRenderable"/> plates what it classifies, and
+/// <see cref="MeshNodeImageHelper.SizeInlineSvg"/> plates what it sizes for a raw-HTML surface. A
+/// surface reaches for one or the other, never for neither: the version of this policy that
+/// documented itself as running at "the ONE seam every surface classifies through" ran at
+/// ResolveRenderable only, while five surfaces in this assembly built their own markup around the
+/// sizer and drew the authored icon verbatim — which is exactly the invisible-in-dark-mode defect
+/// this type exists to prevent, reproduced on ~20 nodes of one Space on 2026-09-14. The claim is
+/// now enforced rather than asserted: <c>InlineSvgEmissionBackplateGuard</c> derives every
+/// inline-svg emission in <c>src/</c> from the SOURCES and fails on one that reaches neither
+/// seam.</para>
 /// </summary>
 public static partial class IconBackplate
 {

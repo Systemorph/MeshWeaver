@@ -41,6 +41,8 @@
 #  15. a replica floor > 1 implies anti-affinity / spread    or every replica shares one node
 #  16. wait-for-postgres probes EVERY host the pod's connection strings name  or Init:1/1 proves
 #                                                             nothing about the connection that fails
+#  17. no wait-for-postgres probes memex-postgres-service unless the chart renders it  or the gate
+#                                                             spins forever on a name that never resolves
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -119,6 +121,12 @@ COMBOS=(
   # gate was blind to — the probe read config.MEMEX_HOST while the boot opened two SECRET
   # connection strings naming neither. Invariant 16 asserts the probe covers both.
   "a dedicated orleans server (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.dedicated-orleans-host.yaml"
+  # 🚨 The Key Vault case (pearl, 2026-09-15): an external database whose connection string comes
+  # from a CSI SecretProviderClass, not from the values — the shape of EVERY record-driven Provision,
+  # and the one no combination here rendered. #4173 derived the probe from the values' string, which
+  # here is the chart's in-cluster default, and pearl's pods waited forever for memex-postgres-service.
+  # Invariants 16 and 17 assert the probe is the record-rendered MEMEX_HOST and never that Service.
+  "a Key Vault connection string, record-driven (the pearl shape, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.keyvault-connection-string.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -160,8 +168,65 @@ if [ "$rendered" -lt "${#COMBOS[@]}" ]; then
   report "only $rendered of ${#COMBOS[@]} values combinations rendered — treating as FAILURE rather than reporting 'no contradictions' on partial evidence"
 fi
 
+# ---------------------------------------------------------------------------
+# REFUSALS — shapes the chart must NOT render, and must name why.
+#
+# 🚨 The opposite assertion from the loop above, and the one #3780 needed. A values combination
+# can be internally consistent and still describe a deployment that dies at boot, because a
+# template `default` manufactured a plausible value for an input nobody supplied: two replicas on
+# an external database with NO connection string in values rendered `ConnectionStrings__orleans`
+# pointing at the chart's in-cluster Service, which that release does not render — and every new
+# pod on the control instance failed at silo start, twice (revisions 44 and 55), with `helm
+# template` perfectly happy both times. The invariant checker cannot see it: the rendered Secret
+# carries a key (invariant 4 is satisfied) naming a host (invariant 16 is satisfied) that simply
+# does not exist. So the chart now REFUSES that render, and this is the control that proves the
+# refusal is still there: each entry must FAIL `helm template` AND mention the phrase. A render
+# that succeeds here is the regression.
+#
+# name|values files (colon-separated)|phrase the refusal must carry
+# ---------------------------------------------------------------------------
+REFUSALS=(
+  "AdoNet on an external database with no connection string in values (the #3780 render)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.adonet-external-db-no-connection-string.yaml|MeshWeaver#3780"
+  "an external database with neither a values connection string nor a MEMEX_HOST (the pearl refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-no-host.yaml|names no external database host"
+  "an external database whose values string names the in-cluster Service (the explicit-placeholder refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-explicit-in-cluster-host.yaml|names the in-cluster Service memex-postgres-service"
+)
+refused=0
+for entry in "${REFUSALS[@]}"; do
+  name="${entry%%|*}"
+  rest="${entry#*|}"
+  files="${rest%%|*}"
+  phrase="${rest#*|}"
+  args=( template release "$CHART" --namespace check )
+  bad_input=0
+  IFS=':' read -r -a paths <<< "$files"
+  for p in "${paths[@]}"; do
+    if [ ! -f "$REPO/$p" ]; then
+      report "refusal '$name' names a values file that does not exist: $p"
+      bad_input=1
+    fi
+    args+=( -f "$REPO/$p" )
+  done
+  [ "$bad_input" -eq 1 ] && continue
+
+  out="$WORK/refusal-$(echo "$name" | tr -c 'a-zA-Z0-9' '-').yaml"
+  if helm "${args[@]}" > "$out" 2> "$out.err"; then
+    report "refusal '$name' RENDERED — the chart manufactured a value for an input nobody supplied instead of refusing (the #3780 shape is back)"
+    continue
+  fi
+  if ! grep -q -- "$phrase" "$out.err"; then
+    report "refusal '$name' failed to render, but not for the stated reason — '$phrase' is not in helm's error:"
+    sed 's/^/    /' "$out.err"
+    continue
+  fi
+  refused=$((refused + 1))
+  ok "$name — refused to render, naming the missing input"
+done
+if [ "$refused" -lt "${#REFUSALS[@]}" ]; then
+  report "only $refused of ${#REFUSALS[@]} refusal controls held — treating as FAILURE"
+fi
+
 if [ "$fail" -eq 0 ]; then
   echo
-  echo "All $rendered values combinations render a self-consistent deployment."
+  echo "All $rendered values combinations render a self-consistent deployment, and all $refused refusal controls hold."
 fi
 exit "$fail"

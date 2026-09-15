@@ -1,7 +1,10 @@
 ---
 Name: Reading a Base-State Timeout
 Category: Architecture
-Description: "no initial state arrived for '…' within 30s" has two shapes with two different fixes, and until #1174 the log could not tell them apart. The census that does, what its zero branch deliberately does NOT claim, and how to read one in production.
+Description: >-
+  "no initial state arrived for '…' within 30s" has two shapes with two different fixes, and until
+  #1174 the log could not tell them apart. The census that does, what its zero branch deliberately
+  does NOT claim, and how to read one in production.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M3.5 8.5h3"/></svg>
 ---
 
@@ -116,12 +119,20 @@ which is why this page exists. The next occurrence says so in its own message �
 zero branch, says in the same sentence that it has not decided between an unreachable owner and one
 whose hydration produced nothing.
 
+**The mechanism that predicts the hot-path concentration is now fixed.** Every write used to evict
+its own mirror, so every write to a hot path hydrated a brand-new one inside this bound — thousands of
+hydrations on a node at version 6498, one on a cold path. Since 2026-09-15 a versioned commit keeps
+the mirror and the next write is held to the version it announced
+([Live Mirrors and the Change Feed](../LiveMirrorsAndTheChangeFeed)). A base-state timeout on a
+replica carrying that fix therefore comes from a mirror that was NOT rebuilt per write, and its
+census branch is the next fact to read.
+
 ## Related
 
 - [Write Verdict Totality](../WriteVerdictTotality) — the sibling case: a base read that ENDS rather
   than times out, and used to answer nobody at all
 - [MeshNode Stream Cache](../MeshNodeStreamCache) — the per-path update queue the `[UpdateQueue]` lines
   come from
-- [Live Mirrors and the Change Feed](../LiveMirrorsAndTheChangeFeed) — why a written path's mirror is
-  evicted after every write, and what that costs
+- [Live Mirrors and the Change Feed](../LiveMirrorsAndTheChangeFeed) — why a written path's mirror was
+  evicted after every write, what that cost, and the version-aware base that replaced it (#1174)
 - [Operating from the Portal](../OperatingFromThePortal) — the `Logs` and `Sample` instance actions

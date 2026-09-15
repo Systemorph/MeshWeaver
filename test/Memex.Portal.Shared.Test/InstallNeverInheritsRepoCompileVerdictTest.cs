@@ -116,7 +116,7 @@ public class InstallNeverInheritsRepoCompileVerdictTest(ITestOutputHelper output
                 ],
                 "HEAD")
             .Should().Within(180.Seconds())
-            .Emit("the install itself must complete before anything about the type can be read");
+            .Emit("the install itself must complete before anything about the type can be read", cancellationToken: TestContext.Current.CancellationToken);
         result.WrittenPaths.Should().Contain(TypePath, "the type node is what this test is about");
 
         // 1. As installed: none of the file's verdict landed, all of the authored definition did.
@@ -124,7 +124,7 @@ public class InstallNeverInheritsRepoCompileVerdictTest(ITestOutputHelper output
             .Where(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is not null)
             .FirstAsync()
             .Timeout(60.Seconds())
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         var installedDef = installed!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
         Output.WriteLine(
             $"as installed: status={installedDef.CompilationStatus} framework={installedDef.CompiledFrameworkVersion ?? "(null)"} "
@@ -143,8 +143,8 @@ public class InstallNeverInheritsRepoCompileVerdictTest(ITestOutputHelper output
                     && def.LatestAssemblyPath != JulyAssemblyPath,
                 "the type must compile on THIS mesh and record this mesh's framework and assembly — "
                 + "the file's July verdict claimed a build that did not exist here, which is exactly the "
-                + "\"stale green\" that parks a type on a cold cache");
-        var compiled = (await Mesh.GetWorkspace().GetMeshNodeStream(TypePath).FirstAsync().Timeout(TestTimeouts.Convergence).Await())!
+                + "\"stale green\" that parks a type on a cold cache", cancellationToken: TestContext.Current.CancellationToken);
+        var compiled = (await Mesh.GetWorkspace().GetMeshNodeStream(TypePath).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))!
             .ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
         AssertTheFilesVerdictIsAbsent(compiled, "after the mesh compiled it");
     }
