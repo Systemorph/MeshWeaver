@@ -357,7 +357,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// revisited pages, and never on cold paths.</para>
     ///
     /// <para>So the eviction is no longer the freshness barrier: the change feed's
-    /// <c>Version</c> is recorded against the owner (<c>Workspace.AnnouncedVersion</c>) and the
+    /// <c>Version</c> is recorded ON the cached mirror (<c>Workspace.AnnouncedVersionFor</c>) and the
     /// base must REACH it — <c>Version &gt;= announced</c> — before it may be diffed. Same filter,
     /// same bound, same never-parks fallback; the predicate is just the conjunction of the two
     /// reasons a base can be too old. 🚨 This is NOT the liveness gate that was
@@ -378,7 +378,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// bound elapsed and the re-attempt fell back to un-advanced state.</param>
     /// <param name="scheduler">Timer seam for tests.</param>
     /// <param name="announcedVersion">The highest version the change feed has announced for this
-    /// path, or <c>0</c> when this workspace has heard none — in which case the read is byte-for-byte
+    /// mirror's owner while the mirror was cached, or <c>0</c> when it has heard none — in which case the read is byte-for-byte
     /// what it was before #1174.</param>
     /// <param name="onMirrorBehindAnnounced">Called with <paramref name="announcedVersion"/> when
     /// the ANNOUNCED floor is the binding one and the mirror is PROVABLY behind it — it carried a
@@ -2015,12 +2015,14 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             var composite = new CompositeDisposable(streamLease);
 
             // 🚨 The write's FRESHNESS floor — issue #1174. The change feed announces a Version per
-            // commit; the workspace records the highest one it has heard for this owner and KEEPS
-            // the mirror, instead of evicting it on every commit and making the next write hydrate
-            // a brand-new one inside BaseStateWaitBound. Read once, here, so the floor is the one
-            // in force when this attempt started. 0 ⇒ no claim ⇒ the read below is exactly what it
-            // was before. See Workspace.OnOwnerNodeChanged and RebaseSource.
-            var announcedVersion = workspace.AnnouncedVersion(_path!);
+            // commit; the workspace raises it as a floor ON the cached mirror instance and KEEPS the
+            // mirror, instead of evicting it on every commit and making the next write hydrate a
+            // brand-new one inside BaseStateWaitBound. Read off the very stream this attempt
+            // acquired — never by path — so a write is only ever held to its OWN mirror's floor,
+            // and a mirror built after another was removed starts with none. Read once, here, so
+            // the floor is the one in force when this attempt started. 0 ⇒ no claim ⇒ the read
+            // below is exactly what it was before. See Workspace.OnOwnerNodeChanged and RebaseSource.
+            var announcedVersion = Workspace.AnnouncedVersionFor(remoteStream);
 
             // Wait for the per-node hub's initial SubscribeResponse before
             // running the user lambda — the lambda needs a non-null current

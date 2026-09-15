@@ -131,16 +131,23 @@ two ways, decided by what the commit announced, never by how the mirror looks:
 
 | Event | Answer |
 |---|---|
-| `Updated` with a version — one per write, the hot path | **Keep** the mirror and record the version as the owner's high-water mark (`Workspace.AnnouncedVersion`) |
+| `Updated` with a version — one per write, the hot path | **Keep** the mirror and raise its floor to that version — a field of the mirror instance itself (`IAnnouncedVersionFloor`) |
 | `Deleted` (announces 0) | **Evict**, as before — the node is gone and a recreate restarts its version counter |
 | `Created` on a path already mirrored | **Evict** — a recreate is a new incarnation, whose versions say nothing about the old mirror |
 | `Updated` with version 0 (the operator recycle broadcast) | **Evict** — nothing a mirror could be held to |
 | any shape without a version or a kind | **Evict** — the pre-#1174 behaviour, the only safe one |
 
-The mark exists only for an owner the workspace actually mirrors, and it leaves with those mirrors —
-on eviction, and on the shared mesh-node cache's idle release (`DetachRemoteStreams`, once no mirror
-of the owner remains). Dropping a mark is always safe: a mirror built afterwards hydrates from the
-owner's current state, which is at or past any version announced before it.
+🚨 **The floor is a field of the mirror, not an entry beside the cache.** The handler raises it on
+each instance it finds in the cache for the owner, and the write reads it off the very stream it
+acquired (`Workspace.AnnouncedVersionFor(stream)`). So a floor cannot outlive its mirror and cannot
+reach the next one: whatever removes a mirror — eviction, the mesh-node cache's idle release, a
+fault, a recycle — removes its floor with it, and a new mirror starts with none, which is right
+because it hydrates from the owner's current state, at or past every version announced before it.
+The first cut kept a per-owner map instead, and review found the window that shape cannot close: a
+removal landing between "the cache still mirrors this owner" and "record the floor" left a floor with
+no mirror behind it, which the next mirror inherited (`AnnouncedFloorLifetimeTest` reproduces it
+deterministically through a seam in exactly that window, and the same inheritance through the
+faulted-stream path — both red against the map, both green now).
 
 **The write path** (`MeshNodeStreamHandle.RebaseSource`, the same seam the #1910 conflict rebase
 uses) reads the mark once per attempt and requires the base to satisfy
@@ -168,6 +175,7 @@ to trigger the eviction, so every commit the old barrier covered is still covere
 | Five versioned commits on one owner, leased acquire per commit (`HotPathMirrorChurnTest`) | 6 distinct mirrors | 1 mirror, 0 `SubscribeRequest`, 0 `UnsubscribeRequest` |
 | Six sequential cross-hub writes to one node on a real mesh (`HotPathWritesKeepTheirMirrorTest`) | 5 mirrors opened after the first write | 0 opened, 0 `MIRROR_BEHIND`, every write landed |
 | `StaticRepoImportActivityWriteCountTest` at `DOTNET_PROCESSOR_COUNT=4` (the liveness-gate repro) | — | passes: 2000 messages in 80 appends → version 84 (80 + 4 sealed segments), no refused re-writes |
+| A removal between locating a mirror and recording its floor, then a new mirror; and a faulted mirror rebuilt (`AnnouncedFloorLifetimeTest`) | per-owner map: the new mirror inherited floor 7, the rebuilt one 5 | floor on the instance: both start at 0 |
 
 The real-mesh arm also asserts that the floor was *in force* (the workspace's "Mirror … kept" line
 fired for the later commits) and that the owner's fanned-out version met the announced one every time

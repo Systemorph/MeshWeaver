@@ -304,7 +304,8 @@ public class Workspace : IWorkspace
     ///
     /// <list type="number">
     ///   <item><description><b>A versioned <c>Updated</c></b> — the hot path, one per write —
-    ///     RECORDS the announced version against the owner and leaves the mirror in the cache. The
+    ///     RAISES the floor of every cached mirror of the owner — a field of that mirror instance
+    ///     (<see cref="IAnnouncedVersionFloor"/>) — and leaves the mirror in the cache. The
     ///     writer's base read then waits for the mirror to REACH that version before it diffs
     ///     (<c>MeshNodeStreamHandle.RebaseSource</c>), so freshness is PROVEN per write instead of
     ///     being bought by throwing the mirror away.</description></item>
@@ -360,67 +361,65 @@ public class Workspace : IWorkspace
 
         if (version <= 0 || !string.Equals(kind, "Updated", StringComparison.Ordinal))
         {
-            // Nothing a mirror could be held to — see the list above. Drop both the mark and the
-            // mirrors (EvictRemoteStreamsForPath removes the mark).
+            // Nothing a mirror could be held to — see the list above. Evict the mirrors; their
+            // floors are fields of theirs and leave with them.
             EvictRemoteStreamsForPath(path);
             return;
         }
 
-        // 🚨 Only for an owner this workspace actually mirrors. Recording for every path the
-        // process ever commits would grow without bound; recording only what the eviction loop
-        // below would have touched keeps this map bounded by _remoteStreamCache, and an owner
-        // with no mirror needs no mark at all (the next acquire builds a fresh stream, which is
-        // authoritative by construction).
-        var mirrored = false;
-        foreach (var key in _remoteStreamCache.Keys)
+        // 🚨 PAIR-EXACT: the floor is raised ON each mirror instance found in the cache for this
+        // owner — a field of that instance (IAnnouncedVersionFloor) — never recorded beside the
+        // cache. That is what makes it impossible for a floor to outlive its mirror or to precede
+        // the next one: a removal that lands between finding an instance and raising its floor
+        // (an idle release, an eviction, a fault) takes the instance out of the cache, the raise
+        // lands on an instance no new caller can get, and the next mirror is a new instance that
+        // starts with no floor (review finding on #4428; AnnouncedFloorLifetimeTest). And there is
+        // no map to grow: an owner with no mirror records nothing at all.
+        //
+        // A Lazy whose factory has not produced its stream yet is skipped — there is no instance to
+        // hold a floor. That mirror's SubscribeRequest is being posted right now, so it hydrates
+        // from whatever the owner serves when it answers; the one case that is not already at or
+        // past this commit is an answer that raced it, which is exactly the exposure a creator had
+        // before #1174 (the eviction could not take a stream its creator already held), and the
+        // owner's merge answers such a stale base with a Conflict and a rebase, never a lost write.
+        var raised = 0;
+        var highWater = 0L;
+        foreach (var (key, lazy) in _remoteStreamCache)
         {
-            if (!string.Equals(key.Owner.ToString(), path, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(key.Owner.ToString(), path, StringComparison.OrdinalIgnoreCase)
+                || !lazy.IsValueCreated
+                || lazy.Value is not IAnnouncedVersionFloor floor)
                 continue;
-            mirrored = true;
-            break;
+            BeforeAnnouncedVersionRecorded?.Invoke(path);
+            highWater = Math.Max(highWater, floor.RaiseAnnouncedVersion(version));
+            raised++;
         }
-        if (!mirrored)
-        {
-            // …and a mark left behind by a detach that raced an earlier event (checked mirrored,
-            // then lost the mirror before recording) is swept here rather than kept for the life
-            // of the process. Dropping a mark with no mirror to protect is always safe.
-            _announcedVersions.TryRemove(path, out _);
+        if (raised == 0)
             return;
-        }
 
-        var announced = _announcedVersions.AddOrUpdate(path, version, (_, seen) => Math.Max(seen, version));
         _logger.LogDebug(
             "Mirror for {Address} kept; the change feed announced version {Version} (high-water {Announced}) "
             + "and the next write's base read waits for the mirror to reach it.",
-            path, version, announced);
+            path, version, highWater);
     }
 
     /// <summary>
-    /// The version the change feed most recently announced for <paramref name="path"/>, or
-    /// <c>0</c> when this workspace has heard none — the freshness floor a cross-hub write's base
-    /// must reach before it may be diffed against (#1174). <c>0</c> means "no claim", and the
-    /// write reads the mirror exactly as it did before.
+    /// The floor a cross-hub write through <paramref name="stream"/> is held to — the version the
+    /// change feed announced for its owner while THIS mirror was cached, or <c>0</c> when it has
+    /// heard none (#1174). <c>0</c> means "no claim", and the write reads the mirror exactly as it
+    /// did before. Read off the instance the write acquired, so a write can only ever be held to
+    /// its own mirror's floor.
     /// </summary>
-    internal long AnnouncedVersion(string path)
-        => !string.IsNullOrEmpty(path) && _announcedVersions.TryGetValue(path, out var v) ? v : 0L;
+    internal static long AnnouncedVersionFor(ISynchronizationStream stream)
+        => stream is IAnnouncedVersionFloor floor ? floor.AnnouncedVersion : 0L;
 
     /// <summary>
-    /// The high-water version the change feed has announced per mirrored owner path — the floor a
-    /// write's base read must reach. Instance state on the mesh-scoped workspace, never static,
-    /// and bounded by <see cref="_remoteStreamCache"/>: an entry is only ever written for an owner
-    /// this workspace currently mirrors, and removed when those mirrors leave — evicted
-    /// (<see cref="EvictRemoteStreamsForPath"/>) or detached by the shared mesh-node cache's idle
-    /// release (<see cref="DetachRemoteStreams"/>, once no mirror of the owner remains). Without
-    /// the second removal a written-then-idle path would keep its mark for the life of the
-    /// process.
-    ///
-    /// <para>Dropping a mark is always SAFE: it can only matter to a mirror that is still cached
-    /// and behind, and both removals take every such mirror out of the cache with it — a mirror
-    /// built afterwards hydrates from the owner's current state, which is at or past any version
-    /// the feed announced before it.</para>
+    /// TEST SEAM (null in production): runs in <see cref="OnOwnerNodeChanged"/> after a mirror of
+    /// the owner was located and BEFORE its floor is raised — the window a concurrent removal
+    /// can land in. <c>AnnouncedFloorLifetimeTest</c> runs a removal here to reproduce that
+    /// interleaving deterministically. Instance state; never static.
     /// </summary>
-    private readonly ConcurrentDictionary<string, long> _announcedVersions =
-        new(StringComparer.OrdinalIgnoreCase);
+    internal Action<string>? BeforeAnnouncedVersionRecorded { get; set; }
 
     /// <summary>
     /// Drops any cached remote streams whose owner address matches <paramref name="path"/>.
@@ -439,10 +438,6 @@ public class Workspace : IWorkspace
     {
         if (string.IsNullOrEmpty(path) || _remoteStreamCache.IsEmpty)
             return;
-
-        // The mark describes a mirror that is about to be gone; a fresh stream is authoritative by
-        // construction and needs no floor.
-        _announcedVersions.TryRemove(path, out _);
 
         // Do NOT unconditionally dispose the evicted stream — an undeclared reader (e.g. a
         // MeshDataSource reduce callback that handed the stream on) may still be attached and
@@ -844,21 +839,6 @@ public class Workspace : IWorkspace
         // "undeclared holders" bucket until a fresh lease is taken.
         foreach (var stream in detached)
             _remoteStreamLeases.TryRemove(stream, out _);
-        // …and the freshness floor those mirrors were held to (#1174), once NO mirror of this
-        // owner is left in the cache for it to protect: the next one hydrates fresh from the
-        // owner's current state and needs no floor. Checked rather than assumed because this
-        // method detaches ONE reference, and a mark dropped while another reference's mirror of the
-        // same owner is still cached and behind would hand that mirror's next write a stale base.
-        var ownerStillMirrored = false;
-        foreach (var key in _remoteStreamCache.Keys)
-        {
-            if (!key.Owner.Equals(owner))
-                continue;
-            ownerStillMirrored = true;
-            break;
-        }
-        if (!ownerStillMirrored)
-            _announcedVersions.TryRemove(owner.ToString(), out _);
         return detached;
     }
 
