@@ -132,7 +132,7 @@ public class InstallRecordFollowsItsPartitionTest(ITestOutputHelper output) : Mo
             .FirstAsync()
             .Select(d => d.Message)
             .Timeout(TestTimeouts.CrossSilo)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"delete {path} success={response.Success} error={response.Error}");
         response.Success.Should().BeTrue($"the delete itself must succeed: {response.Error}");
     }

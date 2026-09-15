@@ -130,7 +130,8 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
             NodeType = MeshNode.NodeTypePath,
             State = MeshNodeState.Active,
             Content = new NodeTypeDefinition { Description = "A NodeType with no compile lifecycle" }
-        }).Should().Within(TestTimeouts.Convergence).Emit("the NodeType declaration must land before its instance", cancellationToken: TestContext.Current.CancellationToken);
+        }).Should().Within(TestTimeouts.Convergence).Emit("the NodeType declaration must land before its instance",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         // Content exactly as storage holds it for an instance of a runtime-compiled type: a JSON
         // object carrying the bare short-name $type. Serialised THROUGH the mesh options so the
@@ -150,7 +151,8 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
             NodeType = typePath,
             State = MeshNodeState.Active,
             Content = stored
-        }).Should().Within(TestTimeouts.Convergence).Emit("the instance carrying the unresolvable $type must land", cancellationToken: TestContext.Current.CancellationToken);
+        }).Should().Within(TestTimeouts.Convergence).Emit("the instance carrying the unresolvable $type must land",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         // 🚨 ONE live subscription, held across the registration — the shape of a bound view, and
         // the only shape in which the defect is visible at all. Replay(1) + Connect keeps exactly
@@ -162,7 +164,8 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
         using var connection = live.Connect();
 
         var degraded = await live.FirstAsync()
-            .Should().Within(TestTimeouts.Convergence).Emit("the node must be readable even while its type is unknown", cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit("the node must be readable even while its type is unknown",
+                cancellationToken: TestContext.Current.CancellationToken);
         degraded.Content.Should().BeOfType<JsonElement>(
             "BUG REPRODUCED: nothing can resolve the discriminator yet, so the read boundary hands "
             + "the subscriber an untyped JsonElement — every 'Content is T' downstream fails");
@@ -182,7 +185,8 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
             .Should().Within(TestTimeouts.Convergence).Emit(
                 "the SAME subscription must be handed the content typed once the type registers — "
                 + "the node never changes, so a reader that is not told about the registration waits "
-                + "for an emission that will never come (#2952)", cancellationToken: TestContext.Current.CancellationToken);
+                + "for an emission that will never come (#2952)",
+                    cancellationToken: TestContext.Current.CancellationToken);
 
         typed.Content!.GetType().Should().Be(contentType,
             "the re-type must land on the exact registered CLR type, not merely stop being a JsonElement");
@@ -244,7 +248,8 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
             .Should().NotEmit(5.Seconds(),
                 "an unresolvable discriminator stays an untyped JsonElement — the wait re-asks the "
                 + "registry and keeps the answer only when it is genuinely typed, so it can never "
-                + "force-fit content onto an unrelated registration", cancellationToken: TestContext.Current.CancellationToken);
+                + "force-fit content onto an unrelated registration",
+                    cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -310,7 +315,8 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
             .Should().Within(TestTimeouts.Convergence).Emit(
                 "the name route must re-type too — a wait that only listens for its own NodeType path "
                 + "would drop every WithMeshType / sweep-probe registration and leave the node untyped "
-                + "forever, which is the defect wearing a different hat", cancellationToken: TestContext.Current.CancellationToken);
+                + "forever, which is the defect wearing a different hat",
+                    cancellationToken: TestContext.Current.CancellationToken);
 
         typed.Content!.GetType().Should().Be(contentType);
         contentType.GetProperty("Label")!.GetValue(typed.Content).Should().Be("by name only");
@@ -350,7 +356,8 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
 
         var degraded = await Mesh.GetWorkspace().GetMeshNodeStream(instancePath)
             .Where(n => n is not null).FirstAsync()
-            .Should().Within(TestTimeouts.Convergence).Emit("the node must be readable while its type is unknown", cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit("the node must be readable while its type is unknown",
+                cancellationToken: TestContext.Current.CancellationToken);
         degraded!.Content.Should().BeOfType<JsonElement>(
             "PRECONDITION: the degradation this test then cures must actually have happened");
         degradations.AssertReportedFor(instancePath,
@@ -399,7 +406,8 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
 
         var degraded = await Mesh.GetWorkspace().GetMeshNodeStream(instancePath)
             .Where(n => n is not null).FirstAsync()
-            .Should().Within(TestTimeouts.Convergence).Emit("the node must be readable while its type is unknown", cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit("the node must be readable while its type is unknown",
+                cancellationToken: TestContext.Current.CancellationToken);
         degraded!.Content.Should().BeOfType<JsonElement>();
         degradations.AssertReportedFor(instancePath, "nothing will ever claim this discriminator");
 
@@ -447,7 +455,8 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
             NodeType = MeshNode.NodeTypePath,
             State = MeshNodeState.Active,
             Content = new NodeTypeDefinition { Description = "A NodeType with no compile lifecycle" }
-        }).Should().Within(TestTimeouts.Convergence).Emit("the NodeType declaration must land first");
+        }).Should().Within(TestTimeouts.Convergence).Emit("the NodeType declaration must land first",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var instance = Activator.CreateInstance(contentType)!;
         contentType.GetProperty("Label")!.SetValue(instance, label);
@@ -462,7 +471,8 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
             NodeType = typePath,
             State = MeshNodeState.Active,
             Content = stored
-        }).Should().Within(TestTimeouts.Convergence).Emit("the instance carrying the unresolvable $type must land");
+        }).Should().Within(TestTimeouts.Convergence).Emit("the instance carrying the unresolvable $type must land",
+            cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>

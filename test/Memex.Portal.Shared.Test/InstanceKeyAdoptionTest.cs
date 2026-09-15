@@ -50,7 +50,7 @@ public class InstanceKeyAdoptionTest(ITestOutputHelper output) : MonolithMeshTes
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         return access.RunAsSystem(() => Mesh.GetMeshNode(path, TimeSpan.FromSeconds(10)).Take(1))
             .Timeout(TimeSpan.FromSeconds(30))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
     }
 
     [Fact(Timeout = 120_000)]

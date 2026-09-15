@@ -64,7 +64,7 @@ public class PluginBundleIndexArtifactTest(ITestOutputHelper output) : MonolithM
             .Select(r => r.RawKey)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
     private Task<InstallResult> InstallPackage(string id, CancellationToken cancellationToken) =>
         PackageInstaller.Install(

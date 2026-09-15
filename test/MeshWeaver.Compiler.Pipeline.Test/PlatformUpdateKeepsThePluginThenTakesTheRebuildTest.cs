@@ -172,7 +172,7 @@ public class PlatformUpdateKeepsThePluginThenTakesTheRebuildTest : IDisposable
                 minMeshVersion: minMeshVersion,
                 staticAssets: [("wwwroot/build.txt",
                     System.Text.Encoding.UTF8.GetBytes($"{version} {frameworkMvid}"))])
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     /// <summary>
     /// One replica's boot on a platform stamped <paramref name="runningVersion"/>, composed as

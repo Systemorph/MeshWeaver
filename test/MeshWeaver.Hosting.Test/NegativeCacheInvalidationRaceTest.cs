@@ -87,7 +87,7 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
             NodeType = "Markdown",
             State = MeshNodeState.Active,
         };
-        await NodeFactory.CreateNode(node).Should().Within(TestTimeouts.Convergence).Emit();
+        await NodeFactory.CreateNode(node).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         return path;
     }
 
@@ -122,7 +122,8 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
             .Materialize()
             .Should().Within(TestTimeouts.Convergence).Match(
                 notification => notification.Kind == NotificationKind.OnError,
-                "the owner must return the genuine missing-node verdict used by the subject arm", cancellationToken: TestContext.Current.CancellationToken);
+                "the owner must return the genuine missing-node verdict used by the subject arm",
+                    cancellationToken: TestContext.Current.CancellationToken);
 
         MeshNodeStreamCache.IsMissingNodeFailure(failure.Exception!).Should().BeTrue();
         owner.GateTimedOut.Should().BeFalse();
@@ -144,14 +145,16 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
         try
         {
             await owner.RequestEntered.Should().Within(TestTimeouts.Convergence).Emit(
-                "the NotFound must already be in flight before the invalidation, or the race is not held", cancellationToken: TestContext.Current.CancellationToken);
+                "the NotFound must already be in flight before the invalidation, or the race is not held",
+                    cancellationToken: TestContext.Current.CancellationToken);
 
             PublishAuthoritativeChange(path);
             owner.Release();
 
             var failure = await terminal.Should().Within(TestTimeouts.Convergence).Match(
                 notification => notification.Kind == NotificationKind.OnError,
-                "the held owner must deliver its pre-invalidation NotFound after the change event", cancellationToken: TestContext.Current.CancellationToken);
+                "the held owner must deliver its pre-invalidation NotFound after the change event",
+                    cancellationToken: TestContext.Current.CancellationToken);
             MeshNodeStreamCache.IsMissingNodeFailure(failure.Exception!).Should().BeTrue(
                 "the delayed verdict must be exactly the failure class that normally opens the negative window");
             owner.GateTimedOut.Should().BeFalse(
@@ -231,7 +234,8 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
         try
         {
             await oldReachedPublish.Should().Within(TestTimeouts.Convergence).Emit(
-                "the old probe must be parked after validation and before publication", cancellationToken: TestContext.Current.CancellationToken);
+                "the old probe must be parked after validation and before publication",
+                    cancellationToken: TestContext.Current.CancellationToken);
             var newClaim = Cache.BeginNegativeProbe(path);
             Cache.TryRecordNegativeForTest(path, newError, newClaim, static () => { }).Should().BeTrue();
 

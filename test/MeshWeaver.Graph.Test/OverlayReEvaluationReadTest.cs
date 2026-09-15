@@ -48,7 +48,7 @@ public class OverlayReEvaluationReadTest(ITestOutputHelper output) : MonolithMes
 
     private Task<MeshNode> CreateTypeNode(string id, string ns) =>
         MeshService.CreateNode(new MeshNode(id, ns) { NodeType = MeshNode.NodeTypePath, Version = 3259 })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
     /// <summary>
     /// The read resolves through <c>IMeshQueryCore</c> — the mesh's query-provider fan-out over

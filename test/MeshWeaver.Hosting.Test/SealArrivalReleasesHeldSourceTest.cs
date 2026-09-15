@@ -235,7 +235,7 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
             await Mesh.GetWorkspace().GetMeshNodeStream($"{path}/{SealedSourceName}")
                 .Update(node => node with { Name = "Publication " + Guid.NewGuid().ToString("N")[..8] })
                 .Timeout(TestTimeouts.Convergence)
-                .Await();
+                .Await(TestContext.Current.CancellationToken);
             return;
         }
         await NodeFactory.CreateNode(new MeshNode(SealedSourceName, path)
@@ -245,7 +245,7 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
             State = MeshNodeState.Active,
             Content = new PlatformBuildAnnouncement(
                 PrebuiltAssemblySeeder.LiveFrameworkMvid, "3.0.0-ci.8392", LaterSha),
-        }).Timeout(TestTimeouts.Convergence).Await();
+        }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         announced = true;
     }
 
@@ -260,17 +260,17 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
             Name = "Seal-arrival space",
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Timeout(TestTimeouts.Convergence).Await();
+        }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         var configNode = await Sync
             .SaveConfig(space, RepoUrl, "main", null,
                 createBranchIfMissing: false, createRepoIfMissing: false)
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         var syncOwner = configNode.CreatedBy is { Length: > 0 } creator ? creator : UserId;
         await Credentials
             .Save(syncOwner, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         return space;
     }
 
@@ -283,7 +283,7 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
         try
         {
             await Webhooks.Process("workflow_run", GreenBuildPayload(headSha))
-                .Timeout(TestTimeouts.Convergence).Await();
+                .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         }
         finally
         {

@@ -425,10 +425,10 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     private async Task<HashSet<string>> Offered(string parentPath)
     {
         var parent = await Mesh.GetWorkspace().GetMeshNodeStream(parentPath)
-            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         var types = await Mesh.ServiceProvider.GetRequiredService<ICreatableTypesProvider>()
             .GetCreatableTypes(parentPath, parent)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         return types.Select(t => t.NodeTypePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
@@ -441,7 +441,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
         {
             var change = await core
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(query), Mesh.JsonSerializerOptions)
-                .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
             foreach (var item in change.Items)
                 result.Add(item.Path);
         }
@@ -461,7 +461,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
         var picker = await Observable.Merge(areas)
             .OfType<MeshNodePickerControl>()
             .Where(IsTypePicker)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         return (stream, picker);
     }
 
@@ -480,7 +480,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
         var dataContext = await Observable.Merge(areas)
             .Select(c => (c as UiControl)?.DataContext?.ToString())
             .Where(d => !string.IsNullOrEmpty(d) && d!.StartsWith("/data/", StringComparison.Ordinal))
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         return (stream, dataContext!);
     }
 
@@ -497,7 +497,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     private static async Task<string> SubmittedType(
         ISynchronizationStream<JsonElement> stream, string dataContext)
         => await stream.GetDataStream<string>(new JsonPointerReference($"{dataContext}/type"))
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await() ?? "";
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken) ?? "";
 
     /// <summary>
     /// Subscribes to every child area of the rendered Create form at once, so a sibling that has
@@ -516,7 +516,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
 
         var root = await stream.GetControlStream(reference.Area!)
             .Where(c => c is StackControl { Areas.Count: > 0 })
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         var areas = ((StackControl)root!).Areas
             .Select(a => a.Area?.ToString())

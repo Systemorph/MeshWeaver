@@ -132,7 +132,7 @@ public class PodHubClaimReassertionTest
                 .Where(count => count >= target)
                 .Take(1)
                 .Timeout(Budget)
-                .Await();
+                .Await(TestContext.Current.CancellationToken);
         }
         catch (TimeoutException)
         {

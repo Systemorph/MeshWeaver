@@ -130,7 +130,7 @@ public class TruncatedRepoListingIsNotADeletionTest(ITestOutputHelper output)
             Name = "Truncated tree",
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Timeout(TestTimeouts.Convergence).Await();
+        }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         // ImportOnly — a repo → mesh mirror. Bidirectional would additionally protect server-side
         // ADDITIONS from the prune (#604), which is a DIFFERENT guard: it would keep the node in both
@@ -139,18 +139,18 @@ public class TruncatedRepoListingIsNotADeletionTest(ITestOutputHelper output)
             .SaveConfig(space, RepoUrl, "main", null,
                 createBranchIfMissing: false, createRepoIfMissing: false,
                 direction: SyncDirection.ImportOnly)
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         var syncOwner = configNode.CreatedBy is { Length: > 0 } creator ? creator : UserId;
         await Credentials
             .Save(syncOwner, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         // ── 1. Both files land. If they do not, the second import has nothing to prune and the
         //       measurement below is vacuous — so the count is asserted, not assumed.
         repoClient.Serve(FirstSha, complete: true, KeptFile, MissingFile);
         var first = await Sync.ReimportAtCommit(space, FirstSha, UserId)
-            .Timeout(TestTimeouts.Convergence * 2).Await();
+            .Timeout(TestTimeouts.Convergence * 2).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"{space} import 1: outcome={first.Outcome} count={first.Count}");
         first.Outcome.Should().Be("Imported",
             "the first import must really materialize both files — otherwise the second one is not "
@@ -162,7 +162,7 @@ public class TruncatedRepoListingIsNotADeletionTest(ITestOutputHelper output)
         //       deletion depends entirely on whether the listing can be trusted to be whole.
         repoClient.Serve(SecondSha, listingIsComplete, KeptFile);
         var second = await Sync.ReimportAtCommit(space, SecondSha, UserId)
-            .Timeout(TestTimeouts.Convergence * 2).Await();
+            .Timeout(TestTimeouts.Convergence * 2).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"{space} import 2: outcome={second.Outcome} count={second.Count}");
         second.Outcome.Should().NotBe("Skipped",
             "a dropped file changes the content fingerprint, so this import really runs — a Skipped "

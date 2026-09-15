@@ -44,7 +44,7 @@ public class ContainerImageRecordingTest(ITestOutputHelper output) : MonolithMes
             Name = "Images",
             NodeType = "Markdown",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
     private static ContainerImageRecord Describe(string reference, string json) =>
         ContainerImageCatalog.Describe(

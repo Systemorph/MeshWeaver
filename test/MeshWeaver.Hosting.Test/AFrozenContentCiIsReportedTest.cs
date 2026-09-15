@@ -179,7 +179,7 @@ public class AFrozenContentCiIsReportedTest(ITestOutputHelper output)
         {
             return await Webhooks
                 .Process("workflow_run", Payload(repoFullName, workflowPath, headSha))
-                .Timeout(TestTimeouts.Convergence).Await();
+                .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         }
         finally
         {

@@ -222,7 +222,7 @@ public class SealedModuleCompositionTest(ITestOutputHelper output) : MonolithMes
     private Task<string> RegisterInstance(string instanceId, params string[] defaultGrants) =>
         InstanceService(defaultGrants)
             .Register("owner", "Owner", "owner@test.com", instanceId, instanceId)
-            .Select(r => r.RawKey).FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
+            .Select(r => r.RawKey).FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
 
     private async Task<WebApplication> StartHost(
         string publishedRoot, Func<HttpContext, RequestDelegate, Task> publisher)

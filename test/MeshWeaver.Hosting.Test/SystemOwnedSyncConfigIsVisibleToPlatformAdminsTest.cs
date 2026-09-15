@@ -88,11 +88,13 @@ public class SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest(ITestOutputHelpe
         {
             NodeType = "Space", Name = "System-owned space", State = MeshNodeState.Active,
             Content = new Space(),
-        }).Should().Within(Budget).Emit("the Space fixture must be created");
+        }).Should().Within(Budget).Emit("the Space fixture must be created",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var config = await Sync.SaveConfig(space, RepoUrl, "main", null, false, false,
                 direction: SyncDirection.ImportOnly, twoWay: false)
-            .Should().Within(Budget).Emit("the one-way sync config must be written");
+            .Should().Within(Budget).Emit("the one-way sync config must be written",
+                cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(GitHubSyncService.ConfigPath(space), config.Path);
         Assert.Equal(GitHubSyncService.ConfigNodeType, config.NodeType);
         Assert.True(AccessAssignmentGuard.IsSystemOwned(config, Mesh.JsonSerializerOptions),
@@ -123,16 +125,20 @@ public class SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest(ITestOutputHelpe
     private async Task AssertTheFoldIsUnchanged(string configPath)
     {
         await Mesh.IsGlobalAdmin(PlatformAdmin).Should().Within(Budget).Match(a => a,
-            "an Admin-partition grant IS the platform-admin predicate");
+            "an Admin-partition grant IS the platform-admin predicate",
+                cancellationToken: TestContext.Current.CancellationToken);
         await Mesh.IsGlobalAdmin(PlainUser).Should().Within(Budget).Match(a => !a,
-            "owning your own partition does not make you a platform admin");
+            "owning your own partition does not make you a platform admin",
+                cancellationToken: TestContext.Current.CancellationToken);
         await Mesh.GetEffectivePermissions(configPath, PlatformAdmin).Should().Within(Budget)
             .Match(p => !p.HasFlag(Permission.Read) && !p.HasFlag(Permission.Delete),
                 "a platform admin is NOT a data superuser: the fold on a system-owned Space stays "
-                + "None for them — the widening must come from the node type's rule, never from a grant");
+                + "None for them — the widening must come from the node type's rule, never from a grant",
+                    cancellationToken: TestContext.Current.CancellationToken);
         await Mesh.GetEffectivePermissions(configPath, PlainUser).Should().Within(Budget)
             .Match(p => !p.HasFlag(Permission.Read) && !p.HasFlag(Permission.Delete),
-                "the non-admin holds nothing on somebody else's Space");
+                "the non-admin holds nothing on somebody else's Space",
+                    cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -148,15 +154,19 @@ public class SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest(ITestOutputHelpe
         await AssertTheFoldIsUnchanged(configPath);
 
         await IsVisibleTo(configPath, PlatformAdmin).Should().Within(Budget).Match(seen => seen,
-            "the platform admin must be able to SEE the config that re-imports a repository", cancellationToken: TestContext.Current.CancellationToken);
+            "the platform admin must be able to SEE the config that re-imports a repository",
+                cancellationToken: TestContext.Current.CancellationToken);
         await IsVisibleTo(space, PlatformAdmin).Should().Within(Budget).Match(seen => seen,
-            "the platform admin must be able to see that the system-owned Space EXISTS", cancellationToken: TestContext.Current.CancellationToken);
+            "the platform admin must be able to see that the system-owned Space EXISTS",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         var configSeenByPlainUser = await IsVisibleTo(configPath, PlainUser)
-            .Should().Within(Budget).Emit("the query itself must answer, so the emptiness is a verdict", cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(Budget).Emit("the query itself must answer, so the emptiness is a verdict",
+                cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(configSeenByPlainUser, "a non-admin still cannot see somebody else's sync config");
         var spaceSeenByPlainUser = await IsVisibleTo(space, PlainUser)
-            .Should().Within(Budget).Emit("the query itself must answer, so the emptiness is a verdict", cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(Budget).Emit("the query itself must answer, so the emptiness is a verdict",
+                cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(spaceSeenByPlainUser, "a non-admin still cannot see a Space they hold nothing on");
     }
 
@@ -173,18 +183,22 @@ public class SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest(ITestOutputHelpe
         await AssertTheFoldIsUnchanged(configPath);
 
         var refused = await DeleteAs(configPath, PlainUser)
-            .Should().Within(Budget).Emit("the delete must answer", cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(Budget).Emit("the delete must answer",
+                cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(refused.Success, "a non-admin must not be able to remove somebody else's sync");
         Assert.Equal(NodeDeletionRejectionReason.Unauthorized, refused.RejectionReason);
         Assert.NotNull(await NodeTypeAccessRuleGate.ReadSubjectNode(Mesh, configPath)
-            .Should().Within(Budget).Emit("the refused delete must have left the config in place", cancellationToken: TestContext.Current.CancellationToken));
+            .Should().Within(Budget).Emit("the refused delete must have left the config in place",
+                cancellationToken: TestContext.Current.CancellationToken));
 
         var deleted = await DeleteAs(configPath, PlatformAdmin)
-            .Should().Within(Budget).Emit("the delete must answer", cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(Budget).Emit("the delete must answer",
+                cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(deleted.Success,
             $"the platform admin's delete must succeed, but was refused: {deleted.Error}");
         var afterwards = await NodeTypeAccessRuleGate.ReadSubjectNode(Mesh, configPath)
-            .Should().Within(Budget).Emit("storage must answer about the deleted path", cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(Budget).Emit("storage must answer about the deleted path",
+                cancellationToken: TestContext.Current.CancellationToken);
         Assert.Null(afterwards);
     }
 }

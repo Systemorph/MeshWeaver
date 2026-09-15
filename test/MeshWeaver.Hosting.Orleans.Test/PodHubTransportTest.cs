@@ -408,6 +408,13 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     {
         // A bounded, condition-shaped "has it happened yet" — never an unbounded await, which would
         // hang the way the bug does.
+        //
+        // 🚨 THE DELAY IS UNTOKENED ON PURPOSE (#4378), and this one would be actively dangerous
+        // tokened. `Settled` is read as a NEGATIVE assertion at the call site — `(await
+        // Settled(received.Task)).Should().BeFalse(...)`. A cancelled delay wins the WhenAny race,
+        // so `Settled` would return false and the negative assertion would PASS for a test that
+        // merely ran out of time: a cancelled wait re-described as a verdict, which is the one
+        // thing Rule 2a's own wording forbids. The 2 s bound is the whole measurement here.
         var completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(2)));
         return ReferenceEquals(completed, task);
     }

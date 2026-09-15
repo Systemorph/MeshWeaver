@@ -112,28 +112,31 @@ public class PinnedReleaseAdmissionTest(ITestOutputHelper output) : MonolithMesh
                         && d.CompilationStatus == CompilationStatus.Ok
                         && !string.IsNullOrEmpty(d.LatestReleasePath)
                         && d.LatestReleasePath != knownRelease,
-                "a compile of the source lands a new release on the type");
+                "a compile of the source lands a new release on the type",
+                    cancellationToken: TestContext.Current.CancellationToken);
         return (NodeTypeDefinition)node.Content!;
     }
 
     private async Task<NodeTypeRelease> ReadRelease(string releasePath)
     {
         var node = await Mesh.GetMeshNodeStream(releasePath).Should().Within(TestTimeouts.Convergence)
-            .Match(n => n?.Content is NodeTypeRelease, "the release node is readable");
+            .Match(n => n?.Content is NodeTypeRelease, "the release node is readable",
+                cancellationToken: TestContext.Current.CancellationToken);
         return (NodeTypeRelease)node.Content!;
     }
 
     private Task Pin(string? releasePath) =>
         Mesh.GetMeshNodeStream(TypePath)
             .Update<NodeTypeDefinition>(d => d with { RequestedReleasePath = releasePath })
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
     private async Task<GetCompilationPathResponse> AskForCompilationPath()
     {
         var reply = await GetClient()
             .Observe(new GetCompilationPathRequest(), o => o.WithTarget(new Address(TypePath)))
             .Take(1)
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the type's hub answers a compilation-path request");
+            .Should().Within(TestTimeouts.CrossSilo).Emit("the type's hub answers a compilation-path request",
+                cancellationToken: TestContext.Current.CancellationToken);
         return reply.Message;
     }
 

@@ -128,7 +128,7 @@ Reproduce with the normal SDK fixture:
 
 ```bash
 dotnet build test/MeshWeaver.Compiler.Pipeline.Test/MeshWeaver.Compiler.Pipeline.Test.csproj -c Release -warnaserror
-dotnet test test/MeshWeaver.Compiler.Pipeline.Test/MeshWeaver.Compiler.Pipeline.Test.csproj -c Release --no-build --no-restore --filter 'FullyQualifiedName~CompileCacheInputFreshnessTest|FullyQualifiedName~CompileSourceReadIdentityTest|FullyQualifiedName~CacheHitStampsTheSameRecordTest|FullyQualifiedName~ContentKeyReevaluationTest|FullyQualifiedName~GeneratedInputIdentityTest' --logger trx
+dotnet test test/MeshWeaver.Compiler.Pipeline.Test/MeshWeaver.Compiler.Pipeline.Test.csproj -c Release --no-build --no-restore --filter 'FullyQualifiedName~CompileCacheInputFreshnessTest|FullyQualifiedName~CompileSourceReadIdentityTest|FullyQualifiedName~CacheHitStampsTheSameRecordTest|FullyQualifiedName~ContentKeyReevaluationTest|FullyQualifiedName~GeneratedInputIdentityTest' --report-xunit-trx --report-xunit-trx-filename freshness.trx
 cd test/MeshWeaver.Compiler.Pipeline.Test/bin/Release/net10.0
 dotnet MeshWeaver.Compiler.Pipeline.Test.dll -culture en-US -trx compiler-suite-en-US.trx -showLiveOutput -longRunning 60
 ```

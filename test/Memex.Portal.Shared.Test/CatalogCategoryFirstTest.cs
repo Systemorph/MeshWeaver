@@ -284,7 +284,7 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
         PackageInstaller.Install(Mesh, manifest, [new PackageFile($"{manifest.Id}/Doc.md", $"# {manifest.Id}")], "HEAD")
             .FirstAsync()
             .Timeout(RenderBudget)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
     private IObservable<ChangeItem<JsonElement>> Render(string? id) =>
         GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(

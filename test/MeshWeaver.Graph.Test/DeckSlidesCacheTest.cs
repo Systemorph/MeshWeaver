@@ -97,7 +97,7 @@ public class DeckSlidesCacheTest(ITestOutputHelper output) : MonolithMeshTestBas
             .Where(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count(n => SlideNodeType.Matches(n.NodeType)) >= expectedCount)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
     private DeckSlidesCache MakeCache(IMeshService mesh) =>
         new(() => mesh,

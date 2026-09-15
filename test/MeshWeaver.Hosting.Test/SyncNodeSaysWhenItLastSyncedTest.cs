@@ -176,7 +176,7 @@ public class SyncNodeSaysWhenItLastSyncedTest(ITestOutputHelper output)
                         && predicate(c))
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         return node.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)!;
     }
 

@@ -68,7 +68,8 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
             Operation = NodeOperation.Update,
             Node = Page(id, MissingType),
             ExistingNode = Page(id, "Markdown"),
-        }).Should().Within(TestTimeouts.Quick).Emit("the guard must reach a verdict", cancellationToken: TestContext.Current.CancellationToken);
+        }).Should().Within(TestTimeouts.Quick).Emit("the guard must reach a verdict",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeFalse(
             "an update that RETYPES a node to something that resolves to nothing produces an "
@@ -93,7 +94,8 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
             Operation = NodeOperation.Update,
             Node = Page(id, MissingType),
             ExistingNode = Page(id, MissingType),
-        }).Should().Within(TestTimeouts.Quick).Emit("the guard must reach a verdict", cancellationToken: TestContext.Current.CancellationToken);
+        }).Should().Within(TestTimeouts.Quick).Emit("the guard must reach a verdict",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeTrue(
             "round-tripping the type a node ALREADY carries introduces nothing; refusing it would "
@@ -110,7 +112,8 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
             Operation = NodeOperation.Update,
             Node = Page(id, "Markdown"),
             ExistingNode = Page(id, MissingType),
-        }).Should().Within(TestTimeouts.Quick).Emit("the guard must reach a verdict", cancellationToken: TestContext.Current.CancellationToken);
+        }).Should().Within(TestTimeouts.Quick).Emit("the guard must reach a verdict",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeTrue(
             "naming a type that DOES resolve is the sanctioned repair for a mistyped node — the "
@@ -142,7 +145,8 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
         var id = NewId();
         var path = $"{TestPartition}/{id}";
         await MeshService.CreateNode(Page(id, "Markdown")).Take(1)
-            .Should().Within(60.Seconds()).Emit("the node to retype must exist first", cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(60.Seconds()).Emit("the node to retype must exist first",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         var live = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null).FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
@@ -171,7 +175,8 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
         var id = NewId();
         var path = $"{TestPartition}/{id}";
         await MeshService.CreateNode(Page(id, "Markdown")).Take(1)
-            .Should().Within(60.Seconds()).Emit("the node to retype must exist first", cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(60.Seconds()).Emit("the node to retype must exist first",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         var response = await Upsert(Page(id, MissingType), allowUnresolvable: false);
 
@@ -201,7 +206,8 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
         var id = NewId();
         var path = $"{TestPartition}/{id}";
         await MeshService.CreateNode(Page(id, "Markdown")).Take(1)
-            .Should().Within(60.Seconds()).Emit("the node to retype must exist first", cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(60.Seconds()).Emit("the node to retype must exist first",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         var response = await Upsert(Page(id, MissingType), allowUnresolvable: true);
 
@@ -243,7 +249,7 @@ public class DanglingNodeTypeUpdateTest(ITestOutputHelper output) : MonolithMesh
                 }))
             .FirstAsync()
             .Select(d => d.Message)
-            .Timeout(90.Seconds()).Await();
+            .Timeout(90.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine(
             $"upsert allowUnresolvable={allowUnresolvable} success={response.Success} "
             + $"reason={response.RejectionReason} error={response.Error}");

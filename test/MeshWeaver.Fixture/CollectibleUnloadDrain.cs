@@ -95,6 +95,10 @@ public static class CollectibleUnloadDrain
         // observable directly would resume this teardown inline on the pool thread that signalled.
         try
         {
+            // 🚨 UNTOKENED ON PURPOSE (#4378): this is a TEARDOWN drain, and teardown lets work
+            // finish rather than forcing it. Cancelling here would return an "unload did not
+            // complete" outcome for a test that merely ran out of time, and would leave a
+            // collectible context half-released — the disposal-overlapping-a-new-instance shape.
             await unloads.AllCollected.Await();
             return new CollectibleUnloadOutcome(rounds, [], null);
         }

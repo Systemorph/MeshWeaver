@@ -51,7 +51,7 @@ public class CodeNodeSegmentNameValidatorTest
 
     private static async Task<NodeValidationResult> Validate(string id, string ns, string nodeType) =>
         await Guard.Validate(Context(new MeshNode(id, ns) { NodeType = nodeType, Name = id }))
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
     [Theory]
     [InlineData("Source")]

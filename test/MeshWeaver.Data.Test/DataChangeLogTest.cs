@@ -55,7 +55,8 @@ public class DataChangeLogTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var workspace = GetHost().GetWorkspace();
         await workspace.GetObservable<ChangeLogRecord>()
-            .Should().Within(10.Seconds()).Match(x => x.Any(r => r.Id == "1"));
+            .Should().Within(10.Seconds()).Match(x => x.Any(r => r.Id == "1"),
+                cancellationToken: TestContext.Current.CancellationToken);
         return workspace;
     }
 
