@@ -38,17 +38,17 @@ public class PlatformAgentsVisibleInPickerTest(PortalFixture fixture)
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
         // The installing admin sees them …
-        await AssertAgentPickerListsPlatformAgentsAsync(personId: null);
+        await AssertAgentPickerListsPlatformAgentsAsync(personId: null, TestContext.Current.CancellationToken);
 
         // … and so does a DIFFERENT signed-in person, who installed nothing and holds no grant.
         // This is the sglauser case: everyone in the portal, not just whoever provisioned it.
-        await AssertAgentPickerListsPlatformAgentsAsync(personId: "Sandra");
+        await AssertAgentPickerListsPlatformAgentsAsync(personId: "Sandra", TestContext.Current.CancellationToken);
     }
 
-    private async Task AssertAgentPickerListsPlatformAgentsAsync(string? personId)
+    private async Task AssertAgentPickerListsPlatformAgentsAsync(string? personId, CancellationToken cancellationToken)
     {
         var who = personId ?? fixture.UserId;
-        await using var context = await fixture.NewAuthenticatedContextAsync(personId);
+        await using var context = await fixture.NewAuthenticatedContextAsync(personId, cancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         // Pin the MeshWeaver harness: under a CLI harness "/agent" is forwarded to the CLI instead
@@ -91,7 +91,7 @@ public class PlatformAgentsVisibleInPickerTest(PortalFixture fixture)
                 await harnessChip.CountAsync() > 0
                 && (await harnessChip.First.InnerTextAsync())
                     .Contains("MeshWeaver", StringComparison.OrdinalIgnoreCase),
-                TimeSpan.FromSeconds(30)))
+                TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken))
             .Should().BeTrue("the composer must bind to the MeshWeaver harness before /agent opens the picker");
 
         // Open the agent picker the way a user does: type "/agent" and SUBMIT it. Submitting is
@@ -113,7 +113,7 @@ public class PlatformAgentsVisibleInPickerTest(PortalFixture fixture)
             if (await rows.CountAsync() == 0) return false;
             seen = string.Join(" | ", await rows.AllInnerTextsAsync()).ToLowerInvariant();
             return seen.Contains(ShippedAgent, StringComparison.Ordinal);
-        }, TimeSpan.FromSeconds(30));
+        }, TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
 
         await page.ScreenshotAsync(new PageScreenshotOptions
         {
@@ -127,13 +127,14 @@ public class PlatformAgentsVisibleInPickerTest(PortalFixture fixture)
             + $"installer. Saw rows: {seen}");
     }
 
-    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)
+    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             if (await predicate()) return true;
-            await Task.Delay(300);
+            await Task.Delay(300, cancellationToken);
         }
         return false;
     }

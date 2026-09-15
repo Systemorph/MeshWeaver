@@ -98,7 +98,7 @@ public class PluginBundleEntitlementTest(ITestOutputHelper output) : MonolithMes
 
     /// <summary>Installs a package the production way, so the install record carries the same
     /// <c>Source</c> stamp the registry writes — the half of the grant pair that is not the id.</summary>
-    private Task<InstallResult> InstallPackage(string id, string source) =>
+    private Task<InstallResult> InstallPackage(string id, string source, CancellationToken cancellationToken) =>
         PackageInstaller.Install(
                 Mesh,
                 new PackageManifest
@@ -120,7 +120,7 @@ public class PluginBundleEntitlementTest(ITestOutputHelper output) : MonolithMes
                 "HEAD")
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(120))
-            .Await();
+            .Await(cancellationToken);
 
     // ── the route, over a real HTTP pipeline ──────────────────────────────────────────────────
 
@@ -177,8 +177,8 @@ public class PluginBundleEntitlementTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 300_000)]
     public async Task OnlyGrantedPackagesAreServed()
     {
-        await InstallPackage(GrantedPackage, PlatformSource);
-        await InstallPackage(PaidPackage, PaidSource);
+        await InstallPackage(GrantedPackage, PlatformSource, TestContext.Current.CancellationToken);
+        await InstallPackage(PaidPackage, PaidSource, TestContext.Current.CancellationToken);
         var grantedKey = await RegisterInstance(GrantedInstance, $"{PlatformSource}/*");
         var ungrantedKey = await RegisterInstance(UngrantedInstance);
 
@@ -220,7 +220,7 @@ public class PluginBundleEntitlementTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 300_000)]
     public async Task RefusalIsIndistinguishableFromNotFound()
     {
-        await InstallPackage(PaidPackage, PaidSource);
+        await InstallPackage(PaidPackage, PaidSource, TestContext.Current.CancellationToken);
         var grantedKey = await RegisterInstance(GrantedInstance, $"{PlatformSource}/*");
 
         var app = await StartBundleHost();
@@ -257,8 +257,8 @@ public class PluginBundleEntitlementTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 300_000)]
     public async Task TheIndexListsOnlyGrantedPackages()
     {
-        await InstallPackage(GrantedPackage, PlatformSource);
-        await InstallPackage(PaidPackage, PaidSource);
+        await InstallPackage(GrantedPackage, PlatformSource, TestContext.Current.CancellationToken);
+        await InstallPackage(PaidPackage, PaidSource, TestContext.Current.CancellationToken);
         var grantedKey = await RegisterInstance(GrantedInstance, $"{PlatformSource}/*");
         var ungrantedKey = await RegisterInstance(UngrantedInstance);
 

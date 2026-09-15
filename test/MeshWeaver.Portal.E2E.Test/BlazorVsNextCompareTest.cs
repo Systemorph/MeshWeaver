@@ -31,7 +31,7 @@ public class BlazorVsNextCompareTest(PortalFixture fixture)
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
         Directory.CreateDirectory(OutDir);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var user = fixture.UserId; // resolved from the token mint on the first authenticated context
         var notes = new List<string> { $"# Blazor-vs-Next comparison — user='{user}' baseUrl={fixture.BaseUrl}" };
 

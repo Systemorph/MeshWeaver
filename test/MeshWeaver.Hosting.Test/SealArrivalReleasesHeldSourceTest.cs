@@ -210,7 +210,7 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
             .Where(h => h.Count == 0)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>

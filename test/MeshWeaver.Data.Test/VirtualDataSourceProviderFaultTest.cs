@@ -60,7 +60,7 @@ public class VirtualDataSourceProviderFaultTest(ITestOutputHelper output) : HubT
         // the subscriber that is still attached when the fault lands (initialization's Take(1) has
         // already released).
         var stream = workspace.GetStream(typeof(FaultingRow));
-        await stream.Should().Within(TimeSpan.FromSeconds(10)).Emit();
+        await stream.Should().Within(TimeSpan.FromSeconds(10)).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var fault = new TimeoutException(
             "GetMeshNode('$model-probe/deadbeef') timed out after 10.0s — the shape of #2468");

@@ -65,6 +65,7 @@ public class MeshFreeBakePathTest(ITestOutputHelper output)
     [Fact(Timeout = 120_000)]
     public void TheCompilerDrivenBake_BuildsNoMesh_WhileTheGateDoes()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var assemblyPath = typeof(TreeBake).Assembly.Location;
         Assert.True(File.Exists(assemblyPath), $"cannot read the tool assembly at '{assemblyPath}'");
 

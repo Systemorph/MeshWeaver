@@ -87,7 +87,7 @@ public class ExecuteScriptPreflightTest(ITestOutputHelper output) : MonolithMesh
     {
         var absent = $"{TestPartition}/NoSuchScript-{Guid.NewGuid():N}";
 
-        var (result, elapsed) = await Run(absent);
+        var (result, elapsed) = await Run(absent, TestContext.Current.CancellationToken);
 
         elapsed.Should().BeLessThan(FailFastBar,
             $"a target that does not exist is knowable up front — the pre-flight must answer it "
@@ -110,7 +110,7 @@ public class ExecuteScriptPreflightTest(ITestOutputHelper output) : MonolithMesh
     [Fact(Timeout = 180000)]
     public async Task ExecuteScript_OnANodeThatIsNotCode_AnswersFromThePreflight_WithoutBurningTheDispatchBudget()
     {
-        var (result, elapsed) = await Run(TestPartition);
+        var (result, elapsed) = await Run(TestPartition, TestContext.Current.CancellationToken);
 
         elapsed.Should().BeLessThan(FailFastBar,
             $"the node was readable and demonstrably not executable — deciding that needs one "
@@ -150,7 +150,7 @@ public class ExecuteScriptPreflightTest(ITestOutputHelper output) : MonolithMesh
             ? $"{TestPartition}/NoSuchScript-{Guid.NewGuid():N}"
             : TestPartition;
 
-        var (result, _) = await Run(path);
+        var (result, _) = await Run(path, TestContext.Current.CancellationToken);
         result.GetProperty("status").GetString().Should().Be("Error", result.ToString());
 
         var refusals = logs.Records
@@ -178,7 +178,7 @@ public class ExecuteScriptPreflightTest(ITestOutputHelper output) : MonolithMesh
     /// clock the caller actually paid. The stopwatch starts at SUBSCRIBE — <c>ExecuteScript</c>
     /// returns a cold observable, so timing the call itself would measure nothing.
     /// </summary>
-    private async Task<(JsonElement Result, TimeSpan Elapsed)> Run(string path)
+    private async Task<(JsonElement Result, TimeSpan Elapsed)> Run(string path, CancellationToken cancellationToken)
     {
         var operations = new MeshOperations(Mesh);
         var stopwatch = Stopwatch.StartNew();
@@ -186,7 +186,7 @@ public class ExecuteScriptPreflightTest(ITestOutputHelper output) : MonolithMesh
                 operations.ExecuteScript(path, DispatchBudgetSeconds))
             .FirstAsync()
             .Timeout(AwaitBound)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
         stopwatch.Stop();
 
         Output.WriteLine($"ExecuteScript('{path}') answered in {stopwatch.Elapsed.TotalSeconds:F2}s: {json}");

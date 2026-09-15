@@ -47,7 +47,7 @@ public class ActivationLeavesNoOwnCacheSubscriberTest(ITestOutputHelper output) 
         var created = await client.Observe(
                 new CreateNodeRequest(new MeshNode(id, "TestUser") { Name = "Pinned?", NodeType = "Markdown" }),
                 o => o.WithTarget(new Address("TestUser")))
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         created.Message.Success.Should().BeTrue(created.Message.Error ?? "");
         var path = created.Message.Node!.Path!;
 
@@ -55,7 +55,7 @@ public class ActivationLeavesNoOwnCacheSubscriberTest(ITestOutputHelper output) 
         // SubscribeRequest routed to the grain — and let the reader's subscription go (FirstAsync).
         var node = await client.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         node!.Path.Should().Be(path);
         Output.WriteLine($"[active] {path} answered its first read — grain active, hub built");
 
@@ -68,7 +68,7 @@ public class ActivationLeavesNoOwnCacheSubscriberTest(ITestOutputHelper output) 
             .Where(r => r)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         released.Should().BeTrue(
             "an activated hub's own cache entry must reach zero subscribers once activation has settled — " +
             "a hub that keeps its own entry subscribed pins the entry, its hydration stream, its heartbeat " +

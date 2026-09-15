@@ -25,12 +25,12 @@ public class FeedbackReviewE2ETest(PortalFixture fixture)
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
         // Admin context FIRST so fixture.UserId resolves to the DevLogin admin (Roland).
-        await using var adminCtx = await fixture.NewAuthenticatedContextAsync();
+        await using var adminCtx = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var adminUserId = fixture.UserId;
 
-        await using var aliceCtx = await fixture.NewAuthenticatedContextAsync("alice");
+        await using var aliceCtx = await fixture.NewAuthenticatedContextAsync("alice", cancellationToken: TestContext.Current.CancellationToken);
         var aliceToken = await fixture.MintTokenAsync(aliceCtx);
-        await using var bobCtx = await fixture.NewAuthenticatedContextAsync("bob");
+        await using var bobCtx = await fixture.NewAuthenticatedContextAsync("bob", cancellationToken: TestContext.Current.CancellationToken);
         var bobToken = await fixture.MintTokenAsync(bobCtx);
 
         try
@@ -39,9 +39,9 @@ public class FeedbackReviewE2ETest(PortalFixture fixture)
             await SeedFeedback(aliceCtx, aliceToken, "alice", "fb-e2e-alice", "Alice E2E feedback", "alice says search is slow");
             await SeedFeedback(bobCtx, bobToken, "bob", "fb-e2e-bob", "Bob E2E feedback", "bob wants dark mode");
 
-            (await fixture.WaitUntilReadableAsync(aliceCtx, aliceToken, AliceFeedback, TimeSpan.FromSeconds(60)))
+            (await fixture.WaitUntilReadableAsync(aliceCtx, aliceToken, AliceFeedback, TimeSpan.FromSeconds(60), cancellationToken: TestContext.Current.CancellationToken))
                 .Should().BeTrue("alice must be able to read her own feedback");
-            (await fixture.WaitUntilReadableAsync(bobCtx, bobToken, BobFeedback, TimeSpan.FromSeconds(60)))
+            (await fixture.WaitUntilReadableAsync(bobCtx, bobToken, BobFeedback, TimeSpan.FromSeconds(60), cancellationToken: TestContext.Current.CancellationToken))
                 .Should().BeTrue("bob must be able to read his own feedback");
 
             // ── Isolation: neither user can read the other's feedback (private per-user) ──

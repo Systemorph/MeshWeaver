@@ -21,7 +21,7 @@ public class NextHomeScreenshotTest(PortalFixture fixture)
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
         Directory.CreateDirectory(OutDir);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1600, 1100);
 

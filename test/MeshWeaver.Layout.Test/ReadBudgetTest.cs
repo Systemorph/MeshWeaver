@@ -59,6 +59,7 @@ public class ReadBudgetTest
     [Fact(Timeout = 30000)]
     public void ATargetThatNeverAnswers_FailsAtTheCallersBudget_NotTheHubs()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
 
         var observed = Record(
@@ -88,6 +89,7 @@ public class ReadBudgetTest
     [Fact(Timeout = 30000)]
     public void TheFailure_StaysClassifiedAsATransientHubMiss()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
 
         var observed = Record(
@@ -112,6 +114,7 @@ public class ReadBudgetTest
     [Fact(Timeout = 30000)]
     public void TheFailedRead_NeverCompletesEmpty()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
 
         var observed = Record(
@@ -134,6 +137,7 @@ public class ReadBudgetTest
     [Fact(Timeout = 30000)]
     public void TheBudget_DoesNotFireBeforeItElapses()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
 
         var observed = Record(
@@ -155,6 +159,7 @@ public class ReadBudgetTest
     [Fact(Timeout = 30000)]
     public void OnceTheSourceAnswers_TheBudgetIsGone_AndAnIdleStreamSurvives()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
         var source = new Subject<string>();
         var values = new List<string>();
@@ -183,6 +188,7 @@ public class ReadBudgetTest
     [Fact(Timeout = 30000)]
     public void ARealFailure_IsNotReplacedByTheBudgetsOne()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
         var source = new Subject<string>();
         var errors = new List<Exception>();
@@ -212,6 +218,7 @@ public class ReadBudgetTest
     [Fact(Timeout = 30000)]
     public void ABindingThatGetsNothingInTime_DrawsEmpty_AndStillTakesTheLateValue()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
         var source = new Subject<object?>();
         var values = new List<object?>();
@@ -242,6 +249,7 @@ public class ReadBudgetTest
     [Fact(Timeout = 30000)]
     public void TheDegradation_IsReportedOnce_WithTheSameAttributableFailure()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
         var degradations = new List<HubUnreachableException>();
 
@@ -266,6 +274,7 @@ public class ReadBudgetTest
     [Fact(Timeout = 30000)]
     public void AValueInTime_CancelsTheDegradationEntirely()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
         var source = new Subject<object?>();
         var values = new List<object?>();
@@ -291,6 +300,7 @@ public class ReadBudgetTest
     [Fact(Timeout = 30000)]
     public void TheDegradedBinding_StaysOpen()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
 
         var observed = Record(
@@ -311,6 +321,7 @@ public class ReadBudgetTest
     [Fact(Timeout = 30000)]
     public void AThrowingReport_StillLetsTheControlDraw()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
 
         var observed = Record(
@@ -338,6 +349,7 @@ public class ReadBudgetTest
     [Fact(Timeout = 30000)]
     public void TheDefaultBudget_SitsWellInsideTheHubsRequestTimeout()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         ReadBudget.Default.Should().Be(TimeSpan.FromSeconds(10));
         ReadBudget.Default.Should().BeLessThan(TimeSpan.FromSeconds(60));
     }
@@ -352,6 +364,7 @@ public class ReadBudgetTest
     [InlineData(-1)]
     public void ANonPositiveBudget_IsRefused(int seconds)
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var budget = TimeSpan.FromSeconds(seconds);
 
         Assert.Throws<ArgumentOutOfRangeException>(() => Observable.Never<string>()

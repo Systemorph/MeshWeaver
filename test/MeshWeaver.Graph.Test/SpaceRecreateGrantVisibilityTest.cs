@@ -60,23 +60,23 @@ public class SpaceRecreateGrantVisibilityTest(ITestOutputHelper output) : Monoli
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         await meshService.CreateNode(Space())
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space");
+            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space", cancellationToken: TestContext.Current.CancellationToken);
 
         // The negative control: the SAME child create, on the FIRST incarnation. If this failed the
         // assertion below would be reading a constant of the create path, not the recreate.
         await meshService.CreateNode(Child("first"))
             .Should().Within(TestTimeouts.CrossSilo).Emit(
-                "the creator holds Admin on the Space it just created, so a child create is permitted");
+                "the creator holds Admin on the Space it just created, so a child create is permitted", cancellationToken: TestContext.Current.CancellationToken);
 
         await meshService.DeleteNode(SpaceId)
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may delete its own Space");
+            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may delete its own Space", cancellationToken: TestContext.Current.CancellationToken);
 
         await meshService.CreateNode(Space())
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the same id may be created again");
+            .Should().Within(TestTimeouts.CrossSilo).Emit("the same id may be created again", cancellationToken: TestContext.Current.CancellationToken);
 
         await meshService.CreateNode(Child("second"))
             .Should().Within(TestTimeouts.CrossSilo).Emit(
                 "the RECREATE writes the creator's grant exactly as the first create did, so the "
-                + "child create must be permitted on the recreated Space too");
+                + "child create must be permitted on the recreated Space too", cancellationToken: TestContext.Current.CancellationToken);
     }
 }

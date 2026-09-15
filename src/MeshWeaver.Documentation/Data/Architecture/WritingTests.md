@@ -87,6 +87,11 @@ Before writing a test, review the invariants every test must respect:
 > **Rule 2 — Every terminal assertion must be `await`ed.**
 > `.Emit()` / `.Match()` / `.Be()` / `.Complete()` / `.NotEmit()` return a `Task`. An un-awaited one is a fire-and-forget that the compiler will not flag in most positions, so the test proceeds before the write lands. `.Within(t)` and `.Should(t)` are the only synchronous links in the chain — they just configure the deadline. (See [Reactive Test Assertions §2](/Doc/Architecture/ReactiveTestAssertions) for the mechanics, including why the assertion subscribes on `TaskPoolScheduler` rather than xUnit's single-threaded sync context.)
 
+> **Rule 2a — A test with a `Timeout` hands `TestContext.Current.CancellationToken` to the wait it parks in.**
+> xunit.v3 4.x cancels that token when the timeout fires (and when the run is stopped), and its analyzer makes a `Timeout` that never consumes it a build error (`xUnit1069` — under `-warnaserror`, a red build; it is NOT in `NoWarn` and must not go there). A wait that ignores the token outlives the verdict: the failure is recorded, the body stays parked, and the runner carries the blocked body into the next test. So every terminal wait takes the token — `.Await(TestContext.Current.CancellationToken)`, and the trailing `cancellationToken` parameter on `.Emit(…)` / `.Match(…)` / `.Be(…)` / `.Complete(…)` / `.NotEmit(…)` (`Emit(cancellationToken: TestContext.Current.CancellationToken)` when there is no `because`). A private helper the test awaits takes a `CancellationToken cancellationToken` and hands it to ITS wait; the reference has to be lexically inside the test method, so the test passes the token to the helper rather than the helper reading `TestContext` itself. A cancelled wait surfaces as `OperationCanceledException` — it is never folded into "did not emit", and `NotEmit` never reads it as a pass. A synchronous test with a `Timeout` has nothing to hand the token to; it observes it at its first statement (`TestContext.Current.CancellationToken.ThrowIfCancellationRequested();`), which is the analyzer's documented form for that shape and is what a stopped run sees.
+>
+> 🚨 **Satisfying the analyzer is NOT the same as the body stopping, and the difference is the whole point of the rule.** `xUnit1069` is satisfied by ONE reference anywhere in the test method — so a test that hands the token to its first wait and then parks in a helper that polls on a bare `Task.Delay(300)` is green to the analyzer and still outlives its verdict. When you give a test the token, follow it to *every* wait the body can be sitting in: the helper's `Task.Delay`, its `.Await()`, its `WaitAsync(timeout)`. Two shapes are deliberately left alone, and both should say so in a comment: a wait the test PARKS on purpose (the park is the subject — `IoPoolTest`'s in-flight leaf, a backlog of deferred requests), and a FIXTURE's startup wait, which runs before any test owns a token.
+
 > **Rule 3 — Reads after writes use a stream, never a query.**
 > A query goes through the lagged read-side index and returns stale content immediately after a write. Read a known node with `await ReadNode(path).Should().Emit()` (from the test base), or `workspace.GetMeshNodeStream(path)`.
 
@@ -692,16 +697,41 @@ public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(o
 
 Always run tests in the background — they take minutes.
 
-🚨 **Build the project first, and confirm a fresh `.trx`.** `--no-build` / `--no-restore` against a
-project the current worktree has never built exits **0 with no output and no `.trx`** — it runs
-nothing and looks exactly like a clean pass. A fresh worktree has no `bin/`, so this is its default
-state, and two "passing" runs were banked on it before anyone noticed.
+🚨 **Build the project first, and demand a positive summary line.** `--no-build` / `--no-restore`
+against a project the current worktree has never built exits **0 having run nothing** — it looks
+exactly like a clean pass. A fresh worktree has no `bin/`, so this is its default state, and two
+"passing" runs were banked on it before anyone noticed. The signal to read is the last block:
+
+```text
+Test run summary: Passed!
+  total: 112
+  failed: 0
+```
+
+A `total:` of 0 — or no summary block at all — is a run that proved nothing, whatever the exit code.
 
 ```bash
 dotnet build test/MeshWeaver.NodeOperations.Test/MeshWeaver.NodeOperations.Test.csproj
 dotnet test test/MeshWeaver.NodeOperations.Test --no-build
 dotnet test test/MeshWeaver.Acme.Test --no-build --filter "FullyQualifiedName~TodoDataChangeWorkflowTest"
 ```
+
+🚨 **`dotnet test` here is Microsoft.Testing.Platform, not VSTest, and a local run leaves NO `.trx`
+behind unless you ask for one.** xunit.v3 4.x ships MTP v2, which refuses the VSTest target on the
+.NET 10 SDK outright, so the repository opts in through the root `global.json`
+(`{"test": {"runner": "Microsoft.Testing.Platform"}}`). Consequences worth knowing before you go
+looking for a file that is not there:
+
+- The old always-on `<VSTestLogger>trx</VSTestLogger>` in `test/Directory.Build.props` is inert and
+  has been removed. A run that needs a parseable result file asks for it:
+  `dotnet test <proj> --no-build --report-xunit-trx --report-xunit-trx-filename run.trx --results-directory <dir>`.
+- `-l:trx`, `--logger`, `--blame-hang-*` and `-warnaserror` are VSTest-era arguments. MTP rejects
+  them, and `-warnaserror` in particular fails in the way that matters least visibly: **`Zero tests
+  ran`, exit 5** — a run that executed nothing while looking like a tooling hiccup.
+- `--filter "FullyQualifiedName~…"`, `-c`, `--no-build`, `--no-restore` and `--results-directory`
+  are unchanged.
+- CI's shards never call `dotnet test` at all — they launch each project's native xunit v3 host
+  (`dotnet <Name>.dll -trx …`), so CI's trx and its exit markers are unaffected by any of this.
 
 There is no `timeout` (or `gtimeout`) on the macOS dev host, so `timeout 20m dotnet test …` runs
 nothing at all — cap a local run by backgrounding it and polling `date -u` instead.

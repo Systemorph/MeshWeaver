@@ -40,9 +40,17 @@ to leave in the repo without affecting CI).
 
 ## Where do I see results?
 
-- **Terminal** — `dotnet test` prints the per-test outcome and a `Passed!/Failed!/Skipped!` summary.
-- **TRX file** — every run writes `test/MeshWeaver.Portal.E2E.Test/TestResults/_<machine>_<utc>.trx`
-  (per-test outcome + captured stdout). Open it in an IDE, or `dotnet test --logger "console;verbosity=detailed"`.
+- **Terminal** — `dotnet test` prints the per-test outcome and a `Test run summary:` block with
+  `total:` / `failed:` / `succeeded:`. A `total:` of 0 is a run that proved nothing.
+- **TRX file** — 🚨 **not written unless you ask for one.** `dotnet test` here is
+  Microsoft.Testing.Platform (xunit.v3 4.x refuses VSTest on the .NET 10 SDK; the repo opts in via
+  the root `global.json`), so `--logger` and the old always-on `<VSTestLogger>` are gone. Ask for
+  the per-test outcome + captured stdout explicitly:
+  ```bash
+  dotnet test test/MeshWeaver.Portal.E2E.Test --report-xunit-trx \
+    --report-xunit-trx-filename e2e.trx --results-directory TestResults
+  ```
+  For fuller terminal output use `--output Detailed` (not `--logger "console;verbosity=detailed"`).
 - **Watch it live** — add `E2E_HEADED=1` to open a visible, slow-motion browser:
   ```bash
   E2E_BASE_URL=https://localhost:7122 E2E_HEADED=1 dotnet test test/MeshWeaver.Portal.E2E.Test

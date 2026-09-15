@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
@@ -168,20 +168,20 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
             .Subscribe(changeCounts.OnNext);
 
         // Wait for initial data — the first emission is change #1.
-        var initialChangeCount = await changeCounts.Should().Within(10.Seconds()).Match(c => c >= 1);
+        var initialChangeCount = await changeCounts.Should().Within(10.Seconds()).Match(c => c >= 1, cancellationToken: TestContext.Current.CancellationToken);
 
         // act
         await client.Observe(DataChangeRequest.Update(new object[] { updatedItem }), o => o.WithTarget(CreateClientAddress()))
-            .Should().Within(10.Seconds()).Emit();
+            .Should().Within(10.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // assert — the update produces a further change event (count strictly grows).
-        await changeCounts.Should().Within(10.Seconds()).Match(c => c > initialChangeCount);
+        await changeCounts.Should().Within(10.Seconds()).Match(c => c > initialChangeCount, cancellationToken: TestContext.Current.CancellationToken);
 
         // and the new value is present in the workspace.
         var currentData = await workspace
             .GetObservable<WorkspaceTestData>()
             .Should().Within(10.Seconds())
-            .Match(x => x.Any(item => item.Id == "1" && item.Name == "Updated First Item"));
+            .Match(x => x.Any(item => item.Id == "1" && item.Name == "Updated First Item"), cancellationToken: TestContext.Current.CancellationToken);
         currentData.Should().Contain(x => x.Id == "1" && x.Name == "Updated First Item");
 
         subscription.Dispose();
@@ -198,19 +198,19 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var initialData = await workspace
             .GetObservable<WorkspaceTestData>()
             .Should().Within(10.Seconds())
-            .Emit();
+            .Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var itemToDelete = initialData.First(x => x.Id == "3");
 
         // act
         await client.Observe(DataChangeRequest.Delete(new object[] { itemToDelete }, "TestUser"), o => o.WithTarget(CreateClientAddress()))
-            .Should().Within(10.Seconds()).Emit();
+            .Should().Within(10.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         var updatedData = await workspace
             .GetObservable<WorkspaceTestData>()
             .Should().Within(10.Seconds())
-            .Match(x => x.Count == 2);
+            .Match(x => x.Count == 2, cancellationToken: TestContext.Current.CancellationToken);
 
         updatedData.Should().HaveCount(2);
         updatedData.Should().NotContain(x => x.Id == "3");

@@ -63,7 +63,7 @@ public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase
         await base.DisposeAsync();
     }
 
-    private async Task<IMessageHub> CreatePortalHubAsync()
+    private async Task<IMessageHub> CreatePortalHubAsync(CancellationToken cancellationToken)
     {
         var meshHub = Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
         var routingService = Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>();
@@ -75,7 +75,7 @@ public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase
                 .WithInitialization(hub =>
                     hub.RegisterForDisposal(routingService.RegisterStream(hub))))!;
 
-        await Task.Delay(500);
+        await Task.Delay(500, cancellationToken);
         return portalHub;
     }
 
@@ -90,7 +90,7 @@ public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase
     [Fact(Timeout = 30000)]
     public async Task CodeSubmissions_SurviveGrainSerializationRoundTrip()
     {
-        var portal = await CreatePortalHubAsync();
+        var portal = await CreatePortalHubAsync(TestContext.Current.CancellationToken);
 
         const string markdown = """
             ```csharp --render orleans-wire
@@ -136,7 +136,7 @@ public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase
     [Fact(Timeout = 30000)]
     public async Task MarkdownString_RoundTripsThroughJsonElement()
     {
-        var portal = await CreatePortalHubAsync();
+        var portal = await CreatePortalHubAsync(TestContext.Current.CancellationToken);
 
         const string markdown = "See [the docs](https://example.com/docs) for details.";
 

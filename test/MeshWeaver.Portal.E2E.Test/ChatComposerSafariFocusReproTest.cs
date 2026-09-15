@@ -67,7 +67,7 @@ public class ChatComposerSafariFocusReproTest(PortalFixture fixture, ITestOutput
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
         output.WriteLine($"engine = {fixture.BrowserName}");
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         try { await fixture.CreateNodeAsync(context, token, ComposerSeedJson); }
@@ -168,7 +168,7 @@ public class ChatComposerSafariFocusReproTest(PortalFixture fixture, ITestOutput
             var execVisible = await execBar.CountAsync() > 0 && await execBar.First.IsVisibleAsync();
             if (execVisible) streamingSeen = true;
             else if (streamingSeen) break; // round finished — stop looping
-            if (!execVisible) { await Task.Delay(100); continue; } // not streaming yet — wait for the round to start
+            if (!execVisible) { await Task.Delay(100, TestContext.Current.CancellationToken); continue; } // not streaming yet — wait for the round to start
 
             cycles++;
             var marker = $"rf{cycles:D2}";
@@ -176,7 +176,7 @@ public class ChatComposerSafariFocusReproTest(PortalFixture fixture, ITestOutput
             // Steal focus away, then click back and type as tightly as possible so a re-render is likely
             // to land in the click→type→settle window (where the reconcile/focus race lives).
             var stolenTo = await page.EvaluateAsync<string?>(stealFocusJs);
-            await Task.Delay(120); // brief — a couple of streaming re-renders land while focus is away
+            await Task.Delay(120, TestContext.Current.CancellationToken); // brief — a couple of streaming re-renders land while focus is away
             await composer.ClickAsync();                 // user clicks back into the composer
             await page.Keyboard.TypeAsync(marker);
 
@@ -186,10 +186,10 @@ public class ChatComposerSafariFocusReproTest(PortalFixture fixture, ITestOutput
             while (sw.ElapsedMilliseconds < 1_500)
             {
                 if ((await viewLines.InnerTextAsync()).Contains(marker, StringComparison.Ordinal)) { landed = true; break; }
-                await Task.Delay(50);
+                await Task.Delay(50, TestContext.Current.CancellationToken);
             }
             // (b) does it SURVIVE the next burst of re-render storm (reconcile-wipe check)?
-            await Task.Delay(500);
+            await Task.Delay(500, TestContext.Current.CancellationToken);
             var survived = (await viewLines.InnerTextAsync()).Contains(marker, StringComparison.Ordinal);
 
             if (!landed || !survived)

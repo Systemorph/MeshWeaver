@@ -75,7 +75,7 @@ public class DisposalStallWatchdogTest : HubTestBase
 
         var started = DateTime.UtcNow;
         root.Dispose();
-        await root.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(120.Seconds());
+        await root.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(120.Seconds(), TestContext.Current.CancellationToken);
         var elapsed = DateTime.UtcNow - started;
 
         elapsed.Should().BeGreaterThan(TimeSpan.FromSeconds(9),
@@ -119,7 +119,7 @@ public class DisposalStallWatchdogTest : HubTestBase
         try
         {
             victim.Post(new WedgeEvent(), o => o.WithTarget(victim.Address));
-            await entered.Should().Within(10.Seconds()).Emit("the turn must hold the block before we dispose");
+            await entered.Should().Within(10.Seconds()).Emit("the turn must hold the block before we dispose", cancellationToken: TestContext.Current.CancellationToken);
 
             victim.Dispose();
 
@@ -133,7 +133,7 @@ public class DisposalStallWatchdogTest : HubTestBase
                 "the report carries the recursive disposal snapshot — queue depths, the executing turn, "
                 + "pending callbacks — so a reader can reproduce it from the log alone");
 
-            await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TestTimeouts.Convergence);
+            await victim.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
             Volatile.Read(ref cancellationObserved).Should().Be(1,
                 "the turn returned because it observed the cancellation the detector handed it");
             victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
@@ -186,9 +186,9 @@ public class DisposalStallWatchdogTest : HubTestBase
         try
         {
             victim.Post(new WedgeEvent(), o => o.WithTarget(victim.Address));
-            await entered.Should().Within(10.Seconds()).Emit("the turn must hold the block before we dispose");
+            await entered.Should().Within(10.Seconds()).Emit("the turn must hold the block before we dispose", cancellationToken: TestContext.Current.CancellationToken);
 
-            var completed = victim.DisposalCompleted.FirstOrDefaultAsync().Await();
+            var completed = victim.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken);
             victim.Dispose();
 
             // Two budgets of no progress: the cancel verdict, then the ignores-cancellation verdict.
@@ -203,7 +203,7 @@ public class DisposalStallWatchdogTest : HubTestBase
 
             // Sanctioned negative wait: the finding IS that disposal has NOT completed — nothing was
             // torn down around the running turn, so there is no positive signal to filter for.
-            var winner = await Task.WhenAny(completed, Task.Delay(TimeSpan.FromSeconds(2)));
+            var winner = await Task.WhenAny(completed, Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken));
             winner.Should().NotBe(completed,
                 "disposal must stay PENDING while the turn runs: a hub that has not finished must not "
                 + "say it has — the predecessor force-tore the subtree down here and signalled Dead");
@@ -212,9 +212,9 @@ public class DisposalStallWatchdogTest : HubTestBase
 
             // The work finishes; the ordinary phases run to the end.
             Volatile.Write(ref release, 1);
-            await completed.WaitAsync(TestTimeouts.Convergence);
-            await ownDisposed.Should().Within(5.Seconds()).Emit("ShutDown disposes the hub's own registrations");
-            await childDisposed.Should().Within(5.Seconds()).Emit("DisposeHostedHubs disposes the children");
+            await completed.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
+            await ownDisposed.Should().Within(5.Seconds()).Emit("ShutDown disposes the hub's own registrations", cancellationToken: TestContext.Current.CancellationToken);
+            await childDisposed.Should().Within(5.Seconds()).Emit("DisposeHostedHubs disposes the children", cancellationToken: TestContext.Current.CancellationToken);
             victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
         }
         finally
@@ -248,7 +248,9 @@ public class DisposalStallWatchdogTest : HubTestBase
 
         var started = DateTime.UtcNow;
         victim.Dispose();
-        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(60.Seconds());
+        await victim.DisposalCompleted.FirstOrDefaultAsync()
+            .Await(TestContext.Current.CancellationToken)
+            .WaitAsync(60.Seconds(), TestContext.Current.CancellationToken);
         var elapsed = DateTime.UtcNow - started;
 
         elapsed.Should().BeGreaterThan(TimeSpan.FromSeconds(7),

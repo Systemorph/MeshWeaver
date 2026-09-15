@@ -23,7 +23,7 @@ public class NodeMenuE2ETest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         try
@@ -64,7 +64,7 @@ public class NodeMenuE2ETest(PortalFixture fixture)
             }
             catch (InvalidOperationException) { }
 
-            (await fixture.WaitUntilReadableAsync(context, token, Space, TimeSpan.FromSeconds(60)))
+            (await fixture.WaitUntilReadableAsync(context, token, Space, TimeSpan.FromSeconds(60), cancellationToken: TestContext.Current.CancellationToken))
                 .Should().BeTrue("the seeded space must be readable before driving the UI");
 
             var page = await context.NewPageAsync();

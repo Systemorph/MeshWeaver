@@ -212,7 +212,7 @@ public class ForeignFrameworkStampOnTheMirrorTest(ITestOutputHelper output) : Mo
         const long storeVersion = 1;
         var bytes = await File.ReadAllBytesAsync(typeof(ModuleVersionCompatibility).Assembly.Location);
         var location = await store!.PutWithLocation(typePath, storeVersion, bytes, null)
-            .FirstAsync().Timeout(VerdictBudget).Await();
+            .FirstAsync().Timeout(VerdictBudget).Await(TestContext.Current.CancellationToken);
 
         var usable = new NodeTypeDefinition
         {
@@ -240,7 +240,7 @@ public class ForeignFrameworkStampOnTheMirrorTest(ITestOutputHelper output) : Mo
             .ApplyStreamResult(
                 mirror, instance, typePath, EmptyMeshConfiguration(), Compiler, Mesh, logger: null)
             .Take(1)
-            .Should().Within(VerdictBudget).Emit("the activation must reach a verdict");
+            .Should().Within(VerdictBudget).Emit("the activation must reach a verdict", cancellationToken: TestContext.Current.CancellationToken);
 
         // Not an overlay: every overlay installs an UnhandledMessageNack; a bound build does not.
         if (verdict.HubConfiguration is not null)
@@ -256,7 +256,7 @@ public class ForeignFrameworkStampOnTheMirrorTest(ITestOutputHelper output) : Mo
         var after = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n is not null)
             .Take(1)
-            .Should().Within(VerdictBudget).Emit("the type node is readable after the verdict");
+            .Should().Within(VerdictBudget).Emit("the type node is readable after the verdict", cancellationToken: TestContext.Current.CancellationToken);
         var afterDef = after!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions);
         afterDef.Should().NotBeNull();
         afterDef!.CompilationStatus.Should().Be(CompilationStatus.Ok,

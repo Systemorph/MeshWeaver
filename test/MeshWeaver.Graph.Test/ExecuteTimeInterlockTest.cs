@@ -68,7 +68,7 @@ public class ExecuteTimeInterlockTest(ITestOutputHelper output) : MonolithMeshTe
     public async Task AProvenStaleAdoption_IsNotArmed_AndSaysSo()
     {
         var nack = await EnrichAgainst(nameof(AProvenStaleAdoption_IsNotArmed_AndSaysSo),
-            BuildProvenance.AdoptionRefused);
+            BuildProvenance.AdoptionRefused, TestContext.Current.CancellationToken);
 
         nack.Should().NotBeNull(
             "a refused type must still ACTIVATE — with a configuration that refuses — so callers "
@@ -104,7 +104,7 @@ public class ExecuteTimeInterlockTest(ITestOutputHelper output) : MonolithMeshTe
     {
         var nack = await EnrichAgainst(
             $"{nameof(AnUnverifiedAdoption_StillArms_TheAntiOutageProperty)}{provenance}",
-            provenance);
+            provenance, TestContext.Current.CancellationToken);
 
         // This mesh has no compilation service and no bytes behind those coordinates, so the
         // enrichment lands on one of the ORDINARY availability outcomes. Which one does not
@@ -119,14 +119,14 @@ public class ExecuteTimeInterlockTest(ITestOutputHelper output) : MonolithMeshTe
     /// of it through the real enrichment path, and returns the <see cref="UnhandledMessageNack"/>
     /// the resulting configuration installs (null when it installs none).
     /// </summary>
-    private async Task<UnhandledMessageNack?> EnrichAgainst(string typeName, BuildProvenance provenance)
+    private async Task<UnhandledMessageNack?> EnrichAgainst(string typeName, BuildProvenance provenance, CancellationToken cancellationToken)
     {
         var typePath = $"{TestPartition}/{typeName}";
         await CreateAsSystem(new MeshNode(typeName, TestPartition)
         {
             NodeType = MeshNode.NodeTypePath,
             Content = Adopted(provenance),
-        });
+        }, cancellationToken);
 
         var enriched = await NodeTypeEnrichmentHelpers
             .EnrichWithNodeType(
@@ -135,7 +135,7 @@ public class ExecuteTimeInterlockTest(ITestOutputHelper output) : MonolithMeshTe
                 compilationService: null,
                 new MeshNode($"instance-{provenance}", TestPartition) { NodeType = typePath })
             .Take(1)
-            .Should().Within(EnrichBudget).Emit("enrichment always emits — worst case an overlay");
+            .Should().Within(EnrichBudget).Emit("enrichment always emits — worst case an overlay", cancellationToken);
 
         enriched.Should().NotBeNull();
         if (enriched!.HubConfiguration is null)
@@ -146,11 +146,11 @@ public class ExecuteTimeInterlockTest(ITestOutputHelper output) : MonolithMeshTe
         return applied.Get<UnhandledMessageNack>();
     }
 
-    private Task CreateAsSystem(MeshNode node)
+    private Task CreateAsSystem(MeshNode node, CancellationToken cancellationToken)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
         return access.RunAsSystem(() => meshService.CreateNode(node))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(cancellationToken);
     }
 }

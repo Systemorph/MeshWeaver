@@ -44,7 +44,7 @@ public class SpaceInviteServiceTest(ITestOutputHelper output) : MonolithMeshTest
                 NodeType = "User",
                 Name = "Bob",
                 Content = new User { Email = email, FullName = "Bob" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // Wait until the account is queryable by email (the service looks it up that way).
         await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:User content.email:{email}"))
@@ -70,7 +70,7 @@ public class SpaceInviteServiceTest(ITestOutputHelper output) : MonolithMeshTest
         const string email = "carol@acme.com";
 
         var outcome = await NewService().Invite(Space, email, "Viewer", pin: false, invitedBy: "admin")
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
         Assert.Equal(SpaceInviteOutcome.Invited, outcome);
 
         // An event subscription was created to grant Viewer on the Space when this email's User appears.
@@ -79,12 +79,12 @@ public class SpaceInviteServiceTest(ITestOutputHelper output) : MonolithMeshTest
             .Where(nodes => (nodes ?? []).Any(n => n.Content is EventSubscription s
                 && s.TriggerType == EventTriggerType.NodeChange
                 && s.MatchValue == email && s.TargetPath == Space && s.Role == "Viewer"))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
 
         // An Invitation node was created for the email (the InvitationEmailSender emails it),
         // carrying the target Space so the email addresses it by name + links to it.
         await Mesh.GetWorkspace().GetMeshNodeStream($"{InvitationNodeType.Namespace}/{SpaceInviteService.Slug(email)}")
             .Where(n => n?.Content is Invitation inv && inv.Email == email && inv.SpacePath == Space)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
     }
 }

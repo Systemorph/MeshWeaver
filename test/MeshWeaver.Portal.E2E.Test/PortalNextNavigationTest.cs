@@ -15,10 +15,10 @@ namespace MeshWeaver.Portal.E2E;
 [Collection("portal-e2e")]
 public class PortalNextNavigationTest(PortalFixture fixture)
 {
-    private async Task<IBrowserContext> RequireNextAsync()
+    private async Task<IBrowserContext> RequireNextAsync(CancellationToken cancellationToken)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
-        var context = await fixture.NewAuthenticatedContextAsync();
+        var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: cancellationToken);
         var probe = await context.APIRequest.GetAsync($"{fixture.BaseUrl}/next");
         Assert.SkipUnless((int)probe.Status == 200,
             $"/next not deployed on {fixture.BaseUrl} (HTTP {probe.Status}) — run 'memex-local e2e up'.");
@@ -52,7 +52,7 @@ public class PortalNextNavigationTest(PortalFixture fixture)
     [Fact(Timeout = 240_000)]
     public async Task MarkdownLink_Click_NavigatesClientSide_InsideTheShell()
     {
-        await using var context = await RequireNextAsync();
+        await using var context = await RequireNextAsync(TestContext.Current.CancellationToken);
         var page = await GotoLiveAsync(context, fixture.BaseUrl!, "/Doc/GUI");
 
         // A rendered internal doc link (the Markdig HTML carries root-absolute "/Doc/…" hrefs).
@@ -80,7 +80,7 @@ public class PortalNextNavigationTest(PortalFixture fixture)
     [Fact(Timeout = 240_000)]
     public async Task ResultCard_Click_NavigatesClientSide_ToTheNode()
     {
-        await using var context = await RequireNextAsync();
+        await using var context = await RequireNextAsync(TestContext.Current.CancellationToken);
         var page = await GotoLiveAsync(context, fixture.BaseUrl!, "");
 
         // The home regions (Open threads / Spaces tabs) render mesh result cards. Their hrefs must

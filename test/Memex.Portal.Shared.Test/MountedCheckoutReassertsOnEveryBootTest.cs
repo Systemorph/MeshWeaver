@@ -80,7 +80,7 @@ public class MountedCheckoutReassertsOnEveryBootTest(ITestOutputHelper output) :
     {
         // Boot 1: the seed installs the course and ledgers it — the state every populated
         // self-registry portal sits in.
-        var first = await Installer.Completed.FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await();
+        var first = await Installer.Completed.FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(TestContext.Current.CancellationToken);
         first.Packages.Should().Equal(new[] { "Course" });
         first.Failed.Should().Be(0);
         (await Read("Course/Lesson"))!.ContentAs<string>(Mesh.JsonSerializerOptions).Should().Be("# Lesson, as of its first install.");
@@ -92,7 +92,7 @@ public class MountedCheckoutReassertsOnEveryBootTest(ITestOutputHelper output) :
         // Boot 2: the same production decision, unchanged configuration. Seeded once, this pass
         // skipped the package on the ledger and the portal kept serving the first install forever —
         // the defect. A mounted checkout is standing operator intent, so it re-asserts.
-        var second = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await();
+        var second = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await(TestContext.Current.CancellationToken);
         second.Packages.Should().Equal(new[] { "Course" },
             "a package selected out of a LOCAL checkout is reconciled on every boot, never seeded once (MeshWeaver#3359)");
         second.Failed.Should().Be(0);
@@ -102,7 +102,7 @@ public class MountedCheckoutReassertsOnEveryBootTest(ITestOutputHelper output) :
         (await Read("Course/Quiz")).Should().NotBeNull("a node added to the checkout after the first install reaches the portal");
 
         // Boot 3: nothing changed in the checkout — the reconcile is one listing and no writes.
-        var third = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await();
+        var third = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await(TestContext.Current.CancellationToken);
         third.Packages.Should().Equal(new[] { "Course" });
         third.Installed.Should().Be(0, "the content-hash gate turns an unchanged mount into a no-op");
         third.UpToDate.Should().Be(1);
@@ -154,12 +154,12 @@ public class FetchedSourceStillSeedsOnceTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 240_000)]
     public async Task ASeededPackageFromAFetchedSource_IsNotReasserted()
     {
-        var first = await Installer.Completed.FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await();
+        var first = await Installer.Completed.FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(TestContext.Current.CancellationToken);
         first.Packages.Should().Equal(new[] { "Course" });
 
         MountedRepo.Write(checkout, "A course, fetched.", lesson: "# Lesson, rewritten since.");
 
-        var second = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await();
+        var second = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await(TestContext.Current.CancellationToken);
         second.Packages.Should().BeEmpty(
             "a fetched source's package is a SEED: ledgered on the first boot and never re-asserted, "
             + "so an operator who removes it is not fought by the next restart");

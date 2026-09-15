@@ -82,7 +82,7 @@ public class ModuleFloorAdvisoryFunnelTest(ITestOutputHelper output) : MonolithM
         var landed = await client
             .LandFromBundle(Plugin, Module, "Plugins/" + Plugin, "1.2.0",
                 ModuleBundle(minMeshVersion: floor), advertisedFrameworkMvid: "s-advertised")
-            .FirstAsync().Await();
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
 
         Assert.Equal(1, landed);
         var list = ModuleActivationSidecar.Read(landingRoot);
@@ -107,7 +107,7 @@ public class ModuleFloorAdvisoryFunnelTest(ITestOutputHelper output) : MonolithM
         var landed = await client
             .LandFromBundle(Plugin, "MeshWeaver.SomethingElse", "Plugins/" + Plugin, "1.2.0",
                 ModuleBundle(minMeshVersion: null), advertisedFrameworkMvid: "s-advertised")
-            .FirstAsync().Await();
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
 
         Assert.Equal(0, landed);
         Assert.Empty(ModuleActivationSidecar.Read(landingRoot).Entries);

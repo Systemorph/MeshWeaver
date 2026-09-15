@@ -15,6 +15,7 @@ public class RecentlyDeletedRegistryTest
     [Fact(Timeout = 5000)]
     public void MarkDeleted_ThenIsRecentlyDeleted_IsTrue()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new RecentlyDeletedRegistry();
         registry.IsRecentlyDeleted("Admin/Partition/space1").Should().BeFalse(
             "an untracked path was never deleted");
@@ -30,6 +31,7 @@ public class RecentlyDeletedRegistryTest
     [Fact(Timeout = 5000)]
     public void Clear_LiftsTheTombstone_SoARecreatePersists()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new RecentlyDeletedRegistry();
         registry.MarkDeleted("Admin/Partition/space1");
         registry.IsRecentlyDeleted("Admin/Partition/space1").Should().BeTrue();
@@ -44,6 +46,7 @@ public class RecentlyDeletedRegistryTest
     [Fact(Timeout = 5000)]
     public void IsCaseInsensitive_And_NullSafe()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new RecentlyDeletedRegistry();
         registry.MarkDeleted("Admin/Partition/Space1");
 

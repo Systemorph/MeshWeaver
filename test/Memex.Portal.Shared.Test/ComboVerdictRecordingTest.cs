@@ -45,7 +45,7 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 60000)]
     public async Task RecordVerification_RoundTripsTheWholeVerdict_ThroughTheHubSerializer()
     {
-        await Seed();
+        await Seed(TestContext.Current.CancellationToken);
         var verdict = RedVerdict(Tag) with
         {
             Caveats = ["'Store' was materialised from a MOVING ref"],
@@ -72,7 +72,7 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 60000)]
     public async Task RecordVerification_UpsertsByTag_ARerunReplacesRatherThanDuplicates()
     {
-        await Seed();
+        await Seed(TestContext.Current.CancellationToken);
         await Record(RedVerdict(Tag));
         await Record(GreenVerdict(Tag) with { VerifiedAt = DateTimeOffset.UtcNow.AddMinutes(1) });
 
@@ -86,7 +86,7 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 60000)]
     public async Task RecordVerification_IsBounded_NewestKept_TheNodeNeverGrowsWithoutLimit()
     {
-        await Seed();
+        await Seed(TestContext.Current.CancellationToken);
         var baseTime = DateTimeOffset.UtcNow;
         for (var i = 0; i < UpdatePolicyNodeType.MaxRecordedVerifications + 2; i++)
             await Record(GreenVerdict($"3.0.0-ci.{i}") with { VerifiedAt = baseTime.AddMinutes(i) });
@@ -264,7 +264,7 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
     private static string EchoLocalizer(string key, object?[] args) =>
         $"{key}[{string.Join(',', args)}]";
 
-    private Task Seed()
+    private Task Seed(CancellationToken cancellationToken)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var node = new MeshNode(UpdatePolicyNodeType.NodeId, UpdatePolicyNodeType.AdminPartition)
@@ -283,7 +283,7 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
             })
             .FirstAsync()
             .Timeout(Budget)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
     }
 
     private Task Record(ComboVerification verdict) =>

@@ -48,7 +48,7 @@ public class PublicReadPolicyScopeTest(ITestOutputHelper output) : MonolithMeshT
             AssignmentNodeFactory.UserRole(Reader, "Viewer", "RolePolicy/Denied", denied: true),
             new MeshNode("Page", "RolePolicy/Denied") { NodeType = "Markdown" });
 
-    private Task<Permission> Effective(string path, string subject)
+    private Task<Permission> Effective(string path, string subject, CancellationToken cancellationToken)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var context = new AccessContext { ObjectId = subject, Name = subject };
@@ -56,7 +56,7 @@ public class PublicReadPolicyScopeTest(ITestOutputHelper output) : MonolithMeshT
         access.SetHostIdentity(context);
         // Assert the first decision, not a later matching answer that could hide an initial leak.
         return Mesh.GetEffectivePermissions(path, subject)
-            .FirstAsync().Timeout(TestTimeouts.Quick).Await(TestContext.Current.CancellationToken);
+            .FirstAsync().Timeout(TestTimeouts.Quick).Await(cancellationToken);
     }
 
     [Theory(Timeout = 60_000)]
@@ -74,17 +74,17 @@ public class PublicReadPolicyScopeTest(ITestOutputHelper output) : MonolithMeshT
     [InlineData("CapOnly/Page", Reader, false)]
     public async Task PublicRead_UsesTheMostSpecificPolicy(string path, string subject, bool readable)
     {
-        (await Effective(path, subject)).HasFlag(Permission.Read).Should().Be(readable,
+        (await Effective(path, subject, TestContext.Current.CancellationToken)).HasFlag(Permission.Read).Should().Be(readable,
             "a deeper cap suppresses an inherited public grant, while a grant at the same scope wins");
     }
 
     [Fact(Timeout = 60_000)]
     public async Task RoleGrantAndCap_KeepTheirExistingPermissionBits()
     {
-        var granted = await Effective("RolePolicy/Page", Reader);
+        var granted = await Effective("RolePolicy/Page", Reader, TestContext.Current.CancellationToken);
         granted.HasFlag(Permission.Read | Permission.Execute | Permission.Api).Should().BeTrue();
 
-        var capped = await Effective("RolePolicy/Capped/Page", Reader);
+        var capped = await Effective("RolePolicy/Capped/Page", Reader, TestContext.Current.CancellationToken);
         capped.HasFlag(Permission.Read).Should().BeFalse();
         capped.HasFlag(Permission.Execute | Permission.Api).Should().BeTrue();
     }
@@ -92,6 +92,6 @@ public class PublicReadPolicyScopeTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 60_000)]
     public async Task RoleDeny_StillRemovesTheInheritedRole()
     {
-        (await Effective("RolePolicy/Denied/Page", Reader)).Should().Be(Permission.None);
+        (await Effective("RolePolicy/Denied/Page", Reader, TestContext.Current.CancellationToken)).Should().Be(Permission.None);
     }
 }

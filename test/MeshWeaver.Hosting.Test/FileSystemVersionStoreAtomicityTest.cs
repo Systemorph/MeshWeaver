@@ -116,7 +116,7 @@ public class FileSystemVersionStoreAtomicityTest : IDisposable
             await store.WriteVersion(Snapshot(v), JsonOptions).FirstAsync();
 
         Volatile.Write(ref writesDone, true);
-        await probe;
+        await probe.WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.True(Volatile.Read(ref observations) > 0,
             "the probe never observed a published snapshot at all, so it proved nothing");
@@ -145,7 +145,7 @@ public class FileSystemVersionStoreAtomicityTest : IDisposable
     public async Task WritingLeavesNoTemporaryFileBehind()
     {
         var store = new FileSystemVersionStore(_dir, _ioPools);
-        await store.WriteVersion(Snapshot(1), JsonOptions).FirstAsync();
+        await store.WriteVersion(Snapshot(1), JsonOptions).FirstAsync().Await(TestContext.Current.CancellationToken);
 
         var files = Directory.GetFiles(Path.Combine(_dir, ".versions", "test"));
         Assert.Equal(new[] { "node_1.json" }, files.Select(Path.GetFileName).Order().ToArray());

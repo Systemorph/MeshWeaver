@@ -18,6 +18,7 @@ public class PathEscapingTest
     [InlineData("back\\slash", "back__slash")]
     public void Escape_ReplacesSlashesWithDoubleUnderscore(string input, string expected)
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         // Act
         var result = PathEscaping.Escape(input);
 
@@ -34,6 +35,7 @@ public class PathEscapingTest
     [InlineData("trailing__", "trailing/")]
     public void Unescape_ReplacesDoubleUnderscoreWithSlash(string input, string expected)
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         // Act
         var result = PathEscaping.Unescape(input);
 
@@ -47,6 +49,7 @@ public class PathEscapingTest
     [InlineData("a/b/c/d/e")]
     public void RoundTrip_EscapeAndUnescape_ReturnsOriginal(string original)
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         // Act
         var escaped = PathEscaping.Escape(original);
         var unescaped = PathEscaping.Unescape(escaped);
@@ -58,6 +61,7 @@ public class PathEscapingTest
     [Fact(Timeout = 5000)]
     public void Escape_NullInput_ReturnsNull()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         // Act
         var result = PathEscaping.Escape(null!);
 
@@ -68,6 +72,7 @@ public class PathEscapingTest
     [Fact(Timeout = 5000)]
     public void Unescape_NullInput_ReturnsNull()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         // Act
         var result = PathEscaping.Unescape(null!);
 

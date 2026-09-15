@@ -115,7 +115,7 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
         // The residue the contract names — a repository this instance runs no publication of —
         // keeps today's behaviour: the configured branch. This is also the precondition that
         // makes every later boot a measurement: the partition holds the TIP's tree.
-        var first = await Installer.Completed.FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await();
+        var first = await Installer.Completed.FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(TestContext.Current.CancellationToken);
         first.Packages.Should().Equal(new[] { Package });
         first.Failed.Should().Be(0);
         (await Record())!.InstalledFromRef.Should().Be("main",
@@ -129,7 +129,7 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
 
         // ── Boot 2: the repository is sealed at an OLDER commit for this identity ────────────
         StageSeal(RepoFullName, SealedSha, complete: true);
-        var second = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await();
+        var second = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await(TestContext.Current.CancellationToken);
         second.Packages.Should().Equal(new[] { Package });
         second.Failed.Should().Be(0);
         second.ListingIncomplete.Should().BeFalse();
@@ -150,7 +150,7 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
         // removed would otherwise come back the moment a publication was half-written.
         var fetchesBeforeHold = repoClient.FetchedRefs.Count;
         StageSeal(RepoFullName, SealedSha, complete: false);
-        var third = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await();
+        var third = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await(TestContext.Current.CancellationToken);
         third.Packages.Should().BeEmpty("a held source contributes no candidates this boot");
         third.Failed.Should().Be(0, "a hold is not a failure — a retry cannot change a seal, the seal landing can");
         third.ListingIncomplete.Should().BeTrue(
@@ -162,7 +162,7 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
         // ── Boot 4: a seal of ANOTHER repository — not this lane's business ──────────────────
         StageSeal(OtherRepoFullName, SealedSha, complete: true);
         var fetchesBeforeFourth = repoClient.FetchedRefs.Count;
-        var fourth = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await();
+        var fourth = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120)).Await(TestContext.Current.CancellationToken);
         fourth.Packages.Should().Equal(new[] { Package });
         fourth.ListingIncomplete.Should().BeFalse();
         (await Record())!.InstalledFromRef.Should().Be("main",

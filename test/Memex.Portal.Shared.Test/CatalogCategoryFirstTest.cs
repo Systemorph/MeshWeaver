@@ -190,7 +190,7 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
 
         var frame = await Render(null)
             .Where(f => Leaves(f).Contains("categories"))
-            .FirstAsync().Timeout(RenderBudget).Await();
+            .FirstAsync().Timeout(RenderBudget).Await(TestContext.Current.CancellationToken);
 
         var leaves = Leaves(frame);
         leaves.Should().Contain(["cat-1", "cat-2", "cat-3", "all"]);
@@ -226,7 +226,7 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
         var insurance = Render($"{CatalogLayoutAreas.CatalogArea}?{CatalogLayoutAreas.CategoryParam}=insurance");
         var frame = await insurance
             .Where(f => f.Value.ToString().Contains(InstalledFragment, StringComparison.Ordinal))
-            .FirstAsync().Timeout(RenderBudget).Await();
+            .FirstAsync().Timeout(RenderBudget).Await(TestContext.Current.CancellationToken);
 
         Cards(frame).Should().Equal(["pkg-Q2ZHYW1tYQ"], "the sole card retains the identity of CfGamma");
         var json = frame.Value.ToString();
@@ -237,7 +237,7 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
 
         var education = await Render($"{CatalogLayoutAreas.CatalogArea}?{CatalogLayoutAreas.CategoryParam}=Education")
             .Where(f => Cards(f).Count == 2)
-            .FirstAsync().Timeout(RenderBudget).Await();
+            .FirstAsync().Timeout(RenderBudget).Await(TestContext.Current.CancellationToken);
         var educationJson = education.Value.ToString();
         educationJson.Should().Contain("Alpha Course").And.Contain("Beta Course")
             .And.NotContain("Gamma Cover", "the other category's card never renders here")
@@ -254,7 +254,7 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
 
         var frame = await Render(null)
             .Where(f => Leaves(f).Contains("empty"))
-            .FirstAsync().Timeout(RenderBudget).Await();
+            .FirstAsync().Timeout(RenderBudget).Await(TestContext.Current.CancellationToken);
 
         frame.Value.ToString().Should().Contain(expected);
         Leaves(frame).Should().NotContain("categories").And.NotContain("all");

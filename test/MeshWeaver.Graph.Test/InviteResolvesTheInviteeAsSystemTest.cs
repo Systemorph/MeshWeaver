@@ -98,17 +98,18 @@ public class InviteResolvesTheInviteeAsSystemTest(ITestOutputHelper output) : Mo
 
         using (access.ImpersonateAsSystem())
         {
-            await SeedInvitee(meshService);
-            await GrantAdmin(meshService, Inviter, Space);
+            await SeedInvitee(meshService, TestContext.Current.CancellationToken);
+            await GrantAdmin(meshService, Inviter, Space, TestContext.Current.CancellationToken);
         }
-        await AccountIsQueryable(meshService);
+        await AccountIsQueryable(meshService, TestContext.Current.CancellationToken);
 
         SpaceInviteOutcome outcome;
         using (access.SwitchAccessContext(InviterContext))
         {
             outcome = await NewService()
                 .Invite(Space, InviteeEmail, "Editor", pin: true, invitedBy: Inviter)
-                .FirstAsync().Timeout(TestTimeouts.CrossSilo);
+                .FirstAsync().Timeout(TestTimeouts.CrossSilo)
+                .Await(TestContext.Current.CancellationToken);
         }
 
         Assert.Equal(SpaceInviteOutcome.Granted, outcome);
@@ -117,10 +118,12 @@ public class InviteResolvesTheInviteeAsSystemTest(ITestOutputHelper output) : Mo
             .Where(n => n?.Content is AccessAssignment a
                         && a.AccessObject == Invitee
                         && a.Roles.Any(r => r.Role == "Editor" && !r.Denied))
-            .FirstAsync().Timeout(TestTimeouts.CrossSilo);
+            .FirstAsync().Timeout(TestTimeouts.CrossSilo)
+            .Await(TestContext.Current.CancellationToken);
         await Mesh.GetWorkspace().GetMeshNodeStream(Invitee)
             .Where(n => n?.Content is User u && u.PinnedPaths.Contains(Space))
-            .FirstAsync().Timeout(TestTimeouts.CrossSilo);
+            .FirstAsync().Timeout(TestTimeouts.CrossSilo)
+            .Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -141,17 +144,19 @@ public class InviteResolvesTheInviteeAsSystemTest(ITestOutputHelper output) : Mo
                 NodeType = "Group",
                 Name = "Team",
                 Content = new AccessObject { Description = "Test group" },
-            }).Should().Within(TestTimeouts.CrossSilo).Emit("the group must exist");
-            await SeedInvitee(meshService);
-            await GrantAdmin(meshService, Inviter, GroupPath);
+            }).Should().Within(TestTimeouts.CrossSilo)
+                .Emit("the group must exist", TestContext.Current.CancellationToken);
+            await SeedInvitee(meshService, TestContext.Current.CancellationToken);
+            await GrantAdmin(meshService, Inviter, GroupPath, TestContext.Current.CancellationToken);
         }
-        await AccountIsQueryable(meshService);
+        await AccountIsQueryable(meshService, TestContext.Current.CancellationToken);
 
         GroupInviteOutcome outcome;
         using (access.SwitchAccessContext(InviterContext))
         {
             outcome = await Mesh.InviteToGroup(GroupPath, InviteeEmail, invitedBy: Inviter)
-                .FirstAsync().Timeout(TestTimeouts.CrossSilo);
+                .FirstAsync().Timeout(TestTimeouts.CrossSilo)
+                .Await(TestContext.Current.CancellationToken);
         }
 
         Assert.Equal(GroupInviteOutcome.Added, outcome);
@@ -160,19 +165,22 @@ public class InviteResolvesTheInviteeAsSystemTest(ITestOutputHelper output) : Mo
             .Where(n => n?.Content is GroupMembership gm
                         && gm.Member == Invitee
                         && gm.Groups.Any(e => e.Group == GroupPath))
-            .FirstAsync().Timeout(TestTimeouts.CrossSilo);
+            .FirstAsync().Timeout(TestTimeouts.CrossSilo)
+            .Await(TestContext.Current.CancellationToken);
     }
 
-    private static async Task SeedInvitee(IMeshService meshService)
+    private static async Task SeedInvitee(IMeshService meshService, CancellationToken cancellationToken)
         => await meshService.CreateNode(new MeshNode(Invitee)
         {
             NodeType = "User",
             Name = "Bob",
             Content = new User { Email = InviteeEmail, FullName = "Bob" },
-        }).Should().Within(TestTimeouts.CrossSilo).Emit("the invitee's account must exist");
+        }).Should().Within(TestTimeouts.CrossSilo)
+            .Emit("the invitee's account must exist", cancellationToken);
 
     /// <summary>The inviter's ONLY grant: Admin on the node they invite to — no root, no auth.</summary>
-    private static async Task GrantAdmin(IMeshService meshService, string subject, string scope)
+    private static async Task GrantAdmin(IMeshService meshService, string subject, string scope,
+        CancellationToken cancellationToken)
         => await meshService.CreateNode(new MeshNode($"{subject}_Access", $"{scope}/_Access")
         {
             NodeType = AccessAssignmentNodeType.NodeType,
@@ -184,12 +192,14 @@ public class InviteResolvesTheInviteeAsSystemTest(ITestOutputHelper output) : Mo
                 DisplayName = subject,
                 Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }],
             },
-        }).Should().Within(TestTimeouts.CrossSilo).Emit("the inviter's grant must land");
+        }).Should().Within(TestTimeouts.CrossSilo)
+            .Emit("the inviter's grant must land", cancellationToken);
 
     /// <summary>Waits until the account is in the query index the service reads (as System, the
     /// service's own shape) so the invite decides on a settled snapshot.</summary>
-    private static async Task AccountIsQueryable(IMeshService meshService)
+    private static async Task AccountIsQueryable(IMeshService meshService, CancellationToken cancellationToken)
         => await meshService.Query<MeshNode>(SpaceInviteService.AccountLookup(InviteeEmail))
             .Where(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Id == Invitee))
-            .FirstAsync().Timeout(TestTimeouts.CrossSilo);
+            .FirstAsync().Timeout(TestTimeouts.CrossSilo)
+            .Await(cancellationToken);
 }

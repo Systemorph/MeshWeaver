@@ -90,7 +90,7 @@ public class RefusedContentSyncIsNotSuccessTest(ITestOutputHelper output) : Mono
         };
 
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"outcome = {result.Outcome}");
 
@@ -118,7 +118,7 @@ public class RefusedContentSyncIsNotSuccessTest(ITestOutputHelper output) : Mono
         };
 
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"outcome = {result.Outcome}");
 

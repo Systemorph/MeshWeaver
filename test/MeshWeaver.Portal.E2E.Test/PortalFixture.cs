@@ -176,7 +176,11 @@ public sealed class PortalFixture : IAsyncLifetime
     /// navigations in the context are logged in. DevLogin self-provisions any unknown <paramref name="personId"/>
     /// (EnableDevLogin is on for the e2e portal), so a second user (e.g. a space owner) is created on demand.
     /// </summary>
-    public async Task<IBrowserContext> NewAuthenticatedContextAsync(string? personId = null)
+    /// <param name="personId">The DevLogin user, or <c>null</c> for the default one.</param>
+    /// <param name="cancellationToken">Cancels the readiness retry loop — pass the test's
+    /// <c>TestContext.Current.CancellationToken</c> so a timed-out test stops waiting on the portal.</param>
+    public async Task<IBrowserContext> NewAuthenticatedContextAsync(string? personId = null,
+        CancellationToken cancellationToken = default)
     {
         var person = string.IsNullOrWhiteSpace(personId) ? User : personId!;
         var context = await _browser!.NewContextAsync(new BrowserNewContextOptions
@@ -201,7 +205,7 @@ public sealed class PortalFixture : IAsyncLifetime
             });
             if ((int)response.Status < 500)
                 break;
-            await Task.Delay(2000);
+            await Task.Delay(2000, cancellationToken);
         }
         if (response is null || (int)response.Status >= 400)
             throw new InvalidOperationException(
@@ -292,14 +296,14 @@ public sealed class PortalFixture : IAsyncLifetime
 
     /// <summary>Polls <see cref="CanReadNodeAsync"/> until it returns true or the timeout elapses.</summary>
     public async Task<bool> WaitUntilReadableAsync(IBrowserContext context, string token, string path,
-        TimeSpan timeout)
+        TimeSpan timeout, CancellationToken cancellationToken = default)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             if (await CanReadNodeAsync(context, token, path))
                 return true;
-            await Task.Delay(500);
+            await Task.Delay(500, cancellationToken);
         }
         return false;
     }
@@ -388,8 +392,11 @@ public sealed class PortalFixture : IAsyncLifetime
     /// serial (one collection), so sharing is race-free; pages are still per-test. Never dispose it
     /// in a test — the fixture owns it.
     /// </summary>
-    public async Task<IBrowserContext> SharedAuthenticatedContextAsync()
-        => _sharedContext ??= await NewAuthenticatedContextAsync();
+    /// <param name="cancellationToken">Cancels the login's readiness retry loop (the shared context
+    /// is only created once; a later caller finds it made). Pass the test's
+    /// <c>TestContext.Current.CancellationToken</c>.</param>
+    public async Task<IBrowserContext> SharedAuthenticatedContextAsync(CancellationToken cancellationToken = default)
+        => _sharedContext ??= await NewAuthenticatedContextAsync(cancellationToken: cancellationToken);
 
     private bool _kernelWarmed;
 

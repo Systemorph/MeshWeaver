@@ -90,7 +90,9 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public async Task ColdStart_CompileViaGetCompilationPathRequest_Succeeds()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(50.Seconds());
+        var ct = deadline.Token;
         var client = GetClient($"compile-{Guid.NewGuid():N}");
 
         // Use a unique NodeType id per run so the disk-cache hash never matches a
@@ -154,7 +156,9 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public async Task ColdStart_InvalidSource_ReturnsErrorWithoutDeadlock()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(50.Seconds());
+        var ct = deadline.Token;
         var client = GetClient($"compile-fail-{Guid.NewGuid():N}");
 
         var typeId = $"OrleansCompileBroken{Guid.NewGuid():N}";
@@ -223,7 +227,9 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
     [Fact(Timeout = 180_000)]
     public async Task Instance_OfDynamicNodeType_ActivatesAndAnswers()
     {
-        var ct = new CancellationTokenSource(80.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(80.Seconds());
+        var ct = deadline.Token;
         var client = GetClient($"instance-{Guid.NewGuid():N}");
 
         var typeId = $"OrleansInstanceType{Guid.NewGuid():N}";
@@ -273,7 +279,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
         await SiloMeshHub.GetWorkspace().GetMeshNodeStream(typePath)
             .Should().Within(TimeSpan.FromSeconds(60))
             .Match(n => n?.Content is NodeTypeDefinition def
-                        && def.CompilationStatus == CompilationStatus.Ok);
+                        && def.CompilationStatus == CompilationStatus.Ok, cancellationToken: TestContext.Current.CancellationToken);
 
         // Create an INSTANCE of the dynamic type. NodeType=<typePath> means the
         // EnrichWithNodeType slow path fires — the static lookup misses, the
@@ -340,7 +346,9 @@ public class OrleansCrossSiloCompilationTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public async Task CompiledArtifact_IsVisibleFromBothSilos()
     {
-        var ct = new CancellationTokenSource(80.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(80.Seconds());
+        var ct = deadline.Token;
         var client = GetClient($"xsilo-{Guid.NewGuid():N}");
 
         Cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2,

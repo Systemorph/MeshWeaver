@@ -50,7 +50,7 @@ public class SidePanelChatMultiMessageTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         // Seed the per-user composer so the side-panel chat has a harness/model selection
         // (a fresh monolith has none — same seed HomeComposerVerifyTest uses), then PATCH it onto

@@ -162,6 +162,7 @@ public class PromiseCacheFaultEvictionTest
     [Fact(Timeout = 30000)]
     public void EvictionIsPairExact_AndNeverDropsAHealthyReplacement()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var cache = new PromiseCache<string, string>();
         var first = new ReplaySubject<string>();
         var second = new ReplaySubject<string>();
@@ -208,6 +209,7 @@ public class PromiseCacheFaultEvictionTest
     [Fact(Timeout = 30000)]
     public void AnInFlightPromise_IsSharedByConcurrentCallers_AndNotEvicted()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var cache = new PromiseCache<string, string>();
         var gate = new ReplaySubject<string>();
         var builds = 0;
@@ -237,6 +239,7 @@ public class PromiseCacheFaultEvictionTest
     [Fact(Timeout = 30000)]
     public void ConcurrentFirstCallers_BuildTheEagerFactoryExactlyOnce()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var cache = new PromiseCache<string, string>();
         var builds = 0;
         const int callers = 16;

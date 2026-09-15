@@ -55,6 +55,7 @@ public class BundleCarriesTheUpstreamTest(ITestOutputHelper output)
     [Fact(Timeout = 300_000)]
     public void TheBaseBundle_CarriesEveryFileRepo2NeedsToInstallIt()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var repo1 = TempDirectory("mw-upstream-repo1");
         var bakeDir = TempDirectory("mw-upstream-bake");
         try
@@ -120,6 +121,7 @@ public class BundleCarriesTheUpstreamTest(ITestOutputHelper output)
     [Fact(Timeout = 300_000)]
     public void Repo2_CanReconstructTheBasePackage_FromRepo1sBundleAlone()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var repo1 = TempDirectory("mw-upstream-src");
         var bake1 = TempDirectory("mw-upstream-bake1");
         var repo2 = TempDirectory("mw-upstream-repo2");
