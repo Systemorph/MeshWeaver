@@ -222,19 +222,28 @@ public class SelfUpdateHandover
 
     /// <summary>
     /// The route the settings admit: <see cref="Route.Post"/> needs a record id, an inbox URL and
-    /// the signing secret; <see cref="Route.Local"/> needs a record id, the target listed on this
-    /// instance, the target's DECLARED <c>SecretConfigKey</c> and that key's secret present — the
-    /// key is required by the route itself, not only by the reader, so a caller that assembles
-    /// <see cref="Settings"/> by hand cannot reach local delivery without one. A POST is preferred
-    /// when both are possible — an instance that declares a control inbox is a consumer, whatever
-    /// it also lists. Pure.
+    /// the signing secret; <see cref="Route.Local"/> needs a record id, NO control inbox declared,
+    /// the target listed on this instance, the target's DECLARED <c>SecretConfigKey</c> and that
+    /// key's secret present — the key is required by the route itself, not only by the reader, so a
+    /// caller that assembles <see cref="Settings"/> by hand cannot reach local delivery without one.
+    ///
+    /// <para>🚨 <b>A declared control inbox is EXCLUSIVE</b> — an instance that names one is a
+    /// CONSUMER, whatever it also lists, so the only routes it admits are <see cref="Route.Post"/>
+    /// (secret present) and <see cref="Route.None"/> (absent). It must never fall through to
+    /// <see cref="Route.Local"/>: <c>build</c> derives its inbox URL from <c>Hosting:ReportTo</c>,
+    /// maps no <see cref="SecretKey"/>, and legitimately LISTS <see cref="InboxTarget"/> because it
+    /// owns the fleet's build queue. The fall-through stored the release in build's OWN inbox, whose
+    /// watcher classifies a <see cref="ReleaseEvent"/> as a non-build event and DELETES it — while
+    /// the boot line reported <c>apply=control-lane</c> with a verified delivery and
+    /// <see cref="Missing"/> named nothing. A control plane silently talking to itself, read off a
+    /// step that could not fail. A missing secret is a REFUSAL that names the key (#4098). Pure.</para>
     /// </summary>
     public static Route RouteFor(Settings settings)
     {
         if (settings.Deployment.Length == 0)
             return Route.None;
-        if (settings.Url is { Length: > 0 } && settings.SecretPresent)
-            return Route.Post;
+        if (settings.Url is { Length: > 0 })
+            return settings.SecretPresent ? Route.Post : Route.None;
         if (settings.LocalTargetListed && settings.LocalSecretKey is { Length: > 0 } && settings.LocalSecretPresent)
             return Route.Local;
         return Route.None;
@@ -250,7 +259,9 @@ public class SelfUpdateHandover
             return null;
         if (settings.Deployment.Length == 0)
             return $"no control inbox: {DeploymentKey} is not set, so no record on the control instance could be named";
-        if (settings.Url is not null && !settings.SecretPresent)
+        // The same "a URL is declared" test RouteFor takes, so the sentence blames the key the
+        // route actually refused on — never the URL keys for an instance that declared neither.
+        if (settings.Url is { Length: > 0 } && !settings.SecretPresent)
             return settings.UrlFrom == UrlSource.Derived
                 ? $"no control inbox: {ReportToKey} names the control instance but {SecretKey} is empty, so nothing could be signed"
                 : $"no control inbox: {UrlKey} is set but {SecretKey} is empty, so nothing could be signed";
@@ -259,7 +270,7 @@ public class SelfUpdateHandover
                 + "so this inbox would store the event unverified";
         if (settings.LocalTargetListed && !settings.LocalSecretPresent)
             return $"no control inbox: {InboxTarget} is a listed webhook target but its {settings.LocalSecretKey} is empty, so nothing could be signed";
-        if (settings.Url is null)
+        if (settings.Url is not { Length: > 0 })
             return $"no control inbox: neither {UrlKey} nor {ReportToKey} names the control instance";
         return "no control inbox is configured";
     }
