@@ -31,8 +31,14 @@ The control-portal URL is validated BEFORE anything is signed (`--check-url`): h
 host (`control-webhook-host`, default memex.systemorph.com), a path under /api/hooks/. A signed
 HMAC must never travel to whatever non-empty string a caller put in a variable.
 
-THE FOUR RULES, each covered by --self-test
+THE FIVE RULES, each covered by --self-test
 --------------------------------------------
+  * two or more matching OPEN issues     → FOLD every newer one into the oldest first (its entries
+                                           appended there, a comment on each side, the newer one
+                                           closed as not planned), then apply the rules below. The
+                                           label listing is not a transaction: it once answered
+                                           "0 owned" beside an open ledger and a second one was
+                                           filed (#4431 beside #4413, 2026-09-15). See `fold_duplicates`.
   * `failure` + no matching issue        → CREATE one (label + exact title), first ledger entry.
   * `failure` + a matching OPEN issue    → APPEND an entry to its body. Never a second open issue.
   * `failure` + a matching issue CLOSED
@@ -464,6 +470,57 @@ def _owned(gh, label: str, title: str, number: int) -> Issue:
               f"title or the `{LEDGER_MARK}` mark. A mechanism may only close an issue it opened; nothing written.")
 
 
+def entries_of(body: str) -> list[str]:
+    """Every ledger entry in `body`, oldest first, each starting with ENTRY_HEAD — the inverse of
+    `append_entry`'s layout (the head, the mark, `## Ledger`, an optional trim note, the entries)."""
+    _, mark, tail = (body or "").partition(LEDGER_MARK)
+    if not mark:
+        return []
+    parts = tail.split("\n" + ENTRY_HEAD)
+    lead, rest = parts[0], parts[1:]
+    if lead.strip().startswith(ENTRY_HEAD):
+        rest = [lead.strip()[len(ENTRY_HEAD):]] + rest
+    return [ENTRY_HEAD + e.strip() for e in rest if e.strip()]
+
+
+def fold_duplicates(gh, matching: list[Issue], title: str, label: str) -> tuple[list[Issue], list[int]]:
+    """🚨 ONE open ledger, always — even after the listing lied once.
+
+    `decide` never files a second open issue while it can SEE the first, but it can only see what
+    the label listing returns, and that listing is not a transaction: on 2026-09-15 at 14:32Z the
+    combo-verify ledger read "0 owned issue(s), 0 foreign" for `ci-combo-unverified` while #4413
+    had carried that label, the exact title and the mark since 10:31Z (never closed), and filed
+    #4431 beside it; the next run found #4413 again. A retry would only make that rarer. Instead
+    the duplicate cannot SURVIVE: whenever this ledger owns more than one OPEN issue, every newer
+    one is folded into the oldest — its entries appended there, a comment on each side naming the
+    other, the newer one closed as not planned — before the verdict is taken. Both issues are
+    re-proven ours at the moment of each write, like every other write here.
+
+    Returns (the owned issues as they stand after folding, the numbers folded away)."""
+    open_ones = sorted((i for i in matching if i.state == "open"), key=lambda i: i.number)
+    if len(open_ones) < 2:
+        return matching, []
+    keep = open_ones[0].number
+    folded: list[int] = []
+    for dup in open_ones[1:]:
+        current_dup = _owned(gh, label, title, dup.number)
+        current_keep = _owned(gh, label, title, keep)
+        body = current_keep.body
+        moved = entries_of(current_dup.body)
+        for entry in moved:
+            body = append_entry(body, entry)
+        gh.update_issue(keep, body=body)
+        gh.comment(keep, f"Folded in from #{dup.number}, a second open ledger for this same check "
+                         f"(the label listing once returned no issue while this one was open). "
+                         f"Its {len(moved)} entr{'y' if len(moved) == 1 else 'ies'} now sit(s) in the ledger above.")
+        gh.comment(dup.number, f"Duplicate of #{keep}, the open ledger for this same check — its entries "
+                               f"are folded in there. Closing: one outage is one story.")
+        gh.update_issue(dup.number, state="closed", state_reason="not_planned")
+        folded.append(dup.number)
+    mine, _ = owned_issues(gh, label, title)
+    return mine, folded
+
+
 def apply(gh, run: Run, verdict: Verdict, title: str, label: str, now: datetime,
           reopen_window_days: int) -> tuple[Issue | None, str | None]:
     """Perform the verdict. Returns (the issue touched, the event body to POST or None)."""
@@ -562,6 +619,9 @@ def main(argv: list[str]) -> int:
         for f in foreign:
             print(f"leaving #{f.number} alone ({f.state}, {f.title!r}): it carries `{a.label}` but not this ledger's "
                   f"title and `{LEDGER_MARK}` mark, so this mechanism did not open it and will not touch it")
+        matching, folded = fold_duplicates(gh, matching, a.title, a.label)
+        for n in folded:
+            print(f"FOLDED  #{n} — a second open ledger for this check; its entries now sit in the oldest open one")
         verdict = decide(a.outcome, matching, now, a.reopen_window_days)
         print(f"{verdict.action.upper():7} {verdict.reason} (label `{a.label}`, title {a.title!r}, "
               f"{len(matching)} owned issue(s), {len(foreign)} foreign)")
@@ -849,12 +909,45 @@ def self_test() -> int:
     except Red:
         check("a non-boolean neverStarted is refused", True)
 
+    # 13. a second OPEN ledger (the listing once returned nothing) is folded into the oldest
+    def owned_open(n, entry_run):
+        return Issue(n, title, "open", append_entry(new_body("o/r", 7), ledger_entry(entry_run, now)),
+                     f"https://github.com/o/r/issues/{n}", (label,), None, BOT_LOGIN, BOT_TYPE)
+    foreign13 = Issue(300, title, "open", new_body("o/r", 7), "https://github.com/o/r/issues/300", (label,),
+                      None, "someone", "User")
+    gh13 = _Fake([owned_open(201, run("failure", [job])), owned_open(202, run("failure", [job])), foreign13])
+    m13, folded13 = fold_duplicates(gh13, owned_issues(gh13, label, title)[0], title, label)
+    v13 = decide("failure", m13, now, 7)
+    issue13, _ = apply(gh13, run("failure", [job]), v13, title, label, now, 7)
+    check("two open ledgers -> the newer is folded into the oldest and closed",
+          folded13 == [202] and v13.action == "append" and v13.issue == 201
+          and gh13.issues[202].state == "closed" and gh13.issues[201].state == "open")
+    check("the oldest keeps its entry, gains the folded one AND this run's",
+          len(entries_of(gh13.issues[201].body)) == 3 and issue13 is not None and issue13.number == 201)
+    check("each side of a fold names the other",
+          any(n == 201 and "#202" in b for n, b in gh13.comments) and any(n == 202 and "#201" in b for n, b in gh13.comments))
+    check("a foreign same-label issue is never folded or touched",
+          gh13.issues[300].state == "open" and not any(n == 300 for n, _ in gh13.comments))
+
+    # 14. green with two open ledgers -> fold, then close the oldest: nothing stays open
+    gh14 = _Fake([owned_open(401, run("failure", [job])), owned_open(402, run("failure", [job]))])
+    m14, folded14 = fold_duplicates(gh14, owned_issues(gh14, label, title)[0], title, label)
+    apply(gh14, run("success"), decide("success", m14, now, 7), title, label, now, 7)
+    check("green with two open ledgers closes both (one folded, one healed)",
+          folded14 == [402] and gh14.issues[401].state == "closed" and gh14.issues[402].state == "closed")
+
+    # 15. one open ledger -> the fold is a no-op (no write at all)
+    gh15 = _Fake([owned_open(501, run("failure", [job]))])
+    before = gh15.writes
+    m15, folded15 = fold_duplicates(gh15, owned_issues(gh15, label, title)[0], title, label)
+    check("one open ledger -> nothing folded, nothing written", folded15 == [] and gh15.writes == before)
+
     if fails:
         print("::error title=ci-failure-ledger self-test::" + "; ".join(fails), file=sys.stderr)
         return 1
     print("✓ ci-failure-ledger self-test: create / append / reopen-recent / create-after-old / close-with-comment / "
           "noop-when-green / refuse-malformed / cd-ci-failure-untouched / unmarked-ci-main-red-untouched / human-authored-is-foreign / "
-          "never-labelled-ci-failure / inbox-url-validated / bounded-ledger / jobs-listed / never-started-said — every rule fires and stays silent as designed")
+          "never-labelled-ci-failure / inbox-url-validated / bounded-ledger / jobs-listed / never-started-said / duplicate-folded — every rule fires and stays silent as designed")
     return 0
 
 
