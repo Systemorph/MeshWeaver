@@ -77,16 +77,39 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
     public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // Read the centralized partition-ownership flag off the NodeType's definition.
-        // FindStaticNode resolves the type definition node (config-time AddMeshNodes +
-        // IStaticNodeProvider); its Content is the NodeTypeDefinition.
         if (string.IsNullOrEmpty(context.Node.NodeType))
             return Observable.Return(NodeValidationResult.Valid());
 
-        var def = _hub.ServiceProvider.FindStaticNode(context.Node.NodeType)?.Content
-            as NodeTypeDefinition;
-        if (def is not { OwnsPartition: true })
+        // A type registered in src/ answers from the static registry, synchronously — and for it
+        // the nested-create refusal inside Provision still applies to every create.
+        if (_hub.ServiceProvider.FindStaticNode(context.Node.NodeType) is { } staticType)
+            return staticType.ContentAs<NodeTypeDefinition>(_hub.JsonSerializerOptions) is { OwnsPartition: true }
+                ? Provision(context)
+                : Observable.Return(NodeValidationResult.Valid());
+
+        // 🚨 A type declared in MESH CONTENT (Crm/Client) is invisible to FindStaticNode, and asking
+        // only the static registry is why its top-level create was never provisioned. Only a
+        // TOP-LEVEL create can root a partition, so the declaration is read (one anchored query)
+        // only then — nested creates of in-mesh types stay free of the read.
+        if (!string.IsNullOrEmpty(context.Node.Namespace))
             return Observable.Return(NodeValidationResult.Valid());
 
+        return PartitionOwningTypes.OwnsPartition(_hub, context.Node.NodeType)
+            .SelectMany(owns => owns switch
+            {
+                true => Provision(context),
+                false => Observable.Return(NodeValidationResult.Valid()),
+                null => Observable.Return(PartitionOwningTypes.Undetermined(context)),
+            });
+    }
+
+    /// <summary>
+    /// Provisions the partition of a create whose type OWNS its partition: refuses a nested
+    /// instance, validates the partition id, then provisions every provider's backing store
+    /// before the root write.
+    /// </summary>
+    private IObservable<NodeValidationResult> Provision(NodeValidationContext context)
+    {
         // A partition-owning instance is a partition root → must be top-level.
         if (!string.IsNullOrEmpty(context.Node.Namespace))
             return Observable.Return(NodeValidationResult.Invalid(

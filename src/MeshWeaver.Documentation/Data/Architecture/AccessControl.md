@@ -1397,7 +1397,26 @@ Before it consults any permission, `Validate` applies two synchronous short-circ
 1. **System bypass** — `userId == WellKnownUsers.System` is always valid.
 2. **Own-scope shortcut** — a node whose `MainNode` equals the caller, or whose path is `{userId}` / `{userId}/…`, is valid unconditionally. Every user owns the partition named after their userId, so their own home never walks the access-rule chain.
 
-Otherwise it checks the hub rule, then any registered per-type `INodeTypeAccessRule`, then `hub.CheckPermission` for the operation's required permission. `RlsNodeValidator` is registered by `AddRowLevelSecurity()` alongside `PartitionWriteGuardValidator`, `OwnsPartitionProvisioningValidator` and `PartitionRootDeletionGuard` — validators **AND**-compose, so a rejection by any one of them wins even when RLS would grant.
+Otherwise it checks the hub rule, then any registered per-type `INodeTypeAccessRule`, then the **partition-owner create rule** (below), then `hub.CheckPermission` for the operation's required permission.
+
+### Creating a partition — any signed-in user, for EVERY partition-owning type
+
+A create is decided on its PARENT, and a top-level node has none: the standard check falls back to the node's own path, where no grant can exist before the node does. So a top-level create needs a rule. `SpaceAccessRule` has had one for a Space since the Organization→Space migration — *any authenticated identity may create a top-level Space, and becomes its Admin* — but it was the ONLY one, and every other check on the create path asked the **static** registry (`FindStaticNode`) whether a type owns its partition. A type declared in mesh content — `Crm/Client`, `ownsPartition: true` in its package's `NodeTypeDefinition`, compiled live — was therefore not partition-owning to anybody:
+
+| Check | What it did for `Crm/Client` | Now |
+|---|---|---|
+| `RlsNodeValidator` | no per-type rule → `CheckPermission` on the node itself → *"Access denied: Create permission required"* | `CheckPartitionOwnerCreate`: a TOP-LEVEL create of an owning type by an authenticated identity is allowed |
+| `PartitionWriteGuardValidator` rule 3 | type not static → *"must be a Space"* | reads the declaration; an owning type's top-level create is the explicit partition-creation path, exempt from rule 2's existence probe |
+| `OwnsPartitionProvisioningValidator` | type not static → schema never provisioned | reads the declaration and provisions before the root write |
+| post-creation | no handler matched `Crm/Client` → no owner, no `Admin/Partition/{id}` | `InMeshPartitionOwnerPostCreationHandler` — the creator gets Admin and the partition definition is written, as for a Space |
+
+Measured on memex.systemorph.com, 2026-09-15: nobody — platform admins included — could create a new CRM client; the only way in was to create a Space and retype its root. The declaration is now read wherever it lives, through ONE resolver (`PartitionOwningTypes.OwnsPartition`): a static type answers synchronously with no read; an in-mesh type costs one anchored, unfiltered query of its definition, and only for a TOP-LEVEL create — the only create that can root a partition. A definition that does not answer is reported as an availability failure (`Unavailable`), never as "does not own a partition".
+
+What it grants is what any signed-in user already had — creating a partition, with themselves as its Admin. A non-owning type is still refused at the root. The logged-out caller (who arrives NAMED `Anonymous`) is refused OUTRIGHT, never handed to the permission fold where an `Anonymous` grant could decide it — and the **own-scope shortcut** ("every user owns the partition named after their id") now requires an authenticated identity: it used to accept any non-empty id, so an anonymous caller creating a root named `Anonymous` bypassed every rule. Space and User keep their own rules and handlers; the in-mesh handler matches STRUCTURALLY (a partition root whose type is not registered in `src/`), the creation-side twin of the [partition teardown](/Doc/Architecture/PartitionTeardown), and for a non-System creator it FAILS the create unless ownership is positively re-established — a quiet skip would return an ownerless partition. Pinned by `InMeshPartitionOwnerTopLevelCreateTest`.
+
+**Read the declaration the CQRS way.** The definition is one known path the create GATES on, so its content comes from `GetMeshNodeStream` (authoritative), after a `namespace:` listing of its parent has established that it exists — never from a query's index, and never with the caller's type interpolated into a `path:` term (a wildcard there could select another type's definition). The type must be a literal path.
+
+**Still open (#4449):** a NESTED instance of an in-mesh owning type is not refused (the static-type refusal never covered in-mesh types — unchanged here); a bulk `CreateNodesRequest` does not compensate a failed owner grant (the same gap Space has); the declaration is resolved once per check rather than once per create — every disagreement fails closed. `RlsNodeValidator` is registered by `AddRowLevelSecurity()` alongside `PartitionWriteGuardValidator`, `OwnsPartitionProvisioningValidator` and `PartitionRootDeletionGuard` — validators **AND**-compose, so a rejection by any one of them wins even when RLS would grant.
 
 Node *reads* are validated through `MeshCatalog.ValidateReadAsync`, which runs the same validators; query *listing* is filtered separately, in SQL, by `user_effective_permissions` (see "PostgreSQL integration").
 
