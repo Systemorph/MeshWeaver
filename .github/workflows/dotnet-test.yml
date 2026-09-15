@@ -2082,6 +2082,13 @@ jobs:
     - name: "A gate shard refuses a platform volume it cannot trust (self-test)"
       run: bash .github/scripts/resolve-gate-platform.sh --self-test
 
+    # …and the lane hands that script the set NAME a pinned caller already resolved. Without it a
+    # shard cannot wait out a set the runner volume has not installed YET, and refuses it at once —
+    # which every satellite run hits when it resolves a set sealed minutes earlier (Crm#108, 09-15).
+    # Reads node-repo-gate.yml and EXECUTES its plan/shard steps on the pinned path.
+    - name: "The gate lane carries a pinned caller's set name to the volume lookup"
+      run: python3 .github/scripts/test-gate-lane-forwards-the-callers-set.py
+
     # The platform resolver the node-repo gate and publish-bake lanes run when a caller pins no
     # digest (2026-09-12: "for compile always find latest package of platform and plugins") —
     # fetched by the lanes at their scripts-ref. Its 43 offline cases prove the seal is the trio,
