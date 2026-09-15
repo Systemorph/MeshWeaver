@@ -17,7 +17,9 @@ That list is a pin, and the platform has a rule against pins for a reason that t
 exactly: it fails in the direction nobody can see. An installation added to the fleet is simply
 absent from it, so the lane goes green having verified everyone it was told about and nobody it was
 not. Measured against the live fleet, the value that variable was specified with named **two**
-portals. The fleet's deployment overlays declare **three** live ones.
+portals. The fleet's deployment overlays declare **four** live ones, across three repositories —
+and two of those four carry the same name, which the derivation now refuses rather than papers over
+(see below).
 
 ## What changed
 
@@ -39,6 +41,15 @@ installation with nowhere to reach it, a stale exemption, or a fleet that genuin
 portals. It also drives its own extractor over two known overlays on every run, so "the reader
 stopped matching" can never arrive wearing "the fleet has no installations". Three layers refuse a
 zero, and every one of them is exercised on every pull request.
+
+## Two portals, one name
+
+A portal's identity is qualified by the repository that declares it, so two deployment repositories
+may each declare an installation called `memex` — and two of them do. That is correct where the
+fleet asks each portal what it is running. It is not correct here: the per-instance credentials are
+keyed by the name, so the two would be handed the same key and one's verdict would be recorded on
+the other. The derivation refuses, naming both declaring files, and the fix is a decision — rename
+one, or key the credentials by the qualified name — rather than something a workflow can paper over.
 
 ## What is still owed
 
