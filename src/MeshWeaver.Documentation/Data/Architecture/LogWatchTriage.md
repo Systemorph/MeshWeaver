@@ -218,8 +218,11 @@ Measured on [#1134](https://github.com/Systemorph/MeshWeaver/issues/1134), finge
 `9ca334c1e8dad9ca` (category `Polly`). The issue was filed on timeout events that could not be
 attributed to any call path — `Source: '-standard//Standard-AttemptTimeout'`, the empty client name
 of the ONE shared `ConfigureHttpClientDefaults` pipeline. #1133/#1137 fixed that by re-registering
-the registry clients by name (`ServiceDefaults.AddServiceDefaults`), and all ten retained `samples[]`
-have read `plugin-registry-standard//…` or `plugin-registry-bundles-standard//…` ever since. What
+the registry clients by name (`ServiceDefaults.AddServiceDefaults`). `samples[]` is a ROLLING window
+— it holds the last `MaxSamples` lines, not the history — so it can say what the events carry NOW,
+never that every occurrence since a fix was attributed: read 2026-09-15, all ten name a pipeline
+(`plugin-registry-standard//…`, one `plugin-registry-bundles-standard//…`) and none carries the
+unattributed form. What
 keeps folding onto the fingerprint is the registry LATENCY *behind* those timeouts —
 [#4222](https://github.com/Systemorph/MeshWeaver/issues/4222)'s subject, not #1134's, because the
 normalizer masks the `Source:` value and every Polly `OnTimeout` on every pipeline shares one
@@ -232,7 +235,7 @@ it both times within hours. Three sessions re-derived that before anyone changed
 |---|---|
 | `NextRequest`: `{ IssueNumber: not null } => Comment` | the link is read from the LIVE node on every fold, never cached — a new value takes effect on the next recurrence |
 | `ClaimRequest`: a `File` on a ticketed incident is granted as `Comment` | repointing can never mint a second issue, whatever the status says |
-| `LogIncidentFiler.Comment` → `Reopen` | reads the TARGET issue and reopens it when closed, so the traffic arrives as a reopen of the ticket that owns it — the notification you actually want |
+| `LogIncidentFiler.Comment` → `Reopen` | reads the TARGET issue and reopens it when closed **while `ReopenOnRecurrence` is on** (the default), so the traffic arrives as a reopen of the ticket that owns it — the notification you actually want. With the option off the recurrence still comments on the new target; it simply does not reopen it, so the redirect lands either way |
 | `OccurrencesAtLastComment` / `LastCommentedAt` are not touched | the first comment on the new target continues the count instead of restarting it |
 
 ```jsonc
