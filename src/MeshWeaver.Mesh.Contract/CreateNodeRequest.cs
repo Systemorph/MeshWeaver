@@ -72,6 +72,29 @@ public record CreateNodeResponse(MeshNode? Node)
     public NodeCreationRejectionReason? RejectionReason { get; init; }
 
     /// <summary>
+    /// 🚨 Structured failure payload for the CREATE leg — the exact counterpart of
+    /// <see cref="PatchDataResponse.NodeError"/> on the UPDATE leg, added for #3510.
+    ///
+    /// <para><b>Why <see cref="RejectionReason"/> could not carry it.</b>
+    /// <see cref="NodeCreationRejectionReason"/> says why a create was REFUSED — a verdict about
+    /// the request. <see cref="MeshNodeErrorCode.OwnerDisposing"/> says something different in
+    /// kind: the activation that was handling the create went away, so there is no verdict about
+    /// the request at all and a retry against the fresh activation is meaningful. That distinction
+    /// is the whole content of the code, and the update leg has carried it since #3499; folding it
+    /// into a rejection reason would have told the caller its request had been judged.</para>
+    ///
+    /// <para><b>Populated alongside <see cref="Error"/>, never instead of it</b>, exactly as on the
+    /// patch leg: <see cref="Error"/> is filled from <see cref="MeshNodeError.Message"/> so a
+    /// string-only caller keeps working, while a caller that can act on the code switches on it
+    /// (the upsert's create arm re-drives an <see cref="MeshNodeErrorCode.OwnerDisposing"/> against
+    /// the fresh activation, the way <c>MeshNodeStreamHandle</c> re-enqueues a patch).</para>
+    ///
+    /// <para><c>null</c> on success and on every ordinary refusal — a create that was judged has a
+    /// <see cref="RejectionReason"/>, not a node error.</para>
+    /// </summary>
+    public MeshNodeError? NodeError { get; init; }
+
+    /// <summary>
     /// Creates a successful response with the created node.
     /// </summary>
     public static CreateNodeResponse Ok(MeshNode node) => new(node);

@@ -462,7 +462,7 @@ subscriber cannot fail to answer:
 | no-op probe — `SkipNoOpIfAuthorized` | `UPSERT_READ existing → no-op probe` | falls through to the write path. `GetEffectivePermissions` terminating without emitting is a documented outcome — half of what `HubPermissionExtensions` classifies as `Undetermined`, *"because it FAULTED, or because it terminated without ever emitting (#2742)"* — and against a two-arm `Subscribe` it posted nothing at all |
 | NodeType gate — `ApplyUpdateViaStream` | — | refuses, and says the probe produced no answer rather than "not registered" — a verdict and a non-verdict are not the same answer |
 | update — `WriteThroughStream` | `UPSERT_WRITE_THROUGH_STREAM` | posts a refusal naming the unconfirmed write. Disposal is separately covered: `RegisterOwnerDisposingNack` mints `OwnerDisposing`, the writer re-enqueues against the fresh activation, the caller is answered `success=True` (`UpsertAnswersWhenTheOwnerGoesAwayTest`) |
-| create — `DispatchInnerCreate` | `UPSERT_READ absent → create` | posts a refusal (`UPSERT_CREATE_COMPLETED_EMPTY`), and an `InnerCreateVerdictBound` bounds the no-answer case |
+| create — `DispatchInnerCreate` | `UPSERT_READ absent → create` | posts a refusal (`UPSERT_CREATE_COMPLETED_EMPTY`), and an `InnerCreateVerdictBound` bounds the no-answer case. Disposal is now covered the way the update leg's is: `RegisterCreateOwnerDisposingNack` mints `OwnerDisposing`, and this leg re-drives against the fresh activation (`UPSERT_CREATE_OWNER_NACK_REENQUEUE`) — see below |
 
 🚨 **None of this bounds a source that NEVER terminates.** `DetachedReplyOutcome.Of` is about the
 three terminations Rx *delivers*; the fourth outcome — never emits, never completes, the section
@@ -556,6 +556,68 @@ Measured on core CD 7950: the create leg's trail ends at `HANDLER_EXIT state=Pro
 follows, and the run contains **zero `[CreateOrUpdate]` lines of any kind** — so neither terminal arm
 ever ran. Silence, not a fault. The install then ran out its ten-minute bound with no name for what
 happened.
+
+### The create leg's OWNER-SIDE disposal NACK — the asymmetry, and closing it
+
+A bound is not the same answer as a verdict, and for two years the two legs of one verb gave
+different ones for the identical event.
+
+| | UPDATE leg | CREATE leg, before | CREATE leg, now |
+|---|---|---|---|
+| owner disposed under the in-flight write | `RegisterOwnerDisposingNack` mints `OwnerDisposing` at the ShutDown phase | nothing — no `RegisterForDisposal` at all | `RegisterCreateOwnerDisposingNack` mints `OwnerDisposing` |
+| what the caller learns | "provably not applied; retry the fresh activation" | after `InnerCreateVerdictBound` (36 s): *"the outcome is unknown"* | "this activation went away owing the verdict; re-drive it" |
+| what the caller DOES | re-enqueues, capped at `MaxOwnerDisposingReenqueues`, and **succeeds** | **fails** | re-drives, capped at the same constant, and succeeds |
+
+`HandleCreateNodeRequest` returns `Processed()` and owes its reply from a detached chain whose legs
+reach the partition bootstrap, the validators, storage and the post-creation handlers. A hub disposed
+under any of those produces Rx's **fourth** outcome on that leg — never emits, never completes, never
+faults — which is exactly what the `onCompleted` backstop cannot see. #3603's
+`InnerCreateVerdictBound` converted the resulting ten-minute silence into a *named refusal*, which is
+strictly better than a hang and still a failure: a refusal ends the install, a NACK re-drives it.
+
+Three properties are load-bearing, and each is inherited from the update leg's version:
+
+1. **Eager DI capture.** The parent hub and the logger are resolved on the handler's TURN and closed
+   over. A resolve from inside a ShutDown-phase registrant can throw `ObjectDisposedException`
+   ("Instances cannot be resolved … from this LifetimeScope") because a hub's lifetime scope, or an
+   ancestor's, may already be closed — and the verdict is then never produced at all, which is the
+   silence the registration exists to remove.
+2. **The transport is the PARENT, and only the immediate parent.** A hub past `DisposeHostedHubs`
+   cannot post for itself; correlation rides `ResponseFor`'s RequestId, never the posting hub's
+   identity. Walking the chain to the first ancestor that can still post is correct about the caller
+   and was measured at ~10× on teardown (`MeshWeaver.Content.Test` 29 s → 176 s) — implemented and
+   reverted. There is deliberately **no** `ILatePatchVerdictSink` analogue: that registry serves
+   `UpdateRemote`'s armed write watches, whose ~2 s wait has usually closed; a create's waiter is an
+   ordinary `hub.Observe` callback that stays armed for the caller's whole budget, so the post *is*
+   the designed seam here.
+3. **One claim, shared with every other terminal.** The handler's `responded` flag became an
+   interlocked claim, so "did anybody answer" is a race-free question across the chain's thread and
+   the disposing thread, and `PostCreateVerdict` falls through to the parent when this hub's own post
+   is refused — claim-then-VERIFY, because claiming the gate is exactly what disables the NACK
+   (#3196, one lane over).
+
+🚨 **What the code claims here is narrower than on the patch leg, deliberately.** `OwnerDisposing`'s
+enum contract says "provably NEVER applied", which is true of a patch NACKed at handler entry. A
+create is not that shape: the row may already be written when the hub goes. So the create leg's NACK
+claims only what the retry contract needs — *this activation went away owing the verdict, and a
+re-drive against the fresh one is meaningful* — and the message says so rather than promising
+rollback. **The re-drive is safe by construction, not by hope:** a create whose row did land is
+answered `NodeAlreadyExists`, and the upsert's create arm already folds exactly that into the update
+path. So a re-drive either creates or converges to an update; it can never write a second row.
+
+The re-drive is skipped when THIS hub is the one shutting down (`hub.IsShuttingDown`): the inner
+create is posted to this hub's own address, so re-driving could only buy a second
+`InnerCreateVerdictBound` of silence before the same refusal. The caller is answered immediately
+instead, with the owner's words and its structured code.
+
+`CreateAnswersWhenTheOwnerGoesAwayTest` pins it, and its lever is a real `INodeValidator` that never
+emits — the creation validators are run by `HandleCreateNodeRequest` itself, so the park is on the
+seam the create actually traverses. (The issue records two failed attempts to reproduce this by
+parking a partition root's primary stream: *"the root's `Version` never advances after the post, so
+the create does not route through the parked hub at all."*) Measured on this repository: before the
+fix the caller emits **nothing at all** for the full 36 s bound; after it, both the regression and its
+control finish in **0.8 s** — the answer arrives at the disposal, not at a bound, which is the
+positive signal a pass needs.
 
 ### A create timeout cannot establish that nothing was written
 
