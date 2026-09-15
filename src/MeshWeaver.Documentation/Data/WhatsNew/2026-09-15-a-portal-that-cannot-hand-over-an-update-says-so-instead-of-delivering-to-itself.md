@@ -1,19 +1,23 @@
 ---
 Name: A portal that cannot hand over an update says so instead of delivering to itself
 Category: Fix
-Description: A portal that names a control instance but has no signing secret now reports detect-only and names the missing key, instead of quietly storing the release in its own inbox and reporting a successful hand-over.
+Description: A portal that hands platform updates to a control instance but has no signing secret now reports detect-only and names the missing key, instead of quietly storing the release in its own inbox and reporting a successful hand-over. Portals that still apply updates themselves are unaffected.
 Icon: ArrowSyncCheckmark
 Order: -20260915
 ---
 
 # A portal that cannot hand over an update says so instead of delivering to itself
 
-When a portal spots a new platform release it no longer applies it itself — it **hands it over** to
-the control instance, which opens a `Roll` for a person to approve. The hand-over is one signed
-message, and the signature needs a secret the operator mounts on that portal.
+Portals are moving off applying platform updates themselves. **Where that has happened** — where the
+portal is no longer permitted to change its own workloads — a release it spots is **handed over** to
+the control instance instead, which opens a `Roll` for a person to approve. The hand-over is one
+signed message, and the signature needs a secret the operator mounts on that portal.
 
-A portal that has not been given that secret cannot hand anything over. It should say so, by name,
-in its start-up line:
+*A portal that still applies its own updates is unaffected by everything below: it keeps doing
+exactly that.*
+
+A portal on the new footing that has not been given that secret cannot hand anything over. It
+should say so, by name, in its start-up line:
 
 > `apply=detect-only (no control inbox: Hosting:ReportTo names the control instance but
 > Hosting:ControlInbox:Secret is empty, so nothing could be signed)`
