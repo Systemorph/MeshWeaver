@@ -219,7 +219,7 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
                 SourceSha = "deadbeef",
                 CompileTimeout = TimeSpan.FromMinutes(4),
                 RenderTimeout = TimeSpan.FromMinutes(2),
-            }).FirstAsync().Await();
+            }).FirstAsync().Await(TestContext.Current.CancellationToken);
             output.WriteLine("── mesh-driven bake ──");
             output.WriteLine(meshLog.ToString());
             // 🚨 Assert.True(…, message) rather than Assert.Null — xUnit renders a failed
@@ -394,6 +394,7 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
     [Fact(Timeout = 120_000)]
     public void ASourceOnlyTypeWithAnUnevaluableQuery_FailsLoudly_NeverSilentlySkipped()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         const string unevaluableNodeType =
             """{"$type":"MeshNode","id":"Ghost","namespace":"Widget","path":"Widget/Ghost","mainNode":"Widget/Ghost","name":"Ghost","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"Sources only, via a query the bake cannot evaluate.","sources":["namespace:*/Source scope:subtree"]}}""";
 

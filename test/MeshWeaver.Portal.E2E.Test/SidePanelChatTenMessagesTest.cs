@@ -43,7 +43,7 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         // Seed the per-user composer, then PATCH it onto the MeshWeaver harness + the small model. A
         // PATCH (not create) so the post-creation seed handler doesn't reset it; deterministic regardless

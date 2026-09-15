@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -159,13 +160,13 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
     [Fact(Timeout = 120_000)]
     public async Task SealHeldSource_RecordsTheHoldOnItsConfig_SoItCannotReadAsSettled()
     {
-        var space = await ArmedSpace("Held");
+        var space = await ArmedSpace("Held", TestContext.Current.CancellationToken);
 
         // ── the delivery the seal does not cover ─────────────────────────────
         var neverFetched = repoClient.FetchedRefs.Where(r => r == UnsealedSha)
-            .Should().NotEmit(within: TestTimeouts.Quick);
+            .Should().NotEmit(within: TestTimeouts.Quick, cancellationToken: TestContext.Current.CancellationToken);
 
-        await Deliver(UnsealedSha);
+        await Deliver(UnsealedSha, TestContext.Current.CancellationToken);
         await neverFetched;
 
         // 🚨 Read the node back with a FALLBACK to whatever it currently says, never a bare wait:
@@ -173,7 +174,8 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
         // field and reads as a hang. The assertions below must be able to state what the node
         // actually said instead.
         var afterHold = await ConfigWhenOrCurrent(space, c =>
-            string.Equals(c.LastSyncOutcome, GitHubSyncService.HeldOutcome, StringComparison.Ordinal));
+            string.Equals(c.LastSyncOutcome, GitHubSyncService.HeldOutcome, StringComparison.Ordinal),
+            TestContext.Current.CancellationToken);
 
         Output.WriteLine(
             $"after the held delivery: outcome={afterHold.LastSyncOutcome} "
@@ -198,13 +200,15 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
         // ── the control: the seal DOES cover this one, so it imports and the note clears ──
         var fetched = repoClient.FetchedRefs.Where(r => r == SealedSha)
             .Should().Within(TestTimeouts.Convergence * 2)
-            .Emit("a green build AT the sealed commit is exactly what the gate waits for");
+            .Emit("a green build AT the sealed commit is exactly what the gate waits for",
+                TestContext.Current.CancellationToken);
 
-        await Deliver(SealedSha);
+        await Deliver(SealedSha, TestContext.Current.CancellationToken);
         (await fetched).Should().Be(SealedSha);
 
         var afterImport = await ConfigWhen(space, c =>
-            string.Equals(c.LastSyncCommitSha, SealedSha, StringComparison.OrdinalIgnoreCase));
+            string.Equals(c.LastSyncCommitSha, SealedSha, StringComparison.OrdinalIgnoreCase),
+            TestContext.Current.CancellationToken);
 
         Output.WriteLine(
             $"after the sealed delivery: outcome={afterImport.LastSyncOutcome} "
@@ -220,7 +224,7 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
 
     /// <summary>A Space with a sync config for this repository and a credential for whoever the
     /// config write attributed itself to, so the import path can authenticate.</summary>
-    private async Task<string> ArmedSpace(string prefix)
+    private async Task<string> ArmedSpace(string prefix, CancellationToken cancellationToken)
     {
         var space = prefix + Guid.NewGuid().ToString("N")[..8];
         await NodeFactory.CreateNode(new MeshNode(space)
@@ -229,26 +233,26 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
             Name = "Seal-held space",
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Timeout(TestTimeouts.Convergence).Await();
+        }).Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
         var configNode = await Sync
             .SaveConfig(space, RepoUrl, "main", null,
                 createBranchIfMissing: false, createRepoIfMissing: false)
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
         // The import authenticates as the sync config's CREATOR — read it off the node rather than
         // assuming which identity the write landed under.
         var syncOwner = configNode.CreatedBy is { Length: > 0 } creator ? creator : UserId;
         await Credentials
             .Save(syncOwner, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
         return space;
     }
 
     /// <summary>One verified green-build delivery, with every ambient identity dropped: the webhook
     /// request is ANONYMOUS — its authorization is the HMAC signature — so the processor's own
     /// System impersonation must be what carries the lookups and the writes.</summary>
-    private async Task Deliver(string headSha)
+    private async Task Deliver(string headSha, CancellationToken cancellationToken)
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.ClearHostIdentity();
@@ -257,7 +261,7 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
         try
         {
             await Webhooks.Process("workflow_run", GreenBuildPayload(headSha))
-                .Timeout(TestTimeouts.Convergence).Await();
+                .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
         }
         finally
         {
@@ -271,7 +275,7 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
     /// fails and names the field. A bare timeout would report a hang for a value that is simply
     /// wrong.</summary>
     private async Task<GitHubSyncConfig> ConfigWhenOrCurrent(
-        string space, Func<GitHubSyncConfig, bool> predicate)
+        string space, Func<GitHubSyncConfig, bool> predicate, CancellationToken cancellationToken)
     {
         var configs = Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
             .Where(n => n is not null
@@ -280,14 +284,15 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
         return await configs.Where(predicate).FirstAsync()
             .Timeout(TestTimeouts.Convergence, configs.FirstAsync())
             .Timeout(TestTimeouts.CrossSilo)
-            .Await();
+            .Await(cancellationToken);
     }
 
     /// <summary>The sync config as the authoritative node stream reports it, once it satisfies
     /// <paramref name="predicate"/> — never a query (eventually consistent, and this reads right
     /// after a write), and never a bare first emission (the cache can replay the pre-write value).
     /// </summary>
-    private async Task<GitHubSyncConfig> ConfigWhen(string space, Func<GitHubSyncConfig, bool> predicate)
+    private async Task<GitHubSyncConfig> ConfigWhen(
+        string space, Func<GitHubSyncConfig, bool> predicate, CancellationToken cancellationToken)
     {
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
             .Where(n => n is not null
@@ -295,7 +300,7 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
                         && predicate(c))
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(cancellationToken);
         return node.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)!;
     }
 

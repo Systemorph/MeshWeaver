@@ -85,7 +85,7 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
         => ConfigureMeshBase(builder)
             .AddMeshNodes(new MeshNode(Space) { Name = "Bulk Space", NodeType = "Space" });
 
-    private async Task SeedGroupAsync()
+    private async Task SeedGroupAsync(CancellationToken cancellationToken)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -95,10 +95,10 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
                 NodeType = "Group",
                 Name = "Crew",
                 Content = new AccessObject { Description = "Bulk-invited crew" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: cancellationToken);
     }
 
-    private async Task SeedUserAsync(string userId, string email)
+    private async Task SeedUserAsync(string userId, string email, CancellationToken cancellationToken)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -108,7 +108,7 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
                 NodeType = "User",
                 Name = userId,
                 Content = new User { Email = email, FullName = userId },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: cancellationToken);
 
         // Wait until the account is queryable by email (the invite looks it up that way).
         await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:User content.email:{email}"))
@@ -123,8 +123,8 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
         const string existingId = "bob";
         const string newEmail = "carol@acme.com";
 
-        await SeedGroupAsync();
-        await SeedUserAsync(existingId, existingEmail);
+        await SeedGroupAsync(TestContext.Current.CancellationToken);
+        await SeedUserAsync(existingId, existingEmail, TestContext.Current.CancellationToken);
 
         // One existing account, one unknown email (repeated in Outlook shape → deduped), one junk token.
         var result = await Mesh.InviteAllToGroup(GroupPath,
@@ -182,7 +182,7 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
         var changeFeed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
-        await SeedGroupAsync();
+        await SeedGroupAsync(TestContext.Current.CancellationToken);
 
         // Arm the runner BEFORE the triggering write so the live change-feed path fires the continuation.
         using var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
@@ -194,7 +194,7 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
         Assert.Equal(1, result.InvitedCount);
 
         // The invitee signs up — their User node is created (as onboarding does).
-        await SeedUserAsync(userId, email);
+        await SeedUserAsync(userId, email, TestContext.Current.CancellationToken);
 
         // Wait for the subscription's terminal state first (race-free: both writes complete BEFORE the
         // Fired write, so once Fired is observed the membership + grant already exist).

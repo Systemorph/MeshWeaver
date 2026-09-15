@@ -70,7 +70,7 @@ public class ChatDelegationTest(PortalFixture fixture)
             "E2E_TOOL_MODEL is not set — no tool-capable model is pulled/keyed on the e2e portal " +
             "(qwen-small cannot tool-call). Pull one (e.g. `ollama pull qwen3-coder:30b`) and re-run.");
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         var workerPath = $"{fixture.UserId}/Agent/{WorkerId}";
@@ -171,7 +171,7 @@ public class ChatDelegationTest(PortalFixture fixture)
         subThreadPath.Should().Contain("/_Thread/",
             "the delegation must spawn a sub-thread nested under the parent thread path");
 
-        (await fixture.WaitUntilReadableAsync(context, token, subThreadPath, TimeSpan.FromSeconds(60)))
+        (await fixture.WaitUntilReadableAsync(context, token, subThreadPath, TimeSpan.FromSeconds(60), cancellationToken: TestContext.Current.CancellationToken))
             .Should().BeTrue($"the spawned sub-thread node '{subThreadPath}' must be readable in the mesh");
 
         // ── 2) The delegated result flows back: the tool call resolves into its COMPLETED form ───────────

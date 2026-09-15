@@ -209,23 +209,23 @@ public class NotificationRetentionTest(ITestOutputHelper output) : MonolithMeshT
         const string user = "retentionreader";
         var stale = DateTimeOffset.UtcNow.AddDays(-200);
 
-        await SeedUserAsync(user);
+        await SeedUserAsync(user, TestContext.Current.CancellationToken);
         // The entity a pre-addressing notification was filed under. Real shape: before #3156 a
         // notification was a satellite of what it was ABOUT, not of who it was FOR.
         await SeedAsync(MeshNode.FromPath($"{user}/Report") with
         {
             NodeType = "Markdown", Name = "Report", State = MeshNodeState.Active,
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await SeedAsync(Notification($"{user}/{NotificationService.SatelliteSegment}/addressed-old", stale));
-        await SeedAsync(Notification($"{user}/Report/{NotificationService.SatelliteSegment}/legacy-old", stale));
+        await SeedAsync(Notification($"{user}/{NotificationService.SatelliteSegment}/addressed-old", stale), TestContext.Current.CancellationToken);
+        await SeedAsync(Notification($"{user}/Report/{NotificationService.SatelliteSegment}/legacy-old", stale), TestContext.Current.CancellationToken);
         await SeedAsync(Notification(
-            $"{user}/{NotificationService.SatelliteSegment}/recent", DateTimeOffset.UtcNow));
+            $"{user}/{NotificationService.SatelliteSegment}/recent", DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
 
         // Precondition, asserted rather than assumed — the sweep reads through the query index, and
         // if the seeded rows are invisible there the real assertion below would pass having deleted
         // nothing, for a reason that has nothing to do with retention.
-        var seeded = await SettleAsync(AllNotifications(user), rows => rows.Count == 3);
+        var seeded = await SettleAsync(AllNotifications(user), rows => rows.Count == 3, TestContext.Current.CancellationToken);
         Paths(seeded).Should().Be(
             $"{user}/Report/{NotificationService.SatelliteSegment}/legacy-old|"
             + $"{user}/{NotificationService.SatelliteSegment}/addressed-old|"
@@ -236,9 +236,9 @@ public class NotificationRetentionTest(ITestOutputHelper output) : MonolithMeshT
                 "the create pipeline preserves an explicitly-set LastModified — the whole test "
                 + "depends on a seeded row genuinely being old");
 
-        await RunRetentionAsync(user, NotificationRetention.Default);
+        await RunRetentionAsync(user, NotificationRetention.Default, TestContext.Current.CancellationToken);
 
-        var afterFirst = await SettleAsync(AllNotifications(user), rows => rows.Count == 1);
+        var afterFirst = await SettleAsync(AllNotifications(user), rows => rows.Count == 1, TestContext.Current.CancellationToken);
         Paths(afterFirst).Should().Be(
             $"{user}/{NotificationService.SatelliteSegment}/recent",
             "both expired rows go — the addressed one AND the legacy one filed under the entity — "
@@ -246,8 +246,8 @@ public class NotificationRetentionTest(ITestOutputHelper output) : MonolithMeshT
 
         // Idempotence: the cutoff is a pure function of the clock, so a second run selects the same
         // (now absent) set, finds nothing, and leaves the kept row alone.
-        await RunRetentionAsync(user, NotificationRetention.Default);
-        var afterSecond = await SettleAsync(AllNotifications(user), rows => rows.Count == 1);
+        await RunRetentionAsync(user, NotificationRetention.Default, TestContext.Current.CancellationToken);
+        var afterSecond = await SettleAsync(AllNotifications(user), rows => rows.Count == 1, TestContext.Current.CancellationToken);
         Paths(afterSecond).Should().Be(
             $"{user}/{NotificationService.SatelliteSegment}/recent",
             "a repeat run is a no-op, not a second bite");
@@ -260,12 +260,12 @@ public class NotificationRetentionTest(ITestOutputHelper output) : MonolithMeshT
         var stale = DateTimeOffset.UtcNow.AddDays(-200);
         var policy = NotificationRetention.Default with { MaxDeletionsPerRun = 2 };
 
-        await SeedUserAsync(user);
+        await SeedUserAsync(user, TestContext.Current.CancellationToken);
         for (var i = 0; i < 5; i++)
             await SeedAsync(Notification(
-                $"{user}/{NotificationService.SatelliteSegment}/backlog-{i}", stale.AddMinutes(i)));
+                $"{user}/{NotificationService.SatelliteSegment}/backlog-{i}", stale.AddMinutes(i)), TestContext.Current.CancellationToken);
 
-        (await SettleAsync(AllNotifications(user), rows => rows.Count == 5)).Should().HaveCount(5);
+        (await SettleAsync(AllNotifications(user), rows => rows.Count == 5, TestContext.Current.CancellationToken)).Should().HaveCount(5);
 
         // 🚨 THE BOUNDEDNESS ASSERTION. Five rows are expired and every one of them is reachable in
         // a single statement; the cap is what stops one run taking them all. MEASURED: with BOTH
@@ -273,18 +273,18 @@ public class NotificationRetentionTest(ITestOutputHelper output) : MonolithMeshT
         // partition and this reads 0 instead of 3. Either cap alone still holds the line, which is
         // why they are both here and why the query's `limit:` has its own assertion above: this
         // case cannot see a cap that has silently become redundant.
-        await RunRetentionAsync(user, policy);
-        (await SettleAsync(AllNotifications(user), rows => rows.Count == 3))
+        await RunRetentionAsync(user, policy, TestContext.Current.CancellationToken);
+        (await SettleAsync(AllNotifications(user), rows => rows.Count == 3, TestContext.Current.CancellationToken))
             .Should().HaveCount(3, "one run removes at most MaxDeletionsPerRun rows");
 
         // …and the backlog is not merely capped, it DRAINS: the window is ordered oldest-first, so
         // each run takes the next two rather than re-reading the same page.
-        await RunRetentionAsync(user, policy);
-        (await SettleAsync(AllNotifications(user), rows => rows.Count == 1))
+        await RunRetentionAsync(user, policy, TestContext.Current.CancellationToken);
+        (await SettleAsync(AllNotifications(user), rows => rows.Count == 1, TestContext.Current.CancellationToken))
             .Should().HaveCount(1, "successive runs make monotone progress");
 
-        await RunRetentionAsync(user, policy);
-        (await SettleAsync(AllNotifications(user), rows => rows.Count == 0))
+        await RunRetentionAsync(user, policy, TestContext.Current.CancellationToken);
+        (await SettleAsync(AllNotifications(user), rows => rows.Count == 0, TestContext.Current.CancellationToken))
             .Should().BeEmpty("the tail is gone after ceil(5/2) runs");
     }
 
@@ -292,16 +292,16 @@ public class NotificationRetentionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task A_disarmed_policy_deletes_nothing()
     {
         const string user = "retentiondisarmed";
-        await SeedUserAsync(user);
+        await SeedUserAsync(user, TestContext.Current.CancellationToken);
         await SeedAsync(Notification(
-            $"{user}/{NotificationService.SatelliteSegment}/ancient", DateTimeOffset.UtcNow.AddDays(-2000)));
-        (await SettleAsync(AllNotifications(user), rows => rows.Count == 1)).Should().HaveCount(1);
+            $"{user}/{NotificationService.SatelliteSegment}/ancient", DateTimeOffset.UtcNow.AddDays(-2000)), TestContext.Current.CancellationToken);
+        (await SettleAsync(AllNotifications(user), rows => rows.Count == 1, TestContext.Current.CancellationToken)).Should().HaveCount(1);
 
-        await RunRetentionAsync(user, NotificationRetention.Default with { Enabled = false });
+        await RunRetentionAsync(user, NotificationRetention.Default with { Enabled = false }, TestContext.Current.CancellationToken);
 
         // A negative case with no positive signal to wait for: the run has completed, so the only
         // thing left to establish is that it wrote nothing. Read once, now.
-        (await SnapshotAsync(AllNotifications(user)))
+        (await SnapshotAsync(AllNotifications(user), TestContext.Current.CancellationToken))
             .Should().HaveCount(1, "Enabled:false makes the pass a complete no-op");
     }
 
@@ -313,13 +313,13 @@ public class NotificationRetentionTest(ITestOutputHelper output) : MonolithMeshT
     /// <summary>Runs ONLY this action, through the real runner — same ordering, identity scope and
     /// budget the platform uses; discovery is the one thing skipped, so a case sees its own action
     /// rather than everything the mesh happens to have registered.</summary>
-    private Task RunRetentionAsync(string user, NotificationRetention policy)
+    private Task RunRetentionAsync(string user, NotificationRetention policy, CancellationToken cancellationToken)
     {
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
         return runner.RunFor(
                 new AccessContext { ObjectId = user, Name = user },
                 [new NotificationRetentionLogonAction(policy)])
-            .FirstAsync().Timeout(Bound).Await();
+            .FirstAsync().Timeout(Bound).Await(cancellationToken);
     }
 
     /// <summary>The row paths, ordered and joined — a legible one-line failure message.</summary>
@@ -336,8 +336,8 @@ public class NotificationRetentionTest(ITestOutputHelper output) : MonolithMeshT
             .Take(1);
     }
 
-    private Task<IReadOnlyCollection<MeshNode>> SnapshotAsync(string query)
-        => Snapshot(query).FirstAsync().Timeout(Bound).Await();
+    private Task<IReadOnlyCollection<MeshNode>> SnapshotAsync(string query, CancellationToken cancellationToken)
+        => Snapshot(query).FirstAsync().Timeout(Bound).Await(cancellationToken);
 
     /// <summary>
     /// Re-reads on an interval until <paramref name="predicate"/> holds — a wait on the CONDITION,
@@ -346,7 +346,7 @@ public class NotificationRetentionTest(ITestOutputHelper output) : MonolithMeshT
     /// <c>TimeoutException</c> with nothing in it.
     /// </summary>
     private async Task<IReadOnlyCollection<MeshNode>> SettleAsync(
-        string query, Func<IReadOnlyCollection<MeshNode>, bool> predicate)
+        string query, Func<IReadOnlyCollection<MeshNode>, bool> predicate, CancellationToken cancellationToken)
     {
         try
         {
@@ -355,26 +355,26 @@ public class NotificationRetentionTest(ITestOutputHelper output) : MonolithMeshT
             return await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
                 .SelectMany(_ => Snapshot(query))
                 .Where(predicate)
-                .FirstAsync().Timeout(Bound).Await();
+                .FirstAsync().Timeout(Bound).Await(cancellationToken);
         }
         catch (TimeoutException)
         {
-            return await SnapshotAsync(query);
+            return await SnapshotAsync(query, cancellationToken);
         }
     }
 
     /// <summary>Seeds the user partition root as System — reserved to the platform by UserNodeType's
     /// access rule, exactly as onboarding does it.</summary>
-    private Task SeedUserAsync(string user) => SeedAsync(MeshNode.FromPath(user) with
+    private Task SeedUserAsync(string user, CancellationToken cancellationToken) => SeedAsync(MeshNode.FromPath(user) with
     {
         NodeType = "User", Name = user, State = MeshNodeState.Active, Content = new User(),
-    });
+    }, cancellationToken);
 
-    private Task SeedAsync(MeshNode node)
+    private Task SeedAsync(MeshNode node, CancellationToken cancellationToken)
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
         return access.RunAsSystem(() => mesh.CreateNode(node))
-            .FirstAsync().Timeout(Bound).Await();
+            .FirstAsync().Timeout(Bound).Await(cancellationToken);
     }
 }

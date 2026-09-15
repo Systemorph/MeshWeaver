@@ -127,7 +127,7 @@ public class UnreadablePolicyRecordIsNotClobberedTest(ITestOutputHelper output) 
     [MemberData(nameof(EveryBookkeepingWrite))]
     public async Task AnUnreadableRecordIsRefused_NotOverwritten(string write)
     {
-        await Seed(UnreadableRecord);
+        await Seed(UnreadableRecord, TestContext.Current.CancellationToken);
 
         var fault = await RunWrite(write);
 
@@ -158,7 +158,7 @@ public class UnreadablePolicyRecordIsNotClobberedTest(ITestOutputHelper output) 
     [MemberData(nameof(EveryBookkeepingWrite))]
     public async Task AReadableRecordIsWritten_AndKeepsItsPolicy(string write)
     {
-        await Seed(ReadableRecord);
+        await Seed(ReadableRecord, TestContext.Current.CancellationToken);
 
         var fault = await RunWrite(write);
 
@@ -278,7 +278,7 @@ public class UnreadablePolicyRecordIsNotClobberedTest(ITestOutputHelper output) 
                     .Subscribe(observer);
         });
 
-    private Task Seed(string json)
+    private Task Seed(string json, CancellationToken cancellationToken)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var node = new MeshNode(UpdatePolicyNodeType.NodeId, UpdatePolicyNodeType.AdminPartition)
@@ -295,6 +295,6 @@ public class UnreadablePolicyRecordIsNotClobberedTest(ITestOutputHelper output) 
             })
             .FirstAsync()
             .Timeout(Budget)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
     }
 }

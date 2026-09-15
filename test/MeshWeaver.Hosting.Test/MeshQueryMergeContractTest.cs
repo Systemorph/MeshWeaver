@@ -81,7 +81,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         change.ChangeType.Should().Be(QueryChangeType.Initial);
         var paths = change.Items.Select(n => n.Path).ToList();
@@ -102,7 +102,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         change.ChangeType.Should().Be(QueryChangeType.Initial);
         change.Items.Should().BeEmpty();
@@ -129,7 +129,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown partitions:all", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         change.Partitions.Should().Equal(new[] { "acme", "shared", "docs" },
             "the union of what the reporting providers read, deduplicated, and a silent provider adds nothing");
@@ -152,7 +152,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown partitions:all", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         change.Partitions.Should().BeNull("an unreported denominator is unknown, not empty");
     }
@@ -173,7 +173,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "namespace:p", Limit = 1 }, Options)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         change.Items.Should().HaveCount(1, "the Limit clip applied");
         change.Partitions.Should().Equal("p");
@@ -191,7 +191,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         var paths = change.Items.Select(n => n.Path).ToList();
         paths.Should().HaveCount(2);
@@ -216,7 +216,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 2 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         change.ChangeType.Should().Be(QueryChangeType.Initial);
         change.Items.Should().HaveCount(2, "the Limit clip must still apply through the probe wrapper");
@@ -239,7 +239,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<InvalidOperationException>();
     }

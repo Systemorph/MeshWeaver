@@ -26,7 +26,7 @@ public class ChatComposerRefocusTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 950);
         await page.GotoAsync($"{fixture.BaseUrl}/User/Roland",

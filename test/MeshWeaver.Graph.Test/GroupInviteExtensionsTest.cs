@@ -27,7 +27,7 @@ public class GroupInviteExtensionsTest(ITestOutputHelper output) : MonolithMeshT
         => ConfigureMeshBase(builder)
             .AddMeshNodes(new MeshNode(Space) { Name = "Group Space", NodeType = "Space" });
 
-    private async Task SeedGroupAsync()
+    private async Task SeedGroupAsync(CancellationToken cancellationToken)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -37,7 +37,7 @@ public class GroupInviteExtensionsTest(ITestOutputHelper output) : MonolithMeshT
                 NodeType = "Group",
                 Name = "Team",
                 Content = new AccessObject { Description = "Test group" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: cancellationToken);
     }
 
     [Fact(Timeout = 60000)]
@@ -48,14 +48,14 @@ public class GroupInviteExtensionsTest(ITestOutputHelper output) : MonolithMeshT
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
-        await SeedGroupAsync();
+        await SeedGroupAsync(TestContext.Current.CancellationToken);
         using (accessService.ImpersonateAsSystem())
             await meshService.CreateNode(new MeshNode(userId)
             {
                 NodeType = "User",
                 Name = "Bob",
                 Content = new User { Email = email, FullName = "Bob" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // Wait until the account is queryable by email (the extension looks it up that way).
         await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:User content.email:{email}"))
@@ -78,7 +78,7 @@ public class GroupInviteExtensionsTest(ITestOutputHelper output) : MonolithMeshT
     public async Task InviteAbsentEmail_SchedulesAddToGroupAndCreatesInvitation()
     {
         const string email = "carol@acme.com";
-        await SeedGroupAsync();
+        await SeedGroupAsync(TestContext.Current.CancellationToken);
 
         var outcome = await Mesh.InviteToGroup(GroupPath, email, invitedBy: "admin")
             .FirstAsync().Timeout(30.Seconds());

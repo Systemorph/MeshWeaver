@@ -112,8 +112,8 @@ public class DeckSlidesCacheTest(ITestOutputHelper output) : MonolithMeshTestBas
         var mesh = MakeCountingMesh();
         var cache = MakeCache(mesh);
 
-        var firstTask = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).Await();
-        var secondTask = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).Await();
+        var firstTask = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
+        var secondTask = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
         var results = await Task.WhenAll(firstTask, secondTask);
 
         mesh.Subscriptions.Values.Sum().Should().Be(1,
@@ -207,7 +207,7 @@ public class DeckSlidesCacheTest(ITestOutputHelper output) : MonolithMeshTestBas
                 JsonOptions,
                 accessService: null)
             .Where(list => list.Select(n => n.Path).SequenceEqual(["DeckC/s1", "DeckC/s2"]))
-            .FirstAsync().Timeout(30.Seconds()).Await();
+            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
 
         mesh.Subscriptions.Keys.Should().ContainSingle().Which.Should().Be("namespace:DeckC",
             "the sibling query must not carry an equality nodeType filter");

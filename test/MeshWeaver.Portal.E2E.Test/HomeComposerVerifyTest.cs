@@ -15,7 +15,7 @@ public class HomeComposerVerifyTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         // The per-user ThreadComposer node is normally seeded at onboarding; a fresh monolith has none,
         // so the composer area would error ("No node found at Roland/_Thread/ThreadComposer"). Seed it.

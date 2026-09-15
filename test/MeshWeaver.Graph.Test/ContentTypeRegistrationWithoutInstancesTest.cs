@@ -68,6 +68,7 @@ public class ContentTypeRegistrationWithoutInstancesTest(ITestOutputHelper outpu
     [Fact(Timeout = 60_000)]
     public void ADefinedNodeType_RegistersItsContentType_WithoutAnyInstanceActivating()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = Mesh.ServiceProvider.GetRequiredService<IMeshContentTypeRegistry>();
 
         registry.TryResolveByNodeType(InstancelessNodeType, out var resolved).Should().BeTrue(

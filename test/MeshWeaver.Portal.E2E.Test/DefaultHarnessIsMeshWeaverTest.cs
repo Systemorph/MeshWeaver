@@ -24,7 +24,7 @@ public class DefaultHarnessIsMeshWeaverTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         // Remove the per-user composer and WAIT for the delete to propagate before reopening — otherwise

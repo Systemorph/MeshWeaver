@@ -80,7 +80,7 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
         var outcome = await Service(root)
             .SelectRollTarget(RunningVersion, [IncompleteVersion, CompleteVersion])
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine(outcome.Summary);
 
@@ -112,7 +112,7 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
         var outcome = await Service(root, requirePrebuilt: true)
             .SelectRollTarget(RunningVersion, [IncompleteVersion, CompleteVersion])
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine(outcome.Summary);
 
@@ -142,7 +142,7 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
         var outcome = await Service(root)
             .SelectRollTarget(RunningVersion, [IncompleteVersion, CompleteVersion])
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine(outcome.Summary);
 
@@ -159,7 +159,7 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
         // re-gate cannot wave through what the selector declined to choose. A refusal only the
         // selector honours would be a rule with one caller.
         var verdict = await Service(root).IsUpdatable(IncompleteVersion)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         verdict.IsUpdatable.Should().BeFalse(
             "a gate that compares two empty sets is the vacuity #3441 removed one level down");
         verdict.IsIndeterminate.Should().BeTrue();
@@ -183,7 +183,7 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
         var outcome = await Service(root, requirePrebuilt: true)
             .SelectRollTarget(RunningVersion)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine(outcome.Summary);
 
@@ -205,7 +205,7 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
         var outcome = await Service(missing)
             .SelectRollTarget(RunningVersion, [IncompleteVersion, CompleteVersion])
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine(outcome.Summary);
 

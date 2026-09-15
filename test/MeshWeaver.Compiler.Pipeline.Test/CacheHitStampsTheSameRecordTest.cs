@@ -116,7 +116,7 @@ public class CacheHitStampsTheSameRecordTest(ITestOutputHelper output) : Monolit
         var fresh = await Compiler.CompileAndGetConfigurations(typeNode, sources)
             .Take(1)
             .Should().Within(TestTimeouts.Convergence)
-            .Emit("the first compile must settle — everything below reads its result");
+            .Emit("the first compile must settle — everything below reads its result", cancellationToken: TestContext.Current.CancellationToken);
         fresh.Should().NotBeNull();
         fresh!.AssemblyLocation.Should().NotBeNullOrEmpty("Roslyn produced an assembly");
 
@@ -134,7 +134,7 @@ public class CacheHitStampsTheSameRecordTest(ITestOutputHelper output) : Monolit
         var warm = await Compiler.CompileAndGetConfigurations(typeNode, sources)
             .Take(1)
             .Should().Within(TestTimeouts.Convergence)
-            .Emit("the second call must settle");
+            .Emit("the second call must settle", cancellationToken: TestContext.Current.CancellationToken);
         warm.Should().NotBeNull();
 
         Transcript(warm!).Should().Contain("Cache hit",

@@ -27,7 +27,7 @@ public class ChatAtAutocompleteTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         // Seed the per-user composer on the MeshWeaver harness (the @ orchestrator path), and a
@@ -46,7 +46,7 @@ public class ChatAtAutocompleteTest(PortalFixture fixture)
               "content": { "$type": "MarkdownContent", "content": "# {{MarkerName}}" } }
             """);
         // The @ subtree query is RLS-scoped — make sure the seed is readable before driving the UI.
-        (await fixture.WaitUntilReadableAsync(context, token, $"{fixture.UserId}/{MarkerName}", TimeSpan.FromSeconds(30)))
+        (await fixture.WaitUntilReadableAsync(context, token, $"{fixture.UserId}/{MarkerName}", TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken))
             .Should().BeTrue("the seeded reference node must be readable before @ autocomplete can surface it");
 
         var page = await context.NewPageAsync();

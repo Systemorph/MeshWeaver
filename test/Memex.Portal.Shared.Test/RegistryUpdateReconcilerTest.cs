@@ -82,8 +82,8 @@ public class RegistryUpdateReconcilerTest(ITestOutputHelper output) : MonolithMe
     [Fact(Timeout = 240_000)]
     public async Task ABroadcastForOnePackage_ReconcilesThatPackage_AndOnlyThat()
     {
-        await SeedInstallRecord(PackageA, "ModA");
-        await SeedInstallRecord(PackageB, "ModB");
+        await SeedInstallRecord(PackageA, "ModA", TestContext.Current.CancellationToken);
+        await SeedInstallRecord(PackageB, "ModB", TestContext.Current.CancellationToken);
 
         // ── 1. The boot pass ran (the hosted service started with the mesh) ───────────────────
         await LedgerEntries()
@@ -132,7 +132,7 @@ public class RegistryUpdateReconcilerTest(ITestOutputHelper output) : MonolithMe
     [Fact(Timeout = 240_000)]
     public async Task ABroadcastFromAnUnknownRegistry_IsDroppedWithoutARequest()
     {
-        await SeedInstallRecord(PackageA, "ModA");
+        await SeedInstallRecord(PackageA, "ModA", TestContext.Current.CancellationToken);
         await LedgerEntries()
             .Where(entries => entries.Any(e => e.Url == RegistryUrl && e.LastReconciledVia == RegistryReconcileEntry.ViaBoot))
             .FirstAsync().Timeout(TestTimeouts.Convergence);
@@ -180,7 +180,7 @@ public class RegistryUpdateReconcilerTest(ITestOutputHelper output) : MonolithMe
 
     // ── harness ───────────────────────────────────────────────────────────────
 
-    private async Task SeedInstallRecord(string packageId, string module)
+    private async Task SeedInstallRecord(string packageId, string module, CancellationToken cancellationToken)
     {
         var manifest = new PackageManifest
         {
@@ -201,7 +201,8 @@ public class RegistryUpdateReconcilerTest(ITestOutputHelper output) : MonolithMe
         };
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         await access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(record))
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence)
+            .Await(cancellationToken);
     }
 
     private IObservable<IReadOnlyList<RegistryReconcileEntry>> LedgerEntries() =>

@@ -76,7 +76,7 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
         using (access.ImpersonateAsSystem())
             await meshService.CreateOrUpdateNode(
                 new MeshNode(space) { Name = "Timer Space", NodeType = "Markdown" })
-                .FirstAsync().Await();
+                .FirstAsync().Await(TestContext.Current.CancellationToken);
 
         var subscription = new EventSubscription
         {
@@ -88,13 +88,13 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
             Role = "Editor",
         };
         using (access.ImpersonateAsSystem())
-            await EventSubscriptionOps.CreateSubscription(meshService, subscription).FirstAsync().Await();
+            await EventSubscriptionOps.CreateSubscription(meshService, subscription).FirstAsync().Await(TestContext.Current.CancellationToken);
 
         // ── the negative half ───────────────────────────────────────────────────────────────
         // Give the runner ample time to observe the new subscription and schedule it, then assert
         // it has NOT fired. This window is deliberately well inside the slot: if it were close to
         // it, a slow runner would make the test pass for the wrong reason.
-        await Task.Delay(5.Seconds());
+        await Task.Delay(5.Seconds(), TestContext.Current.CancellationToken);
         var early = await ReadSubscription(subscription.Id);
         Assert.True(early is { Status: EventSubscriptionStatus.Pending },
             $"a timer due at {slot:o} fired early (status {early?.Status}) — it would publish a "
@@ -136,7 +136,7 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
         using (access.ImpersonateAsSystem())
             await meshService.CreateOrUpdateNode(
                 new MeshNode(space) { Name = "Late Timer Space", NodeType = "Markdown" })
-                .FirstAsync().Await();
+                .FirstAsync().Await(TestContext.Current.CancellationToken);
 
         // Written with NO runner alive — the "due during downtime" shape.
         var subscription = new EventSubscription
@@ -149,7 +149,7 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
             Role = "Editor",
         };
         using (access.ImpersonateAsSystem())
-            await EventSubscriptionOps.CreateSubscription(meshService, subscription).FirstAsync().Await();
+            await EventSubscriptionOps.CreateSubscription(meshService, subscription).FirstAsync().Await(TestContext.Current.CancellationToken);
 
         using var runner = StartRunner();
 

@@ -178,7 +178,7 @@ public class ChangeFeedResetReleasesUpstreamTest(ITestOutputHelper output) : Mon
         Cache.ReleaseIfUnwatched(path).Should().BeTrue(
             "nothing is subscribed to the faulted entry, so the release must claim and tear it down");
 
-        var eviction = await evictions.FirstAsync().Should().Within(TestTimeouts.Convergence).Emit();
+        var eviction = await evictions.FirstAsync().Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         eviction.UpstreamReleased.Should().BeTrue(
             "a transiently-faulted read leaves a LIVE upstream sync stream — with its 45 s "
             + "HeartBeatEvent — in the cache hub's workspace. If this is false the scenario no "
@@ -210,7 +210,7 @@ public class ChangeFeedResetReleasesUpstreamTest(ITestOutputHelper output) : Mon
         PublishChangeBroadcast(path);
 
         var eviction = await evictions.FirstAsync().Should().Within(TestTimeouts.Convergence).Emit(
-            "a change-feed event must evict the faulted entry so the next read re-probes");
+            "a change-feed event must evict the faulted entry so the next read re-probes", cancellationToken: TestContext.Current.CancellationToken);
         Cache.IsReadStreamLive(path).Should().BeFalse(
             "the faulted entry is gone — from here on NOTHING in the cache references the path, so "
             + "this eviction was the last chance to release its upstream");

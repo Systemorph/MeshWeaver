@@ -94,7 +94,9 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public async Task BackgroundActivation_OfDynamicNodeType_DoesNotLoopRecompiles()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(50.Seconds());
+        var ct = deadline.Token;
 
         // 1. Seed a dynamic NodeType + Code child via the silo's IMeshService
         //    (server-side, no access check). After this the NodeType exists in
@@ -177,7 +179,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{activityNamespace} scope:subtree"))
             .Select(r => r.Items.Count(n => n.Id != NodeTypeCompileStateMirror.StateId));
-        var firstCount = await activityCount.Should().Within(30.Seconds()).Match(c => c >= 1);
+        var firstCount = await activityCount.Should().Within(30.Seconds()).Match(c => c >= 1, cancellationToken: TestContext.Current.CancellationToken);
         Output.WriteLine($"_Activity compile rows after first background-activation: {firstCount}");
 
         // Re-activate by a SECOND background read. If the kickoff is unguarded
@@ -202,7 +204,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             .Should().NotEmit(within: TimeSpan.FromSeconds(8),
                 because: "the first-build kickoff fires exactly once (status guard + Take(1)); " +
                     "a second background activation MUST NOT trigger a second compile — the prod " +
-                    "2026-05-21 loop bug the status guard fixes");
+                    "2026-05-21 loop bug the status guard fixes", cancellationToken: TestContext.Current.CancellationToken);
         Output.WriteLine($"_Activity rows after SECOND background-activation: still {firstCount} (no second compile).");
     }
 
@@ -223,7 +225,9 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public async Task User_With_Edit_Triggers_Recompile_Activity_Has_User_Identity()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(50.Seconds());
+        var ct = deadline.Token;
 
         // Seed dynamic NodeType in TestUser's own partition — TestUser has Admin
         // there via the RestrictedAccessSiloConfigurator seeded assignment.
@@ -397,7 +401,9 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
     [Fact(Timeout = 60000)]
     public async Task User_Without_Edit_Triggers_Recompile_Is_Denied_Cleanly()
     {
-        var ct = new CancellationTokenSource(50.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(50.Seconds());
+        var ct = deadline.Token;
 
         // Seed a dynamic NodeType in OtherUser's partition. TestUser has no
         // role on OtherUser/ — RestrictedAccessSiloConfigurator only grants
@@ -507,7 +513,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // is suppressed by the seeded terminal status above, and TestUser's
         // release-request write was denied — so the _Activity namespace must stay
         // empty. Watch the LIVE activity query and assert it never emits a non-empty
-        // result within a bounded window. (The prior fixed Task.Delay(5s) + count
+        // result within a bounded window. (The prior fixed Task.Delay(5s, TestContext.Current.CancellationToken) + count
         // raced the activity create either way; the live query is also the primitive
         // the sibling BackgroundActivation test uses. A persistent GetMeshNodeStream
         // subscribe on this cross-partition node is the wrong tool here — under the
@@ -532,7 +538,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
                     "settled AND has nothing due (see the seeding comment) — no compile activity " +
                     "row is ever created. Pin against the " +
                     "MessageHubConfiguration.cs:328-342 deletion (PostPipeline no longer stamps " +
-                    "hub-self as principal).");
+                    "hub-self as principal).", cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -553,7 +559,9 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
     [Fact(Timeout = 90000)]
     public async Task NodeTypeHub_StaysResponsive_WhileFirstBuildCompileInFlight()
     {
-        var ct = new CancellationTokenSource(80.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(80.Seconds());
+        var ct = deadline.Token;
 
         var typeId = $"Responsive{Guid.NewGuid():N}";
         var typePath = $"TestUser/{typeId}";
@@ -655,7 +663,9 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
     [Fact(Timeout = 90000)]
     public async Task NodeTypeHub_StrandedInCompiling_RecompilesOnInit()
     {
-        var ct = new CancellationTokenSource(80.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(80.Seconds());
+        var ct = deadline.Token;
 
         var typeId = $"Stranded{Guid.NewGuid():N}";
         var typePath = $"TestUser/{typeId}";
@@ -741,7 +751,9 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
     [Fact(Timeout = 90000)]
     public async Task NodeTypeHub_StrandedInCompiling_RecentActivityRecorded_StillRecompilesOnInit()
     {
-        var ct = new CancellationTokenSource(80.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(80.Seconds());
+        var ct = deadline.Token;
 
         var typeId = $"StrandedRecent{Guid.NewGuid():N}";
         var typePath = $"TestUser/{typeId}";
@@ -824,7 +836,9 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
     [Fact(Timeout = 90000)]
     public async Task SourcesWatcher_UserContextActivation_SettlesWithoutSelfDeadlock()
     {
-        var ct = new CancellationTokenSource(80.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(80.Seconds());
+        var ct = deadline.Token;
 
         var typeId = $"SelfDeadlock{Guid.NewGuid():N}";
         var typePath = $"TestUser/{typeId}";
@@ -918,7 +932,9 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
     [Fact(Timeout = 120000)]
     public async Task FrameworkStaleAssembly_SelfHealsOnInstanceActivation()
     {
-        var ct = new CancellationTokenSource(110.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(110.Seconds());
+        var ct = deadline.Token;
 
         var typeId = $"FwStale{Guid.NewGuid():N}";
         var typePath = $"TestUser/{typeId}";

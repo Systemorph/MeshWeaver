@@ -55,6 +55,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void UniqueDiscriminator_Resolves()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new MeshContentTypeRegistry();
         var scenario = EmitType("SST_Scenario", "Scenario");
 
@@ -68,6 +69,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void TwoDeclarationsOfOneName_StopResolving()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new MeshContentTypeRegistry();
         var ifrs17 = EmitType("Ifrs17_Currency", "Currency");
         var claims = EmitType("ClaimsDeepfield_Currency", "Currency");
@@ -88,6 +90,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void ContestedName_IsRefusedRegardlessOfRegistrationOrder()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var forward = new MeshContentTypeRegistry();
         forward.Register(EmitType("Ifrs17_Currency", "Currency"));
         forward.Register(EmitType("ClaimsDeepfield_Currency", "Currency"));
@@ -104,6 +107,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void ContestedName_StaysContestedAfterAFurtherRegistration()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new MeshContentTypeRegistry();
         registry.Register(EmitType("Ifrs17_Currency", "Currency"));
         registry.Register(EmitType("ClaimsDeepfield_Currency", "Currency"));
@@ -119,6 +123,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void RebuildOfTheSameDeclaration_ResolvesToTheNewestBuild()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new MeshContentTypeRegistry();
         registry.Register(EmitType("SST_Scenario", "Scenario"));
         var rebuilt = EmitType("SST_Scenario", "Scenario");
@@ -137,6 +142,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void SameTypeRegisteredFromTwoNodeTypes_StaysResolvable()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new MeshContentTypeRegistry();
         var shared = EmitType("SST_Shared", "Filing");
 
@@ -151,6 +157,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void NodeTypeRoute_StaysExactForBothClaimants()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new MeshContentTypeRegistry();
         var ifrs17 = EmitType("Ifrs17_Currency", "Currency");
         var claims = EmitType("ClaimsDeepfield_Currency", "Currency");
@@ -188,6 +195,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void TheCollisionIsReportedOnce_NamingBothDeclarations()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var logger = new CapturingLogger();
         var registry = new MeshContentTypeRegistry(logger);
 
@@ -208,6 +216,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void RebuildOfAContestedClaimant_DoesNotReportItAgain()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var logger = new CapturingLogger();
         var registry = new MeshContentTypeRegistry(logger);
         registry.Register(EmitType("Ifrs17_Currency", "Currency"));
@@ -227,6 +236,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void TryRecover_RefusesAContestedDiscriminator()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new MeshContentTypeRegistry();
         registry.Register(EmitType("Ifrs17_Currency", "Currency"));
         registry.Register(EmitType("ClaimsDeepfield_Currency", "Currency"));
@@ -249,6 +259,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void TryRecoverForNodeType_ResolvesBothClaimantsOfAContestedName()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new MeshContentTypeRegistry();
         var ifrs17 = EmitTypeWithProperty("Ifrs17_Currency", "Currency", "Code");
         var claims = EmitTypeWithProperty("ClaimsDeepfield_Currency", "Currency", "Code");
@@ -280,6 +291,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void TryRecoverForNodeType_FallsBackToTheNameRoute_WhenThePathIsAbsentOrUnknown()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new MeshContentTypeRegistry();
         var scenario = EmitTypeWithProperty("SST_Scenario", "Scenario", "Code");
         registry.Register(scenario, "SST/Scenario");
@@ -313,6 +325,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void TryRecoverForNodeType_RefusesATypeTheContentsOwnDiscriminatorContradicts()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new MeshContentTypeRegistry();
         var declaration = EmitTypeWithProperty("Store_Plugin_Declaration", "PluginContent", "Id");
         var foreign = EmitTypeWithProperty("Graph_Definition", "NodeTypeDefinition", "Description");
@@ -343,6 +356,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void TryRecoverForNodeType_StillResolvesContentThatCarriesNoDiscriminator()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new MeshContentTypeRegistry();
         var scenario = EmitTypeWithProperty("SST_Untagged", "Scenario", "Code");
         registry.Register(scenario, "SST/Scenario");
@@ -370,6 +384,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void ARecoveryThatDropsAuthoredMembers_IsReportedNamingThem()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var logger = new CapturingLogger();
         var registry = new MeshContentTypeRegistry(logger);
         var article = EmitTypeWithProperty("SST_Lossy", "Article", "Title");
@@ -400,6 +415,7 @@ public class MeshContentTypeRegistryTest
     [Fact(Timeout = 30000)]
     public void ARecoveryThatCarriesEverything_IsSilent()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var logger = new CapturingLogger();
         var registry = new MeshContentTypeRegistry(logger);
         var scenario = EmitTypeWithProperty("SST_Lossless", "Scenario", "Code");

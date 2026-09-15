@@ -40,29 +40,29 @@ public class HubRunLevelObservableTest
     public async Task ALateSubscriberIsToldTheLevelTheHubIsAlreadyIn()
     {
         using var host = BuildHost(out var mesh);
-        await host.StartAsync();
+        await host.StartAsync(TestContext.Current.CancellationToken);
 
         // Subscribing AFTER the hub started must not wait for the next transition — otherwise
         // subscribing in order to observe the disposal window would itself race the window, which
         // is the defect one level down.
-        var current = await mesh.RunLevelChanged.FirstAsync().Await();
+        var current = await mesh.RunLevelChanged.FirstAsync().Await(TestContext.Current.CancellationToken);
 
         current.Should().Be(mesh.RunLevel,
             "the source replays the current level, so a subscription is never behind the property");
 
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
     [Fact(Timeout = 60000)]
     public async Task TheDisposalWINDOWIsObservable_NotJustItsEnd()
     {
         using var host = BuildHost(out var mesh);
-        await host.StartAsync();
+        await host.StartAsync(TestContext.Current.CancellationToken);
 
         var seen = new List<MessageHubRunLevel>();
         using var subscription = mesh.RunLevelChanged.Subscribe(seen.Add);
 
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
 
         // The end of teardown was always observable via DisposalCompleted. What was NOT is
         // everything before it — this is the whole point of the issue.
@@ -79,12 +79,12 @@ public class HubRunLevelObservableTest
     public async Task TheSourceReportsTransitions_NotRepeatedAssignments()
     {
         using var host = BuildHost(out var mesh);
-        await host.StartAsync();
+        await host.StartAsync(TestContext.Current.CancellationToken);
 
         var seen = new List<MessageHubRunLevel>();
         using var subscription = mesh.RunLevelChanged.Subscribe(seen.Add);
 
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
 
         // Several disposal arms assign the same terminal level defensively (the Dead backstop in
         // the finally, for one). A subscriber should see the lifecycle, not how many times a field
@@ -98,12 +98,12 @@ public class HubRunLevelObservableTest
     public async Task TheSourceCOMPLETESAtDead()
     {
         using var host = BuildHost(out var mesh);
-        await host.StartAsync();
+        await host.StartAsync(TestContext.Current.CancellationToken);
 
         var completed = false;
         using var subscription = mesh.RunLevelChanged.Subscribe(_ => { }, () => completed = true);
 
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
 
         completed.Should().BeTrue(
             "Dead is terminal, so the source must complete — otherwise every completion-shaped "

@@ -61,10 +61,10 @@ public class DiagnosticsNameTheContentTypeAssemblyTest(ITestOutputHelper testOut
                     Content = new NodeTypeDefinition { DefaultNamespace = "" },
                 });
 
-    private async Task<JsonElement> DiagnosticsFor(string nodeTypePath)
+    private async Task<JsonElement> DiagnosticsFor(string nodeTypePath, CancellationToken cancellationToken)
     {
         var json = await new MeshOperations(Mesh).GetDiagnostics(nodeTypePath)
-            .Timeout(TestTimeouts.CrossSilo).FirstAsync();
+            .Timeout(TestTimeouts.CrossSilo).FirstAsync().Await(cancellationToken);
         Output.WriteLine($"{nodeTypePath} → {json}");
         return JsonDocument.Parse(json).RootElement;
     }
@@ -75,7 +75,7 @@ public class DiagnosticsNameTheContentTypeAssemblyTest(ITestOutputHelper testOut
         Mesh.ServiceProvider.GetRequiredService<IMeshContentTypeRegistry>()
             .Register(typeof(DiagPayload), TypedNodeType);
 
-        var reply = await DiagnosticsFor(TypedNodeType);
+        var reply = await DiagnosticsFor(TypedNodeType, TestContext.Current.CancellationToken);
 
         Assert.True(reply.TryGetProperty("contentType", out var block),
             "the per-NodeType diagnostics must carry the assembly the content type resolved to — "
@@ -99,7 +99,7 @@ public class DiagnosticsNameTheContentTypeAssemblyTest(ITestOutputHelper testOut
     [Fact(Timeout = 120_000)]
     public async Task ANodeTypeWithNoRegisteredContentTypeSaysSo_NotNothing()
     {
-        var reply = await DiagnosticsFor(UntypedNodeType);
+        var reply = await DiagnosticsFor(UntypedNodeType, TestContext.Current.CancellationToken);
 
         Assert.True(reply.TryGetProperty("contentType", out var block),
             $"the block must be present whatever the answer is. Got: {reply}");

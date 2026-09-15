@@ -79,7 +79,7 @@ public class StaticRepoImportBulkWriteTest(ITestOutputHelper output) : MonolithM
             Nodes = [.. Enumerable.Range(0, Pages).Select(i => Page(_partition, $"P{i:D2}"))],
         };
 
-        var result = await Import(source);
+        var result = await Import(source, TestContext.Current.CancellationToken);
 
         result.Count.Should().Be(Pages, "every node in the source must land");
         result.Failed.Should().Be(0);
@@ -92,8 +92,8 @@ public class StaticRepoImportBulkWriteTest(ITestOutputHelper output) : MonolithM
 
         // …and the batching is not bought by losing content: read two of them back through their own
         // per-node hubs, which is what the change feed had to wake.
-        (await Body($"{_partition}/P00")).Should().Contain("page");
-        (await Body($"{_partition}/P39")).Should().Contain("page");
+        (await Body($"{_partition}/P00", TestContext.Current.CancellationToken)).Should().Contain("page");
+        (await Body($"{_partition}/P39", TestContext.Current.CancellationToken)).Should().Contain("page");
     }
 
     /// <summary>
@@ -118,7 +118,7 @@ public class StaticRepoImportBulkWriteTest(ITestOutputHelper output) : MonolithM
             ],
         };
 
-        var result = await Import(source);
+        var result = await Import(source, TestContext.Current.CancellationToken);
 
         result.Failed.Should().Be(1,
             "exactly ONE node was rejected — a batched write must not turn one validator refusal into "
@@ -142,8 +142,8 @@ public class StaticRepoImportBulkWriteTest(ITestOutputHelper output) : MonolithM
         result.WriteRequests.Should().Be(1 + source.Nodes.Count,
             "a refused batch is re-run node by node so the failure lands on the file that caused it");
 
-        (await Body($"{_partition}/Before")).Should().Contain("page");
-        (await Body($"{_partition}/After")).Should().Contain("page");
+        (await Body($"{_partition}/Before", TestContext.Current.CancellationToken)).Should().Contain("page");
+        (await Body($"{_partition}/After", TestContext.Current.CancellationToken)).Should().Contain("page");
     }
 
     /// <summary>
@@ -166,7 +166,7 @@ public class StaticRepoImportBulkWriteTest(ITestOutputHelper output) : MonolithM
             ],
         };
 
-        var result = await Import(source);
+        var result = await Import(source, TestContext.Current.CancellationToken);
 
         result.Failed.Should().Be(0,
             "a satellite the bulk verb cannot carry must be routed AROUND the batch, never left in it "
@@ -174,7 +174,7 @@ public class StaticRepoImportBulkWriteTest(ITestOutputHelper output) : MonolithM
         result.Count.Should().Be(3);
         result.WriteRequests.Should().Be(2,
             "the two plain creates travel in ONE bulk request; the satellite takes the per-node verb");
-        (await Body($"{_partition}/_Notes")).Should().Contain("page");
+        (await Body($"{_partition}/_Notes", TestContext.Current.CancellationToken)).Should().Contain("page");
     }
 
     /// <summary>
@@ -190,7 +190,7 @@ public class StaticRepoImportBulkWriteTest(ITestOutputHelper output) : MonolithM
             Root = Space(_partition),
             Nodes = [Page(_partition, "A"), Page(_partition, "B")],
         };
-        var first = await Import(source);
+        var first = await Import(source, TestContext.Current.CancellationToken);
         first.Count.Should().Be(2);
         first.WriteRequests.Should().Be(1, "two fresh creates are one batch");
 
@@ -198,35 +198,35 @@ public class StaticRepoImportBulkWriteTest(ITestOutputHelper output) : MonolithM
         {
             Content = new MarkdownContent { Content = $"# {n.Id}\n\nrevised" }
         })];
-        var second = await Import(source);
+        var second = await Import(source, TestContext.Current.CancellationToken);
 
         second.Failed.Should().Be(0);
         second.Count.Should().Be(2);
         second.WriteRequests.Should().Be(2,
             "an existing node is UPDATED by its own per-node hub, so an update costs its own request — "
             + "batching creates must not have quietly moved updates onto the mesh hub's write path");
-        (await Body($"{_partition}/A")).Should().Contain("revised");
-        (await Body($"{_partition}/B")).Should().Contain("revised");
+        (await Body($"{_partition}/A", TestContext.Current.CancellationToken)).Should().Contain("revised");
+        (await Body($"{_partition}/B", TestContext.Current.CancellationToken)).Should().Contain("revised");
     }
 
-    private async Task<StaticRepoImportResult> Import(FakeRepoSource source)
+    private async Task<StaticRepoImportResult> Import(FakeRepoSource source, CancellationToken cancellationToken)
     {
         // 🚨 .Await(), never a bare `await source`: Rx's own awaiter resumes the continuation INLINE
         // on the signalling thread, still inside the trampoline, and every later await in the method
         // inherits that scheduler — the .ToTask() defect wearing different clothes.
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(180.Seconds()).Await();
+            .FirstAsync().Timeout(180.Seconds()).Await(cancellationToken);
         Output.WriteLine(
             $"outcome={result.Outcome} count={result.Count} failed={result.Failed} "
             + $"writeRequests={result.WriteRequests} written=[{string.Join(", ", result.WrittenPaths)}]");
         return result;
     }
 
-    private async Task<string> Body(string path)
+    private async Task<string> Body(string path, CancellationToken cancellationToken)
     {
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null)
-            .FirstAsync().Timeout(60.Seconds()).Await();
+            .FirstAsync().Timeout(60.Seconds()).Await(cancellationToken);
         return node.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content ?? "";
     }
 

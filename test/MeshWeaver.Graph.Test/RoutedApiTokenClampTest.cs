@@ -110,7 +110,7 @@ public class RoutedApiTokenClampTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 60_000)]
     public async Task ABearerDeliveryWithNoClaims_IsClampedOnThePerNodeHub()
     {
-        var failure = await RoutedRead(Token).Should().Within(Budget).Emit();
+        var failure = await RoutedRead(Token).Should().Within(Budget).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         failure.Should().NotBeNull(
             "a claimless Bearer delivery reached the gate and was SERVED — the API-token clamp "
@@ -131,7 +131,7 @@ public class RoutedApiTokenClampTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 60_000)]
     public async Task TheSamePersonInABrowser_IsNotRefused()
     {
-        var failure = await RoutedRead(Browser).Should().Within(Budget).Emit();
+        var failure = await RoutedRead(Browser).Should().Within(Budget).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         failure.Should().BeNull(
             "the page is PublicRead — an interactive session reads it, and the clamp that refuses "

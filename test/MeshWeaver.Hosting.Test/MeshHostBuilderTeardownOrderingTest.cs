@@ -44,12 +44,12 @@ public class MeshHostBuilderTeardownOrderingTest
         var hostBuilder = new HostBuilder();
         _ = new MeshHostBuilder(hostBuilder, new Address("mesh", "teardown-ordering"));
         using var host = hostBuilder.Build();
-        await host.StartAsync();
+        await host.StartAsync(TestContext.Current.CancellationToken);
 
         var mesh = host.Services.GetRequiredService<IMessageHub>();
         mesh.IsDisposing.Should().BeFalse("the mesh must be alive while the host runs");
 
-        await host.StopAsync();
+        await host.StopAsync(TestContext.Current.CancellationToken);
 
         // The ordering contract: StopAsync (which runs every IHostedService.StopAsync,
         // including the mesh drain) must have FULLY drained the mesh root hub before the

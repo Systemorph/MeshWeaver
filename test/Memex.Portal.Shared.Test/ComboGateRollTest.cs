@@ -81,7 +81,7 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
     [Fact(Timeout = 240_000)]
     public async Task ARedVerdict_BlocksTheRoll_AndNamesTheModuleThatWouldBreak()
     {
-        await Seed();
+        await Seed(TestContext.Current.CancellationToken);
         await Record(Red());
         var updater = new RecordingUpdater();
 
@@ -113,7 +113,7 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
     [Fact(Timeout = 240_000)]
     public async Task AReVerifiedCandidate_ClearsAStaleHold_AndRolls()
     {
-        await Seed(held: true);
+        await Seed(TestContext.Current.CancellationToken, held: true);
         await Record(Green());
         var updater = new RecordingUpdater();
 
@@ -131,7 +131,7 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
     [Fact(Timeout = 240_000)]
     public async Task AGreenVerdict_Clears_AndTheRollLands()
     {
-        await Seed();
+        await Seed(TestContext.Current.CancellationToken);
         await Record(Green());
         var updater = new RecordingUpdater();
 
@@ -153,7 +153,7 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
     [Fact(Timeout = 240_000)]
     public async Task ANotVerifiableVerdict_NeitherClearsNorRefuses_AndTheUnverifiedRollIsRecorded()
     {
-        await Seed();
+        await Seed(TestContext.Current.CancellationToken);
         await Record(NotVerifiable());
         var updater = new RecordingUpdater();
 
@@ -179,7 +179,7 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
     [Fact(Timeout = 240_000)]
     public async Task NoVerdictAtAll_DoesNotClearAndDoesNotRefuse_AndSaysWhichItIs()
     {
-        await Seed();
+        await Seed(TestContext.Current.CancellationToken);
         var updater = new RecordingUpdater();
 
         var content = await RunOneCheck(updater, ComboGate());
@@ -220,7 +220,7 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
     public async Task AVerdictRecordedAfterTheFirstCheck_RefusesTheNextRoll()
     {
         var ct = TestContext.Current.CancellationToken;
-        await Seed();
+        await Seed(TestContext.Current.CancellationToken);
         var updater = new RecordingUpdater();
         var service = new GatedSelfUpdateService(
             Mesh, new FakeAcrTagLister(), updater, FastPollWithSafetyNet(),
@@ -282,7 +282,7 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
     [Fact(Timeout = 240_000)]
     public async Task TheVerifierIsRun_ItsRedVerdictIsRecorded_AndTheRollIsRefused()
     {
-        await Seed();
+        await Seed(TestContext.Current.CancellationToken);
         var workRoot = Path.Combine(
             Path.GetTempPath(), $"combo-gate-test-{Guid.NewGuid():N}"[..38]);
         var updater = new RecordingUpdater();
@@ -573,7 +573,7 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
 
     // ── mesh helpers (the ComboVerdictRecordingTest shapes) ──
 
-    private Task Seed(bool held = false)
+    private Task Seed(CancellationToken cancellationToken, bool held = false)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         // 2026-09-08: the candidate is a ci build, eligible only under a pattern that admits it.
@@ -601,7 +601,7 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
             })
             .FirstAsync()
             .Timeout(Budget)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
     }
 
     /// <summary>

@@ -41,13 +41,20 @@
          are actually emitted. With ImplicitUsings disabled, <Using> is silently ignored,
          and Should()/Seconds() fail to resolve across every test file. -->
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- Always emit a TRX so every `dotnet test` invocation leaves a parseable
-         result file in TestResults/ — required for hang diagnosis (the only
-         place the per-test StdOut + outcome is recorded once the host crashes
-         or the runner is killed). Without this, local runs leave nothing
-         behind to inspect. CI passes `-l:trx` explicitly; this matches that
-         behavior for local. Path = `<project>/TestResults/_<machine>_<utc>.trx`. -->
-    <VSTestLogger>trx</VSTestLogger>
+    <!-- 🚨 There is deliberately NO always-on TRX property here any more, and its absence is a
+         measurement, not an oversight. `<VSTestLogger>trx</VSTestLogger>` used to give every local
+         `dotnet test` a parseable result file. xunit.v3 4.x ships Microsoft.Testing.Platform v2,
+         which REFUSES the VSTest target on the .NET 10 SDK, so the repo opts into MTP through the
+         root `global.json` — and under MTP that property is inert (measured: the run passes and
+         writes no .trx). The MTP equivalent is a per-run FLAG, not a property (the MSBuild property
+         `TestingPlatformCommandLineArguments` was measured NOT to reach the run either), so a run
+         that wants evidence asks for it on the command line with the xunit trx reporter flags
+         (`report-xunit-trx`, `report-xunit-trx-filename`, `results-directory`) — see
+         `Doc/Architecture/WritingTests`, "Running Tests". CI's shards do not go through
+         `dotnet test` at all; they launch the native xunit v3 host (`dotnet <Name>.dll -trx …`, see
+         .github/workflows/dotnet-test.yml), so CI's trx is unaffected by any of this. Leaving the
+         dead property here would have read as "local runs still leave a trx behind", which they do
+         not. -->
     <!-- xUnit v3 → trx StdOut: anything written via ITestOutputHelper.WriteLine
          (which the per-test ILogger redirects to at Information+ via xunit.runner.json
          + appsettings.json's MeshWeaver=Information) flows into the trx's

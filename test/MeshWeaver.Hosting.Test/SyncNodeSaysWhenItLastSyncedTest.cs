@@ -88,23 +88,23 @@ public class SyncNodeSaysWhenItLastSyncedTest(ITestOutputHelper output)
             Name = "Says when",
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Timeout(TestTimeouts.Convergence).Await();
+        }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         var configNode = await Sync
             .SaveConfig(space, RepoUrl, "main", null,
                 createBranchIfMissing: false, createRepoIfMissing: false)
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         var syncOwner = configNode.CreatedBy is { Length: > 0 } creator ? creator : UserId;
         await Credentials
             .Save(syncOwner, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         // ── 1. A real import. Every field moves together, which is the state the second import
         //       must then be measured against.
         repoClient.Sha = FirstSha;
         var first = await Sync.ReimportAtCommit(space, FirstSha, UserId)
-            .Timeout(TestTimeouts.Convergence * 2).Await();
+            .Timeout(TestTimeouts.Convergence * 2).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"import 1: outcome={first.Outcome} count={first.Count}");
         first.Outcome.Should().Be("Imported",
             "the first import of this content really does materialize it — if it does not, the "
@@ -133,7 +133,7 @@ public class SyncNodeSaysWhenItLastSyncedTest(ITestOutputHelper output)
         //       This is what Edu did every day: the sha advances, the horizon must not.
         repoClient.Sha = SecondSha;
         var second = await Sync.ReimportAtCommit(space, SecondSha, UserId)
-            .Timeout(TestTimeouts.Convergence * 2).Await();
+            .Timeout(TestTimeouts.Convergence * 2).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"import 2: outcome={second.Outcome} count={second.Count}");
         second.Outcome.Should().Be("Skipped",
             "identical content at a new commit is the no-op the fingerprint gate exists for — if "

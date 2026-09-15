@@ -61,7 +61,7 @@ public class AgentFilesToolingTest(PortalFixture fixture)
             "E2E_TOOL_MODEL is not set — no tool-capable model is pulled/keyed on the e2e portal " +
             "(qwen-small cannot tool-call). Pull one (e.g. `ollama pull qwen3-coder:30b`) and re-run.");
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
         var page = await SeedAndOpenAsync(context, token, toolModel!);
 
@@ -81,7 +81,7 @@ public class AgentFilesToolingTest(PortalFixture fixture)
         writtenPath.Should().Contain("/_Thread/",
             "the working area is rooted at the conversation's thread, not somewhere global");
         writtenPath.Should().EndWith("/Files/notes.md");
-        (await fixture.WaitUntilReadableAsync(context, token, writtenPath, TimeSpan.FromSeconds(60)))
+        (await fixture.WaitUntilReadableAsync(context, token, writtenPath, TimeSpan.FromSeconds(60), cancellationToken: TestContext.Current.CancellationToken))
             .Should().BeTrue($"'{writtenPath}' must exist in the mesh as an ordinary node");
 
         // ── 2) list_agent_files ──────────────────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ public class AgentFilesToolingTest(PortalFixture fixture)
         Assert.SkipWhen(string.IsNullOrWhiteSpace(toolModel),
             "E2E_TOOL_MODEL is not set — no tool-capable model is pulled/keyed on the e2e portal.");
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
         var page = await SeedAndOpenAsync(context, token, toolModel!);
 

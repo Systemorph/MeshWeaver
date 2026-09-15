@@ -108,7 +108,7 @@ public class TruncatedRepoListingIsNotADeletionTest(ITestOutputHelper output)
             .Where(n => n is not null)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         survivor.Should().NotBeNull(
             "the guard is about the node still existing, not merely about a count being zero");
     }

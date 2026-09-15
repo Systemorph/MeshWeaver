@@ -415,6 +415,7 @@ public class PublishedAssemblyIsCompleteTest
     [Fact(Timeout = 120_000)]
     public void No_damaged_artifact_may_pass_the_publication_gate()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var whole = EmitToDiskWithRetryTest.RealAssemblyBytes();
         int mdOffset, mdSize;
         using (var pe = new PEReader(new MemoryStream(whole)))

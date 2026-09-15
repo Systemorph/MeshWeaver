@@ -35,13 +35,14 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
         string mainNodePath, string title, string message, NotificationType type,
         string? targetNodePath = null, string? createdBy = null, string? icon = null,
         string? recipient = null,
-        string? identity = null)
+        string? identity = null,
+        CancellationToken cancellationToken = default)
     {
         using (Access.ImpersonateAsSystem())
             return await NotificationService.CreateNotification(
                     MeshService, mainNodePath, title, message, type, targetNodePath, createdBy, icon,
                     recipient, identity)
-                .Should().Emit();
+                .Should().Emit(cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -65,7 +66,8 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
             targetNodePath: main,
             createdBy: "agent",
             icon: "/static/NodeTypeIcons/chat.svg",
-            recipient: addressee);
+            recipient: addressee,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         node.MainNode.Should().Be(addressee);
         node.Namespace.Should().Be($"{addressee}/{NotificationService.SatelliteSegment}");
@@ -115,7 +117,8 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
             type: NotificationType.ApprovalRequired,
             targetNodePath: $"{TestPartition}/Docs/spec/Approval/abc",
             createdBy: "carol",
-            icon: "bell.svg");
+            icon: "bell.svg",
+            cancellationToken: TestContext.Current.CancellationToken);
         var after = DateTimeOffset.UtcNow;
 
         var content = node.ContentAs<Notification>(Mesh.JsonSerializerOptions)!;
@@ -139,7 +142,8 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
             mainNodePath: main,
             title: "Ready",
             message: "",
-            type: NotificationType.General);
+            type: NotificationType.General,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         node.ContentAs<Notification>(Mesh.JsonSerializerOptions)!.TargetNodePath.Should().Be(main,
             "the bell click should land on the main entity when no other target is set");
@@ -148,8 +152,10 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 30000)]
     public async Task CreateNotification_EachCallProducesUniqueId()
     {
-        var first = await CreateNotification(TestPartition, "a", "", NotificationType.General);
-        var second = await CreateNotification(TestPartition, "b", "", NotificationType.General);
+        var first = await CreateNotification(TestPartition, "a", "", NotificationType.General,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var second = await CreateNotification(TestPartition, "b", "", NotificationType.General,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         first.Id.Should().NotBe(second.Id);
     }

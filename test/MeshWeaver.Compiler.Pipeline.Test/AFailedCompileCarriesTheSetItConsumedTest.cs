@@ -93,7 +93,7 @@ public class AFailedCompileCarriesTheSetItConsumedTest(ITestOutputHelper output)
         var failed = await Compiler.CompileAndGetConfigurations(TypeNode(), sources)
             .Take(1)
             .Should().Within(TestTimeouts.Convergence)
-            .Emit("the compile must settle — everything below reads its result");
+            .Emit("the compile must settle — everything below reads its result", cancellationToken: TestContext.Current.CancellationToken);
 
         failed.Should().NotBeNull();
         failed!.AssemblyLocation.Should().BeNullOrEmpty("PeriodType is declared nowhere in this set");

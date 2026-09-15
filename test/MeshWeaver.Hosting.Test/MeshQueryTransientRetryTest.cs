@@ -286,7 +286,7 @@ public class MeshQueryTransientRetryTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         subscribeCount.Should().Be(2, "the fan-in retries the transient connect fault once");
         change.ChangeType.Should().Be(QueryChangeType.Initial);
@@ -313,7 +313,7 @@ public class MeshQueryTransientRetryTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(15))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<DbException>();
         subscribeCount.Should().Be(1 + TransientStorageFaults.DefaultMaxRetries);

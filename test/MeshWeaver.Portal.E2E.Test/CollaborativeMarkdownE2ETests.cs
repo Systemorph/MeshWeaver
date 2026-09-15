@@ -121,7 +121,7 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
     public async Task DocPage_RendersCollaborativeMarkdown_WhenAuthenticated()
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var docPath = await SeedDocAsync(context, await fixture.MintTokenAsync(context));
 
         var page = await OpenDocAsync(context, docPath);
@@ -134,7 +134,7 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
     public async Task Comment_InMarkdownText_ShowsInlineHighlightAndSidebarCard()
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var docPath = await SeedDocAsync(context, await fixture.MintTokenAsync(context));
         var page = await OpenDocAsync(context, docPath);
 
@@ -162,7 +162,7 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
     public async Task Comment_AtBottom_PageLevel_ShowsCommentCard()
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var docPath = await SeedDocAsync(context, await fixture.MintTokenAsync(context));
         var page = await OpenDocAsync(context, docPath);
 
@@ -182,7 +182,7 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
     public async Task Comment_Reply_AddsAReplyUnderThePageComment()
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var docPath = await SeedDocAsync(context, await fixture.MintTokenAsync(context));
         var page = await OpenDocAsync(context, docPath);
 
@@ -234,7 +234,7 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
     public async Task DocPage_ShowsNoRedline_AfterAnEdit()
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
         var docPath = await SeedDocAsync(context, token);
 
@@ -262,7 +262,7 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
     public async Task Change_WhoChangedWhat_RendersAuthorAndTextFromVersionHistory()
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
         var docPath = await SeedDocAsync(context, token);
 
@@ -294,7 +294,7 @@ public class CollaborativeMarkdownE2ETests(PortalFixture fixture)
     public async Task Change_Revert_RestoresThePreviousText()
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
         var docPath = await SeedDocAsync(context, token);
 

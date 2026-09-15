@@ -59,23 +59,23 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
         // declaration under test is byte-for-byte the one the Admin node carries.
         const string user = "pinuser";
         foreach (var course in CoursePins)
-            await CreateCourseAsync(course);
-        await CreateUserAsync(user, new User { PinnedPaths = DocPins });
+            await CreateCourseAsync(course, TestContext.Current.CancellationToken);
+        await CreateUserAsync(user, new User { PinnedPaths = DocPins }, TestContext.Current.CancellationToken);
 
         var action = Migration("docs-to-courses", DocPins, CoursePins);
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
         var identity = IdentityFor(user);
 
-        await RunAsync(runner, identity, action);
-        var afterFirst = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(action.Id));
+        await RunAsync(runner, identity, action, TestContext.Current.CancellationToken);
+        var afterFirst = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(action.Id), TestContext.Current.CancellationToken);
 
         afterFirst.PinnedPaths.Should().Equal(CoursePins,
             "the four doc sections are unpinned and the three courses pinned, in declaration order");
 
         // The user then curates their own home — and a second logon must leave that alone.
-        await UpdateProfileAsync(user, u => u with { PinnedPaths = [.. u.PinnedPaths, "something/i/pinned"] });
-        await RunAsync(runner, identity, action);
-        var afterSecond = await AwaitProfileAsync(user, u => u.PinnedPaths.Contains("something/i/pinned"));
+        await UpdateProfileAsync(user, u => u with { PinnedPaths = [.. u.PinnedPaths, "something/i/pinned"] }, TestContext.Current.CancellationToken);
+        await RunAsync(runner, identity, action, TestContext.Current.CancellationToken);
+        var afterSecond = await AwaitProfileAsync(user, u => u.PinnedPaths.Contains("something/i/pinned"), TestContext.Current.CancellationToken);
 
         afterSecond.PinnedPaths.Should().Equal(
             new[] { "AgenticPrimer", "AgenticEngineering", "AgenticBusiness", "something/i/pinned" },
@@ -90,13 +90,13 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
         // state). Nothing is substituted or stubbed: same action id, same unpin list, same pin list
         // as the node on memex.
         const string user = "pinuser-nocourses";
-        await CreateUserAsync(user, new User { PinnedPaths = DocPins });
+        await CreateUserAsync(user, new User { PinnedPaths = DocPins }, TestContext.Current.CancellationToken);
 
         var action = Migration("docs-to-courses", DocPins, CoursePins);
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
 
-        await RunAsync(runner, identity: IdentityFor(user), action);
-        var profile = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(action.Id));
+        await RunAsync(runner, identity: IdentityFor(user), action, TestContext.Current.CancellationToken);
+        var profile = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(action.Id), TestContext.Current.CancellationToken);
 
         profile.PinnedPaths.Should().BeEmpty(
             "the unpins still apply, but a course this deployment does not carry is never pinned");
@@ -111,14 +111,14 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
         // The partly-migrated portal: it carries the Primer but not the other two — which is also
         // what a portal looks like MID-INSTALL, and the shape a typo'd path produces.
         const string user = "pinuser-partial";
-        await CreateCourseAsync("AgenticPrimer");
-        await CreateUserAsync(user, new User { PinnedPaths = DocPins });
+        await CreateCourseAsync("AgenticPrimer", TestContext.Current.CancellationToken);
+        await CreateUserAsync(user, new User { PinnedPaths = DocPins }, TestContext.Current.CancellationToken);
 
         var action = Migration("docs-to-courses", DocPins, CoursePins);
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
 
-        await RunAsync(runner, IdentityFor(user), action);
-        var profile = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(action.Id));
+        await RunAsync(runner, IdentityFor(user), action, TestContext.Current.CancellationToken);
+        var profile = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(action.Id), TestContext.Current.CancellationToken);
 
         profile.PinnedPaths.Should().Equal(new[] { "AgenticPrimer" },
             "a missing target is skipped without taking the present ones down with it");
@@ -133,15 +133,15 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
         // dangling tile the existence check exists to prevent, arrived at from the other direction.
         // The intersection is therefore on EXACT path equality, and this pins that.
         const string user = "pinuser-descendants";
-        await CreateCourseAsync("AgenticPrimer");
-        await CreateChildAsync("AgenticPrimer", "Introduction");
-        await CreateUserAsync(user, new User { PinnedPaths = DocPins });
+        await CreateCourseAsync("AgenticPrimer", TestContext.Current.CancellationToken);
+        await CreateChildAsync("AgenticPrimer", "Introduction", TestContext.Current.CancellationToken);
+        await CreateUserAsync(user, new User { PinnedPaths = DocPins }, TestContext.Current.CancellationToken);
 
         var action = Migration("docs-to-courses", DocPins, CoursePins);
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
 
-        await RunAsync(runner, IdentityFor(user), action);
-        var profile = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(action.Id));
+        await RunAsync(runner, IdentityFor(user), action, TestContext.Current.CancellationToken);
+        var profile = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(action.Id), TestContext.Current.CancellationToken);
 
         profile.PinnedPaths.Should().Equal(new[] { "AgenticPrimer" },
             "only the declared path itself counts — a child of it is not the target, and the two "
@@ -160,8 +160,8 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
         const string user = "pinuser-declared";
         const string actionId = "docs-to-courses";
         foreach (var course in CoursePins)
-            await CreateCourseAsync(course);
-        await CreateUserAsync(user, new User { PinnedPaths = DocPins });
+            await CreateCourseAsync(course, TestContext.Current.CancellationToken);
+        await CreateUserAsync(user, new User { PinnedPaths = DocPins }, TestContext.Current.CancellationToken);
 
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         await mesh.CreateNode(MeshNode.FromPath(LogonActionNodeType.PathFor(actionId)) with
@@ -177,12 +177,12 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
                 UnpinPaths = DocPins,
                 PinPaths = CoursePins,
             },
-        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
+        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(TestContext.Current.CancellationToken);
 
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
-        await runner.RunFor(IdentityFor(user)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+        await runner.RunFor(IdentityFor(user)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
 
-        var profile = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(actionId));
+        var profile = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(actionId), TestContext.Current.CancellationToken);
         profile.PinnedPaths.Should().Equal(CoursePins);
     }
 
@@ -192,12 +192,12 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
         // The default state of every deployment that never opts in. It must not throw, and it must
         // not touch the profile.
         const string user = "pinuser-untouched";
-        await CreateUserAsync(user, new User { PinnedPaths = DocPins });
+        await CreateUserAsync(user, new User { PinnedPaths = DocPins }, TestContext.Current.CancellationToken);
 
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
-        await runner.RunFor(IdentityFor(user)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+        await runner.RunFor(IdentityFor(user)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
 
-        var profile = await ReadProfileAsync(user);
+        var profile = await ReadProfileAsync(user, TestContext.Current.CancellationToken);
         profile.PinnedPaths.Should().Equal(DocPins);
     }
 
@@ -231,13 +231,13 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
     /// <summary>Runs one action through the real runner by registering nothing — the runner takes
     /// its actions from DI and the Admin partition, so a test-constructed action is driven through
     /// the same commit path via <see cref="LogonActionRunner.RunFor"/> after registration.</summary>
-    private static Task RunAsync(LogonActionRunner runner, AccessContext identity, PinMigrationLogonAction action) =>
-        runner.RunFor(identity, [action]).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+    private static Task RunAsync(LogonActionRunner runner, AccessContext identity, PinMigrationLogonAction action, CancellationToken cancellationToken) =>
+        runner.RunFor(identity, [action]).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(cancellationToken);
 
     private static AccessContext IdentityFor(string userPath) =>
         new() { ObjectId = userPath, Name = userPath, Email = $"{userPath}@meshweaver.io" };
 
-    private async Task CreateCourseAsync(string path)
+    private async Task CreateCourseAsync(string path, CancellationToken cancellationToken)
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         await mesh.CreateNode(MeshNode.FromPath(path) with
@@ -248,12 +248,12 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = "Space",
             Name = path,
             State = MeshNodeState.Active,
-        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
+        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(cancellationToken);
     }
 
     /// <summary>A child node inside an existing course partition — used to prove a descendant row
     /// never stands in for its ancestor in the alternation query's result set.</summary>
-    private async Task CreateChildAsync(string parent, string id)
+    private async Task CreateChildAsync(string parent, string id, CancellationToken cancellationToken)
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         await mesh.CreateNode(MeshNode.FromPath($"{parent}/{id}") with
@@ -261,12 +261,12 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = "Markdown",
             Name = id,
             State = MeshNodeState.Active,
-        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
+        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(cancellationToken);
     }
 
     /// <summary>Creates the user's partition root as onboarding does — as System, because
     /// UserNodeType's access rule reserves creating a User node to the platform.</summary>
-    private async Task CreateUserAsync(string path, User content)
+    private async Task CreateUserAsync(string path, User content, CancellationToken cancellationToken)
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
@@ -276,29 +276,29 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
             Name = path,
             State = MeshNodeState.Active,
             Content = content,
-        })).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
+        })).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(cancellationToken);
     }
 
-    private Task UpdateProfileAsync(string path, Func<User, User> change) =>
+    private Task UpdateProfileAsync(string path, Func<User, User> change, CancellationToken cancellationToken) =>
         Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Update(node => node.ContentAs<User>(Mesh.JsonSerializerOptions) is { } u
                 ? node with { Content = change(u) }
                 : node)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(cancellationToken);
 
-    private async Task<User> ReadProfileAsync(string path)
+    private async Task<User> ReadProfileAsync(string path, CancellationToken cancellationToken)
     {
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n?.Content is not null)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(cancellationToken);
         return node.ContentAs<User>(Mesh.JsonSerializerOptions)!;
     }
 
-    private async Task<User> AwaitProfileAsync(string path, Func<User, bool> predicate)
+    private async Task<User> AwaitProfileAsync(string path, Func<User, bool> predicate, CancellationToken cancellationToken)
     {
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n?.ContentAs<User>(Mesh.JsonSerializerOptions) is { } u && predicate(u))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(cancellationToken);
         return node.ContentAs<User>(Mesh.JsonSerializerOptions)!;
     }
 }

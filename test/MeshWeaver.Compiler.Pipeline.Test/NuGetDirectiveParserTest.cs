@@ -8,6 +8,7 @@ public class NuGetDirectiveParserTest
     [Fact(Timeout = 5000)]
     public void SingleDirectiveWithVersion_ExtractsAndStrips()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var (cleaned, refs) = NuGetDirectiveParser.Extract(
             """
             #r "nuget:Humanizer, 2.14.1"
@@ -25,6 +26,7 @@ public class NuGetDirectiveParserTest
     [Fact(Timeout = 5000)]
     public void MultipleDirectives_AllCaptured()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var (cleaned, refs) = NuGetDirectiveParser.Extract(
             """
             #r "nuget:Humanizer, 2.14.1"
@@ -41,6 +43,7 @@ public class NuGetDirectiveParserTest
     [Fact(Timeout = 5000)]
     public void NoVersion_VersionRangeIsNull()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var (_, refs) = NuGetDirectiveParser.Extract("#r \"nuget:Humanizer\"");
         refs.Should().ContainSingle();
         refs[0].Id.Should().Be("Humanizer");
@@ -50,6 +53,7 @@ public class NuGetDirectiveParserTest
     [Fact(Timeout = 5000)]
     public void NonNuGetDirective_LeftAlone()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var source = """
             #r "System.Text.Json"
             #r "file:C:/lib/Foo.dll"
@@ -65,6 +69,7 @@ public class NuGetDirectiveParserTest
     [Fact(Timeout = 5000)]
     public void NoDirective_SourceUnchanged()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         const string source = "using System;\nConsole.WriteLine(\"hi\");";
         var (cleaned, refs) = NuGetDirectiveParser.Extract(source);
         refs.Should().BeEmpty();
@@ -74,6 +79,7 @@ public class NuGetDirectiveParserTest
     [Fact(Timeout = 5000)]
     public void WhitespaceVariants_Handled()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var (_, refs) = NuGetDirectiveParser.Extract(
             "   #r   \"nuget:  MathNet.Numerics ,  5.0.0  \"\nusing MathNet.Numerics;");
         refs.Should().ContainSingle();

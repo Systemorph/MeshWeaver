@@ -60,7 +60,9 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
     [Fact(Timeout = 120_000)]
     public async Task Instance_OfNonCompilingNodeType_AnswersTerminalError_NotSilence()
     {
-        var ct = new CancellationTokenSource(110.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(110.Seconds());
+        var ct = deadline.Token;
         var client = GetClient($"broken-{Guid.NewGuid():N}");
 
         var typeId = $"OrleansBrokenAccess{Guid.NewGuid():N}";
@@ -151,7 +153,9 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
     [Fact(Timeout = 120_000)]
     public async Task Subscribe_ToLayoutAreaOf_NonCompilingNodeTypeInstance_SurfacesError_NotWedge()
     {
-        var ct = new CancellationTokenSource(110.Seconds()).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(110.Seconds());
+        var ct = deadline.Token;
         var client = GetClient($"broken-sub-{Guid.NewGuid():N}");
 
         var typeId = $"OrleansBrokenSub{Guid.NewGuid():N}";

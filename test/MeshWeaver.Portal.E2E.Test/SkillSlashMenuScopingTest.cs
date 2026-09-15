@@ -37,7 +37,7 @@ public class SkillSlashMenuScopingTest(PortalFixture fixture)
 
         // ── Seed (idempotent) ────────────────────────────────────────────────────────────────────
         // A different user OWNS the space + the space skill; the chatting user is granted EDITOR on it.
-        await using (var owner = await fixture.NewAuthenticatedContextAsync(SpaceOwner))
+        await using (var owner = await fixture.NewAuthenticatedContextAsync(SpaceOwner, cancellationToken: TestContext.Current.CancellationToken))
         {
             var ownerToken = await fixture.MintTokenAsync(owner);
             await SeedAsync(owner, ownerToken, $$"""
@@ -60,7 +60,7 @@ public class SkillSlashMenuScopingTest(PortalFixture fixture)
                 """);
         }
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         // The chatting user's OWN skill (their personal {user}/Skill registry).
@@ -89,7 +89,7 @@ public class SkillSlashMenuScopingTest(PortalFixture fixture)
         // user can actually READ the space skill via the API before driving the UI, so a not-yet-propagated
         // grant can't masquerade as the GUI bug.
         var spaceSkillPath = $"{Space}/Skill/{SpaceSkill}";
-        (await fixture.WaitUntilReadableAsync(context, token, spaceSkillPath, TimeSpan.FromSeconds(30)))
+        (await fixture.WaitUntilReadableAsync(context, token, spaceSkillPath, TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken))
             .Should().BeTrue($"the Editor grant must propagate so '{spaceSkillPath}' is readable before the UI test");
 
         var page = await context.NewPageAsync();

@@ -141,7 +141,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         repoClient.Files = [Page("Lesson"), NestedSpace("Nested")];
 
         var first = await Sync.ReimportAtCommit(space, BuiltSha, UserId)
-            .Timeout(TestTimeouts.Convergence * 2).Await();
+            .Timeout(TestTimeouts.Convergence * 2).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"import 1: outcome={first.Outcome} count={first.Count} failed={first.Failed}");
 
         first.Outcome.Should().Be(StaticRepoImportResult.ContentErrorsOutcome,
@@ -225,7 +225,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         repoClient.Files = [Page("Lesson"), Page($"{UnreachableMarker}Blip")];
 
         var first = await Sync.ReimportAtCommit(space, BuiltSha, UserId)
-            .Timeout(TestTimeouts.Convergence * 2).Await();
+            .Timeout(TestTimeouts.Convergence * 2).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"import 1: outcome={first.Outcome} count={first.Count} failed={first.Failed}");
 
         first.Failed.Should().BeGreaterThan(0,

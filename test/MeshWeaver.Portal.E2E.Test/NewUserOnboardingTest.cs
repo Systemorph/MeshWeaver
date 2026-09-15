@@ -22,7 +22,7 @@ public class NewUserOnboardingTest(PortalFixture fixture)
 
         // Signing in self-provisions the unknown user; the fixture throws if onboarding fails (4xx, or a
         // persistent 5xx after the self-provisioning retries), so reaching here means onboarding worked.
-        await using var context = await fixture.NewAuthenticatedContextAsync(newUser);
+        await using var context = await fixture.NewAuthenticatedContextAsync(newUser, cancellationToken: TestContext.Current.CancellationToken);
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1280, 900);
 

@@ -83,7 +83,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant (TestTimeouts.TestMilliseconds is not).
     public async Task AParentDeclaringNothingLosesNothing()
     {
-        var (types, host, _) = await Fixture();
+        var (types, host, _) = await Fixture(TestContext.Current.CancellationToken);
         var parentPath = $"{host}/Thing";
 
         var baseline = await LiteralQueryResults(parentPath);
@@ -143,7 +143,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task TheOldQueryLiteralsCannotReachADeclaredType()
     {
-        var (types, host, _) = await Fixture();
+        var (types, host, _) = await Fixture(TestContext.Current.CancellationToken);
 
         var baseline = await LiteralQueryResults($"{host}/Deal");
         Output.WriteLine($"retired literals for {host}/Deal returned {baseline.Count}: "
@@ -167,7 +167,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task TheRenderedCreateFormOffersATypeTheParentDeclaresInAnotherPartition()
     {
-        var (types, host, _) = await Fixture();
+        var (types, host, _) = await Fixture(TestContext.Current.CancellationToken);
 
         var declaring = await RenderedTypePicker($"{host}/Deal");
         var offered = PickerPaths(declaring);
@@ -196,7 +196,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task ADeclarationRestrictsDiscovery_AndIncludeGlobalTypesDecidesTheGlobals()
     {
-        var (types, host, _) = await Fixture();
+        var (types, host, _) = await Fixture(TestContext.Current.CancellationToken);
         var globals = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>().GlobalCreatableTypes;
         globals.Should().NotBeEmpty("the global set is the thing IncludeGlobalTypes switches off");
 
@@ -232,7 +232,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task ATypeThatOptedOutOfTheCreateContextIsNeverOffered()
     {
-        var (types, host, declaredButOptedOut) = await Fixture();
+        var (types, host, declaredButOptedOut) = await Fixture(TestContext.Current.CancellationToken);
 
         var optedOut = Mesh.ServiceProvider.EnumerateStaticNodes()
             .Where(n => n.IsExcludedFromContext(MeshContexts.Create))
@@ -284,7 +284,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task TheFormNeverSubmitsATypeThePickerWithholds()
     {
-        var (types, host, _) = await Fixture();
+        var (types, host, _) = await Fixture(TestContext.Current.CancellationToken);
 
         var (stream, picker) = await RenderedCreateForm($"{host}/Sealed");
         var offered = PickerPaths(picker);
@@ -314,7 +314,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task APinnedTypeTheParentForbidsIsNotSubmittableThroughTheUrl()
     {
-        var (_, host, _) = await Fixture();
+        var (_, host, _) = await Fixture(TestContext.Current.CancellationToken);
 
         // The control: a parent that declares nothing allows Markdown, so the pinned URL is
         // honoured — the field renders as the read-only label and the value stands. Without this
@@ -343,7 +343,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     /// Two partitions, mirroring <c>Crm</c> + <c>PearlTechnology</c>: the TYPES live in one and the
     /// INSTANCES in the other, so a declared type is provably outside the instance's ancestor chain.
     /// </summary>
-    private async Task<(string Types, string Host, string OptedOut)> Fixture()
+    private async Task<(string Types, string Host, string OptedOut)> Fixture(CancellationToken cancellationToken)
     {
         var types = "Ct" + Guid.NewGuid().ToString("N")[..8];
         var host = "Ho" + Guid.NewGuid().ToString("N")[..8];
@@ -390,7 +390,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
                 TypeNode(types, "Internal", new NodeTypeDefinition { Configuration = "config => config" })
                     with { ExcludeFromContext = ImmutableHashSet.Create(MeshContexts.Create) },
             ],
-        });
+        }, cancellationToken);
 
         await Import(new FakeRepoSource(host)
         {
@@ -404,18 +404,18 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
                 Instance(host, "Deal", $"{types}/Offer"),
                 Instance(host, "Sealed", $"{types}/SealedOffer"),
             ],
-        });
+        }, cancellationToken);
 
         return (types, host, optedOut);
     }
 
-    private async Task Import(FakeRepoSource source)
+    private async Task Import(FakeRepoSource source, CancellationToken cancellationToken)
     {
         // 🚨 .Await(), never a bare `await source`: Rx's own awaiter resumes the continuation
         // INLINE on the signalling thread, and every later await in the method inherits that
         // scheduler.
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
         Output.WriteLine($"{source.Partition} import: {result.Outcome} count={result.Count} "
             + $"failed={result.Failed} blocked=[{string.Join(", ", result.BlockedCreatePaths)}]");
         result.Failed.Should().Be(0, "a fixture that did not land cannot measure anything");
