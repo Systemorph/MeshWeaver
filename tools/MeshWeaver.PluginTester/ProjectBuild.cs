@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Compiler;
 using MeshWeaver.Data;
+using MeshWeaver.Plugin.Packaging;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
@@ -280,6 +281,16 @@ public static class ProjectBuild
         /// </summary>
         public ImmutableArray<PrivateClosure.Ride> Rides { get; init; } = [];
 
+        /// <summary>
+        /// The LOADABLE NATIVE payloads this project's own <c>PackageReference</c>s pull in
+        /// (#4126) — carried, unioned and laid out exactly like <see cref="Rides"/>, but under
+        /// <c>runtimes/&lt;rid&gt;/native/</c> rather than flat, because that is where the module
+        /// loader probes.
+        ///
+        /// <para>🚨 An <c>init</c> PROPERTY, for the same reason.</para>
+        /// </summary>
+        public ImmutableArray<PrivateClosure.NativeRide> NativeRides { get; init; } = [];
+
         /// <summary>Compiled, emitted, and within the warning policy.</summary>
         public bool IsGreen => Failure is null && AssemblyPath is not null;
     }
@@ -505,6 +516,9 @@ public static class ProjectBuild
                             [.. reachableProjects
                                 .Where(byProject.ContainsKey)
                                 .SelectMany(path => byProject[path].Rides)],
+                            [.. reachableProjects
+                                .Where(byProject.ContainsKey)
+                                .SelectMany(path => byProject[path].NativeRides)],
                             sink);
                     }
                 }
@@ -978,12 +992,28 @@ public static class ProjectBuild
         foreach (var absent in privateClosure.Missing)
             sink.Warn($"[{name}] private closure: no file for '{absent}' in the image or on the "
                 + "shelf — it cannot ride, and a bundle missing part of its closure faults at first use");
+        // 🚨 A DECLARED native with no bytes anywhere is named per file (#4126). It is the one
+        // drop that produces no compile error, no load error and no rendering defect — only a
+        // DllNotFoundException at the first P/Invoke, arbitrarily far from the build that caused it.
+        foreach (var absent in privateClosure.NativesMissing)
+            sink.Warn($"[{name}] private closure: a package declares the native payload '{absent}' "
+                + "and neither the image nor the shelf carries the file — it cannot ride, and the "
+                + "module will throw DllNotFoundException at its first P/Invoke");
         if (!privateClosure.Rides.IsEmpty)
             sink.Info($"[{name}] private closure: {privateClosure.Rides.Length} assembl(y|ies) ride "
                 + $"the bundle, {privateClosure.FrameworkResolved.Length} left to the shared framework"
                 + (options.Verbose
                     ? " — " + string.Join(", ", privateClosure.Rides.Select(r => $"{r.AssemblyName} ({r.Source})"))
                     : " (names with --verbose)"));
+        // 🚨 Stated whenever there are any, and it names the RIDS — because the container lane
+        // resolves against ONE image, which is ONE rid. A bundle built here therefore carries that
+        // rid's engine and no other, and a host on a different rid falls back to the runtime's own
+        // probing. That is strictly better than the nothing it carried before #4126, and it is a
+        // limit a reader has to be able to see rather than deduce.
+        if (!privateClosure.Natives.IsEmpty)
+            sink.Info($"[{name}] private closure: {privateClosure.Natives.Length} native payload(s) "
+                + "ride the bundle — "
+                + string.Join(", ", privateClosure.Natives.Select(n => $"{n.RelativePath} ({n.Source})")));
 
         // The reference set: the whole container, MINUS every assembly this run builds from source
         // (its own included) — two definitions of one type is the CS0433 family, and the local build
@@ -1289,6 +1319,7 @@ public static class ProjectBuild
                 RazorCount = razorGenerated,
                 ResourceCount = model.EmbeddedResources.Length,
                 Rides = privateClosure.Rides,
+                NativeRides = privateClosure.Natives,
             };
         }
         catch (CompilationException ex)
@@ -1478,6 +1509,23 @@ public static class ProjectBuild
     public const string ShelfManifestName = "module-libs.txt";
 
     /// <summary>
+    /// The file, beside the built module, that names every NATIVE payload riding the bundle
+    /// (#4126) — one module-relative <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c> path per line.
+    ///
+    /// <para>🚨 A second manifest rather than more lines in <see cref="ShelfManifestName"/>,
+    /// because the two are consumed differently and by different rules: the pack lane turns every
+    /// line of that file into <c>--with &lt;file name&gt;</c>, and <c>--with</c> REFUSES a path
+    /// component by design (a flat closure has no place for one). A native is declared with
+    /// <c>--with-native</c>, which requires exactly the opposite — the path, because the path is
+    /// what the loader probes. Mixing them would make the pack lane's loop wrong for one of the
+    /// two whichever way it was written.</para>
+    ///
+    /// <para>Written ONLY when there are natives, so its ABSENCE means "this module ships none",
+    /// the same statement the packer makes by omitting the manifest's <c>nativeAssets</c>.</para>
+    /// </summary>
+    public const string NativeManifestName = "module-natives.txt";
+
+    /// <summary>
     /// Copies a module's private closure beside it and writes <see cref="ShelfManifestName"/>. The
     /// rides were derived from the image's and the shelf's own deps.json records
     /// (<see cref="PrivateClosure.Derive"/>), so the bundle's closure stays complete BY RECORD —
@@ -1485,9 +1533,13 @@ public static class ProjectBuild
     /// </summary>
     private static void EmitPrivateClosure(
         string outputDirectory, string moduleName,
-        ImmutableArray<PrivateClosure.Ride> rides, Sink sink)
+        ImmutableArray<PrivateClosure.Ride> rides,
+        ImmutableArray<PrivateClosure.NativeRide> natives, Sink sink)
     {
-        if (rides.IsEmpty || !Directory.Exists(outputDirectory))
+        if (!Directory.Exists(outputDirectory))
+            return;
+        EmitNativeClosure(outputDirectory, moduleName, natives, sink.Info, sink.Warn);
+        if (rides.IsEmpty)
             return;
         var manifest = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var ride in rides)
@@ -1503,6 +1555,60 @@ public static class ProjectBuild
         File.WriteAllLines(Path.Combine(outputDirectory, ShelfManifestName), manifest);
         sink.Info($"[{moduleName}] private closure: {manifest.Count} assembl(y|ies) beside the module "
             + $"({ShelfManifestName} is the provenance the pack inspection keys on)");
+    }
+
+    /// <summary>
+    /// Lays the module's NATIVE payloads out UNDER the built module, at the exact path the loader
+    /// probes, and writes <see cref="NativeManifestName"/> beside them (#4126).
+    ///
+    /// <para>🚨 The layout, not a flat copy: <c>ModuleNativeAssets</c> composes its probe from
+    /// <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c> and has no recursive walk, and the packer,
+    /// the bundle reader and the landing all enforce the same four segments
+    /// (<c>NuGetPackageWriter.IsModuleNativeLayout</c>) — so a file laid anywhere else would be
+    /// carried by nothing downstream even if it were copied here.</para>
+    ///
+    /// <para>The manifest is the PROVENANCE, the same role <see cref="ShelfManifestName"/> plays
+    /// for the flat closure: the pack lane turns each line into <c>--with-native</c>, so a payload
+    /// this builder did not derive cannot reach a bundle.</para>
+    /// </summary>
+    /// <param name="outputDirectory">The pack input — the built module's folder.</param>
+    /// <param name="moduleName">The module's name, for the log lines.</param>
+    /// <param name="natives">The derived native rides.</param>
+    /// <param name="info">Where an ordinary line goes (the build sink).</param>
+    /// <param name="warn">Where a refusal goes. Two delegates rather than the sink itself so the
+    /// layout — which is the whole contract here — is pinnable without a build.</param>
+    /// <returns>The module-relative paths actually laid out, in ordinal order.</returns>
+    internal static ImmutableArray<string> EmitNativeClosure(
+        string outputDirectory, string moduleName,
+        ImmutableArray<PrivateClosure.NativeRide> natives,
+        Action<string> info, Action<string> warn)
+    {
+        if (natives.IsEmpty)
+            return [];
+        var manifest = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var native in natives)
+        {
+            // Belt and braces: the derivation already filtered on this predicate, and it is the
+            // one that keeps a path from resolving outside the module directory.
+            if (!NuGetPackageWriter.IsModuleNativeLayout(native.RelativePath))
+            {
+                warn($"[{moduleName}] native '{native.RelativePath}' is not the layout the "
+                    + "module loader probes (runtimes/<rid>/native/<file>) — not laid out");
+                continue;
+            }
+            var destination = Path.Combine(
+                outputDirectory, native.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(native.SourcePath, destination, overwrite: true);
+            manifest.Add(native.RelativePath);
+        }
+        if (manifest.Count == 0)
+            return [];
+        File.WriteAllLines(Path.Combine(outputDirectory, NativeManifestName), manifest);
+        info($"[{moduleName}] private closure: {manifest.Count} native payload(s) under the "
+            + $"module ({NativeManifestName} is the provenance the pack lane declares them from): "
+            + string.Join(", ", manifest));
+        return [.. manifest];
     }
 
     /// <summary>

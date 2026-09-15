@@ -33,19 +33,22 @@ public sealed class ModuleLibrariesShelf
     private readonly ImmutableDictionary<string, ImmutableArray<string>> _dependenciesByPackage;
     private readonly ImmutableDictionary<string, string> _versionsByPackage;
     private readonly ImmutableDictionary<string, string> _filesByName;
+    private readonly ImmutableDictionary<string, ImmutableArray<string>> _nativesByPackage;
 
     private ModuleLibrariesShelf(
         string directory,
         ImmutableDictionary<string, ImmutableArray<string>> assembliesByPackage,
         ImmutableDictionary<string, ImmutableArray<string>> dependenciesByPackage,
         ImmutableDictionary<string, string> versionsByPackage,
-        ImmutableDictionary<string, string> filesByName)
+        ImmutableDictionary<string, string> filesByName,
+        ImmutableDictionary<string, ImmutableArray<string>> nativesByPackage)
     {
         Directory = directory;
         _assembliesByPackage = assembliesByPackage;
         _dependenciesByPackage = dependenciesByPackage;
         _versionsByPackage = versionsByPackage;
         _filesByName = filesByName;
+        _nativesByPackage = nativesByPackage;
     }
 
     /// <summary>Where the shelf was read from.</summary>
@@ -94,6 +97,7 @@ public sealed class ModuleLibrariesShelf
         var assemblies = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
         var dependencies = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
         var versions = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        var natives = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
 
         if (!document.RootElement.TryGetProperty("targets", out var targets))
             throw new InvalidOperationException($"'{depsFiles[0]}' has no 'targets' — not a deps.json.");
@@ -116,6 +120,12 @@ public sealed class ModuleLibrariesShelf
                     if (!names.IsEmpty)
                         assemblies[id] = names;
                 }
+                // #4126 — the shelf is a second byte source for the same closure, so it answers the
+                // same question about natives, through the same reader (NativeContributions), and
+                // for the same reason: a curated package whose only contribution is native would
+                // otherwise resolve, ride nothing, and throw at the first P/Invoke.
+                if (NativeContributions.DeclaredBy(library.Value) is { IsEmpty: false } declared)
+                    natives[id] = declared;
                 if (library.Value.TryGetProperty("dependencies", out var deps))
                     dependencies[id] = [.. deps.EnumerateObject().Select(d => d.Name)];
             }
@@ -129,7 +139,7 @@ public sealed class ModuleLibrariesShelf
 
         return new ModuleLibrariesShelf(
             full, assemblies.ToImmutable(), dependencies.ToImmutable(),
-            versions.ToImmutable(), files);
+            versions.ToImmutable(), files, natives.ToImmutable());
     }
 
     /// <summary>Whether the shelf carries this package at all (its deps record names it).</summary>
@@ -158,6 +168,19 @@ public sealed class ModuleLibrariesShelf
     /// <param name="assemblyName">The assembly's simple name.</param>
     /// <returns>The path, or null.</returns>
     public string? FileFor(string assemblyName) => _filesByName.GetValueOrDefault(assemblyName);
+
+    /// <summary>The native paths a shelf package DECLARES (#4126), whether or not the files are
+    /// staged — the same reading the container applies to its own deps.json.</summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>The declared module-relative paths.</returns>
+    public ImmutableArray<string> DeclaredNativesOf(string packageId) =>
+        _nativesByPackage.TryGetValue(packageId, out var declared) ? declared : [];
+
+    /// <summary>The file on the shelf backing one declared native path, or null.</summary>
+    /// <param name="relativePath">The module-relative path.</param>
+    /// <returns>The absolute path, or null.</returns>
+    public string? NativeFileFor(string relativePath) =>
+        NativeContributions.FileFor(Directory, relativePath);
 
     /// <summary>One shelf resolution: the package's own assemblies plus its transitive ride set.</summary>
     /// <param name="PackageId">The package.</param>

@@ -173,8 +173,32 @@ internal static class PackageUpdateReconciler
         // which governs the image roll alone since 2026-09-14.
         return policy switch
         {
-            PackageUpdatePolicy.Auto => Apply(hub, meshService, accessService, source, sourceRef, pkg, record,
-                recordPath, provenance, detail, logger),
+            // 🚨 …and the policy decides only whether this lane WANTS to write. Whether it MAY is a
+            // second question, and #4355 is what it cost to leave unasked: a partition whose content
+            // a sync source keeps at the sealed commit has an owner already, and this lane writing
+            // into it is a second writer with its own books. The apply is therefore gated on
+            // ownership and DEGRADES TO THE REMINDER — never a silent skip, and never a write that
+            // lands sources this instance has no proven bundle for. Only the unattended apply is
+            // gated: a human clicking Update is the documented escape (Doc/Architecture/SyncRefContract
+            // draws the same line), and it goes through the full install, never a delta.
+            //
+            // The CANDIDATE's target partition, because that is where this apply's writes would
+            // land — not the record's, which is the partition an existing baseline describes and is
+            // the question CatalogLayoutAreas asks. They are the same for every package that does
+            // not move partitions, and where they differ each side asks about the one it means.
+            PackageUpdatePolicy.Auto => PartitionContentOwnership
+                .Observe(hub, PackageInstaller.TargetPartitionOf(pkg.Id, pkg), pkg.Id, logger)
+                .SelectMany(ownership => ownership.InstallerOwnsTheContent
+                    ? Apply(hub, meshService, accessService, source, sourceRef, pkg, record,
+                        recordPath, provenance, detail, logger)
+                    : Notify(
+                        hub, meshService, accessService, recordPath, pkg, record, SyncOwnedPartitionKind,
+                        $"Update held: {pkg.Name ?? pkg.Id}",
+                        $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}), and this package "
+                        + "is set to update automatically — but it was NOT applied. "
+                        + ownership.Because + ". Applying it here would leave two writers with "
+                        + "separate records of one partition (MeshWeaver#4355). " + provenance + ".",
+                        logger)),
             PackageUpdatePolicy.Notify => Notify(
                 hub, meshService, accessService, recordPath, pkg, record, UpdateAvailableKind,
                 $"Update available: {pkg.Name ?? pkg.Id}",
@@ -270,6 +294,15 @@ internal static class PackageUpdateReconciler
 
     /// <summary>The refusal that an unattended apply needs a global admin to re-authorize it.</summary>
     private const string AuthorizationRequiredKind = "authorization-required";
+
+    /// <summary>
+    /// The hold that an unattended apply declined because the target partition's content is kept by
+    /// a sync source, not by the installer (<see cref="PartitionContentOwnership"/>, #4355). A
+    /// distinct kind so it is idempotent per candidate on its OWN marker and is never folded into
+    /// the plain "update available" reminder — the two say different things to an administrator:
+    /// one is "press Update", the other is "this package will not auto-update here, and why".
+    /// </summary>
+    private const string SyncOwnedPartitionKind = "sync-owned-partition";
 
     /// <summary>
     /// Raises a system notification on the install record — the user-visible surface of an update

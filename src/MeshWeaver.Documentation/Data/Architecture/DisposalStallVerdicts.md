@@ -118,12 +118,16 @@ fell into the wrong bucket.
 `ShutdownRequest` that `Dispose()` posted. The hub was not waiting on a child: at `RunLevel=Started`
 it has not reached `DisposeHostedHubs` and has asked nothing below it to do anything.
 
-**Not established** — the mechanism. Three candidates remain (the third was added later; see below),
-and the instrumentation of the day could not discriminate any of them:
+**Not established at the time** — the mechanism. Three candidates were carried for eight days
+(the third was added later; see below), because the instrumentation of the day could not
+discriminate any of them. 🚨 **It is established now: the answer is M1, and the reading that settles
+it was taken in-process rather than waited for in production — see *"Resolved 2026-09-15 (#3593) —
+M1, measured"* at the end of this section.** The table below is kept as the discriminator it was,
+and because the counters it describes are what produced the answer.
 
 | | **M1 — the wake-up was never delivered** | **M2 — a drain body is blocked before the handler** |
 |---|---|---|
-| Mechanism | `ScheduleDrainOne` uses `Task.Factory.StartNew(…, turnScheduler)` **without** `TaskCreationOptions.PreferFairness`. From a thread-pool thread that enqueues onto that thread's **local LIFO** work-stealing queue. `HostedHubsCollection.DisposeHubsReactive` disposes every child sequentially on one thread, so N children's drains land in one thread's local queue, reachable only by stealing. | A `DrainOne` **is** running and is blocked synchronously ahead of the handler — the `GetHub` convoy `HostedHubsCollection` documents from two `dotnet-stack` captures: `Monitor.Enter_Slowpath ← GetHub ← RouteStreamMessage ← DrainOne`. |
+| Mechanism (**this is the one it was**) | `ScheduleDrainOne` used `Task.Factory.StartNew(…, turnScheduler)` **without** `TaskCreationOptions.PreferFairness`. From a thread-pool thread that enqueues onto that thread's **local LIFO** work-stealing queue. `HostedHubsCollection.DisposeHubsReactive` disposes every child sequentially on one thread, so N children's drains land in one thread's local queue, reachable only by stealing. | A `DrainOne` **is** running and is blocked synchronously ahead of the handler — the `GetHub` convoy `HostedHubsCollection` documents from two `dotnet-stack` captures: `Monitor.Enter_Slowpath ← GetHub ← RouteStreamMessage ← DrainOne`. |
 | Reproduces all measured fields on N children at once? | yes | yes |
 | `drainsInFlight` | **0** | **≥ 1** |
 | `TurnsDequeued` | **unchanged** — the body never ran | **advanced** — the body dequeued the turn it is now stuck in |
@@ -181,14 +185,77 @@ specific shape — a wedged or already-deactivated activation parks every turn i
 the verdict now hands the stall to that scheduler by measurement rather than by assertion.
 
 🚨 It does **not** apply to hosted hubs, which is what the 47 reports were: hosted hubs are built
-from a fresh configuration and stay on `TaskScheduler.Default`. Read a
-`drainsAwaitingScheduler > 0` on a `sync/*` hub as **pool starvation or a local-queue LIFO stall**,
-not as a dead activation — the owner is the same (the scheduler), the remedy is not.
+from a fresh configuration and stay on `TaskScheduler.Default`. Since the fix below, a
+`drainsAwaitingScheduler > 0` on a `sync/*` hub means the pool genuinely has no thread to give —
+the drain is on the global queue, so it is not hiding on one — not a dead activation. The owner is
+the same (the scheduler), the remedy is not.
 
-🚨 **Do not "fix" this by adding `PreferFairness`.** It is one of the live hypotheses, and shipping
-a change that makes a symptom rarer while the mechanism is unmeasured is the band-aid this
-repository refuses. The next occurrence now names which of M1, M2 or M3 it is; that is what the fix
-waits on.
+### Resolved 2026-09-15 (#3593) — M1, measured: the drain rode the POSTING thread's own queue
+
+For eight days this page said *"do not fix this by adding `PreferFairness` — it is one of the live
+hypotheses, and making a symptom rarer while the mechanism is unmeasured is the band-aid this
+repository refuses."* That was the right call then and it is discharged now, because the mechanism
+was **measured** rather than guessed, twice — once against the runtime, once against the hub.
+
+**The runtime reading.** `Task.Factory.StartNew(…, TaskScheduler.Default)` issued *from a thread-pool
+worker* enqueues onto **that worker's local LIFO queue**. Measured on an 18-core host, with every
+worker occupied by a non-blocking loop and one such task queued from each:
+
+| what was queued | drains started after 20 s | `ThreadPool.ThreadCount` | `PendingWorkItemCount` |
+|---|---|---|---|
+| `DenyChildAttach` (local queue) | **0 / 18** | 18 → 18 (never grew) | 18, flat for the whole 20 s |
+| `DenyChildAttach \| PreferFairness` (global queue) | 18 / 18 by ~4.7 s | 18 → **19** (a thread was injected) | 0 |
+
+So the stall is not "slow under load": work on a busy worker's local queue is reachable by **neither**
+work-stealing (no worker is idle to steal) **nor** the pool's starvation detection, which does not
+look there and therefore never injects a thread. It waits for the worker that enqueued it to return
+to the dispatcher — and for the hub pump that worker is running, "return to the dispatcher" means
+"that *other* hub's queue emptied". **Unbounded, and a cross-hub coupling the actor model forbids.**
+
+**Why the poster is always somebody else's thread.** `KickDrain` runs inline on whoever posted. A
+mass teardown posts every child's `ShutdownRequest` from ONE worker — `HostedHubsCollection
+.DisposeHubsReactive` calls `h.Dispose()` sequentially inside the owner's own turn — so N children's
+drains pile onto that one worker's local queue. That is the population shape of the incident exactly:
+47 `sync/*` siblings, one cascade, 41 ms apart.
+
+**The hub reading**, from `PumpDrainReachabilityTest` — a hub whose drain is scheduled from another
+hub's turn while that turn is parked. Unfixed, the verdict prints the incident's own fingerprint:
+
+```
+DISPOSAL DEADLOCK DETECTED: Hub victim/… made no teardown progress for 00:00:08
+(last progress: victim/… → Started). RunLevel=Started, queue depth 1.
+THE PUMP IS NOT TURNING: the drain flag is latched, drainsInFlight=0,
+drainsAwaitingScheduler=1, and NO turn was dequeued in that window (0 dequeued in total…)
+Hub victim/… RunLevel=Started Disposal=Pending Queue(buffer=1,deferred=0,drainsInFlight=0,openGates=0,draining=True)
+```
+
+Read against the discriminator table above — `drainsInFlight=0`, `TurnsDequeued` delta `0`,
+`drainsAwaitingScheduler=1` — that is **M1**, and it is every field of the 47 reports plus the two
+that did not exist when they were filed.
+
+**The fix**, one flag in `MessageService.ScheduleDrainOne`:
+
+```csharp
+Task.Factory.StartNew(DrainOne, CancellationToken.None,
+    TaskCreationOptions.DenyChildAttach | TaskCreationOptions.PreferFairness,
+    turnScheduler);
+```
+
+The drain goes to the **global** queue: visible to every worker, and visible to the pool's own
+starvation detection, so a saturated pool grows to service it. What is left is the pool's bounded,
+self-healing back-pressure instead of a wait on an unrelated hub. Nothing else changed — no
+`PreferFairness` anywhere else, no retry, no re-kick, no widened bound, no watchdog: **M2 and M3 are
+untouched**, and the verdict still names them if they ever fire.
+
+🚨 **The negative control ran.** With only the flag removed and the test project rebuilt, the test
+fails in 12 s with the verdict above; with it, green in 406 ms. One line is the whole difference.
+
+🚨 **What this does NOT fix, stated so the next reader does not assume it.** `DrainLoop`'s trampoline
+still owns its worker for an unbounded run of synchronous turns, so a continuously-posted hub can
+still hold a pool thread indefinitely. That is a *precondition* of the wedge (it is one way the pool
+gets saturated), not the wedge: with the drain on the global queue a saturated pool is answered by
+thread injection. If pool exhaustion is ever measured as a defect in its own right, the remedy is a
+bounded trampoline (TPL Dataflow's `MaxMessagesPerTask`), and it is a different change.
 
 ---
 

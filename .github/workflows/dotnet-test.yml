@@ -2436,7 +2436,7 @@ jobs:
     - name: "Execute the module publication lane against a stub registry"
       run: python3 .github/scripts/test-module-publication.py
 
-    # The gate and publish-bake lanes compose every external module into /ext/<Name>/ for the
+    # The gate and publish-bake lanes compose every external module into /ext/modules/<Name>/ for the
     # tester container, and until #3514 they copied `meshweaver/modules/` alone — leaving a module
     # that LOADS and then 404s every static asset it ships (`meshweaver/moduleassets/`), announced
     # in one LogDebug line. Latent here (the bake is mesh-free, the gate runs no browser) and fine
@@ -2444,6 +2444,11 @@ jobs:
     # browser-driven mesh e2e, rendered a bare Code card where the workbench belongs for three days.
     # This EXTRACTS both lanes' step by `id:` and executes it against real bundle shapes, reading
     # the verdict off the landed bytes — with two arms that mutate the real step and must go RED.
+    # Since #4126 the same harness also covers the THIRD bundle section — a module's RID-specific
+    # NATIVE payloads (`meshweaver/modulenatives/`), which must land at the exact four segments
+    # `ModuleNativeAssets` probes, under a folder whose PARENT is named `modules`. Both properties
+    # are asserted, and both have their own falsification arm: the drop has no symptom short of a
+    # DllNotFoundException at the first P/Invoke.
     - name: "Execute the lanes' external-module landing against real bundle shapes"
       run: python3 .github/scripts/test-module-asset-landing.py
 
