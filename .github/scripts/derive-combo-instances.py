@@ -126,14 +126,22 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
                 "what it would roll to and what it runs; an installation that cannot be reached is "
                 "left UNVERIFIED, which is the state this lane exists to end.")
             continue
-        if instance.host in hosts:
+        # 🚨 CANONICALISE BEFORE COMPARING. A HOSTNAME IS CASE-INSENSITIVE and the overlay extractor
+        # accepts upper case, so `portal.example.com` and `PORTAL.EXAMPLE.COM` are ONE portal that a
+        # case-sensitive test reads as two — which is not a cosmetic miss: it walks straight through
+        # the refusal below, and the second entry would be verified with the first's credentials and
+        # land its verdict on the wrong `Admin/UpdatePolicy`. A dedup key that fails to dedup is the
+        # shape this whole file is about. The ORIGINAL spelling is what goes in the URL and the
+        # report, because the overlay is the record.
+        host_key = instance.host.rstrip(".").lower()
+        if host_key in hosts:
             blockers.append(
-                f"installations `{hosts[instance.host]}` and `{instance.id}` both resolve to "
-                f"https://{instance.host}. One of them would be verified under a name whose "
+                f"installations `{hosts[host_key]}` and `{instance.id}` both resolve to "
+                f"https://{host_key}. One of them would be verified under a name whose "
                 "instance key and admin token belong to the other, and its verdict would land on "
                 "the wrong `Admin/UpdatePolicy`.")
             continue
-        hosts[instance.host] = instance.id
+        hosts[host_key] = instance.id
         rows.append({"name": instance.id, "baseUrl": f"https://{instance.host}"})
 
     if not rows and not blockers:
@@ -287,6 +295,15 @@ def self_test() -> int:
         ("twin", "same.example.com", "deployments/aks/twin/values.twin.yaml")])], {})
     check(any("resolve to" in b for b in blockers),
           "two installations on one host is a RED")
+
+    # …and the same host SPELLED DIFFERENTLY is the same host. A case-sensitive dedup key walks
+    # straight through the arm above and hands one portal two names (caught in review on #4390).
+    rows, _, blockers = derive([_scan("Systemorph/Memex", [
+        ("memex", "Same.Example.COM.", "deployments/aks/memex/values.memex.yaml"),
+        ("twin", "same.example.com", "deployments/aks/twin/values.twin.yaml")])], {})
+    check(rows == [{"name": "memex", "baseUrl": "https://Same.Example.COM."}]
+          and any("resolve to" in b for b in blockers),
+          "one host in two spellings is a RED, and the overlay's own spelling survives")
 
     # A roster entry naming nothing exempts nothing and hides the next one.
     rows, _, blockers = derive(TWO_LIVE, {"ghost": ("retired", "long gone", "")})
