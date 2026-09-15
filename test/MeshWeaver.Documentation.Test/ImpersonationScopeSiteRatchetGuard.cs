@@ -63,8 +63,16 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     /// The seeded inventory's size. Per-file entries stop a new site in a file that already carries
     /// the shape; this stops the list as a WHOLE from growing — including by the trick of adding a
     /// new file's line. Lower it whenever you delete or lower an entry.
+    ///
+    /// <para><b>2026-09-15 — 66 → 65 by CONVERSION.</b>
+    /// <c>src/MeshWeaver.Graph/Configuration/SpaceNodeType.cs</c> (1) is gone: the Space
+    /// creator-Admin grant now runs through <c>AccessService.RunAsSystem</c>. That site was not a
+    /// tidiness item — it LATCHED <c>system-security</c> onto the create flow that invoked the
+    /// post-creation handler, which is why the framework's own
+    /// <c>Admin/Partition/{id}</c> announcement was decided against two different identities in one
+    /// run (#4061). Pinned by <c>SpaceGrantScopeDoesNotLatchTheCreateFlowTest</c>.</para>
     /// </summary>
-    private const int TotalBudget = 66;
+    private const int TotalBudget = 65;
 
     /// <summary>Production roots. <c>test/</c> and <c>samples/</c> are deliberately out of scope —
     /// the leak there costs test isolation, not a user's permissions, and listing 21 more entries
