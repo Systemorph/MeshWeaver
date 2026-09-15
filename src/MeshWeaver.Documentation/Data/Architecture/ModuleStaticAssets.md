@@ -167,7 +167,7 @@ build; call the shared lane.
 
 | Hop | Gate | Proven by |
 |---|---|---|
-| 1 — the PRODUCER emits all three kinds | `CollocatedJsModuleTest` + `ScopedCssTest` (`test/MeshWeaver.PluginTester.Test`) — they RUN `ProjectBuild` and read the emitted tree | reverting the emitter turns 3 of the 4 cases red and leaves the assetless control green |
+| 1 — the PRODUCER emits all three kinds | `CollocatedJsModuleTest` + `ScopedCssTest` (`test/MeshWeaver.PluginTester.Test`) — they RUN `ProjectBuild` and read the emitted tree | reverting the emitter turns 5 of its 6 cases red (both `.razor.js` and `.cshtml.js`) and leaves the assetless control green |
 | 1 — the BUNDLE declares what the tree implies | `.github/scripts/check-bundle-static-assets.py`, in every satellite's pack lane, per file, both compilers, no precondition | its `--self-test`: 14 cases, 6 of which MUST fail the gate |
 | 3 — the LANE lands what the bundle ships | `.github/scripts/test-module-asset-landing.py` | two falsification arms per lane, each mutating the real step |
 | 4 — the HOST serves what landed | `PluginBundlePublishAssetsTest` (`test/Memex.Portal.Shared.Test`) | a bundle with no assets lands no `wwwroot` |

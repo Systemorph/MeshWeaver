@@ -1335,26 +1335,28 @@ public static class ProjectBuild
         int ScopedStylesheets, int JsModules, string? Refusal);
 
     /// <summary>
-    /// The static-asset half of the module — the Razor SDK's THREE asset kinds, reproduced:
+    /// The static-asset half of the module — the Razor SDK's THREE asset kinds, reproduced, in the
+    /// order this method emits them and the order
+    /// <see href="/Doc/Architecture/ModuleStaticAssets">the architecture page</see> numbers them:
     /// <list type="number">
-    /// <item>the project's own <c>wwwroot/**</c>, copied verbatim;</item>
-    /// <item>the CSS-isolation aggregate <c>wwwroot/&lt;AssemblyName&gt;.styles.css</c> — each
-    /// <c>*.razor.css</c> rewritten under the SAME scope the generator stamped into the markup
-    /// (<see cref="ScopedCss"/>), concatenated in item order;</item>
-    /// <item>each collocated <b>JS module</b> — a <c>Foo.razor.js</c> beside <c>Foo.razor</c> —
-    /// copied to <c>wwwroot/&lt;path relative to the project&gt;</c>.</item>
+    /// <item><b>Kind 1</b> — the project's own <c>wwwroot/**</c>, copied verbatim;</item>
+    /// <item><b>Kind 2</b> — each collocated <b>JS module</b>, a <c>Foo.razor.js</c> beside
+    /// <c>Foo.razor</c>, copied to <c>wwwroot/&lt;path relative to the project&gt;</c>;</item>
+    /// <item><b>Kind 3</b> — the CSS-isolation aggregate <c>wwwroot/&lt;AssemblyName&gt;.styles.css</c>
+    /// — each <c>*.razor.css</c> rewritten under the SAME scope the generator stamped into the
+    /// markup (<see cref="ScopedCss"/>), concatenated in item order.</item>
     /// </list>
     /// The packer sweeps <c>wwwroot/</c> into the bundle's <c>staticAssets</c>, the landing writes
     /// it module-relative, and the host mounts it at <c>_content/&lt;Name&gt;/…</c>.
     ///
     /// <para>🚨 Kinds 2 and 3 are COMPUTED: neither file exists under the project's <c>wwwroot/</c>,
     /// so a directory walk cannot see them and every producer of a module bundle has to reproduce
-    /// them. Kind 2 was missing until #2221 and a converted pack landed, loaded and rendered
-    /// UNSTYLED with nothing in any log. Kind 3 was missing until #2384 and did the same thing one
-    /// step further along: <c>OpenStreetMapView.razor.js</c> 404'd for three weeks, so every map in
-    /// every container-built view pack — OpenStreetMap, GoogleMaps, AppleMaps, Chat — threw
-    /// <c>Failed to fetch dynamically imported module</c> in <c>OnAfterRenderAsync</c> and rendered
-    /// nothing. The real SDK lays kind 3 at the project-relative path
+    /// them. <b>Kind 3 was missing until #2221</b> and a converted pack landed, loaded and rendered
+    /// UNSTYLED with nothing in any log. <b>Kind 2 was missing until #2384</b> and did the same
+    /// thing one step further along: <c>OpenStreetMapView.razor.js</c> 404'd for three weeks, so
+    /// every map in every container-built view pack — OpenStreetMap, GoogleMaps, AppleMaps, Chat —
+    /// threw <c>Failed to fetch dynamically imported module</c> in <c>OnAfterRenderAsync</c> and
+    /// rendered nothing. The real SDK lays kind 2 at the project-relative path
     /// (<c>publish/wwwroot/Components/Badge.razor.js</c> for <c>Components/Badge.razor.js</c> —
     /// measured against SDK 10.0.400, 2026-09-15), which is exactly what
     /// <c>MeshModuleStaticAssetExtensions</c> re-bases onto <c>_content/&lt;Name&gt;/…</c>.</para>

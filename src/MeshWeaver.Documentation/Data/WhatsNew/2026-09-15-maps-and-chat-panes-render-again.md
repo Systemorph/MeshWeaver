@@ -1,7 +1,7 @@
 ---
 Name: Maps and chat panes render again
 Category: Fix
-Description: Every view pack installed from the Store shipped without the JavaScript its views load, so maps came up blank and chat panes lost their editor behaviour. The file now rides the package, and the build refuses to produce one that is missing it.
+Description: Four view packs — OpenStreetMap, Google Maps, Apple Maps and Chat — shipped without the JavaScript their views load, so maps came up blank and chat panes lost their editor behaviour. The file now rides the package, and the build refuses to produce one that is missing it.
 Icon: Map
 Order: -20260915
 ---
@@ -24,7 +24,8 @@ actually imports was absent, and nothing anywhere logged a word about it.
 
 **Four packs were affected — OpenStreetMap, Google Maps, Apple Maps and Chat — and every deployment
 that installed one inherited the same blank frames.** Reinstalling did not help; the file was never
-in any copy of the package.
+in any copy of the package. Other packs, and every view that ships inside the platform itself, were
+never affected: this is specific to how those four are compiled into a package.
 
 ## What changed
 
@@ -38,5 +39,10 @@ noticed:
   package declared *some* assets — and OpenStreetMap's map library answered yes while the file its
   view imports was missing. Apple Maps, whose entire asset is that one file, was not checked at all.
 
-No action is needed: the next version of each pack carries the file, and installs pick it up
-automatically.
+## What you will see
+
+The packages already on your deployment are unchanged — the file is not in them, and nothing this
+fix does can put it there. **Each of the four packs has to be published once more**, and until that
+new version reaches your deployment its maps and chat panes behave exactly as they did. From then
+on it is hands-off: a deployment that auto-updates picks the new version up on its own, and a fresh
+install gets it straight away.

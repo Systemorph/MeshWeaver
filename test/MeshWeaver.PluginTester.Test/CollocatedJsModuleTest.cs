@@ -146,6 +146,51 @@ public class CollocatedJsModuleTest : IDisposable
     }
 
     /// <summary>
+    /// The OTHER pairing the SDK recognises: a <c>Foo.cshtml.js</c> beside a Razor Pages/MVC
+    /// <c>Foo.cshtml</c>. It travels a different branch of the emitter (the Razor item is not a
+    /// component) to the same project-relative destination, so a regression in it would 404
+    /// exactly like #2384 while a `.razor.js`-only suite stayed green.
+    /// </summary>
+    [Fact]
+    public async Task ACshtmlViewsCollocatedJsModuleLandsTheSameWay()
+    {
+        const string js = "export function page(){ return 'p'; }\n";
+        var entry = Write("Pages/Pages.csproj", Csproj("Widgets.Pages"));
+        Write("Pages/Views/Index.cshtml", "@{ }\n<p>index</p>\n");
+        Write("Pages/Views/Index.cshtml.js", js);
+
+        var report = await Build(entry);
+
+        report.ExitCode.Should().Be(0,
+            $"the fixture must build for this case to measure anything — {report.Projects.Single().Result?.Failure}");
+        var outputDirectory = Path.GetDirectoryName(report.Projects.Single().Result!.AssemblyPath!)!;
+        var landed = Path.Combine(outputDirectory, "wwwroot", "Views", "Index.cshtml.js");
+        File.Exists(landed).Should().BeTrue(
+            "a .cshtml view's collocated JS is the same SDK asset kind as a component's, and it is "
+            + "requested at the same _content/<Name>/<project-relative path>");
+        File.ReadAllText(landed).Should().Be(js);
+    }
+
+    /// <summary>
+    /// The same refusal on the <c>.cshtml</c> side — proving the orphan check keys off the PAIRING,
+    /// not off the <c>.razor</c> extension.
+    /// </summary>
+    [Fact]
+    public async Task ACshtmlJsModuleThatPairsWithNothingIsRefusedToo()
+    {
+        var entry = Write("OrphanPage/OrphanPage.csproj", Csproj("Widgets.OrphanPage"));
+        Write("OrphanPage/Views/Index.cshtml", "@{ }\n<p>index</p>\n");
+        Write("OrphanPage/Views/Index.cshtml.js", "export function ok(){}\n");
+        Write("OrphanPage/Views/Removed.cshtml.js", "export function stranded(){}\n");
+
+        var report = await Build(entry);
+
+        report.ExitCode.Should().NotBe(0);
+        report.Projects.Single().Result!.Failure.Should()
+            .Contain("Removed.cshtml.js").And.Contain("BLAZOR106");
+    }
+
+    /// <summary>
     /// NEGATIVE CONTROL for the emitter itself: a JS module that pairs with nothing is REFUSED by
     /// name — the SDK's own BLAZOR106, which is an error there too (measured against SDK 10.0.400,
     /// 2026-09-15, including for a file under <c>wwwroot/</c>). Without this a component renamed
