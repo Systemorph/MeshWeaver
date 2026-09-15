@@ -4,7 +4,7 @@
 WHY
 ---
 `node-repo-gate.yml` and `node-repo-publish-bake.yml` unpack every external module bundle and
-compose it into `/ext/<Name>/` for the tester container. Until MeshWeaver#3514 they copied
+compose it into `/ext/modules/<Name>/` for the tester container. Until MeshWeaver#3514 they copied
 `meshweaver/modules/` and nothing else — but a bundle carries its STATIC WEB ASSETS separately,
 under `meshweaver/moduleassets/`, keeping their module-relative path (`wwwroot/x.js`,
 `wwwroot/_content/<Dep>/y.css`). That is the shape `ModuleLandingService` writes verbatim beside
@@ -26,7 +26,7 @@ HOW IT STAYS HONEST
 * The step is EXTRACTED FROM THE WORKFLOW by its `id:`, never copied here — a copy passes while
   the real thing rots. Both lanes are extracted, and finding fewer than both is RED.
 * The verdict is read off THE BYTES on disk: every shipped asset must exist at its module-relative
-  path under `/ext/<Name>/` with a matching sha256. Not off the step's own log, and not off a file
+  path under `/ext/modules/<Name>/` with a matching sha256. Not off the step's own log, and not off a file
   count that a landing which copied nothing could also satisfy.
 * Every case prints its DENOMINATOR — bundles composed, bundles carrying assets, asset files
   shipped, asset files landed — and a case that finds ZERO shipped assets FAILS. A harness that
@@ -44,11 +44,28 @@ HOW IT STAYS HONEST
   `NuGetPackageWriter.ModuleAssetFolder` in `src/`, so renaming the constant reds this harness
   instead of silently orphaning the lane.
 
+THE NATIVE HALF (MeshWeaver#4126)
+---------------------------------
+A bundle carries its RID-specific NATIVE payloads in a THIRD section,
+`meshweaver/modulenatives/`, keeping the module-relative path `runtimes/<rid>/native/<file>`. Two
+things about that path are load-bearing and both are asserted here:
+
+* it must survive the composition EXACTLY — `ModuleNativeAssets` composes its probe from those four
+  segments and has no recursive walk, so a payload landed anywhere else reads as shipped and
+  behaves as absent;
+* the module folder itself must sit under a parent named `modules`, because that is what the
+  resolver keys on (`IsModuleDirectory`). The lanes therefore compose into `/ext/modules/<Name>/`,
+  and the case below asserts the DEPTH, not merely that the file arrived somewhere.
+
+The failure this prevents has no symptom short of a `DllNotFoundException` at the first P/Invoke:
+the module loads, its types scan, its NodeTypes compile, and nothing anywhere says the engine is
+missing.
+
 WHAT THIS HARNESS CANNOT PROVE
 ------------------------------
 That the browser gets a 200. It proves the lane lays the bytes down in the exact shape
 `MeshModuleStaticAssetExtensions.ModuleWwwrootPath` looks for — `<dir of the loaded assembly>/
-wwwroot` — for an assembly the lane passes as `--module /ext/<Name>/<Name>.dll`. The serving half
+wwwroot` — for an assembly the lane passes as `--module /ext/modules/<Name>/<Name>.dll`. The serving half
 is the platform's and is exercised in production, where both portals answer 200 for
 `_content/MeshWeaver.Markdown.Collaboration/Components/collaborativeMarkdownView.js`.
 """
@@ -107,6 +124,19 @@ def asset_folder() -> str:
         r'public\s+const\s+string\s+ModuleAssetFolder\s*=\s*"([^"]+)"', text)
     if not match:
         die(f"cannot read ModuleAssetFolder from {PACKAGING_SOURCE} — the harness would be "
+            "asserting a path nothing in src/ defines")
+    return match.group(1)
+
+
+def native_folder() -> str:
+    """`NuGetPackageWriter.ModuleNativeFolder`, read from source for the same reason
+    `asset_folder` is: the lane hard-codes the path, and a renamed constant must red this harness
+    instead of silently orphaning the lane."""
+    text = (ROOT / PACKAGING_SOURCE).read_text(encoding="utf-8")
+    match = re.search(
+        r'public\s+const\s+string\s+ModuleNativeFolder\s*=\s*"([^"]+)"', text)
+    if not match:
+        die(f"cannot read ModuleNativeFolder from {PACKAGING_SOURCE} — the harness would be "
             "asserting a path nothing in src/ defines")
     return match.group(1)
 
@@ -172,9 +202,45 @@ def strip_asset_landing(body: str, lane: str) -> str:
     return out
 
 
+def strip_native_landing(body: str, lane: str) -> str:
+    """The PRE-#4126 body: the whole native block removed, reconstructed from the real one."""
+    lines = body.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines)
+                     if "RID-SPECIFIC NATIVE PAYLOADS" in line)
+        opener = next(i for i, line in enumerate(lines)
+                      if 'if [ -d "$u/meshweaver/modulenatives" ]' in line)
+    except StopIteration:
+        die(f"{lane}: the native-landing block is not in the step — nothing to revert, so the "
+            "falsification arm would pass having removed nothing")
+    indent = len(lines[opener]) - len(lines[opener].lstrip())
+    closer = next(
+        (i for i in range(opener + 1, len(lines))
+         if lines[i].strip() == "fi" and len(lines[i]) - len(lines[i].lstrip()) == indent),
+        None)
+    if closer is None:
+        die(f"{lane}: cannot find the `fi` closing the native-landing block")
+    kept = lines[:start] + lines[closer + 1:]
+    out = "\n".join(kept)
+    # `natives` is defined inside the removed region; keep the rest runnable under -u.
+    out = out.replace(", $natives native payload(s)", "")
+    out = out.replace("NATIVE_FILES=$((NATIVE_FILES + natives))", "NATIVE_FILES=$((NATIVE_FILES + 0))")
+    if "modulenatives" in out:
+        die(f"{lane}: the revert arm still mentions modulenatives — it removed the wrong region")
+    return out
+
+
+def strip_native_copy(body: str, lane: str) -> str:
+    """The native `cp` removed, the in-lane assertion kept: does the lane's own check fire?"""
+    needle = 'cp -R "$u"/meshweaver/modulenatives/. "$EXT/modules/$name/"'
+    if needle not in body:
+        die(f"{lane}: the native copy is not in the step — the no-copy arm has nothing to remove")
+    return body.replace(needle, ': "the copy this arm deliberately removes"')
+
+
 def strip_asset_copy(body: str, lane: str) -> str:
     """The `cp` removed, the in-lane assertion kept: does the lane's own check actually fire?"""
-    needle = 'cp -R "$u"/meshweaver/moduleassets/. "$EXT/$name/"'
+    needle = 'cp -R "$u"/meshweaver/moduleassets/. "$EXT/modules/$name/"'
     if needle not in body:
         die(f"{lane}: the asset copy is not in the step — the no-copy arm has nothing to remove")
     return body.replace(needle, ': "the copy this arm deliberately removes"')
@@ -182,13 +248,14 @@ def strip_asset_copy(body: str, lane: str) -> str:
 
 # ── fixtures ────────────────────────────────────────────────────────────────────────────────
 def make_bundle(path: Path, module: str, assets: dict[str, bytes],
-                *, entry_dll: bool = True, closure: tuple[str, ...] = ()) -> dict[str, bytes]:
+                *, entry_dll: bool = True, closure: tuple[str, ...] = (),
+                natives: dict[str, bytes] | None = None) -> dict[str, bytes]:
     """Write one module bundle in the shape `ModulePackCommand` produces.
 
     Returns the asset map actually written, keyed by module-relative path — the DENOMINATOR every
     assertion below is measured against.
     """
-    mf, af = module_folder(), asset_folder()
+    mf, af, nf = module_folder(), asset_folder(), native_folder()
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("meshweaver/manifest.json", json.dumps({
             "plugin": module,
@@ -201,7 +268,19 @@ def make_bundle(path: Path, module: str, assets: dict[str, bytes],
             archive.writestr(f"{mf}/{dep}.dll", b"MZ-dep-" + dep.encode())
         for relative, content in assets.items():
             archive.writestr(f"{af}/{relative}", content)
+        for relative, content in (natives or {}).items():
+            archive.writestr(f"{nf}/{relative}", content)
     return dict(assets)
+
+
+def realistic_natives() -> dict[str, bytes]:
+    """The shape a native package actually emits: one payload per RID, each at the EXACT four
+    segments the module loader probes. Two RIDs deliberately — one file landing is not evidence
+    that the SET landed — and two extensions, so a filter keyed on one of them fails here."""
+    return {
+        "runtimes/linux-x64/native/libe_sqlite3.so": b"\x7fELF-linux-x64-engine",
+        "runtimes/osx-arm64/native/libe_sqlite3.dylib": b"\xcf\xfa\xed\xfeMACHO-osx-arm64",
+    }
 
 
 def realistic_assets(module: str) -> dict[str, bytes]:
@@ -266,7 +345,13 @@ def run_step(body: str, workdir: Path, bundles: list[Path],
 
 
 def ext_dir(workdir: Path) -> Path:
-    return workdir / "runner-temp" / "ext-modules"
+    """The directory the lane composes modules INTO.
+
+    🚨 `modules/` is part of the answer, not a tidy-up (MeshWeaver#4126): `ModuleNativeAssets`
+    accepts a directory as a module folder only when its PARENT is named `modules`, so a lane that
+    composed into `<ext>/<Name>/` would land a module's natives on disk and never probe them.
+    """
+    return workdir / "runner-temp" / "ext-modules" / "modules"
 
 
 def seal_dir(workdir: Path) -> Path:
@@ -338,14 +423,14 @@ def case_lands_assets(lane: str, body: str, tmp: Path) -> None:
 
     env_text = (work / "github-env").read_text(encoding="utf-8")
     for module in list(shipped) + ["MeshWeaver.Testing"]:
-        if f"--module /ext/{module}/{module}.dll" not in env_text:
+        if f"--module /ext/modules/{module}/{module}.dll" not in env_text:
             fail(f"{lane}: EXT_MODULE_ARGS does not name {module}")
 
     print(f"        denominator: 3 bundle(s) composed, 2 carrying static assets, "
           f"{total_shipped} asset file(s) shipped, {landed} landed byte-identical")
     if landed == total_shipped and len(FAILURES) == before:
         ok(f"{lane}: {landed}/{total_shipped} shipped assets landed module-relative "
-           f"under /ext/<module>/")
+           f"under /ext/modules/<module>/")
 
 
 def case_missing_entry_is_refused(lane: str, body: str, tmp: Path) -> None:
@@ -414,6 +499,114 @@ def case_no_copy_fails_closed(lane: str, body: str, tmp: Path) -> None:
        f"{len(shipped)} shipped asset(s)")
 
 
+def case_lands_natives(lane: str, body: str, tmp: Path) -> None:
+    """POSITIVE (MeshWeaver#4126): every shipped native payload lands, byte-identical, at the EXACT
+    path the module loader probes — including the `modules/` parent the resolver keys on."""
+    before = len(FAILURES)
+    work = tmp / "natives"
+    work.mkdir()
+    fixtures = tmp / "fixtures-natives"
+    fixtures.mkdir()
+
+    module = "MeshWeaver.AppleMessages"
+    shipped = realistic_natives()
+    engine = fixtures / f"{module}.module.nupkg"
+    make_bundle(engine, module, {}, natives=shipped)
+    # A module with no engine at all: composing it must stay green, and it must land NO
+    # runtimes/ tree — otherwise the positive assertion is about a lane that writes everything.
+    plain = fixtures / "MeshWeaver.Testing.module.nupkg"
+    make_bundle(plain, "MeshWeaver.Testing", {})
+
+    result = run_step(body, work, [engine, plain])
+    if result.returncode != 0:
+        fail(f"{lane}: the step failed on a bundle carrying natives\n{result.stdout}\n{result.stderr}")
+        return
+    if not shipped:
+        fail(f"{lane}: the fixture ships ZERO natives — this case would pass having checked nothing")
+        return
+
+    landed = 0
+    for relative, content in shipped.items():
+        target = ext_dir(work) / module / relative
+        if not target.is_file():
+            fail(f"{lane}: {module}: native '{relative}' did not land at {target} — the module "
+                 "would load and throw DllNotFoundException at its first P/Invoke")
+            continue
+        if sha(target.read_bytes()) != sha(content):
+            fail(f"{lane}: {module}: native '{relative}' landed with different bytes")
+            continue
+        landed += 1
+
+    # 🚨 The DEPTH is the assertion, not merely the arrival: the resolver accepts a module folder
+    # only when its parent is named `modules`, so a lane that composed one level up would satisfy
+    # "the file is somewhere" and satisfy nothing the runtime asks.
+    if (ext_dir(work) / module).parent.name != "modules":
+        fail(f"{lane}: the module folder's parent is "
+             f"{(ext_dir(work) / module).parent.name!r}, not 'modules' — ModuleNativeAssets would "
+             "not probe it, so the payloads land and are never looked at")
+
+    if (ext_dir(work) / "MeshWeaver.Testing" / "runtimes").exists():
+        fail(f"{lane}: a bundle carrying no natives grew a runtimes/ tree — the layout must be "
+             "driven by what the producer packed, never fabricated by the lane")
+
+    print(f"        denominator: 2 bundle(s) composed, 1 carrying natives, "
+          f"{len(shipped)} native file(s) shipped, {landed} landed byte-identical")
+    if landed == len(shipped) and len(FAILURES) == before:
+        ok(f"{lane}: {landed}/{len(shipped)} shipped natives landed at "
+           f"/ext/modules/<module>/runtimes/<rid>/native/<file>")
+
+
+def case_native_revert_goes_red(lane: str, body: str, tmp: Path) -> None:
+    """FALSIFICATION: with the native block reverted, the positive case must go RED."""
+    work = tmp / "native-revert"
+    work.mkdir()
+    fixtures = tmp / "fixtures-native-revert"
+    fixtures.mkdir()
+    module = "MeshWeaver.AppleMessages"
+    shipped = realistic_natives()
+    path = fixtures / f"{module}.module.nupkg"
+    make_bundle(path, module, {}, natives=shipped)
+
+    result = run_step(strip_native_landing(body, lane), work, [path])
+    if result.returncode != 0:
+        fail(f"{lane}: the PRE-#4126 step failed for an unrelated reason — the arm proves nothing"
+             f"\n{result.stdout}\n{result.stderr}")
+        return
+    if not (ext_dir(work) / module / f"{module}.dll").is_file():
+        fail(f"{lane}: the PRE-#4126 step did not even land the closure — wrong arm")
+        return
+    survivors = [r for r in shipped if (ext_dir(work) / module / r).is_file()]
+    if survivors:
+        fail(f"{lane}: the PRE-#4126 step landed {len(survivors)} native(s) — the fix is not what "
+             "makes the positive case pass, so that case measures nothing")
+    else:
+        ok(f"{lane}: reverted, 0/{len(shipped)} natives land — the positive case goes RED without "
+           "the fix")
+
+
+def case_native_no_copy_fails_closed(lane: str, body: str, tmp: Path) -> None:
+    """FALSIFICATION: the lane's OWN native assertion must fail when the copy is removed."""
+    work = tmp / "native-nocopy"
+    work.mkdir()
+    fixtures = tmp / "fixtures-native-nocopy"
+    fixtures.mkdir()
+    module = "MeshWeaver.AppleMessages"
+    shipped = realistic_natives()
+    path = fixtures / f"{module}.module.nupkg"
+    make_bundle(path, module, {}, natives=shipped)
+
+    result = run_step(strip_native_copy(body, lane), work, [path])
+    if result.returncode == 0:
+        fail(f"{lane}: with the native copy removed the step still passed — its fail-closed check "
+             "is a no-op, which ticks exactly like a check that passed")
+        return
+    if "did not land" not in result.stdout:
+        fail(f"{lane}: the step failed without naming the missing native\n{result.stdout}")
+        return
+    ok(f"{lane}: copy removed ⇒ the step's own check fails closed, naming the "
+       f"{len(shipped)} shipped native payload(s)")
+
+
 def main() -> int:
     try:
         import yaml  # noqa: F401
@@ -425,7 +618,7 @@ def main() -> int:
             die(f"this harness needs `{tool}` — the lane's own step calls it")
 
     print(f"bundle layout read from {PACKAGING_SOURCE}: "
-          f"modules={module_folder()!r} assets={asset_folder()!r}")
+          f"modules={module_folder()!r} assets={asset_folder()!r} natives={native_folder()!r}")
 
     lanes = [(workflow, extract_step(workflow, step_id)) for workflow, step_id in LANES]
     if len(lanes) != len(LANES):
@@ -441,6 +634,9 @@ def main() -> int:
             case_missing_entry_is_refused(lane, body, tmp)
             case_revert_goes_red(lane, body, tmp)
             case_no_copy_fails_closed(lane, body, tmp)
+            case_lands_natives(lane, body, tmp)
+            case_native_revert_goes_red(lane, body, tmp)
+            case_native_no_copy_fails_closed(lane, body, tmp)
 
     print()
     if FAILURES:
@@ -448,8 +644,9 @@ def main() -> int:
         for finding in FAILURES:
             print(f"  - {finding}")
         return 1
-    print(f"PASS — {len(lanes)} lane(s), 4 case(s) each: assets land byte-identical, the lane "
-          "refuses a broken bundle, and BOTH falsification arms go red.")
+    print(f"PASS — {len(lanes)} lane(s), 7 case(s) each: assets and RID-specific natives land "
+          "byte-identical under /ext/modules/<module>/, the lane refuses a broken bundle, and ALL "
+          "FOUR falsification arms go red.")
     return 0
 
 

@@ -82,6 +82,25 @@ public static class ModulePublish
         /// (<c>scripts/record-signatures.allow</c>).</para>
         /// </summary>
         public string? SourceCommit { get; init; }
+
+        /// <summary>
+        /// The module's RID-specific NATIVE payloads (#4126), module-relative path + bytes, each
+        /// at <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c> — carried to
+        /// <c>ModuleLandingService.ShelveModule</c> so the SHELF holds them too.
+        ///
+        /// <para>🚨 <b>The shelf must carry them, for exactly the reason the static assets must
+        /// (#2221).</b> A consumer never reads this upload's archive — it fetches what the shelf
+        /// holds and serves onward — so an engine dropped at the warehouse door is unreachable for
+        /// every instance downstream, however complete the packed bundle was. The failure is worse
+        /// than the assets' one: an asset dropped renders unstyled, an engine dropped throws
+        /// <c>DllNotFoundException</c> at the first P/Invoke.</para>
+        ///
+        /// <para>An INIT property, not a further primary-constructor parameter — a parameter
+        /// REPLACES a public record's constructor signature and is a binary break across the
+        /// fleet (<c>scripts/record-signatures.allow</c>), which is why
+        /// <see cref="SourceCommit"/> is here too.</para>
+        /// </summary>
+        public IReadOnlyList<(string RelativePath, byte[] Bytes)>? NativeAssets { get; init; }
     }
 
     /// <summary>
@@ -126,7 +145,8 @@ public static class ModulePublish
         IReadOnlyList<BundleReader.ModuleFile> files,
         string? version = null,
         string? packagePath = null,
-        IReadOnlyList<BundleReader.ModuleAsset>? staticAssets = null)
+        IReadOnlyList<BundleReader.ModuleAsset>? staticAssets = null,
+        IReadOnlyList<BundleReader.ModuleAsset>? nativeAssets = null)
     {
         // The package path ("Plugins/AzureBlob") is what stamps the landed entry's SOURCE — the
         // key every PluginGrant and serve-side filter matches on. Optional (an older publisher
@@ -182,6 +202,20 @@ public static class ModulePublish
         if (!files.Any(f => string.Equals(f.FileName, entry, StringComparison.OrdinalIgnoreCase)))
             return (null, $"the bundle carries no entry assembly '{entry}'");
 
+        // 🚨 A NATIVE path is refused HERE, before any byte reaches the shelf, and by the ONE
+        // spelling the derivation, the packer and the bundle reader share (#4126). These strings
+        // become paths under modules/<generation>/ that a process then LOADS, so "not traversing"
+        // is not enough: a payload at anything but runtimes/<rid>/native/<file> lands where
+        // ModuleNativeAssets never probes, which is bytes that read as shipped and behave as
+        // absent. The landing refuses it too — this is the registry's own check, which does not
+        // depend on which producer sent the bytes.
+        foreach (var native in nativeAssets ?? [])
+            if (!NuGetPackageWriter.IsModuleNativeLayout(native.RelativePath))
+                return (null,
+                    $"'{native.RelativePath}' is not the layout the module loader probes "
+                    + "(exactly runtimes/<rid>/native/<file>) — a native landed anywhere else is "
+                    + "shipped in appearance and absent in behaviour");
+
         // 🚨 ARMED 2026-09-05 (#3240) — the LAST refusal of #3211, and the registry's own.
         //
         // A bundle stating no framework identity shelves a null, the index advertises a null, and
@@ -233,6 +267,11 @@ public static class ModulePublish
             // normalised to null HERE rather than shelved as a field that renders empty.
             SourceCommit = string.IsNullOrWhiteSpace(manifest.SourceCommit)
                 ? null : manifest.SourceCommit,
+            // #4126 — the shelf carries the engine, or every consumer downstream gets a module
+            // that loads and then throws at its first P/Invoke.
+            NativeAssets = nativeAssets is { Count: > 0 }
+                ? [.. nativeAssets.Select(a => (a.RelativePath, a.Bytes))]
+                : null,
         }, null);
     }
 }
