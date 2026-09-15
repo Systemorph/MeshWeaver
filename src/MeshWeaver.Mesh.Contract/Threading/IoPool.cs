@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -348,7 +349,13 @@ public sealed class IoPool : IIoPool, IDisposable
                 // before the slot is granted throws here, before the increment, so
                 // no slot is ever leaked. The ThreadPool thread is released during
                 // the inner await, so the gate caps in-flight ops, not threads.
-                await _gate.WaitAsync(ct).ConfigureAwait(false);
+                var queuedAt = Stopwatch.GetTimestamp();
+                // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
+                // what lets a test synchronise on arrival instead of guessing with a duration.
+                Interlocked.Increment(ref _waiting);
+                try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
+                finally { Interlocked.Decrement(ref _waiting); }
+                RecordWait(queuedAt);
                 Interlocked.Increment(ref _inFlight);
                 var leaf = EnterLeaf(io);
                 try
@@ -393,6 +400,71 @@ public sealed class IoPool : IIoPool, IDisposable
         Interlocked.Decrement(ref _inFlight);
     }
 
+    // ───────────────────────── queue-wait instrument (MeshWeaver#1198) ─────────────────────────
+    // Lock-free counters, instance fields on a mesh-scoped pool — never static, and not a
+    // collection. Six buckets rather than a mean, because the question a cap has to answer is
+    // about the TAIL; see IoPoolWaitStats for why #1198 could not be decided without this.
+    private int _waiting;
+    private long _waitTicks;
+    private long _waitMaxTicks;
+    private long _waitUnderMillisecond;
+    private long _waitUnderTenMilliseconds;
+    private long _waitUnderHundredMilliseconds;
+    private long _waitUnderSecond;
+    private long _waitUnderTenSeconds;
+    private long _waitTenSecondsOrMore;
+
+
+    /// <summary>
+    /// Folds one granted admission into the distribution. Hot path: interlocked, no lock, and
+    /// deliberately NOT wrapped in an `async` helper around the gate wait — that would allocate a
+    /// Task per admission on the busiest path in the system. The three async-gate sites and the
+    /// blocking scheduler's grant point all funnel here instead, so the distribution still has ONE
+    /// definition even though the timestamp is taken at each site.
+    /// </summary>
+    private void RecordWait(long queuedAt)
+    {
+        var elapsed = Stopwatch.GetTimestamp() - queuedAt;
+        // A clock that appears to run backwards is not a negative wait.
+        if (elapsed < 0)
+            elapsed = 0;
+
+        Interlocked.Add(ref _waitTicks, elapsed);
+        for (var observed = Volatile.Read(ref _waitMaxTicks); elapsed > observed;)
+        {
+            var prior = Interlocked.CompareExchange(ref _waitMaxTicks, elapsed, observed);
+            if (prior == observed)
+                break;
+            observed = prior;
+        }
+
+        var milliseconds = elapsed * 1000d / Stopwatch.Frequency;
+        if (milliseconds < 1) Interlocked.Increment(ref _waitUnderMillisecond);
+        else if (milliseconds < 10) Interlocked.Increment(ref _waitUnderTenMilliseconds);
+        else if (milliseconds < 100) Interlocked.Increment(ref _waitUnderHundredMilliseconds);
+        else if (milliseconds < 1_000) Interlocked.Increment(ref _waitUnderSecond);
+        else if (milliseconds < 10_000) Interlocked.Increment(ref _waitUnderTenSeconds);
+        else Interlocked.Increment(ref _waitTenSecondsOrMore);
+    }
+
+    /// <inheritdoc />
+    public int CurrentlyWaiting => Volatile.Read(ref _waiting);
+
+    /// <inheritdoc />
+    public IoPoolWaitStats QueueWait => new(
+        StopwatchElapsed(Volatile.Read(ref _waitTicks)),
+        StopwatchElapsed(Volatile.Read(ref _waitMaxTicks)),
+        Volatile.Read(ref _waitUnderMillisecond),
+        Volatile.Read(ref _waitUnderTenMilliseconds),
+        Volatile.Read(ref _waitUnderHundredMilliseconds),
+        Volatile.Read(ref _waitUnderSecond),
+        Volatile.Read(ref _waitUnderTenSeconds),
+        Volatile.Read(ref _waitTenSecondsOrMore));
+
+    /// <summary>Stopwatch ticks are NOT <see cref="TimeSpan"/> ticks — the frequency is platform-dependent.</summary>
+    private static TimeSpan StopwatchElapsed(long stopwatchTicks) =>
+        TimeSpan.FromTicks((long)(stopwatchTicks * ((double)TimeSpan.TicksPerSecond / Stopwatch.Frequency)));
+
     /// <summary>
     /// Streams an async-enumerable I/O leaf off the calling scheduler under the pool's concurrency gate.
     /// </summary>
@@ -411,7 +483,13 @@ public sealed class IoPool : IIoPool, IDisposable
             {
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
                 var ct = linked.Token;
-                await _gate.WaitAsync(ct).ConfigureAwait(false);
+                var queuedAt = Stopwatch.GetTimestamp();
+                // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
+                // what lets a test synchronise on arrival instead of guessing with a duration.
+                Interlocked.Increment(ref _waiting);
+                try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
+                finally { Interlocked.Decrement(ref _waiting); }
+                RecordWait(queuedAt);
                 Interlocked.Increment(ref _inFlight);
                 var leaf = EnterLeaf(source);
                 try
@@ -470,8 +548,15 @@ public sealed class IoPool : IIoPool, IDisposable
             {
                 // Linked to the pool token so Drain()/Dispose() cancels blocking work too.
                 var cts = CancellationTokenSource.CreateLinkedTokenSource(_poolCts.Token);
+                // 🚨 Blocking work does NOT pass through _gate — it queues on the limited-concurrency
+                // scheduler instead — so its wait is timed at THAT grant point. Instrumenting only the
+                // async gate would have left a whole admission path out of a reading that looks total.
+                var queuedAt = Stopwatch.GetTimestamp();
+                Interlocked.Increment(ref _waiting);
                 _blockingFactory.StartNew(() =>
                     {
+                        Interlocked.Decrement(ref _waiting);
+                        RecordWait(queuedAt);
                         // _inFlight increments only once the scheduler grants a slot —
                         // so CurrentInFlight reflects actually-running blocking work,
                         // capped at the scheduler's MaximumConcurrencyLevel.
@@ -586,7 +671,13 @@ public sealed class IoPool : IIoPool, IDisposable
                         {
                             using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
                             var ct = linked.Token;
-                            await _gate.WaitAsync(ct).ConfigureAwait(false);
+                            var queuedAt = Stopwatch.GetTimestamp();
+                            // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
+                            // what lets a test synchronise on arrival instead of guessing with a duration.
+                            Interlocked.Increment(ref _waiting);
+                            try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
+                            finally { Interlocked.Decrement(ref _waiting); }
+                            RecordWait(queuedAt);
                             Interlocked.Increment(ref _inFlight);
                             var subLeaf = EnterLeaf(source);
                             try
