@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -63,9 +64,38 @@ def _skip(relative: Path) -> bool:
     return any(part in _EXCLUDED_DIRS or part.startswith(".") for part in relative.parts[:-1])
 
 
+class CannotCompute(Exception):
+    """The project disables an item glob this tree walk assumes. Fail closed, never guess."""
+
+
+def _property_is_false(text: str, name: str) -> bool:
+    return re.search(rf"<{name}\s*>\s*false\s*</{name}\s*>", text, re.IGNORECASE) is not None
+
+
 def expected_assets(project: Path, module: str) -> dict[str, str]:
-    """The asset set the project tree implies, as {bundle path: why it is implied}."""
+    """The asset set the project tree implies, as {bundle path: why it is implied}.
+
+    🚨 Two MSBuild properties would make this walk WRONG rather than merely coarse, so each is
+    read and handled exactly:
+
+    * ``EnableDefaultItems`` / ``EnableDefaultContentItems`` = false means the project lists its
+      own items, and a file on disk no longer implies an asset. This script is not an MSBuild
+      evaluator, so it REFUSES rather than over- or under-stating the set — fail closed. (Measured
+      2026-09-15: no project in MeshWeaver or MeshWeaver.Plugins sets either, so this costs the
+      fleet nothing today and cannot silently start guessing tomorrow.)
+    * ``ScopedCssEnabled`` = false means the SDK emits no ``.styles.css`` aggregate, so neither
+      does this gate expect one.
+    """
     directory = project.parent
+    project_text = project.read_text(encoding="utf-8", errors="replace")
+    for switch in ("EnableDefaultItems", "EnableDefaultContentItems"):
+        if _property_is_false(project_text, switch):
+            raise CannotCompute(
+                f"{project.name} sets <{switch}>false</{switch}>, so a file on disk no longer "
+                "implies a project item and this gate cannot state what the bundle owes. It "
+                "refuses rather than guessing in either direction — teach it the project's own "
+                "item declarations, or do not disable the glob.")
+    scoped_css_enabled = not _property_is_false(project_text, "ScopedCssEnabled")
     implied: dict[str, str] = {}
 
     wwwroot = directory / "wwwroot"
@@ -94,7 +124,7 @@ def expected_assets(project: Path, module: str) -> dict[str, str]:
                 f"{relative.as_posix()} is collocated with {component.name}")
 
     # Kind 3 — the CSS-isolation aggregate, if and only if the project has scoped CSS.
-    for file in directory.rglob("*.razor.css"):
+    for file in directory.rglob("*.razor.css") if scoped_css_enabled else []:
         if file.is_file() and not _skip(file.relative_to(directory)):
             implied[f"wwwroot/{module}.styles.css"] = (
                 f"the project has scoped CSS ({file.relative_to(directory).as_posix()}), so the SDK "
@@ -111,7 +141,11 @@ def declared_assets(manifest: Path) -> list[str]:
 
 
 def check(module: str, project: Path, manifest: Path, *, out=sys.stdout) -> int:
-    implied = expected_assets(project, module)
+    try:
+        implied = expected_assets(project, module)
+    except CannotCompute as refusal:
+        print(f"::error::{module}: {refusal}", file=out)
+        return 1
     declared = declared_assets(manifest)
     have = set(declared)
     missing = {path: why for path, why in sorted(implied.items()) if path not in have}
@@ -218,6 +252,14 @@ _CASES: list[tuple[str, dict[str, str], list[str] | None, int, str]] = [
     ("an SDK-lane bundle declaring MORE than the tree implies (deps' _content, .br/.gz) passes",
      _APPLE, ["wwwroot/AppleMapView.razor.js", "wwwroot/AppleMapView.razor.js.br",
               "wwwroot/_content/MeshWeaver.Blazor/x.css"], 0, "0 missing"),
+    ("ScopedCssEnabled=false — the SDK emits no aggregate, so neither is one demanded",
+     {"NoCss.csproj": "<Project><PropertyGroup><ScopedCssEnabled>false</ScopedCssEnabled></PropertyGroup></Project>",
+      "V.razor": "<div/>", "V.razor.css": ".v{}", "V.razor.js": "export function v(){}"},
+     ["wwwroot/V.razor.js"], 0, "0 scoped-CSS aggregate"),
+    ("EnableDefaultItems=false — the walk would be a guess, so the gate REFUSES",
+     {"NoGlob.csproj": "<Project><PropertyGroup><EnableDefaultItems>false</EnableDefaultItems></PropertyGroup></Project>",
+      "V.razor": "<div/>", "V.razor.js": "export function v(){}"},
+     ["wwwroot/V.razor.js"], 1, "cannot state what the bundle owes"),
     ("build residue is never an asset",
      {"Res.csproj": "<Project/>", "V.razor": "<div/>", "V.razor.js": "export function v(){}",
       "obj/Release/Ghost.razor.js": "//", "bin/Release/wwwroot/Ghost.css": "//"},
@@ -234,7 +276,8 @@ def self_test() -> int:
             root = _tree(Path(raw) / "proj", files)
             project = next(root.glob("*.csproj"))
             module = {"Osm": "OpenStreetMap", "Apple": "Apple", "Google": "Google",
-                      "Plain": "Plain", "Orphan": "Orphan", "Res": "Res"}[project.stem]
+                      "Plain": "Plain", "Orphan": "Orphan", "Res": "Res",
+                      "NoCss": "NoCss", "NoGlob": "NoGlob"}[project.stem]
             buffer = io.StringIO()
             got = check(module, project, _manifest(Path(raw), module, declared), out=buffer)
             output = buffer.getvalue()

@@ -2060,7 +2060,7 @@ jobs:
     # files satisfied `7 > 0` while the one file its view imports was missing, and AppleMaps did not
     # meet the guard's `if` at all. Every map in every container-built view pack was blank for three
     # weeks and nothing in CI could have said so. The script runs in every satellite's pack lane, so
-    # its 12 cases — 5 that must FAIL the gate, 7 that must PASS it — are proven here, where core
+    # its 14 cases — 6 that must FAIL the gate, 8 that must PASS it — are proven here, where core
     # owns it.
     - name: "A bundle declaring only SOME of its static assets is caught (self-test)"
       run: python3 .github/scripts/check-bundle-static-assets.py --self-test
