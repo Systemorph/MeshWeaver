@@ -238,6 +238,21 @@ def github_fetch_with(token: str) -> Fetch:
                     time.sleep(wait)
                     last = error
                     continue
+                # 🚨 A 5xx is GitHub failing to answer, not an answer — the same class as the
+                # transport faults below, and retried the same bounded way. It used to fall through
+                # to the verdict text, which blamed a revoked token, a rate limit or a renamed
+                # workflow for a single 502 and took eight downstream gates red with it
+                # (MeshWeaver.Plugins run 35000489240, `…/actions/runs/34937373355/jobs → HTTP 502`).
+                if error.code >= 500:
+                    last = error
+                    if attempt < 3:
+                        print(f"GET {path} → HTTP {error.code} (GitHub server error) — retrying in "
+                              f"{5 * (attempt + 1)}s")
+                        time.sleep(5 * (attempt + 1))
+                        continue
+                    raise ResolutionError(
+                        f"GET {path} → HTTP {error.code} (GitHub server error) on all {attempt + 1} "
+                        "attempts — the API is failing, not the platform. Re-run this job.") from error
                 raise ResolutionError(
                     f"GET {path} → HTTP {error.code}. {CORE_REPO} is public, so this is a revoked "
                     "token, an exhausted rate limit, or a renamed workflow — not a missing "
@@ -1337,6 +1352,11 @@ def _registry(present: dict[tuple[str, str], str]) -> Resolve:
     return resolve
 
 
+def code_blames_token(text: str) -> bool:
+    """The 4xx verdict's wording — which a 5xx must never carry."""
+    return "revoked token" in text
+
+
 def self_test() -> int:
     tester, portal = DEFAULT_TESTER_IMAGE, DEFAULT_PORTAL_IMAGE
     A = "a" * 40
@@ -1669,6 +1689,47 @@ def self_test() -> int:
          lambda: choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
                         freeze="3.0.0-ci.8207", log=logs.append, passed_ceiling=8203),
          lambda c: c.set_name == "3.0.0-ci.8207" and c.lag == "")
+
+    # ── a transient GitHub 5xx is retried and named; a 4xx is a verdict on the first answer ──
+    import io
+    real_urlopen, real_sleep = urllib.request.urlopen, time.sleep
+
+    def http_error(code: int) -> urllib.error.HTTPError:
+        return urllib.error.HTTPError("https://api.github.com/x", code, "err", {}, io.BytesIO(b""))
+
+    def scripted(codes: list[int]):
+        calls = {"n": 0}
+
+        def urlopen(request, timeout=0):
+            calls["n"] += 1
+            code = codes[calls["n"] - 1] if calls["n"] <= len(codes) else 200
+            if code != 200:
+                raise http_error(code)
+            return io.BytesIO(b'{"ok": true}')
+        return urlopen, calls
+
+    try:
+        time.sleep = lambda _seconds: None                      # type: ignore[assignment]
+        for label, codes, want_ok, want_calls, says in (
+            ("a 502 then a 200 is retried and answers", [502], True, 2, None),
+            ("three 5xx then a 200 is still answered (bounded, 4 attempts)", [502, 503, 500], True, 4, None),
+            ("four 5xx is RED naming the SERVER, never the token", [502, 502, 502, 502], False, 4,
+             "GitHub server error"),
+            ("a 404 is a verdict on the FIRST answer — not retried", [404], False, 1, "revoked token"),
+        ):
+            total += 1
+            opener, calls = scripted(codes)
+            urllib.request.urlopen = opener                     # type: ignore[assignment]
+            try:
+                answer = github_fetch_with("t")("/repos/x/y")
+                ok, text = answer == {"ok": True}, ""
+            except ResolutionError as error:
+                ok, text = False, str(error)
+            if ok != want_ok or calls["n"] != want_calls or (says and says not in text) \
+                    or (not want_ok and code_blames_token(text) and says != "revoked token"):
+                failures.append(f"{label}: ok={ok} calls={calls['n']} message={text[:160]!r}")
+    finally:
+        urllib.request.urlopen, time.sleep = real_urlopen, real_sleep
 
     # ── a STALE listing (#4433): page 1 served from an old snapshot is refused, never resolved ──
     made = "2026-09-12T12:00:00Z"
@@ -2150,7 +2211,8 @@ def self_test() -> int:
           "rather than falling back when main has passed nothing, the OPTIONAL source verification "
           "reads no job log unless asked for and passes over a set it cannot attribute, a main run "
           "whose annotations name two DIFFERENT sets is SKIPPED rather than guessed at, a set below "
-          "this repository's declared FLOOR is refused on every path including under a freeze, a run "
+          "this repository's declared FLOOR is refused on every path including under a freeze, a transient "
+          "GitHub 5xx is retried (bounded) and named as a server error, a run "
           "listing whose page 1 is provably STALE (its newest run over 12 h old, or older than the "
           "set main has passed) is refused rather than resolved from, and every dead end is RED "
           "naming why.")
