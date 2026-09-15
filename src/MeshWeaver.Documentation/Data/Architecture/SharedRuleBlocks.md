@@ -163,11 +163,13 @@ watches, and fails indistinguishably from a scope problem.
 
 ## Adding or changing a shared block
 
-**Adding one:** wrap the region with markers in *every* repo the register will list, add the entry,
-and land it as one change set. The gate is red for a repo that is listed and has no markers, so a
-half-landed adoption cannot be mistaken for a pass. Because the gate reads the satellites' default
-branches, **merge the satellites first and the core change last** — otherwise core's own pull
-request is red on repos that have not landed their half yet.
+**Adding one:** the gate is red for a repo that is listed and has no markers, so a half-landed
+adoption cannot be mistaken for a pass — and it is ALSO red for a marker whose id the register does
+not declare, in any of the seven repos it reads. So neither "satellites first" nor "core first"
+lands green in one step. **Land it in three:** (1) a core change that wraps the hub's copy and
+registers the block with `required-in` naming only the hub — green on its own, and the id becomes
+known; (2) the spokes' copies, in any order; (3) a core change widening `required-in` to every repo.
+`never-hand-roll-ui` (2026-09-15) was the first block landed this way.
 
 **Changing the text of one:** the hub's copy is authoritative, so the hub's change merges first and
 every spoke's pull request stays red until it does. Never "fix" that red by reverting the hub.
