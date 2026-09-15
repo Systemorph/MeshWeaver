@@ -137,7 +137,10 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
                 ? Observable.Return<NodeValidationResult?>(hubResult)
                 : CheckCustomRule(context, userId))
             .SelectMany(customResult => customResult != null
-                ? Observable.Return(customResult)
+                ? Observable.Return<NodeValidationResult?>(customResult)
+                : CheckPartitionOwnerCreate(context, userId))
+            .SelectMany(ownerResult => ownerResult != null
+                ? Observable.Return(ownerResult)
                 : CheckPermission(context, userId, requiredPermission, pathToCheck))
             .TakeDecisionOutsideGate()
             // 🚨 THE TERMINAL. Placed here rather than inside CheckPermission so it covers EVERY
@@ -238,6 +241,42 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
             + $"established: the effective-permission read of '{pathToCheck}' {why}. This is an "
             + "availability failure, NOT a decision about your access — the operation was not "
             + "evaluated and may be retried.");
+    }
+
+    /// <summary>
+    /// A TOP-LEVEL create of a partition-owning type, by an authenticated identity, is allowed —
+    /// the rule <c>SpaceAccessRule</c> states for a Space, keyed here on the type's DECLARATION
+    /// (<see cref="MeshWeaver.Graph.Configuration.NodeTypeDefinition.OwnsPartition"/>) so that it holds for a type declared in
+    /// mesh content (<c>Crm/Client</c>) too. Emits <c>null</c> ("no opinion") for anything else,
+    /// and the standard permission check decides.
+    ///
+    /// <para>🚨 <b>Why a rule is needed at all.</b> The standard check decides a create on the
+    /// PARENT, and a top-level node has none: it falls back to the node's own path, where no grant
+    /// can exist before the node does. So without this every owning type that lacks its own
+    /// <see cref="INodeTypeAccessRule"/> was un-creatable for everyone, platform admins included —
+    /// the "logic lost in the Organization→Space migration" that <c>SpaceAccessRule</c> restored for
+    /// Space alone. The creator becomes the new partition's Admin
+    /// (<c>InMeshPartitionOwnerPostCreationHandler</c>), exactly as a Space's creator does.</para>
+    ///
+    /// <para>Runs only when no per-type rule answered, so Space and User keep their own rules. It
+    /// grants nothing beyond what any signed-in user already has — creating a Space.
+    /// "Authenticated" is <see cref="WellKnownUsers.IsAuthenticated"/>: the logged-out caller
+    /// arrives NAMED, so "has a user id" would grant this to the internet.</para>
+    /// </summary>
+    private IObservable<NodeValidationResult?> CheckPartitionOwnerCreate(NodeValidationContext context, string? userId)
+    {
+        if (context.Operation != NodeOperation.Create
+            || !string.IsNullOrEmpty(context.Node.Namespace)
+            || !WellKnownUsers.IsAuthenticated(userId))
+            return Observable.Return<NodeValidationResult?>(null);
+
+        return PartitionOwningTypes.OwnsPartition(_hub, context.Node.NodeType)
+            .Select(owns => owns switch
+            {
+                true => NodeValidationResult.Valid(),
+                null => PartitionOwningTypes.Undetermined(context),
+                false => (NodeValidationResult?)null,
+            });
     }
 
     private IObservable<NodeValidationResult?> CheckHubRule(NodeValidationContext context, string? userId)
