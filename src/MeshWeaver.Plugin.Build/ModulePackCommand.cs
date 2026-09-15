@@ -116,6 +116,25 @@ public static class ModulePackCommand
         }
     }
 
+    /// <summary>
+    /// What carries an asset the derivation could not (#4367) — in words for the pack log — or
+    /// null when nothing does and the pack must refuse. See the gate in <see cref="Run"/>.
+    /// </summary>
+    private static string? CarrierOf(
+        DepsClosure.UncarriedAsset asset, IReadOnlyList<string> named,
+        IReadOnlyList<string> closure, IReadOnlyList<string> natives)
+    {
+        var nameComparer = asset.Kind == DepsClosure.UncarriedKind.UnprobedNative
+            ? StringComparer.Ordinal
+            : StringComparer.OrdinalIgnoreCase;
+        if (named.Contains(asset.FileName, nameComparer)
+            && closure.Contains(asset.FileName, StringComparer.OrdinalIgnoreCase))
+            return $"--with {asset.FileName} (flat in the module folder)";
+        if (asset.ProbedPath is { } probed && natives.Contains(probed, StringComparer.Ordinal))
+            return $"the native payload at {probed}";
+        return null;
+    }
+
     /// <summary>Runs the command; returns the process exit code.</summary>
     public static int Run(string[] args)
     {
@@ -223,6 +242,14 @@ public static class ModulePackCommand
                                               module to be built with
                                               CopyLocalLockFileAssemblies=true so the files are in
                                               the output folder.
+                                              🚨 A declared asset the derivation cannot carry — a
+                                              RID-specific MANAGED assembly, or a native at a
+                                              layout the loader does not probe — REFUSES the pack
+                                              (exit 2) unless something named carries it: --with
+                                              <its file name> (flattened into the module folder),
+                                              or, for a native, --with-native
+                                              runtimes/<rid>/native/<its file name>. Each refusal
+                                              names the exact value (#4367)
                   --out <dir>                 where to write the bundle (default: current directory)
                 """);
             return 0;
@@ -481,6 +508,9 @@ public static class ModulePackCommand
         var entryPdb = moduleName + ".pdb";
         if (File.Exists(Path.Combine(moduleDirectory, entryPdb)))
             closure.Add(entryPdb);
+        // What --deps-closure found declared and could NOT carry (#4367) — judged below, once
+        // --with and --with-native are composed, because either may carry it instead.
+        IReadOnlyList<DepsClosure.UncarriedAsset> uncarried = [];
 
         // 🚨 --deps-closure: the module's own package dependencies ride WITH it. Entry-DLL-only
         // bundles landed modules that faulted at first use on their first private dependency
@@ -507,8 +537,7 @@ public static class ModulePackCommand
                 Console.Error.WriteLine($"error: --deps-closure could not read {depsPath}: {e.Message}");
                 return 2;
             }
-            foreach (var warning in derived.Warnings)
-                Console.Error.WriteLine($"warning: {warning}");
+            uncarried = derived.Uncarried;
             var present = derived.Files
                 .Where(f => File.Exists(Path.Combine(moduleDirectory, f)))
                 .ToList();
@@ -697,6 +726,50 @@ public static class ModulePackCommand
                 $"platform-shipped: measured against {Path.GetFullPath(platformApp)} — "
                 + $"{platformShipped.Count} MeshWeaver.* assembl(y|ies) shipped by that host, "
                 + $"{dropped.Count} dropped from this bundle's closure");
+        }
+
+        // ───────── WHAT THE DERIVATION COULD NOT CARRY — refused unless something NAMED carries it ─────────
+        // 🚨 #4367 (the last stage of #4126). These two shapes used to print as `warning:` and pack
+        // anyway, leaving the module on the host-supplies-it fallback: a RID-specific MANAGED
+        // assembly (the flat closure has one slot per name and no way to choose a RID) and a
+        // native at a layout the loader never probes. Armed on a MEASUREMENT, the #3240 shape: the
+        // full wave of both publishing repos (MeshWeaver.Plugins run 34939850754, 41 bundles, 3 on
+        // this --deps-closure path; MeshWeaver.SocialMedia run 34941532528, 1 bundle, on it)
+        // printed ZERO of either warning, so the refusal has no live victim.
+        //
+        // 🚨 THE REFUSAL MUST BE SATISFIABLE BY THE STEP ITS OWN MESSAGE PRESCRIBES. deps.json
+        // keeps declaring the asset after the author follows the advice, so refusing on the
+        // derivation's findings alone would refuse the fix too and block a legitimate module
+        // forever. So each finding is refused only when NOTHING the caller named carries it:
+        //   * `--with <its file name>` — the file the author flattened into the module folder, in
+        //     the bundle as written (the witness above may have dropped a --with file). Named, not
+        //     merely present: a RID-agnostic copy that rides by derivation is exactly the silent
+        //     "which RID's copy" choice the refusal exists to stop, so it does not count;
+        //   * for a native, the payload at `runtimes/<its rid>/native/<its file name>` — carried
+        //     by --with-native or by the derivation itself. That is the exact slot the loader
+        //     probes for that RID and that name, so it is carried whoever put it there.
+        // The ordinal/ignore-case split is the same one the rest of this file draws: a native's
+        // identity is its file name on a case-sensitive filesystem, an assembly's is not.
+        var refused = new List<DepsClosure.UncarriedAsset>();
+        foreach (var asset in uncarried)
+        {
+            if (CarrierOf(asset, extras, closure, natives) is { } carrier)
+                Console.WriteLine(
+                    $"deps-closure: '{asset.Package}' declares {asset.RelativePath}, which the "
+                    + $"derivation does not carry — carried by {carrier}");
+            else
+                refused.Add(asset);
+        }
+        if (refused.Count > 0)
+        {
+            foreach (var asset in refused)
+                Console.Error.WriteLine($"error: {asset.Describe()}");
+            Console.Error.WriteLine(
+                $"error: --deps-closure refuses the pack: {refused.Count} declared asset(s) the "
+                + "bundle would not carry, and nothing named with --with / --with-native carries "
+                + "them. A module that lands without an asset its own dependency graph declares "
+                + "faults at first use wherever the host does not happen to supply it (#4367).");
+            return 2;
         }
 
         var manifest = new PluginManifest(

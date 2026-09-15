@@ -252,6 +252,82 @@ public class DepsClosureTest
         var ridSpecific = Assert.Single(result.Warnings, w => w.Contains("RidPicky"));
         Assert.Contains("copy the file into the module folder root", ridSpecific, StringComparison.Ordinal);
         Assert.Contains("it refuses a path", ridSpecific, StringComparison.Ordinal);
+        // 🚨 #4367 — module-pack now REFUSES on this finding unless it is carried, so the message
+        // must name the EXACT value that lifts the refusal, not a placeholder the reader has to
+        // resolve: the refusal is keyed on that file name.
+        Assert.Contains("--with RidPicky.dll", ridSpecific, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 #4367 — every finding is STRUCTURED as well as worded, because the packer's refusal is a
+    /// question text cannot answer reliably: does something the caller NAMED carry this asset?
+    /// Pinned field by field on both shapes, plus the invariant that the words and the data are
+    /// one source (<see cref="DepsClosure.Result.Warnings"/> is exactly the
+    /// <see cref="DepsClosure.UncarriedAsset.Describe"/> of each entry).
+    /// </summary>
+    [Fact]
+    public void EveryUncarriedAssetIsSTRUCTURED_SoThePackCanAskWhetherSomethingNamedCarriesIt()
+    {
+        var pure = DepsClosure.Derive(PureNativeGraph, "MeshWeaver.AppleMessages");
+        var managed = Assert.Single(pure.Uncarried);
+        Assert.Equal(DepsClosure.UncarriedKind.RidSpecificManaged, managed.Kind);
+        Assert.Equal("RidPicky", managed.Package);
+        Assert.Equal("runtimes/win-x64/lib/net10.0/RidPicky.dll", managed.RelativePath);
+        Assert.Equal("win-x64", managed.Rid);
+        Assert.Equal("RidPicky.dll", managed.FileName);
+        // A managed assembly has no probed NATIVE layout — --with is its only carrier.
+        Assert.Null(managed.ProbedPath);
+
+        var graph = DepsClosure.Derive(Graph, "MeshWeaver.Mail.MicrosoftGraph");
+        var native = Assert.Single(graph.Uncarried);
+        Assert.Equal(DepsClosure.UncarriedKind.UnprobedNative, native.Kind);
+        Assert.Equal("Microsoft.Identity.Client", native.Package);
+        Assert.Equal("runtimes/win/lib/net8.0/msalruntime.dll", native.RelativePath);
+        Assert.Equal("msalruntime.dll", native.FileName);
+        // The slot the loader probes for the same file and the same RID.
+        Assert.Equal("runtimes/win/native/msalruntime.dll", native.ProbedPath);
+
+        Assert.Equal(pure.Uncarried.Select(u => u.Describe()), pure.Warnings);
+        Assert.Equal(graph.Uncarried.Select(u => u.Describe()), graph.Warnings);
+    }
+
+    /// <summary>A native declared with NO rid, at a key that is not a <c>runtimes/</c> path, so
+    /// nothing names the RID it is for.</summary>
+    private const string RidlessNativeGraph = """
+        {
+          "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+          "targets": {
+            ".NETCoreApp,Version=v10.0": {
+              "Loose.Module/1.0.0": {
+                "dependencies": { "Loose.Natives": "1.0.0" },
+                "runtime": { "Loose.Module.dll": {} }
+              },
+              "Loose.Natives/1.0.0": {
+                "runtimeTargets": {
+                  "native/loose.so": { "assetType": "native" }
+                }
+              }
+            }
+          },
+          "libraries": {
+            "Loose.Module/1.0.0": { "type": "project" },
+            "Loose.Natives/1.0.0": { "type": "package" }
+          }
+        }
+        """;
+
+    [Fact]
+    public void ANativeWhoseRIDIsUnknown_IsOfferedOnlyTheFlatCarrier_NeverAnInventedSlot()
+    {
+        var loose = Assert.Single(DepsClosure.Derive(RidlessNativeGraph, "Loose.Module").Uncarried);
+
+        // 🚨 Reading the key's second segment as a RID regardless of its first would mint one
+        // from a folder name ("loose.so") and advise --with-native runtimes/loose.so/native/… — a
+        // slot no host ever probes, i.e. advice that satisfies the refusal and fixes nothing.
+        Assert.Equal("", loose.Rid);
+        Assert.Null(loose.ProbedPath);
+        Assert.DoesNotContain("--with-native", loose.Describe(), StringComparison.Ordinal);
+        Assert.Contains("--with loose.so", loose.Describe(), StringComparison.Ordinal);
     }
 
     [Fact]
