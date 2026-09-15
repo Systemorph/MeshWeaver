@@ -84,12 +84,12 @@ public class FullShareRefusesTheCompileTest(ITestOutputHelper output) : Monolith
                         """,
                 },
             }))
-            .Should().Within(60.Seconds()).Emit();
+            .Should().Within(60.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var settled = await Mesh.GetMeshNodeStream(TypePath)
             .Should().Within(120.Seconds())
             .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
-                is { CompilationStatus: CompilationStatus.Ok or CompilationStatus.Error });
+                is { CompilationStatus: CompilationStatus.Ok or CompilationStatus.Error }, cancellationToken: TestContext.Current.CancellationToken);
         var def = settled.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
 
         // ── THE VERDICT ──────────────────────────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ public class FullShareRefusesTheCompileTest(ITestOutputHelper output) : Monolith
         var activity = await Mesh.GetMeshNodeStream(def.LastCompilationActivityPath!)
             .Should().Within(60.Seconds())
             .Match(n => n.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions)
-                is { Status: ActivityStatus.Failed });
+                is { Status: ActivityStatus.Failed }, cancellationToken: TestContext.Current.CancellationToken);
         var log = activity.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions)!;
         log.Messages.Should().Contain(m => m.Message.Contains("Assembly NOT PUBLISHED"),
             "Roslyn produced the assembly; the reader must be sent to the disk, not to the source. "

@@ -163,7 +163,7 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
 
         await _probeArrived.Should().Within(TestTimeouts.Convergence)
             .Emit("the probe must actually reach the client hub, or nothing was delivered and this "
-                + "control proves nothing");
+                + "control proves nothing", cancellationToken: TestContext.Current.CancellationToken);
 
         DumpReports();
         // 🚨 Asserted on ROLE and ENDS, never on the message type. The client hub is reached over a

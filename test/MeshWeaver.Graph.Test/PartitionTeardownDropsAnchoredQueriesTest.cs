@@ -97,14 +97,16 @@ public class PartitionTeardownDropsAnchoredQueriesTest(ITestOutputHelper output)
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         await meshService.CreateNode(Space())
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space");
+            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         // CONTROL ARM. The child create is what takes a permission decision ON the partition, and
         // that decision is what mints `$security-access:{id}`. Without this the assertion after the
         // delete would be satisfied by a query that never existed.
         await meshService.CreateNode(Child("first"))
             .Should().Within(TestTimeouts.CrossSilo).Emit(
-                "the creator holds Admin on the Space it just created, so a child create is permitted");
+                "the creator holds Admin on the Space it just created, so a child create is permitted",
+                    cancellationToken: TestContext.Current.CancellationToken);
         IsResident(AccessQueryId).Should().BeTrue(
             "CONTROL ARM: the child create's permission decision reads $security-access:{partition}, "
             + "so the chain must be registered here — a false makes the post-delete assertion vacuous");
@@ -120,7 +122,8 @@ public class PartitionTeardownDropsAnchoredQueriesTest(ITestOutputHelper output)
             + "the release assertion below vacuous");
 
         await meshService.DeleteNode(SpaceId)
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may delete its own Space");
+            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may delete its own Space",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         Cache.LiveQueryConnections.Should().BeLessThan(connectionsBefore,
             "the anchored chains' UPSTREAM connections must be released, not merely forgotten — a "
@@ -161,9 +164,11 @@ public class PartitionTeardownDropsAnchoredQueriesTest(ITestOutputHelper output)
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         await meshService.CreateNode(Space())
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space");
+            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space",
+                cancellationToken: TestContext.Current.CancellationToken);
         await meshService.CreateNode(Child("first"))
-            .Should().Within(TestTimeouts.CrossSilo).Emit("a child create takes a decision on the partition");
+            .Should().Within(TestTimeouts.CrossSilo).Emit("a child create takes a decision on the partition",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         // The gated-node fold's REAL id spelling, for a NodeType that happens to be named exactly
         // like this partition. Registering it is enough — residency is read off the cache's map,
@@ -180,7 +185,8 @@ public class PartitionTeardownDropsAnchoredQueriesTest(ITestOutputHelper output)
             + "assertion after it proves nothing");
 
         await meshService.DeleteNode(SpaceId)
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may delete its own Space");
+            .Should().Within(TestTimeouts.CrossSilo).Emit("the creator may delete its own Space",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         IsResident(SecurityQueries.RootAssignmentsQueryId).Should().BeTrue(
             "the root scope belongs to NO partition — its grants live in the registered global "

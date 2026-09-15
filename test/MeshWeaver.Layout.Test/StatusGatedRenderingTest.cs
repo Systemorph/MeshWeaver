@@ -9,6 +9,7 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
+using Xunit;
 
 namespace MeshWeaver.Layout.Test;
 
@@ -73,7 +74,8 @@ public class StatusGatedRenderingTest(ITestOutputHelper output) : HubTestBase(ou
     private async Task<string> GetEmergencyMarkdown(ISynchronizationStream<JsonElement> stream, string area)
     {
         var control = await stream.GetControlStream(area)
-            .Should().Within(10.Seconds()).Match(x => x is MarkdownControl);
+            .Should().Within(10.Seconds()).Match(x => x is MarkdownControl,
+                cancellationToken: TestContext.Current.CancellationToken);
         return control.Should().BeOfType<MarkdownControl>().Subject.Markdown?.ToString() ?? string.Empty;
     }
 

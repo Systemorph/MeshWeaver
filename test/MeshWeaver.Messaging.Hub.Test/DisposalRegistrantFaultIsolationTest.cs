@@ -77,7 +77,7 @@ public class DisposalRegistrantFaultIsolationTest(ITestOutputHelper output) : Hu
         hub.RegisterForDisposal(_ => afterActionRan = true);
 
         hub.Dispose();
-        await hub.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TimeSpan.FromSeconds(120));
+        await hub.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(120), TestContext.Current.CancellationToken);
 
         Assert.True(thrower.WasDisposed, "precondition: the throwing registrant was reached at all");
         Assert.True(afterDisposable.WasDisposed,

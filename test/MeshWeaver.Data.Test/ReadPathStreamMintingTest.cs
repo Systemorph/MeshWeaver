@@ -650,7 +650,8 @@ public class ReadPathStreamMintingTest(ITestOutputHelper output) : HubTestBase(o
     {
         var delivery = await client
             .Observe(new GetDataRequest(reference), o => o.WithTarget(CreateHostAddress()))
-            .Should().Within(TestTimeouts.Convergence).Emit(because);
+            .Should().Within(TestTimeouts.Convergence).Emit(because,
+                cancellationToken: TestContext.Current.CancellationToken);
         var response = delivery.Message.Should().BeOfType<GetDataResponse>().Which;
         response.Error.Should().BeNull(because);
         return response.Data.Should().BeOfType<InstanceCollection>().Which;

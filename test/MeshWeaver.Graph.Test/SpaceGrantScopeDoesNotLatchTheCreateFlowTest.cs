@@ -117,7 +117,8 @@ public class SpaceGrantScopeDoesNotLatchTheCreateFlowTest(ITestOutputHelper outp
             }))
             .Should().Within(TestTimeouts.CrossSilo).Emit(
                 "the creator-Admin grant is part of the create's CONTRACT (FailsCreateOnError), so a "
-                + "create that emits at all is the proof that the grant write still authorised as System");
+                + "create that emits at all is the proof that the grant write still authorised as System",
+                    cancellationToken: TestContext.Current.CancellationToken);
 
         await access.RunAs(Probe, () => meshService.CreateNode(new MeshNode("page", SpaceId)
             {
@@ -128,7 +129,8 @@ public class SpaceGrantScopeDoesNotLatchTheCreateFlowTest(ITestOutputHelper outp
             .Should().Within(TestTimeouts.CrossSilo).Emit(
                 "an identity that holds NOTHING outside this Space must be able to create a child in "
                 + "the Space it just created — the creator grant is the only thing that confers it, "
-                + "and its absence is exactly the 'Create permission required' that #4061 reports");
+                + "and its absence is exactly the 'Create permission required' that #4061 reports",
+                    cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -150,7 +152,8 @@ public class SpaceGrantScopeDoesNotLatchTheCreateFlowTest(ITestOutputHelper outp
                 State = MeshNodeState.Active,
                 Content = new Space(),
             }))
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the Space the grants below are written under");
+            .Should().Within(TestTimeouts.CrossSilo).Emit("the Space the grants below are written under",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         // 🚨 Both subscriptions stay ALIVE past the assertion — disposing one here would cancel the
         // cross-hub write it just started, and the settle-arms below would then wait on a write
@@ -209,10 +212,12 @@ public class SpaceGrantScopeDoesNotLatchTheCreateFlowTest(ITestOutputHelper outp
             // landed.
             await negativeControlSettled.Should().Within(TestTimeouts.CrossSilo).Emit(
                 "the negative control's write must SUCCEED — it is the proof that the old idiom's "
-                + "latch was observed on a write that actually ran");
+                + "latch was observed on a write that actually ran",
+                    cancellationToken: TestContext.Current.CancellationToken);
             await sealedGrantSettled.Should().Within(TestTimeouts.CrossSilo).Emit(
                 "the sealed grant's write must SUCCEED — RunAsSystem must still authorise it as "
-                + "System, or the seal has traded a leak for a fail-closed grant (#638)");
+                + "System, or the seal has traded a leak for a fail-closed grant (#638)",
+                    cancellationToken: TestContext.Current.CancellationToken);
         }
         finally
         {

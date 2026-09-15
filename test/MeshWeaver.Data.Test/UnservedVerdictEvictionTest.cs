@@ -70,7 +70,7 @@ public class UnservedVerdictEvictionTest(ITestOutputHelper output) : HubTestBase
         // Data arrived ⇒ the owner built and is serving a stream for this subscriber. Waiting on
         // the DATA rather than on a delay is what makes "the owner had something to evict" a fact.
         var units = await clientWorkspace.GetObservable<BusinessUnit>()
-            .Should().Within(10.Seconds()).Emit();
+            .Should().Within(10.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
         units.Should().NotBeEmpty("the subscription must be live before the verdict arrives");
 
         var host = GetHost();

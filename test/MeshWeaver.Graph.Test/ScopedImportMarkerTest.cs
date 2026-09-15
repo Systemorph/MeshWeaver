@@ -48,7 +48,7 @@ public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTest
         // 1. The FIRST import is unscoped — it really did materialize the whole content, so it may
         //    (and must) record the marker its fingerprint names.
         var first = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(120.Seconds());
+            .FirstAsync().Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken);
         first.Outcome.Should().Be("Imported");
         (await Body($"{partition}/A")).Should().Contain("v1");
         (await Body($"{partition}/B")).Should().Contain("v1");
@@ -60,7 +60,7 @@ public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTest
         source.Nodes = [Page(partition, "A", "v2"), Page(partition, "B", "v2")];
         var scoped = await StaticRepoImporter
             .ImportSource(Mesh, source, null, null, new HashSet<string> { $"{partition}/A" })
-            .FirstAsync().Timeout(120.Seconds());
+            .FirstAsync().Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"scoped run: outcome={scoped.Outcome} count={scoped.Count} "
             + $"written=[{string.Join(", ", scoped.WrittenPaths)}]");
         (await Body($"{partition}/B")).Should().Contain("v1",
@@ -71,7 +71,7 @@ public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTest
         //    It must actually reconcile. Before the fix the scoped run had already stamped this exact
         //    fingerprint Succeeded, so this returned "Skipped" and B stayed at v1 forever.
         var full = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(120.Seconds());
+            .FirstAsync().Timeout(120.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"unscoped run: outcome={full.Outcome} count={full.Count}");
 
         full.Outcome.Should().NotBe("Skipped",
@@ -92,6 +92,7 @@ public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 240000)]
     public async Task UnscopedImport_StillShortCircuitsOnItsOwnFingerprint()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var partition = "Sk" + Guid.NewGuid().ToString("N")[..8];
         var source = new FakeRepoSource(partition)
         {

@@ -59,7 +59,7 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
 
             var grantedKey = await RegisterInstance(Granted, $"{Source}/*");
             var ungrantedKey = await RegisterInstance(Ungranted);
-            await using var app = await StartHost(root);
+            await using var app = await StartHost(root, cancellationToken: TestContext.Current.CancellationToken);
 
             // 1. the seal's list, exactly — the orphan is not in it
             var index = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}", grantedKey);
@@ -144,7 +144,7 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
 
             var key = await RegisterInstance("module-reader", $"{Source}/*", "legacy/*", "bare/*");
             var ungrantedKey = await RegisterInstance("module-stranger");
-            await using var app = await StartHost(root);
+            await using var app = await StartHost(root, cancellationToken: TestContext.Current.CancellationToken);
 
             // 1. the set is the index's list — the orphan on disk is not in it
             var index = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}/modules", key);
@@ -203,9 +203,10 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
     private Task<string> RegisterInstance(string instanceId, params string[] defaultGrants) =>
         InstanceService(defaultGrants)
             .Register("owner", "Owner", "owner@test.com", instanceId, instanceId)
-            .Select(r => r.RawKey).FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
+            .Select(r => r.RawKey).FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
 
-    private async Task<WebApplication> StartHost(string publishedRoot, Action? beforePublicationRead = null)
+    private async Task<WebApplication> StartHost(
+        string publishedRoot, Action? beforePublicationRead = null, CancellationToken cancellationToken = default)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -220,7 +221,7 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
             builder.Services.AddSingleton<ILoggerFactory>(new PublicationReadLoggerFactory(beforePublicationRead));
         var app = builder.Build();
         app.MapPluginBundles();
-        await app.StartAsync();
+        await app.StartAsync(cancellationToken);
         return app;
     }
 
@@ -247,7 +248,7 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
             File.WriteAllText(sentinel, "Store.zip\n");
 
             var key = await RegisterInstance(Granted, $"{Source}/*");
-            await using var app = await StartHost(root);
+            await using var app = await StartHost(root, cancellationToken: TestContext.Current.CancellationToken);
             var route = $"/api/plugins/bundles/prebuilt/{Identity}/{Source}";
 
             // 1. the index carries a generation, and the same value as its ETag
@@ -304,7 +305,7 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
             var seal = Path.Combine(directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
             File.WriteAllText(seal, "Store.zip\n");
             var key = await RegisterInstance(Granted, $"{Source}/*");
-            await using var app = await StartHost(root);
+            await using var app = await StartHost(root, cancellationToken: TestContext.Current.CancellationToken);
             var route = $"/api/plugins/bundles/prebuilt/{Identity}/{Source}";
             Assert.Equal(HttpStatusCode.OK, (await Get(app, route, key)).StatusCode);
 

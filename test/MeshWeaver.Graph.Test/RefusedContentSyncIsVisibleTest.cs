@@ -115,7 +115,7 @@ public class RefusedContentSyncIsVisibleTest(ITestOutputHelper output) : Monolit
         var source = SourceWith(partition, OversizedVideo(), SmallPoster());
 
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"outcome = {result.Outcome}");
         foreach (var refused in result.RefusedContent)
@@ -144,7 +144,7 @@ public class RefusedContentSyncIsVisibleTest(ITestOutputHelper output) : Monolit
         // 🚨 The durable, author-visible half: the verdict is ON THE SPACE, read back off the mesh.
         var ledger = await Mesh
             .GetMeshNode($"{partition}/_Activity/content-sync", 60.Seconds())
-            .FirstAsync().Timeout(90.Seconds());
+            .FirstAsync().Timeout(90.Seconds()).Await(TestContext.Current.CancellationToken);
 
         ledger.Should().NotBeNull(
             "the person who committed the assets opens the Space, not the partition's import "
@@ -170,6 +170,7 @@ public class RefusedContentSyncIsVisibleTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 300_000)]
     public async Task ARefusalWithNoOversizedFile_IsNotReportedAsASizeProblem()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var partition = Partition();
         var source = SourceWith(partition, SmallPoster());
 
@@ -201,6 +202,7 @@ public class RefusedContentSyncIsVisibleTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 300_000)]
     public async Task ASpaceWithNoContent_GetsNoContentSyncLedger()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var partition = Partition();
         var source = new ContentRepoSource(partition)
         {

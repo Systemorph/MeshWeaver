@@ -54,6 +54,7 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
     [InlineData(PreWarmStatus.Removed)]
     public void ARetiredOutcome_OnAHealthyType_DoesNotGate_AndIsNamed(PreWarmStatus status)
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var gate = new NodeTypeBakeGateState { GatesReadiness = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
 
@@ -77,6 +78,7 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
     [Fact(Timeout = 60000)]
     public void ACompileErrorOnAHealthyType_StillGates()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         // The negative control: the classification changed, the gate did not.
         var gate = new NodeTypeBakeGateState { GatesReadiness = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
@@ -95,6 +97,7 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
     [Fact(Timeout = 60000)]
     public void AStandingRegression_WhoseNodeWasRemoved_IsWithdrawn_NotRecovered()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var gate = new NodeTypeBakeGateState { GatesReadiness = true };
         gate.MarkRunning("enumerating dynamic NodeTypes");
         gate.MarkOutcome(new PreWarmOutcome("Crm/Mail", PreWarmStatus.CompileError, "No node found at 'Crm/Mail'")
@@ -134,6 +137,7 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
     [Fact(Timeout = 60000)]
     public void AHeldDefinition_ClassifiesAsRetired_BeforeAnythingElseIsAsked()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var held = new NodeTypeDefinition
         {
             Configuration = "config => config",
@@ -155,6 +159,7 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
     [Fact(Timeout = 60000)]
     public void AnImageVerdict_AgainstAnAbsentNode_IsRemoved_AndNothingElseMoves()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var compileError = new PreWarmOutcome("Crm/Mail", PreWarmStatus.CompileError, "No node found at 'Crm/Mail'")
         {
             WasHealthyBeforeBake = true,
@@ -200,7 +205,7 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
         var typePath = $"{TestPartition}/{typeId}";
 
         var absent = await DynamicTypePreWarmer.TypeNodeExists(Mesh, typePath, null)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         absent.Should().BeFalse("a path nothing ever created is not in any listing");
 
         await meshService.CreateNode(new MeshNode(typeId, TestPartition)
@@ -208,13 +213,13 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
                 NodeType = MeshNode.NodeTypePath, Name = typeId, State = MeshNodeState.Active,
                 Content = new NodeTypeDefinition { Configuration = "config => config" },
             })
-            .Take(1).Should().Within(TestTimeouts.Convergence).Emit("the type must exist before it is asked about");
+            .Take(1).Should().Within(TestTimeouts.Convergence).Emit("the type must exist before it is asked about", cancellationToken: TestContext.Current.CancellationToken);
 
         // The listing is eventually consistent — wait for it to reflect the create, bounded.
         var present = await Observable.Interval(200.Milliseconds()).StartWith(0L)
             .SelectMany(_ => DynamicTypePreWarmer.TypeNodeExists(Mesh, typePath, null).Take(1))
             .Where(exists => exists)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         present.Should().BeTrue();
     }
 }

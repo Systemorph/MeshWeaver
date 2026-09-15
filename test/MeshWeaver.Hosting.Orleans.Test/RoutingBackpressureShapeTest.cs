@@ -83,6 +83,7 @@ public class RoutingBackpressureShapeTest
     [Fact(Timeout = 60_000)]
     public void SameInFlightCount_MeansBothBusyAndBlocked_AndOnlyTheQueueSnapshotTellsThemApart()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         using var pool = new IoPool(256);   // the Routing pool's real cap — never the binding constraint at 64
 
         // ── Shape A: 64 destinations, one leg each. Every leg is executing; nothing waits on anything.

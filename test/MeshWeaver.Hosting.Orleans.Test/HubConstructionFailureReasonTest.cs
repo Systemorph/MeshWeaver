@@ -41,6 +41,7 @@ public class HubConstructionFailureReasonTest
     [Fact(Timeout = 30000)]
     public void TheReason_NamesTheNodeAndItsType()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var reason = MessageHubGrain.HubConstructionFailureReason(
             new MeshNode("AdvancedBusinessRules") { NodeType = "Store/Plugin" },
             HostedHubOutcome.ConstructionFaulted);
@@ -59,6 +60,7 @@ public class HubConstructionFailureReasonTest
     [Fact(Timeout = 30000)]
     public void TheReason_PointsAtTheLogEntryCarryingTheRealException()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var reason = MessageHubGrain.HubConstructionFailureReason(
             new MeshNode("AdvancedBusinessRules") { NodeType = "Store/Plugin" },
             HostedHubOutcome.ConstructionFaulted);
@@ -85,6 +87,7 @@ public class HubConstructionFailureReasonTest
     [Fact(Timeout = 30000)]
     public void AnUntypedNode_StillReadsAsASentence()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var reason = MessageHubGrain.HubConstructionFailureReason(
             new MeshNode("Orphan"), HostedHubOutcome.ConstructionFaulted);
 

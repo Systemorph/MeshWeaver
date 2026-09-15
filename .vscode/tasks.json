@@ -39,11 +39,14 @@
     },
     {
       // No --no-build here on purpose: against a project this worktree has never built, a
-      // --no-build/--no-restore run exits 0 with no output and no .trx — a pass that ran nothing.
+      // --no-build/--no-restore run exits 0 having run nothing — a pass that proved nothing.
+      // The flags are Microsoft.Testing.Platform's, not VSTest's: xunit.v3 4.x refuses the VSTest
+      // target on the .NET 10 SDK, so the repo opts into MTP in global.json and `--logger trx`
+      // (which this task used to pass) is rejected — the task would fail instead of running a test.
       "label": "test project",
       "type": "process",
       "command": "dotnet",
-      "args": ["test", "${input:testProject}", "--logger", "trx"],
+      "args": ["test", "${input:testProject}", "--report-xunit-trx", "--report-xunit-trx-filename", "vscode.trx"],
       "options": { "cwd": "${workspaceFolder}" },
       "group": { "kind": "test", "isDefault": true },
       "problemMatcher": "$msCompile"

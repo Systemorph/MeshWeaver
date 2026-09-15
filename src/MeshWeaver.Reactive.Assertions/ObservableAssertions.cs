@@ -101,8 +101,11 @@ public class ObservableAssertions<T>
     /// Awaits (up to the timeout) the first emission and returns it for further inspection.
     /// Fails if the stream times out or completes without emitting.
     /// </summary>
-    public Task<T> Emit(string because = "")
-        => WaitForFirst(null, "emit a value", because);
+    /// <param name="because">Why the emission is expected; appended to the failure message.</param>
+    /// <param name="cancellationToken">Cancels the WAIT (not the stream). A test with a <c>Timeout</c>
+    /// passes <c>TestContext.Current.CancellationToken</c> so the wait ends when the test does.</param>
+    public Task<T> Emit(string because = "", CancellationToken cancellationToken = default)
+        => WaitForFirst(null, "emit a value", because, cancellationToken);
 
     /// <summary>
     /// Awaits the first emission satisfying <paramref name="predicate"/> and returns it. This is
@@ -110,14 +113,20 @@ public class ObservableAssertions<T>
     /// <c>await obs.Should().Match(x =&gt; x.Count == 2)</c>. Fails on timeout, or if the stream
     /// completes without ever producing a matching value.
     /// </summary>
-    public Task<T> Match(Func<T, bool> predicate, string because = "")
+    /// <param name="predicate">The condition the awaited emission must satisfy.</param>
+    /// <param name="because">Why the emission is expected; appended to the failure message.</param>
+    /// <param name="cancellationToken">Cancels the WAIT (not the stream); see <see cref="Emit"/>.</param>
+    public Task<T> Match(Func<T, bool> predicate, string because = "", CancellationToken cancellationToken = default)
         => WaitForFirst(predicate ?? throw new ArgumentNullException(nameof(predicate)),
-            "emit a value matching the predicate", because);
+            "emit a value matching the predicate", because, cancellationToken);
 
     /// <summary>Awaits the first emission and asserts it equals <paramref name="expected"/>.</summary>
-    public async Task<ObservableAssertions<T>> Be(T expected, string because = "")
+    /// <param name="expected">The value the first emission must equal.</param>
+    /// <param name="because">Why the emission is expected; appended to the failure message.</param>
+    /// <param name="cancellationToken">Cancels the WAIT (not the stream); see <see cref="Emit"/>.</param>
+    public async Task<ObservableAssertions<T>> Be(T expected, string because = "", CancellationToken cancellationToken = default)
     {
-        var actual = await Emit(because);
+        var actual = await Emit(because, cancellationToken);
         if (!EqualityComparer<T>.Default.Equals(actual, expected))
             throw new ObservableAssertionException(
                 $"Expected the observable's first emission to be {Format(expected)}{Reason(because)}, but found {Format(actual)}.");
@@ -125,7 +134,9 @@ public class ObservableAssertions<T>
     }
 
     /// <summary>Asserts the observable completes within the timeout (a value is not required).</summary>
-    public async Task<ObservableAssertions<T>> Complete(string because = "")
+    /// <param name="because">Why completion is expected; appended to the failure message.</param>
+    /// <param name="cancellationToken">Cancels the WAIT (not the stream); see <see cref="Emit"/>.</param>
+    public async Task<ObservableAssertions<T>> Complete(string because = "", CancellationToken cancellationToken = default)
     {
         try
         {
@@ -140,7 +151,12 @@ public class ObservableAssertions<T>
                 SubscribeHereOffSyncContext(_subject)
                     .IgnoreElements()
                     .Timeout(_timeout, Observable.Defer(() =>
-                        Observable.Throw<T>(new AssertionWaitTimeoutException()))));
+                        Observable.Throw<T>(new AssertionWaitTimeoutException()))),
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (AssertionWaitTimeoutException)
         {
@@ -160,7 +176,13 @@ public class ObservableAssertions<T>
     /// place a fixed wait is correct — a "nothing should happen" test has no positive signal to
     /// await. Keep <paramref name="within"/> short.
     /// </summary>
-    public async Task<ObservableAssertions<T>> NotEmit(TimeSpan within, string because = "")
+    /// <param name="within">The window in which nothing may be emitted.</param>
+    /// <param name="because">Why silence is expected; appended to the failure message.</param>
+    /// <param name="cancellationToken">Cancels the WAIT. 🚨 A cancelled wait is NOT "nothing was
+    /// emitted": cancellation propagates as <see cref="OperationCanceledException"/> rather than
+    /// being folded into the passing branch, so a test cut off by its <c>Timeout</c> fails as
+    /// cancelled instead of passing a negative assertion it never finished.</param>
+    public async Task<ObservableAssertions<T>> NotEmit(TimeSpan within, string because = "", CancellationToken cancellationToken = default)
     {
         T observed = default!;
         var emitted = false;
@@ -175,8 +197,13 @@ public class ObservableAssertions<T>
             // default — otherwise `emitted` would be set for a stream that emitted nothing and
             // this negative assertion would invert.
             observed = (await ReactiveWait.First(
-                SubscribeHereOffSyncContext(_subject).FirstAsync().Timeout(within)))!;
+                SubscribeHereOffSyncContext(_subject).FirstAsync().Timeout(within),
+                cancellationToken))!;
             emitted = true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {
@@ -188,7 +215,8 @@ public class ObservableAssertions<T>
         return this;
     }
 
-    private async Task<T> WaitForFirst(Func<T, bool>? predicate, string expectation, string because)
+    private async Task<T> WaitForFirst(Func<T, bool>? predicate, string expectation, string because,
+        CancellationToken cancellationToken)
     {
         // 🚨 Record what the stream ACTUALLY emitted, so a timeout can say why it failed.
         // `.Where(predicate)` discards every non-matching value, so without this tap the
@@ -229,7 +257,14 @@ public class ObservableAssertions<T>
                     .Take(1)
                     .ToList()
                     .Timeout(_timeout, Observable.Defer(() =>
-                        Observable.Throw<IList<T>>(new AssertionWaitTimeoutException())))))!;
+                        Observable.Throw<IList<T>>(new AssertionWaitTimeoutException()))),
+                cancellationToken))!;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The TEST was cancelled (its Timeout fired, or the run was stopped): that is the
+            // verdict, not an assertion failure to re-describe.
+            throw;
         }
         catch (AssertionWaitTimeoutException)
         {

@@ -52,7 +52,7 @@ public class BuildCoordinationRetryTest
                 Scheduler.Immediate,
                 logger: null)
             .FirstAsync()
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         result.Should().Be("granted");
         attempts.Should().Equal(new[] { 1, 2, 3 });
@@ -75,7 +75,7 @@ public class BuildCoordinationRetryTest
                 Scheduler.Immediate,
                 logger: null)
             .FirstAsync()
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         var thrown = await act.Should().ThrowAsync<BuildCoordinationUnreachableException>();
         // The refusal NAMES what it could not reach, and says it is a refusal — the bare
@@ -101,7 +101,7 @@ public class BuildCoordinationRetryTest
                 Scheduler.Immediate,
                 logger: null)
             .FirstAsync()
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<BuildCoordinationUnreachableException>();
         attempts.Should().ContainSingle();
@@ -123,7 +123,7 @@ public class BuildCoordinationRetryTest
                 Scheduler.Immediate,
                 logger: null)
             .FirstAsync()
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         var thrown = await act.Should().ThrowAsync<InvalidOperationException>();
         thrown.Which.Message.Should().Be("malformed BuildState");
@@ -148,7 +148,7 @@ public class BuildCoordinationRetryTest
                 Scheduler.Immediate,
                 logger: null)
             .FirstAsync()
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         result.Should().Be("granted");
         attempts.Should().Equal(new[] { 1, 2 });

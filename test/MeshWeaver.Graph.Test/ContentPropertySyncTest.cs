@@ -10,6 +10,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Xunit;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -64,7 +65,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             NodeType = nodeType,
             Content = content
         };
-        await _persistence.SaveNode(node, JsonOptions).Should().Emit();
+        await _persistence.SaveNode(node, JsonOptions).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -74,7 +75,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
     private Task<MeshNode?> WaitForPersisted(string hubPath, Func<MeshNode?, bool> predicate)
         => Observable.Interval(50.Milliseconds()).StartWith(0L)
             .SelectMany(_ => _persistence.Read(hubPath, JsonOptions))
-            .Should().Within(5.Seconds()).Match(predicate);
+            .Should().Within(5.Seconds()).Match(predicate, cancellationToken: TestContext.Current.CancellationToken);
 
     [HubFact]
     public async Task MeshNode_LoadsWithContentFromPersistence()

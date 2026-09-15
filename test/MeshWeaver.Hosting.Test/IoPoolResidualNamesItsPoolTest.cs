@@ -130,6 +130,7 @@ public class IoPoolResidualNamesItsPoolTest
     [Fact(Timeout = 60_000)]
     public void DrainAll_reportsNoPool_whenEveryLeafUnwound()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         using var registry = new IoPoolRegistry();
         var pool = registry.Get(IoPoolNames.Query);
 

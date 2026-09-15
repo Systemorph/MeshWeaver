@@ -118,7 +118,8 @@ public class PumpDrainReachabilityTest(ITestOutputHelper output) : HubTestBase(o
             // test that disposed before this point would be measuring that instead.
             await victim.Observe(new Ping(), o => o.WithTarget(victim.Address))
                 .Should().Within(TestTimeouts.Quick)
-                .Emit("the victim must be fully started before its pump is put under test");
+                .Emit("the victim must be fully started before its pump is put under test",
+                    cancellationToken: TestContext.Current.CancellationToken);
             victim.RunLevel.Should().Be(MessageHubRunLevel.Started,
                 "the wedge under test is a STARTED hub whose queued ShutdownRequest is never "
                 + "dequeued — not a hub that never finished starting");
@@ -146,7 +147,8 @@ public class PumpDrainReachabilityTest(ITestOutputHelper output) : HubTestBase(o
                 .Emit("Dispose() posted ShutdownRequest(Quiescing) and the pump latched its drain "
                     + "flag — so the drain MUST be reachable by a thread other than the one that "
                     + "posted it. Queued on that thread's local LIFO queue it is not: it waits for "
-                    + "an unrelated hub's turn to finish, which is the 47-hub wedge of #3593");
+                    + "an unrelated hub's turn to finish, which is the 47-hub wedge of #3593",
+                        cancellationToken: TestContext.Current.CancellationToken);
 
             Volatile.Read(ref parkExited).Should().Be(0,
                 "the victim advanced while the driver's worker was STILL parked — that, and not the "
@@ -161,10 +163,12 @@ public class PumpDrainReachabilityTest(ITestOutputHelper output) : HubTestBase(o
         await driver.Observe(new Ping(), o => o.WithTarget(driver.Address))
             .Should().Within(TestTimeouts.Convergence)
             .Emit("the driver's worker is released, so its pump keeps working normally — the wedge "
-                + "under test is about WHERE the victim's drain was queued, not about the driver");
+                + "under test is about WHERE the victim's drain was queued, not about the driver",
+                    cancellationToken: TestContext.Current.CancellationToken);
 
         await victim.DisposalCompleted.Should().Within(TestTimeouts.Convergence)
-            .Emit("the victim's teardown completes once its pump turns");
+            .Emit("the victim's teardown completes once its pump turns",
+                cancellationToken: TestContext.Current.CancellationToken);
         victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
     }
 

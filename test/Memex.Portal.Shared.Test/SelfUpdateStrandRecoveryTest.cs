@@ -99,7 +99,7 @@ public class SelfUpdateStrandRecoveryTest(ITestOutputHelper output) : MonolithMe
     public async Task AWithdrawnInstalledTag_RollsToTheBestAvailableRelease()
     {
         AssertBehindInstalled(WithoutTheInstalledTag);
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         var updater = new RecordingUpdater();
 
         var content = await RunOneCheck(updater, WithoutTheInstalledTag);
@@ -128,7 +128,7 @@ public class SelfUpdateStrandRecoveryTest(ITestOutputHelper output) : MonolithMe
     {
         string[] registry = [.. WithoutTheInstalledTag, InstalledTag];
         AssertBehindInstalled(WithoutTheInstalledTag);
-        await Seed(UpdatePolicyKind.Continuous);
+        await Seed(UpdatePolicyKind.Continuous, TestContext.Current.CancellationToken);
         var updater = new RecordingUpdater();
 
         var content = await RunOneCheck(updater, registry);
@@ -150,7 +150,7 @@ public class SelfUpdateStrandRecoveryTest(ITestOutputHelper output) : MonolithMe
     [Fact(Timeout = 240_000)]
     public async Task AStrandWithNothingToRecoverTo_SaysSo_InsteadOfLookingHealthy()
     {
-        await Seed(UpdatePolicyKind.Stable);
+        await Seed(UpdatePolicyKind.Stable, TestContext.Current.CancellationToken);
         var updater = new RecordingUpdater();
 
         var content = await RunOneCheck(updater, WithoutTheInstalledTag);
@@ -279,7 +279,7 @@ public class SelfUpdateStrandRecoveryTest(ITestOutputHelper output) : MonolithMe
         }
     }
 
-    private Task Seed(UpdatePolicyKind policy)
+    private Task Seed(UpdatePolicyKind policy, CancellationToken cancellationToken)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var node = new MeshNode(UpdatePolicyNodeType.NodeId, UpdatePolicyNodeType.AdminPartition)
@@ -304,7 +304,7 @@ public class SelfUpdateStrandRecoveryTest(ITestOutputHelper output) : MonolithMe
             })
             .FirstAsync()
             .Timeout(Budget)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
     }
 
     /// <summary>The first reconciled content matching <paramref name="predicate"/> — the

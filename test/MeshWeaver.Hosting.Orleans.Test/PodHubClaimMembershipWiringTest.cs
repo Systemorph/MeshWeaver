@@ -58,7 +58,8 @@ public class PodHubClaimMembershipWiringTest : IClassFixture<TwoSiloCacheUpdateF
     [Fact(Timeout = 300_000)]
     public async Task ASiloJoining_ReachesTheFeed_AndClaimedAddressesStayReachable()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(240));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(240));
         var ct = deadline.Token;
         var cluster = fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2,

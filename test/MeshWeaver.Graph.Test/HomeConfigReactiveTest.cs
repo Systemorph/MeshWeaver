@@ -31,7 +31,7 @@ public class HomeConfigReactiveTest(ITestOutputHelper output) : MonolithMeshTest
 
         // Absent → the shipped defaults (FirstLevel + Flat + LastAccessed).
         var first = await HomeConfigNodeType.Observe(workspace, options, configPath)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await(TestContext.Current.CancellationToken);
         first.Should().Be(HomeConfigNodeType.Defaults);
 
         // An admin creates the config node with NON-default settings.
@@ -46,12 +46,12 @@ public class HomeConfigReactiveTest(ITestOutputHelper output) : MonolithMeshTest
                 Render = HomeCatalogRender.Grouped,
                 DefaultSort = HomeCatalogSort.Alphabetical,
             },
-        }).FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
+        }).FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await(TestContext.Current.CancellationToken);
 
         // Observe re-emits the edited config live — every open home would update without a deploy.
         var updated = await HomeConfigNodeType.Observe(workspace, options, configPath)
             .Where(c => c.Render == HomeCatalogRender.Grouped)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await(TestContext.Current.CancellationToken);
         updated.Scope.Should().Be(HomeCatalogScope.Subtree);
         updated.DefaultSort.Should().Be(HomeCatalogSort.Alphabetical);
     }

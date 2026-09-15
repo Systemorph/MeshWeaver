@@ -221,7 +221,7 @@ public class ContentReadPaysTheOwningHubsStartupTest(ITestOutputHelper output)
                 Mesh, "__probe_absent__/content/__absent__.svg")
             .Should().Within(TestTimeouts.Quick)
             .Emit("an unmatched path returns at path resolution and never reaches the collection-"
-                + "config read, so it must answer well inside ReadBudget.Default");
+                + "config read, so it must answer well inside ReadBudget.Default", cancellationToken: TestContext.Current.CancellationToken);
 
         result.Resolution.Should().BeNull("no node matches this path");
         result.Reason.Should().NotBeNull(

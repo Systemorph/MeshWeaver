@@ -88,7 +88,7 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
         var fixture = await ArrangeQuiescingVictim();
 
         var failure = await Assert.ThrowsAsync<DeliveryFailureException>(
-            () => RequestNewWork(fixture.Host));
+            () => RequestNewWork(fixture.Host, TestContext.Current.CancellationToken));
 
         failure.Failure.Should().NotBeNull();
         Output.WriteLine(
@@ -147,8 +147,8 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
         // 🚨 The positive, specific signal that the hub left Quiescing by DRAINING: disposal
         // completes inside Convergence, orders of magnitude short of the held quiesce budget. A
         // refused reply would instead park until HeldQuiesceBudget and end in [QUIESCE-TIMEOUT].
-        await fixture.Victim.DisposalCompleted.FirstOrDefaultAsync().Await()
-            .WaitAsync(TestTimeouts.Convergence);
+        await fixture.Victim.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken)
+            .WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
         fixture.Victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
     }
 
@@ -213,7 +213,8 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
             };
             fixture.Victim.DeliverMessage(delivery);
             await arrived.Should().Within(TestTimeouts.Convergence).Emit(
-                "quiescing stops new work owned by this hub, but preserves transit traffic");
+                "quiescing stops new work owned by this hub, but preserves transit traffic",
+                    cancellationToken: TestContext.Current.CancellationToken);
         }
         finally
         {
@@ -233,6 +234,9 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
         {
             ReleaseParkedRequest();
             await PendingReply;
+            // 🚨 UNTOKENED ON PURPOSE (#4378): this exists to let the HELD victim finish its drain so
+            // the fixture tears down cleanly. A cancelled drain leaves the victim quiescing into a
+            // disposed mesh, which is the crash shape, not a faster test.
             await Victim.DisposalCompleted.FirstOrDefaultAsync().Await()
                 .WaitAsync(TestTimeouts.Convergence);
         }
@@ -294,7 +298,7 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
 
         await parkedArrived.Should().Within(TestTimeouts.Convergence).Emit(
             "the sink must be holding the victim's request, so the victim owes exactly one callback "
-            + "and cannot drain past Quiescing on its own");
+            + "and cannot drain past Quiescing on its own", cancellationToken: TestContext.Current.CancellationToken);
 
         // Dispose is a POST, not a blocking teardown: it returns and the phases advance on the
         // victim's own turn loop.
@@ -325,9 +329,10 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
     /// Posts a NEW request from the host to the quiescing victim and awaits its outcome — a
     /// response if the gate let it in (the pre-#3506 behaviour), a DeliveryFailure if it refused.
     /// </summary>
-    private static Task<IMessageDelivery<NewWorkResponse>> RequestNewWork(IMessageHub host) =>
+    private static Task<IMessageDelivery<NewWorkResponse>> RequestNewWork(
+        IMessageHub host, CancellationToken cancellationToken) =>
         host.Observe(new NewWorkRequest(), o => o.WithTarget(VictimAddress))
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
 }

@@ -116,7 +116,7 @@ public class PendingModuleActivationsCostTest : IDisposable
 
     private async Task Land(string name) =>
         await landing.LandModule(name, [(name + ".dll", RealAssemblyBytes)])
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     private static byte[] RealAssemblyBytes =>
         File.ReadAllBytes(typeof(MeshWeaver.Plugin.Packaging.BundleReader).Assembly.Location);
@@ -125,6 +125,6 @@ public class PendingModuleActivationsCostTest : IDisposable
     {
         foreach (var name in names)
             await Land(name);
-        await landing.ProposeModuleSet().Timeout(TestTimeouts.Convergence).Await();
+        await landing.ProposeModuleSet().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
     }
 }

@@ -58,7 +58,7 @@ public class QuiesceStartNamesTheAskerTest : HubTestBase
         // stays strictly below the [Fact(Timeout)] outer bound, so a wait that loses says WHAT did
         // not converge instead of dying as an anonymous xunit timeout. TestTimeoutLiteralRatchetGuard
         // holds the hand-written count to a number that only goes down.
-        await hub.DisposalCompleted.FirstOrDefaultAsync().Timeout(TestTimeouts.Convergence).Await();
+        await hub.DisposalCompleted.FirstOrDefaultAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         var address = hub.Address.ToString();
         var line = _capture.Entries.FirstOrDefault(e => e.Contains(address, StringComparison.Ordinal));
         line.Should().NotBeNull(

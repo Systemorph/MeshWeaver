@@ -107,7 +107,7 @@ public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper 
         };
 
         var first = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"first  = {first.Outcome}");
 
         first.Outcome.Should().Be("ImportedWithContentErrors",
@@ -117,7 +117,7 @@ public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper 
 
         // Same source, same fingerprint — the state memex-cloud was in on every webhook.
         var second = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(240.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"second = {second.Outcome}");
 
         second.Outcome.Should().Be("Skipped",
@@ -135,6 +135,7 @@ public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper 
     [Fact(Timeout = 300_000)]
     public async Task ACleanImport_StillSucceedsAndStillShortCircuits()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var partition = "Cv" + Guid.NewGuid().ToString("N")[..8];
         var source = new RepoSource(partition)
         {
@@ -180,6 +181,7 @@ public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper 
     [Fact(Timeout = 300_000)]
     public async Task AThrowingValidator_IsRecordedAsAContentVerdict()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var partition = "Cv" + Guid.NewGuid().ToString("N")[..8];
         _throwPath = $"{partition}/Flaky";
         var source = new RepoSource(partition)

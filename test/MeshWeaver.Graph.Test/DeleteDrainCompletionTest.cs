@@ -340,10 +340,10 @@ public class DeleteDrainVerifiesTheRootTest(ITestOutputHelper output) : Monolith
         var rootPath = $"{TestPartition}/{id}";
         var created = await NodeFactory.CreateNode(
                 new MeshNode(id, TestPartition) { Name = id, NodeType = "Markdown" })
-            .Should().Within(30.Seconds()).Emit();
+            .Should().Within(30.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
         await NodeFactory.CreateNode(
                 new MeshNode("child", rootPath) { Name = "child", NodeType = "Markdown" })
-            .Should().Within(30.Seconds()).Emit();
+            .Should().Within(30.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var raw = Mesh.ServiceProvider.GetRawStorageAdapter<InMemoryStorageAdapter>()!;
         return (raw, rootPath, created);

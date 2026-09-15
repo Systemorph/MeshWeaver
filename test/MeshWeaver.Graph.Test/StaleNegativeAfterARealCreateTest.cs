@@ -72,7 +72,8 @@ public class StaleNegativeAfterARealCreateTest(ITestOutputHelper output)
             .Materialize()
             .Should().Within(TestTimeouts.Convergence).Match(
                 n => n.Kind == NotificationKind.OnError,
-                "reading a path that does not exist must surface the owner's NotFound as OnError");
+                "reading a path that does not exist must surface the owner's NotFound as OnError",
+                    cancellationToken: TestContext.Current.CancellationToken);
         MeshNodeStreamCache.IsMissingNodeFailure(failure.Exception!).Should().BeTrue(
             "precondition: the organic failure must be the class the storm breaker records");
         return failure.Exception!;

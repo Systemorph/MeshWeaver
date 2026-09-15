@@ -129,7 +129,7 @@ public class InstallTimePrebuiltAdoptionTest(ITestOutputHelper output) : Monolit
         }
         """;
 
-    private Task<InstallResult> InstallAfterBoot(ILogger logger) =>
+    private Task<InstallResult> InstallAfterBoot(ILogger logger, CancellationToken cancellationToken) =>
         PackageInstaller.Install(
                 Mesh,
                 new PackageManifest
@@ -148,7 +148,7 @@ public class InstallTimePrebuiltAdoptionTest(ITestOutputHelper output) : Monolit
                 "HEAD",
                 logger)
             .Should().Within(180.Seconds())
-            .Emit("the install itself must complete before anything about adoption can be read");
+            .Emit("the install itself must complete before anything about adoption can be read", cancellationToken);
 
     /// <summary>
     /// THE POSITIVE CONTROL — a package installed after boot whose baked assembly is mounted is
@@ -166,7 +166,7 @@ public class InstallTimePrebuiltAdoptionTest(ITestOutputHelper output) : Monolit
             expectedMvid.Should().NotBeNullOrEmpty("the mounted bundle carries a real PE image");
 
             var install = new LogSink();
-            var result = await InstallAfterBoot(install.Logger);
+            var result = await InstallAfterBoot(install.Logger, TestContext.Current.CancellationToken);
             result.Written.Should().BeGreaterThan(0, "the install must have written its nodes");
 
             await Mesh.GetWorkspace().GetMeshNodeStream(CoveredType)
@@ -176,7 +176,7 @@ public class InstallTimePrebuiltAdoptionTest(ITestOutputHelper output) : Monolit
                         n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.LatestAssemblyMvid,
                         expectedMvid, StringComparison.Ordinal),
                     "the bytes for this type were mounted when the package installed — install-time "
-                    + "adoption is the ONLY lane that can serve a package that arrives after boot");
+                    + "adoption is the ONLY lane that can serve a package that arrives after boot", cancellationToken: TestContext.Current.CancellationToken);
 
             install.Dump(Output, "INSTALL");
             install.Lines.Should().Contain(
@@ -204,7 +204,7 @@ public class InstallTimePrebuiltAdoptionTest(ITestOutputHelper output) : Monolit
             MountBundle("Other.zip", "SomeOtherPackage/Thing");
 
             var install = new LogSink();
-            await InstallAfterBoot(install.Logger);
+            await InstallAfterBoot(install.Logger, TestContext.Current.CancellationToken);
 
             install.Dump(Output, "INSTALL");
             _meshLog.Dump(Output, "MESH");

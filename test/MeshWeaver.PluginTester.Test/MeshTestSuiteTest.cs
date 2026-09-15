@@ -34,6 +34,7 @@ public class MeshTestSuiteTest(ITestOutputHelper output)
     [Fact(Timeout = 300000)]
     public void TheConvertedSuite_BootsItsDeclaredMesh_AndEveryCaseIsGreen()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var assembly = typeof(MissingEvaluatorFailsClosedTests).Assembly.Location;
 
         var run = StaticTestRunner.Execute(assembly, [], CaseBudget, new TestWriter(output));
@@ -222,6 +223,7 @@ public class MeshTestSuiteTest(ITestOutputHelper output)
     [Fact(Timeout = 300000)]
     public void ADeclaredSubstitution_IsWhatTheMeshResolves_EvenOverTheLanesOwn()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var run = RunProbe("Substitution", """
             using MeshWeaver.Graph.Configuration;
             using MeshWeaver.Hosting.Monolith;
@@ -312,6 +314,7 @@ public class MeshTestSuiteTest(ITestOutputHelper output)
     [Fact(Timeout = 300000)]
     public void AMeshCaseThatDeclines_IsSkipped_NotPassedAndNotFailed()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var run = RunProbe("MeshSkip", """
             using MeshWeaver.Graph.Configuration;
             using MeshWeaver.Hosting.Monolith;

@@ -77,7 +77,7 @@ public class ChatComposerStreamingFocusTest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         try { await fixture.CreateNodeAsync(context, token, ComposerSeedJson); }
@@ -162,7 +162,7 @@ public class ChatComposerStreamingFocusTest(PortalFixture fixture)
             var view = await page.EvaluateAsync<string?>(ViewInstanceJs);
             if (view is not null && view != lastView) { viewChanges++; lastView = view; }
             if (!await page.EvaluateAsync<bool>(FocusInComposerJs)) focusLostSamples++;
-            await Task.Delay(SampleEveryMs);
+            await Task.Delay(SampleEveryMs, TestContext.Current.CancellationToken);
         }
 
         // Live proof the composer stays usable mid-stream: type and require it to land.

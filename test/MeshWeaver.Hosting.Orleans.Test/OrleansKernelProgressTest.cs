@@ -37,6 +37,7 @@ public class OrleansKernelProgressTest(ITestOutputHelper output) : OrleansMeshTe
     [Fact(Timeout = DefaultTimeoutMs)]
     public async Task Log_from_script_is_observable_on_activity_log_stream()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var client = GetClient();
         var kernelAddress = AddressExtensions.CreateKernelAddress();
 
@@ -59,6 +60,7 @@ public class OrleansKernelProgressTest(ITestOutputHelper output) : OrleansMeshTe
     [Fact(Timeout = DefaultTimeoutMs)]
     public async Task Log_survives_exceptions_inside_script()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         // Contract: Log must be best-effort. If a subsequent line in the script
         // throws, earlier log entries still landed on the ActivityLog.
         await Task.CompletedTask;
@@ -67,6 +69,7 @@ public class OrleansKernelProgressTest(ITestOutputHelper output) : OrleansMeshTe
     [Fact(Timeout = DefaultTimeoutMs)]
     public async Task Each_submission_has_its_own_activity_log()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         // Each SubmitCodeRequest gets a fresh ActivityLog node. Submission 1's
         // messages don't bleed into submission 2's stream.
         await Task.CompletedTask;

@@ -67,12 +67,12 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
 
         var root = await workspace.ObservePartitionRoot(ChildPath)
             .Where(n => n is not null)
-            .FirstAsync().Timeout(ReadBudget);
+            .FirstAsync().Timeout(ReadBudget).Await(TestContext.Current.CancellationToken);
         root!.Path.Should().Be(Package);
 
         var child = await workspace.GetMeshNodeStream(ChildPath)
             .Where(n => n is not null)
-            .FirstAsync().Timeout(ReadBudget);
+            .FirstAsync().Timeout(ReadBudget).Await(TestContext.Current.CancellationToken);
 
         // Before: the generic glyph for its type. After: the package's mark.
         MeshNodeImageHelper.ResolveNodeIcon(child).Should().Be("/static/NodeTypeIcons/document.svg");
@@ -85,9 +85,11 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task TheStream_StartsWithNothing_SoItCannotGateThePage()
-        => (await Mesh.GetWorkspace().ObservePartitionRoot(ChildPath)
-                .FirstAsync().Timeout(ReadBudget))
+    {
+        (await Mesh.GetWorkspace().ObservePartitionRoot(ChildPath)
+                .FirstAsync().Timeout(ReadBudget).Await(TestContext.Current.CancellationToken))
             .Should().BeNull();
+    }
 
     /// <summary>
     /// 🚨 A PACKAGE ROOT OPENS NO READ. Its own partition root is itself, so the stream is a
@@ -97,6 +99,7 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 120_000)]
     public async Task ForThePackageRootItself_NothingIsRead()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var emissions = await Mesh.GetWorkspace().ObservePartitionRoot(Package)
             .ToList()
             .FirstAsync().Timeout(ReadBudget);
@@ -123,12 +126,12 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 240_000)]
     public async Task TheNodePageHeader_DrawsThePackageMark()
     {
-        var marked = await IconTile(ChildPath, MarkPathData);
+        var marked = await IconTile(ChildPath, MarkPathData, TestContext.Current.CancellationToken);
         marked.Should().Contain(MarkSignature, "the package's mark is what the header's tile draws");
 
         // The control: same page shape, no mark on its root — it settles on the type glyph, and the
         // other package's mark never reaches it.
-        var unmarked = await IconTile($"{UnmarkedPackage}/Rules", DocumentGlyph);
+        var unmarked = await IconTile($"{UnmarkedPackage}/Rules", DocumentGlyph, TestContext.Current.CancellationToken);
         unmarked.Should().Contain(DocumentGlyph);
         unmarked.Should().NotContain(MarkSignature);
     }
@@ -163,7 +166,7 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
     /// the tree is walked for the tile itself, so the assertion is still about the ICON and not about
     /// the payload at large.</para>
     /// </summary>
-    private async Task<string> IconTile(string nodePath, string awaitedFragment)
+    private async Task<string> IconTile(string nodePath, string awaitedFragment, CancellationToken cancellationToken)
     {
         var workspace = GetClient(c => c.AddData()).GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
@@ -172,7 +175,7 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
 
         await stream.Should().Within(RenderBudget).Match(
             frame => frame.Value.ToString().Contains(awaitedFragment),
-            $"the Overview of '{nodePath}' renders '{awaitedFragment}'");
+            $"the Overview of '{nodePath}' renders '{awaitedFragment}'", cancellationToken);
 
         var tiles = new List<string>();
         await Collect(reference.Area!, 0);
@@ -183,7 +186,7 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
             if (depth > 6)
                 return;
             var control = await stream.GetControlStream(area)
-                .Should().Within(ReadBudget).Match(c => c != null);
+                .Should().Within(ReadBudget).Match(c => c != null, cancellationToken: cancellationToken);
             if (control is HtmlControl html
                 && (html.Data?.ToString() ?? "").Contains(IconTileMarker))
                 tiles.Add(html.Data!.ToString()!);

@@ -92,7 +92,7 @@ public class StaleAssemblySelfHealWatcherTest(ITestOutputHelper output) : HubTes
     /// <summary>Bounded wait for the real dispose signal — <c>false</c> means it never fired within the window.</summary>
     private static async Task<bool> DisposedWithinAsync(IObservable<bool> disposed, TimeSpan window)
     {
-        try { return await disposed.FirstAsync().Timeout(window).Await(); }
+        try { return await disposed.FirstAsync().Timeout(window).Await(TestContext.Current.CancellationToken); }
         catch (TimeoutException) { return false; }
     }
 

@@ -70,7 +70,7 @@ public class CreateBoundaryHonoursCreatableTypesTest(ITestOutputHelper output)
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant (TestTimeouts.TestMilliseconds is not).
     public async Task ATypeTheParentDoesNotDeclareIsRefusedAtTheBoundary()
     {
-        var (types, host) = await Fixture();
+        var (types, host) = await Fixture(TestContext.Current.CancellationToken);
 
         // The positive control FIRST, so a failure of the fixture cannot be read as enforcement.
         var allowed = await CreateAs(Alice, Child($"{host}/Sealed", "Asked", $"{types}/Question"));
@@ -104,7 +104,7 @@ public class CreateBoundaryHonoursCreatableTypesTest(ITestOutputHelper output)
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task TheGlobalsRideAlongWithAWhitelistUnlessTheParentSwitchedThemOff()
     {
-        var (_, host) = await Fixture();
+        var (_, host) = await Fixture(TestContext.Current.CancellationToken);
         var globals = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>().GlobalCreatableTypes;
         globals.Should().Contain("Markdown", "the global set is what IncludeGlobalTypes switches off");
 
@@ -134,7 +134,7 @@ public class CreateBoundaryHonoursCreatableTypesTest(ITestOutputHelper output)
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task AParentDeclaringNothingRefusesNothing()
     {
-        var (_, host) = await Fixture();
+        var (_, host) = await Fixture(TestContext.Current.CancellationToken);
 
         var global = await CreateAs(Alice, Child($"{host}/Thing", "AnyGlobal", "Markdown"));
         global.Success.Should().BeTrue(
@@ -161,7 +161,7 @@ public class CreateBoundaryHonoursCreatableTypesTest(ITestOutputHelper output)
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task ThePlatformsOwnWritersAreNotCurated()
     {
-        var (_, host) = await Fixture();
+        var (_, host) = await Fixture(TestContext.Current.CancellationToken);
 
         var imported = await CreateAsSystem(Child($"{host}/Sealed", "ImportedAnyway", "Markdown"));
 
@@ -178,7 +178,7 @@ public class CreateBoundaryHonoursCreatableTypesTest(ITestOutputHelper output)
     /// one and the INSTANCES in the other, so the declaration is provably what governs and not the
     /// ancestor chain.
     /// </summary>
-    private async Task<(string Types, string Host)> Fixture()
+    private async Task<(string Types, string Host)> Fixture(CancellationToken cancellationToken)
     {
         if (fixture is not null)
             return fixture.Value;
@@ -208,7 +208,7 @@ public class CreateBoundaryHonoursCreatableTypesTest(ITestOutputHelper output)
                 }),
                 TypeNode(types, "Question", new NodeTypeDefinition { Configuration = "config => config" }),
             ],
-        });
+        }, cancellationToken);
 
         await Import(new FakeRepoSource(host)
         {
@@ -220,7 +220,7 @@ public class CreateBoundaryHonoursCreatableTypesTest(ITestOutputHelper output)
                 Instance(host, "Deal", $"{types}/Offer"),
                 Instance(host, "Sealed", $"{types}/SealedOffer"),
             ],
-        });
+        }, cancellationToken);
 
         fixture = (types, host);
         return fixture.Value;
@@ -228,13 +228,13 @@ public class CreateBoundaryHonoursCreatableTypesTest(ITestOutputHelper output)
 
     private (string Types, string Host)? fixture;
 
-    private async Task Import(FakeRepoSource source)
+    private async Task Import(FakeRepoSource source, CancellationToken cancellationToken)
     {
         // 🚨 .Await(), never a bare `await source`: Rx's own awaiter resumes the continuation
         // INLINE on the signalling thread, and every later await in the method inherits that
         // scheduler.
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
         Output.WriteLine($"{source.Partition} import: {result.Outcome} count={result.Count} "
             + $"failed={result.Failed} blocked=[{string.Join(", ", result.BlockedCreatePaths)}]");
         result.Failed.Should().Be(0, "a fixture that did not land cannot measure anything");

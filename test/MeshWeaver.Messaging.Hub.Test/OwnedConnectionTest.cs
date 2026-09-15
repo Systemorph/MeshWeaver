@@ -203,7 +203,7 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
         upstream.HasObservers.Should().BeTrue("CONTROL ARM: connected on the live hub");
 
         hub.Dispose();
-        await hub.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TimeSpan.FromSeconds(120));
+        await hub.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(120), TestContext.Current.CancellationToken);
 
         upstream.HasObservers.Should().BeFalse(
             "RegisterForDisposal runs the release in the hub's ShutDown phase — strictly inside its "

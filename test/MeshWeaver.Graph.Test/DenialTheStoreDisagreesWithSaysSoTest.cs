@@ -50,14 +50,14 @@ public class DenialTheStoreDisagreesWithSaysSoTest(ITestOutputHelper output)
                 .WithQuiesceTimeout(TestQuiesceTimeout)
                 .WithRequestTimeout(TimeSpan.FromSeconds(60)));
 
-    private async Task GivenTheSpaceExists()
+    private async Task GivenTheSpaceExists(CancellationToken cancellationToken)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         await meshService.CreateNode(new MeshNode(SpaceId)
         {
             Name = "Disagreement Probe", NodeType = SpaceNodeType.NodeType,
             State = MeshNodeState.Active, Content = new Space(),
-        }).Should().Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space");
+        }).Should().Within(TestTimeouts.CrossSilo).Emit("the creator may create a Space", cancellationToken);
     }
 
     /// <summary>
@@ -75,7 +75,7 @@ public class DenialTheStoreDisagreesWithSaysSoTest(ITestOutputHelper output)
     /// — which is exactly the shape a grant whose content degraded to an untyped
     /// <c>JsonElement</c> presents, one of the two causes the message names.</para>
     /// </summary>
-    private async Task GivenTheStoreHoldsANodeAtTheGrantPathTheFoldDoesNotHonour(string principal)
+    private async Task GivenTheStoreHoldsANodeAtTheGrantPathTheFoldDoesNotHonour(string principal, CancellationToken cancellationToken)
     {
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         await storage.Write(
@@ -86,7 +86,7 @@ public class DenialTheStoreDisagreesWithSaysSoTest(ITestOutputHelper output)
                 MainNode = SpaceId,
             },
             Mesh.JsonSerializerOptions)
-            .Should().Within(TestTimeouts.CrossSilo).Emit("the direct store write must land");
+            .Should().Within(TestTimeouts.CrossSilo).Emit("the direct store write must land", cancellationToken);
     }
 
     private async Task<string> DenialMessageFor(string principal, string childId)
@@ -108,8 +108,8 @@ public class DenialTheStoreDisagreesWithSaysSoTest(ITestOutputHelper output)
     [Fact(Timeout = 180_000)]
     public async Task ADeniedWriteWhoseGrantTheStoreHolds_NamesTheDisagreement()
     {
-        await GivenTheSpaceExists();
-        await GivenTheStoreHoldsANodeAtTheGrantPathTheFoldDoesNotHonour(Ghost);
+        await GivenTheSpaceExists(TestContext.Current.CancellationToken);
+        await GivenTheStoreHoldsANodeAtTheGrantPathTheFoldDoesNotHonour(Ghost, TestContext.Current.CancellationToken);
 
         var message = await DenialMessageFor(Ghost, "ghost-page");
 
@@ -126,10 +126,10 @@ public class DenialTheStoreDisagreesWithSaysSoTest(ITestOutputHelper output)
     [Fact(Timeout = 180_000)]
     public async Task ANORDINARYDenialSaysNothingOfTheKind()
     {
-        await GivenTheSpaceExists();
+        await GivenTheSpaceExists(TestContext.Current.CancellationToken);
         // The partition HAS grants (the creator's), so the ownerless diagnosis stays silent here
         // exactly as it does above — the only difference between the two cases is whose grant.
-        await GivenTheStoreHoldsANodeAtTheGrantPathTheFoldDoesNotHonour(Ghost);
+        await GivenTheStoreHoldsANodeAtTheGrantPathTheFoldDoesNotHonour(Ghost, TestContext.Current.CancellationToken);
 
         var message = await DenialMessageFor(Stranger, "stranger-page");
 

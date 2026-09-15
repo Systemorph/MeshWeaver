@@ -178,11 +178,11 @@ public class ContentReadIsNotQueuedBehindNodeCrudTest(ITestOutputHelper output)
         try
         {
             await _parked.Should().Within(TestTimeouts.Convergence)
-                .Emit("the node-CRUD execution hub must actually be busy");
+                .Emit("the node-CRUD execution hub must actually be busy", cancellationToken: TestContext.Current.CancellationToken);
 
             var node = await Mesh.GetMeshNode(ProbeNodePath)
                 .Should().Within(TestTimeouts.Convergence)
-                .Emit("a one-shot node read must answer while an unrelated node write is in flight");
+                .Emit("a one-shot node read must answer while an unrelated node write is in flight", cancellationToken: TestContext.Current.CancellationToken);
 
             node.Should().NotBeNull("the probe node exists");
             node!.Path.Should().Be(ProbeNodePath);
@@ -193,7 +193,7 @@ public class ContentReadIsNotQueuedBehindNodeCrudTest(ITestOutputHelper output)
         }
 
         await write.Should().Within(TestTimeouts.Convergence)
-            .Emit("the parked write must complete once released");
+            .Emit("the parked write must complete once released", cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -204,6 +204,7 @@ public class ContentReadIsNotQueuedBehindNodeCrudTest(ITestOutputHelper output)
     [Fact(Timeout = 60_000)]
     public void TheReadIssuingHub_IsNotTheNodeOperationExecutionHub()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         Mesh.ReadIssuingHub().Address.Should().NotBe(Mesh.NodeOperationTarget(),
             "a bounded read must not be dispatched by the action block that runs every "
             + "create/upsert in the mesh (#2901)");

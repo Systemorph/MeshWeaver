@@ -104,6 +104,7 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
     [Fact(Timeout = 300_000)]
     public void TheBakeIsKeyedToTheHost_AndCompilesAgainstItsAssemblies()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var repo = TempDirectory("mw-host-repo");
         var host = TempDirectory("mw-host-app");
         var bake = TempDirectory("mw-host-bake");
@@ -273,6 +274,7 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
     [Fact(Timeout = 300_000)]
     public void AReferenceSetGap_IsNamedInTheVerdict_AndAContentErrorIsNot()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var repo = TempDirectory("mw-gap-repo");
         var host = TempDirectory("mw-gap-app");
         var bake = TempDirectory("mw-gap-bake");
@@ -358,6 +360,7 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
     [Fact(Timeout = 300_000)]
     public void AComposedModuleTheHostAlsoShips_IsRefusedByName()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var repo = TempDirectory("mw-two-producers-repo");
         var host = TempDirectory("mw-two-producers-app");
         var mounted = TempDirectory("mw-two-producers-module");

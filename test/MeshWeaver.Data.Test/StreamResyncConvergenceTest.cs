@@ -326,7 +326,7 @@ public class StreamResyncConvergenceTest(ITestOutputHelper output) : HubTestBase
             .GetRemoteStream<EntityStore>(CreateHostAddress(), new CollectionsReference(collectionName));
 
         // Base Full applied — the mirror is live, and mirrorStreamId is now known.
-        await clientStream.Should().Within(8.Seconds()).Emit();
+        await clientStream.Should().Within(8.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         for (var i = 1; i <= 3; i++)
             host.Post(
@@ -336,7 +336,8 @@ public class StreamResyncConvergenceTest(ITestOutputHelper output) : HubTestBase
         // Wait for the injected failure itself — the event, never a delay — so the write below is
         // guaranteed to be a frame the owner sends AFTER the resync's answer went wrong.
         await failureInjected.Take(1).Should().Within(8.Seconds())
-            .Emit("the resync's answer must actually have been broken before the next write");
+            .Emit("the resync's answer must actually have been broken before the next write",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         host.Post(
             new DataChangeRequest().WithUpdates(new MyData("doc-4", "value-4")),
@@ -349,7 +350,8 @@ public class StreamResyncConvergenceTest(ITestOutputHelper output) : HubTestBase
             .Take(1)
             .Should().Within(10.Seconds())
             .Emit("a resync whose answer failed must still converge: the next frame proves the "
-                + "mirror has no base, and that proof — not a timer — earns one new re-ask");
+                + "mirror has no base, and that proof — not a timer — earns one new re-ask",
+                    cancellationToken: TestContext.Current.CancellationToken);
 
         Volatile.Read(ref droppedPatches).Should().Be(1,
             "the delivery pipeline must have dropped exactly one mid-burst Patch frame — without "

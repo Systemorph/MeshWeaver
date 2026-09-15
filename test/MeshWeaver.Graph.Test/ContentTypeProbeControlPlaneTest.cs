@@ -148,7 +148,7 @@ public class ContentTypeProbeControlPlaneTest(ITestOutputHelper output) : Monoli
     [Fact(Timeout = 120_000)]
     public async Task BootSweep_OfActivityShapedNodeTypes_LogsNoControlPlaneFault()
     {
-        await ProbesWereBuiltAndTornDown();
+        await ProbesWereBuiltAndTornDown(TestContext.Current.CancellationToken);
 
         var faults = recorder.Records
             .Where(r => r.Level >= LogLevel.Error
@@ -173,7 +173,7 @@ public class ContentTypeProbeControlPlaneTest(ITestOutputHelper output) : Monoli
     [Fact(Timeout = 120_000)]
     public async Task BootSweep_OfActivityShapedNodeTypes_OpensNoSyncSubHubOnAProbe()
     {
-        await ProbesWereBuiltAndTornDown();
+        await ProbesWereBuiltAndTornDown(TestContext.Current.CancellationToken);
 
         var rejected = recorder.Records
             .Where(r => r.Message.Contains("Rejecting hosted hub creation", StringComparison.Ordinal)
@@ -210,7 +210,7 @@ public class ContentTypeProbeControlPlaneTest(ITestOutputHelper output) : Monoli
             $"{TransientProbeAddresses.ContentTypeRegistrationProbePrefix}{Guid.NewGuid():N}";
 
         var emitted = await cache.GetStream(probePath, Mesh.JsonSerializerOptions)
-            .ToArray().Should().Within(TestTimeouts.Quick).Emit();
+            .ToArray().Should().Within(TestTimeouts.Quick).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         emitted.Should().BeEmpty(
             "there is no node at a registration probe's synthetic address and there never will be "
@@ -223,14 +223,14 @@ public class ContentTypeProbeControlPlaneTest(ITestOutputHelper output) : Monoli
     /// (so the NodeType WAS swept) and that its init turn has ended, run or skipped. A faulted
     /// probe teardown surfaces here as the subject's error.
     /// </summary>
-    private async Task ProbesWereBuiltAndTornDown()
+    private async Task ProbesWereBuiltAndTornDown(CancellationToken cancellationToken)
     {
         await bareProbeDisposed.Should().Within(TestTimeouts.Quick)
             .Emit("the sweep must probe the ACP NodeType that carries no data source and dispose "
-                  + "that probe, or this test asserts nothing");
+                  + "that probe, or this test asserts nothing", cancellationToken);
         await typedProbeDisposed.Should().Within(TestTimeouts.Quick)
             .Emit("the sweep must probe the ACP NodeType that declares a content type and dispose "
-                  + "that probe, or this test asserts nothing");
+                  + "that probe, or this test asserts nothing", cancellationToken);
 
         Output.WriteLine(
             $"    init turn reached the ACP install point: bare={Volatile.Read(ref bareInstallRan) == 1}, "

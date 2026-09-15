@@ -101,8 +101,8 @@ public class SecurityQueryScaleTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 120_000)]
     public async Task TheSecurityFoldsQueryCountDoesNotGrowWithTheNumberOfNodesFiltered()
     {
-        var small = await MeasureArm(SmallPartition, SmallCount);
-        var large = await MeasureArm(LargePartition, LargeCount);
+        var small = await MeasureArm(SmallPartition, SmallCount, TestContext.Current.CancellationToken);
+        var large = await MeasureArm(LargePartition, LargeCount, TestContext.Current.CancellationToken);
 
         Output.WriteLine($"#3093 census — {SmallCount} nodes: {small.Count} security queries "
             + $"[{string.Join(", ", small.OrderBy(x => x, StringComparer.Ordinal))}]");
@@ -176,13 +176,13 @@ public class SecurityQueryScaleTest(ITestOutputHelper output) : MonolithMeshTest
     {
         var readable = await Filter(Enumerable.Range(0, SmallCount)
             .Select(i => new MeshNode($"n{i}", SmallPartition))
-            .ToArray());
+            .ToArray(), TestContext.Current.CancellationToken);
 
         readable.Should().HaveCount(SmallCount,
             $"{SmallPartition} is PublicRead, so every one of its nodes is readable — a count "
             + "assertion over a filter that admits nothing proves nothing");
 
-        var denied = await Filter([new MeshNode("secret", "ForeignSpace")]);
+        var denied = await Filter([new MeshNode("secret", "ForeignSpace")], TestContext.Current.CancellationToken);
         denied.Should().BeEmpty(
             "a partition with no policy and no grant stays denied — the cheaper fold must not be "
             + "a wider one");
@@ -194,12 +194,12 @@ public class SecurityQueryScaleTest(ITestOutputHelper output) : MonolithMeshTest
     /// opened FIRST would charge the shared legs to whichever arm ran first and make the two
     /// numbers incomparable.
     /// </summary>
-    private async Task<IReadOnlyCollection<string>> MeasureArm(string partition, int count)
+    private async Task<IReadOnlyCollection<string>> MeasureArm(string partition, int count, CancellationToken cancellationToken)
     {
         census.Reset();
         await Filter(Enumerable.Range(0, count)
             .Select(i => new MeshNode($"n{i}", partition))
-            .ToArray());
+            .ToArray(), cancellationToken);
         return census.SecurityQueryIds;
     }
 
@@ -214,14 +214,14 @@ public class SecurityQueryScaleTest(ITestOutputHelper output) : MonolithMeshTest
             .Timeout(TestTimeouts.Convergence)
             .Await(TestContext.Current.CancellationToken);
 
-    private Task<IEnumerable<MeshNode>> Filter(params MeshNode[] snapshot)
+    private Task<IEnumerable<MeshNode>> Filter(MeshNode[] snapshot, CancellationToken cancellationToken)
         => SyncedQueryDataSourceExtensions
             .FilterByReadPermission(
                 Observable.Return<IEnumerable<MeshNode>>(snapshot),
                 node => Mesh.CheckPermission(node.Path ?? string.Empty, Viewer, Permission.Read))
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
 
     /// <summary>
     /// Records the ids of the <c>$security-*</c> queries the permission fold opens. Instance state

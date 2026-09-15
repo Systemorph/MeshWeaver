@@ -94,12 +94,12 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
             Name = "Pinned build space",
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Timeout(TestTimeouts.Convergence).Await();
+        }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         var configNode = await Sync
             .SaveConfig(space, RepoUrl, "main", null,
                 createBranchIfMissing: false, createRepoIfMissing: false)
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         // The import authenticates as the sync config's CREATOR — read it off the node rather than
         // assuming which identity the write landed under, so the credential below is seeded for the
@@ -108,7 +108,7 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
         Output.WriteLine($"sync config {configNode.Path} createdBy={syncOwner}");
         await Credentials
             .Save(syncOwner, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         // Arm the observation BEFORE the trigger: the fetch is the thing under test and it happens
         // on a background activity, so the assertion must already be subscribed when it fires.
@@ -126,7 +126,7 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
         try
         {
             triggered = await Webhooks.Process("workflow_run", GreenBuildPayload(BuiltSha))
-                .Timeout(TestTimeouts.Convergence).Await();
+                .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         }
         finally
         {
@@ -165,14 +165,14 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
             Name = "No proven commit",
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Timeout(TestTimeouts.Convergence).Await();
+        }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
             Mesh.UpdateToProvenCommitFromGitHub(space, UserId, commitSha: "")
-                .Timeout(TestTimeouts.Convergence).Await());
+                .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken));
 
         // Nothing was asked of GitHub — the refusal is BEFORE any fetch, not a failed fetch.
-        await repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick);
+        await repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -188,7 +188,7 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
         var triggered = await Webhooks.Process(
                 "workflow_run",
                 GreenBuildPayload(BuiltSha, ".github/workflows/auto-update-green-prs.yml"))
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         triggered.Should().Be(0,
             "a workflow's trigger says how it started, not that it compiled this repository's content");
@@ -227,16 +227,16 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
             Name = "Every admitted trigger",
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Timeout(TestTimeouts.Convergence).Await();
+        }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         var configNode = await Sync
             .SaveConfig(space, RepoUrl, "main", null,
                 createBranchIfMissing: false, createRepoIfMissing: false)
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         var syncOwner = configNode.CreatedBy is { Length: > 0 } creator ? creator : UserId;
         await Credentials
             .Save(syncOwner, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         // One distinct sha per trigger kind, so no delivery can be satisfied by another's import and
         // #3945's "already attempted these exact bytes" skip cannot mask a dropped signal.
@@ -269,7 +269,7 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
             {
                 triggered = await Webhooks
                     .Process("workflow_run", GreenBuildPayload(sha, trigger: trigger))
-                    .Timeout(TestTimeouts.Convergence).Await();
+                    .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
             }
             finally
             {
@@ -293,7 +293,7 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
         var refused = await Webhooks
             .Process("workflow_run", GreenBuildPayload(
                 UpdaterSha, ".github/workflows/auto-update-green-prs.yml", trigger: "schedule"))
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         refused.Should().Be(0,
             "a green scheduled PR updater checks out nothing and builds nothing; the SAME trigger "

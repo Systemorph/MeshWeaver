@@ -92,7 +92,7 @@ public class NodeTypeEnrichmentDoubleCallTest(ITestOutputHelper output) : Monoli
         var afterCatalog = await NodeTypeEnrichmentHelpers
             .EnrichWithNodeType(Mesh, cfg, compilationService: null, bareInstance)
             .Take(1)
-            .Should().Within(SingleProbeBudget).Emit("the probe path must always emit — fall back to overlay");
+            .Should().Within(SingleProbeBudget).Emit("the probe path must always emit — fall back to overlay", cancellationToken: TestContext.Current.CancellationToken);
 
         var afterPass1 = sw.Elapsed;
         afterCatalog.Should().NotBeNull("the probe path must always emit — fall back to overlay");
@@ -106,7 +106,7 @@ public class NodeTypeEnrichmentDoubleCallTest(ITestOutputHelper output) : Monoli
         await NodeTypeEnrichmentHelpers
             .EnrichWithNodeType(Mesh, cfg, compilationService: null, afterCatalog)
             .Take(1)
-            .Should().Within(500.Milliseconds()).Emit();
+            .Should().Within(500.Milliseconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         sw.Stop();
 
@@ -142,7 +142,7 @@ public class NodeTypeEnrichmentDoubleCallTest(ITestOutputHelper output) : Monoli
         var result = await NodeTypeEnrichmentHelpers
             .EnrichWithNodeType(Mesh, cfg, compilationService: null, preEnriched)
             .Take(1)
-            .Should().Within(5.Seconds()).Emit();
+            .Should().Within(5.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
         sw.Stop();
 
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(500),

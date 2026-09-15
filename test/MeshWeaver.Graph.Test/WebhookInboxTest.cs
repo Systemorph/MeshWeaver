@@ -63,42 +63,43 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
     private Task<WebhookInbox.DeliveryResult> Post(
         WebhookInbox.WebhookTarget allowed, string target,
-        IEnumerable<KeyValuePair<string, string>> headers, string body) =>
+        IEnumerable<KeyValuePair<string, string>> headers, string body,
+        CancellationToken cancellationToken = default) =>
         WebhookInbox.Deliver(Mesh, [allowed], target, "application/json", headers, body)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
-    private async Task<int> InboxCount(string target) =>
+    private async Task<int> InboxCount(string target, CancellationToken cancellationToken = default) =>
         (await Observable.Using(
                 () => Access.ImpersonateAsSystem(),
                 _ => MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                         $"path:{target}/{WebhookInbox.InboxContainer} scope:children"))
                     .Take(1))
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken))
         .Items.Count(n => n.NodeType == WebhookInbox.NodeType);
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
-    private Task<MeshNode> WriteAsSystem(MeshNode node) =>
+    private Task<MeshNode> WriteAsSystem(MeshNode node, CancellationToken cancellationToken = default) =>
         Observable.Using(
                 () => Access.ImpersonateAsSystem(),
                 _ => MeshService.CreateOrUpdateNode(node))
-            .FirstAsync().Await();
+            .FirstAsync().Await(cancellationToken);
 
     private Task<MeshNode?> Find(string path) =>
         Observable.Using(
                 () => Access.ImpersonateAsSystem(),
                 _ => MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}")).Take(1)
                     .Select(c => c.Items.FirstOrDefault(n => n.Path == path)))
-            .FirstAsync().Await();
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
 
-    private Task<MeshNode> CreateTarget(string path) =>
+    private Task<MeshNode> CreateTarget(string path, CancellationToken cancellationToken = default) =>
         WriteAsSystem(new MeshNode(path)
         {
             Name = path,
             NodeType = "Markdown",
             Content = new MarkdownContent { Content = "# Payments\n" },
-        });
+        }, cancellationToken);
 
     private static readonly IReadOnlyList<KeyValuePair<string, string>> StripeHeaders =
     [
@@ -116,7 +117,7 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var result = await WebhookInbox.Deliver(
                 Mesh, ["Payments"], "Payments", "application/json", StripeHeaders,
                 """{"type":"checkout.session.completed"}""")
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         result.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
         result.NodePath.Should().StartWith($"Payments/{WebhookInbox.InboxContainer}/");
@@ -161,7 +162,7 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             pending = WebhookInbox.Deliver(Mesh, ["InProcess"], "InProcess", "application/json", [], "{\"n\":1}")
                 .Do(_ => seenOnNotification = Access.Context)
                 .FirstAsync().Timeout(TestTimeouts.Convergence)
-                .Await();
+                .Await(TestContext.Current.CancellationToken);
             afterSubscribe = Access.Context;
         }
         var result = await pending;
@@ -185,22 +186,22 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         // Exists but not allowlisted → refused.
         (await WebhookInbox.Deliver(Mesh, [], "Existing", null, [], "{}")
-                .FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Status.Should().Be(WebhookInbox.DeliveryStatus.UnknownTarget);
 
         // Allowlisted but no node at the path → refused (the satellite would be ownerless).
         (await WebhookInbox.Deliver(Mesh, ["Ghost"], "Ghost", null, [], "{}")
-                .FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Status.Should().Be(WebhookInbox.DeliveryStatus.UnknownTarget);
 
         // Path-shape games never resolve to an allowlisted target.
         (await WebhookInbox.Deliver(Mesh, ["Existing"], "Existing/../Other", null, [], "{}")
-                .FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Status.Should().Be(WebhookInbox.DeliveryStatus.UnknownTarget);
 
         // Slash normalization DOES resolve ("/Existing/" ≡ "Existing").
         (await WebhookInbox.Deliver(Mesh, ["Existing"], "/Existing/", null, [], "{}")
-                .FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
     }
 
@@ -210,7 +211,7 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         await CreateTarget("Sized");
         var huge = new string('x', WebhookInbox.MaxBodyBytes + 1);
         (await WebhookInbox.Deliver(Mesh, ["Sized"], "Sized", null, [], huge)
-                .FirstAsync().Timeout(TestTimeouts.Convergence).Await())
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Status.Should().Be(WebhookInbox.DeliveryStatus.TooLarge);
     }
 
@@ -219,9 +220,9 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     {
         await CreateTarget("Multi");
         var first = await WebhookInbox.Deliver(Mesh, ["Multi"], "Multi", null, [], "{\"n\":1}")
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         var second = await WebhookInbox.Deliver(Mesh, ["Multi"], "Multi", null, [], "{\"n\":2}")
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         first.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
         second.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
         second.NodePath.Should().NotBe(first.NodePath);
@@ -235,17 +236,17 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     [Fact(Timeout = 120000)]
     public async Task SignedTarget_WithTheRightSecret_IsAccepted()
     {
-        await CreateTarget("Signed");
+        await CreateTarget("Signed", TestContext.Current.CancellationToken);
 
         var result = await Post(
             new WebhookInbox.WebhookTarget("Signed", SecretKey), "Signed",
-            [Sign(BuildFact, InstanceSecret)], BuildFact);
+            [Sign(BuildFact, InstanceSecret)], BuildFact, TestContext.Current.CancellationToken);
 
         result.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
         result.SignatureVerified.Should().BeTrue(
             "the ANSWER, not the status, is what a signing publisher reads — this is the flag the "
             + "endpoint renders as `\"signature\":\"verified\"` and both CD lanes judge (#3338)");
-        (await InboxCount("Signed")).Should().Be(1);
+        (await InboxCount("Signed", TestContext.Current.CancellationToken)).Should().Be(1);
     }
 
     /// <summary>
@@ -258,15 +259,15 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     [Fact(Timeout = 120000)]
     public async Task SignedTarget_WithADriftedSecret_IsRefused_AndStoresNothing()
     {
-        await CreateTarget("Drifted");
+        await CreateTarget("Drifted", TestContext.Current.CancellationToken);
 
         var result = await Post(
             new WebhookInbox.WebhookTarget("Drifted", SecretKey), "Drifted",
-            [Sign(BuildFact, InstanceSecret + "x")], BuildFact);
+            [Sign(BuildFact, InstanceSecret + "x")], BuildFact, TestContext.Current.CancellationToken);
 
         result.Status.Should().Be(WebhookInbox.DeliveryStatus.SignatureInvalid);
         result.NodePath.Should().BeNull();
-        (await InboxCount("Drifted")).Should().Be(0,
+        (await InboxCount("Drifted", TestContext.Current.CancellationToken)).Should().Be(0,
             "a delivery that fails to verify must leave nothing behind — otherwise the endpoint "
             + "has only moved the silent drop from the consumer into the store");
     }
@@ -274,23 +275,23 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     [Fact(Timeout = 120000)]
     public async Task SignedTarget_RefusesAnAbsentOrMalformedOrRebodiedSignature()
     {
-        await CreateTarget("Malformed");
+        await CreateTarget("Malformed", TestContext.Current.CancellationToken);
         var target = new WebhookInbox.WebhookTarget("Malformed", SecretKey);
 
         // No signature header at all — the shape an unaware sender produces.
-        (await Post(target, "Malformed", [], BuildFact))
+        (await Post(target, "Malformed", [], BuildFact, TestContext.Current.CancellationToken))
             .Status.Should().Be(WebhookInbox.DeliveryStatus.SignatureInvalid);
 
         // Present, but not the scheme this endpoint verifies.
         (await Post(target, "Malformed",
-                [new(WebhookInbox.SignatureHeader, "t=1,v1=abc")], BuildFact))
+                [new(WebhookInbox.SignatureHeader, "t=1,v1=abc")], BuildFact, TestContext.Current.CancellationToken))
             .Status.Should().Be(WebhookInbox.DeliveryStatus.SignatureInvalid);
 
         // Correctly signed with the right secret — over a DIFFERENT body than the one delivered.
-        (await Post(target, "Malformed", [Sign("{}", InstanceSecret)], BuildFact))
+        (await Post(target, "Malformed", [Sign("{}", InstanceSecret)], BuildFact, TestContext.Current.CancellationToken))
             .Status.Should().Be(WebhookInbox.DeliveryStatus.SignatureInvalid);
 
-        (await InboxCount("Malformed")).Should().Be(0);
+        (await InboxCount("Malformed", TestContext.Current.CancellationToken)).Should().Be(0);
     }
 
     /// <summary>
@@ -302,15 +303,15 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     [Fact(Timeout = 120000)]
     public async Task DeclaredButUnprovisionedSecret_RefusesEverything_FailClosed()
     {
-        await CreateTarget("NoSecret");
+        await CreateTarget("NoSecret", TestContext.Current.CancellationToken);
         var target = new WebhookInbox.WebhookTarget("NoSecret", UnprovisionedKey);
 
-        (await Post(target, "NoSecret", [Sign(BuildFact, "")], BuildFact))
+        (await Post(target, "NoSecret", [Sign(BuildFact, "")], BuildFact, TestContext.Current.CancellationToken))
             .Status.Should().Be(WebhookInbox.DeliveryStatus.SecretUnavailable);
-        (await Post(target, "NoSecret", [Sign(BuildFact, InstanceSecret)], BuildFact))
+        (await Post(target, "NoSecret", [Sign(BuildFact, InstanceSecret)], BuildFact, TestContext.Current.CancellationToken))
             .Status.Should().Be(WebhookInbox.DeliveryStatus.SecretUnavailable);
 
-        (await InboxCount("NoSecret")).Should().Be(0);
+        (await InboxCount("NoSecret", TestContext.Current.CancellationToken)).Should().Be(0);
     }
 
     /// <summary>
@@ -322,10 +323,10 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     [Fact(Timeout = 120000)]
     public async Task TargetWithoutADeclaredSecret_KeepsTheDumbContract()
     {
-        await CreateTarget("Dumb");
+        await CreateTarget("Dumb", TestContext.Current.CancellationToken);
 
         var result = await Post(new WebhookInbox.WebhookTarget("Dumb"), "Dumb",
-            [new(WebhookInbox.SignatureHeader, "sha256=deadbeef")], "{}");
+            [new(WebhookInbox.SignatureHeader, "sha256=deadbeef")], "{}", TestContext.Current.CancellationToken);
 
         result.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
         result.SignatureVerified.Should().BeFalse(
@@ -335,7 +336,7 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             + "SignedTarget_WithTheRightSecret_IsAccepted are the pair: if a change makes them "
             + "agree, the two states are indistinguishable again and the #3338 escalation is "
             + "judging a constant");
-        (await InboxCount("Dumb")).Should().Be(1);
+        (await InboxCount("Dumb", TestContext.Current.CancellationToken)).Should().Be(1);
     }
 
     /// <summary>

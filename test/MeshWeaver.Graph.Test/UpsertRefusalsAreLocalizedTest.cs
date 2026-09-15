@@ -164,7 +164,7 @@ public class UpsertRefusalsAreLocalizedTest(ITestOutputHelper output) : Monolith
             .FirstAsync()
             .Select(d => d.Message)
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"upsert success={response.Success} reason={response.RejectionReason} "
             + $"error={response.Error}");
         return response;

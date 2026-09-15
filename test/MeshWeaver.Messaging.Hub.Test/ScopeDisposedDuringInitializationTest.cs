@@ -94,7 +94,7 @@ public class ScopeDisposedDuringInitializationTest(ITestOutputHelper output) : H
                 }));
 
         hub.Should().NotBeNull();
-        await buildupParked.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
+        await buildupParked.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await(TestContext.Current.CancellationToken);
 
         // Out-of-band scope teardown — no hub Dispose(), no CloseCreation cascade: exactly the
         // host-root-container disposal of a Host.StartAsync abort / pod shutdown. Disposing the
@@ -103,7 +103,7 @@ public class ScopeDisposedDuringInitializationTest(ITestOutputHelper output) : H
         // window), and only then disposes the tracked hub instance.
         ((IDisposable)hub!.ServiceProvider).Dispose();
 
-        await hub.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
+        await hub.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await(TestContext.Current.CancellationToken);
 
         ((MessageHub)hub).InitializationError.Should().BeNull(
             "an init BuildupAction faulting on a DISPOSED scope is teardown racing initialization "
