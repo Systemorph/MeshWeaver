@@ -30,7 +30,7 @@ and order — and not the description. So the page lands, renders and is findabl
 empty summary everywhere a summary is shown.
 
 **Thirteen more** parsed perfectly and were simply cut short. An unquoted `#` opens a YAML comment,
-so a description ending in a issue reference lost everything from the `#` onward:
+so a description ending in an issue reference lost everything from the `#` onward:
 
 ```yaml
 Description: … and the repair path both decisions had to leave open — issue #2993.
