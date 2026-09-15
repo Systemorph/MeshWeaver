@@ -1,16 +1,37 @@
 #!/usr/bin/env bash
-# hosting-deploy --namespace <ns> --release <name> --database <db> --values <file> --config-file <file>
+# hosting-deploy --namespace <ns> --release <name> --database <db> --values <file> [--vault <name>] [--image <ref>]
 #
 # Install (or upgrade) the portal release for ONE instance.
 #
 # 🚨 WHERE THE PER-INSTANCE VALUES COME FROM, because this is the piece a fleet gets wrong. There is
 # NO checked-in `values.<newinstance>.yaml`, and there must not be: a self-service instance is
-# created after the repo was last edited. So the shape is base + derived:
+# created after the repo was last edited. So the shape is TWO layers, in this order:
 #
-#   --values <file>   the FLEET TEMPLATE — everything every instance shares. Reviewed, in git.
-#   --set …           this instance's IDENTITY only: namespace, host, database, TLS secret, the
-#                     Key Vault prefix. Derived from the deployment record, which is itself the
-#                     reviewed artefact (it arrives in the config repo by write-through PR).
+#   helm-values-<release>   the Key Vault VALUES HALF — `parameters:`, `pgbackrest:`, `secrets:` —
+#                           captured from the live release by the config repo's `helm-release
+#                           capture` and held in no repository. Layered FIRST, from the vault the
+#                           record names (--vault), only when the record declares that the chart's
+#                           own Secret is fed from it (`vaultValuesKeys`).
+#   --values <file>         the record's RENDER (HelmValues in the Hosting plugin) — secret-free by
+#                           construction. Layered LAST, so the reviewed record wins on every key it
+#                           declares; the `--set` flags after it carry only this instance's identity.
+#
+# 🚨 WHY THE VAULT HALF IS NOT OPTIONAL WHERE THE RECORD DECLARES IT (MeshWeaver#3780). The chart's
+# `memex-portal-secrets` / `memex-migration-secrets` render from `secrets.<half>.*`, and for an
+# instance on an external Postgres those values live ONLY in the vault half. helm REPLACES a Secret
+# wholesale on every upgrade, so an upgrade fed the record alone re-rendered both Secrets from the
+# chart's in-cluster defaults — `ConnectionStrings__orleans` became `Host=memex-postgres-service;…`,
+# a Service the release does not render — and every new pod died at silo start:
+#
+#     'MembershipTableManager' failed to start due to errors at stage 'RuntimeGrainServices (8000)'.
+#     Npgsql.NpgsqlException: Name or service not known
+#
+# Measured twice on the control instance: revision 44 (2026-09-09 02:35Z) and revision 55
+# (2026-09-14 20:14Z), both record-driven Reconciles; the lane-driven deploys in between, which
+# layer `-f vault-values.yaml -f <overlay>`, rolled the same image 2/2 Ready. The two paths had two
+# answers to one question; this is the disagreement resolved in favour of the one that kept the
+# instance up. The values half is read by the operator's own identity and is never echoed — only
+# its size is logged.
 #
 # The chart ships in this image at /opt/hosting/chart, so the operator image version IS the chart
 # version it deploys. That pinning is deliberate: the scripts and the templates they --set against
@@ -22,7 +43,7 @@ HOSTING_CMD="hosting-deploy"
 
 CHART="${HOSTING_CHART:-/opt/hosting/chart}"
 
-namespace="" release="" database="" values="" image=""
+namespace="" release="" database="" values="" image="" vault=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --namespace)   namespace="${2:-}";   shift 2 ;;
@@ -30,6 +51,7 @@ while [ $# -gt 0 ]; do
     --database)    database="${2:-}";    shift 2 ;;
     --values)      values="${2:-}";      shift 2 ;;
     --image)       image="${2:-}";       shift 2 ;;
+    --vault)       vault="${2:-}";       shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -40,13 +62,15 @@ hosting::need_flag database "$database"
 hosting::safe_name namespace "$namespace"
 hosting::safe_name release "$release"
 hosting::safe_name database "$database"
+[ -z "$vault" ] || hosting::safe_name vault "$vault"
 
 [ -d "$CHART" ] || hosting::die "no chart at ${CHART}. It is baked into the operator image (COPY helm/ /opt/hosting/chart) precisely so a run cannot deploy a chart nobody reviewed — an image built without it is broken, not degraded."
 # 🚨 THE VALUES FILE IS RENDERED FROM THE DEPLOYMENT RECORD (HelmValues in the Hosting plugin)
 # and materialised by run.sh from HOSTING_VALUES. There is no fleet template and no per-environment
-# overlay any more: the record is the only source. A missing or empty file is a refusal, because
-# helm would fall through to CHART DEFAULTS — ghcr.io/…:latest and an in-cluster Postgres this
-# fleet does not run — and report success.
+# overlay any more: the record is the only REPOSITORY source (the vault half above is the other
+# layer, and it is not a file anyone edits). A missing or empty file is a refusal, because helm
+# would fall through to CHART DEFAULTS — ghcr.io/…:latest and an in-cluster Postgres this fleet
+# does not run — and report success.
 [ -n "$values" ] && [ -f "$values" ] \
   || hosting::die "the rendered values file '${values:-<unset>}' does not exist. It is rendered from the Deployment record by the Hosting plugin and passed to the job as HOSTING_VALUES; without it the release would fall through to CHART DEFAULTS, which point at ghcr.io/…:latest and an in-cluster Postgres this fleet does not run."
 [ -s "$values" ] \
@@ -98,11 +122,38 @@ if [ -n "$pg_host" ]; then
   )
 fi
 
+# ── the Key Vault values half, layered FIRST ────────────────────────────────────────────────────
+# 🚨 Read only when the record asked for it (--vault), and then REQUIRED: a record that declares
+# `vaultValuesKeys` is stating that the chart's own Secret carries keys nothing in the record
+# renders. Proceeding without the half would not deploy "less" — it would replace those keys with
+# the chart's in-cluster defaults, which is exactly the boot failure in the header. The same rule
+# as the config repo's lane: "Key Vault holds no values for <release> — run capture first".
+#
+# The file is 0600 in the job's private /tmp, removed on exit, and NEVER printed: the adoption
+# render below holds the values in memory, and the only thing this step logs is the byte count.
+vault_values=""
+if [ -n "$vault" ]; then
+  vault_values="$(mktemp)"
+  chmod 600 "$vault_values"
+  # shellcheck disable=SC2064  # expand the path NOW: the trap must name this file, not a later $vault_values
+  trap "rm -f '$vault_values'" EXIT
+  hosting::log "vault     ${vault}: reading the values half helm-values-${release}"
+  kv_err="$(hosting::read az keyvault secret download --vault-name "$vault" --name "helm-values-${release}" --file "$vault_values" --output none 2>&1 >/dev/null)" \
+    || hosting::die "Key Vault ${vault} holds no values half for release ${release} (helm-values-${release}): ${kv_err}. The record declares vaultValuesKeys — keys the chart's own Secret must carry — and nothing in the record renders them, so an upgrade without this file would re-render memex-portal-secrets from the chart's in-cluster defaults and every new pod would fail at silo start (MeshWeaver#3780). Run the config repo's helm-release workflow with action=capture for this release first, or clear vaultValuesKeys on the record if the chart's Secret genuinely carries nothing."
+  [ -s "$vault_values" ] \
+    || hosting::die "the values half helm-values-${release} in Key Vault ${vault} is EMPTY — an empty vault half is not 'no secrets', it is a capture that wrote nothing. Re-run helm-release capture for this release (MeshWeaver#3780)."
+  hosting::log "vault     helm-values-${release} ($(wc -c < "$vault_values") bytes) — layered FIRST; the record's render wins on every key it declares"
+  hosting::say vault_values_bytes "$(wc -c < "$vault_values" | tr -d ' ')"
+fi
+
 # The catalog config the mesh composed (plugin mounts + pre-install patterns) is a values FILE, so
 # it layers like any other and stays visible in `helm get values`.
-# ONE values file. The catalog wiring, the module policy, the envelope and the volumes all ride in
-# it, in the chart's own shape — there is no second file to forget.
-files=( -f "$values" )
+# TWO values files at most, in a fixed order: the vault half (when the record declares one), then
+# the record's render. The catalog wiring, the module policy, the envelope and the volumes all ride
+# in the render, in the chart's own shape — there is no third file to forget.
+files=()
+[ -z "$vault_values" ] || files+=( -f "$vault_values" )
+files+=( -f "$values" )
 hosting::log "values    ${values} ($(wc -c < "$values") bytes, rendered from the record)"
 
 hosting::log "chart     ${CHART}"

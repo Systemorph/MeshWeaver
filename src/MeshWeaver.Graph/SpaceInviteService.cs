@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
@@ -31,7 +32,9 @@ public enum SpaceInviteOutcome
 ///     restarts via <see cref="EventSubscriptionRunner"/>.</item>
 /// </list>
 /// The immediate grant runs under the CALLER's identity (the inviting admin, who has rights on the
-/// Space). The Admin-partition writes (invitation + event subscription) run as system.
+/// Space). The lookup that decides which case applies runs as System (<see cref="AccountLookup"/>),
+/// as does the dashboard pin on the invitee's own node; the Admin-partition writes (invitation + event
+/// subscription) run as system too.
 /// </summary>
 public sealed class SpaceInviteService(
     IMessageHub hub,
@@ -62,8 +65,8 @@ public sealed class SpaceInviteService(
     {
         var normalizedEmail = email.Trim();
 
-        // Look up an existing account by email (one-shot initial snapshot).
-        return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:User content.email:{normalizedEmail}"))
+        // Look up an existing account by email (one-shot initial snapshot) — as System, see AccountLookup.
+        return meshService.Query<MeshNode>(AccountLookup(normalizedEmail))
             .Where(c => c.ChangeType == QueryChangeType.Initial)
             .Select(c => c.Items)
             .Take(1)
@@ -76,12 +79,54 @@ public sealed class SpaceInviteService(
             });
     }
 
+    /// <summary>
+    /// The read that resolves an invitee's account from their email — issued as
+    /// <see cref="WellKnownUsers.System"/>, whoever is inviting (#4309).
+    ///
+    /// <para><b>Why not as the caller.</b> A path-less <c>nodeType:User</c> query is pinned to the
+    /// <c>auth</c> mirror (<see cref="UserNodeType"/>'s routing rule), and on Postgres that one schema is
+    /// row-level-filtered by the caller's grants there. A signed-in Space or group admin holds no grant
+    /// on <c>auth</c> unless the deployment granted <c>Public</c> on it — so, as the caller, the lookup
+    /// answered <b>0</b> for an account that exists, the flow took the "not on the system yet" branch,
+    /// and an existing user received an Invitation instead of the grant (measured on the control
+    /// instance, 2026-09-14: <c>nodeType:User</c> → 0 as a platform admin; <c>path:rbuergi
+    /// nodeType:User</c> → 1). The in-memory provider hides this: <see cref="UserNodeType"/>'s own
+    /// access rule reads every root User node for any authenticated caller, so the identical code was
+    /// correct on every adapter a unit test uses.</para>
+    ///
+    /// <para><b>Why System is the right identity, not a wider grant.</b> This read is identity
+    /// resolution, the same infrastructure case as <c>UserIdentityCache.DirectoryQuery</c> and the
+    /// developer-login page (MeshWeaver.Plugins#712): it exists to turn an email into a partition id so
+    /// the grant can be addressed. Nothing the caller could not already learn is disclosed — the only
+    /// thing that reaches them is the <see cref="SpaceInviteOutcome"/> the feature has always returned,
+    /// and the grant that follows still runs as the caller and is still refused where they hold no
+    /// rights. Granting <c>Public</c> on <c>auth</c> would instead let every signed-in user enumerate
+    /// every account, which is exactly what the mirror's filter is for.</para>
+    ///
+    /// <para>Stamped on the REQUEST (<see cref="MeshQueryRequest.AsSystem"/>) rather than opened as an
+    /// ambient scope, so the identity covers the read alone: everything composed on its result — the
+    /// grant, the membership — keeps the subscriber's own identity.</para>
+    /// </summary>
+    /// <param name="email">The invitee's email, already trimmed.</param>
+    /// <returns>The lookup request, viewer = System.</returns>
+    public static MeshQueryRequest AccountLookup(string email)
+        => MeshQueryRequest.FromQuery($"nodeType:User content.email:{email}").AsSystem();
+
     private IObservable<SpaceInviteOutcome> GrantNow(string userId, string spacePath, string role, bool pin)
     {
-        // Runs under the caller's identity (the inviting admin has rights on the Space).
+        // The grant runs under the caller's identity (the inviting admin has rights on the Space).
         var grant = EventSubscriptionOps.Grant(meshService, userId, spacePath, role);
+        // The pin is a write on the INVITEE's partition root — their own User node — which the
+        // inviting admin holds no rights on (UserNodeType's update rule admits the user themself and
+        // portal identities, nobody else). It is the same write the deferred path performs as System
+        // in EventSubscriptionRunner.BuildContinuation; the immediate path runs it the same way, so an
+        // invite that grants NOW does not fail on the pin after the grant has already landed.
+        // RunAsSystem seals the scope to the pin's own Subscribe (#1790); the grant before it and the
+        // outcome after it stay under the caller.
         var effect = pin
-            ? grant.SelectMany(g => EventSubscriptionOps.Pin(hub, userId, spacePath).Select(_ => g))
+            ? grant.SelectMany(g => accessService
+                .RunAsSystem(() => EventSubscriptionOps.Pin(hub, userId, spacePath))
+                .Select(_ => g))
             : grant;
         return effect.Select(_ =>
         {

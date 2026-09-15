@@ -34,7 +34,7 @@ param gatewaySubnetPrefix string = '10.0.16.0/24'
 param bastionSubnetPrefix string = '10.0.17.0/26'
 
 @description('Subnet CIDR for the delegated Azure Database for PostgreSQL Flexible Server subnet (private/VNet-injected PG).')
-param postgresSubnetPrefix string = '<pg-private-ip-prefix>.0/24'
+param postgresSubnetPrefix string = '10.0.18.0/24'
 
 @description('Tags applied to every resource.')
 param tags object = {}

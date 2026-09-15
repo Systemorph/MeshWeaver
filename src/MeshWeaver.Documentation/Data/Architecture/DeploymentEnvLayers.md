@@ -338,6 +338,63 @@ live `SecretProviderClass` because it has not been deployed yet — and when it 
 will fail the whole mount. The record states it because it states the overlay's intent; provisioning
 the vault secret is what unblocks the next deploy.
 
+## Layer 2 on the operator path — the vault half a Reconcile never layered (#3780)
+
+Layer 2 is the one layer that is neither in a repository nor on the record: Secret
+`memex-portal-secrets` renders from `secrets.<half>.*` in the Key Vault **values half**
+(`helm-values-<release>`, written by the config repo's `helm-release capture`). Two deploy paths
+feed the chart, and until 2026-09-14 they disagreed about that layer:
+
+| path | values handed to `helm upgrade` | what `memex-portal-secrets` became |
+|---|---|---|
+| config repo lane (`helm-release.yml` → `deploy`) | `-f vault-values.yaml -f <committed overlay>` | the captured strings — the external server |
+| operator (`hosting-deploy`, a record-driven Provision / Reconcile) | `-f <the record's render>` only | the chart's **in-cluster defaults** |
+
+helm replaces a Secret wholesale on every upgrade, so the operator path did not deploy *less* — it
+rewrote layer 2 with `ConnectionStrings__orleans = Host=memex-postgres-service;…;Database=orleans`,
+a Service no AKS release renders (`postgres.enabled: false`). The mesh string survived it only
+because layer 3 (`memex-kv`, later in `envFrom`) shadows `ConnectionStrings__memex`; nothing
+shadows the orleans string anywhere in the fleet, so every new pod died at silo start on a name
+that never resolved:
+
+    'MembershipTableManager' failed to start due to errors at stage 'RuntimeGrainServices (8000)'.
+    Npgsql.NpgsqlException: Name or service not known
+
+Measured twice on the control instance, both record-driven Reconciles: helm revision 44
+(2026-09-09 02:35Z; `--atomic` then rolled it back onto the lane's revision 43, which is why the
+portal recovered) and revision 55 (2026-09-14 20:14Z, `Ops/Actions/reconcile-memex-20260914-nav-rail`,
+pod `…-77476b68-l4gw8`, 85 failed boots in the following hour). Every Roll and Restart in between
+was healthy because neither touches the Secret. The init container passed both times because the
+operator image predated the probe fix (#4173): it waited for `config.MEMEX_HOST`, which the record
+renders correctly, and said nothing about the connection that failed.
+
+Three things changed, so that neither path can produce that render again:
+
+1. **`hosting-deploy --vault <name>` layers `helm-values-<release>` FIRST**, then the record's
+   render — the lane's order, so the reviewed record still wins on every key it declares. The half
+   is read by the operator's own identity into a `0600` temp file, removed on exit, never echoed;
+   only its byte count is logged (`::hosting:: vault_values_bytes=`). Where the flag is given the
+   half is **required**: a vault that holds none is a refusal before helm, naming
+   `helm-release capture`, because proceeding would not deploy less — it would rewrite layer 2.
+2. **The plan passes `--vault` exactly when the record declares `vaultValuesKeys`** — the record's
+   own statement that the chart's Secret carries keys nothing in the record renders. A provisioned
+   instance (`vaultValuesKeys: []`, its connection string on a CSI class) reads nothing from any
+   vault and keeps its one-layer shape.
+3. **The chart refuses to invent the host.** `memex.orleansConnectionString` used to fall through
+   to the in-cluster default whenever neither string was supplied; on an external database
+   (`postgres.enabled: false`) it now `fail`s the render naming the missing input. The invariant
+   checker could never have caught this render — the Secret carried the key (invariant 4) naming a
+   host (invariant 16) that simply did not exist — so `check-chart-invariants.sh` now carries a
+   **refusal control**: a fixture of exactly the #3780 render that must fail to template.
+
+What is deliberately *not* gated the same way: the mesh string's chart-side copy on a record-driven
+instance is a shadowed placeholder by design (layer 3 supplies the real one), so `helm template`
+still accepts it. That leaves one known consequence for the next operator image, which will carry
+the #4173 probe: on an instance with no vault half, the probe derives its target from that
+placeholder and holds at `Init:0/1` naming `memex-postgres-service` — a diagnosable stall, not a
+crash loop, and the reason the record path should eventually feed `databaseConnectionSecret` into
+`secrets.<half>.ConnectionStrings__memex` as well.
+
 ## Related
 
 - [Chart Drift — what a deploy actually does](/Doc/Architecture/ChartDriftSemantics) — what a

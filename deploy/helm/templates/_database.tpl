@@ -58,12 +58,29 @@
          * derived  — the mesh connection plus `Search Path=orleans`: the SAME database as the
            mesh/graph data, isolated in its own schema. The default for an external mesh database,
            so a multi-pod deployment is never left on Localhost membership.
-       Only meaningful under AdoNet; the caller asks `memex.adoNetClustering` first. */ -}}
+       Only meaningful under AdoNet; the caller asks `memex.adoNetClustering` first.
+
+       🚨 THE THIRD SHAPE IS A REFUSAL, NOT A DEFAULT (MeshWeaver#3780). With neither string set the
+       only value left is the chart's in-cluster host, `memex-postgres-service` — correct where
+       `postgres.enabled` renders that Service (self-host, compose, local k3s), and a dead name
+       everywhere else. Cluster membership pointed at a Service the release does not render fails
+       the silo at start ('MembershipTableManager' … Name or service not known) on EVERY new pod,
+       and nothing in the chart said which input was missing. Measured on the control instance on
+       2026-09-09 (revision 44) and 2026-09-14 (revision 55): an upgrade that was fed the record's
+       render without the Key Vault values half re-rendered memex-portal-secrets from exactly this
+       default. So on an external database the rule fails the RENDER, naming the input, before
+       anything is applied. The mesh string is deliberately NOT gated the same way: a record-driven
+       instance legitimately supplies ConnectionStrings__memex through a Key Vault CSI class that
+       outranks the chart's Secret in envFrom, so its chart-side copy is a shadowed placeholder —
+       while ConnectionStrings__orleans has no such source anywhere in the fleet. */ -}}
 {{- define "memex.orleansConnectionString" -}}
 {{- $secrets := index .root.Values.secrets .half -}}
 {{- $orleans := $secrets.ConnectionStrings__orleans -}}
 {{- if and (not $orleans) $secrets.ConnectionStrings__memex -}}
 {{- $orleans = printf "%s;Search Path=orleans" (trimSuffix ";" $secrets.ConnectionStrings__memex) -}}
+{{- end -}}
+{{- if and (not $orleans) (not .root.Values.postgres.enabled) -}}
+{{- fail (printf "memex.orleansConnectionString: '%s' runs AdoNet clustering on an EXTERNAL database (postgres.enabled is false) but names no database for cluster membership: neither secrets.%s.ConnectionStrings__orleans nor secrets.%s.ConnectionStrings__memex is set. The only value left would be the chart's in-cluster default Host=memex-postgres-service, a Service this release does not render — every new pod would then fail at silo start ('MembershipTableManager' failed to start … Name or service not known; MeshWeaver#3780). Supply the connection string in values: on a record-driven deploy that is the Key Vault values half (helm-values-<release>, layered by hosting-deploy --vault when the record declares vaultValuesKeys); on the helm-release lane it is layered as vault-values.yaml. Refusing to render." .half .half .half) -}}
 {{- end -}}
 {{- $orleans | default (printf "Host=memex-postgres-service;Port=5432;Username=postgres;Password=%s;Database=orleans" $secrets.memex_postgres_password) -}}
 {{- end -}}

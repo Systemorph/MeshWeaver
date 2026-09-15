@@ -55,10 +55,13 @@ public record UnpartitionedHubDataSource(Address Address, IWorkspace Workspace) 
 
     /// <summary>
     /// Initializes the data source and eagerly opens the remote stream for its reference.
+    /// The primary (remote) stream only — the full-reference reduce this method used to perform and
+    /// discard minted a second, unreachable <c>sync/</c> hub per source (Systemorph/MeshWeaver#4300); see
+    /// <c>TypeSourceBasedUnpartitionedDataSource.Initialize</c> for the mechanism.
     /// </summary>
     public override void Initialize()
     {
         base.Initialize();
-        GetStream(GetReference());
+        GetStreamForPartition(null);
     }
 }

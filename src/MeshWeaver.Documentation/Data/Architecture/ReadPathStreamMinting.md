@@ -299,6 +299,73 @@ the same reference and that test would pass on a hub that refused nothing.
   that stopped listening until the hub dies. That is a lifetime defect in its own right; it costs an
   observer, not a hub, and it is untouched here.
 
+## 8. The sixth hub: a data source's start minted a spare ([#4300](https://github.com/Systemorph/MeshWeaver/issues/4300))
+
+`AnUncachedConfiguredReduce_MintsOneSyncHubPerCall` — §6's control in the growing direction — read
+**+6 for 5 calls** once, on a pull request whose diff could not reach `MeshWeaver.Data`
+(run 34823051999, shard 1). It was filed as unattributed, with three candidate mechanisms: the
+precondition's stream registering after its first frame, the client hub connecting, a previous test's
+stream settling. **All three were wrong**, and the way to know was not to re-run the test but to name
+the hub: a probe subscribed to the host's `HostedHubsCollection.HubAdded` and recorded every `sync/`
+hub's address, thread and creation stack across the whole test.
+
+The population at the baseline was three hubs, not one:
+
+| Hub | Thread | Minted by |
+|---|---|---|
+| `sync/JHJu…` | init turn | `DataContext.InitializeDataSources` → `TypeSourceBasedUnpartitionedDataSource.Initialize()` → `GetStream(GetReference())` → **`GetStreamForPartition(null)`** — the primary `EntityStore` stream |
+| `sync/E6Dr…` | init turn, **8.5 ms later** | the same call, second half: **`.Reduce(reference)`** — an uncached configured reduce (`x => x`) of the store to its own full reference, **result discarded** |
+| `sync/BTEH…` | test thread | the precondition, `GetObservable<BusinessUnit>()` → `Workspace.GetStream(Type[])` — itself an uncached `ReduceStream(…, x => x)` |
+
+The test's precondition waited for a **frame**. `GetHost()` returns when `Build` returns; the data
+sources start on the hub's init turn (`StartDataSourcesAndOpenGate`, off `Build` since #1868), on
+another thread; and the frame is produced by the primary stream's own initialization on a third.
+So the init turn's second mint — `E6Dr` — raced the frame, and on a loaded runner lost: it landed
+after the baseline, inside the measurement, and was counted as the sixth. Locally it won by 8 ms.
+Nothing about the minting itself was non-deterministic; the test's baseline was taken before the
+host's steady state.
+
+### The product defect underneath
+
+Every `Initialize()` override — `TypeSourceBasedUnpartitionedDataSource`,
+`TypeSourceBasedPartitionedDataSource`, `HubDataSource`, `PartitionedHubDataSource` — called
+`GetStream(reference)` for the side effect of opening the primary stream and discarded the reduced
+stream it returns. `DataSource.GetStream(reference)` is `GetStreamForPartition(partition).Reduce(reference)`,
+and `Reduce(reference)` is the stream-level **uncached** reduce (§7's second bullet, one layer up):
+a second `SynchronizationStream`, a second hosted `sync/` hub, registered for disposal on the
+hub-lifetime primary stream, reachable by nobody. **One permanent, unused hub per data source per
+partition, on every hub that carries data** — the very shape §5 pinned on the read path, paid once at
+start instead of once per read. `DataContext.InitializeDataSources` even documents the eager
+`GetStream` as "a sync/ sub-hub per source"; it was two.
+
+The fix is the obvious one: each override opens the primary stream (`GetStreamForPartition`) and
+reduces nothing. `IDataSource.Initialized` is `WhenAll` over the streams in the partition map, which
+never held the reduced stream, so the initialization gate is unchanged; nothing subscribed to the
+discarded stream, so no consumer loses a frame.
+
+### What the tests now say
+
+- `ADataSourceStart_MintsOnlyItsPrimaryStream` waits for `host.Started` — which settles only after
+  the init turn has run every `Initialize()` — and asserts the host holds exactly one `sync/` hub per
+  data source. Deterministic in both directions: it read 2 on every run before the fix and 1 after.
+- `AnUncachedConfiguredReduce_MintsOneSyncHubPerCall` keeps its frame precondition (the read must
+  have data) and takes its baseline only after `host.Started`, because the baseline of a
+  population count is the steady state, and a frame is evidence of a stream, not of a finished start.
+- `DataSourceStartMintingTest` pins the overrides the unpartitioned fixture cannot reach, each by
+  the same exact count after `Started`: a partitioned type-source beside an unpartitioned one on
+  one host (`APartitionedTypeSourceStart_MintsOnlyItsPrimaryStream`, 2 sources → 2 hubs) and a
+  `PartitionedHubDataSource` with two initialized partitions on a client
+  (`APartitionedHubSourceStart_MintsOneMirrorPerInitializedPartition`, 2 partitions → 2 mirrors).
+  With the four pre-fix lines restored both read **4** — one primary plus one discarded reduce per
+  stream opened — so the count is a real instrument in both directions. Note that no in-repo
+  concrete source derives from the abstract `GenericPartitionedDataSource`; the test declares its
+  own, which is why that override was previously unreachable by any test at all.
+
+The three hypotheses the issue listed are recorded here so they are not re-investigated: the client
+hub is not created by this test at all; the precondition's own reduce mints its hub synchronously in
+the `SynchronizationStream` constructor, before the frame can exist; and the mesh is per test, so no
+previous test's stream can settle on it.
+
 ## Related
 
 - [The `sync/` Hub Population](../SyncHubPopulation) — the 1:1 stream↔hub identity this all rests on
