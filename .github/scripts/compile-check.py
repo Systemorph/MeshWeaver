@@ -825,26 +825,22 @@ def build_csproj(work: Path, cs_files, ref_xml: str, with_config_check: bool = F
     # and System.Reactive come from the same refs dir in this mode.
     impl_props = ("    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>\n"
                   if impl_frameworks else "")
-    # 🚨 THE Rx PIN IS EMITTED ONLY WHEN THE REFS DIR DOES NOT ALREADY CARRY System.Reactive
-    # (MeshWeaver.Plugins#1911). A hard-coded `Version="6.1.0"` beside a refs dir whose platform
-    # assemblies were built against Rx 7 is CS1705 BY CONSTRUCTION, on every NodeType whose set
-    # binds MeshWeaver.Messaging.Hub / Mesh.Contract / Graph:
+    # 🚨 THIS FILE NEVER RESTORES System.Reactive FROM NuGet — in ANY mode (#4404, after
+    # MeshWeaver.Plugins#1911). Rx comes from the reference set, full stop: `ref_xml` declares the
+    # refs dir's own `System.Reactive.dll` with a HintPath, and that is the exact assembly the
+    # platform image runs. A version literal written here was CS1705 BY CONSTRUCTION the day the
+    # platform moved to Rx 7, on every NodeType whose set binds MeshWeaver.Messaging.Hub /
+    # Mesh.Contract / Graph:
     #
     #   CS1705: Assembly 'MeshWeaver.Messaging.Hub' … uses 'System.Reactive, Version=7.0.0.0' which
     #           has a higher version than referenced assembly 'System.Reactive' … '6.1.0.0'
     #
-    # and the message names THIS REPO'S CONTENT ("13 NodeTypes breaking") rather than the reference
-    # set — a gate that is red on a green main is a gate people learn to ignore, which this file's
-    # header already says about the registry-served module assemblies one layer up.
-    #
-    # When the refs dir carries `System.Reactive.dll`, `ref_xml` already declares it with a HintPath,
-    # and THAT is authoritative: it is the exact assembly the platform image runs. Restoring a second
-    # copy from NuGet beside it can only ever agree by luck. So the pin is the fallback for a refs dir
-    # that has no Rx at all, never a competitor to one that does — and there is no version literal to
-    # go stale in the case that actually occurs.
-    # A refs dir WITHOUT Rx never reaches this point: `short_reference_set_refusal` refuses it in
-    # `main` before any set is compiled, so nothing here restores a version, and there is no second
-    # place to forget that the platform moved (#4404).
+    # and the message named THIS REPO'S CONTENT ("13 NodeTypes breaking") rather than the reference
+    # set. So there is no fallback to restore: a refs dir WITHOUT `System.Reactive.dll` — or, in
+    # image layout, without `System.Private.CoreLib.dll` — is REFUSED by
+    # `short_reference_set_refusal` in `main` before any set is compiled, naming the refill command.
+    # Do not reintroduce a version literal "for the case the refs dir has none": that case exits
+    # before reaching this line, and a pin is a second place to forget that the platform moved.
     framework_items = ("" if impl_frameworks else
                        '    <FrameworkReference Include="Microsoft.AspNetCore.App" />\n')
     return f'''<Project Sdk="Microsoft.NET.Sdk">
