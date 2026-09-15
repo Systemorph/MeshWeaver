@@ -115,17 +115,38 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
     rows: list[dict[str, str]] = []
     excluded: list[tuple[str, str, str]] = []
     hosts: dict[str, tuple[str, str]] = {}
-    for instance in sorted(instances, key=lambda i: i.id):
+    names: dict[str, str] = {}
+    for instance in sorted(instances, key=lambda i: (i.id, i.gh_repo)):
         if instance.state != "live":
-            excluded.append((instance.id, instance.state, instance.reason))
+            excluded.append((instance.label, instance.state, instance.reason))
             continue
         if not instance.host:
             blockers.append(
-                f"installation `{instance.id}` ({instance.source}) declares no `ingress.host`, so "
-                "there is no base URL to verify it at. Combo verification asks the instance itself "
-                "what it would roll to and what it runs; an installation that cannot be reached is "
-                "left UNVERIFIED, which is the state this lane exists to end.")
+                f"installation `{instance.label}` ({instance.source}) declares no `ingress.host`, "
+                "so there is no base URL to verify it at. Combo verification asks the instance "
+                "itself what it would roll to and what it runs; an installation that cannot be "
+                "reached is left UNVERIFIED, which is the state this lane exists to end.")
             continue
+        # 🚨 THE ROSTER NAME IS A CREDENTIAL KEY, AND UPSTREAM IDENTITY IS NOT (#3438, 2026-09-15).
+        # `build_instances` qualifies an installation by `gh_repo:id` and DELIBERATELY permits two
+        # deployments repositories to each declare a `memex` — both are correct there, because it
+        # only ever asks each one what it is running. Here they are not: `COMBO_VERIFY_KEYS` and
+        # `COMBO_VERIFY_TOKENS` are keyed by NAME, so two installations sharing one would be handed
+        # the SAME `mwi_` key and admin token, and the second's verdict would land on the FIRST's
+        # `Admin/UpdatePolicy`. That is the duplicate-host harm arriving through the other door, and
+        # it became reachable the moment the fleet gained a second deployments repository — so it is
+        # refused HERE rather than assumed away upstream. Qualifying the name instead would be worse:
+        # it would silently ask for credentials under a key nobody has provisioned.
+        if instance.id in names:
+            blockers.append(
+                f"two live installations are both named `{instance.id}` ({names[instance.id]} and "
+                f"{instance.source}). Identity is qualified by the declaring repository upstream, "
+                "but this lane's credential maps (`COMBO_VERIFY_KEYS`, `COMBO_VERIFY_TOKENS`) are "
+                "keyed by NAME: both would be handed the same instance key and admin token, and "
+                "one's verdict would land on the other's `Admin/UpdatePolicy`. Rename one "
+                "installation, or key the maps by the qualified `repo:id` and say so here.")
+            continue
+        names[instance.id] = instance.source
         # 🚨 CANONICALISE BEFORE COMPARING. A HOSTNAME IS CASE-INSENSITIVE and the overlay extractor
         # accepts upper case, so `portal.example.com` and `PORTAL.EXAMPLE.COM` are ONE portal that a
         # case-sensitive test reads as two — which is not a cosmetic miss: it walks straight through
@@ -141,13 +162,13 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
             # the host ITS OWN overlay wrote, and the key they collide on separately.
             first_id, first_host = hosts[host_key]
             blockers.append(
-                f"installations `{first_id}` (https://{first_host}) and `{instance.id}` "
+                f"installations `{first_id}` (https://{first_host}) and `{instance.label}` "
                 f"(https://{instance.host}) both resolve to the same host `{host_key}` — a "
                 "hostname is case-insensitive. One of them would be verified under a name whose "
                 "instance key and admin token belong to the other, and its verdict would land on "
                 "the wrong `Admin/UpdatePolicy`.")
             continue
-        hosts[host_key] = (instance.id, instance.host)
+        hosts[host_key] = (instance.label, instance.host)
         rows.append({"name": instance.id, "baseUrl": f"https://{instance.host}"})
 
     if not rows and not blockers:
@@ -294,6 +315,30 @@ def self_test() -> int:
         ("memex", "b.example.com", "deployments/aks/memex/values.b.yaml")])], {})
     check(any("declared by two overlays" in b for b in blockers),
           "one installation declared by two overlays is a RED")
+
+    # 🚨 ONE NAME, TWO REPOSITORIES. Upstream this is LEGAL — identity there is `gh_repo:id`, and
+    # two deployments repositories may each declare a `memex`. Here it is fatal, because the
+    # credential maps are keyed by NAME. It must red rather than emit two rows.
+    rows, _, blockers = derive([
+        _scan("Systemorph/Memex", [
+            ("memex", "memex.systemorph.com", "deployments/aks/memex/values.memex.public.yaml")]),
+        _scan("Systemorph/PartnerRe.Memex", [
+            ("memex", "partnerre.meshweaver.cloud", "deployments/aks/memex/values.memex.yaml")]),
+    ], {})
+    check(rows == [{"name": "memex", "baseUrl": "https://memex.systemorph.com"}]
+          and any("both named `memex`" in b and "Systemorph/PartnerRe.Memex" in b
+                  and "Systemorph/Memex" in b for b in blockers),
+          "one NAME declared by two repositories is a RED naming both, though upstream allows it")
+
+    # …and two repositories declaring DIFFERENT names is the ordinary multi-repo fleet: no blocker.
+    rows, _, blockers = derive([
+        _scan("Systemorph/Memex", [
+            ("memex", "memex.systemorph.com", "deployments/aks/memex/values.memex.public.yaml")]),
+        _scan("Systemorph/PartnerRe.Memex", [
+            ("partnerre", "partnerre.meshweaver.cloud", "deployments/aks/pr/values.pr.yaml")]),
+    ], {})
+    check(blockers == [] and [r["name"] for r in rows] == ["memex", "partnerre"],
+          "two repositories declaring different names derive both, with no blocker")
 
     # Two ids, one host: the second would be verified with the first's credentials.
     rows, _, blockers = derive([_scan("Systemorph/Memex", [

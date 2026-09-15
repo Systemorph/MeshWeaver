@@ -299,12 +299,29 @@ are the whole of what is missing.
 
 🚨 **"One per instance" is now answered by the lane, not by the reader.** The preflight prints the
 derived roster before it asks for credentials, and names the instance any map is missing
-(`combo-verify.yml:194-198`). Measured 2026-09-15 it derives **three**: `build`
-(https://build.meshweaver.cloud), `memex` (https://memex.systemorph.com) and `memex-cloud`
-(https://memex.meshweaver.cloud), with `pearl` excluded by its `not-installed` declaration in
-`.github/acr-retention/instances.json`. The hand-written value this page used to carry named only
-the last two — so the list was already an installation short of the fleet on the day it was
-specified, which is the failure mode a derivation removes rather than a tidiness argument.
+(`combo-verify.yml:194-198`). The hand-written value this page used to carry named `memex` and
+`memex-cloud` — and the fleet's overlays declared more than that on the day it was specified, which
+is the failure mode a derivation removes rather than a tidiness argument.
+
+🚨 **And what the derivation says TODAY is a refusal, which is the mechanism working.** Measured
+2026-09-15 over all three deployments repositories, the fleet declares **four live** installations:
+`build` (build.meshweaver.cloud), `memex-cloud` (memex.meshweaver.cloud) and `memex`
+(memex.systemorph.com) in `Systemorph/Memex`, **and a second `memex`** (partnerre.meshweaver.cloud)
+in `Systemorph/PartnerRe.Memex` — with `pearl` and `partnerre` excluded by their `not-installed`
+declarations in `.github/acr-retention/instances.json`.
+
+Upstream that duplicate is **legal and correct**: since [#3438](https://github.com/Systemorph/MeshWeaver/issues/3438)
+(2026-09-15) an installation's identity is `gh_repo:id`, because a `Hosting__Deployment` is unique
+inside one deployments repository and inside nothing larger, and AXIS 3 only ever asks each one what
+it is running. **Here it is fatal**, because `COMBO_VERIFY_KEYS` and `COMBO_VERIFY_TOKENS` are keyed
+by NAME: two installations sharing one would be handed the same `mwi_` key and admin token, and the
+second's verdict would land on the FIRST's `Admin/UpdatePolicy`. So the derivation REFUSES, naming
+both declaring overlays, rather than emitting two rows called `memex`. Silently qualifying the name
+to `repo:id` would be worse — it would ask for credentials under a key nobody has provisioned.
+
+Resolving it is a decision, not a workaround: rename one installation, or key the maps by the
+qualified `repo:id` and record that here. Until then the lane is red on the roster rather than on
+the credentials, and it says which two overlays collide.
 
 The names are asserted at `combo-verify.yml:99-129` (the inputs) and `:169-205` (the per-instance
 half, which cannot run before the derivation); each `missing+=` line already names what to provision.
