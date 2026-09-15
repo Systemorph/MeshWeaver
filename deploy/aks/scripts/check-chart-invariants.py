@@ -564,20 +564,64 @@ def _waiter_command(obj):
     return None if waiter is None else " ".join(waiter.get("command") or [])
 
 
-def _secret_refs_after(obj, secret_name):
-    """Does any container of `obj` list a secretRef AFTER the chart's own Secret in envFrom? That is
-    the only way the chart Secret's placeholder connection string is shadowed (Kubernetes keeps the
-    LAST envFrom source on a key clash)."""
+def _probe_hosts(command):
+    """The EXACT host tokens a wait-for-postgres command waits for — the `for g in <group> …; do`
+    list, each group `h1,h2:port`. Compared as tokens, never substrings: `memex-postgres-service`
+    must not match `memex-postgres-service-replica` (Copilot on #4416)."""
+    import re as _re
+    m = _re.search(r"for g in (.*?); do", command or "")
+    if not m:
+        return set()
+    return {
+        h.strip()
+        for group in m.group(1).split()
+        for h in _re.sub(r":[0-9]+$", "", group).split(",")
+        if h.strip()
+    }
+
+
+def _keys_of_secret_source(name):
+    """The env keys a Secret named `name` will carry, as far as THIS render can tell: a chart Secret's
+    own keys, or the `secretObjects[].data[].key` of the SecretProviderClass that syncs into it.
+    None when nothing in the render produces that Secret (a hand-made class, `extraEnvFrom`) —
+    an OPAQUE source whose keys this checker cannot verify."""
+    for spc in by_kind("SecretProviderClass"):
+        for so in ((spc.get("spec") or {}).get("secretObjects") or []):
+            if so.get("secretName") == name:
+                return {d.get("key") for d in (so.get("data") or []) if d.get("key")}
+    rendered = next(iter(by_kind("Secret", name)), None)
+    if rendered is not None:
+        return set((rendered.get("stringData") or {}).keys()) | set((rendered.get("data") or {}).keys())
+    return None
+
+
+def _shadowing(obj, secret_name, key):
+    """Is `key` of the chart Secret `secret_name` overridden for every container that reads it?
+    envFrom precedence is PER KEY — Kubernetes keeps the LAST source that carries the key — so a
+    later Secret only shadows the placeholder if it carries THAT key (Copilot on #4416).
+    Returns (unshadowed_containers, opaque_sources): a container is unshadowed when no later source
+    is known to carry `key`; opaque sources are later refs whose keys the render does not show."""
     pod_spec = (((obj or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
+    unshadowed, opaque = [], []
     for c in pod_spec.get("containers") or []:
         refs = [
             ((e.get("secretRef") or {}).get("name"))
             for e in (c.get("envFrom") or [])
             if e.get("secretRef")
         ]
-        if secret_name in refs and refs.index(secret_name) < len(refs) - 1:
-            return True
-    return False
+        if secret_name not in refs:
+            continue
+        later = refs[refs.index(secret_name) + 1:]
+        carried = False
+        for ref in later:
+            keys = _keys_of_secret_source(ref)
+            if keys is None:
+                opaque.append(ref)
+            elif key in keys:
+                carried = True
+        if not carried:
+            unshadowed.append(c.get("name"))
+    return unshadowed, sorted(set(opaque))
 
 
 def _probe_coverage(kind_name, obj_kind, obj, secret_obj, label, cfg_obj=None):
@@ -651,7 +695,7 @@ def _probe_coverage(kind_name, obj_kind, obj, secret_obj, label, cfg_obj=None):
             )
     if shadowed:
         cfg_host = (((cfg_obj or {}).get("data") or {}).get("MEMEX_HOST") or "").strip()
-        if not cfg_host or cfg_host == "memex-postgres-service" or cfg_host not in probed:
+        if not cfg_host or cfg_host == "memex-postgres-service" or cfg_host not in _probe_hosts(probed):
             finding(
                 f"{label}: {', '.join(shadowed)} is the chart's in-cluster placeholder on an external "
                 f"database, and wait-for-postgres does not probe the record-rendered MEMEX_HOST "
@@ -660,14 +704,31 @@ def _probe_coverage(kind_name, obj_kind, obj, secret_obj, label, cfg_obj=None):
                 "so MEMEX_HOST is the only rendered address of the server the process opens. Without "
                 "it the gate waits for a Service this release does not render (pearl, 2026-09-15).",
             )
-        if not _secret_refs_after(obj, kind_name):
-            finding(
-                f"{label}: {', '.join(shadowed)} names memex-postgres-service, which this release does "
-                f"not render, and no envFrom source after {kind_name} shadows it",
-                "the process would open the placeholder and die at boot. Supply the connection string "
-                "in values, or through a Key Vault class (keyVaultSecrets.secrets), whose synced Secret "
-                "is listed after the chart's own.",
-            )
+        for key in shadowed:
+            unshadowed, opaque = _shadowing(obj, kind_name, key)
+            if not unshadowed:
+                continue
+            if opaque:
+                # FAIL CLOSED: a later source might carry the key, but nothing in this render says
+                # so — and "could not verify" must never read as "shadowed".
+                finding(
+                    f"{label}: {key} in {kind_name} names memex-postgres-service, which this release "
+                    f"does not render, and the only later envFrom source(s) {', '.join(opaque)} are "
+                    f"not rendered by the chart, so whether they carry {key} cannot be verified",
+                    "envFrom precedence is per key. Declare the connection string on a chart-rendered "
+                    "Key Vault class (keyVaultSecrets.secrets / keyVaultSecretClasses) so its "
+                    "secretObjects mapping is visible, or supply it in values.",
+                )
+            else:
+                finding(
+                    f"{label}: {key} in {kind_name} names memex-postgres-service, which this release "
+                    f"does not render, and no later envFrom source carries {key} "
+                    f"(container(s): {', '.join(unshadowed)})",
+                    "Kubernetes keeps the LAST source per key, so the process would open the "
+                    "placeholder and die at boot. Map the key on a Key Vault class "
+                    "(keyVaultSecrets.secrets), whose synced Secret is listed after the chart's own, "
+                    "or supply the string in values.",
+                )
 
 
 _probe_coverage(
@@ -707,7 +768,7 @@ if not pg_rendered:
     )
     for _label, _obj in (("portal", dep), ("migration", _migration_job)):
         _probed = _waiter_command(_obj)
-        if _probed and "memex-postgres-service" in _probed:
+        if _probed and "memex-postgres-service" in _probe_hosts(_probed):
             finding(
                 f"{_label}: wait-for-postgres probes memex-postgres-service, which this release does "
                 "not render (postgres.enabled is false)",

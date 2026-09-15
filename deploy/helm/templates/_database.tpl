@@ -166,6 +166,20 @@
 {{- if $orleans -}}{{- $targets = append $targets $orleans -}}{{- end -}}
 {{- end -}}
 {{- $targets = $targets | uniq -}}
+{{- /* 🚨 On an external database NO probe may name the in-cluster Service — whichever input
+       named it. meshProbeGroup refuses the defaulted MEMEX_HOST; this refuses an EXPLICIT values
+       string (`Host=memex-postgres-service` set by hand on a postgres.enabled:false release), which
+       would otherwise render a waiter that can neither succeed nor fail. Copilot on #4416. */ -}}
+{{- if not .root.Values.postgres.enabled -}}
+{{- $half := .half -}}
+{{- range $group := $targets -}}
+{{- range $h := splitList "," (regexReplaceAll ":[0-9]+$" $group "") -}}
+{{- if eq (trim $h) "memex-postgres-service" -}}
+{{- fail (printf "memex.dbProbeTargets: '%s' runs on an EXTERNAL database (postgres.enabled is false) but a connection string in values names the in-cluster Service memex-postgres-service, which this release does not render. wait-for-postgres would spin on it forever (pearl, 2026-09-15) and the process would die on it. Point secrets.%s.ConnectionStrings__memex (and __orleans) at the external server, or drop the values string and set config.%s.MEMEX_HOST. The same refusal as MeshWeaver#3780: never wait for a host nobody runs." $half $half $half) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if not $targets -}}
 {{- fail (printf "memex.dbProbeTargets: no database host could be derived for '%s'. Its connection strings name no Host= (or Server=), so the wait-for-postgres init container has nothing to wait for — and an init container that probes nothing would PASS, which is the exact failure #4173 removes. Set secrets.%s.ConnectionStrings__memex to a connection string naming a host." .half .half) -}}
 {{- end -}}
