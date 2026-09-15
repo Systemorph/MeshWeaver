@@ -1,21 +1,140 @@
 ---
 Name: Module Activation Head Ownership
 Category: Architecture
-Description: Which generation of a module a deployment runs is a decision every replica writes to one shared file, and two replicas landing different content of one module a few seconds apart lose each other's decision. The measured shape of that defect, why routing the write to an owning hub is not available, why the head must be DERIVED rather than stored, and exactly what the derivation costs.
+Description: Which generation of a module a deployment runs used to be a decision every replica wrote to one shared file, so two replicas landing different content of one module a few seconds apart lost each other's decision. Now every landing writes an immutable record of its own and the head is DERIVED from the records present. The on-disk format, how it stays readable by images already deployed, the retention rule, and why routing the write to an owning hub was not available.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6"/><path d="M5 8h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2z"/><path d="M7 20h10"/><path d="M9 16v4"/><path d="M15 16v4"/></svg>
 ---
 
 # Module Activation Head Ownership
 
-A deployment records which generation of each landed module it runs in one file per module,
-`modules/activation.d/<Name>.json`, on the RWX `/data` volume every replica shares. A landing reads
-that file at its start, decides against what it read, and replaces it at its end. The replace is
+A deployment recorded which generation of each landed module it runs in one file per module,
+`modules/activation.d/<Name>.json`, on the RWX `/data` volume every replica shares. A landing read
+that file at its start, decided against what it read, and replaced it at its end. The replace is
 atomic and **unconditional**.
 
 Within one process that is safe — landings are serialised on a cap-1 `IIoPool` slot. Across
-replicas it is a lost update, and this page is the measured shape of it, the two closing designs,
-and why only one of them is available. The issue is
-[#4026](https://github.com/Systemorph/MeshWeaver/issues/4026).
+replicas it was a lost update. The issue is
+[#4026](https://github.com/Systemorph/MeshWeaver/issues/4026), and it is **closed by deriving the
+head**: every landing now writes an immutable record of its own facts, and the head and fallback are
+computed from every record present. The first section below is the format as built and the
+compatibility story; the rest of the page is the measured defect and the design reasoning that
+chose this shape, kept because it is why the format looks the way it does.
+
+## As built — the on-disk format (#4026)
+
+```
+modules/activation.d/<Name>/<generation>.<SHA-256 of the record>.json   one landing, never rewritten
+modules/activation.d/<Name>.json                                        the STORED entry, still written
+modules/activation.json                                                 the legacy aggregate, read only
+```
+
+**A landing record** (`ModuleLandingRecord`) carries only the landing's own facts — `name`,
+`source`, `packagePath`, `directory` (the generation), `version`, `frameworkMvid`,
+`minMeshVersion`, `sourceCommit` — plus two facts of the REQUEST: `yieldsToNewerHead` (true on the
+publish route's shelf, false on the adopt path, because the derivation has to replay each lane's own
+head rule) and `reArrivalOf` (below). All of these are hashed, length-prefixed in a fixed order, into
+the file name with the **full** SHA-256 (`ModuleActivationSidecar.LandingRecordAddress`). One more
+field, `linkableHere` — the landing's own link-probe verdict — is stored but deliberately **outside**
+the address, because it is a function of the running platform, not of the bytes. The arrival stamp
+is the file's own write time and is never serialized. No `Previous*`, no `Enabled`: those are
+decisions and state, not facts of a landing.
+
+**The derivation** (`ModuleActivationSidecar.DeriveEntry`) runs inside `Read`, so the 82 call sites
+measured below get it with no change. One candidate per generation (the higher label wins, then the later arrival),
+then:
+
+- **the head is a replay** — the candidates folded in arrival order through #3996's predicate, which
+  keeps the current head only when the arriving landing is a SHELF landing ranking strictly below it
+  (both versions SemVer) and the head's bytes are present. That reproduces what a serialised
+  sequence of the same landings would have produced — including the arrival-dependent cases the rule
+  deliberately keeps (an equal version is a rebuild and moves the head, an unversioned label moves
+  it, an adopt landing always moves it). Every replica folds the same files with the same stamps, so
+  every replica reaches the same head.
+- **the fallback is a rank** over every other generation — bytes present, then `linkableHere`, then
+  the higher version, ties keeping the earlier arrival: `KeepsRecordedFallback`'s rule applied to all
+  candidates at once.
+
+**Writing** (`WriteLanding`) is create-if-absent: a name that exists already holds this record. The
+create does not have to be atomic — .NET's no-overwrite move is `link(2)` where the file system has
+it and an existence check plus `rename(2)` where it does not (a CIFS mount) — because two writers of
+one name are writing identical addressed bytes. The temp file is staged in `activation.d/` itself, so
+the rename moves that directory's write time, which is the fingerprint
+`PendingModuleActivations` memoises the activation read behind.
+
+**A re-arrival** is the one case identical records would get wrong: an adopt landing re-installing
+the generation the deployment ran before (the Store's rollback) finds its record already on the
+volume, and "already there" must not mean "nothing happened". When the landing would take the head
+if it arrived now, it writes a NEW record whose `reArrivalOf` names the latest record with the same
+facts (address and stamp) — a new file with its own arrival, never a touch of an existing one, and
+still identical across two replicas re-landing over the same state. When it would not (an identical
+re-publish of the head, an older shelf upload), nothing is written.
+
+### Compatibility with images already deployed
+
+This code runs on every portal pod, and a rolling update or a rollback puts an older image on the
+same volume. The format is chosen so that an older image **cannot tell anything changed**:
+
+| | what an image that predates the records does | why it is safe |
+|---|---|---|
+| reads | enumerates `activation.d/*.json` at the **top level** only | records live in a SUBDIRECTORY and the staged temp ends `.landing.tmp`, so neither is ever parsed as an entry |
+| boots | loads the head the stored `<Name>.json` names | every landing still writes that file — as a **projection** of the head it derived, and only when it differs |
+| collects garbage | references the generations the stored entries name | the current GC references **both** the derived and the stored generations, a superset of either — it never deletes what an older replica would boot |
+| uninstalls | writes a disabled `<Name>.json` and leaves the records alone | a **disabled stored entry is authoritative** over every record (below) |
+
+The projection is still last-writer-wins between two replicas, exactly as before. For a module that
+has records, no current image takes a head from it, so that lost update now reaches only an older
+image — which had it anyway.
+
+### The layers are a PRECEDENCE, then a ranking
+
+- **Whether** a module is installed is decided by the stored layers, as before: the aggregate, then
+  the per-module file winning by name. A disabled stored entry makes the module disabled whatever
+  records exist — *an uninstall must beat a stale landing*, including an uninstall written by an
+  older image that never removed the records. So no separate "uninstalled" marker was needed:
+  enabled state stays where every image already reads it.
+- **Which generation** an enabled module runs is decided by the records. A generation the stored
+  entry names that **no record names** joins the derivation as one of the **earliest** arrivals — its
+  fallback first, its head second, neither yielding — so a pre-records head, or an older image's
+  landing during a roll, stays a candidate, and the first landing on a new image keeps the fallback
+  the deployment already had. A generation the stored entry names that a record ALSO names adds
+  nothing, which is what stops the last-writer-wins projection leaking back into the answer.
+- A module with **no** records reads exactly as before, byte for byte. That is every module until its
+  first landing on an image that writes them, and it is why no migration pass exists.
+
+An uninstall (`RemoveModule`) writes the disabled entry first and then removes the module's record
+files, so the next landing is a first landing — which is what the documented registry rollback,
+*uninstall, then publish the older build*, relies on.
+
+### Retention can never change the answer
+
+Without retention, deriving the head trades a race for unbounded growth. `CollectGarbage` retires a
+record only when **the entry derived without it is identical** to the entry derived with it
+(`PruneLandingRecords`), behind the same fail-closed read-fault counter and the same grace window as
+the generation deletes, and never a record of a generation the stored entry names. "Keep the head's
+and the fallback's records" would be WRONG: an unversioned landing moves the head whatever it follows,
+so a later older shelf landing takes the head from it, and the head then depends on a record that is
+neither head nor fallback — retiring it would flip the head five minutes after the last landing with
+nothing having landed. The test `Retention_KeepsARecordTheHeadDependsOn_EvenWhenItIsNeitherHeadNorFallback`
+pins that case. Generation directories are still reclaimed only by the existing GC rules; a retired
+record's generation is simply no longer referenced.
+
+Reclaiming a displaced generation's bytes cannot change the fold either: a displaced record was
+displaced by a landing that is non-yielding, unorderable or not below it, and each of those displaces
+whatever is current whether that record's bytes are present or not.
+
+### Measured
+
+`ConcurrentModuleLandingTest` runs two `ModuleLandingService` instances — two replicas, each with its
+own cap-1 pool — over one landing root, and runs one replica's whole landing inside the other's
+recording window (after its bytes land, before it records). Against the code before this change:
+
+| interleaving | before | after |
+|---|---|---|
+| 1.6.1 interrupted, 1.7.0 lands inside the window | head **1.6.1** — the regression | head 1.7.0, fallback 1.6.1 |
+| 1.7.0 interrupted, 1.6.1 lands inside the window | head 1.7.0, fallback **lost** (`null`) | head 1.7.0, fallback 1.6.1 |
+
+The second row is worth noticing: even the order that kept the right head lost the older build's
+fallback slot, so the modules GC would have reclaimed it five minutes later.
 
 ## The mechanism, at file and line
 
@@ -259,18 +378,24 @@ platform-aware resolution step. What is genuinely not local is the rest:
 answer, so a derived head flows into `Propose` exactly as a stored one does. The boot projection
 (`ProjectOntoMeshSet`) is likewise untouched.
 
-## Standing verdict
+## Verdict
 
-The defect is real, reachable only by two different contents of one module landing concurrently on
-two replicas, and unbounded once it happens (it propagates into the proposed module set). **Deriving
-the head is the only one of the named shapes that adds no new cell two replicas can both write**, and
-routing the write to an owning hub is not available in the form the issue states it, because boot
-reads the record before the mesh exists.
+The defect was real, reachable only by two different contents of one module landing concurrently on
+two replicas, and unbounded once it happened (it propagated into the proposed module set). **Deriving
+the head was the only one of the named shapes that adds no new cell two replicas can both write**, and
+routing the write to an owning hub was not available in the form the issue stated it, because boot
+reads the record before the mesh exists. It is built as described in the *As built* section at the
+top of this page: the on-disk record changes shape additively, an
+older image reads and writes exactly what it always did, and retention is stated as an invariant
+(*it never changes what `Read` answers*) rather than a list of records to keep.
 
-What is left is a scope call the maintainer has not made: **whether the on-disk activation record
-changes shape on a live fleet now**, given that the GC retention rule has to be rewritten in the same
-change and that the last four changes in this area were each written after an incident in which a
-module silently stopped shipping.
+What the design section priced and the build settled differently: the enabled state did **not** need
+a marker of its own — it stays in the stored entry, which every image already reads, and its disabled
+state is authoritative over the records; and the fallback's loadability is the landing's own recorded
+verdict (`linkableHere`), so `Read` stays platform-blind and boot reads no assembly metadata. The
+residue is the one a platform-dependent fact always has: during a rolling update two images can
+disagree about `linkableHere` for one record, which can reorder the fallback for the length of the
+roll and never moves the head.
 
 ## See also
 
