@@ -85,9 +85,9 @@ public record Space
 ///     <c>partition_changes</c> pg_notify provisioning so every silo/mirror agrees the
 ///     partition exists.</item>
 ///   <item><b>Creator gets Admin.</b> The handler persists an <c>AccessAssignment</c> at
-///     <c>{id}/_Access</c> under <c>AccessService.ImpersonateAsSystem</c>; the write is
-///     <b>awaited</b>, so a failed grant faults the create response rather than being
-///     silently dropped.</item>
+///     <c>{id}/_Access</c> as System, through the sealed boundary
+///     <c>AccessService.RunAsSystem</c>; the write is <b>awaited</b>, so a failed grant
+///     faults the create response rather than being silently dropped.</item>
 /// </list>
 ///
 /// Access rules: Read/Create/Update/Delete controlled by partition-level
@@ -241,13 +241,20 @@ public static class SpaceNodeType
     /// that primes <c>PgPartitionCache</c> + the <c>partition_changes</c> notify pump,
     /// and (2) grants the creator Admin.</para>
     ///
-    /// <para><b>The creator-admin grant</b> runs under
-    /// <c>AccessService.ImpersonateAsSystem</c> (the new user / brand-new partition
-    /// root means the caller can't already hold Create on it — the canonical
+    /// <para><b>The creator-admin grant</b> runs as System (the new user / brand-new
+    /// partition root means the caller can't already hold Create on it — the canonical
     /// infrastructure-write case) and is <b>awaited</b>, not fire-and-forget: a
     /// failed grant faults <see cref="Handle"/>, which
     /// <c>RunPostCreationHandlersObs</c> surfaces as a failed create response
     /// instead of silently dropping it.</para>
+    ///
+    /// <para>🚨 It runs through <c>ImpersonationScopeExtensions.RunAsSystem</c>, never a raw
+    /// <c>Observable.Using(accessService.ImpersonateAsSystem, …)</c>. The raw shape opens the
+    /// AsyncLocal scope on the SUBSCRIBING thread and disposes it when the cross-hub create
+    /// terminates on another one, so it LATCHES <c>system-security</c> onto the create flow that
+    /// invoked this handler — which is where #4061's "intermittent" Admin/Partition denial came
+    /// from. See the body of <see cref="Handle"/>, and
+    /// <c>SpaceGrantScopeDoesNotLatchTheCreateFlowTest</c>, which pins it.</para>
     /// </summary>
     private class SpacePostCreationHandler(
         IMeshService meshService,
@@ -306,12 +313,36 @@ public static class SpaceNodeType
             // hold Create on a brand-new partition root). Return the observable directly — the
             // caller subscribes; a failure propagates through OnError so RunPostCreationHandlers
             // reports it. Pure reactive, no Task, no ToTask bridge.
-            return Observable.Using(
-                    () => accessService.ImpersonateAsSystem(),
-                    _ => meshService.CreateNode(assignmentNode))
-                .Do(_ => logger?.LogInformation(
-                    "Granted Admin to {User} on Space {Path} at {GrantPath}",
-                    createdBy, createdNode.Path, assignmentNode.Path))
+            //
+            // 🚨 RunAsSystem, NEVER `Observable.Using(() => accessService.ImpersonateAsSystem(), …)`
+            // (#4061 — this site is the mechanism behind that issue's "intermittent" denial, and it
+            // was the last entry MeshWeaver.Graph held in test/ImpersonationScopeSites.allow).
+            // Impersonation is an AsyncLocal store/restore pair. Rx runs the resource factory on the
+            // SUBSCRIBING thread and disposes the resource when the inner observable TERMINATES —
+            // for this CROSS-HUB create, the owning hub's response thread. AccessContextScope's
+            // restore is thread-affine, so it writes nothing over there, and NOTHING ever closes the
+            // scope on the subscriber: the flow that invoked this handler keeps `system-security`
+            // for everything it does next.
+            //
+            // That subscriber is MeshExtensions.RunPostCreationHandlersObs, which goes on to persist
+            // and ANNOUNCE Admin/Partition/{id}. #4197 measured BOTH identities on that announcement
+            // in ONE run, 41 ms apart — `user=system-security` while the latch was in effect and
+            // `user=Roland`, denied on Admin/Partition/{id}, when it was not — and fixed the
+            // announcement by declaring its identity as a VALUE. That closed the symptom at one call
+            // site; this closes the SOURCE. An accidental Permission.All is the more serious half:
+            // its failure mode is a write silently succeeding where the user would have been refused
+            // (#1444), and a stage that "works" only while a sibling scope has not been torn down is
+            // not working.
+            //
+            // The seal does not weaken the write: RunAsSystem enters the scope at Subscribe, so the
+            // cold create still eager-captures System, and leaves it on the way out of that same
+            // Subscribe. The .Do is inside the work factory so emission-time behaviour is unchanged
+            // (ImpersonationScopeExtensions: "compose the WIDEST cold pipeline inside work").
+            return accessService
+                .RunAsSystem(() => meshService.CreateNode(assignmentNode)
+                    .Do(_ => logger?.LogInformation(
+                        "Granted Admin to {User} on Space {Path} at {GrantPath}",
+                        createdBy, createdNode.Path, assignmentNode.Path)))
                 .Select(_ => System.Reactive.Unit.Default);
         }
 
