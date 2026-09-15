@@ -52,14 +52,23 @@ public class DocumentationFrontMatterGuard
             .ToArray();
     }
 
-    /// <summary>The text between the opening and closing <c>---</c> fences, or null when the file opens none.</summary>
+    /// <summary>
+    /// The text between the opening and closing <c>---</c> fences; null when the file opens none.
+    ///
+    /// <para>🚨 An UNTERMINATED block is not "no front matter" — it returns
+    /// <see cref="Unterminated"/> so the caller reports it. Treating it as absent would let the one
+    /// shape that cannot possibly be read escape the guard silently, which is the skip-trapdoor this
+    /// file exists to close.</para>
+    /// </summary>
+    private const string Unterminated = "\u0000unterminated";
+
     private static string? FrontMatterOf(string text)
     {
         var normalized = text.Replace("\r\n", "\n");
         if (!normalized.StartsWith("---\n", StringComparison.Ordinal))
             return null;
         var end = normalized.IndexOf("\n---", 3, StringComparison.Ordinal);
-        return end < 0 ? null : normalized[4..end];
+        return end < 0 ? Unterminated : normalized[4..end];
     }
 
     [Fact]
@@ -77,6 +86,14 @@ public class DocumentationFrontMatterGuard
         var offenders = new StringBuilder();
         foreach (var (path, frontMatter) in files)
         {
+            if (ReferenceEquals(frontMatter, Unterminated))
+            {
+                offenders.AppendLine(
+                    $"  {path}: the front-matter block OPENS with '---' and never closes, so no "
+                    + "parser can read it and every field in it is lost.");
+                continue;
+            }
+
             try
             {
                 new DeserializerBuilder().Build().Deserialize<Dictionary<string, object>>(frontMatter);
@@ -108,6 +125,9 @@ public class DocumentationFrontMatterGuard
         var offenders = new StringBuilder();
         foreach (var (path, frontMatter) in files)
         {
+            if (ReferenceEquals(frontMatter, Unterminated))
+                continue;   // reported by the sibling test; nothing here can be read
+
             // This half cannot be caught by parsing alone: ' #' opens a comment, so the document is
             // VALID and the value is simply shorter than it was written. Compare what the parser
             // would return against the raw line to see the loss.
