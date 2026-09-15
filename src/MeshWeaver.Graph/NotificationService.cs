@@ -183,7 +183,11 @@ public static class NotificationService
         string? createdBy = null,
         string? icon = null,
         string? recipient = null,
-        string? identity = null)
+        string? identity = null,
+        string? titleKey = null,
+        (string Name, object? Value)[]? titleArgs = null,
+        string? messageKey = null,
+        (string Name, object? Value)[]? messageArgs = null)
     {
         // The two concepts compose: `recipient` decides WHERE the notification is delivered, and
         // `identity` decides WHETHER a repeat is a new row or the same one refreshed.
@@ -216,10 +220,20 @@ public static class NotificationService
             CreatedAt = DateTimeOffset.UtcNow,
             NotificationType = type,
             CreatedBy = createdBy
-        };
+        }
+            // 🚨 The KEYS, not the rendered sentence, are what make this row readable in the
+            // viewer's language (#4373). `title`/`message` stay as the English fallback, so a
+            // caller that passes no key is unchanged and a key that later leaves the catalog still
+            // renders what the writer meant. Resolving here would be wrong even where possible:
+            // this runs as SYSTEM on a background reaction, with no viewer in scope, and the row
+            // outlives the write.
+            .WithKeys(titleKey, titleArgs, messageKey, messageArgs);
 
         var node = new MeshNode(notificationId, parentPath)
         {
+            // The node's Name stays the ENGLISH title: it is the row's identity in listings,
+            // search and logs, and a per-viewer value there would make two readers disagree about
+            // what the same node is called. The bell renders `LocalizeTitle` off the CONTENT.
             Name = title,
             NodeType = NotificationNodeType.NodeType,
             State = MeshNodeState.Active,

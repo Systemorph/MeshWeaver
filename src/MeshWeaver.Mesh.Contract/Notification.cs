@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 
@@ -58,6 +59,43 @@ public record Notification
     /// Detailed message body.
     /// </summary>
     public string Message { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Catalog key for <see cref="Title"/>; when set, <see cref="Title"/> is the English fallback
+    /// and the bell resolves THIS instead, in the viewer's language (#4373).
+    ///
+    /// <para>🚨 <b>A notification cannot be localized at the write site</b>, which is why the key
+    /// is stored rather than the sentence. Every one is raised on a background reaction — the
+    /// package-update reconciler, a module-discovery scan, a startup import — running as SYSTEM
+    /// with no viewer in scope, so resolving there picks the system default (English) and then
+    /// BAKES it into a durable row that several people with different languages will read for
+    /// days. Same reasoning, same shape, as <c>LogMessage.MessageKey</c> (#3236).</para>
+    ///
+    /// <para>Null is the common case and always will be: every row written before #4373, and any
+    /// notification whose text is verbatim upstream output no catalog can carry.</para>
+    /// </summary>
+    [Browsable(false)]
+    public string? TitleKey { get; init; }
+
+    /// <summary>
+    /// The arguments for <see cref="TitleKey"/>, BY NAME — the catalog template refers to them as
+    /// <c>{name}</c>, <c>{count}</c>, … so a translator may reorder them for target-language word
+    /// order. Named rather than positional precisely because these are PERSISTED: a row written
+    /// weeks ago must still bind to a template someone has since rewritten.
+    /// </summary>
+    [Browsable(false)]
+    public ImmutableDictionary<string, object>? TitleArgs { get; init; }
+
+    /// <summary>
+    /// Catalog key for <see cref="Message"/>; see <see cref="TitleKey"/> for why this is stored
+    /// rather than resolved at the write site.
+    /// </summary>
+    [Browsable(false)]
+    public string? MessageKey { get; init; }
+
+    /// <summary>The arguments for <see cref="MessageKey"/>, by name — see <see cref="TitleArgs"/>.</summary>
+    [Browsable(false)]
+    public ImmutableDictionary<string, object>? MessageArgs { get; init; }
 
     /// <summary>
     /// Optional icon path or URL for the notification (e.g.,
