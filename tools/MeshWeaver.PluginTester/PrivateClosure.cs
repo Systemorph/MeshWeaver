@@ -56,7 +56,39 @@ public static class PrivateClosure
     public sealed record Result(
         ImmutableArray<Ride> Rides,
         ImmutableArray<string> FrameworkResolved,
-        ImmutableArray<string> Missing);
+        ImmutableArray<string> Missing)
+    {
+        /// <summary>
+        /// The LOADABLE NATIVE payloads that must travel with the bundle (#4126), ordered by their
+        /// module-relative path. Kept apart from <see cref="Rides"/> because the two are PLACED
+        /// differently: a ride is a flat file beside the entry assembly, while a native keeps
+        /// <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c> — the exact layout
+        /// <c>ModuleNativeAssets</c> probes, and the reason it is a layout and not a name.
+        ///
+        /// <para>An INIT property, not a fourth primary-constructor parameter
+        /// (<c>scripts/check-record-signatures.py</c>).</para>
+        /// </summary>
+        public ImmutableArray<NativeRide> Natives { get; init; } = [];
+
+        /// <summary>
+        /// Native payloads the walk reached, DECLARED by a package in the image's or the shelf's
+        /// own deps.json, for which neither source has a file. Never silently dropped, for the
+        /// same reason <see cref="Missing"/> is not: a module that ships without the engine it
+        /// declared does not degrade, it throws <c>DllNotFoundException</c> at the first P/Invoke.
+        /// </summary>
+        public ImmutableArray<string> NativesMissing { get; init; } = [];
+    }
+
+    /// <summary>One native payload riding the bundle.</summary>
+    /// <param name="RelativePath">Where it must land under the module folder —
+    /// <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c>, exactly as the source's deps.json declared
+    /// it. 🚨 The path IS the contract: the loader composes its probe from these four segments and
+    /// has no recursive walk.</param>
+    /// <param name="SourcePath">The file to copy.</param>
+    /// <param name="PackageId">The package that contributed it.</param>
+    /// <param name="Source">Where the bytes came from — <c>the image</c> or <c>the shelf</c>.</param>
+    public sealed record NativeRide(
+        string RelativePath, string SourcePath, string PackageId, string Source);
 
     /// <summary>
     /// Derives the private closure of a set of <c>PackageReference</c> ids.
@@ -75,6 +107,11 @@ public static class PrivateClosure
         var rides = new Dictionary<string, Ride>(StringComparer.OrdinalIgnoreCase);
         var frameworkResolved = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         var missing = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        // 🚨 ORDINAL for the natives, unlike everything else in this method. Assembly binding is
+        // case-insensitive; a Linux filesystem is not, so `libFoo.so` and `libfoo.so` are two
+        // distinct loadable libraries and folding them together would drop one.
+        var natives = new Dictionary<string, NativeRide>(StringComparer.Ordinal);
+        var nativesMissing = new SortedSet<string>(StringComparer.Ordinal);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var pending = new Stack<string>(packageIds);
 
@@ -113,6 +150,30 @@ public static class PrivateClosure
                     missing.Add(name);
             }
 
+            // 🚨 THE NATIVE half of the same closure (#4126). A package's LOADABLE payloads are
+            // declared in the very deps.json the managed walk above follows, and until now this
+            // method read only the `runtime` side of it — so a module's engine rode nowhere and
+            // the module threw DllNotFoundException at its first P/Invoke, on a bundle whose
+            // managed closure was complete and whose log said so.
+            //
+            // The image first, for the same reason as the managed rides: those are the bytes the
+            // compile resolved against. The shelf supplies what the image does not carry. A path
+            // DECLARED by either record and found in NEITHER is recorded as missing rather than
+            // passed over — the caller warns per file.
+            foreach (var declared in container.DeclaredNativesOf(id)
+                         .Concat(shelf?.DeclaredNativesOf(id) ?? [])
+                         .Distinct(StringComparer.Ordinal))
+            {
+                if (natives.ContainsKey(declared))
+                    continue;
+                if (container.NativeFileFor(declared) is { } fromImage)
+                    natives[declared] = new NativeRide(declared, fromImage, id, "the image");
+                else if (shelf?.NativeFileFor(declared) is { } fromShelf)
+                    natives[declared] = new NativeRide(declared, fromShelf, id, "the shelf");
+                else
+                    nativesMissing.Add(declared);
+            }
+
             // Both records are followed: the shelf pins additional libraries, the image pins
             // everything it carries, and a package can be known to one and not the other.
             foreach (var dependency in container.DependenciesOf(id))
@@ -125,7 +186,11 @@ public static class PrivateClosure
         return new Result(
             [.. rides.Values.OrderBy(r => r.AssemblyName, StringComparer.OrdinalIgnoreCase)],
             [.. frameworkResolved],
-            [.. missing]);
+            [.. missing])
+        {
+            Natives = [.. natives.Values.OrderBy(n => n.RelativePath, StringComparer.Ordinal)],
+            NativesMissing = [.. nativesMissing],
+        };
     }
 
     private static bool IsPlatform(string name) =>

@@ -492,6 +492,12 @@ public sealed class ModuleLandingService : IDisposable
     /// the producer recorded it in the bundle manifest (#4158) — recorded on the activation entry
     /// and printed by <see cref="ModuleLoadReport"/>. DIAGNOSTIC, and never inferred: null means the
     /// producer stated none, which prints as an explicit "(unrecorded)".</param>
+    /// <param name="nativeAssets">🚨 The module's RID-specific NATIVE payloads (#4126), each at
+    /// <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c> — the EXACT four segments
+    /// <c>ModuleNativeAssets</c> composes its probe from, enforced here by
+    /// <see cref="NuGetPackageWriter.IsModuleNativeLayout"/> rather than trusted. A payload at any
+    /// other shape would be written to disk, read as shipped and never be looked at: the one
+    /// outcome carrying natives exists to prevent, so it is refused instead of landed.</param>
     public IObservable<Unit> LandModule(
         string name,
         IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
@@ -500,11 +506,13 @@ public sealed class ModuleLandingService : IDisposable
         string? version = null,
         string? minMeshVersion = null,
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null,
-        string? sourceCommit = null)
+        string? sourceCommit = null,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets = null)
         => pool.InvokeBlocking(_ =>
         {
             LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
-                staticAssets, sourceCommit, holdUnloadable: false, keepNewerHead: false);
+                staticAssets, sourceCommit, nativeAssets,
+                holdUnloadable: false, keepNewerHead: false);
             return Unit.Default;
         })
         .Do(_ => AnnounceActivationChanged());
@@ -568,10 +576,12 @@ public sealed class ModuleLandingService : IDisposable
         string? version = null,
         string? minMeshVersion = null,
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null,
-        string? sourceCommit = null)
+        string? sourceCommit = null,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets = null)
         => pool.InvokeBlocking(_ =>
             LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
-                staticAssets, sourceCommit, holdUnloadable: true, keepNewerHead: true))
+                staticAssets, sourceCommit, nativeAssets,
+                holdUnloadable: true, keepNewerHead: true))
             .Do(_ => AnnounceActivationChanged());
 
     /// <summary>
@@ -590,6 +600,33 @@ public sealed class ModuleLandingService : IDisposable
                 $"Module '{moduleName}': '{value}' is not a valid module-relative asset path.");
         foreach (var segment in value.Split('/'))
             ValidateFileName(segment, $"asset path segment of module '{moduleName}'");
+    }
+
+    /// <summary>
+    /// Validates one module-relative NATIVE path (#4126): everything
+    /// <see cref="ValidateAssetPath"/> requires, PLUS the exact layout the module loader probes —
+    /// <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c>, four segments, no more and no fewer
+    /// (<see cref="NuGetPackageWriter.IsModuleNativeLayout"/>, the one spelling the derivation,
+    /// the packer and the bundle reader also use).
+    ///
+    /// <para>🚨 The layout is checked HERE and not only at the bundle boundary, because this is
+    /// the method that puts the bytes on disk and every producer reaches it — the publish
+    /// endpoint, a consumer's adopt, and a caller inside the process. A payload at any other
+    /// shape lands, is never probed (<c>ModuleNativeAssets.CandidatePaths</c> composes exactly
+    /// those four segments and has no recursive walk), and reads as shipped while behaving as
+    /// absent: bytes on disk with nothing anywhere to grep. Refused, so that the one thing a
+    /// native section cannot do is fail silently.</para>
+    /// </summary>
+    internal static void ValidateNativePath(string? value, string moduleName)
+    {
+        ValidateAssetPath(value, moduleName);
+        if (!NuGetPackageWriter.IsModuleNativeLayout(value))
+            throw new ArgumentException(
+                $"Module '{moduleName}': '{value}' is not the layout the module loader probes "
+                + "(exactly runtimes/<rid>/native/<file>). Landing it would write bytes to a path "
+                + "nothing ever looks at — shipped in appearance, absent in behaviour. A native "
+                + "that has to live elsewhere rides FLAT beside the entry assembly instead, which "
+                + "is the loader's last probe.");
     }
 
     /// <summary>
@@ -667,11 +704,14 @@ public sealed class ModuleLandingService : IDisposable
         string? minMeshVersion,
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets,
         string? sourceCommit,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets,
         bool holdUnloadable,
         bool keepNewerHead)
     {
         foreach (var (relativePath, _) in staticAssets ?? [])
             ValidateAssetPath(relativePath, name);
+        foreach (var (relativePath, _) in nativeAssets ?? [])
+            ValidateNativePath(relativePath, name);
         ValidateFileName(name, "module name");
         if (assemblies is not { Count: > 0 })
             throw new ArgumentException($"Module '{name}': no assemblies to land.", nameof(assemblies));
@@ -780,7 +820,7 @@ public sealed class ModuleLandingService : IDisposable
         // it should always have been, so no conflicting record is ever written. A GENUINE conflict
         // (two replicas landing different content) still derives two sets and is still reported;
         // that report is now about something that actually differs.
-        var generation = $"{name}@{GenerationIdOf(assemblies, staticAssets)}";
+        var generation = $"{name}@{GenerationIdOf(assemblies, staticAssets, nativeAssets)}";
 
         // 🚨 #3649 — THE PREVIOUS GENERATION IS KEPT, never overwritten. The entry this landing
         // displaces becomes the new entry's fallback: boot loads the head generation, and when
@@ -923,6 +963,19 @@ public sealed class ModuleLandingService : IDisposable
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                 File.WriteAllBytes(destination, bytes);
             }
+            // 🚨 NATIVE payloads keep their relative path for a harder reason than the assets do
+            // (#4126): the path IS the contract. ModuleNativeAssets composes its probe from
+            // exactly runtimes/<rid>/native/<file> under the module folder and has no recursive
+            // walk, so a byte written anywhere else is a module that loads, reports nothing, and
+            // throws DllNotFoundException at its first P/Invoke. The shape was refused above, at
+            // the top of this method, before anything touched the disk.
+            foreach (var (relativePath, bytes) in nativeAssets ?? [])
+            {
+                var destination = Path.Combine(
+                    staging, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.WriteAllBytes(destination, bytes);
+            }
             // 🚨 An EXISTING target is the right answer, never a collision (#3656): the leaf is the
             // content address, so a directory already carrying this name already carries these
             // bytes. Another replica landing the same bundle concurrently, or an earlier landing
@@ -962,6 +1015,20 @@ public sealed class ModuleLandingService : IDisposable
             }
             throw;
         }
+
+        // 🚨 The natives get a line of their OWN (#4126). Everything else about a native is
+        // invisible until a P/Invoke throws — the module lands, loads, and reports nothing — so
+        // "this landing wrote N engines, for these RIDs" is the only place a reader can tell a
+        // module that shipped none from a lane that dropped them. Stated when there are some;
+        // the absence of the line is not a claim, it is the ordinary case.
+        if (nativeAssets is { Count: > 0 })
+            logger?.LogInformation(
+                "Module '{Name}': {Count} native payload(s) landed under modules/{Generation}/ — "
+                + "{Paths}. The host resolves them at load time for ITS OWN rid "
+                + "(ModuleNativeAssets, #1728); a rid this bundle does not carry falls back to the "
+                + "runtime's own probing",
+                name, nativeAssets.Count, generation,
+                string.Join(", ", nativeAssets.Select(a => a.RelativePath)));
 
         var entry = !keepsNewerHead
             ? new ModuleActivationEntry
@@ -1145,14 +1212,22 @@ public sealed class ModuleLandingService : IDisposable
     /// <param name="assemblies">The assemblies the landing writes, as file name → bytes.</param>
     /// <param name="staticAssets">The static web assets it writes, as module-relative path →
     /// bytes; null or empty when the module ships none.</param>
+    /// <param name="nativeAssets">🚨 The RID-specific native payloads it writes (#4126), same
+    /// shape. They are part of the address for the same reason the assets are: two bundles that
+    /// differ ONLY in their natives are two different landings, and hashing over the assemblies
+    /// alone would resolve both to one generation directory — the second adopting the first's
+    /// engine (or none) while its activation entry claims its own.</param>
     internal static string GenerationIdOf(
         IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
-        IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets)
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets = null)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (var (path, bytes) in (assemblies ?? [])
                      .Select(a => (Path: a.FileName.Replace('\\', '/'), a.Bytes))
                      .Concat((staticAssets ?? [])
+                         .Select(a => (Path: a.RelativePath.Replace('\\', '/'), a.Bytes)))
+                     .Concat((nativeAssets ?? [])
                          .Select(a => (Path: a.RelativePath.Replace('\\', '/'), a.Bytes)))
                      .OrderBy(x => x.Path, StringComparer.Ordinal))
         {

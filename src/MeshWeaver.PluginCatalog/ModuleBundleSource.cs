@@ -1,4 +1,5 @@
 using System.IO;
+using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -122,6 +123,68 @@ public static class ModuleBundleSource
             : [];
 
         return (files, assets, null);
+    }
+
+    /// <summary>
+    /// The module's RID-specific NATIVE payloads on this deployment's shelf (#4126), as
+    /// (module-relative path, absolute path) pairs — the <c>runtimes/&lt;rid&gt;/native/</c> tree a
+    /// landing wrote under the resolved generation.
+    ///
+    /// <para>🚨 <b>A SEPARATE call rather than a fourth element on
+    /// <see cref="CollectVersion"/>'s tuple.</b> Widening that tuple would rewrite the signature
+    /// of a method another repository already destructures into three
+    /// (<c>MeshWeaver.Plugins</c>'s <c>ModuleBundleSourceTest</c> / <c>PendingLandingTest</c>), so
+    /// the addition would red a consumer's trunk for a capability it does not use. It resolves the
+    /// generation by the SAME rule (<see cref="ResolveEntry"/> +
+    /// <see cref="ModuleLandingService.ModuleDirectoryFor"/>), so the two calls cannot name
+    /// different bytes.</para>
+    ///
+    /// <para>🚨 <b>ENUMERATED here, unlike in the bundle, and that is not an inconsistency.</b> The
+    /// bundle is a producer-controlled ARCHIVE, so its reader is manifest-driven and would
+    /// otherwise adopt any stray entry a future writer places in the folder. This reads a
+    /// directory THIS deployment's own landing wrote, where the tree IS the record — exactly as
+    /// the <c>wwwroot</c> walk above. The layout filter is kept all the same: a file the landing
+    /// could not have written (anything but <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c>) is not
+    /// re-served, because re-serving it would make the next consumer's landing refuse the whole
+    /// bundle.</para>
+    /// </summary>
+    /// <param name="baseDirectory">The deployment root the <c>modules/</c> tree lives under.</param>
+    /// <param name="moduleName">The module's entry-assembly name without extension.</param>
+    /// <param name="activation">The deployment's activation sidecar list.</param>
+    /// <param name="version">The published version to resolve, or null for the head.</param>
+    /// <returns>The native payloads, empty when the module has none (or cannot be resolved —
+    /// <see cref="CollectVersion"/> is what states a decline).</returns>
+    public static IReadOnlyList<(string RelativePath, string FullPath)> NativeAssetsOf(
+        string baseDirectory,
+        string moduleName,
+        ModuleActivationList activation,
+        string? version)
+    {
+        if (string.IsNullOrWhiteSpace(moduleName)
+            || moduleName is "." or ".."
+            || moduleName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || moduleName.Contains('/') || moduleName.Contains('\\'))
+            return [];
+
+        var entry = ResolveEntry(activation, moduleName, version);
+        if (!string.IsNullOrWhiteSpace(version) && entry is null)
+            return [];
+        if (entry is { Enabled: false })
+            return [];
+
+        var folder = ModuleLandingService.ModuleDirectoryFor(baseDirectory, moduleName, entry);
+        var root = Path.Combine(folder, "runtimes");
+        if (!Directory.Exists(root))
+            return [];
+
+        return Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Select(f => (
+                RelativePath: "runtimes/" + Path.GetRelativePath(root, f)
+                    .Replace(Path.DirectorySeparatorChar, '/'),
+                FullPath: f))
+            .Where(a => NuGetPackageWriter.IsModuleNativeLayout(a.RelativePath))
+            .OrderBy(a => a.RelativePath, StringComparer.Ordinal)
+            .ToList();
     }
 
     /// <summary>The activation entry whose bytes represent <paramref name="version"/>: the head
