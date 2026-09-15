@@ -56,6 +56,9 @@ RUN chmod +x /opt/hosting/bin/* && ln -s /opt/hosting/bin/hosting-* /usr/local/b
 # from them silently — rendering a release nobody reviewed, which is the failure the whole
 # repo-driven deploy exists to prevent.
 COPY helm/ /opt/hosting/chart/
+# The per-instance DATABASE chart (deploy/helm-db, Doc/Architecture/InClusterDatabases), beside the
+# portal chart for the same reason: hosting-db-release installs the templates this image was built with.
+COPY helm-db/ /opt/hosting/chart-db/
 
 # Non-root. Nothing here needs to be root, and a container that can delete namespaces should not
 # also be able to do whatever a root process on a node could.

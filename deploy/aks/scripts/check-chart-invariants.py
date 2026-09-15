@@ -777,6 +777,62 @@ if not pg_rendered:
                 "the record-rendered config MEMEX_HOST (templates/_database.tpl → memex.meshProbeGroup).",
             )
 
+# ---------------------------------------------------------------------------
+# 19. The instance's OWN database release (values database.release, Doc/Architecture/InClusterDatabases):
+#     the connection strings are COMPOSED in the containers' env from `$(MEMEX_DB_USER)` and
+#     `$(MEMEX_DB_PASSWORD)`, which come from the CloudNativePG Secret by secretKeyRef.
+#     Kubernetes expands $(VAR) only from variables defined EARLIER in the same container — a
+#     reference to one defined later stays the literal text `$(MEMEX_DB_PASSWORD)`, and the pod
+#     authenticates with that as its password. So: every container whose env composes a string
+#     must define both variables from a secretKeyRef BEFORE it, and the gate of the pod must probe
+#     the host the composed string names.
+# ---------------------------------------------------------------------------
+def _composed_env_problems(obj, label):
+    if not obj:
+        return []
+    problems = []
+    spec = ((obj.get("spec") or {}).get("template") or {}).get("spec") or {}
+    probed = _probe_hosts(_waiter_command(obj) or "")
+    for c in (spec.get("initContainers") or []) + (spec.get("containers") or []):
+        env = c.get("env") or []
+        defined = {}
+        for i, e in enumerate(env):
+            ref = ((e.get("valueFrom") or {}).get("secretKeyRef") or {})
+            if ref:
+                defined[e.get("name")] = (i, ref.get("name"), ref.get("key"))
+            value = e.get("value") or ""
+            if (e.get("name") or "").startswith("ConnectionStrings__") and "$(" in value:
+                for var in ("MEMEX_DB_USER", "MEMEX_DB_PASSWORD"):
+                    if f"$({var})" not in value:
+                        continue
+                    if var not in defined or defined[var][0] > i:
+                        problems.append(
+                            f"{label}/{c.get('name')}: {e.get('name')} expands $({var}) but {var} is not "
+                            "defined from a secretKeyRef EARLIER in the same container — Kubernetes leaves "
+                            "the literal text, and the pod authenticates with it")
+                hosts, _port = _cs_hosts(value)
+                if probed and hosts and not (set(hosts) & probed):
+                    problems.append(
+                        f"{label}/{c.get('name')}: {e.get('name')} names {sorted(hosts)} but the pod's "
+                        f"wait-for-postgres probes {sorted(probed)} — the gate and the connection disagree")
+    return problems
+
+_composing = False
+for _label, _obj in (
+    ("portal", dep),
+    ("migration", next((d for d in by_kind("Job")
+                        if ((d.get("metadata") or {}).get("name") or "").startswith("memex-migration-")), None)),
+):
+    spec = (((_obj or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
+    if any("$(" in (e.get("value") or "") for c in (spec.get("containers") or []) for e in (c.get("env") or [])
+           if (e.get("name") or "").startswith("ConnectionStrings__")):
+        _composing = True
+    for _p in _composed_env_problems(_obj, _label):
+        finding(_p, "templates/_database.tpl → memex.dbReleaseEnv renders the two secretKeyRef entries first; "
+                    "keep that order, and derive the gate from memex.meshConnectionString.")
+if _composing:
+    checks += 1
+
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:
     print(
