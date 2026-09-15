@@ -98,6 +98,17 @@ def main() -> int:
     rc, rows, said = execute(script, {"IMAGE_DIGEST": "", "PLATFORM_DIGEST": "", "ALLOW_UNPINNED": "false",
                                       "PINNED_SET": "3.0.0-ci.8687"})
     check("13 EXECUTED: a set with no pin → rc != 0, named", rc != 0 and "none are pinned" in said)
+    rc, rows, said = execute(script, {**pins, "PLATFORM_DIGEST": "", "PINNED_SET": "3.0.0-ci.8687"})
+    check("15 EXECUTED: a set beside a HALF-pin → the half-pin refusal, never 'none are pinned'",
+          rc != 0 and "half-pin" in said and "none are pinned" not in said)
+    for bad in ("3.0.0-rc..ci.1", "3.0.0-.ci.1", "3.0.0-rc.-ci.1x"):
+        rc, rows, said = execute(script, {**pins, "PINNED_SET": bad})
+        check(f"16 EXECUTED: '{bad}' is refused by shape (the resolver's SET_NAME would refuse it)",
+              rc != 0 and "is not a set name" in said)
+    for good in ("3.0.0-ci.8687", "3.0.0.ci.8687", "3.0.0-rc.1-ci.12", "3.1.0-preview-2-ci.9"):
+        rc, rows, said = execute(script, {**pins, "PINNED_SET": good})
+        check(f"17 EXECUTED: '{good}' is accepted (the resolver's SET_NAME accepts it)",
+              rc == 0 and rows.get("platform-set") == good)
 
     shard = step(text, "The platform for this shard: the caller's pins, or plan's set re-checked")
     check("7 the shard reads plan's set", "PLAN_SET: ${{ needs.plan.outputs.platform-set }}" in shard)

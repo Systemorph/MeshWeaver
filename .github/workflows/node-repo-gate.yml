@@ -711,10 +711,17 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${PINNED_SET:-}" ]; then
-            [[ "$PINNED_SET" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?[.-]ci\.[0-9]+$ ]] \
+            # resolve-platform.py's SET_NAME, segment for segment: a prerelease is dot-separated
+            # NON-EMPTY identifiers, so `3.0.0-rc..ci.1` is refused here exactly as the resolver
+            # would refuse it — this input may never name a set the resolver cannot.
+            [[ "$PINNED_SET" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?[.-]ci\.[0-9]+$ ]] \
               || { echo "::error::platform-set '${PINNED_SET}' is not a set name (X.Y.Z[-prerelease]-ci.N) — pass the resolver's \`set\` output, or nothing"; exit 1; }
-            [ -n "${IMAGE_DIGEST:-}" ] && [ -n "${PLATFORM_DIGEST:-}" ] \
-              || { echo "::error::platform-set '${PINNED_SET}' names the set of PINNED digests, and none are pinned — with no pin this lane resolves (and names) its own set; drop the input or pin both digests"; exit 1; }
+            # Only when NEITHER digest is pinned; a half-pin falls through to its own, more
+            # specific refusal below rather than being misdescribed as "none".
+            if [ -z "${IMAGE_DIGEST:-}" ] && [ -z "${PLATFORM_DIGEST:-}" ]; then
+              echo "::error::platform-set '${PINNED_SET}' names the set of PINNED digests, and none are pinned — with no pin this lane resolves (and names) its own set; drop the input or pin both digests"
+              exit 1
+            fi
           fi
           if [ -n "${IMAGE_DIGEST:-}" ] && [ -n "${PLATFORM_DIGEST:-}" ]; then
             {
