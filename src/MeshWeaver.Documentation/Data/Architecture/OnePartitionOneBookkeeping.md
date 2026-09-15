@@ -110,7 +110,20 @@ Three answers, and only one is a pass:
 | ≥ 1 | `true` | `SyncSource` | A `{partition}/_GitSync` names a repository. The installer is not the writer here. |
 | ≥ 1 | `null` | `Undetermined` | The seam faulted or did not answer inside its budget. 🚨 **Not a pass** — kept apart from `Installer` so a failed read is never spelt like a real negative. |
 
-Each caller resolves `Undetermined` in **its own** conservative direction, and the two directions are
+Two more properties of the seam are load-bearing, and both cost a silent skip when they are missing
+(the callers are all `SelectMany`s, so a sequence that completes with **no** verdict runs no arm at
+all — neither the install nor the hold):
+
+- **Exactly once, whatever the providers do.** One leg that completes without emitting completes the
+  whole `CombineLatest` with no value, and `Timeout` does not fire on a sequence that *completed*; a
+  provider whose `IsTracked` throws **synchronously** does so while the sequence is being
+  constructed, escaping every operator attached after it. Each leg is therefore `Defer`red, bounded
+  and caught on its own, with an empty leg mapped to "did not answer".
+- **A positive is decisive; a negative needs everybody.** One seam saying "a source tracks this" is
+  knowledge whatever a second seam failed to say. Only when nothing said yes does it matter whether
+  everyone answered — otherwise a seam that stopped answering would read as a clean partition.
+
+Each caller resolves `Undetermined` in **its own** conservative direction, and the directions are
 different — which is the point of one shared "cannot tell":
 
 ### Gate 1 — the unattended apply is not the second writer
@@ -123,6 +136,23 @@ never updates"* this lane must not become.
 
 Only the **unattended** lane is gated. A human clicking Update is the documented escape — the
 Sync-Ref Contract draws the same line — and that click goes through gate 2.
+
+### Gate 1b — the module half takes the same hold
+
+A package update has two halves — its node **content** and its compiled **module bundle** — and the
+platform's own rule is that *"a package never lands one half without the other"*: both follow the
+package's update policy, in `PackageUpdateReconciler` and in `RegistryUpdateReconciler` respectively.
+
+A content hold that stopped at the content would break exactly that promise. The partition's synced
+content would stay on the sealed tree while the unattended module lane advanced the package's
+**code** — the same sources-and-bundle split `MeshWeaver.Plugins#1430` removed, one level over. So
+the ownership hold rides the module lane's existing `policyDecline` seam, in the one place both
+unattended module lanes share (`AdoptOne`, used by the boot pass *and* the `ModulePublished`
+broadcast drain). The package's own policy still speaks first, because it is the more specific
+answer.
+
+Such a partition is not left without a module: it has a delivery path already — the sealed
+publication its content is held to — and a human's manual Update lands both halves together.
 
 ### Gate 2 — a delta is never diffed against a baseline the installer does not own
 

@@ -24,6 +24,8 @@ knew about.
 - The plugin's automatic update does **not** write into it. It raises the ordinary "update available"
   reminder instead, saying why it was held — so a package that will not update itself here says so
   once, rather than looking as though nothing has changed.
+- The package's compiled part is held with it, so its code can never run ahead of the content the
+  repository is keeping — a package still arrives whole, or not at all.
 - Anything that still installs there deliberately — your own **Update** on the package card, or the
   portal's own start-up install — installs the package **in full** rather than working out a
   difference from a note that the other writer has made out of date.

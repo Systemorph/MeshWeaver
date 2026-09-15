@@ -129,9 +129,25 @@ public static class PartitionContentOwnership
 
     /// <summary>
     /// The reactive half: asks every registered <see cref="IPartitionSourceTracking"/> once, bounded,
-    /// and turns the answer into a verdict. Cold, emits exactly once; Subscribe to run.
+    /// and turns the answers into a verdict. Cold, emits <b>exactly once</b>; Subscribe to run.
     ///
-    /// <para>Never faults — a seam that throws is <see cref="PartitionContentOwner.Undetermined"/>,
+    /// <para>🚨 <b>Exactly once is load-bearing, and three separate things would otherwise break
+    /// it</b> — each producing a caller whose <c>SelectMany</c> runs no arm at all, which is a
+    /// SILENT SKIP rather than a verdict:</para>
+    /// <list type="bullet">
+    ///   <item><b>A leg that completes without emitting.</b> One empty leg completes the whole
+    ///     <c>CombineLatest</c> with no value — and <c>Timeout</c>
+    ///     does not fire on a sequence that COMPLETED. <c>DefaultIfEmpty</c> per leg turns "did not
+    ///     answer" into a null ANSWER instead.</item>
+    ///   <item><b>A provider that throws SYNCHRONOUSLY from <c>IsTracked</c>.</b> The call is a
+    ///     method call: without a per-leg <c>Defer</c> it runs while the sequence is being
+    ///     CONSTRUCTED, so the throw escapes every operator attached after it.</item>
+    ///   <item><b>A provider that never answers.</b> Bounded per leg, not around the combination,
+    ///     so one wedged provider yields null for ITSELF rather than discarding what the others
+    ///     said.</item>
+    /// </list>
+    ///
+    /// <para>Never faults — an unanswered seam is <see cref="PartitionContentOwner.Undetermined"/>,
     /// which each caller then resolves in ITS OWN conservative direction (an unattended apply holds;
     /// an install that must happen anyway stops trusting its delta baseline and installs in full).
     /// One shared "cannot tell" with two different, stated consequences is the point: neither caller
@@ -149,14 +165,36 @@ public static class PartitionContentOwnership
             if (providers.Length == 0)
                 return Observable.Return(Decide(partition, tracked: null, providerCount: 0));
             return providers
-                .Select(p => p.IsTracked(partition).Take(1))
+                .Select(p => Observable.Defer(() => p.IsTracked(partition))
+                    .Take(1)
+                    .Select(tracked => (bool?)tracked)
+                    .DefaultIfEmpty(null)
+                    .Timeout(TrackingBudget)
+                    .Catch<bool?, Exception>(_ => Observable.Return<bool?>(null)))
                 .CombineLatest()
                 .Take(1)
-                .Timeout(TrackingBudget)
-                .Select(answers => Decide(partition, answers.Any(t => t), providers.Length))
+                .Select(answers => Decide(partition, Fold(answers), providers.Length))
+                // The outer arm covers what no leg can: resolving the services themselves.
                 .Catch<PartitionContentOwnershipVerdict, Exception>(_ =>
                     Observable.Return(Decide(partition, tracked: null, providers.Length)));
         });
+    }
+
+    /// <summary>
+    /// Several providers into one answer. A positive is DECISIVE — one seam saying "a source tracks
+    /// this" is knowledge, whatever a second seam failed to say. Only when nothing said yes does it
+    /// matter whether everyone answered: all answered and none tracked is a real negative; a silent
+    /// one leaves the question open.
+    /// </summary>
+    /// <param name="answers">One entry per provider; null where that provider did not answer.</param>
+    /// <returns><c>true</c>, <c>false</c>, or <c>null</c> for "not established".</returns>
+    public static bool? Fold(IEnumerable<bool?> answers)
+    {
+        ArgumentNullException.ThrowIfNull(answers);
+        var given = answers as IReadOnlyCollection<bool?> ?? answers.ToList();
+        if (given.Any(a => a == true))
+            return true;
+        return given.All(a => a.HasValue) ? false : null;
     }
 
     /// <summary>

@@ -303,6 +303,61 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
                 + "nobody can act on");
     }
 
+    /// <summary>
+    /// 🚨 Several providers into one answer, and the two halves are asymmetric on purpose. A
+    /// POSITIVE is decisive — one seam saying "a source tracks this" is knowledge, whatever a second
+    /// seam failed to say — while a NEGATIVE needs everyone to have answered, or "nobody said yes"
+    /// would be produced by a mesh where nobody said anything.
+    /// </summary>
+    [Fact]
+    public void ASilentProviderNeverTurnsIntoANegative()
+    {
+        PartitionContentOwnership.Fold([true, null]).Should().Be(true,
+            "a positive is knowledge — a second seam's silence cannot unsay it");
+        PartitionContentOwnership.Fold([false, false]).Should().Be(false,
+            "everyone answered and nobody tracks it: a real negative");
+        PartitionContentOwnership.Fold([false, null]).Should().BeNull(
+            "THE arm: one silent provider beside a negative is 'not established', never 'nothing "
+            + "tracks it' — otherwise a seam that stopped answering reads as a clean partition");
+        PartitionContentOwnership.Fold([null, null]).Should().BeNull();
+        PartitionContentOwnership.Fold([]).Should().Be(false,
+            "no providers to ask is decided by Decide's providerCount arm, not here");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The MODULE half takes the same hold as the content half.</b> The platform's own rule is
+    /// that "a package never lands one half without the other"; a content hold that left the module
+    /// lane free would advance the package's CODE past the content the seal pins — the same
+    /// sources-and-bundle split MeshWeaver.Plugins#1430 removed, one level over.
+    /// </summary>
+    [Fact]
+    public void TheModuleLaneDeclinesWhereTheContentHalfIsHeld()
+    {
+        var owned = PartitionContentOwnership.Decide("Store", tracked: false, providerCount: 1);
+        RegistryUpdateReconciler.OwnershipDecline(owned).Should().BeNull(
+            "the control: where the installer owns the content, the module lands as before — a "
+            + "decline here would stop every module update on every deployment");
+
+        foreach (var held in new[]
+                 {
+                     PartitionContentOwnership.Decide("Store", tracked: true, providerCount: 1),
+                     PartitionContentOwnership.Decide("Store", tracked: null, providerCount: 1),
+                 })
+        {
+            var decline = RegistryUpdateReconciler.OwnershipDecline(held);
+            decline.Should().NotBeNull(
+                $"a {held.Owner} partition holds BOTH halves — landing the module alone is the "
+                + "split the one-bookkeeping invariant exists to prevent");
+            decline.Should().Contain(held.Because,
+                "and the decline carries the ownership reason, so the log says WHY rather than "
+                + "only that something declined");
+        }
+
+        // The package's OWN policy still speaks first: it is the more specific answer.
+        RegistryUpdateReconciler.PolicyDecline(new PackageManifest { Id = "X", AutoUpdate = false })
+            .Should().NotBeNull("a Notify record declines for its own reason, ownership aside");
+    }
+
     // ── harness ─────────────────────────────────────────────────────────────────────────────────
 
     private static PackageManifest Candidate(string id, string moduleVersion) => new()
@@ -462,5 +517,88 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
                 ? files
                 : (IReadOnlyList<PackageFile>)files.Where(f => wanted.Contains(f.RelativePath)).ToList());
         }
+    }
+}
+
+/// <summary>
+/// 🚨 <b>The ownership seam must answer EXACTLY ONCE, whatever the providers do</b> —
+/// Systemorph/MeshWeaver#4355, Copilot review of #4364.
+///
+/// <para>Both callers of <see cref="PartitionContentOwnership.Observe(IMessageHub, string)"/> are
+/// <c>SelectMany</c>s. A sequence that completes WITHOUT a verdict therefore runs neither arm: no
+/// install, no reminder, no decline — a silent skip wearing the colours of a decision. Three
+/// separate provider behaviours produce exactly that unless the composition is right, and each one
+/// gets its own arm here:</para>
+/// <list type="bullet">
+///   <item>a provider that COMPLETES WITHOUT EMITTING — one empty leg completes the whole
+///   <c>CombineLatest</c> with no value, and <c>Timeout</c> does not fire on a completed
+///   sequence;</item>
+///   <item>a provider whose <c>IsTracked</c> THROWS SYNCHRONOUSLY — the call runs while the
+///   sequence is being constructed, so without a per-leg <c>Defer</c> the throw escapes every
+///   operator attached after it;</item>
+///   <item>a provider that returns a faulting sequence.</item>
+/// </list>
+///
+/// <para>The providers here are real implementations of an extension seam the platform expects
+/// several of (one class per sync kind — the GitHub one is the shipped example), in the same spirit
+/// as this suite's <c>IPackageSource</c> and <c>IGitHubRepoClient</c> stand-ins: the transport is
+/// substituted, never a core service. What is under test is the composition, so a provider that
+/// misbehaves in a way no shipped one does is exactly the input required.</para>
+/// </summary>
+public class PartitionContentOwnershipSeamTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string Partition = "SeamPartition";
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services =>
+            {
+                // No GitSync here: these three ARE the mesh's tracking layer, so the verdict is a
+                // pure function of their behaviour.
+                services.AddSingleton<IPartitionSourceTracking>(new SilentProvider());
+                services.AddSingleton<IPartitionSourceTracking>(new ThrowsSynchronouslyProvider());
+                services.AddSingleton<IPartitionSourceTracking>(new FaultingProvider());
+                return services;
+            });
+
+    [Fact(Timeout = 300_000)]
+    public async Task ASeamThatDoesNotAnswer_StillProducesExactlyOneVerdict()
+    {
+        var verdicts = await PartitionContentOwnership.Observe(Mesh, Partition)
+            .ToList()
+            .Timeout(TestTimeouts.CrossSilo)
+            .Await();
+
+        verdicts.Should().HaveCount(1,
+            "THE assertion: both callers are SelectMany, so a sequence that completes with no "
+            + "verdict runs no arm at all — neither the install nor the hold. A silent skip is the "
+            + "one outcome this gate must never have (MeshWeaver#4355)");
+        verdicts[0].Owner.Should().Be(PartitionContentOwner.Undetermined,
+            "no provider answered, and 'I could not tell' is never 'the installer owns it'");
+        verdicts[0].InstallerOwnsTheContent.Should().BeFalse();
+        verdicts[0].Because.Should().Contain(Partition,
+            "the reason names the partition it is about");
+    }
+
+    /// <summary>A provider that COMPLETES without emitting — the empty leg. Legal for any
+    /// <see cref="IObservable{T}"/> and fatal to a <c>CombineLatest</c> that does not allow for
+    /// it.</summary>
+    private sealed class SilentProvider : IPartitionSourceTracking
+    {
+        public IObservable<bool> IsTracked(string partition) => Observable.Empty<bool>();
+    }
+
+    /// <summary>A provider whose <c>IsTracked</c> throws before it ever returns a sequence.</summary>
+    private sealed class ThrowsSynchronouslyProvider : IPartitionSourceTracking
+    {
+        public IObservable<bool> IsTracked(string partition) =>
+            throw new InvalidOperationException("this seam cannot answer at all");
+    }
+
+    /// <summary>A provider whose sequence faults.</summary>
+    private sealed class FaultingProvider : IPartitionSourceTracking
+    {
+        public IObservable<bool> IsTracked(string partition) =>
+            Observable.Throw<bool>(new InvalidOperationException("this seam failed while answering"));
     }
 }
