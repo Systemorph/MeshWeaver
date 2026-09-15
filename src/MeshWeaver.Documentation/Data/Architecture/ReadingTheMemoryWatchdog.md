@@ -1,7 +1,12 @@
 ---
 Name: Reading the Memory Watchdog
 Category: Architecture
-Description: The test-host memory watchdog FailFasts a shard at 6 GiB RSS and used to name its cause in the message. On #4127 its own trace refuted that name — every mesh class sat flat, and the growth was two steps that coincided with plain xUnit classes compiling with Roslyn against a 520-assembly reference set they rebuilt per call. How to read the trajectory, what each field measures, and the shared reference set that removed the steps.
+Description: >-
+  The test-host memory watchdog FailFasts a shard at 6 GiB RSS and used to name its cause in the
+  message. On #4127 its own trace refuted that name — every mesh class sat flat, and the growth was
+  two steps that coincided with plain xUnit classes compiling with Roslyn against a 520-assembly
+  reference set they rebuilt per call. How to read the trajectory, what each field measures, and the
+  shared reference set that removed the steps.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l4-8 4 4 4-10 4 6"/><path d="M3 21h18"/></svg>
 ---
 

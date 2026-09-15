@@ -1,7 +1,9 @@
 ---
 Name: NuGet Packages in Node Types
 Category: Documentation
-Description: Reference any NuGet package from a node type's Source/*.cs file using the #r "nuget:..." directive — no redeploy, no SDK on the container.
+Description: >-
+  Reference any NuGet package from a node type's Source/*.cs file using the #r "nuget:..." directive —
+  no redeploy, no SDK on the container.
 ---
 
 Need a statistics library, a PDF renderer, or a cloud SDK in your node type? You don't have to redeploy the portal to get it. Drop a `#r "nuget:..."` directive at the top of any `.cs` file under the node type's `Source/` folder and the compiler restores the package in-process before building.

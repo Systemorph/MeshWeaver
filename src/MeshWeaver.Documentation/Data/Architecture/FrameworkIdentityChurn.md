@@ -2,7 +2,10 @@
 nodeType: Markdown
 name: Framework Identity Churn
 category: Architecture
-description: Why the framework identity moves on every core commit rather than on every content change — measured, with the falsification test that killed the obvious fix — what that churn costs CI today, and the costed options for #3583's bake-side half.
+description: >-
+  Why the framework identity moves on every core commit rather than on every content change —
+  measured, with the falsification test that killed the obvious fix — what that churn costs CI today,
+  and the costed options for #3583's bake-side half.
 icon: /static/NodeTypeIcons/box.svg
 ---
 

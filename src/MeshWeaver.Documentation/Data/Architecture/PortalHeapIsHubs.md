@@ -1,7 +1,13 @@
 ---
 Name: The Portal Heap Is Hubs
 Category: Architecture
-Description: Five heap dumps from a live memex-cloud replica: the retention is 9,386 MessageHub instances (89.6% sync/ stream hubs), 1,496 of them fully disposed corpses held by SynchronizationStream.Hub after the parent killed the hub under a stream that was never told; 45% of the live heap is per-hub Autofac and TypeRegistry metadata; the ALC, lazy-compile and GC-fragmentation candidates are all falsified. Also: taking such a dump is NOT free — a --type Heap dump freezes a 6.6 GiB replica for 106 s, longer than the 90 s liveness budget, so it restarts the container.
+Description: >-
+  Five heap dumps from a live memex-cloud replica: the retention is 9,386 MessageHub instances (89.6%
+  sync/ stream hubs), 1,496 of them fully disposed corpses held by SynchronizationStream.Hub after the
+  parent killed the hub under a stream that was never told; 45% of the live heap is per-hub Autofac
+  and TypeRegistry metadata; the ALC, lazy-compile and GC-fragmentation candidates are all falsified.
+  Also: taking such a dump is NOT free — a --type Heap dump freezes a 6.6 GiB replica for 106 s,
+  longer than the 90 s liveness budget, so it restarts the container.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M10 10L6.5 6.5"/><path d="M14 10l3.5-3.5"/><path d="M10 14l-3.5 3.5"/><path d="M14 14l3.5 3.5"/></svg>
 ---
 
