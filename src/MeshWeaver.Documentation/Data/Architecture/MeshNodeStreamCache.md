@@ -315,9 +315,12 @@ shorter window would have hidden that defect rather than cured it.
 
 The idle sweep answers *"this path went quiet"*. It cannot answer *"this write is finished
 with its mirror"*, and that is the case a busy path is always in: `Workspace.EvictForPath`
-retires a path's upstream on **every** change event — including the echo of the writer's own
-write — so the next writer diffs against the owner's authoritative state rather than a stale
-snapshot. That eviction is load-bearing; parking the retired stream until the idle sweep
+retired a path's upstream on **every** change event — including the echo of the writer's own
+write — so the next writer diffed against the owner's authoritative state rather than a stale
+snapshot. (Since [#1174](https://github.com/Systemorph/MeshWeaver/issues/1174) a versioned
+`Updated` keeps the upstream and holds the next writer to the version it announced instead; only a
+delete, a recreate and a version-less recycle broadcast still retire it — see
+[Live Mirrors and the Change Feed](../LiveMirrorsAndTheChangeFeed).) That eviction is load-bearing; parking the retired stream until the idle sweep
 happened to notice was not, and a continuously-written path never meets the sweep's
 "zero subscribers **and** ten minutes untouched" condition
 ([#1324](https://github.com/Systemorph/MeshWeaver/issues/1324)).
