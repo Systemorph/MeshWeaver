@@ -1,5 +1,5 @@
 ---
-Name: "Saved" now means the change was actually saved
+Name: '"Saved" now means the change was actually saved'
 Category: Fix
 Description: An edit to a busy document could be reported as saved while the server was still deciding — and a refusal that arrived a moment later was never shown. Edits now report the server's real answer.
 Icon: CheckmarkCircle

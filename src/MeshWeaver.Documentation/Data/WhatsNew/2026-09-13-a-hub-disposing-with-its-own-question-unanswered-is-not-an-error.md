@@ -1,7 +1,11 @@
 ---
 Name: A hub disposing with its own question unanswered is no longer reported as lost work
 Category: Fix
-Description: A transient type probe is created, read once and disposed — by design. When it was torn down with its own self-addressed read still parked behind its initialization gates, the teardown reported an Error claiming the sender had been answered. Nobody had been answered, and nobody was waiting: the sender was the probe itself. 76 such lines per gate shard. The line now follows the fact.
+Description: >-
+  A transient type probe is created, read once and disposed — by design. When it was torn down with
+  its own self-addressed read still parked behind its initialization gates, the teardown reported an
+  Error claiming the sender had been answered. Nobody had been answered, and nobody was waiting: the
+  sender was the probe itself. 76 such lines per gate shard. The line now follows the fact.
 Icon: Checkmark
 Order: -20260913
 ---

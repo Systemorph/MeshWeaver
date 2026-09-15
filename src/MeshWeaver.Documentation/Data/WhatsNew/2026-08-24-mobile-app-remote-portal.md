@@ -1,5 +1,5 @@
 ---
-Name: Mobile app: pages render against remote portals
+Name: 'Mobile app: pages render against remote portals'
 Category: Fix
 Description: The mobile/web-lite client now renders markdown pages and file listings against a signed-in portal, and node-bound editors show and save their values.
 Icon: Sparkle

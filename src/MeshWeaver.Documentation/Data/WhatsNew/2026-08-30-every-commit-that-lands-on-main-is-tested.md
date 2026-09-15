@@ -1,7 +1,10 @@
 ---
 Name: Every commit that lands on main is tested again — merges no longer evict each other
 Category: Fix
-Description: Turning off cancel-in-progress was not enough: GitHub keeps only one pending run per concurrency group, so a burst of merges evicted the queued runs and three landed commits went untested and unpublished. Each main commit now gets its own group.
+Description: >-
+  Turning off cancel-in-progress was not enough: GitHub keeps only one pending run per concurrency
+  group, so a burst of merges evicted the queued runs and three landed commits went untested and
+  unpublished. Each main commit now gets its own group.
 Icon: Bug
 Order: -20260830
 ---

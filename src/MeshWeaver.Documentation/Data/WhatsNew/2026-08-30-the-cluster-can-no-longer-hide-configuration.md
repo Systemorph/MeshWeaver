@@ -1,7 +1,11 @@
 ---
 Name: The cluster can no longer hide configuration
 Category: Feature
-Description: The hosting operator gains hosting-audit — one read-only command that diffs a namespace against its helm release's manifest and reports, by name and never by value, everything that lives only on the cluster: env patches, live-edited ConfigMap keys, sidecars, unmanaged objects, secrets nothing renders, and secret-shaped names carried as plain values.
+Description: >-
+  The hosting operator gains hosting-audit — one read-only command that diffs a namespace against its
+  helm release's manifest and reports, by name and never by value, everything that lives only on the
+  cluster: env patches, live-edited ConfigMap keys, sidecars, unmanaged objects, secrets nothing
+  renders, and secret-shaped names carried as plain values.
 Icon: ArrowSyncCheckmark
 Order: -20260830
 ---

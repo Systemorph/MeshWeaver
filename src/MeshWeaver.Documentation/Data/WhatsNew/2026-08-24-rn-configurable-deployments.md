@@ -1,7 +1,9 @@
 ---
 Name: Configurable mobile-app deployments
 Category: Feature
-Description: A deployment manifest now composes the mobile app: its portal, its branding, and the client modules bundled into it — one JSON file per deployment, no code change.
+Description: >-
+  A deployment manifest now composes the mobile app: its portal, its branding, and the client modules
+  bundled into it — one JSON file per deployment, no code change.
 Icon: Sparkle
 Order: -20260824
 ---
