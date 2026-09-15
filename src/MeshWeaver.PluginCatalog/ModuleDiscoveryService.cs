@@ -858,7 +858,6 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
         ImmutableList<DiscoveredModule> modules,
         ImmutableDictionary<string, DiscoveredModule> previous)
     {
-        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         var announcements = modules
@@ -875,11 +874,24 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
             // `Admin/_Discovery/{owner}.{repo}`, so this changed nothing about where the row lands —
             // it states the addressee instead of inheriting it from the record's path, which is what
             // the census test can then check.
-            .Select(module => AsSystem(() => NotificationService.CreateNotification(
+            // 🚨 The key and its arguments are PERSISTED, never resolved here. This scan runs as
+            // SYSTEM with no viewer in scope, so an `accessService.Localize(...)` at this line — which
+            // is what stood here — resolved to the system default and baked ENGLISH into a durable
+            // row every German operator then read (#4373). The bell resolves the same key per viewer.
+            .Select(module => AsSystem(() => NotificationService.CreateLocalizableNotification(
                     meshService, recordPath,
-                    accessService.Localize($"plugins.discovery.{Key(module.Status)}.title", module.Name ?? module.Id),
-                    accessService.Localize($"plugins.discovery.{Key(module.Status)}.body",
-                        module.Name ?? module.Id, module.Detail ?? ""),
+                    LocalizableText.Keyed(
+                        LocalizationCatalog.GetNamed(
+                            $"notification.plugins.discovery.{Key(module.Status)}.title", Locales.Default,
+                            NameArgs(module)),
+                        $"notification.plugins.discovery.{Key(module.Status)}.title",
+                        ("name", module.Name ?? module.Id)),
+                    LocalizableText.Keyed(
+                        LocalizationCatalog.GetNamed(
+                            $"notification.plugins.discovery.{Key(module.Status)}.body", Locales.Default,
+                            NameArgs(module)),
+                        $"notification.plugins.discovery.{Key(module.Status)}.body",
+                        ("name", module.Name ?? module.Id), ("detail", module.Detail ?? "")),
                     NotificationType.System, targetNodePath: recordPath,
                     recipient: NotificationService.PlatformAddressee))
                 .Take(1)
@@ -894,6 +906,16 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
             .Concat()
             .TakeLast(1);
     }
+
+    /// <summary>
+    /// The English fallback's arguments — the SAME named pair the persisted key is given, bound
+    /// against the English catalog here so the stored <c>Title</c>/<c>Message</c> read as the
+    /// sentence the key renders in English and the two cannot drift.
+    /// </summary>
+    private static ImmutableDictionary<string, object> NameArgs(DiscoveredModule module)
+        => ImmutableDictionary<string, object>.Empty
+            .Add("name", module.Name ?? module.Id)
+            .Add("detail", module.Detail ?? "");
 
     private static string Key(ModuleDiscoveryStatus status) => status switch
     {

@@ -1,6 +1,7 @@
 using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -83,24 +84,41 @@ public sealed class AccessGrantNotifier(
                     .SelectMany(granterNode =>
                     {
                         var granter = ResolveGranterName(granterNode, assignmentNode.CreatedBy, hub.JsonSerializerOptions);
+                        // 🚨 Two whole sentences, never one key with an optional "{granter} " prefix:
+                        // a clause spliced into a translated sentence lands as English inside German
+                        // word order (Doc/Architecture/Localization). The ROLE names ride as an
+                        // argument — they are wire identifiers, deliberately not translated.
                         var message = granter is null
-                            ? $"You now have {roleText} access to \"{name}\"."
-                            : $"{granter} gave you {roleText} access to \"{name}\".";
-                        return NotificationService.Dispatch(
+                            ? LocalizableText.Keyed(
+                                $"You now have {roleText} access to \"{name}\".",
+                                "notification.accessGranted.body",
+                                ("role", roleText), ("name", name))
+                            : LocalizableText.Keyed(
+                                $"{granter} gave you {roleText} access to \"{name}\".",
+                                "notification.accessGranted.bodyByGranter",
+                                ("granter", granter), ("role", roleText), ("name", name));
+                        return NotificationService.DispatchLocalizable(
                             hub,
                             recipient: recipient,
                             mainNodePath: recipient,
-                            title: $"You've been given access to {name}",
+                            title: LocalizableText.Keyed(
+                                $"You've been given access to {name}",
+                                "notification.accessGranted.title", ("name", name)),
                             message: message,
                             type: NotificationType.AccessGranted,
                             targetNodePath: grantedNodePath,
                             createdBy: assignmentNode.CreatedBy,
                             icon: "/static/NodeTypeIcons/shield.svg",
-                            emailCtaLabel: $"Open {name}",
+                            // The email leg has ONE known reader, so NotificationService resolves
+                            // these against that person's own profile locale before sending.
+                            emailCtaLabel: LocalizableText.Keyed(
+                                $"Open {name}", "notification.accessGranted.emailCta", ("name", name)),
                             // First-contact hint — this recipient may have never signed in. Passed
                             // explicitly (not defaulted in NotificationService) so it never leaks onto
                             // notifications aimed at already-signed-in users.
-                            emailFooterNote: "New to Memex? Sign in with this email address to open it.");
+                            emailFooterNote: LocalizableText.Keyed(
+                                "New to Memex? Sign in with this email address to open it.",
+                                "notification.accessGranted.emailFooter"));
                     });
             });
         });

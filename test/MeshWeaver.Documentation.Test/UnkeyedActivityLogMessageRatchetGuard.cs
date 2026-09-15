@@ -206,8 +206,9 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     /// there: <c>LocalizableText.Verbatim("…")</c> would sail straight past it.
     ///
     /// <para>Ratcheted per file, on the same rule as the inventory above: the count may FALL, never
-    /// rise. The one allowance in <c>MeshExtensions.cs</c> is the inner <c>CreateNodeResponse.Error</c>
-    /// — the create handler's own words, verbatim upstream text no catalog of ours can carry.</para>
+    /// rise. Every allowance below is a file where the text really is NOT ours to key — an upstream
+    /// message quoted whole, or a compatibility entry point handed a sentence a CALLER already
+    /// rendered — and each carries its reason beside the budget.</para>
     /// </summary>
     [Fact]
     public void NoNewVerbatimLocalizableTextIsIntroduced()
@@ -215,7 +216,28 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
         var root = SourceScan.FindRepoRoot();
         var budgets = new Dictionary<string, int>(StringComparer.Ordinal)
         {
+            // The inner CreateNodeResponse.Error — the create handler's own words, verbatim
+            // upstream text no catalog of ours can carry.
             ["src/MeshWeaver.Mesh.Contract/MeshExtensions.cs"] = 1,
+
+            // ── #4373: the notification surface adopting the same carrier ────────────────────
+            // The two COMPATIBILITY entry points (CreateNotification / Dispatch) and the email
+            // CTA/footer they forward: each is handed a `string` a CALLER already rendered, so
+            // there is no key here to supply — the keyed entry points are
+            // CreateLocalizableNotification / DispatchLocalizable, and every emitter in src/ uses
+            // them. These four sites are what let an already-published module bundle keep binding
+            // the old signature instead of throwing MissingMethodException.
+            ["src/MeshWeaver.Graph/NotificationService.cs"] = 6,
+            // The string overload of ICompileFailureNotifier.NotifyCompileFailed, same reason.
+            ["src/MeshWeaver.Graph/CompileFailureNotifier.cs"] = 2,
+            // The captured startup log lines — third-party categories and stack traces.
+            ["src/MeshWeaver.Graph/StartupErrorNotifier.cs"] = 1,
+            // The importer quotes the error the import itself returned.
+            ["src/MeshWeaver.Graph/StaticRepoImporter.cs"] = 1,
+            // ServingNotice / IncompatibleNotice are declared as the operator/log wording of the
+            // record's own fields — "the page localizes its own copy from the same fields" — so a
+            // second, divergent translation of them in the catalog would be the defect, not the fix.
+            ["src/MeshWeaver.Compiler.Pipeline/BuildDeliveryHold.cs"] = 2,
         };
         var verbatim = new Regex(@"LocalizableText\s*\.\s*Verbatim\s*\(",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);

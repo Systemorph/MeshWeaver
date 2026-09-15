@@ -1,5 +1,6 @@
 using System.Reactive;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Hosting;
@@ -96,16 +97,27 @@ public sealed class StartupErrorNotifier(
             .Take(MaxLines)
             .Select(e => $"[{e.Level}] {e.Category}: {e.Message}");
         var remainder = total - Math.Min(report.Errors.Count, MaxLines);
-        var message = string.Join("\n", lines)
-            + (remainder > 0 ? $"\n… and {remainder} more error(s) — see the server log." : "");
+        var body = string.Join("\n", lines);
+        // The captured lines are VERBATIM log output — no catalog carries a third-party stack
+        // trace — so only the platform's own truncation sentence is keyed, with the lines riding as
+        // an argument. With nothing truncated there is no platform sentence at all and the body is
+        // the lines themselves, unkeyed.
+        var message = remainder > 0
+            ? LocalizableText.Keyed(
+                body + $"\n… and {remainder} more error(s) — see the server log.",
+                "notification.startup.errors.bodyTruncated",
+                ("lines", body), ("count", remainder))
+            : LocalizableText.Verbatim(body);
 
         // Admin-broadcast (recipient: null → in-app bell only, no email), System category so the
         // bell renders it with error styling. Dispatch runs under the system identity itself.
-        return NotificationService.Dispatch(
+        return NotificationService.DispatchLocalizable(
                 hub,
                 recipient: null,
                 mainNodePath: AdminPartition,
-                title: $"Startup completed with {total} error(s)",
+                title: LocalizableText.Keyed(
+                    $"Startup completed with {total} error(s)",
+                    "notification.startup.errors.title", ("count", total)),
                 message: message,
                 type: NotificationType.System,
                 targetNodePath: AdminPartition,

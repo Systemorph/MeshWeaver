@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -370,10 +371,17 @@ public sealed class NodeTypeCompileParkRegistry
         var typeName = nodeTypePath.Contains('/')
             ? nodeTypePath[(nodeTypePath.LastIndexOf('/') + 1)..]
             : nodeTypePath;
-        var title = $"Type '{typeName}' failed to compile";
-        var message =
+        // The platform's own sentence is keyed; Roslyn's diagnostic rides as an argument, verbatim —
+        // no catalog can carry a compiler's output (Doc/Architecture/Localization).
+        var summary = SummarizeError(error);
+        var title = LocalizableText.Keyed(
+            $"Type '{typeName}' failed to compile",
+            "notification.compile.failed.title", ("typeName", typeName));
+        var message = LocalizableText.Keyed(
             $"The node type '{nodeTypePath}' was parked after a compile failure and will not be " +
-            $"retried until its source is fixed. {SummarizeError(error)}";
+            $"retried until its source is fixed. {summary}",
+            "notification.compile.failed.body",
+            ("nodeTypePath", nodeTypePath), ("error", summary));
 
         // Dispatch runs the whole flow as System itself (the compile runs as System; the recipient's
         // bell partition admits no ambient user write). Infrastructure observability under the

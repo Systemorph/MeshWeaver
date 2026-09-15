@@ -2619,12 +2619,20 @@ public static class StaticRepoImporter
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
             return;
-        AsSystem(hub, () => NotificationService.CreateNotification(
+        AsSystem(hub, () => NotificationService.CreateLocalizableNotification(
                 meshService,
                 recipient: NotificationService.PlatformAddressee,
                 mainNodePath: partition,
-                title: $"Startup import failed: {partition}",
-                message: string.IsNullOrWhiteSpace(error) ? "Import failed during startup." : error,
+                title: LocalizableText.Keyed(
+                    $"Startup import failed: {partition}",
+                    "notification.import.startupFailed.title", ("partition", partition)),
+                // The importer's own sentence is keyed; an error that came back from the import is
+                // VERBATIM upstream text no catalog can carry, and rides unkeyed exactly as the
+                // activity transcript's Roslyn diagnostics do.
+                message: string.IsNullOrWhiteSpace(error)
+                    ? LocalizableText.Keyed(
+                        "Import failed during startup.", "notification.import.startupFailed.body")
+                    : LocalizableText.Verbatim(error),
                 // System (not General): the platform/system-event category — the bell renders it
                 // with error styling. No icon override: a bare Fluent name ("ErrorCircle") is not a
                 // URL and rendered as a broken <img>; the type-based default icon is correct.
