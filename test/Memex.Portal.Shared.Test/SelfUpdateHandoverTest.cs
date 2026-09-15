@@ -72,6 +72,76 @@ public class SelfUpdateHandoverTest
             "a listed target without a declared SecretConfigKey is an unsigned target — the route, not only the reader, refuses it");
     }
 
+    /// <summary>
+    /// 🚨 A DECLARED control inbox is EXCLUSIVE: the three shapes of an instance that names one are
+    /// <see cref="Route.Post"/> (secret present), a REFUSAL that names the missing secret (absent),
+    /// and nothing else — never a fall-through to <see cref="Route.Local"/> self-delivery, whatever
+    /// the instance also lists. This is the doc comment's own rule ("an instance that declares a
+    /// control inbox is a consumer, whatever it also lists") applied to the case that actually
+    /// happens rather than only to the one where the secret is there.
+    /// </summary>
+    [Theory]
+    [InlineData(InboxUrl, true, Route.Post)]
+    [InlineData(InboxUrl, false, Route.None)]
+    [InlineData(null, false, Route.Local)]
+    public void ADeclaredControlInbox_IsExclusive_NeverFallingThroughToLocalDelivery(
+        string? url, bool secretPresent, Route expected) =>
+        SelfUpdateHandover.RouteFor(
+                new(Deployment, url, secretPresent, LocalTargetListed: true, LocalSecretPresent: true, null)
+                {
+                    UrlFrom = url is null ? SelfUpdateHandover.UrlSource.None : SelfUpdateHandover.UrlSource.Derived,
+                    LocalSecretKey = SelfUpdateHandover.LocalSecretKey,
+                })
+            .Should().Be(expected,
+                "a consumer whose signing secret is absent hands over to nobody — and saying so is the only "
+                + "reading that can fail; delivering into its own inbox reads like a success. Local stays the "
+                + "control instance's route: it declares no ReportTo and no ControlInbox:Url");
+
+    /// <summary>
+    /// 🚨 The measured <c>build</c> shape (MeshWeaver#4098, live record v12 read 2026-09-15): the inbox
+    /// URL is DERIVED from <c>Hosting:ReportTo</c>, <c>Hosting:ControlInbox:Secret</c> is ABSENT, and
+    /// <c>build</c> legitimately LISTS <c>Hosting/PlatformBuilds</c> with a declared secret key whose
+    /// secret IS mounted — it owns the fleet's build queue. Falling through to the local route there
+    /// stores the release in build's OWN inbox, whose watcher classifies a <c>self-update-available</c>
+    /// event as a non-build event and DELETES it, while the boot line reports <c>apply=control-lane</c>
+    /// with a verified delivery and <see cref="SelfUpdateHandover.Missing"/> names nothing. The route
+    /// must refuse and the refusal must name the absent key, so the boot line is a reading that can
+    /// fail. The config-only alternative (mount the secret on <c>build</c>) fixes one record and leaves
+    /// the silent self-delivery reachable for the next instance that owns an inbox.
+    /// </summary>
+    [Fact]
+    public void AnInstanceThatNamesAControlInstance_AndOwnsAnInbox_RefusesRatherThanTalkingToItself()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [SelfUpdateHandover.DeploymentKey] = Deployment,
+            [SelfUpdateHandover.ReportToKey] = "https://memex.systemorph.com",
+            // No Hosting:ControlInbox:Secret — the record does not map it.
+            ["WebhookInbox:Targets:0"] = SelfUpdateHandover.InboxTarget,
+            ["WebhookInbox:Targets:0:SecretConfigKey"] = SelfUpdateHandover.LocalSecretKey,
+            [SelfUpdateHandover.LocalSecretKey] = "fleet-secret",
+        }).Build();
+
+        var settings = SelfUpdateHandover.ReadSettings(config);
+
+        settings.Url.Should().Be(InboxUrl, "Hosting:ReportTo names the control instance");
+        settings.SecretPresent.Should().BeFalse();
+        settings.LocalTargetListed.Should().BeTrue("build owns the fleet's build queue and drains this target itself");
+        settings.LocalSecretPresent.Should().BeTrue();
+
+        SelfUpdateHandover.RouteFor(settings).Should().Be(Route.None,
+            "an instance that names a control instance is a CONSUMER — its own inbox is not a control plane, "
+            + "and the event it stores there is deleted by its own watcher");
+        SelfUpdateHandover.ApplyModeFor(false, false, SelfUpdateHandover.RouteFor(settings))
+            .Should().Be(SelfUpdateApply.DetectOnly,
+                "the boot line must read detect-only naming a key, never control-lane naming this instance's own inbox");
+        SelfUpdateHandover.Missing(settings)
+            .Should().Contain(SelfUpdateHandover.SecretKey).And.Contain(SelfUpdateHandover.ReportToKey)
+            .And.NotContain(SelfUpdateHandover.InboxTarget,
+                "the absent signing secret is what stands between this install and the control lane, "
+                + "not anything about the target it drains for the fleet");
+    }
+
     /// <summary>The missing sentence names the KEY that was actually read — never a value, and never
     /// a key the operator did not use: a URL derived from ReportTo is blamed on ReportTo, a listed
     /// local target on its own declared secret key. Null once a route exists.</summary>
