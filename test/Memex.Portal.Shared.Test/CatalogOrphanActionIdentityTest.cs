@@ -55,7 +55,7 @@ public class CatalogOrphanActionIdentityTest(ITestOutputHelper output) : Monolit
     private Task<InstallResult> Install(PackageManifest manifest)
         => PackageInstaller.Install(Mesh, manifest,
                 [new PackageFile($"{manifest.Id}/Doc.md", $"# {manifest.Name}")], "HEAD")
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     private static IObservable<T> ReadOwner<T>(LayoutAreaHost host, Func<T> read)
         => Observable.Create<T>(observer =>

@@ -47,7 +47,8 @@ public class CellSurfaceRefusedBuildTest(ITestOutputHelper output) : MonolithMes
     {
         var resolved = await Provider.ResolveCellSurfaceAssemblies()
             .Take(1)
-            .Should().Within(60.Seconds()).Emit("resolution always emits — worst case an empty set");
+            .Should().Within(60.Seconds()).Emit("resolution always emits — worst case an empty set",
+                cancellationToken: TestContext.Current.CancellationToken);
         try
         {
             return resolved.Any(a =>

@@ -101,7 +101,7 @@ public class InstanceOpenRegistrationTest(ITestOutputHelper output) : MonolithMe
                     .Take(1))
             .Select(node => node?.ContentAs<PluginGrant>(Mesh.JsonSerializerOptions))
             .Timeout(TimeSpan.FromSeconds(30))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
     }
 
     [Fact(Timeout = 300_000)]
@@ -153,7 +153,7 @@ public class InstanceOpenRegistrationTest(ITestOutputHelper output) : MonolithMe
                 : access.RunAsSystem(() => Mesh.GetMeshNode(path, TimeSpan.FromSeconds(10)).Take(1)))
             .Select(node => node?.ContentAs<MeshWeaverInstance>(Mesh.JsonSerializerOptions)?.Plan)
             .Timeout(TimeSpan.FromSeconds(30))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
     }
 
     [Fact(Timeout = 300_000)]

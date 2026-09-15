@@ -39,11 +39,12 @@ reaches *directly* now takes the token, and so do the helpers a test parks in lo
 suites' `PollAsync` loops (11 files, 24 call sites), their compile- and activity-status polls, and
 the sync suites' `ConfigWhen` / `QueryShows` / `DeliverGreenBuild`. What is deliberately left is
 recorded rather than implied: a wait a test parks on **purpose** (the park is what the test
-measures), a **fixture's** startup wait, which runs before any test owns a token, and a remaining
-population of helper-level waits that are already bounded by their own Rx `.Timeout(…)` — 271 of
-them, measured, tracked separately. None of them can hang a run; they can end it later than the
-verdict, which is a smaller defect than the one this change closes and is not worth pretending was
-also fixed.
+measures) and a **fixture's** startup wait, which runs before any test owns a token. The remaining
+helper-level population was measured rather than waved at, and
+[the companion entry](/Doc/WhatsNew/2026-09-15-a-timed-out-test-stops-in-its-helpers-too) closes it:
+185 more helper-level waits now take the token, and the five that still do not each say why where
+they sit. What neither entry fixes — and neither claims to — is the 1,292 waits inside test bodies
+that are analyzer-compliant through a reference elsewhere in the method.
 
 Nothing was suppressed to get here: neither rule was added to `NoWarn`, and no test's timeout,
 assertion or wait was changed. One fixture had two public constructors, which xunit 4.x refuses; the

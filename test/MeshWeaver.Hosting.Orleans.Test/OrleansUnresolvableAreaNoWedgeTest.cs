@@ -84,7 +84,7 @@ public class OrleansUnresolvableAreaNoWedgeTest(ITestOutputHelper output) : Orle
                 .Materialize()
                 .FirstAsync()
                 .Timeout(15.Seconds())
-                .Await();
+                .Await(TestContext.Current.CancellationToken);
         }
         catch (TimeoutException)
         {

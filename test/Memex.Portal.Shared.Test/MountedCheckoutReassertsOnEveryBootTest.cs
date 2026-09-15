@@ -112,7 +112,7 @@ public class MountedCheckoutReassertsOnEveryBootTest(ITestOutputHelper output) :
     private Task<MeshNode?> Read(string path) =>
         Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read(path, Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await();
+            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
 }
 
 /// <summary>
@@ -171,7 +171,7 @@ public class FetchedSourceStillSeedsOnceTest(ITestOutputHelper output) : Monolit
     private Task<MeshNode?> Read(string path) =>
         Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read(path, Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await();
+            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
 }
 
 /// <summary>One package, <c>Course</c>, in node-repo format on disk — the shape memex-local mounts.</summary>

@@ -81,7 +81,7 @@ public class PluginBundleAnchorTest(ITestOutputHelper output) : MonolithMeshTest
             .Select(r => r.RawKey)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
     private Task<InstallResult> InstallPackage(string id, string? source, CancellationToken cancellationToken) =>
         PackageInstaller.Install(
@@ -109,7 +109,7 @@ public class PluginBundleAnchorTest(ITestOutputHelper output) : MonolithMeshTest
         PackageInstaller.RemoveInstalledRecord(Mesh, id)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
     // ── the host, with a stub ANCHOR ──────────────────────────────────────────────────────────
 

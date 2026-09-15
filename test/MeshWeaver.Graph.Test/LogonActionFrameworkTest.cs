@@ -193,7 +193,7 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
             Name = path,
             State = MeshNodeState.Active,
             Content = content ?? new User { FullName = path },
-        })).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
+        })).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -206,7 +206,7 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(n => n?.ContentAs<User>(Mesh.JsonSerializerOptions) is { } u && predicate(u))
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         return node.ContentAs<User>(Mesh.JsonSerializerOptions)!;
     }
 

@@ -96,12 +96,14 @@ public class AutocompleteHonoursReadAccessTest(ITestOutputHelper output) : Monol
     private Task<MeshNode> CreateSecret() =>
         MeshService.CreateNode(
                 new MeshNode(SecretId, TestPartition) { Name = SecretName, NodeType = "Markdown" })
-            .Should().Within(TestTimeouts.Convergence).Emit("the admin owns this partition");
+            .Should().Within(TestTimeouts.Convergence).Emit("the admin owns this partition",
+                cancellationToken: TestContext.Current.CancellationToken);
 
     private Task<MeshNode> CreateSharedNote() =>
         MeshService.CreateNode(
                 new MeshNode(SharedId, TestPartition) { Name = SharedName, NodeType = "Markdown" })
-            .Should().Within(TestTimeouts.Convergence).Emit("the admin owns this partition");
+            .Should().Within(TestTimeouts.Convergence).Emit("the admin owns this partition",
+                cancellationToken: TestContext.Current.CancellationToken);
 
     /// <summary>
     /// The drill-down the issue measured: <c>@/{TestPartition}/</c>, i.e. an empty prefix under a
@@ -115,7 +117,8 @@ public class AutocompleteHonoursReadAccessTest(ITestOutputHelper output) : Monol
     private Task<IReadOnlyCollection<QueryResult>> DrillDown(string because) =>
         MeshService.Autocomplete(TestPartition, "", AutocompleteMode.PathFirst, limit: 50)
             .LastAsync()
-            .Should().Within(TestTimeouts.Convergence).Emit(because);
+            .Should().Within(TestTimeouts.Convergence).Emit(because,
+                cancellationToken: TestContext.Current.CancellationToken);
 
     /// <summary>
     /// Switches the ambient viewer to <see cref="Outsider"/> and CHECKS THE SWITCH TOOK. Without

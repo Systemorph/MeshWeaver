@@ -171,9 +171,15 @@ positive signal.
 ```bash
 date -u                                                       # 1. record the start — UTC, so it compares with CI
 dotnet build test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj   # 2. never skip: --no-restore alone runs nothing
-dotnet test test/MeshWeaver.Data.Test --no-build --logger trx        # 3. run_in_background: true
+dotnet test test/MeshWeaver.Data.Test --no-build \
+  --report-xunit-trx --report-xunit-trx-filename run.trx \
+  --results-directory "$PWD/.trx"                             # 3. run_in_background: true — MTP flags,
+                                                              #    NOT --logger: the repo opts into
+                                                              #    Microsoft.Testing.Platform in
+                                                              #    global.json, and --logger there ends
+                                                              #    the run as `Zero tests ran`, exit 5
 date -u                                                       # 4. poll; over budget ⇒ WEDGED, not slow
-ls -la test/MeshWeaver.Data.Test/TestResults/*.trx            # 5. the pass signal: a .trx newer than step 1
+ls -la .trx/run.trx                                           # 5. the pass signal: a .trx newer than step 1
 ```
 
 Over budget means **stuck** — find what is not completing, never raise the bound (AGENTS.md → "No

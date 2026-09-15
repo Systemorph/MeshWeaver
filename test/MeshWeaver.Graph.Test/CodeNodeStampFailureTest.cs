@@ -184,7 +184,7 @@ public class CodeNodeStampFailureTest(ITestOutputHelper output) : MonolithMeshTe
             }))
             .FirstAsync()
             .Timeout(Bound)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         return path;
     }
 
@@ -201,7 +201,7 @@ public class CodeNodeStampFailureTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(until)
             .FirstAsync()
             .Timeout(Bound)
-            .Await())!;
+            .Await(TestContext.Current.CancellationToken))!;
     }
 
     private static string Describe(System.Reactive.Notification<MeshNode> outcome)

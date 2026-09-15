@@ -82,7 +82,7 @@ public class InstanceKeyRotationTest(ITestOutputHelper output) : MonolithMeshTes
         Call(app, HttpMethod.Post, InstanceKeyPayloads.RevokeRoute, rawKey);
 
     private Task<InstanceRegistrationResult> Register(MeshWeaverInstanceService service, string id) =>
-        service.Register("owner", "Owner", "owner@test.com", id, id).Timeout(TimeSpan.FromSeconds(60)).Await();
+        service.Register("owner", "Owner", "owner@test.com", id, id).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
 
     /// <summary>
     /// 🚨 THE CONTROL-INSTANCE CASE. A portal whose store does not hold the instance answers 401 to

@@ -388,7 +388,7 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
             .Select(r => r.RawKey)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
     private async Task<WebApplication> StartHost(string publishedRoot, CancellationToken cancellationToken)
     {

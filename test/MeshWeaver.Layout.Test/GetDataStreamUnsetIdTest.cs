@@ -7,6 +7,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
+using Xunit;
 
 namespace MeshWeaver.Layout.Test;
 
@@ -88,8 +89,9 @@ public class GetDataStreamUnsetIdTest(ITestOutputHelper output) : HubTestBase(ou
     {
         areaStream = GetHost().GetWorkspace().GetStream(new LayoutAreaReference(ProbeView));
         await areaStream!.GetControlStream(ProbeView)
-            .Should().Within(10.Seconds()).Match(c => c is not null);
-        return await renderedHost.Should().Within(10.Seconds()).Emit();
+            .Should().Within(10.Seconds()).Match(c => c is not null,
+                cancellationToken: TestContext.Current.CancellationToken);
+        return await renderedHost.Should().Within(10.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>

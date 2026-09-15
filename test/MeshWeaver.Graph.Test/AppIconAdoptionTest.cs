@@ -215,7 +215,7 @@ public class AppIconAdoptionTest(ITestOutputHelper output) : MonolithMeshTestBas
                 .Select(c => (IReadOnlyCollection<MeshNode>)c.Items.ToArray())
                 .Take(1))
             .Where(items => items.Count > 0)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>Seeds a node as System — the User partition root is reserved to the platform by
@@ -225,6 +225,6 @@ public class AppIconAdoptionTest(ITestOutputHelper output) : MonolithMeshTestBas
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
         await access.RunAsSystem(() => mesh.CreateNode(node))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(TestContext.Current.CancellationToken);
     }
 }

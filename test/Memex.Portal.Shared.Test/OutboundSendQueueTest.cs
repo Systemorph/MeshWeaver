@@ -65,7 +65,7 @@ public class OutboundSendQueueTest
         }
 
         public Task<IList<string>> AwaitProcessed(int count) =>
-            Queue.Processed.Take(count).ToList().Timeout(TestBudget).FirstAsync().Await();
+            Queue.Processed.Take(count).ToList().Timeout(TestBudget).FirstAsync().Await(TestContext.Current.CancellationToken);
 
         public void Dispose() => Queue.Dispose();
     }

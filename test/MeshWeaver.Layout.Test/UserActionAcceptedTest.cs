@@ -80,7 +80,8 @@ public class UserActionAcceptedTest(ITestOutputHelper output) : HubTestBase(outp
 
         await stream.GetControlStream(controlArea).Should().Within(10.Seconds()).Match(
             control => control is not null,
-            "the owner-side LayoutAreaHost and its stream-scoped action handler must exist");
+            "the owner-side LayoutAreaHost and its stream-scoped action handler must exist",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         long receiptOrder = 0;
         var receipt = await client
@@ -89,11 +90,13 @@ public class UserActionAcceptedTest(ITestOutputHelper output) : HubTestBase(outp
                 options => options.WithTarget(CreateHostAddress()))
             .Do(_ => receiptOrder = Interlocked.Increment(ref ordering))
             .Should().Within(10.Seconds()).Emit(
-                "an accepted user action must answer the callback the sender uses as its teardown drain");
+                "an accepted user action must answer the callback the sender uses as its teardown drain",
+                    cancellationToken: TestContext.Current.CancellationToken);
 
         receipt.Message.Should().BeOfType<UserActionAccepted>();
         var invocationOrder = await invoked.Should().Within(10.Seconds()).Emit(
-            "the receipt cannot precede invocation of the stream-scoped action it acknowledges");
+            "the receipt cannot precede invocation of the stream-scoped action it acknowledges",
+                cancellationToken: TestContext.Current.CancellationToken);
         receiptOrder.Should().BeGreaterThan(invocationOrder,
             "the owner must not release the sender's quiesce drain before its handler accepts the action");
     }

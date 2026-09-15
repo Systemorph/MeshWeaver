@@ -179,7 +179,7 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
         };
         await MeshService.CreateNode(typeNode)
             .SelectMany(_ => MeshService.CreateNode(SourceNode(typePath)))
-            .Should().Within(20.Seconds()).Emit();
+            .Should().Within(20.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
         // 🚨 #4208 — an ESTABLISHED fingerprint is the precondition of a decline, not a
         // convenience: the watcher's first publication can be the empty fold, and the seeder
         // deliberately DEFERS on that rather than declining from a source set nobody established.
@@ -191,12 +191,13 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
         await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition d
                         && string.Equals(d.LatestAssemblyMvid, DeadMvid, StringComparison.Ordinal)
-                        && string.Equals(d.CurrentSourceFingerprint, expected, StringComparison.Ordinal));
+                        && string.Equals(d.CurrentSourceFingerprint, expected, StringComparison.Ordinal),
+                            cancellationToken: TestContext.Current.CancellationToken);
 
         // The store of this mesh has never held version 5 of this type — exactly the restarted-pod
         // shape: the record claims a build, the process has no bytes for it.
         var store = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
-        var path = await store.TryGetAssemblyPath(typePath, 5).Should().Within(10.Seconds()).Emit();
+        var path = await store.TryGetAssemblyPath(typePath, 5).Should().Within(10.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
         path.Should().BeNull("the precondition: the claimed build does not resolve here");
         return (typePath, expected);
     }

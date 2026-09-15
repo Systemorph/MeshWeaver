@@ -247,7 +247,7 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
                         TargetPartition = packageId,
                     },
                 }))
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     /// <summary>Two publications: an older identity that sealed every installed package, a newer one
     /// that did not seal <c>Feedback</c>.</summary>

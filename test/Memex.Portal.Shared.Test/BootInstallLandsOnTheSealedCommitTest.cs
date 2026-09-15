@@ -230,7 +230,7 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
     private Task<MeshNode?> Read(string path) =>
         Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read(path, Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(TestTimeouts.Convergence).Await();
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     /// <summary>
     /// The transport, answering a DIFFERENT tree per commitish and recording what it was asked for:

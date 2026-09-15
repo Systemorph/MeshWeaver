@@ -15,6 +15,10 @@ namespace MeshWeaver.Testing.InMesh.Test;
 /// </summary>
 public class MeshTestRunnerTests
 {
+    // 🚨 THE CASES BELOW ARE THE SUBJECT, not tests of this assembly — the in-mesh runner discovers
+    // and runs them, and this file asserts what it reports. Their waits are untokened on purpose
+    // (#4378): `Hangs` parks forever so the runner's OWN TimeoutSeconds can be observed, and giving
+    // it xunit's token would end it for the wrong reason and prove nothing.
     public class Sample
     {
         [MeshFact] public void Passes() { }

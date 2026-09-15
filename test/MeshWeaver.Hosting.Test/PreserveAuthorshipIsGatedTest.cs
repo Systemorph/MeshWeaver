@@ -119,7 +119,7 @@ public class PreserveAuthorshipIsGatedTest(ITestOutputHelper output) : MonolithM
             Name = prefix,
             NodeType = "Markdown",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         return path;
     }
 }
