@@ -1513,6 +1513,42 @@ comment first. Never re-run the failed queue build and never re-queue by hand �
 bug and destroys the control arm; the steward re-queues on evidence and records the attempt. The
 whole protocol is [The Merge Queue](/Doc/Architecture/MergeQueue).
 
+## 🚨 GitHub's run LISTING can be served stale — judge page 1 against a fact it cannot fake
+
+A run listing (`actions/workflows/<wf>/runs?branch=main&per_page=…`) is sometimes answered from an
+old snapshot. The page is well-formed, correctly ordered and internally consistent — it is simply
+days behind — and the same query issued a minute later is correct. Measured instances:
+
+| when | query | what came back |
+|---|---|---|
+| 2026-09-14 | a satellite's `ci.yml` runs, `status=success` | a page from 2026-08-19, twelve runs that predate the job being looked for |
+| 2026-09-15 13:03Z | core `main-cd.yml` runs, page 1 | began at #8423 while #8676 was sealed (~260 runs behind) |
+| 2026-09-15 14:07Z | the same | began at #8420 — the same stale point, an hour later |
+| 2026-09-15 ~14:2xZ | Plugins `ci.yml` runs, `per_page=1` | a run from 2026-08-10 as the newest |
+
+A reader that takes "the first matching run on page 1" as the newest acts on the stale answer
+without a trace. `resolve-platform.py` did exactly that (#4433): with a declared floor it went red
+naming the floor, and without one — every satellite but Plugins — it would have compiled, tested
+and published against a three-day-old platform while reporting it as the newest.
+
+**The rule: make the wrong answer harmless, never retry it away.** Check page 1 against a fact the
+listing cannot supply itself, and refuse — red, naming the staleness — when it fails:
+
+- **the clock**, when the workflow runs on a known cadence: core CD runs on `main` at least hourly
+  (an hourly `schedule` plus every main build; the widest gap in 300 measured runs was 1.7 h), so a
+  page whose newest main run is over 12 h old is not the newest page;
+- **a run number known to exist** from another read: a set the caller's own `main` already passed
+  on cannot be missing from a fresh listing.
+
+A retry keyed on "this answer is inconvenient" is a gate testing its own inputs; the refusal is
+the answer, and a re-run of the job reads the listing again. A freeze is exempt — it names one set,
+and an incident is when it must keep working.
+
+The same family has two more readings that look like verdicts and are not: `workflow_runs[0]` for
+a head sha can be a run **cancelled** by its concurrency group while a sibling run for the same
+sha is live (judge the highest-id non-cancelled run), and a `head_sha` filter given a SHORT sha
+matches nothing, silently.
+
 ## Related
 
 [The Merge Queue](/Doc/Architecture/MergeQueue) · [Module Versioning](/Doc/Architecture/ModuleVersioning)
