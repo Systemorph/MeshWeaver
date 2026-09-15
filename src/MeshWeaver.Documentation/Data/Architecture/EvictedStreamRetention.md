@@ -25,6 +25,14 @@ do **not** apply §9's remedy to `ReclaimIfUnheld`'s predicate: the eviction par
 precisely because an undeclared reader may still be attached, so disposing on "no lease was ever
 declared" cuts live readers off silently.
 
+🚨 **NARROWED 2026-09-15 by [#1174](https://github.com/Systemorph/MeshWeaver/issues/1174).** The
+eviction below no longer runs on *every* change-feed event: a versioned `Updated` — one per write —
+keeps the mirror and records the version it announced (see
+[Live Mirrors and the Change Feed](../LiveMirrorsAndTheChangeFeed)). The retention described here is
+unchanged as a mechanism, but it is now reached only by a delete, a recreate or the version-less
+recycle broadcast. `EvictedUnleasedStreamRetentionTest` drives that last shape for exactly that
+reason, and its third arm pins that the per-write shape leaves one stream, not one per write.
+
 **The verdict is RETENTION, not a leak.** Nothing is created and forgotten. The streams are parked
 *deliberately*, by code that says so, and then the one routine that could release them structurally
 declines to — for a reason that is correct in general and wrong for the majority of call sites.

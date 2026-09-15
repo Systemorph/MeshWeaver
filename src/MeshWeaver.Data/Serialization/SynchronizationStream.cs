@@ -24,7 +24,8 @@ namespace MeshWeaver.Data.Serialization;
 /// and reduced/derived streams are produced through the <see cref="ReduceManager"/>.
 /// </summary>
 /// <typeparam name="TStream">Type of the state carried by the stream.</typeparam>
-public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, IStreamLivenessSource
+public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, IStreamLivenessSource,
+    IAnnouncedVersionFloor
 {
     /// <summary>
     /// The stream reference, i.e. the unique identifier of the stream.
@@ -281,6 +282,31 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
 
     /// <inheritdoc />
     Exception? IStreamLivenessSource.TerminalFault => Volatile.Read(ref terminalFault);
+
+    /// <summary>
+    /// 🚨 This mirror's freshness floor (#1174) — see <see cref="IAnnouncedVersionFloor"/> for why
+    /// it is a field of the instance rather than an entry beside the cache. Raised only by the
+    /// workspace's change-feed handler, on the exact instance it found in its cache; never cleared,
+    /// because nothing needs to clear it: when this mirror leaves, so does its floor.
+    /// </summary>
+    private long announcedOwnerVersion;
+
+    /// <inheritdoc />
+    long IAnnouncedVersionFloor.AnnouncedVersion => Interlocked.Read(ref announcedOwnerVersion);
+
+    /// <inheritdoc />
+    long IAnnouncedVersionFloor.RaiseAnnouncedVersion(long version)
+    {
+        // Monotonic max by compare-and-swap: a field update, not a gate — nothing waits here.
+        while (true)
+        {
+            var seen = Interlocked.Read(ref announcedOwnerVersion);
+            if (version <= seen)
+                return seen;
+            if (Interlocked.CompareExchange(ref announcedOwnerVersion, version, seen) == seen)
+                return version;
+        }
+    }
 
     /// <summary>
     /// The terminal error this stream's <see cref="Store"/> holds, or <c>null</c> while it is
