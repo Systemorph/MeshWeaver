@@ -283,6 +283,65 @@ public class ServedModuleBytesTest : IDisposable
         Assert.Null(refOnly.Disagreement);
     }
 
+    /// <summary>
+    /// 🚨 #4126, stage 3 — the module's RID-specific NATIVE payloads must survive BOTH serve
+    /// routes, and this is the SEALED one. Switching which producer supplies the module must not
+    /// drop the engine: the consumer lands what this archive carries and nothing else, so a native
+    /// left behind here is a module that lands, loads, and throws DllNotFoundException at its
+    /// first P/Invoke — the #2221 shape one step harder, because the asset version merely renders
+    /// unstyled.
+    /// </summary>
+    [Fact]
+    public void TheSealedBuildsNativePayloadsRideWithIt()
+    {
+        var shelf = Shelf(ShelfBytes);
+        PublishedRoot(
+            bundleName: ServedModuleBytes.BundleNameFor(Package),
+            moduleBytes: SealedBytes,
+            natives: [("runtimes/linux-x64/native/libe_sqlite3.so", NativeBytes),
+                      // A payload at a layout the loader never probes: the seal is produced by the
+                      // bake, not by this process, so re-serving one would hand the consumer a
+                      // bundle its own landing REFUSES — turning "no engine" into "nothing lands".
+                      ("runtimes/linux-x64/other/native/libbogus.so", NativeBytes)]);
+
+        var served = ServedModuleBytes.Resolve(
+            Module, Package, shelf.Files, shelf.Assets,
+            new RecordedModuleId(SealedMvid, null),
+            PublishedRootPath, Identity);
+
+        Assert.Null(served.Divergence);
+        Assert.Equal(
+            ["runtimes/linux-x64/native/libe_sqlite3.so"],
+            served.Natives.Select(n => n.RelativePath).ToArray());
+        Assert.Equal(NativeBytes, ReadAsset(served.Natives[0]));
+    }
+
+    /// <summary>
+    /// And the SHELF route: when the registry's own build IS the recorded one — the healthy case,
+    /// and the one every ordinary download takes — the natives it holds are what goes out.
+    /// </summary>
+    [Fact]
+    public void TheShelfsNativePayloadsAreServed()
+    {
+        var shelf = Shelf(ShelfBytes);
+        var nativeFile = Path.Combine(
+            root, "shelf", "modules", Module, "runtimes", "linux-x64", "native", "libe_sqlite3.so");
+        Directory.CreateDirectory(Path.GetDirectoryName(nativeFile)!);
+        File.WriteAllBytes(nativeFile, NativeBytes);
+
+        var served = ServedModuleBytes.Resolve(
+            Module, Package, shelf.Files, shelf.Assets,
+            new RecordedModuleId(ShelfMvid, null),
+            PublishedRootPath, Identity, logger: null,
+            shelfNatives: [("runtimes/linux-x64/native/libe_sqlite3.so", nativeFile)]);
+
+        Assert.Null(served.Divergence);
+        Assert.Contains("shelf", served.Provenance, StringComparison.Ordinal);
+        Assert.Equal(NativeBytes, ReadAsset(Assert.Single(served.Natives)));
+    }
+
+    private static readonly byte[] NativeBytes = Encoding.UTF8.GetBytes("ELF-linux-x64-engine");
+
     private string PublishedRootPath => Path.Combine(root, "published");
 
     /// <summary>This registry's own <c>modules/</c> shelf, holding one build of the module.</summary>
@@ -300,7 +359,8 @@ public class ServedModuleBytesTest : IDisposable
     /// declaring <see cref="Module"/> at the given build.</summary>
     private void PublishedRoot(
         string bundleName, byte[] moduleBytes,
-        IReadOnlyList<(string RelativePath, byte[] Bytes)>? assets = null)
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? assets = null,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? natives = null)
     {
         var source = Path.Combine(PublishedRootPath, Identity, Source);
         var modules = Path.Combine(source, PublishedBundleCatalogue.ModulesDirectoryName);
@@ -314,6 +374,8 @@ public class ServedModuleBytesTest : IDisposable
         };
         foreach (var (relative, bytes) in assets ?? [])
             entries.Add((NuGetPackageWriter.ModuleAssetEntryPathFor(relative), bytes));
+        foreach (var (relative, bytes) in natives ?? [])
+            entries.Add((NuGetPackageWriter.ModuleNativeEntryPathFor(relative), bytes));
         WriteZip(Path.Combine(modules, bundleName), [.. entries]);
         File.WriteAllLines(
             Path.Combine(modules, PublishedBundleCatalogue.ModulesIndexFileName), [bundleName]);
