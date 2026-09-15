@@ -55,7 +55,7 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
         var identity = IdentityFor(UserPath);
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
 
-        await runner.RunFor(identity).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+        await runner.RunFor(identity).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
         var afterFirst = await AwaitProfileAsync(UserPath, u => u.CompletedLogonActions.ContainsKey(_once.Id));
 
         afterFirst.PinnedPaths.Should().ContainSingle(p => p.StartsWith("once-"),
@@ -64,7 +64,7 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
             "the ledger entry lands in the SAME patch as the effect");
 
         // Second logon: the ledger key is present, so the action is not even prepared.
-        await runner.RunFor(identity).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+        await runner.RunFor(identity).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
         // Wait on a POSITIVE signal from the second run — the every-logon action's second marker —
         // so this is not a "wait and hope nothing happened" assertion.
         var afterSecond = await AwaitProfileAsync(
@@ -81,10 +81,10 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
         var identity = IdentityFor(UserPath);
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
 
-        await runner.RunFor(identity).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+        await runner.RunFor(identity).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
         await AwaitProfileAsync(UserPath, u => u.PinnedPaths.Any(p => p.StartsWith("every-")));
 
-        await runner.RunFor(identity).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+        await runner.RunFor(identity).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
         var profile = await AwaitProfileAsync(
             UserPath, u => u.PinnedPaths.Count(p => p.StartsWith("every-")) >= 2);
 
@@ -104,8 +104,8 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
         // empty ledger in their fast-path check and both reach the commit. What separates them is
         // the owning hub serialising the two patches and the second lambda re-reading the ledger key
         // the first one wrote — the guard this test exists for.
-        var first = runner.RunFor(identity).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
-        var second = runner.RunFor(identity).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+        var first = runner.RunFor(identity).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
+        var second = runner.RunFor(identity).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
         await Task.WhenAll(first, second);
 
         var profile = await AwaitProfileAsync(UserPath, u => u.CompletedLogonActions.ContainsKey(_once.Id));
@@ -131,7 +131,7 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
         });
 
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
-        await runner.RunFor(IdentityFor(path)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+        await runner.RunFor(IdentityFor(path)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
 
         // Positive signal: the EVERY-logon action still ran, which proves the runner executed and
         // the absence of a once-marker is a decision rather than a no-op run.
@@ -148,7 +148,7 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
         await CreateUserAsync(UserPath);
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
 
-        await runner.RunFor(IdentityFor(UserPath)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
+        await runner.RunFor(IdentityFor(UserPath)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
         var profile = await AwaitProfileAsync(UserPath, u => u.CompletedLogonActions.ContainsKey(_once.Id));
 
         profile.CompletedLogonActions.Keys.Should().NotContain(_failing.Id,
@@ -166,7 +166,7 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
         var before = _every.Runs;
 
         await runner.RunFor(new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous" })
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await(TestContext.Current.CancellationToken);
 
         _every.Runs.Should().Be(before, "an unauthenticated caller is not a logon");
     }
@@ -193,7 +193,7 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
             Name = path,
             State = MeshNodeState.Active,
             Content = content ?? new User { FullName = path },
-        })).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
+        })).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -206,7 +206,7 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(n => n?.ContentAs<User>(Mesh.JsonSerializerOptions) is { } u && predicate(u))
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         return node.ContentAs<User>(Mesh.JsonSerializerOptions)!;
     }
 

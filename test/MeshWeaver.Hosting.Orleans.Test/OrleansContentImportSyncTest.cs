@@ -52,15 +52,17 @@ public class OrleansContentImportSyncTest(ITestOutputHelper output)
         ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
             .GetRequiredService<IMessageHub>();
 
-    private CancellationToken Ct => new CancellationTokenSource(75.Seconds()).Token;
-
     [Fact(Timeout = 120000)]
     public async Task Import_SyncsContentFile_IntoNodeContentCollection_OnGrain()
     {
-        Directory.CreateDirectory(SourceDir);
-        await File.WriteAllBytesAsync(Path.Combine(SourceDir, "logo.png"), BinaryAsset, Ct);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(75.Seconds());
+        var ct = deadline.Token;
 
-        var results = await StaticRepoImporter.ImportAll(Mesh).ToList().FirstAsync().Await(Ct);
+        Directory.CreateDirectory(SourceDir);
+        await File.WriteAllBytesAsync(Path.Combine(SourceDir, "logo.png"), BinaryAsset, ct);
+
+        var results = await StaticRepoImporter.ImportAll(Mesh).ToList().FirstAsync().Await(ct);
         var mine = results.FirstOrDefault(r => r.Partition == Partition);
         Output.WriteLine($"import: partition={mine?.Partition} outcome={mine?.Outcome} count={mine?.Count}");
         mine.Should().NotBeNull("the content source partition must be imported");

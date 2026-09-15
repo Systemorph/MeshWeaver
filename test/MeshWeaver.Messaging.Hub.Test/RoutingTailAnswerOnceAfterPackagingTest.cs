@@ -88,7 +88,7 @@ public class RoutingTailAnswerOnceAfterPackagingTest(ITestOutputHelper output) :
 
         var answered = await answeredSoFar.Should().Within(30.Seconds())
             .Match(a => a.Contains(control.Id),
-                "an ordinary request that fails routing must still be reported to its sender");
+                "an ordinary request that fails routing must still be reported to its sender", cancellationToken: TestContext.Current.CancellationToken);
 
         answered.Should().ContainSingle(
             "the routing tail must apply the same answer-once contract as the router it reports for — "

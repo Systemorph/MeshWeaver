@@ -52,13 +52,13 @@ public class MoveNodePreservesAuthorshipTest(ITestOutputHelper output) : Monolit
             Name = "Proposal",
             NodeType = "Markdown",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         await NodeFactory.CreateNode(MeshNode.FromPath(sourceChild) with
         {
             Name = "Pricing",
             NodeType = "Markdown",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var rootBefore = await ReadExisting(sourceRoot);
         var childBefore = await ReadExisting(sourceChild);
@@ -70,7 +70,7 @@ public class MoveNodePreservesAuthorshipTest(ITestOutputHelper output) : Monolit
 
         Access.SetCircuitContext(Mover);
         var moved = await ObserveNodeOperation(new MoveNodeRequest(sourceRoot, targetRoot))
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         moved.Message.Success.Should().BeTrue(moved.Message.Error ?? "the move must succeed");
 
         var rootAfter = await ReadExisting(targetRoot);
@@ -112,14 +112,14 @@ public class MoveNodePreservesAuthorshipTest(ITestOutputHelper output) : Monolit
             Name = "Original",
             NodeType = "Markdown",
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         var before = await ReadExisting(sourcePath);
         before.CreatedBy.Should().Be(Author.ObjectId, "precondition: the author created it");
 
         Access.SetCircuitContext(Mover);
         var copied = await ObserveNodeOperation(new CopyNodeRequest(sourcePath, targetPath))
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         copied.Message.Success.Should().BeTrue(copied.Message.Error ?? "the copy must succeed");
 
         var after = await ReadExisting(targetPath);
@@ -143,5 +143,6 @@ public class MoveNodePreservesAuthorshipTest(ITestOutputHelper output) : Monolit
     /// </summary>
     private async Task<MeshNode> ReadExisting(string path) =>
         (await ReadNode(path).Should().Within(TestTimeouts.Convergence)
-            .Match(n => n is not null, $"the node at {path} must exist"))!;
+            .Match(n => n is not null, $"the node at {path} must exist",
+                cancellationToken: TestContext.Current.CancellationToken))!;
 }

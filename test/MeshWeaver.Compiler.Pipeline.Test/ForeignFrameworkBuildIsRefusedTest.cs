@@ -53,7 +53,8 @@ public class ForeignFrameworkBuildIsRefusedTest(ITestOutputHelper output) : Mono
     {
         var resolved = await Provider.ResolveCellSurfaceAssemblies()
             .Take(1)
-            .Should().Within(60.Seconds()).Emit("resolution always emits — worst case an empty set");
+            .Should().Within(60.Seconds()).Emit("resolution always emits — worst case an empty set",
+                cancellationToken: TestContext.Current.CancellationToken);
         try
         {
             return resolved.Any(a =>
@@ -70,7 +71,8 @@ public class ForeignFrameworkBuildIsRefusedTest(ITestOutputHelper output) : Mono
     {
         var node = await Mesh.GetMeshNodeStream(TypePath)
             .Take(1)
-            .Should().Within(60.Seconds()).Emit("the NodeType node is readable");
+            .Should().Within(60.Seconds()).Emit("the NodeType node is readable",
+                cancellationToken: TestContext.Current.CancellationToken);
         return node.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
     }
 
@@ -102,12 +104,13 @@ public class ForeignFrameworkBuildIsRefusedTest(ITestOutputHelper output) : Mono
                         """,
                 },
             }))
-            .Should().Within(60.Seconds()).Emit();
+            .Should().Within(60.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         await Mesh.GetMeshNodeStream(TypePath)
             .Should().Within(120.Seconds())
             .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
-                is { CompilationStatus: CompilationStatus.Ok or CompilationStatus.Error });
+                is { CompilationStatus: CompilationStatus.Ok or CompilationStatus.Error },
+                    cancellationToken: TestContext.Current.CancellationToken);
 
         var honest = await ReadDefinition();
         honest.CompilationStatus.Should().Be(CompilationStatus.Ok,
@@ -144,10 +147,11 @@ public class ForeignFrameworkBuildIsRefusedTest(ITestOutputHelper output) : Mono
         // coordinates, same CompilationStatus.Ok.
         await Mesh.GetMeshNodeStream(TypePath)
             .Update<NodeTypeDefinition>(d => d with { CompiledFrameworkVersion = AnotherProcessesIdentity })
-            .Should().Within(60.Seconds()).Emit();
+            .Should().Within(60.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
         await Mesh.GetMeshNodeStream(TypePath).Should().Within(60.Seconds())
             .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
-                is { CompiledFrameworkVersion: AnotherProcessesIdentity });
+                is { CompiledFrameworkVersion: AnotherProcessesIdentity },
+                    cancellationToken: TestContext.Current.CancellationToken);
 
         var onCellSurface = await CellSurfaceContainsThePack();
 

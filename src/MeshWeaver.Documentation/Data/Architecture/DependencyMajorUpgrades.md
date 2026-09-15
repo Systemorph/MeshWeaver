@@ -374,3 +374,73 @@ matter) and `src/MeshWeaver.Publish` (slide front matter) carry versionless `Yam
 resolved from core's list, so both move to 18.1.0 when the satellite's `MW_PLATFORM_REF` next moves.
 Both were included in the 1,817-file corpus run above, and neither implements an extension point
 that 18.0.0 broke.
+
+### xunit.v3 3.2.2 → 4.0.1 — the major where the ANALYZERS were the whole cost
+
+Measured 2026-09-15.
+
+| Step | Result |
+|---|---|
+| Registry | `…/v3-flatcontainer/xunit.v3/index.json` → HTTP **200**, 572 B; same for `xunit.v3.assert`, `xunit.v3.extensibility.core` and `xunit.v3.runner.console`. Newest stable **4.0.1** for all four (31 versions listed). `xunit.runner.visualstudio` → HTTP **200**, 2,232 B, newest stable **4.0.0** (101 versions), adopted separately in #4260. |
+| Licence | **Apache-2.0 at both ends**, unchanged (`<license type="expression">Apache-2.0</license>` in the 3.2.2 and 4.0.1 nuspecs alike). |
+| API removals we touch | **One.** `XunitTestAssembly(Assembly, string configFileName, Version, string uniqueID)` is deprecated; the replacement reorders the tail into optional named parameters, so `MeshTestFramework` passes `version:` by name. Nothing else in `src/` or `test/` constructs an xunit extensibility type. |
+| Rules an analyzer would have enforced | **This was the entire cost of the bump.** Built at the merge base with only the four `PackageVersion` lines and the `version:` fix applied, `dotnet build MeshWeaver.slnx -c Release -warnaserror -p:CIRun=true` reported **708 errors: 707 distinct `xUnit1069` sites across 260 files and 12 test projects, plus 1 `xUnit1056`** — Graph 470 · Memex.Portal.Shared 258 · Hosting 224 · Hosting.Orleans 120 · Portal.E2E 102 · Messaging.Hub 100 · PluginTester 48 · Compiler.Pipeline 32 · Layout 26 · Data 16 · ContainerImages 10 · Documentation 8. Every failing project is a leaf, so nothing was skipped behind a failed dependency and 707 is exact, not a floor. |
+| The decision | `xUnit1069` — *a test declaring a `Timeout` must reference `TestContext.Current.CancellationToken`* — is the rule this repository most needs, because a wait that ignores the token outlives the verdict and the runner carries the blocked body into the next test. It was **threaded through all 707, not added to `NoWarn`**; `xUnit1056` was fixed by making `SharedOrleansFixture`'s shape-driven constructor `internal`. |
+| Suites | Run against the merged tree — see #4264's pull request for the per-project run lines. |
+
+**The behaviour change no API diff shows: `dotnet test` changed RUNNER.** xunit.v3 4.x ships
+Microsoft.Testing.Platform **v2**, which refuses the VSTest target on the .NET 10 SDK outright —
+`error : Testing with VSTest target is no longer supported by Microsoft.Testing.Platform on .NET 10
+SDK and later`. So the repository opts in through a root `global.json`
+(`{"test": {"runner": "Microsoft.Testing.Platform"}}`) and every `dotnet test` invocation is now
+an MTP one. What survives: the project path (file or directory), `-c`, `--no-build`, `--no-restore`,
+`--results-directory`, and `--filter "FullyQualifiedName~…"`. What does not: `-l:trx` / `--logger`
+(→ `--report-xunit-trx` + `--report-xunit-trx-filename`), `--blame-hang-*` (no equivalent without
+the `Microsoft.Testing.Extensions.HangDump` extension, which this tree does not reference;
+`--long-running <s>` names the hung test instead), and **`-warnaserror`, which fails in the worst
+possible way — `Zero tests ran`, exit 5**, a run that executed nothing while reading like a tooling
+hiccup. `.github/workflows/flake-repro.yml` and `test/Directory.Build.props` (whose always-on
+`<VSTestLogger>trx</VSTestLogger>` is inert under MTP) were adapted in the same change. CI's own
+shards are untouched: they launch each project's native xunit v3 host (`dotnet <Name>.dll -trx …`)
+and never call `dotnet test`.
+
+**What this bump costs MeshWeaver.Plugins at its next pin move, and it is not small.** Its `*.Test`
+projects import core's `test/Directory.Packages.props` (which imports core's root list), so moving
+`MW_PLATFORM_REF` past this commit brings the 4.x analyzers with it. Measured by text scan of that
+repository's working tree on 2026-09-15: **2,646 timed tests in 634 files, 2,184 of which reference
+no cancellation token at all** — a *floor* for what its `-warnaserror` build will report, since the
+analyzer also rejects a body that references some other token. That satellite also needs its own
+`global.json` before any `dotnet test` there will run.
+
+**Where `global.json` reaches, measured rather than assumed.** `dotnet test` selects its runner from
+the first `global.json` found walking **UP from the current directory**. Measured on the .NET
+10.0.400 SDK, 2026-09-15, with `dotnet test --help` as the instrument (it announces which runner it
+is): a `global.json` in a **sibling** directory of the cwd does **not** apply — the help still says
+*".NET Test Command for VSTest"* — while one in the cwd or in an **ancestor** does. That settles a
+question two reviews got wrong in opposite directions. **Two** core-owned reusable workflows invoke
+`dotnet test` against satellite suites — `node-repo-module-pack.yml` (a module's sibling `*.Test`
+project, ×2 call sites) and `node-repo-platform-canary.yml` (the scheduled pin-vs-main canary) — and
+both run with cwd = the **caller's** checkout while keeping the platform in a **sibling** checkout
+(`$GITHUB_WORKSPACE/meshweaver`, `…/core-pin`, `…/core-main`). So core's own `global.json` never
+reaches them and cannot break them; the **caller's** does, which means a satellite adding one is
+exactly the event that would have. Both lanes therefore now read the caller's `global.json` and
+choose their own flags — VSTest (`-warnaserror`, `--logger "trx;…"`) when it selects nothing, and
+xunit's MTP reporter (`--report-xunit-trx`, `--report-xunit-trx-filename`) when it selects
+Microsoft.Testing.Platform. Nothing about a 3.x caller changes, and a repo that moves no longer has
+to land a core PR in the same change set to keep its lane working.
+
+Three more measurements the lanes are built on, same SDK and day: `-p:` properties **do** reach the
+build under MTP (falsified with `-p:LangVersion=7.0` → `error CS8630`, exit 1), so
+`-p:MeshWeaverRoot=…` and `-p:CIRun=true` survive the flip; xunit's trx reporter writes the **same**
+`TeamTest/2010` schema the canary's parser already reads (`ResultSummary`, `Counters`,
+`UnitTestResult outcome`), so no parser moved; and 🚨 **both `-warnaserror` and `--logger` end an
+MTP run as `Zero tests ran`, exit 5** — no trx, nothing executed. That is the failure shape to fear,
+because the module-pack lane records it as *"the module's own suite failed"* and the canary records
+it as *"comparison incomplete"*; neither says "this lane passed the wrong flags".
+
+🚨 **And the canary's build-failure classifier had to widen for this bump specifically.** It read
+`error (?:CS|FS|BC)[0-9]+` to decide whether a failed build was the code's fault or the
+infrastructure's — so ~2,000 `error xUnit1069` at core main, the break this whole entry is about,
+classified as **unknown**, which suppresses the report and preserves the tracking issue rather than
+raising one. It now matches any diagnostic id except `MSB`/`NU`/`NETSDK`, which stay
+infrastructure.

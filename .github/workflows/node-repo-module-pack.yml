@@ -3380,6 +3380,27 @@ jobs:
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
+          # 🚨 THE RUNNER IS THE CALLER'S CHOICE, and `dotnet test` reads it from the first
+          # `global.json` found walking UP from the CURRENT DIRECTORY. Measured on the .NET
+          # 10.0.400 SDK, 2026-09-15: a `global.json` in a SIBLING directory does NOT apply
+          # (`dotnet test --help` still announces ".NET Test Command for VSTest"); one in the cwd
+          # or an ancestor does. This step runs with cwd = the CALLER's checkout and keeps the
+          # platform in a sibling one ($GITHUB_WORKSPACE/meshweaver), so the platform's own
+          # `global.json` — the one core added with xunit.v3 4.x — never reaches this command, and
+          # the caller's is the only one that can. Hard-coding either set of flags breaks the lane
+          # the day a repo moves: under Microsoft.Testing.Platform BOTH `--logger` and
+          # `-warnaserror` were measured to end the run as `Zero tests ran`, exit 5 — no trx,
+          # nothing executed — which this lane would record as "the module's own suite failed".
+          # `-p:` properties reach the build under both runners (falsified with
+          # `-p:LangVersion=7.0` → `error CS8630`), and xunit's trx reporter writes the same
+          # TeamTest/2010 schema the ledger parses, so only the reporter flags differ.
+          test_flags() {
+            if [ -f global.json ] && python3 -c "import json,sys; sys.exit(0 if json.load(open('global.json')).get('test',{}).get('runner') == 'Microsoft.Testing.Platform' else 1)"; then
+              printf '%s\n' --report-xunit-trx --report-xunit-trx-filename ledger.trx --results-directory "$1"
+            else
+              printf '%s\n' -warnaserror --logger "trx;LogFileName=ledger.trx" --results-directory "$1"
+            fi
+          }
           evidence=false
           mapfile -t modules < <(bk list --ok --where need_test=true)
           for MODULE in "${modules[@]}"; do
@@ -3393,9 +3414,9 @@ jobs:
               tests="$(dirname "$PROJECT").Test"
               if [ -d "$tests" ]; then
                 # The trx is the ledger's evidence: counts, and the FAILED names a follower is handed.
-                dotnet test "$tests" -c Release -warnaserror \
-                  -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver \
-                  --logger "trx;LogFileName=ledger.trx" --results-directory "$RUNNER_TEMP/trx/$MODULE"
+                mapfile -t flags < <(test_flags "$RUNNER_TEMP/trx/$MODULE")
+                dotnet test "$tests" -c Release \
+                  -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver "${flags[@]}"
               else
                 echo "no test project at $tests — nothing to run"
               fi
@@ -4214,6 +4235,27 @@ jobs:
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
+          # 🚨 THE RUNNER IS THE CALLER'S CHOICE, and `dotnet test` reads it from the first
+          # `global.json` found walking UP from the CURRENT DIRECTORY. Measured on the .NET
+          # 10.0.400 SDK, 2026-09-15: a `global.json` in a SIBLING directory does NOT apply
+          # (`dotnet test --help` still announces ".NET Test Command for VSTest"); one in the cwd
+          # or an ancestor does. This step runs with cwd = the CALLER's checkout and keeps the
+          # platform in a sibling one ($GITHUB_WORKSPACE/meshweaver), so the platform's own
+          # `global.json` — the one core added with xunit.v3 4.x — never reaches this command, and
+          # the caller's is the only one that can. Hard-coding either set of flags breaks the lane
+          # the day a repo moves: under Microsoft.Testing.Platform BOTH `--logger` and
+          # `-warnaserror` were measured to end the run as `Zero tests ran`, exit 5 — no trx,
+          # nothing executed — which this lane would record as "the module's own suite failed".
+          # `-p:` properties reach the build under both runners (falsified with
+          # `-p:LangVersion=7.0` → `error CS8630`), and xunit's trx reporter writes the same
+          # TeamTest/2010 schema the ledger parses, so only the reporter flags differ.
+          test_flags() {
+            if [ -f global.json ] && python3 -c "import json,sys; sys.exit(0 if json.load(open('global.json')).get('test',{}).get('runner') == 'Microsoft.Testing.Platform' else 1)"; then
+              printf '%s\n' --report-xunit-trx --report-xunit-trx-filename ledger.trx --results-directory "$1"
+            else
+              printf '%s\n' -warnaserror --logger "trx;LogFileName=ledger.trx" --results-directory "$1"
+            fi
+          }
           evidence=false
           mapfile -t modules < <(bk list --ok)
           for MODULE in "${modules[@]}"; do
@@ -4230,9 +4272,9 @@ jobs:
             fi
             set +e
             ( set -euo pipefail
-              dotnet test "$tests" -c Release -warnaserror \
-                -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver \
-                --logger "trx;LogFileName=ledger.trx" --results-directory "$RUNNER_TEMP/trx/$MODULE"
+              mapfile -t flags < <(test_flags "$RUNNER_TEMP/trx/$MODULE")
+              dotnet test "$tests" -c Release \
+                -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver "${flags[@]}"
             )
             rc=$?
             set -e

@@ -26,7 +26,7 @@ public class McpGitHubSyncE2ETest(PortalFixture fixture)
     {
         Assert.SkipUnless(fixture.Available, fixture.SkipReason);
 
-        await using var context = await fixture.NewAuthenticatedContextAsync();
+        await using var context = await fixture.NewAuthenticatedContextAsync(cancellationToken: TestContext.Current.CancellationToken);
         var token = await fixture.MintTokenAsync(context);
 
         var space = "mcpghe2e";
@@ -80,10 +80,11 @@ public class McpGitHubSyncE2ETest(PortalFixture fixture)
         // ── The Activity node materializes and reaches a terminal Status through the real portal ──
         // (Failed, because no repository is configured — the CORRECT outcome; the point is that the
         //  headless MCP trigger created + drove the activity under the token identity.)
-        var readable = await fixture.WaitUntilReadableAsync(context, token, activityPath!, TimeSpan.FromSeconds(60));
+        var readable = await fixture.WaitUntilReadableAsync(context, token, activityPath!, TimeSpan.FromSeconds(60), cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(readable, $"Activity node {activityPath} never became readable.");
 
-        var terminal = await WaitForTerminalStatusAsync(context, token, activityPath!, TimeSpan.FromSeconds(90));
+        var terminal = await WaitForTerminalStatusAsync(context, token, activityPath!,
+            TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
         Assert.True(terminal is "Succeeded" or "Failed" or "Cancelled",
             $"Activity {activityPath} did not reach a terminal Status (was '{terminal}').");
     }
@@ -99,7 +100,8 @@ public class McpGitHubSyncE2ETest(PortalFixture fixture)
 
     /// <summary>Polls the activity node via the mesh REST get until its ActivityLog Status is terminal.</summary>
     private static async Task<string?> WaitForTerminalStatusAsync(
-        Microsoft.Playwright.IBrowserContext context, string token, string path, TimeSpan timeout)
+        Microsoft.Playwright.IBrowserContext context, string token, string path, TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
@@ -117,7 +119,7 @@ public class McpGitHubSyncE2ETest(PortalFixture fixture)
                 if (status is "Succeeded" or "Failed" or "Cancelled")
                     return status;
             }
-            await Task.Delay(1000);
+            await Task.Delay(1000, cancellationToken);
         }
         return null;
     }

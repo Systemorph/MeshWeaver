@@ -114,7 +114,7 @@ public class TokenValidationIsIssuedOffTheRouterTest : MonolithMeshTestBase
                 },
             })
             .Should().Emit("the token must exist, or the validation never reaches a receiving hub "
-                + "and the assertion below would measure nothing");
+                + "and the assertion below would measure nothing", cancellationToken: TestContext.Current.CancellationToken);
 
         // The routing index the middleware's target address names — `ApiToken/{hashPrefix}`. In
         // production ApiTokenService writes it beside the token; nothing writes it automatically, so
@@ -131,14 +131,14 @@ public class TokenValidationIsIssuedOffTheRouterTest : MonolithMeshTestBase
                     TokenPath = $"User/{TokenUserId}/_Api/{hashPrefix}",
                 },
             })
-            .Should().Emit("the validation routes to the INDEX at ApiToken/{hashPrefix} first");
+            .Should().Emit("the validation routes to the INDEX at ApiToken/{hashPrefix} first", cancellationToken: TestContext.Current.CancellationToken);
 
         // 🚨 On `Mesh` DELIBERATELY: the ROUTER as the caller IS the subject, and it is the shape
         // the middleware's own fallback produces.
         var response = await UserContextMiddleware.ValidateTokenViaHub(rawToken, Mesh)
             .Should().Within(TestTimeouts.Convergence)
             .Emit("the validation must actually complete — an exchange that never happened emits no "
-                + "traffic at all");
+                + "traffic at all", cancellationToken: TestContext.Current.CancellationToken);
 
         response.Should().NotBeNull();
         response!.Success.Should().BeTrue(
@@ -176,7 +176,7 @@ public class TokenValidationIsIssuedOffTheRouterTest : MonolithMeshTestBase
 
         await _probeArrived.Should().Within(TestTimeouts.Convergence)
             .Emit("the probe must actually reach the client hub, or nothing was delivered and this "
-                + "control proves nothing");
+                + "control proves nothing", cancellationToken: TestContext.Current.CancellationToken);
 
         DumpReports();
         // Asserted on ROLE and ENDS, never on the message type: the client hub is reached over a

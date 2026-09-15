@@ -63,7 +63,7 @@ public class PublishedModuleVersionShelfTest(ITestOutputHelper output) : Monolit
         }
     }
 
-    private Task<string> RegisterInstance() =>
+    private Task<string> RegisterInstance(CancellationToken cancellationToken) =>
         new MeshWeaverInstanceService(
                 Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>(),
                 Mesh,
@@ -78,9 +78,9 @@ public class PublishedModuleVersionShelfTest(ITestOutputHelper output) : Monolit
             .Select(result => result.RawKey)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(cancellationToken);
 
-    private async Task<WebApplication> StartBundleHost()
+    private async Task<WebApplication> StartBundleHost(CancellationToken cancellationToken)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -89,7 +89,7 @@ public class PublishedModuleVersionShelfTest(ITestOutputHelper output) : Monolit
             Mesh.ServiceProvider.GetRequiredService<InstanceRegistryAuthenticator>());
         var app = builder.Build();
         app.MapPluginBundles();
-        await app.StartAsync();
+        await app.StartAsync(cancellationToken);
         return app;
     }
 
@@ -108,7 +108,7 @@ public class PublishedModuleVersionShelfTest(ITestOutputHelper output) : Monolit
             .Timeout(TestTimeouts.Convergence);
     }
 
-    private Task<InstallResult> InstallOlderRecord() =>
+    private Task<InstallResult> InstallOlderRecord(CancellationToken cancellationToken) =>
         PackageInstaller.Install(
                 Mesh,
                 new PackageManifest
@@ -127,7 +127,7 @@ public class PublishedModuleVersionShelfTest(ITestOutputHelper output) : Monolit
                 "HEAD")
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(cancellationToken);
 
     private static async Task<HttpResponseMessage> Get(
         WebApplication app, string route, string key)
@@ -142,13 +142,13 @@ public class PublishedModuleVersionShelfTest(ITestOutputHelper output) : Monolit
     {
         await Shelve(NewerVersion, "newer");
         await Shelve(OlderVersion, "older");
-        await InstallOlderRecord();
+        await InstallOlderRecord(TestContext.Current.CancellationToken);
         var activation = Assert.Single(ModuleActivationSidecar.Read(landingRoot).Entries);
         Assert.Equal(NewerVersion, activation.Version);
         Assert.Equal(OlderVersion, activation.PreviousVersion);
 
-        var key = await RegisterInstance();
-        await using var app = await StartBundleHost();
+        var key = await RegisterInstance(TestContext.Current.CancellationToken);
+        await using var app = await StartBundleHost(TestContext.Current.CancellationToken);
 
         using var indexResponse = await Get(
             app, PluginBundleEndpoints.RoutePrefix + "/index.json", key);

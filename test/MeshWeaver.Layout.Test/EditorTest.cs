@@ -240,7 +240,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                             .Deserialize<IReadOnlyCollection<Option>>(stream.Hub.JsonSerializerOptions);
                     })
                     .Where(x => x is not null)
-                    .Should().Within(10.Seconds()).Emit();
+                    .Should().Within(10.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
             }
         }
 

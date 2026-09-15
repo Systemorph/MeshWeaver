@@ -625,7 +625,7 @@ public class ModuleSetConvergenceTest : IDisposable
                 [(name + ".dll", RealAssemblyBytes)],
                 version: $"1.0.{build}",
                 staticAssets: [("wwwroot/build.txt", Encoding.UTF8.GetBytes($"build {build}"))])
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     /// <summary>A real, loadable managed assembly's bytes — see <see cref="Land"/>.</summary>
     private static byte[] RealAssemblyBytes =>
@@ -633,7 +633,7 @@ public class ModuleSetConvergenceTest : IDisposable
 
     /// <summary>Closes a landing wave — the coordination step that moves the mesh's set.</summary>
     private async Task<ModuleSet?> ProposeWave() =>
-        await landing.ProposeModuleSet().Timeout(TestTimeouts.Convergence).Await();
+        await landing.ProposeModuleSet().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     /// <summary>A COMPLETE wave: land every module, then propose once.</summary>
     private async Task LandWave(params string[] names)

@@ -182,7 +182,7 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
         });
         try
         {
-            var (report, log) = await RunGate(repo);
+            var (report, log) = await RunGate(repo, TestContext.Current.CancellationToken);
 
             report.FatalError.Should().BeNull();
             var shop = report.Packages.Single(p => p.Id == "Shop");
@@ -218,7 +218,7 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
         });
         try
         {
-            var (report, log) = await RunGate(repo);
+            var (report, log) = await RunGate(repo, TestContext.Current.CancellationToken);
 
             report.FatalError.Should().BeNull();
             report.Packages.Count.Should().Be(1);
@@ -259,7 +259,7 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
         });
         try
         {
-            var (report, log) = await RunGate(repo);
+            var (report, log) = await RunGate(repo, TestContext.Current.CancellationToken);
 
             report.ExitCode.Should().NotBe(0, "a compile error must fail the gate");
 
@@ -293,7 +293,7 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
         });
         try
         {
-            var (report, log) = await RunGate(repo);
+            var (report, log) = await RunGate(repo, TestContext.Current.CancellationToken);
 
             var priced = report.Packages.Single(p => p.Id == "Priced");
             // The regression this pins: the gate installs as an EXPLICIT global admin. With no
@@ -315,7 +315,7 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
         }
     }
 
-    private async Task<(GateReport Report, string Log)> RunGate(string repo)
+    private async Task<(GateReport Report, string Log)> RunGate(string repo, CancellationToken cancellationToken)
     {
         var log = new StringWriter();
         var options = new GateOptions
@@ -329,7 +329,7 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
         {
             var report = await PluginGateRunner.Run(options)
                 .FirstAsync()
-                .Await(TestContext.Current.CancellationToken);
+                .Await(cancellationToken);
             report.WriteSummary(log);
             return (report, log.ToString());
         }

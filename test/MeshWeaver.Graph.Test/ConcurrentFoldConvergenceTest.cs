@@ -80,7 +80,7 @@ public class ConcurrentFoldConvergenceTest(ITestOutputHelper output) : MonolithM
                 ActivityType = ActivityType.Read,
                 AccessCount = 0,
             },
-        }).Take(1).Should().Within(60.Seconds()).Emit("the node the folds target must exist first");
+        }).Take(1).Should().Within(60.Seconds()).Emit("the node the folds target must exist first", cancellationToken: TestContext.Current.CancellationToken);
 
         var stream = workspace.GetMeshNodeStream(path);
 
@@ -120,7 +120,7 @@ public class ConcurrentFoldConvergenceTest(ITestOutputHelper output) : MonolithM
                 + "is the #3001 hang: the cross-hub write settles its caller only from inside its "
                 + "base read's onNext/onError, so a base read that completes with NO value settles "
                 + "nothing at all — no patch is posted, no deadline is armed, and nothing is "
-                + "logged. It reads as 'N writes started, N-1 finished'.");
+                + "logged. It reads as 'N writes started, N-1 finished'.", cancellationToken: TestContext.Current.CancellationToken);
 
         var failures = settled.Where(n => n.Kind == NotificationKind.OnError).ToArray();
         failures.Should().BeEmpty(
@@ -128,7 +128,7 @@ public class ConcurrentFoldConvergenceTest(ITestOutputHelper output) : MonolithM
             + string.Join(" | ", failures.Select(f => f.Exception?.Message)));
 
         var final = await ReadNode(path).Should().Match(n => n is not null,
-            "the folded node must still be readable after every writer has settled");
+            "the folded node must still be readable after every writer has settled", cancellationToken: TestContext.Current.CancellationToken);
 
         var record = final!.ContentAs<UserActivityRecord>(Mesh.JsonSerializerOptions);
         record.Should().NotBeNull("the node must still carry a typed UserActivityRecord");

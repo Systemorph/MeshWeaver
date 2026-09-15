@@ -70,7 +70,9 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
     [Fact(Timeout = 120000)]
     public async Task RootMeshHubRead_ReceivesItsReply_FromBothSilos()
     {
-        var ct = new CancellationTokenSource(TimeSpan.FromSeconds(100)).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(100));
+        var ct = deadline.Token;
         var cluster = _fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "the repro needs two silos");
 
@@ -127,7 +129,8 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
     [Fact(Timeout = 180000)]
     public async Task RootMeshHubRequest_ReceivesItsReply_FromBothSilos()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(100));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(100));
         var ct = deadline.Token;
         var cluster = _fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "one of the two legs has to CROSS silos");
@@ -188,7 +191,8 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
     [Fact(Timeout = 120000)]
     public async Task RootMeshHub_IsClaimedForItsProcess_SoItsRepliesTakeTheDirectedTransport()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(60));
         var ct = deadline.Token;
         var cluster = _fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2,
@@ -243,7 +247,8 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
     [Fact(Timeout = 120000)]
     public async Task AReleasedPodHubAddress_AnswersTerminally_SoTheOwnerCanEvict()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(90));
         var ct = deadline.Token;
         var cluster = _fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2,
@@ -360,7 +365,9 @@ public class OrleansCrossSiloReplyRolloverTest : IClassFixture<TwoSiloCacheUpdat
     [Fact(Timeout = 180000)]
     public async Task RootMeshHubRead_SurvivesSecondarySiloDeparture()
     {
-        var ct = new CancellationTokenSource(TimeSpan.FromSeconds(160)).Token;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(160));
+        var ct = deadline.Token;
         var cluster = _fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "the rollover repro needs two silos");
 

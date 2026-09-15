@@ -26,7 +26,7 @@ public sealed class OpenGraphPreviewServiceTest : IAsyncLifetime
         new(() => pools.Get(IoPoolNames.Http), () => http, allowLoopback);
 
     private static Task<OpenGraphPreview> Await(IObservable<OpenGraphPreview> preview) =>
-        preview.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
+        preview.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await(TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task Get_SameUrlTwice_FetchesOnceAndReplays()

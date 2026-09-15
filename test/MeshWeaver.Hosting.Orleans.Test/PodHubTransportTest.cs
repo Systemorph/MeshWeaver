@@ -79,7 +79,8 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     {
         // Disposed: this overload arms an internal timer, and an undisposed source keeps it
         // alive past the test (Copilot review, #2268).
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(150));
         var ct = deadline.Token;
         var cluster = fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "the delivery has to CROSS silos, or "
@@ -161,7 +162,8 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     {
         // Disposed: this overload arms an internal timer, and an undisposed source keeps it
         // alive past the test (Copilot review, #2268).
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(150));
         var ct = deadline.Token;
         var cluster = fixture.Cluster;
         var address = new Address("client", $"moving-{Guid.NewGuid():N}");
@@ -253,7 +255,8 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     {
         // Disposed: this overload arms an internal timer, and an undisposed source keeps it
         // alive past the test (Copilot review, #2268).
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(150));
         var ct = deadline.Token;
         var cluster = fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "the NACK has to CROSS silos — a "
@@ -405,6 +408,13 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     {
         // A bounded, condition-shaped "has it happened yet" — never an unbounded await, which would
         // hang the way the bug does.
+        //
+        // 🚨 THE DELAY IS UNTOKENED ON PURPOSE (#4378), and this one would be actively dangerous
+        // tokened. `Settled` is read as a NEGATIVE assertion at the call site — `(await
+        // Settled(received.Task)).Should().BeFalse(...)`. A cancelled delay wins the WhenAny race,
+        // so `Settled` would return false and the negative assertion would PASS for a test that
+        // merely ran out of time: a cancelled wait re-described as a verdict, which is the one
+        // thing Rule 2a's own wording forbids. The 2 s bound is the whole measurement here.
         var completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(2)));
         return ReferenceEquals(completed, task);
     }

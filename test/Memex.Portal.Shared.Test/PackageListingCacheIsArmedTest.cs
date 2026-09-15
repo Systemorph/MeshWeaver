@@ -98,7 +98,8 @@ public class PackageListingCacheIsArmedTest(ITestOutputHelper output) : Monolith
         var source = PackageSources.FromRepo(Mesh, Repo, sourceSubdir: null, logger: null, nodeRepo: true);
         Assert.NotNull(source);
         return source.ListPackages(Ref).Should().Within(TestTimeouts.Quick)
-            .Emit("the real factory's source must produce a listing");
+            .Emit("the real factory's source must produce a listing",
+                cancellationToken: TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -137,7 +138,8 @@ public class PackageListingCacheIsArmedTest(ITestOutputHelper output) : Monolith
 
     private static async Task<PackageManifest> Listed(IPackageSource source) =>
         (await source.ListPackages("HEAD").Should().Within(TestTimeouts.Quick)
-            .Emit("a local directory source must list its packages")).Single();
+            .Emit("a local directory source must list its packages",
+                cancellationToken: TestContext.Current.CancellationToken)).Single();
 
     /// <summary>Counts the repository reads the listing path actually performs — the number #4222 is about.</summary>
     private sealed class CountingRepoClient : IGitHubRepoClient

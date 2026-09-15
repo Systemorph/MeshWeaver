@@ -19,9 +19,11 @@ public class OrleansMeshTests(ITestOutputHelper output) : OrleansMeshTestBase(ou
     [Fact(Timeout = 30000)]
     public async Task PingPong()
     {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(20.Seconds());
         var client = GetClient();
         var response = await client
-            .Observe(new PingRequest(), o => o.WithTarget(OrleansTestMeshNodeAttribute.Address)).FirstAsync().Await(new CancellationTokenSource(20.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(OrleansTestMeshNodeAttribute.Address)).FirstAsync().Await(deadline.Token);
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
     }

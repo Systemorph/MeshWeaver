@@ -245,7 +245,7 @@ public class SubscribeDuringRecycleTest(ITestOutputHelper output) : HubTestBase(
     private static async Task WaitForDisposalWindow(IMessageHub hub)
     {
         for (var i = 0; i < 200 && hub.RunLevel < MessageHubRunLevel.Quiescing; i++)
-            await Task.Delay(10);
+            await Task.Delay(10, TestContext.Current.CancellationToken);
         (hub.RunLevel >= MessageHubRunLevel.Quiescing).Should().BeTrue(
             "the DisposeRequest must have moved the hub into its teardown phases — without that "
             + $"this test never exercises the window it exists to pin (RunLevel={hub.RunLevel})");

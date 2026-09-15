@@ -77,7 +77,7 @@ public class DataContextInitTimeoutTest(ITestOutputHelper output) : HubTestBase(
         // gate left shut surfaces as this test's own TimeoutException and fails it).
         var act = () => client
             .Observe(new ProbeRequest(), o => o.WithTarget(host.Address))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await(TestContext.Current.CancellationToken);
 
         var ex = (await act.Should().ThrowAsync<Exception>(
             "a hub whose data-source init hung must answer requests with an error, not serve "
@@ -174,7 +174,7 @@ public class DataContextInitFaultedTest(ITestOutputHelper output) : HubTestBase(
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var act = () => client
             .Observe(new ProbeRequest(), o => o.WithTarget(host.Address))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
 
         var ex = (await act.Should().ThrowAsync<Exception>(
             "a hub whose data-source init threw must answer requests with an error")).Which;
@@ -342,7 +342,7 @@ public class DataContextFaultedInitBeforeStreamHubBoundTest(ITestOutputHelper ou
         // is what carries "…Fast".
         var act = () => client
             .Observe(new ProbeRequest(), o => o.WithTarget(host.Address))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(45)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(45)).Await(TestContext.Current.CancellationToken);
 
         var ex = (await act.Should().ThrowAsync<Exception>(
             "a hub whose data-source init threw must answer requests with an error")).Which;

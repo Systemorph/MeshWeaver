@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Compiler;
 using MeshWeaver.Graph;
@@ -106,12 +107,12 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
     [Fact(Timeout = 60_000)]
     public async Task ARegressedBake_StampsNothing_TheRecordsStillCarryImageA()
     {
-        var seeded = await SeedRecordsStampedByImageA();
+        var seeded = await SeedRecordsStampedByImageA(TestContext.Current.CancellationToken);
 
         // Image B's sweep: two clean compiles, then the regression that refuses the image.
         bake.MarkRunning("enumerating dynamic NodeTypes");
-        await StampAsImageB(seeded["Offer"]);
-        await StampAsImageB(seeded["Opportunity"]);
+        await StampAsImageB(seeded["Offer"], TestContext.Current.CancellationToken);
+        await StampAsImageB(seeded["Opportunity"], TestContext.Current.CancellationToken);
         bake.MarkOutcome(Regression("Feedback"));
         Publication.Reconsider();
         bake.MarkComplete("baked in 00:02:11 — compiled=2 alreadyBaked=0");
@@ -123,7 +124,7 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
             + "equivalence is the whole of #3478's directive");
 
         foreach (var type in new[] { "Offer", "Opportunity" })
-            (await ReadStamp(type)).Should().Be(
+            (await ReadStamp(type, TestContext.Current.CancellationToken)).Should().Be(
                 ImageAStamp(type),
                 $"a refused process must leave {type}'s record exactly as the SERVING replicas "
                 + "stamped it — a record naming image B's assembly is what made the type "
@@ -144,18 +145,18 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
     [Fact(Timeout = 60_000)]
     public async Task ACleanBake_StampsEverythingItHeld()
     {
-        var seeded = await SeedRecordsStampedByImageA();
+        var seeded = await SeedRecordsStampedByImageA(TestContext.Current.CancellationToken);
 
         bake.MarkRunning("enumerating dynamic NodeTypes");
         foreach (var type in Types)
-            await StampAsImageB(seeded[type]);
+            await StampAsImageB(seeded[type], TestContext.Current.CancellationToken);
 
         // Mid-sweep the process is provisional: it has compiled, and published NOTHING.
         Publication.HeldCount.Should().Be(Types.Count,
             "every stamp waits for the verdict — a stamp written before the sweep ends is the "
             + "defect, whichever way the sweep then goes");
         foreach (var type in Types)
-            (await ReadStamp(type)).Should().Be(
+            (await ReadStamp(type, TestContext.Current.CancellationToken)).Should().Be(
                 ImageAStamp(type), "nothing is published while the verdict is still forming");
 
         bake.MarkComplete("baked in 00:02:40 — compiled=3 alreadyBaked=0");
@@ -166,7 +167,7 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
         Publication.WithheldCount.Should().Be(0, "a clean sweep withholds nothing");
 
         foreach (var type in Types)
-            (await ReadStamp(type)).Should().Be(
+            (await ReadStamp(type, TestContext.Current.CancellationToken)).Should().Be(
                 ImageBStamp(type),
                 $"{type}'s record must now name image B's build — holding a stamp forever would "
                 + "trade an outage for a platform that never records what it compiled");
@@ -187,11 +188,11 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
     public async Task AnUnarmedGate_StillStamps_ReproducingTheTwoImageWindow()
     {
         bake = new NodeTypeBakeGateState { GatesReadiness = false };
-        var seeded = await SeedRecordsStampedByImageA();
+        var seeded = await SeedRecordsStampedByImageA(TestContext.Current.CancellationToken);
 
         bake.MarkRunning("enumerating dynamic NodeTypes");
-        await StampAsImageB(seeded["Offer"]);
-        await StampAsImageB(seeded["Opportunity"]);
+        await StampAsImageB(seeded["Offer"], TestContext.Current.CancellationToken);
+        await StampAsImageB(seeded["Opportunity"], TestContext.Current.CancellationToken);
         bake.MarkOutcome(Regression("Feedback"));
         Publication.Reconsider();
         bake.MarkComplete("baked in 00:02:11 — compiled=2 alreadyBaked=0");
@@ -203,7 +204,7 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
             + "'armed' stay separate");
 
         foreach (var type in new[] { "Offer", "Opportunity" })
-            (await ReadStamp(type)).Should().Be(
+            (await ReadStamp(type, TestContext.Current.CancellationToken)).Should().Be(
                 ImageBStamp(type),
                 "THIS is the two-image window: one mesh, two images, and the record now points at "
                 + "an assembly the serving replicas cannot load");
@@ -221,15 +222,15 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
     [Fact(Timeout = 60_000)]
     public async Task ARegressionFoundAfterAdmission_StopsFurtherStamping()
     {
-        var seeded = await SeedRecordsStampedByImageA();
+        var seeded = await SeedRecordsStampedByImageA(TestContext.Current.CancellationToken);
 
         bake.MarkRunning("enumerating dynamic NodeTypes");
         bake.MarkComplete("baked in 00:00:04 — compiled=0 alreadyBaked=3");
         Publication.Reconsider();
         bake.Admission.Should().Be(MeshAdmission.Admitted, "the sweep was clean");
 
-        await StampAsImageB(seeded["Offer"]);
-        (await ReadStamp("Offer")).Should().Be(
+        await StampAsImageB(seeded["Offer"], TestContext.Current.CancellationToken);
+        (await ReadStamp("Offer", TestContext.Current.CancellationToken)).Should().Be(
             ImageBStamp("Offer"), "an admitted process publishes normally");
 
         // A lazy compile, hours later, breaks a type that was healthy on this image.
@@ -237,8 +238,8 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
         bake.Admission.Should().Be(MeshAdmission.Refused,
             "the verdict is level-triggered — admission is not a latch");
 
-        await StampAsImageB(seeded["Opportunity"]);
-        (await ReadStamp("Opportunity")).Should().Be(
+        await StampAsImageB(seeded["Opportunity"], TestContext.Current.CancellationToken);
+        (await ReadStamp("Opportunity", TestContext.Current.CancellationToken)).Should().Be(
             ImageAStamp("Opportunity"),
             "once this process is refused it publishes nothing more, whatever it published before");
         Publication.RefusedCount.Should().Be(1, "the refusal is counted, not silent");
@@ -260,11 +261,11 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
     [Fact(Timeout = 60_000)]
     public async Task ALocallyRebuiltTypeRetractsItsRegression_EvenThoughTheRecordCannotMove()
     {
-        var seeded = await SeedRecordsStampedByImageA();
+        var seeded = await SeedRecordsStampedByImageA(TestContext.Current.CancellationToken);
         var condemned = $"{TestPartition}/Feedback";
 
         bake.MarkRunning("enumerating dynamic NodeTypes");
-        await StampAsImageB(seeded["Offer"]);
+        await StampAsImageB(seeded["Offer"], TestContext.Current.CancellationToken);
         bake.MarkOutcome(Regression("Feedback"));
         Publication.Reconsider();
         bake.Admission.Should().Be(MeshAdmission.Refused, "the sweep condemned a healthy type");
@@ -282,7 +283,7 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
             .Where(_ => bake.Regressions.Count == 0)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(20))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         bake.Retracted.Keys.Should().Contain(condemned,
             "the retraction must SAY the regression was withdrawn — a silently-vanished one is "
@@ -322,7 +323,8 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
     /// feed, so no hub is woken and nothing recompiles behind the test). Returns the persisted
     /// nodes, whose versions the compare-and-set stamp then races.
     /// </summary>
-    private async Task<IReadOnlyDictionary<string, MeshNode>> SeedRecordsStampedByImageA()
+    private async Task<IReadOnlyDictionary<string, MeshNode>> SeedRecordsStampedByImageA(
+        CancellationToken cancellationToken)
     {
         var seeded = new Dictionary<string, MeshNode>();
         foreach (var type in Types)
@@ -348,7 +350,7 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
                             2026, 9, 6, 19, 19, 38, TimeSpan.Zero),
                     },
                 },
-                Mesh.JsonSerializerOptions).Await();
+                Mesh.JsonSerializerOptions).Await(cancellationToken);
             seeded[type] = stored!;
         }
         return seeded;
@@ -358,7 +360,7 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
     /// Drives the PRODUCTION stamp for one type as image B — the same storage-level compare-and-set
     /// the batch bake performs after every compile.
     /// </summary>
-    private Task StampAsImageB(MeshNode typeNode) =>
+    private Task StampAsImageB(MeshNode typeNode, CancellationToken cancellationToken) =>
         NodeTypeBatchBake.WriteStamp(
                 Mesh,
                 typeNode,
@@ -381,14 +383,14 @@ public class RefusedProcessDoesNotJoinTheMeshTest(ITestOutputHelper output) : Mo
                 // change" and nothing about why.
                 Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>()
                     .CreateLogger("RefusedProcessDoesNotJoinTheMesh"))
-            .Await();
+            .Await(cancellationToken);
 
     /// <summary>Reads one NodeType's stamp back off the DURABLE row — what a peer replica reads.</summary>
     private async Task<(string? Framework, string? Modules, string? Collection, string? Assembly, long? Version)>
-        ReadStamp(string type)
+        ReadStamp(string type, CancellationToken cancellationToken)
     {
         var node = await Storage.Read($"{TestPartition}/{type}", Mesh.JsonSerializerOptions)
-            .Take(1).Await();
+            .Take(1).Await(cancellationToken);
         var def = node?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions);
         return (def?.CompiledFrameworkVersion, def?.CompiledModulesHash,
             def?.LatestAssemblyCollection, def?.LatestAssemblyPath, def?.LastCompiledVersion);

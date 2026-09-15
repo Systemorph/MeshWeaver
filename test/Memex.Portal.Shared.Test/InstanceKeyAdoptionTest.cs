@@ -50,7 +50,7 @@ public class InstanceKeyAdoptionTest(ITestOutputHelper output) : MonolithMeshTes
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         return access.RunAsSystem(() => Mesh.GetMeshNode(path, TimeSpan.FromSeconds(10)).Take(1))
             .Timeout(TimeSpan.FromSeconds(30))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
     }
 
     [Fact(Timeout = 120_000)]
@@ -59,7 +59,7 @@ public class InstanceKeyAdoptionTest(ITestOutputHelper output) : MonolithMeshTes
         var service = Service();
         var registered = await service
             .Register("owner", "Owner", "owner@test.com", "rotate-me", "Rotate Me")
-            .Timeout(TimeSpan.FromSeconds(60)).Await();
+            .Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
         var instancePath = registered.Node.Path!;
         var oldHash = registered.Instance.KeyHash;
         oldHash.Should().HaveLength(64, "registration persists the SHA-256 hex of the key");
@@ -69,7 +69,7 @@ public class InstanceKeyAdoptionTest(ITestOutputHelper output) : MonolithMeshTes
         var newHash = InstanceKeys.Hash("mwi_" + Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"));
 
         // Through the CONTRACT the Hosting plugin resolves — by instance id, as the operator knows it.
-        await ((IInstanceKeyRegistry)service).AdoptKeyHash("rotate-me", newHash).Timeout(TimeSpan.FromSeconds(60)).Await();
+        await ((IInstanceKeyRegistry)service).AdoptKeyHash("rotate-me", newHash).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
 
         var node = await Node(instancePath);
         var instance = node!.ContentAs<MeshWeaverInstance>(Mesh.JsonSerializerOptions)!;
@@ -92,7 +92,7 @@ public class InstanceKeyAdoptionTest(ITestOutputHelper output) : MonolithMeshTes
     {
         var service = Service();
         // A raw key is exactly what must never be sent here — shape-refused before any read.
-        var act = () => service.AdoptKeyHash("anything", "mwi_notahash").Timeout(TimeSpan.FromSeconds(10)).Await();
+        var act = () => service.AdoptKeyHash("anything", "mwi_notahash").Timeout(TimeSpan.FromSeconds(10)).Await(TestContext.Current.CancellationToken);
         await act.Should().ThrowAsync<ArgumentException>("the registry stores hashes only");
     }
 }

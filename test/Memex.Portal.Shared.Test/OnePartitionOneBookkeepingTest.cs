@@ -155,7 +155,8 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
                 [Candidate(SyncOwned, V2), Candidate(InstallerOwned, V2)],
                 "Served by registry 'test'", Logger)
             .Should().Within(TestTimeouts.CrossSilo)
-            .Emit("the reconcile pass must complete before anything about it is asserted");
+            .Emit("the reconcile pass must complete before anything about it is asserted",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         // ── The control: the partition the installer owns advanced, content and record. ─────────
         second.Fetched.Should().Contain(r => r.PackageId == InstallerOwned,
@@ -207,8 +208,8 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
             [MixSynced] = Files(MixSynced, V1, "ccc", "# Other\n\nGeneration one."),
             [MixOwned] = Files(MixOwned, V1, "ccc", "# Other\n\nGeneration one."),
         });
-        await Install(first, MixSynced, V1);
-        await Install(first, MixOwned, V1);
+        await Install(first, MixSynced, V1, TestContext.Current.CancellationToken);
+        await Install(first, MixOwned, V1, TestContext.Current.CancellationToken);
 
         (await Record(MixSynced))!.InstalledFiles.Should().NotBeNull()
             .And.ContainKey($"{MixSynced}/Guide.md",
@@ -406,11 +407,18 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
         new PackageFile($"{id}/Other.md", otherBody),
     ];
 
-    private async Task Install(IPackageSource source, string id, string moduleVersion)
+    /// <param name="cancellationToken">The running test's token. A timed test passes it EXPLICITLY
+    /// so the reference sits lexically inside the test METHOD — xUnit1069 is satisfied by the
+    /// test's own body, never by a helper's — and it defaults to the same token for every other
+    /// caller (Doc/Architecture/WritingTests, Rule 2a).</param>
+    private async Task Install(IPackageSource source, string id, string moduleVersion,
+        CancellationToken? cancellationToken = null)
     {
+        var token = cancellationToken ?? TestContext.Current.CancellationToken;
         await CatalogLayoutAreas.InstallOrUpdate(Mesh, source, "HEAD", Candidate(id, moduleVersion), Logger)
             .Should().Within(TestTimeouts.CrossSilo)
-            .Emit($"installing {id} at {moduleVersion} is a precondition of what follows");
+            .Emit($"installing {id} at {moduleVersion} is a precondition of what follows",
+                cancellationToken: token);
         (await Record(id))!.ModuleVersion.Should().Be(moduleVersion,
             "an install that did not stamp its record leaves every later measurement meaningless");
     }
@@ -431,7 +439,7 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
                     Branch = "main",
                 },
             })
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         await AssertOwnership(partition, PartitionContentOwner.SyncSource);
     }
 
@@ -442,7 +450,7 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
             .Where(v => v.Owner == expected)
             .FirstAsync()
             .Timeout(TestTimeouts.CrossSilo)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         verdict.Owner.Should().Be(expected);
     }
 
@@ -453,7 +461,8 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
     {
         await Mesh.GetMeshNodeStream(path)
             .Update(node => node with { Name = DriftedName })
-            .Should().Within(TestTimeouts.WriteConvergence).Emit($"drifting {path} is a precondition");
+            .Should().Within(TestTimeouts.WriteConvergence).Emit($"drifting {path} is a precondition",
+                cancellationToken: TestContext.Current.CancellationToken);
         (await NameOf(path)).Should().Be(DriftedName,
             "the drift must have landed, or the arm below measures nothing");
     }
@@ -466,7 +475,7 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
             .DefaultIfEmpty(null)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         node.Should().NotBeNull($"'{path}' must exist for its name to say anything");
         return node!.Name;
     }
@@ -479,7 +488,7 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
             .DefaultIfEmpty(null)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
         return node?.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions);
     }
 
@@ -567,7 +576,7 @@ public class PartitionContentOwnershipSeamTest(ITestOutputHelper output) : Monol
         var verdicts = await PartitionContentOwnership.Observe(Mesh, Partition)
             .ToList()
             .Timeout(TestTimeouts.CrossSilo)
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
         verdicts.Should().HaveCount(1,
             "THE assertion: both callers are SelectMany, so a sequence that completes with no "

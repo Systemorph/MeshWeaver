@@ -255,7 +255,8 @@ public class EvictedUnleasedStreamRetentionTest(ITestOutputHelper output) : HubT
 
         await workspace.GetObservable<BusinessUnit>()
             .Should().Within(10.Seconds())
-            .Match(x => x.Count > 0, "the owner must serve the initial snapshot");
+            .Match(x => x.Count > 0, "the owner must serve the initial snapshot",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         return (workspace, changeFeed, client);
     }
@@ -278,7 +279,7 @@ public class EvictedUnleasedStreamRetentionTest(ITestOutputHelper output) : HubT
         Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
             .Select(_ => Volatile.Read(ref _subscribeCount))
             .Should().Within(10.Seconds())
-            .Match(c => c >= target, because);
+            .Match(c => c >= target, because, cancellationToken: TestContext.Current.CancellationToken);
 
     /// <summary>
     /// Fires one owner-path change event. <c>Kind = Updated</c> deliberately: the workspace's own

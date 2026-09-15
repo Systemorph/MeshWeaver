@@ -74,6 +74,7 @@ public class EventSubscriptionTypeRegistrationTest(ITestOutputHelper output) : M
     [Fact(Timeout = 30000)]
     public void AHubThatOnlyReadsEventSubscriptions_ResolvesTheStoredDiscriminator()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var reader = Mesh.GetHostedHub(
             new Address("client", Guid.NewGuid().ToString("N")[..12]),
             c => c.AddData().WithGraphTypes());
@@ -121,7 +122,7 @@ public class EventSubscriptionTypeRegistrationTest(ITestOutputHelper output) : M
                 NodeType = EventSubscriptionNodeType.NodeType,
                 Name = "NodeChange → GrantSpaceAccess",
                 Content = JsonSerializer.Deserialize<JsonElement>(StoredJson(subscriptionId)),
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         using var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService, runnerLogger);
         await runner.StartAsync(default);
@@ -133,7 +134,7 @@ public class EventSubscriptionTypeRegistrationTest(ITestOutputHelper output) : M
                 NodeType = "User",
                 Name = "Invitee",
                 Content = new User { Email = InviteeEmail, FullName = "Invitee" },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         // Wait for the subscription to reach a TERMINAL state FIRST — race-free, because that node
         // already exists so the stream waits for its update, whereas opening a stream on a path that

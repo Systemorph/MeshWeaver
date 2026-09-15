@@ -52,8 +52,12 @@ internal static class ReactiveWait
     /// </summary>
     /// <typeparam name="T">The source's element type.</typeparam>
     /// <param name="source">The (terminating) source to wait on.</param>
+    /// <param name="cancellationToken">Cancels the WAIT, not the source: the task settles as
+    /// cancelled and the subscription is dropped. A test passes <c>TestContext.Current.CancellationToken</c>
+    /// here so that a <c>Timeout</c> on the test actually ends the wait instead of leaving it parked
+    /// behind the runner's verdict (xUnit1069).</param>
     /// <returns>The first value, or <c>default</c> if the source completed without one.</returns>
-    public static Task<T?> First<T>(IObservable<T> source)
+    public static Task<T?> First<T>(IObservable<T> source, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -115,6 +119,26 @@ internal static class ReactiveWait
                 subscription.Dispose();
                 completion.TrySetResult(default);
             });
+
+        if (cancellationToken.CanBeCanceled)
+        {
+            // The registration is released when the task settles, whichever side settled it, so a
+            // long-lived token (the test's) does not accumulate one callback per assertion.
+            var registration = cancellationToken.Register(
+                static state =>
+                {
+                    var (tcs, sub, token) = ((TaskCompletionSource<T?>, IDisposable, CancellationToken))state!;
+                    sub.Dispose();
+                    tcs.TrySetCanceled(token);
+                },
+                (completion, (IDisposable)subscription, cancellationToken));
+            _ = completion.Task.ContinueWith(
+                static (_, state) => ((CancellationTokenRegistration)state!).Dispose(),
+                registration,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
 
         return completion.Task;
     }

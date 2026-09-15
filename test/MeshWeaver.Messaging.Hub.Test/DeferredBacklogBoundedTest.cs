@@ -64,7 +64,7 @@ public class DeferredBacklogBoundedTest(ITestOutputHelper output) : HubTestBase(
         var settled = 0;
         for (var i = 0; i < 150; i++)
         {
-            await Task.Delay(100);
+            await Task.Delay(100, TestContext.Current.CancellationToken);
             var d = Deferred();
             if (d > 0 && d == settled) break;   // stable + non-zero → the backlog has settled
             settled = d;

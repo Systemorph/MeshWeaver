@@ -204,7 +204,7 @@ public class DeletedAddressNackClassificationTest(ITestOutputHelper output) : Hu
             foreach (Match m in Regex.Matches(host.GetDisposalDiagnostics(), @"deferred=(\d+)"))
                 if (int.Parse(m.Groups[1].Value) > 0)
                     return;
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
         }
 
         Assert.Fail(

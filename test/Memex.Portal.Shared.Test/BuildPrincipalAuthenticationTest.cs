@@ -95,14 +95,15 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
     private InstanceRegistryAuthenticator Authenticator() => new(
         Mesh, Mesh.ServiceProvider.GetRequiredService<ILogger<InstanceRegistryAuthenticator>>());
 
-    private Task<InstanceAuthResult> Authenticate(string token) =>
+    private Task<InstanceAuthResult> Authenticate(string token, CancellationToken cancellationToken = default) =>
         Authenticator().AuthenticateOutcome($"Bearer {token}")
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
     /// <summary>Writes a build principal into the Admin partition — the create a global admin
     /// makes. As System, because the Admin partition is exactly what an ordinary identity cannot
     /// write.</summary>
-    private Task<MeshNode> Grant(BuildPrincipal principal, string? repository = null)
+    private Task<MeshNode> Grant(BuildPrincipal principal, string? repository = null,
+        CancellationToken cancellationToken = default)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -115,7 +116,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
             Content = principal,
         };
         return access.RunAsSystem(() => meshService.CreateOrUpdateNode(node))
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
     }
 
     private static BuildPrincipal Principal(string repository = Repository) => new()
@@ -141,7 +142,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
 
         // 1. No node for the repository → a DEFINITIVE negative. A verified signature is not an
         //    authorization: this is the "no node = 401" the design names.
-        var stranger = await Authenticate(tokens.Mint(Audience, repository: repository));
+        var stranger = await Authenticate(tokens.Mint(Audience, repository: repository), TestContext.Current.CancellationToken);
         Assert.False(stranger.IsUnavailable);
         Assert.Null(stranger.Instance);
         Assert.Null(stranger.Build);
@@ -163,7 +164,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         // so its path and its declared repository disagree must authenticate nobody.
         jwks = () => tokens.Jwks();
         var repository = "Systemorph/MeshWeaver.PathDrift";
-        await Grant(Principal("Systemorph/SomethingElse"), repository);
+        await Grant(Principal("Systemorph/SomethingElse"), repository, TestContext.Current.CancellationToken);
 
         var result = await Authenticate(tokens.Mint(Audience, repository: repository));
 
@@ -176,7 +177,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
     {
         jwks = () => tokens.Jwks();
         var repository = "Systemorph/MeshWeaver.Revoked";
-        await Grant(Principal(repository));
+        await Grant(Principal(repository), cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull((await Authenticate(tokens.Mint(Audience, repository: repository))).Build);
 
         // The control-plane verb — no watcher stands between writing it and the refusal.
@@ -191,7 +192,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
     public async Task AWrongAudienceOrAnExpiredToken_IsRefused_NotUnavailable()
     {
         jwks = () => tokens.Jwks();
-        await Grant(Principal());
+        await Grant(Principal(), cancellationToken: TestContext.Current.CancellationToken);
 
         foreach (var token in new[]
                  {
@@ -213,7 +214,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         // unknown" — the latter sends an operator hunting a credential that was never the problem
         // (the #2695 shape, on the leg that did not exist yet).
         jwks = () => throw new HttpRequestException("JWKS unreachable");
-        await Grant(Principal());
+        await Grant(Principal(), cancellationToken: TestContext.Current.CancellationToken);
 
         var result = await Authenticate(tokens.Mint(Audience));
 
@@ -228,7 +229,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         // An empty key set would refuse everything, which is correct — but it must not be REMEMBERED
         // for an hour as if it were a valid answer, so the read throws and stays retryable.
         jwks = () => """{"keys":[]}""";
-        await Grant(Principal());
+        await Grant(Principal(), cancellationToken: TestContext.Current.CancellationToken);
 
         var result = await Authenticate(tokens.Mint(Audience));
 
@@ -260,9 +261,9 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         // A failure propagates AND is not cached — the next caller starts a genuinely new attempt
         // rather than replaying a latched OnError (the ReplaySubject trap, #1369).
         await Assert.ThrowsAnyAsync<Exception>(() =>
-            service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await());
+            service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken));
         await Assert.ThrowsAnyAsync<Exception>(() =>
-            service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await());
+            service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken));
         Assert.Equal(2, reads);
 
         // 🚨 A ROTATION ARRIVING WHILE THE CACHE IS EMPTY. The fault above evicted the promise, so
@@ -273,35 +274,35 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         var afterFault = await service
             .Refresh(new GitHubSigningKeys(
                 new Dictionary<string, GitHubSigningKey>(), now - TimeSpan.FromHours(1)), now)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Single(afterFault.ByKeyId);
         Assert.Equal(3, reads);
 
-        var first = await service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        var first = await service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Single(first.ByKeyId);
         // …and it was SHARED with the refresh above rather than starting a round trip of its own.
         Assert.Equal(3, reads);
 
         // A success is shared: a second caller inside the window costs no round trip.
-        await service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        await service.Keys(now).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Equal(3, reads);
 
         // 🚨 The refresh floor. An unknown kid may force ONE early re-read; inside the floor it
         // returns the set unchanged, so a caller inventing key ids cannot amplify into a fetch per
         // request.
         var suppressed = await service.Refresh(first, now).FirstAsync()
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Equal(3, reads);
         Assert.Equal(first.FetchedAt, suppressed.FetchedAt);
 
         // Past the floor it really does re-read — a rotation is recoverable without a restart.
         await service.Refresh(first, now + GitHubOidcKeyService.MinimumRefreshInterval + TimeSpan.FromSeconds(1))
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Equal(4, reads);
 
         // And a stale set is re-read on the ordinary path too.
         await service.Keys(now + GitHubOidcKeyService.CacheDuration + TimeSpan.FromMinutes(1))
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Equal(5, reads);
     }
 
@@ -320,7 +321,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
             File.WriteAllText(
                 Path.Combine(dir, ShippedPrebuiltBundles.CompletionSentinelFileName), "Store.zip\n");
 
-            await Grant(Principal());
+            await Grant(Principal(), cancellationToken: TestContext.Current.CancellationToken);
             await using var app = await StartHost(root);
             var route = $"/api/plugins/bundles/prebuilt/{Identity}/{Source}";
 
@@ -374,7 +375,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
                 State = MeshNodeState.Active,
                 Content = new UpdatePolicyContent { Policy = UpdatePolicyKind.None,
                     LatestAvailableTag = "3.0.0-ci.123" },
-            })).Timeout(TestTimeouts.Convergence).Await();
+            })).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         await using var app = await StartHost(Path.GetTempPath());
         var token = tokens.Mint(Audience, eventName: "workflow_run");
         using var combo = await Get(app, ReleaseGateEndpoints.ComboRoute, token);
@@ -394,7 +395,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
                 .GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
                 .Select(n => UpdatePolicyNodeType.Parse(n, Mesh.JsonSerializerOptions)))
             .Where(c => c.VerificationFor(verdict.CandidateTag)?.VerifiedAt == verdict.VerifiedAt)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Assert.Equal(UpdatePolicyKind.None, policy.Policy);
         Assert.Equal("3.0.0-ci.123", policy.LatestAvailableTag);
         Assert.Equal(ComboVerdictKind.NotVerifiable, policy.VerificationFor(verdict.CandidateTag)!.Verdict);
@@ -420,7 +421,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         var principal = VerificationPrincipal();
         if (changed == "scope") principal = principal with { Scopes = ["fetch:plugins"] };
         if (changed == "ownerId") principal = principal with { RepositoryOwnerId = "wrong-owner" };
-        await Grant(principal);
+        await Grant(principal, cancellationToken: TestContext.Current.CancellationToken);
         var token = tokens.Mint(changed == "audience" ? "https://another.portal.test" : Audience,
             repository: changed == "repository" ? "Systemorph/AnotherRepo" : Repository,
             repositoryId: changed == "repositoryId" ? "wrong-id" : "123456789",
@@ -447,7 +448,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
     public async Task ComboVerification_RefusesAnInvalidOrEmptyGreenVerdict(string body)
     {
         jwks = () => tokens.Jwks();
-        await Grant(VerificationPrincipal());
+        await Grant(VerificationPrincipal(), cancellationToken: TestContext.Current.CancellationToken);
         await using var app = await StartHost(Path.GetTempPath());
         using var response = await PostVerdict(app,
             tokens.Mint(Audience, eventName: "workflow_run"), body);

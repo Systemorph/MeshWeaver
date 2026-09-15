@@ -31,6 +31,7 @@ public class ProviderKeyProtectorRegistrationTest(ITestOutputHelper output)
     [Fact(Timeout = 30000)]
     public void AddGraph_RegistersTheCredentialProtector()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var protector = Mesh.ServiceProvider.GetService<IProviderKeyProtector>();
         var masterKey = Mesh.ServiceProvider.GetService<IMasterKeyProvider>();
 

@@ -65,7 +65,7 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
     /// did. (<c>MonolithMeshTestBase.SeedTopLevel</c> still has the leaky shape — worth a look.)</para>
     /// </summary>
     private Task<MeshNode> SeedPolicy(UpdatePolicyKind policy = UpdatePolicyKind.Continuous,
-        string? latestAvailableTag = NewerTag)
+        string? latestAvailableTag = NewerTag, CancellationToken cancellationToken = default)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var node = new MeshNode(UpdatePolicyNodeType.NodeId, UpdatePolicyNodeType.AdminPartition)
@@ -82,7 +82,7 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
             })
             .FirstAsync()
             .Timeout(ReadBudget)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
     }
 
     /// <summary>
@@ -141,7 +141,7 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task An_admin_can_read_the_policy_node()
     {
-        await SeedPolicy();
+        await SeedPolicy(cancellationToken: TestContext.Current.CancellationToken);
         BecomeAdmin();
 
         (await EffectivePermissions(TestUsers.Admin.ObjectId!)).Should().HaveFlag(Permission.Read);
@@ -162,7 +162,7 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task An_ordinary_user_cannot_read_the_policy_node()
     {
-        await SeedPolicy();
+        await SeedPolicy(cancellationToken: TestContext.Current.CancellationToken);
         BecomeOrdinaryUser();
 
         // Non-vacuity guard: prove the identity in force really holds nothing on this path. Without
@@ -185,7 +185,7 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task An_ordinary_user_sees_the_derived_update_status()
     {
-        await SeedPolicy();
+        await SeedPolicy(cancellationToken: TestContext.Current.CancellationToken);
         BecomeOrdinaryUser();
 
         (await EffectivePermissions("ordinary-viewer")).Should().Be(Permission.None);

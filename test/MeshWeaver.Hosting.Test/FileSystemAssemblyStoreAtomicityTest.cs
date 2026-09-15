@@ -130,7 +130,7 @@ public class FileSystemAssemblyStoreAtomicityTest : IDisposable
             await store.Put(NodeTypePath, v, Payload(v), pdbBytes: null).FirstAsync();
 
         Volatile.Write(ref writesDone, true);
-        await probe;
+        await probe.WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.True(Volatile.Read(ref observations) > 0,
             "the probe never discovered a published assembly at all, so it proved nothing");
@@ -145,7 +145,7 @@ public class FileSystemAssemblyStoreAtomicityTest : IDisposable
         {
             var path = await store.TryGetAssemblyPath(NodeTypePath, v).FirstAsync();
             Assert.NotNull(path);
-            var bytes = await File.ReadAllBytesAsync(path!);
+            var bytes = await File.ReadAllBytesAsync(path!, TestContext.Current.CancellationToken);
             Assert.Equal(PayloadBytes, bytes.Length);
             Assert.Equal((byte)v, bytes[^1]);
         }
@@ -216,7 +216,7 @@ public class FileSystemAssemblyStoreAtomicityTest : IDisposable
     public async Task PublishingLeavesNoTemporaryFileBehind()
     {
         var store = NewStore();
-        await store.Put(NodeTypePath, 1, new byte[1024], new byte[512]).FirstAsync();
+        await store.Put(NodeTypePath, 1, new byte[1024], new byte[512]).FirstAsync().Await(TestContext.Current.CancellationToken);
 
         var files = Directory.GetFiles(Path.Combine(_root, NodeTypePath))
             .Select(Path.GetFileName).Order().ToArray();

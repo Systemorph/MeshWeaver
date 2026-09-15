@@ -41,7 +41,7 @@ public class PortalNextDocExamplesTest(PortalFixture fixture)
             $"{docPath} needs a language worker (python) — the e2e stack has none (set E2E_PYTHON=1 when it does)");
         // ONE shared authenticated context for the whole sweep (owned by the fixture): a fresh
         // context + /dev/signin per page starved the portal under the sweep's kernel-compile load.
-        var context = await fixture.SharedAuthenticatedContextAsync();
+        var context = await fixture.SharedAuthenticatedContextAsync(TestContext.Current.CancellationToken);
         var probe = await context.APIRequest.GetAsync($"{fixture.BaseUrl}/next");
         Assert.SkipUnless((int)probe.Status == 200,
             $"/next not deployed on {fixture.BaseUrl} (HTTP {probe.Status}) — run 'memex-local e2e up'.");

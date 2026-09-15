@@ -48,7 +48,7 @@ public class NodeTypeDeclarationSelfTypingValidatorTest(ITestOutputHelper output
                 Operation = NodeOperation.Create,
                 Node = DeclarationNode("Widget", new NodeTypeDefinition()),
             })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeFalse(
             "content is a NodeTypeDefinition — this node DECLARES 'Widget' — so it must not also "
@@ -82,7 +82,7 @@ public class NodeTypeDeclarationSelfTypingValidatorTest(ITestOutputHelper output
                 // The UWDeepfield shape: a Space root whose content is a NodeTypeDefinition.
                 Node = DeclarationNode("Space", new NodeTypeDefinition()),
             })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeTrue(
             "a declaration naming an UNRELATED type does not enrol itself in its own instance "
@@ -109,7 +109,7 @@ public class NodeTypeDeclarationSelfTypingValidatorTest(ITestOutputHelper output
                     Content = new NodeTypeDefinition(),
                 },
             })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeFalse(
             "instances reference this type as 'Pack/Widget', so the declaration naming that path "
@@ -125,7 +125,7 @@ public class NodeTypeDeclarationSelfTypingValidatorTest(ITestOutputHelper output
                 Operation = NodeOperation.Create,
                 Node = DeclarationNode(MeshNode.NodeTypePath, new NodeTypeDefinition()),
             })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeTrue(
             $"NodeType == '{MeshNode.NodeTypePath}' is exactly how a declaration should say what "
@@ -141,7 +141,7 @@ public class NodeTypeDeclarationSelfTypingValidatorTest(ITestOutputHelper output
                 Operation = NodeOperation.Create,
                 Node = DeclarationNode(null!, new NodeTypeDefinition()),
             })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeTrue("an unset NodeType is also legal for a declaration");
     }
@@ -163,7 +163,7 @@ public class NodeTypeDeclarationSelfTypingValidatorTest(ITestOutputHelper output
                 Operation = NodeOperation.Create,
                 Node = DeclarationNode("Widget", content),
             })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeFalse(
             "the degraded JsonElement shape must be recognised as declaration content too — a "
@@ -192,7 +192,7 @@ public class NodeTypeDeclarationSelfTypingValidatorTest(ITestOutputHelper output
                 Operation = NodeOperation.Create,
                 Node = DeclarationNode("Widget", content),
             })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeFalse(
             "an assembly-qualified $type discriminator must be recognised as declaration content "
@@ -210,7 +210,7 @@ public class NodeTypeDeclarationSelfTypingValidatorTest(ITestOutputHelper output
                 // Content is NOT a NodeTypeDefinition — an ordinary instance of "Widget".
                 Node = DeclarationNode("Widget", new { name = "a widget" }),
             })
-            .Should().Emit();
+            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         result.IsValid.Should().BeTrue(
             $"content is not a NodeTypeDefinition, so this is an ordinary instance write and must "
@@ -225,6 +225,7 @@ public class NodeTypeDeclarationSelfTypingValidatorTest(ITestOutputHelper output
     [Fact(Timeout = 30000)]
     public async Task TheGuard_IsWiredIntoTheLiveCreatePipeline()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var validators = Mesh.ServiceProvider.GetServices<INodeValidator>().ToList();
         validators.OfType<NodeTypeDeclarationSelfTypingValidator>().Should().ContainSingle(
             "AddGraph() must register the guard, or a runtime self-typed declaration write "

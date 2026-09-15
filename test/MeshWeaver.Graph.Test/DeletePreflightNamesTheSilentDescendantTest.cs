@@ -82,11 +82,11 @@ public class DeletePreflightNamesTheSilentDescendantTest(ITestOutputHelper outpu
 
         await NodeFactory.CreateNode(
                 new MeshNode(RootId, TestPartition) { Name = "Pre-flight root", NodeType = "Markdown" })
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         foreach (var id in DescendantIds)
             await NodeFactory.CreateNode(
                     new MeshNode(id, rootPath) { Name = id, NodeType = "Markdown" })
-                .Should().Within(TestTimeouts.Convergence).Emit();
+                .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         validator.Armed = true;
 
@@ -103,7 +103,8 @@ public class DeletePreflightNamesTheSilentDescendantTest(ITestOutputHelper outpu
             });
 
         var reported = await failure.Should().Within(TestTimeouts.WriteConvergence).Emit(
-            "one descendant's hub never answers the pre-flight, so the delete must be refused");
+            "one descendant's hub never answers the pre-flight, so the delete must be refused",
+                cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine(reported.Message);
 
@@ -162,7 +163,7 @@ public class DeletePreflightNamesTheSilentDescendantTest(ITestOutputHelper outpu
         var survivors = await NodeFactory
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{rootPath} scope:children"))
             .Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         survivors.Items.Select(n => n.Path).Should().Contain(
             DescendantIds.Select(id => $"{rootPath}/{id}"),
             "the pre-flight runs before the commit, so a refusal there must leave every descendant "

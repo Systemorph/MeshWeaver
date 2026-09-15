@@ -139,11 +139,11 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
         Access.SetHostIdentity(ctx);
     }
 
-    private Task<Permission> Effective(string path) =>
+    private Task<Permission> Effective(string path, CancellationToken cancellationToken) =>
         Mesh.GetEffectivePermissions(path, TokenUser)
             .FirstAsync()
             .Timeout(Budget)
-            .Await(TestContext.Current.CancellationToken);
+            .Await(cancellationToken);
 
     /// <summary>
     /// 🚨 THE SECURITY PIN. The administrator has said "this partition is not reachable through
@@ -160,7 +160,7 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
     {
         BecomeToken("Admin", "Editor");
 
-        (await Effective($"{ApiCappedPartition}/Page"))
+        (await Effective($"{ApiCappedPartition}/Page", TestContext.Current.CancellationToken))
             .Should().Be(Permission.None,
                 "a policy that caps Api out means 'not reachable through the API' — a role " +
                 "snapshot taken when the token was minted must not outrank it");
@@ -177,7 +177,7 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
     {
         BecomeBrowser();
 
-        (await Effective($"{ApiCappedPartition}/Page"))
+        (await Effective($"{ApiCappedPartition}/Page", TestContext.Current.CancellationToken))
             .HasFlag(Permission.Read).Should().BeTrue(
                 "capping Api withdraws the API surface, not the public page");
     }
@@ -196,7 +196,7 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
     {
         BecomeToken();
 
-        (await Effective($"{PublicPartition}/Page"))
+        (await Effective($"{PublicPartition}/Page", TestContext.Current.CancellationToken))
             .HasFlag(Permission.Read).Should().BeTrue(
                 "a page every anonymous browser may read is not secret from an API client — and " +
                 "no re-mint could have produced this, because the claim list is empty at every mint");
@@ -212,7 +212,7 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
     {
         BecomeToken("Admin");
 
-        (await Effective($"{ForeignPartition}/Page"))
+        (await Effective($"{ForeignPartition}/Page", TestContext.Current.CancellationToken))
             .Should().Be(Permission.None,
                 "a platform role claim is not cross-partition data access, snapshot or not");
     }
@@ -229,7 +229,7 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
     {
         BecomeToken();
 
-        var perms = await Effective($"{GrantedPartition}/Page");
+        var perms = await Effective($"{GrantedPartition}/Page", TestContext.Current.CancellationToken);
         perms.HasFlag(Permission.Read).Should().BeTrue(
             "the grant is read live off the target path — a token never needs re-minting to see it");
         perms.HasFlag(Permission.Api).Should().BeTrue(
@@ -250,7 +250,7 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
         BecomeToken();
 
         // Before: no grant anywhere on this path, no public surface.
-        (await Effective($"{LateGrantPartition}/Page"))
+        (await Effective($"{LateGrantPartition}/Page", TestContext.Current.CancellationToken))
             .Should().Be(Permission.None, "the control arm — this token is refused here");
 
         // The grant lands, written by an administrator long after the token was minted.
@@ -293,12 +293,12 @@ public class ApiTokenCapabilityFreshnessTest(ITestOutputHelper output) : Monolit
     public async Task ClaimRoles_ChangeNoVerdict()
     {
         BecomeToken();
-        var cappedWithout = await Effective($"{ApiCappedPartition}/Page");
-        var publicWithout = await Effective($"{PublicPartition}/Page");
+        var cappedWithout = await Effective($"{ApiCappedPartition}/Page", TestContext.Current.CancellationToken);
+        var publicWithout = await Effective($"{PublicPartition}/Page", TestContext.Current.CancellationToken);
 
         BecomeToken("Admin", "Editor", "Viewer");
-        var cappedWith = await Effective($"{ApiCappedPartition}/Page");
-        var publicWith = await Effective($"{PublicPartition}/Page");
+        var cappedWith = await Effective($"{ApiCappedPartition}/Page", TestContext.Current.CancellationToken);
+        var publicWith = await Effective($"{PublicPartition}/Page", TestContext.Current.CancellationToken);
 
         cappedWith.Should().Be(cappedWithout,
             "the Api cap is decided by the live policy, not by what the token remembers");

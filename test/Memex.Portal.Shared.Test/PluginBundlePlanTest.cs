@@ -94,7 +94,7 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
             .Select(r => r.RawKey)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
     /// <summary>Where <see cref="MeshWeaverInstanceService.Register"/> puts the record: the owner's
     /// partition.</summary>
@@ -103,7 +103,7 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
 
     /// <summary>Installs a package the production way, carrying the plan it declares — the
     /// <c>content.tier</c> a node-repo source reads off the package root.</summary>
-    private Task<InstallResult> InstallPackage(string id, string tier) =>
+    private Task<InstallResult> InstallPackage(string id, string tier, CancellationToken cancellationToken) =>
         PackageInstaller.Install(
                 Mesh,
                 new PackageManifest
@@ -122,12 +122,12 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
                 "HEAD")
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(120))
-            .Await();
+            .Await(cancellationToken);
 
     /// <summary>The plan ladder as the Store seeds it — one <c>Admin/Tiers/{id}</c> node per plan,
     /// its rank on the content. Written as System: the Admin partition is exactly what a registering
     /// instance's owner cannot reach.</summary>
-    private Task SeedLadder()
+    private Task SeedLadder(CancellationToken cancellationToken)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -147,7 +147,7 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
             .Concat()
             .LastAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .Await();
+            .Await(cancellationToken);
     }
 
     // ── the routes, over a real HTTP pipeline ─────────────────────────────────────────────────
@@ -194,9 +194,9 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 300_000)]
     public async Task AnInstanceOnTheFreePlan_CannotPullAProPackage()
     {
-        await SeedLadder();
-        await InstallPackage(FreeApp, "free");
-        await InstallPackage(ProApp, "pro");
+        await SeedLadder(TestContext.Current.CancellationToken);
+        await InstallPackage(FreeApp, "free", TestContext.Current.CancellationToken);
+        await InstallPackage(ProApp, "pro", TestContext.Current.CancellationToken);
         var freeKey = await RegisterInstance(FreeInstance, "free", $"{Source}/*");
         var proKey = await RegisterInstance(ProInstance, "pro", $"{Source}/*");
 
@@ -239,8 +239,8 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 300_000)]
     public async Task WithoutTierNodes_APaidPlanReadsAsTheBaseline()
     {
-        await InstallPackage(FreeApp, "free");
-        await InstallPackage(ProApp, "pro");
+        await InstallPackage(FreeApp, "free", TestContext.Current.CancellationToken);
+        await InstallPackage(ProApp, "pro", TestContext.Current.CancellationToken);
         var proKey = await RegisterInstance(ProInstance, "pro", $"{Source}/*");
 
         var app = await StartBundleHost();
@@ -267,9 +267,9 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 300_000)]
     public async Task ALegacyPlanLessGrant_IsCappedByTheInstancePlan()
     {
-        await SeedLadder();
-        await InstallPackage(FreeApp, "free");
-        await InstallPackage(ProApp, "pro");
+        await SeedLadder(TestContext.Current.CancellationToken);
+        await InstallPackage(FreeApp, "free", TestContext.Current.CancellationToken);
+        await InstallPackage(ProApp, "pro", TestContext.Current.CancellationToken);
         var legacyKey = await RegisterInstance(FreeInstance, null, $"{Source}/*");
 
         var app = await StartBundleHost();
@@ -294,9 +294,9 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 300_000)]
     public async Task PromotingTheInstance_WidensTheNextRequest()
     {
-        await SeedLadder();
-        await InstallPackage(FreeApp, "free");
-        await InstallPackage(ProApp, "pro");
+        await SeedLadder(TestContext.Current.CancellationToken);
+        await InstallPackage(FreeApp, "free", TestContext.Current.CancellationToken);
+        await InstallPackage(ProApp, "pro", TestContext.Current.CancellationToken);
         var key = await RegisterInstance(FreeInstance, "free", $"{Source}/*");
 
         var app = await StartBundleHost();
@@ -310,7 +310,7 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
         // promotion invalidates — so the next request already sees `pro`.
         var plans = Mesh.ServiceProvider.GetRequiredService<InstancePlanService>();
         await plans.SetPlan(InstancePath(FreeInstance), "pro")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
 
         using var after = await Get(app, BundleRoute(ProApp), key);
         after.StatusCode.Should().Be(HttpStatusCode.OK, "the promoted instance pulls the pro package on its next request");

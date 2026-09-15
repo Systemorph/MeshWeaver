@@ -92,8 +92,8 @@ public class BuildMustNotConstructHubsTest : HubTestBase
         var host = (MessageHub)GetHost();
         client.ServiceProvider.GetRequiredService<IWorkspace>().Should().NotBeNull(
             "the workspace must actually be constructed, or this proves nothing");
-        await client.Started.WaitAsync(30.Seconds());
-        await host.Started.WaitAsync(30.Seconds());
+        await client.Started.WaitAsync(30.Seconds(), TestContext.Current.CancellationToken);
+        await host.Started.WaitAsync(30.Seconds(), TestContext.Current.CancellationToken);
 
         // The premise, asserted: the hub-backed data source really did open its remote stream, so a
         // sync/ sub-hub really was created. Without this, "constructed nothing during Build" would

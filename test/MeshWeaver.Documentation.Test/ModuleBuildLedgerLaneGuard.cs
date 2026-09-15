@@ -119,8 +119,10 @@ public class ModuleBuildLedgerLaneGuard
         // The reuse leg verifies the bytes against the record and never packs anyway.
         Assert.Contains("gh run download \"$ART_RUN\"", pack, StringComparison.Ordinal);
         Assert.Contains("is not the ledger's $EXPECTED_SHA", pack, StringComparison.Ordinal);
-        // The suite writes the evidence the ledger records.
-        Assert.Contains("--logger \"trx;LogFileName=ledger.trx\"", pack, StringComparison.Ordinal);
+        // The suite writes the evidence the ledger records — under EITHER runner. The flags are
+        // chosen from the CALLER's global.json (#4378), so asserting one literal would have gone
+        // on passing while the other branch wrote nothing.
+        AssertWritesTheLedgerTrxUnderBothRunners(pack, "pack");
         // The reuse window is the artifact's retention.
         Assert.Contains("retention-days: 7", pack, StringComparison.Ordinal);
     }
@@ -147,11 +149,38 @@ public class ModuleBuildLedgerLaneGuard
             tests, StringComparison.Ordinal);
         Assert.Contains("bk list --ok --where tested=true --where 'ledger.key!='", tests, StringComparison.Ordinal);
         // The suite writes the evidence the ledger records, exactly as the inline one does.
-        Assert.Contains("--logger \"trx;LogFileName=ledger.trx\"", tests, StringComparison.Ordinal);
+        AssertWritesTheLedgerTrxUnderBothRunners(tests, "tests");
         // The way out: this lane can only fail in one phase, so it names it rather than deriving it.
         Assert.Contains("--status Failed --phase test", tests, StringComparison.Ordinal);
         Assert.Contains("if: always() && inputs.ledger == 'required'", tests, StringComparison.Ordinal);
         Assert.Contains("for MODULE in $(bk list --failed); do", tests, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The ledger's evidence is a <c>ledger.trx</c>, and which flags produce one is the CALLER's
+    /// choice, not this lane's: <c>dotnet test</c> selects its runner from the first
+    /// <c>global.json</c> found walking up from the CURRENT DIRECTORY, and this lane runs with the
+    /// caller's checkout as the cwd (the platform's own sits in a SIBLING checkout and never
+    /// applies — measured on the .NET 10.0.400 SDK, 2026-09-15). So the body must carry BOTH
+    /// branches and hand the chosen one to the invocation.
+    ///
+    /// <para>🚨 Asserting only the VSTest literal is what this guard used to do, and it would have
+    /// stayed green while the MTP branch wrote no trx at all — under Microsoft.Testing.Platform
+    /// <c>--logger</c> ends the run as <c>Zero tests ran</c>, exit 5, which this lane records as
+    /// "the module's own suite failed".</para>
+    /// </summary>
+    private static void AssertWritesTheLedgerTrxUnderBothRunners(string body, string job)
+    {
+        Assert.Contains("test_flags() {", body, StringComparison.Ordinal);
+        Assert.Contains("--logger \"trx;LogFileName=ledger.trx\"", body, StringComparison.Ordinal);
+        Assert.Contains("--report-xunit-trx --report-xunit-trx-filename ledger.trx", body, StringComparison.Ordinal);
+        Assert.Contains("--results-directory \"$1\"", body, StringComparison.Ordinal);
+        Assert.True(
+            body.Contains("mapfile -t flags < <(test_flags \"$RUNNER_TEMP/trx/$MODULE\")", StringComparison.Ordinal)
+            && body.Contains("\"${flags[@]}\"", StringComparison.Ordinal),
+            $"the `{job}` job must hand the runner-selected flags to `dotnet test`; a body that "
+            + "computes them and then invokes with a hard-coded set writes the trx of whichever "
+            + "runner it guessed, and the ledger reads an absent file as a failed suite");
     }
 
     [Fact]

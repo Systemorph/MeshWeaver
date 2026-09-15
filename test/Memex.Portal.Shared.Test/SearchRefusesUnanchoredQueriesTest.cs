@@ -46,9 +46,10 @@ public class SearchRefusesUnanchoredQueriesTest(ITestOutputHelper output) : Mono
             new MeshNode("Deep", Partition) { Name = "Deep", NodeType = "Markdown" },
             new MeshNode("Leaf", $"{Partition}/Deep") { Name = Marker, NodeType = "Markdown" });
 
-    private Task<string> Search(string query, string? basePath = null, int limit = 50)
+    private Task<string> Search(
+        string query, string? basePath = null, int limit = 50, CancellationToken cancellationToken = default)
         => new MeshOperations(Mesh).Search(query, basePath, limit)
-            .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+            .FirstAsync().Timeout(Budget).Await(cancellationToken);
 
     // ————————————————————————— refusal
 
@@ -59,7 +60,7 @@ public class SearchRefusesUnanchoredQueriesTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 60_000)]
     public async Task AnUnanchoredQueryIsRefused_NotAnsweredWithAZero()
     {
-        var answer = await Search($"nodeType:Markdown name:{Marker}");
+        var answer = await Search($"nodeType:Markdown name:{Marker}", cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine(answer);
         answer.Should().StartWith("Error:", "a partial answer presented as a total is the defect; a refusal is an answer");
@@ -76,7 +77,9 @@ public class SearchRefusesUnanchoredQueriesTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 60_000)]
     public async Task TheSameQueryAnchoredIsAnswered()
     {
-        var answer = await Search($"namespace:{Partition} scope:descendants nodeType:Markdown name:{Marker}");
+        var answer = await Search(
+            $"namespace:{Partition} scope:descendants nodeType:Markdown name:{Marker}",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine(answer);
         var envelope = JsonDocument.Parse(answer).RootElement;
@@ -98,7 +101,9 @@ public class SearchRefusesUnanchoredQueriesTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 60_000)]
     public async Task ADeclaredFanOutIsAnswered_AndAnUnreportedDenominatorIsNull()
     {
-        var answer = await Search($"nodeType:Markdown name:{Marker} {ParsedQuery.CrossPartitionQualifier}");
+        var answer = await Search(
+            $"nodeType:Markdown name:{Marker} {ParsedQuery.CrossPartitionQualifier}",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine(answer);
         var envelope = JsonDocument.Parse(answer).RootElement;
@@ -118,7 +123,7 @@ public class SearchRefusesUnanchoredQueriesTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 60_000)]
     public async Task AQueryARoutingRulePinsIsServed_AndTheEnvelopeNamesThatPartition()
     {
-        var answer = await Search("nodeType:User");
+        var answer = await Search("nodeType:User", cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine(answer);
         answer.Should().NotStartWith("Error:", "the planner itself serves a rule-routed query");
@@ -139,7 +144,8 @@ public class SearchRefusesUnanchoredQueriesTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 60_000)]
     public async Task BasePathReachesTheWholeSubtree()
     {
-        var answer = await Search($"nodeType:Markdown name:{Marker}", $"@{Partition}");
+        var answer = await Search(
+            $"nodeType:Markdown name:{Marker}", $"@{Partition}", cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine(answer);
         var envelope = JsonDocument.Parse(answer).RootElement;
@@ -156,11 +162,13 @@ public class SearchRefusesUnanchoredQueriesTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 60_000)]
     public async Task TruncatedMeansAFurtherMatchExists_NotThatThePageWasFull()
     {
-        var full = JsonDocument.Parse(await Search("nodeType:Markdown", $"@{Partition}", limit: 2)).RootElement;
+        var full = JsonDocument.Parse(await Search(
+            "nodeType:Markdown", $"@{Partition}", limit: 2, cancellationToken: TestContext.Current.CancellationToken)).RootElement;
         full.GetProperty("count").GetInt32().Should().Be(2, "Deep and Leaf are the two Markdown nodes under the base path");
         full.GetProperty("truncated").GetBoolean().Should().BeFalse("the page is full AND complete — nothing lies beyond it");
 
-        var clipped = JsonDocument.Parse(await Search("nodeType:Markdown", $"@{Partition}", limit: 1)).RootElement;
+        var clipped = JsonDocument.Parse(await Search(
+            "nodeType:Markdown", $"@{Partition}", limit: 1, cancellationToken: TestContext.Current.CancellationToken)).RootElement;
         clipped.GetProperty("count").GetInt32().Should().Be(1);
         clipped.GetProperty("truncated").GetBoolean().Should().BeTrue("a second match exists beyond the page");
     }
@@ -172,7 +180,8 @@ public class SearchRefusesUnanchoredQueriesTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 60_000)]
     public async Task ACallerStatedScopeIsKept()
     {
-        var answer = await Search($"nodeType:Markdown name:{Marker} scope:exact", $"@{Partition}");
+        var answer = await Search(
+            $"nodeType:Markdown name:{Marker} scope:exact", $"@{Partition}", cancellationToken: TestContext.Current.CancellationToken);
 
         Output.WriteLine(answer);
         JsonDocument.Parse(answer).RootElement.GetProperty("count").GetInt32()

@@ -24,7 +24,7 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
     private System.Text.Json.JsonSerializerOptions Json => Mesh.JsonSerializerOptions;
 
-    private async Task CreateUser(string id, string email)
+    private async Task CreateUser(string id, string email, CancellationToken cancellationToken)
     {
         using (Access.ImpersonateAsSystem())
             await MeshService.CreateNode(new MeshNode(id)
@@ -32,14 +32,14 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
                 NodeType = "User",
                 Name = id,
                 Content = new User { Email = email, FullName = id },
-            }).Should().Emit();
+            }).Should().Emit(cancellationToken: cancellationToken);
     }
 
     [Fact(Timeout = 60000)]
     public async Task Dispatch_Default_CreatesInAppBellNotification()
     {
         const string recipient = "grantee_default";
-        await CreateUser(recipient, "grantee@acme.com");
+        await CreateUser(recipient, "grantee@acme.com", TestContext.Current.CancellationToken);
 
         await NotificationService.Dispatch(
                 Mesh,
@@ -50,7 +50,7 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
                 type: NotificationType.AccessGranted,
                 targetNodePath: "TeamSpace",
                 createdBy: "admin")
-            .Timeout(30.Seconds()).Await();
+            .Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
 
         await Mesh.GetWorkspace()
             .GetQuery($"notif|{recipient}", $"path:{recipient}/_Notification scope:children nodeType:Notification")
@@ -63,7 +63,7 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
     public async Task Dispatch_InAppDisabledForCategory_SuppressesBell()
     {
         const string recipient = "grantee_off";
-        await CreateUser(recipient, "off@acme.com");
+        await CreateUser(recipient, "off@acme.com", TestContext.Current.CancellationToken);
 
         // Turn the AccessGranted bell OFF (leave Approvals on as the positive control).
         var settingsPath = await NotificationSettingsNodeType.EnsureExists(Mesh, recipient).FirstAsync().Timeout(30.Seconds());
@@ -78,9 +78,9 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Dispatch a suppressed AccessGranted, then a still-enabled Approvals as the ordered control.
         await NotificationService.Dispatch(Mesh, recipient, recipient,
-                "Access", "granted", NotificationType.AccessGranted, "TeamSpace", "admin").Timeout(30.Seconds()).Await();
+                "Access", "granted", NotificationType.AccessGranted, "TeamSpace", "admin").Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
         await NotificationService.Dispatch(Mesh, recipient, recipient,
-                "Approval Requested", "please approve", NotificationType.ApprovalRequired, "Doc/X", "admin").Timeout(30.Seconds()).Await();
+                "Approval Requested", "please approve", NotificationType.ApprovalRequired, "Doc/X", "admin").Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
 
         // The control (Approvals) bell arrives...
         var nodes = await Mesh.GetWorkspace()
@@ -98,7 +98,7 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
     public async Task NotificationSettings_OffValue_SurvivesMergePatch()
     {
         const string recipient = "prefs_user";
-        await CreateUser(recipient, "prefs@acme.com");
+        await CreateUser(recipient, "prefs@acme.com", TestContext.Current.CancellationToken);
 
         var path = await NotificationSettingsNodeType.EnsureExists(Mesh, recipient).FirstAsync().Timeout(30.Seconds());
 
