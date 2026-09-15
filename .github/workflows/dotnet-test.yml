@@ -2413,6 +2413,18 @@ jobs:
     - name: "Execute compose-sealed-modules.sh against a republishing registry"
       run: python3 .github/scripts/test-sealed-module-compose.py
 
+    # The lanes that run a SATELLITE's suites pick the test runner and the cwd `dotnet test` runs
+    # from, and the platform they compile against pins the xunit.v3 version (#4414): xunit.v3 4.x
+    # refuses VSTest on .NET 10, so a caller with no global.json must still run under
+    # Microsoft.Testing.Platform, FROM the platform checkout. Both harnesses EXTRACT the real code —
+    # module-pack's bash at both call sites (run under bash, `dotnet` stubbed), the canary's
+    # embedded Python — and fail red when they cannot find it. The canary harness also carries the
+    # evidence comparator's cases, which no workflow ran until now.
+    - name: "Execute module-pack's test-runner selection against temp checkouts"
+      run: python3 .github/scripts/test-module-pack-test-runner.py
+    - name: "Execute the platform canary's evidence and runner code"
+      run: python3 .github/scripts/test-platform-canary.py
+
     # The WRITER side of the same window (#3461). `prebuilt-bundles/<identity>/<source>/` has
     # several publishers — core CD's `plugins-bake`, the satellite's own `publish-bake`, and (four
     # times in one measured day, more often than the cross-lane case) two concurrent runs of ONE of
