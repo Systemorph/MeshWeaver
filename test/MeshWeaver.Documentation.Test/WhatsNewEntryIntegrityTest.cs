@@ -113,20 +113,34 @@ public class WhatsNewEntryIntegrityTest
         if (end < 0)
             return null;
 
-        var parsed = new DeserializerBuilder().Build()
+        var parsed = new DeserializerBuilder()
+            // 🚨 Case-INSENSITIVE, because the runtime is (#1984): MarkdownFileParser configures
+            // `WithCaseInsensitivePropertyMatching()` on purpose, so `description:` and
+            // `Description:` both bind. A case-sensitive reader here would red an entry the feed
+            // renders perfectly — the same two-readers-one-artefact defect as before, pointing the
+            // other way. (The comment this replaces claimed a lowercase key is "silently dropped";
+            // that stopped being true when #1984 landed.)
+            .WithCaseInsensitivePropertyMatching()
+            .Build()
             .Deserialize<Dictionary<string, object>>(normalized[4..end]);
-        return parsed is null
-            ? new Dictionary<string, string>(StringComparer.Ordinal)
-            : parsed.ToDictionary(
+        if (parsed is null)
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // 🚨 Scalars only. `Description: {text: …}` and `Description: [a, b]` are valid YAML, and
+        // `ToString()` would turn each into a non-empty CLR type name that satisfies every
+        // presence check below while the feed renders nothing useful. A non-scalar is reported as
+        // ABSENT so the entry fails rather than passing on a type name.
+        return parsed
+            .Where(kv => kv.Value is null or string or bool or int or long or double or decimal)
+            .ToDictionary(
                 kv => kv.Key,
                 kv => kv.Value?.ToString() ?? string.Empty,
-                StringComparer.Ordinal);
+                StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
-    /// The value of a frontmatter key. Case-sensitive on purpose: the mesh's markdown parser maps
-    /// <c>Name</c>/<c>Category</c>/<c>Order</c> by their declared casing, so a lowercase
-    /// <c>category:</c> would be silently dropped rather than accepted here.
+    /// The value of a frontmatter key, case-insensitively — the casing the runtime binds (#1984).
+    /// Returns null for a key that is absent OR whose value is not a scalar.
     /// </summary>
     private static string? Field(IReadOnlyDictionary<string, string> frontMatter, string key) =>
         frontMatter.TryGetValue(key, out var value) ? value : null;

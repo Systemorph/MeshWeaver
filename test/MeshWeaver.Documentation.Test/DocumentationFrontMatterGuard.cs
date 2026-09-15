@@ -71,6 +71,25 @@ public class DocumentationFrontMatterGuard
         return end < 0 ? Unterminated : normalized[4..end];
     }
 
+    /// <summary>
+    /// The unterminated-block classification, pinned on synthetic input.
+    ///
+    /// <para>🚨 Without this, that arm has no negative control IN CI: the committed tree is clean,
+    /// so reverting <c>end &lt; 0 ? Unterminated</c> to <c>null</c> would make the guard silently
+    /// skip the one shape no parser can read, and every test here would still pass. A guard arm
+    /// proved only by a probe the reviewer has to take on trust is not proved.</para>
+    /// </summary>
+    [Fact]
+    public void FrontMatterOf_TellsTheThreeShapesApart()
+    {
+        Assert.Null(FrontMatterOf("# Just a page\n\nNo front matter here.\n"));
+        Assert.Null(FrontMatterOf("Text first\n---\nName: not front matter\n---\n"));
+
+        Assert.Same(Unterminated, FrontMatterOf("---\nName: Opens and never closes\n\nbody\n"));
+
+        Assert.Equal("Name: Closed properly", FrontMatterOf("---\nName: Closed properly\n---\n\nbody\n"));
+    }
+
     [Fact]
     public void EveryDocFrontMatter_Parses()
     {
