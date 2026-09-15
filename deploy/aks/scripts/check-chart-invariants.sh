@@ -41,6 +41,8 @@
 #  15. a replica floor > 1 implies anti-affinity / spread    or every replica shares one node
 #  16. wait-for-postgres probes EVERY host the pod's connection strings name  or Init:1/1 proves
 #                                                             nothing about the connection that fails
+#  17. no wait-for-postgres probes memex-postgres-service unless the chart renders it  or the gate
+#                                                             spins forever on a name that never resolves
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -119,6 +121,12 @@ COMBOS=(
   # gate was blind to — the probe read config.MEMEX_HOST while the boot opened two SECRET
   # connection strings naming neither. Invariant 16 asserts the probe covers both.
   "a dedicated orleans server (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.dedicated-orleans-host.yaml"
+  # 🚨 The Key Vault case (pearl, 2026-09-15): an external database whose connection string comes
+  # from a CSI SecretProviderClass, not from the values — the shape of EVERY record-driven Provision,
+  # and the one no combination here rendered. #4173 derived the probe from the values' string, which
+  # here is the chart's in-cluster default, and pearl's pods waited forever for memex-postgres-service.
+  # Invariants 16 and 17 assert the probe is the record-rendered MEMEX_HOST and never that Service.
+  "a Key Vault connection string, record-driven (the pearl shape, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.keyvault-connection-string.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -179,6 +187,8 @@ fi
 # ---------------------------------------------------------------------------
 REFUSALS=(
   "AdoNet on an external database with no connection string in values (the #3780 render)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.adonet-external-db-no-connection-string.yaml|MeshWeaver#3780"
+  "an external database with neither a values connection string nor a MEMEX_HOST (the pearl refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-no-host.yaml|names no external database host"
+  "an external database whose values string names the in-cluster Service (the explicit-placeholder refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-explicit-in-cluster-host.yaml|names the in-cluster Service memex-postgres-service"
 )
 refused=0
 for entry in "${REFUSALS[@]}"; do
