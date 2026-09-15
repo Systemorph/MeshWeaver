@@ -127,8 +127,14 @@ public static class ModulePackCommand
         var nameComparer = asset.Kind == DepsClosure.UncarriedKind.UnprobedNative
             ? StringComparer.Ordinal
             : StringComparer.OrdinalIgnoreCase;
+        // 🚨 The SAME comparer for both lookups. `--with` joins the closure only when no
+        // case-insensitive match is already there, so a native `LIBODD.DLL` named beside a managed
+        // `libodd.dll` never enters it — and an ignore-case lookup here would read the managed
+        // file's bytes as the native's, passing a refusal whose asset never reaches the bundle.
+        // Ordinal cannot miss a native that IS carried: one that entered via --with sits in the
+        // closure under exactly the spelling it was named with.
         if (named.Contains(asset.FileName, nameComparer)
-            && closure.Contains(asset.FileName, StringComparer.OrdinalIgnoreCase))
+            && closure.Contains(asset.FileName, nameComparer))
             return $"--with {asset.FileName} (flat in the module folder)";
         if (asset.ProbedPath is { } probed && natives.Contains(probed, StringComparer.Ordinal))
             return $"the native payload at {probed}";

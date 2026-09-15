@@ -886,6 +886,63 @@ public class ModulePackCommandTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 #4444 review (Copilot) — a native named with <c>--with</c> whose name differs only in CASE
+    /// from a MANAGED file already in the closure is NOT carried, and the pack is refused.
+    /// <c>--with</c> joins the closure only when no case-insensitive match is already there, so
+    /// <c>LIBODD.DLL</c> never enters it beside the derived <c>libodd.dll</c> — the bundle would
+    /// ship the managed bytes under that slot. The carrier lookup used to check the closure
+    /// ignoring case and read that as "carried": the refusal bypassed for an asset that never
+    /// reaches the bundle.
+    ///
+    /// <para>Portable across filesystems: on a case-insensitive one (macOS) the two names are one
+    /// file, so <c>LIBODD.DLL</c> is created only when absent; either way the assertion is on the
+    /// REFUSAL's words, so the case cannot pass by way of a "--with file not found".</para>
+    /// </summary>
+    [Fact]
+    public void DepsClosure_ANativeNamedWithWith_DifferingOnlyInCaseFromAManagedFileInTheClosure_IsRefused()
+    {
+        const string declared = "runtimes/linux-x64/nativeassets/net10.0/LIBODD.DLL";
+        File.WriteAllBytes(Path.Combine(root, "closure", "libodd.dll"), "MANAGED"u8.ToArray());
+        if (!File.Exists(Path.Combine(root, "closure", "LIBODD.DLL")))
+            File.WriteAllBytes(Path.Combine(root, "closure", "LIBODD.DLL"), "NATIVE"u8.ToArray());
+        FileUnderClosure(declared, "NATIVE");
+        File.WriteAllText(Path.Combine(root, "closure", "Widget.deps.json"), $$"""
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0": {
+                  "Widget/1.0.0": {
+                    "dependencies": { "Odd.Managed": "1.0.0", "Odd.Natives": "1.0.0" },
+                    "runtime": { "Widget.dll": {} }
+                  },
+                  "Odd.Managed/1.0.0": { "runtime": { "lib/net10.0/libodd.dll": {} } },
+                  "Odd.Natives/1.0.0": {
+                    "runtimeTargets": {
+                      "{{declared}}": { "rid": "linux-x64", "assetType": "native" }
+                    }
+                  }
+                }
+              },
+              "libraries": {
+                "Widget/1.0.0": { "type": "project" },
+                "Odd.Managed/1.0.0": { "type": "package" },
+                "Odd.Natives/1.0.0": { "type": "package" }
+              }
+            }
+            """);
+        var outDir = Path.Combine(root, "out-case-collision");
+
+        var (exit, error) = PackCapturingErrors(
+            [.. DepsClosurePackArgs("2.3.0", outDir), "--with", "LIBODD.DLL"]);
+
+        Assert.Equal(2, exit);
+        Assert.False(Directory.Exists(outDir), "a refused pack must not have written anything");
+        Assert.Contains(declared, error, StringComparison.Ordinal);
+        Assert.Contains("--deps-closure refuses the pack", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("--with file not found", error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// 🚨 #4367 — the SHARED LANE's remedy, which the coordinator's review found missing: the lane
     /// composes the pack arguments itself, so a CI-built module cannot pass <c>--with</c>. The
     /// refusal therefore prints csproj lines — a <c>Copy</c> after <c>Publish</c> from the key the
