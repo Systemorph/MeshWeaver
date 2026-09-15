@@ -285,7 +285,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             // replays an already-hydrated entry (a reader kept this path warm across an idle
             // collection) so a reactivation can skip the storage read. It can only ever
             // contribute a VALUE — see ComposeActivationSource for why its terminal is
-            // meaningless by construction and must not fault this activation.
+            // meaningless by construction and must neither fault NOR complete this activation.
             var pathResolver = meshHub.ServiceProvider.GetRequiredService<IPathResolver>();
             var accessService = meshHub.ServiceProvider.GetService<AccessService>();
             // 🚨 Grain activation is INFRASTRUCTURE — reading the node to learn its
@@ -417,28 +417,71 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// retries faulted in milliseconds — the node stayed unreadable to users and to MCP.</para></para>
     ///
     /// <para><b>This is not a swallowed fault.</b> The exception is logged in full via
-    /// <paramref name="onOwnAddressCacheFault"/>, and activation keeps a COMPLETE set of terminal
-    /// outcomes without it: a node from the path resolver drives enrichment; nothing from either
-    /// branch within <see cref="FirstNodeResolutionTimeout"/> throws the precise
-    /// "no MeshNode emitted / no query provider claims its partition" TimeoutException; both
-    /// branches finishing with no node completes the source (the "no usable node" handler in
-    /// <see cref="OnActivateAsync"/>); and an enrichment fault surfaces as the overlay. Collapsing
-    /// the branch to <c>Empty</c> rather than <c>Never</c> is what keeps that last case PROMPT —
-    /// a genuinely missing node is reported immediately instead of waiting out the budget.</para>
+    /// <paramref name="onOwnAddressCacheFault"/> whenever it lands while the authoritative branch
+    /// is still live, and activation keeps a COMPLETE set of terminal outcomes without it: a node
+    /// from the path resolver drives enrichment; nothing from either branch within
+    /// <see cref="FirstNodeResolutionTimeout"/> throws the precise "no MeshNode emitted / no query
+    /// provider claims its partition" TimeoutException; the path resolver finishing with no node
+    /// completes the source (the "no usable node" handler in <see cref="OnActivateAsync"/>); and an
+    /// enrichment fault surfaces as the overlay.</para>
+    ///
+    /// <para>🚨 <b>Neutralising the ERROR terminal is only half of it — the branch must not decide
+    /// COMPLETION either (issue #1186, signature 2).</b> <c>Catch</c> converts a terminal; it
+    /// cannot conjure one where there is none, and <c>Observable.Merge</c> completes only when
+    /// BOTH branches have terminated. On a COLD entry the self-loop's only possible terminal is
+    /// the budget of the request it is parked on
+    /// (<c>MessageHubConfiguration.DefaultRequestTimeout</c>, 60 s) — TWICE
+    /// <see cref="FirstNodeResolutionTimeout"/>. So while completion depended on both branches, a
+    /// genuinely ABSENT node could never reach the prompt "no usable node" answer: the path
+    /// resolver completed empty in milliseconds, the merge could not complete for another ~60 s,
+    /// and the 30 s <c>Amb</c> timer in <see cref="BuildActivationChain"/> always won first with
+    /// <c>"No MeshNode emitted for '…' within 30s. Either the node does not exist or no query
+    /// provider claims its partition."</c> — an indeterminacy diagnostic standing in for a
+    /// determinate answer, 30 s late. That is #1186's second fingerprint, and it is what EVERY
+    /// sample on that issue shows (2026-08-10 → 2026-09-14, 629 occurrences across four pods); the
+    /// Warning path never appears in one of them.</para>
+    ///
+    /// <para><c>TakeUntil</c> ends the source on the AUTHORITATIVE branch's own terminal, which is
+    /// what the rest of this comment already assumed: the accelerator contributes a VALUE and can
+    /// never gate the outcome, in either direction. It also RELEASES the self-referential
+    /// subscription the moment the node is known, rather than holding a request this grain cannot
+    /// answer for the remainder of its 60 s budget.</para>
     /// </summary>
     internal static IObservable<MeshNode> ComposeActivationSource(
         IObservable<MeshNode> pathResolverStream,
         IObservable<MeshNode> ownAddressCacheStream,
         Action<Exception> onOwnAddressCacheFault)
-        => Observable.Merge(
-            pathResolverStream,
-            ownAddressCacheStream.Catch<MeshNode, Exception>(ex =>
-            {
-                onOwnAddressCacheFault(ex);
-                // The branch stops contributing — exactly as if it had never had anything to
-                // say, which is the truth for a request routed back at the activating grain.
-                return Observable.Empty<MeshNode>();
-            }));
+        // Publish: the authoritative branch is subscribed ONCE and consumed TWICE — as a source of
+        // VALUES and as the source's TERMINAL. Subscribing it twice would re-run the storage query,
+        // and (for a resolution served synchronously from PathResolutionService's value cache)
+        // would race that emission past the merge.
+        => pathResolverStream.Publish(authoritative =>
+            Observable.Merge(
+                    authoritative,
+                    ownAddressCacheStream.Catch<MeshNode, Exception>(ex =>
+                    {
+                        onOwnAddressCacheFault(ex);
+                        // The branch stops contributing — exactly as if it had never had anything
+                        // to say, which is the truth for a request routed back at the activating
+                        // grain.
+                        return Observable.Empty<MeshNode>();
+                    }))
+                // 🚨 The authoritative branch — and only it — decides when the source is DONE.
+                .TakeUntil(TerminalOf(authoritative)));
+
+    /// <summary>
+    /// The moment <paramref name="source"/> TERMINATES, as a signal <c>TakeUntil</c> can act on:
+    /// one <c>OnNext</c> when it completes, and its exception when it errors (so a storage failure
+    /// on the authoritative branch still faults the activation).
+    ///
+    /// <para><c>IgnoreElements()</c> on its own would not do it: <c>TakeUntil</c> acts on the other
+    /// sequence's <c>OnNext</c> and <c>OnError</c> and deliberately IGNORES its <c>OnCompleted</c>,
+    /// so the completion has to be turned into a value.</para>
+    /// </summary>
+    private static IObservable<Unit> TerminalOf(IObservable<MeshNode> source)
+        => source.IgnoreElements()
+            .Select(_ => Unit.Default)
+            .Concat(Observable.Return(Unit.Default));
 
     /// <summary>
     /// The activation chain: bound the wait for the FIRST node, enrich it with a
