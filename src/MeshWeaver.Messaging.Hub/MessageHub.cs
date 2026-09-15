@@ -2613,12 +2613,19 @@ public sealed class MessageHub : IMessageHub
         //                          the turn gate, or in whatever runs ahead of taking work off the
         //                          queue.
         //   drainsAwaiting > 0   → the turn scheduler ACCEPTED a drain and has not run it. The
-        //                          cause is outside this hub: a starved pool, work parked on one
-        //                          thread's local LIFO queue, or — for a ROOT GRAIN hub only — an
-        //                          Orleans ActivationTaskScheduler that stopped executing work.
+        //                          cause is outside this hub: a genuinely saturated pool, or — for
+        //                          a ROOT GRAIN hub only — an Orleans ActivationTaskScheduler that
+        //                          stopped executing work.
         //                          🚨 The last one does NOT apply to a hosted hub: hosted hubs are
         //                          built from a fresh MessageHubConfiguration and inherit no
         //                          scheduler, which is what WithTaskScheduler's contract asks for.
+        //                          🚨 And "parked on the POSTING thread's local LIFO queue" is no
+        //                          longer one of the causes: ScheduleDrainOne now asks for
+        //                          PreferFairness, so the drain goes to the pool's GLOBAL queue
+        //                          where any worker — and the pool's own starvation detection —
+        //                          can see it. That was #3593's mechanism, and reading this branch
+        //                          on TaskScheduler.Default today means the pool really is out of
+        //                          threads, not that the work is hiding on one of them.
         //   drainsAwaiting == 0  → NOTHING is outstanding while the latch is set. That breaks
         //                          ScheduleDrainOne's invariant and is a defect in the pump itself,
         //                          not in any scheduler. It is reachable only if a schedule was
@@ -2636,10 +2643,13 @@ public sealed class MessageHub : IMessageHub
                     ? "the turn scheduler ACCEPTED " + drainsAwaiting + " drain(s) and has not run "
                       + "them (drainsInFlight=0). The stall is in THAT SCHEDULER, not in this hub. "
                       + "On TaskScheduler.Default (every hosted hub — a hosted hub is built from a "
-                      + "fresh configuration and inherits no scheduler) that is pool starvation or "
-                      + "work parked on one thread's local LIFO queue; on a ROOT GRAIN hub it is the "
-                      + "grain's ActivationTaskScheduler (MessageHubGrain.WithTaskScheduler), where a "
-                      + "wedged or deactivated activation parks every turn this hub will ever take"
+                      + "fresh configuration and inherits no scheduler) the drain is queued GLOBALLY "
+                      + "(ScheduleDrainOne asks for PreferFairness since #3593), so it is visible to "
+                      + "every worker AND to the pool's starvation detection — reading this here "
+                      + "means the pool genuinely has no thread to give, NOT that the work is parked "
+                      + "on the posting thread's local queue; on a ROOT GRAIN hub it is the grain's "
+                      + "ActivationTaskScheduler (MessageHubGrain.WithTaskScheduler), where a wedged "
+                      + "or deactivated activation parks every turn this hub will ever take"
                     : "NOTHING is outstanding (drainsInFlight=0, drainsScheduled==drainsStarted) "
                       + "while the drain flag is latched. That breaks the pump's own invariant — a "
                       + "latched flag must mean a drain is running or queued — so this is a defect "
