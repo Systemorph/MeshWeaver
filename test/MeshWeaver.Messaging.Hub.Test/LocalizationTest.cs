@@ -123,6 +123,39 @@ public class LocalizationTest
         }
     }
 
+    /// <summary>
+    /// 🚨 A PERSISTED key must use NAMED placeholders. <c>activity.*</c> (a transcript line, #3236)
+    /// and <c>notification.*</c> (a bell row, #4373) are both written with no viewer in scope and
+    /// resolved when somebody reads them, which is why their arguments are stored by NAME: a row
+    /// written months ago must still bind correctly to a template a translator has since reordered.
+    ///
+    /// <para>The failure this catches is silent and user-visible in both directions.
+    /// <see cref="LocalizationCatalog.GetNamed"/> only replaces <c>{identifier}</c>, so a positional
+    /// <c>{0}</c> in one of these namespaces reaches the reader LITERALLY — and
+    /// <see cref="LocalizationCatalog.Get"/>'s <c>string.Format</c> only replaces <c>{0}</c>, so the
+    /// mistake is invisible to every other assertion here. Both notification blocks that already had
+    /// keys were written positionally and resolved at WRITE time, which is exactly how they came to
+    /// render English for every viewer.</para>
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(AllLocales))]
+    public void PersistedNamespaces_UseNamedPlaceholders(string locale)
+    {
+        var positional = new System.Text.RegularExpressions.Regex(@"\{[0-9]+\}");
+        var offenders = LocalizationCatalog.KeysFor(locale)
+            .Where(k => k.StartsWith("activity.", StringComparison.Ordinal)
+                        || k.StartsWith("notification.", StringComparison.Ordinal))
+            .Where(k => positional.IsMatch(LocalizationCatalog.Get(k, locale)))
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToArray();
+
+        offenders.Should().BeEmpty(
+            "keys under activity.* and notification.* are PERSISTED with their arguments and resolved "
+            + "at read time, so their placeholders must be named ({{name}}), not positional ({{0}}) — "
+            + "a positional one reaches the reader literally; in strings.{0}.json: {1}",
+            locale, string.Join(", ", offenders));
+    }
+
     [Theory]
     // Exact matches.
     [InlineData("de", "de")]

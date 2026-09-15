@@ -1,4 +1,5 @@
 using System.Reactive;
+using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -40,4 +41,35 @@ public interface ICompileFailureNotifier
         string title,
         string message,
         string targetNodePath);
+
+    /// <summary>
+    /// The same emission for text the platform OWNS: the title and body carry their catalog key and
+    /// arguments, so the bell renders them in the language of whoever READS the row rather than the
+    /// one the compile happened to run under (Systemorph/MeshWeaver#4373). A compile parks with no
+    /// viewer in scope, so this is the only shape that can reach a German reader.
+    ///
+    /// <para>🚨 <b>Default-implemented on purpose.</b> A new interface member obliges every
+    /// implementer, and a forwarder cannot rescue one — that is exactly the deadlock
+    /// <c>scripts/check-interface-addition.py</c> exists for (#3465). The default forwards to the
+    /// string overload, so an implementer outside this repository keeps compiling and keeps
+    /// behaving as it did, losing only the key it never had.</para>
+    ///
+    /// <para><see cref="LocalizableText"/> has no implicit conversion from <see cref="string"/> —
+    /// deliberately, so that producing an UNKEYED sentence is always spelled out — which means a
+    /// plain string still binds the string overload and no existing call site changes meaning.</para>
+    /// </summary>
+    /// <param name="hub">The hub the dispatch runs on.</param>
+    /// <param name="recipient">The user to notify, or <c>null</c> for the platform operators' bell.</param>
+    /// <param name="mainNodePath">The recipient, or the failing type when there is none.</param>
+    /// <param name="title">The notification title, with its catalog key when the platform owns it.</param>
+    /// <param name="message">The notification body, same shape as <paramref name="title"/>.</param>
+    /// <param name="targetNodePath">The failing NodeType's path.</param>
+    IObservable<Unit> NotifyCompileFailed(
+        IMessageHub hub,
+        string? recipient,
+        string mainNodePath,
+        LocalizableText title,
+        LocalizableText message,
+        string targetNodePath)
+        => NotifyCompileFailed(hub, recipient, mainNodePath, title.English, message.English, targetNodePath);
 }

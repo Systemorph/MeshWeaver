@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 
@@ -50,14 +51,56 @@ public record Notification
     public string Id { get; init; } = Guid.NewGuid().ToString();
 
     /// <summary>
-    /// Title of the notification.
+    /// Title of the notification, in English — the FALLBACK when <see cref="TitleKey"/> is unset or
+    /// names a key that is in no catalog. Read it through
+    /// <c>NotificationLocalizationExtensions.LocalizedTitle</c>, never directly, on any surface a
+    /// person looks at.
     /// </summary>
     public string Title { get; init; } = string.Empty;
 
     /// <summary>
-    /// Detailed message body.
+    /// Detailed message body, in English — the FALLBACK for <see cref="MessageKey"/>, exactly as
+    /// <see cref="Title"/> is for <see cref="TitleKey"/>.
     /// </summary>
     public string Message { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Catalog key (<c>notification.*</c>) for <see cref="Title"/>; when set, the reader resolves
+    /// THIS in their own language and <see cref="Title"/> is only the fallback.
+    ///
+    /// <para>🚨 <b>A notification is written with no viewer in scope</b> — a package-update
+    /// reconciler poll, a module-discovery scan, a startup-error drain, a compile park — so the
+    /// writer runs as SYSTEM and cannot know whose language to pick, while the row it lands in is
+    /// read for days by people whose languages differ. Resolving at write time bakes one language
+    /// into a shared record and is the bug this exists to stop
+    /// (Systemorph/MeshWeaver#4373). Same split as <c>LogMessage.MessageKey</c> for activity
+    /// transcripts (#3236).</para>
+    ///
+    /// <para>Null on every row written before #4373, and on every notification whose title is
+    /// verbatim upstream text no catalog can carry.</para>
+    /// </summary>
+    [Browsable(false)]
+    public string? TitleKey { get; init; }
+
+    /// <summary>
+    /// The named arguments for <see cref="TitleKey"/> — the template refers to them as
+    /// <c>{name}</c>, <c>{count}</c>, … so a translator may reorder them freely. Named rather than
+    /// positional precisely because these are PERSISTED: a row written months ago must still bind
+    /// correctly to a template someone has since rewritten.
+    /// <para>Values round-trip through JSON, so a value read back is typically a
+    /// <see cref="System.Text.Json.JsonElement"/>; the renderer switches on its kind and never
+    /// casts.</para>
+    /// </summary>
+    [Browsable(false)]
+    public ImmutableDictionary<string, object>? TitleArgs { get; init; }
+
+    /// <summary>Catalog key for <see cref="Message"/> — see <see cref="TitleKey"/>.</summary>
+    [Browsable(false)]
+    public string? MessageKey { get; init; }
+
+    /// <summary>Named arguments for <see cref="MessageKey"/> — see <see cref="TitleArgs"/>.</summary>
+    [Browsable(false)]
+    public ImmutableDictionary<string, object>? MessageArgs { get; init; }
 
     /// <summary>
     /// Optional icon path or URL for the notification (e.g.,
