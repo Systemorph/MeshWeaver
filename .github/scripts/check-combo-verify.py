@@ -14,23 +14,37 @@ A gate you have never seen fail is not a gate. This script EXECUTES the prefligh
 text — extracted from the shipped YAML by path, never retyped — under five input scenarios and
 asserts the exit code AND that the message names the specific shortfall:
 
-  1. nothing provisioned                    → RED, naming vars.COMBO_VERIFY_INSTANCES
-  2. the instance list set, a secret absent → RED, naming that secret
-  3. the list present but an EMPTY array    → RED. This is the one that matters most: an empty
-                                              array yields an empty matrix, an empty matrix SKIPS
-                                              the verify job, and GitHub paints a skipped job the
-                                              same colour as a passed one. "The gate never ran" and
-                                              "the gate passed" must never be the same pixel.
-  4. an instance with no admin token        → RED, naming the instance. Otherwise the shortfall
+🚨 THE ROSTER IS DERIVED, SO THE PREFLIGHT ASSERTS IN TWO STEPS (#3848), and this drives both.
+`vars.COMBO_VERIFY_INSTANCES` is gone: `derive-combo-instances.py` reads the fleet's deployment
+overlays between them. So `assert` asks whether the inputs that come from outside the tree exist at
+all, and `roster` — which cannot run before the derivation — asks whether every instance the fleet
+ACTUALLY has carries both credentials. Splitting the assertion split the scenarios with it:
+
+  assert:
+  1. nothing provisioned                    → RED, naming secrets.COMBO_VERIFY_KEYS
+  2. one secret absent                      → RED, naming that secret
+  3. everything provisioned                 → GREEN
+
+  roster:
+  4. the derivation emitted NOTHING         → RED. This is the one that matters most: an empty or
+     (and the same for an EMPTY array)        absent roster yields an empty matrix, an empty matrix
+                                              SKIPS the verify job, and GitHub paints a skipped job
+                                              the same colour as a passed one. "The gate never ran"
+                                              and "the gate passed" must never be the same pixel.
+                                              🚨 A DERIVED zero paints exactly the green a DECLARED
+                                              zero did, which is why this scenario did not move
+                                              with the input it used to be about.
+  5. an instance with no admin token        → RED, naming the instance. Otherwise the shortfall
                                               surfaces deep inside the verify job as an HTTP 401
                                               that names no secret — the shape that made an absent
                                               MW_REGISTRY_KEY read as a script bug (Reinsurance#128).
-  5. everything provisioned                 → GREEN, and it emits the matrix it promised.
+  6. every derived instance credentialled   → GREEN, and it emits the matrix it promised.
 
-🚨 It resolves the step BY PATH into the parsed workflow (`jobs.preflight.steps[0].run`) and
-asserts a sentinel is present, so if the preflight is renamed, reordered or moved into a script
-this fails LOUD instead of silently testing nothing — the "a guard whose subject moved and whose
-roots did not" failure mode.
+🚨 It resolves each step BY ID into the parsed workflow (`jobs.preflight.steps[?id]`) and asserts a
+sentinel is present, so if a step is renamed, reordered or moved into a script this fails LOUD
+instead of silently testing nothing — the "a guard whose subject moved and whose roots did not"
+failure mode. The step BETWEEN them is the derivation, which needs the network and has its own
+falsification (`derive-combo-instances.py --self-test`, run beside this one).
 
 PART TWO — THE VERDICT MERGE
 ----------------------------
@@ -71,8 +85,9 @@ except ImportError:  # pragma: no cover - the CI step installs PyYAML; locally `
 WORKFLOW = ".github/workflows/combo-verify.yml"
 LANDER = ".github/scripts/combo-verify-instance.sh"
 
-# The sentinel proves we extracted the preflight's assertion block and not some neighbouring step.
-SENTINEL = "missing=()"
+# One sentinel per assertion step, proving we extracted THAT block and not a neighbouring step.
+SENTINELS = {"assert": "missing=()",
+             "roster": "COMBO_VERIFY_KEYS has no mwi_ key"}
 
 FULLY_PROVISIONED = {
     "AZURE_CLIENT_ID": "cid",
@@ -80,44 +95,66 @@ FULLY_PROVISIONED = {
     "AZURE_SUBSCRIPTION_ID": "sid",
     "FLEET_READER_APP_ID": "app",
     "FLEET_READER_APP_PRIVATE_KEY": "pem",
-    "COMBO_VERIFY_INSTANCES": (
-        '[{"name":"memex","baseUrl":"https://memex.systemorph.com"},'
-        '{"name":"memex-cloud","baseUrl":"https://memex.meshweaver.cloud"}]'
-    ),
     "COMBO_VERIFY_SOURCES": "plugins=https://github.com/Systemorph/MeshWeaver.Plugins",
     "COMBO_VERIFY_KEYS": '{"memex":"mwi_a","memex-cloud":"mwi_b"}',
     "COMBO_VERIFY_TOKENS": '{"memex":"mw_a","memex-cloud":"mw_b"}',
 }
 
-# (label, env overrides, expected exit code, text the output MUST contain)
+# What the derivation step hands the roster step on a healthy fleet.
+DERIVED = ('[{"name":"memex","baseUrl":"https://memex.systemorph.com"},'
+           '{"name":"memex-cloud","baseUrl":"https://memex.meshweaver.cloud"}]')
+
+# (step id, label, env overrides, expected exit code, text the output MUST contain)
 SCENARIOS = [
     (
+        "assert",
         "nothing provisioned",
         {name: "" for name in FULLY_PROVISIONED},
-        1,
-        "vars.COMBO_VERIFY_INSTANCES",
-    ),
-    (
-        "instance list present, the keys secret absent",
-        {**FULLY_PROVISIONED, "COMBO_VERIFY_KEYS": ""},
         1,
         "secrets.COMBO_VERIFY_KEYS",
     ),
     (
-        "list present but an EMPTY array (the vacuous-green shape)",
-        {**FULLY_PROVISIONED, "COMBO_VERIFY_INSTANCES": "[]"},
+        "assert",
+        "one secret absent",
+        {**FULLY_PROVISIONED, "COMBO_VERIFY_TOKENS": ""},
+        1,
+        "secrets.COMBO_VERIFY_TOKENS",
+    ),
+    (
+        "assert",
+        "everything provisioned",
+        FULLY_PROVISIONED,
+        0,
+        "Every external input is present",
+    ),
+    (
+        # 🚨 THE VACUOUS-GREEN CASE, and it did not move with the input it used to be about: the
+        # roster is derived now, and a DERIVED zero paints exactly the green a DECLARED zero did.
+        "roster",
+        "the derivation emitted NOTHING (the vacuous-green shape)",
+        {**FULLY_PROVISIONED, "INSTANCES": ""},
         1,
         "not a non-empty JSON array",
     ),
     (
-        "an instance in the list has no admin token",
-        {**FULLY_PROVISIONED, "COMBO_VERIFY_TOKENS": '{"memex":"mw_a"}'},
+        "roster",
+        "the derivation emitted an EMPTY array (the vacuous-green shape)",
+        {**FULLY_PROVISIONED, "INSTANCES": "[]"},
+        1,
+        "not a non-empty JSON array",
+    ),
+    (
+        "roster",
+        "a derived instance has no admin token",
+        {**FULLY_PROVISIONED, "INSTANCES": DERIVED,
+         "COMBO_VERIFY_TOKENS": '{"memex":"mw_a"}'},
         1,
         "no mw_ admin token for instance 'memex-cloud'",
     ),
     (
-        "everything provisioned",
-        FULLY_PROVISIONED,
+        "roster",
+        "every derived instance carries both credentials",
+        {**FULLY_PROVISIONED, "INSTANCES": DERIVED},
         0,
         "2 instance(s) will be verified",
     ),
@@ -226,26 +263,40 @@ def check_merge(program: str) -> int:
     return failures
 
 
-def read_preflight(root: Path) -> str:
+def read_preflight(root: Path) -> dict[str, str]:
+    """The preflight's two assertion blocks, resolved BY ID out of the shipped YAML.
+
+    🚨 Never by index. The derivation step sits BETWEEN them, so a position is a coincidence — and
+    a guard that silently reads the wrong step is the failure mode this whole file exists to name."""
     path = root / WORKFLOW
     if not path.is_file():
         raise SystemExit(f"::error::{WORKFLOW} does not exist under {root}")
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     try:
-        script = doc["jobs"]["preflight"]["steps"][0]["run"]
-    except (KeyError, IndexError, TypeError) as exc:
+        steps = doc["jobs"]["preflight"]["steps"]
+    except (KeyError, TypeError) as exc:
         raise SystemExit(
-            f"::error::{WORKFLOW}: could not resolve jobs.preflight.steps[0].run ({exc}). "
-            "The preflight moved and this guard did not — it would otherwise pass having "
-            "checked nothing."
+            f"::error::{WORKFLOW}: could not resolve jobs.preflight.steps ({exc}). The preflight "
+            "moved and this guard did not — it would otherwise pass having checked nothing."
         ) from exc
-    if SENTINEL not in script:
-        raise SystemExit(
-            f"::error::{WORKFLOW}: jobs.preflight.steps[0].run does not contain '{SENTINEL}', so "
-            "it is not the assertion block this guard exercises. Point the guard at the step that "
-            "asserts the inputs, or restore the assertion."
-        )
-    return script
+    by_id = {step.get("id"): step for step in steps if isinstance(step, dict)}
+    scripts: dict[str, str] = {}
+    for step_id, sentinel in SENTINELS.items():
+        step = by_id.get(step_id)
+        if step is None or "run" not in step:
+            raise SystemExit(
+                f"::error::{WORKFLOW}: jobs.preflight has no `run` step with id `{step_id}`. The "
+                "assertion moved, was renamed or became a script, and this guard did not follow — "
+                "it would otherwise pass having checked nothing."
+            )
+        if sentinel not in step["run"]:
+            raise SystemExit(
+                f"::error::{WORKFLOW}: the `{step_id}` step does not contain {sentinel!r}, so it is "
+                "not the assertion block this guard exercises. Point the guard at the step that "
+                "asserts, or restore the assertion."
+            )
+        scripts[step_id] = step["run"]
+    return scripts
 
 
 def run_scenario(script: str, env_overrides: dict[str, str]) -> tuple[int, str, str]:
@@ -261,19 +312,21 @@ def run_scenario(script: str, env_overrides: dict[str, str]) -> tuple[int, str, 
         return proc.returncode, proc.stdout + proc.stderr, Path(github_output).read_text()
 
 
-def check(script: str) -> int:
+def check(scripts: dict[str, str]) -> int:
     failures = 0
-    for label, overrides, want_code, want_text in SCENARIOS:
-        code, output, gh_output = run_scenario(script, overrides)
+    for step_id, label, overrides, want_code, want_text in SCENARIOS:
+        code, output, gh_output = run_scenario(scripts[step_id], overrides)
         ok = code == want_code and want_text in output
-        print(f"[{'PASS' if ok else 'FAIL'}] {label}: exit={code} (want {want_code})")
+        print(f"[{'PASS' if ok else 'FAIL'}] {step_id}: {label}: exit={code} (want {want_code})")
         if not ok:
             failures += 1
-            print(f"::error::combo-verify preflight scenario '{label}' behaved wrongly — "
+            print(f"::error::combo-verify preflight scenario '{label}' ({step_id}) behaved wrongly — "
                   f"exit {code}, want {want_code}; message {'contains' if want_text in output else 'DOES NOT contain'} "
                   f"{want_text!r}")
             print("  " + output.replace("\n", "\n  "))
-        elif want_code == 0:
+        elif want_code == 0 and step_id == "roster":
+            # Only the roster step emits the matrix, and a matrix that is never emitted skips the
+            # verify job exactly as an empty one does.
             if "instances=" not in gh_output or "count=" not in gh_output:
                 failures += 1
                 print("::error::the passing scenario emitted no matrix — an empty matrix skips the "
@@ -285,7 +338,10 @@ def check(script: str) -> int:
 
 def self_test() -> int:
     """Each part must be shown to FIRE on its own defect. An unproven guard is no guard."""
-    gutted = 'echo "instances=[]" >>"$GITHUB_OUTPUT"; echo "count=0" >>"$GITHUB_OUTPUT"; exit 0'
+    gutted = {"assert": 'echo "Every external input is present"; exit 0',
+              "roster": ('echo "instances=[]" >>"$GITHUB_OUTPUT"; '
+                         'echo "count=0" >>"$GITHUB_OUTPUT"; '
+                         'echo "0 instance(s) will be verified"; exit 0')}
     preflight_failures = check(gutted)
     if preflight_failures == 0:
         print("::error::--self-test: a preflight that asserts nothing passed every scenario, so "
@@ -327,8 +383,9 @@ def main() -> int:
     if failures:
         print(f"::error::{failures} combo-verify check(s) behaved wrongly.")
         return 1
-    print(f"check-combo-verify: {len(SCENARIOS)} preflight scenario(s) + "
-          f"{len(NODE_SHAPES)} verdict-merge shape(s), 0 violation(s).")
+    print(f"check-combo-verify: {len(SCENARIOS)} preflight scenario(s) over "
+          f"{len(SENTINELS)} assertion step(s) + {len(NODE_SHAPES)} verdict-merge shape(s), "
+          "0 violation(s).")
     return 0
 
 
