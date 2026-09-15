@@ -189,10 +189,22 @@ on:
         type: string
         default: ""
       issue-title:
-        description: The exact title of the ledger issue. The `ci-main-red` label + this title + the body's ownership mark identify it; nothing else is ever closed or commented on.
+        description: The exact title of the ledger issue. The label + this title + the body's ownership mark identify it; nothing else is ever closed or commented on.
         required: false
         type: string
         default: "ci-main-red: main is red"
+      label:
+        description: >-
+          The ledger's own label. Default `ci-main-red` — every existing caller is a repo's MAIN
+          BUILD and keeps it. A lane that is not "main is red" passes its own (e.g.
+          `ci-combo-unverified`) so its story does not share an issue with the build's: the ledger
+          finds, appends, reopens and closes by label AND title AND the ownership mark, so two lanes
+          under one label would let either close the other's. 🚨 `ci-failure` is REFUSED by the
+          script — that is main-cd.yml's delivery alert, and sharing it lets a CD heal close a
+          ledger while the lane is still red.
+        required: false
+        type: string
+        default: ci-main-red
       control-webhook-url:
         description: The control portal's triage inbox — pass vars.CONTROL_WEBHOOK_URL (https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds).
         required: true
@@ -253,6 +265,7 @@ jobs:
           SHA: ${{ inputs.sha }}
           TRIGGER: ${{ inputs.event }}
           SCRIPTS_REF: ${{ inputs.scripts-ref }}
+          LEDGER_LABEL: ${{ inputs.label }}
         run: |
           set -euo pipefail
           missing=()
@@ -265,6 +278,7 @@ jobs:
           [ -n "${SHA:-}" ]                    || missing+=("inputs.sha                      github.sha")
           [ -n "${TRIGGER:-}" ]                || missing+=("inputs.event                    github.event_name")
           [ -n "${SCRIPTS_REF:-}" ]            || missing+=("inputs.scripts-ref              the Systemorph/MeshWeaver ref the ledger script is fetched at (default main)")
+          [ -n "${LEDGER_LABEL:-}" ]           || missing+=("inputs.label                    the ledger's own label (default ci-main-red). Measured, not assumed: the script reads \`env(LEDGER_LABEL) or DEFAULT_LABEL\`, so an EMPTY value does not fail — it silently becomes \`ci-main-red\`, and a lane that meant to keep its own story would append to, reopen and CLOSE the repo's main-build ledger instead. Refused here so the fallback can never be reached by accident")
           case "${OUTCOME:-}" in
             failure|success) ;;
             *) missing+=("inputs.outcome                  must be \`failure\` or \`success\`, got '${OUTCOME:-}' — wire two caller jobs, one per outcome, never one job guessing") ;;
@@ -280,7 +294,7 @@ jobs:
           # names the `issues: write` grant on the caller job.
           code=$(curl -sS -o "$RUNNER_TEMP/issues-probe" -w '%{http_code}' --connect-timeout 10 --max-time 30 \
             -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues?labels=ci-main-red&state=all&per_page=1") || code=000
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues?labels=${LEDGER_LABEL}&state=all&per_page=1") || code=000
           if [ "$code" != "200" ]; then
             echo "::error::GET /repos/${GITHUB_REPOSITORY}/issues answered HTTP ${code} with the token this lane was handed. It must be the caller's secrets.GITHUB_TOKEN, forwarded as \`secrets: github-token:\`, on a caller job granting \`permissions: {contents: read, issues: write, actions: read}\`. Response: $(head -c 300 "$RUNNER_TEMP/issues-probe" || true)"
             exit 1
@@ -327,7 +341,7 @@ jobs:
           LEDGER_PLATFORM_SET: ${{ inputs.platform-set }}
           LEDGER_ISSUE_TITLE: ${{ inputs.issue-title }}
           # NEVER ci-failure — that is main-cd.yml's delivery alert; the script refuses that label outright.
-          LEDGER_LABEL: ci-main-red
+          LEDGER_LABEL: ${{ inputs.label }}
         run: |
           set -euo pipefail
           export LEDGER_EVENT_OUT="$RUNNER_TEMP/event.json"
