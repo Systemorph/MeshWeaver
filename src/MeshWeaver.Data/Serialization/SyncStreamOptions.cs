@@ -106,4 +106,18 @@ public class SyncStreamOptions
     /// can lag several hundred ms behind the first Full. Tests can shorten it.</para>
     /// </summary>
     public TimeSpan SyncHubRegistrationGrace { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How many stream ids a hub's <c>SyncStreamActivationLedger</c> keeps the disposition of —
+    /// what lets a refused user action say WHICH of the three ends its stream met (#3986) instead
+    /// of naming all three at once.
+    ///
+    /// <para>Sized for "how many streams was this hub serving around the time of the refusal",
+    /// which is the only question it answers: a refusal names a stream that ended recently, so
+    /// RECENCY is what has to survive. NOT a correctness bound — running past it costs the
+    /// "never served here" / "served and long since ended" distinction on that hub and nothing
+    /// else, and the ledger SAYS so with its own numbers rather than guessing. Tests set it tiny
+    /// so that fourth answer is observable without minting hundreds of streams.</para>
+    /// </summary>
+    public int ActivationLedgerCapacity { get; set; } = 512;
 }
