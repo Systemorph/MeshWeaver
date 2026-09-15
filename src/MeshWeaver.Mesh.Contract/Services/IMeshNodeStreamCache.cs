@@ -181,4 +181,34 @@ public interface IMeshNodeStreamCache
     /// recently registered. Internal — reached via <c>workspace.GetQuery(id)</c>.
     /// </summary>
     internal IObservable<IEnumerable<MeshNode>>? GetQuery(object id);
+
+    /// <summary>
+    /// Drops every process-wide synced query this cache holds that is ANCHORED to
+    /// <paramref name="partition"/>, releasing each one's upstream connection. Called by the
+    /// partition teardown (<c>PartitionDropPostDeletionHandler</c>) once the partition's backing
+    /// store is gone.
+    ///
+    /// <para>🚨 <b>Why a teardown must reach in here</b> (issue Systemorph/MeshWeaver.Plugins#1870).
+    /// An anchored query is a <em>fold</em>: it seeds from ONE store listing taken when the chain
+    /// was built and is kept current by change events thereafter — and <c>AutoConnect(1)</c> means
+    /// it stays connected for the life of the process. Dropping a partition destroys the store the
+    /// fold mirrors, but nothing dropped the fold, so the SAME chain went on serving a partition
+    /// recreated later under the same id. The decisive one is
+    /// <c>$security-access:{partition}</c>, which every permission check on that partition reads:
+    /// on a first-ever create it is minted AFTER the creator's <c>{id}/_Access</c> grant and its
+    /// seeding listing therefore contains it by construction, while on a recreate the pre-existing
+    /// fold could only learn the new grant from a change event that RACES the rest of the create —
+    /// so the create returned "you own this Space" and the creator's very next write was refused
+    /// with <c>Access denied: Create permission required</c>. Evicting here restores the
+    /// first-create property: the next decision on that partition is minted from the store it
+    /// actually has.</para>
+    ///
+    /// <para>Idempotent, and a no-op for a partition that holds no cached query. Anchored means the
+    /// cache id is a string ending in <c>:{partition}</c> — the spelling every per-partition
+    /// security query uses (<c>SecurityQueries.PartitionAssignments</c> /
+    /// <c>PartitionPolicies</c>); the root-scope twins (<c>$security-access:</c>) and every global
+    /// query are untouched.</para>
+    /// </summary>
+    /// <param name="partition">The partition (a first path segment) whose store was torn down.</param>
+    internal void InvalidatePartition(string partition) { }
 }
