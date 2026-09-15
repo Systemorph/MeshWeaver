@@ -1,7 +1,7 @@
 ---
 Name: A node that is not there is reported at once
 Category: Fix
-Description: Opening something that no longer exists used to take thirty seconds and then blame the storage layer. The answer now comes back immediately, and says the node is not there.
+Description: Opening something that is not there used to take thirty seconds and come back as a clock running out. The answer now arrives as soon as the lookup has finished — a verdict, not a timeout.
 Icon: Timer
 Order: -20260915
 ---
@@ -26,16 +26,20 @@ simply not there took the full thirty seconds and then came back as:
 > No MeshNode emitted for '…' within 30s. Either the node does not exist or no query provider claims
 > its partition.
 
-That message is what the framework says when it does not know — one of those two clauses is a
-missing node, the other is a piece of storage not answering — and it was being used for a case where
-the framework knew perfectly well, thirty seconds earlier, that the node was missing.
+That is a **timeout** — the framework saying it ran out of time to find out — and it was being used
+for a case where the lookup had finished thirty seconds earlier. (Which of the two clauses applies is
+a separate question, and it is genuinely open: an empty answer from storage looks the same whether
+the node was never written or nothing claims the partition it would live in. That has not changed
+here, and the answer still names both possibilities.)
 
 **Storage now decides when the question is answered**, and the shortcut is dropped the moment it
-does. Ask for something that is not there and you get the answer straight away, saying so; the
-shortcut still hands over a node when it has one warm, which is the only thing it was ever for. If
-storage itself fails, that is still reported as a failure — that part is real news about the node.
+does. Ask for something that is not there and the answer arrives as soon as the lookup is done,
+as a verdict about the address rather than a clock running out. The shortcut still hands over a node
+when it has one warm, which is the only thing it was ever for; and if storage itself fails, that is
+still reported as a failure — that part is real news about the node.
 
 Visibly: a link or a bookmark pointing at something that has been deleted comes back now instead of
 in half a minute, and a compile activity or a mirror that point-reads a companion node it does not
 require stops paying thirty seconds to learn it is absent. In the portal's own logs, the
-*"activation faulted … within 30s"* line stops standing in for *"there is no such node"*.
+*"activation faulted … within 30s"* timeout is replaced by the resolution verdict for that address —
+a different kind of statement, thirty seconds earlier.
