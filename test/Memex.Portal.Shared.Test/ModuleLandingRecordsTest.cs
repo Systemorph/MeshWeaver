@@ -130,10 +130,12 @@ public class ModuleLandingRecordsTest : IDisposable
     {
         using var replica = new ModuleLandingService(null, root, beforeRecording: null);
         await Shelve(replica, "1.6.0", "1.6.0");
-        // What an older image leaves behind: the per-module entry, and no landing records at all.
+        // What an older image leaves behind: the per-module entry exactly as IT writes one — no
+        // ProjectionOf, a field it does not know — and no landing records at all.
         ModuleActivationSidecar.RemoveLandingRecords(root, Module);
         Assert.Empty(RecordFiles());
-        var stored = Assert.Single(ModuleActivationSidecar.ReadStored(root).Entries);
+        var stored = Assert.Single(ModuleActivationSidecar.ReadStored(root).Entries) with { ProjectionOf = null };
+        ModuleActivationSidecar.WriteEntry(root, stored);
         Assert.Equal(stored, Assert.Single(ModuleActivationSidecar.Read(root).Entries));
 
         await Shelve(replica, "1.7.0", "1.7.0");

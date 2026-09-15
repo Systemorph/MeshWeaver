@@ -151,7 +151,8 @@ public class ConcurrentModuleLandingTest : IDisposable
         var stored = JsonSerializer.Deserialize<ModuleActivationEntry>(
             File.ReadAllText(ModuleActivationSidecar.EntryPath(root, Module)),
             new JsonSerializerOptions(JsonSerializerDefaults.Web));
-        Assert.Equal(head with { UnloadableFrameworkMvid = null }, stored);
+        Assert.NotNull(stored!.ProjectionOf);
+        Assert.Equal(head with { UnloadableFrameworkMvid = null }, stored with { ProjectionOf = null });
 
         // ── and both generations survive the modules GC ───────────────────────────────────────
         CollectGarbage();

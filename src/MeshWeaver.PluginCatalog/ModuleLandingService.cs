@@ -235,20 +235,19 @@ public sealed class ModuleLandingService : IDisposable
         // rolled-back replica boots from them. Referencing only the derived set would reclaim the
         // bytes a rollback needs; referencing both keeps a superset of what either reads, so this
         // pass never deletes anything the pre-#4026 pass would have kept.
+        //
+        // 🚨 And the fallback is ranked PER PLATFORM (Copilot's review of #4427): a rolling update
+        // has two images live on one volume, each ranking by its own link verdicts, so the derived
+        // generations of EVERY platform a verdict exists for — and of the platform with none — are
+        // referenced, never only this process's.
         var stored = ModuleActivationSidecar.ReadStored(baseDirectory, OnReadFault);
-        var activation = ModuleActivationSidecar.ApplyLandingRecords(baseDirectory, stored, OnReadFault);
-        var referenced = activation.Entries.Concat(stored.Entries)
-            .Where(e => !string.IsNullOrWhiteSpace(e.Directory))
-            .Select(e => e.Directory!)
+        var referenced = ModuleActivationSidecar.ReferencedGenerations(baseDirectory, stored, OnReadFault)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         // 🚨 #3649: an entry's PREVIOUS generation is referenced exactly like its head one. It is
         // the generation boot falls back to when the head does not load on this platform — for a
         // Store-only module the ONLY generation that runs — and reclaiming it is precisely how a
         // shelved landing built for a newer platform used to take a working module away.
-        foreach (var previous in activation.Entries.Concat(stored.Entries)
-                     .Where(e => !string.IsNullOrWhiteSpace(e.PreviousDirectory))
-                     .Select(e => e.PreviousDirectory!))
-            referenced.Add(previous);
+        // (ReferencedGenerations includes every PREVIOUS generation as well as every head.)
         // 🚨 #3395: the activation entries are NOT the whole reference set any more. The mesh's
         // module set deliberately pins an OLDER generation than the entry while a wave's landings
         // wait to be proposed — and that older generation is what every running replica LOADED. A
@@ -500,13 +499,47 @@ public sealed class ModuleLandingService : IDisposable
     /// runs a second replica's whole landing inside it, which makes the interleaving that lost
     /// Mail 1.7.0 deterministic instead of a timing accident.
     /// </summary>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="baseDirectory">The deployment root.</param>
+    /// <param name="beforeRecording">Runs once a landing's bytes are on the volume, before it records.</param>
+    /// <param name="beforeProjecting">Runs once a landing or an uninstall has decided, before it writes
+    /// the per-module file older images read — the window Copilot's review of #4427 named, in which
+    /// a projection derived before another replica's uninstall (or landing) can be written after it.</param>
+    /// <param name="platformIdentity">The platform build this replica runs — what its link verdicts
+    /// are measured against and read back for. Production uses the live framework identity.</param>
+    /// <param name="platformSurface">The platform half of the link probe's surface, given the probe
+    /// directories. Production uses the running process; a test stands up a replica on ANOTHER image
+    /// by handing it a surface built from that image's files.</param>
     internal ModuleLandingService(
-        ILogger<ModuleLandingService>? logger, string? baseDirectory, Action<string>? beforeRecording)
+        ILogger<ModuleLandingService>? logger, string? baseDirectory, Action<string>? beforeRecording,
+        Action<string>? beforeProjecting = null, string? platformIdentity = null,
+        Func<string[], ModulePlatformSurface>? platformSurface = null)
         : this(logger, baseDirectory)
-        => this.beforeRecording = beforeRecording;
+    {
+        this.beforeRecording = beforeRecording;
+        this.beforeProjecting = beforeProjecting;
+        if (platformIdentity is not null)
+            platform = () => platformIdentity;
+        if (platformSurface is not null)
+            this.platformSurface = platformSurface;
+    }
 
     /// <summary>Null in production — see the internal constructor.</summary>
     private readonly Action<string>? beforeRecording;
+
+    /// <summary>Null in production — see the internal constructor.</summary>
+    private readonly Action<string>? beforeProjecting;
+
+    /// <summary>
+    /// The platform build this replica runs — the key its link verdicts are recorded under and read
+    /// back for (#4026, Copilot's review of #4427). The live framework identity in production,
+    /// resolved on first use.
+    /// </summary>
+    private readonly Func<string?> platform = ModuleActivationSidecar.LivePlatform;
+
+    /// <summary>The running process in production — see the internal constructor.</summary>
+    private readonly Func<string[], ModulePlatformSurface> platformSurface =
+        directories => ModulePlatformSurface.OfRunningProcess(directories);
 
     /// <summary>The deployment root the <c>modules/</c> tree lives under — exposed so the serving
     /// side (<see cref="ModuleBundleSource"/> callers) reads the SAME tree this service writes,
@@ -688,8 +721,8 @@ public sealed class ModuleLandingService : IDisposable
     /// as the writes so a read never observes a landing halfway through its read-modify-write.
     /// </summary>
     public IObservable<ModuleActivationList> GetActivation()
-        => pool.InvokeBlocking(_ => ModuleActivationSidecar.Read(baseDirectory,
-            msg => logger?.LogError("{Message}", msg)));
+        => pool.InvokeBlocking(_ => ModuleActivationSidecar.ReadFor(baseDirectory,
+            msg => logger?.LogError("{Message}", msg), platform));
 
     /// <summary>
     /// Proposes the module set the deployment's activation record now describes — the coordination
@@ -713,8 +746,8 @@ public sealed class ModuleLandingService : IDisposable
     public IObservable<ModuleSet?> ProposeModuleSet()
         => pool.InvokeBlocking(_ =>
         {
-            var landed = ModuleActivationSidecar.Read(baseDirectory,
-                msg => logger?.LogError("{Message}", msg));
+            var landed = ModuleActivationSidecar.ReadFor(baseDirectory,
+                msg => logger?.LogError("{Message}", msg), platform);
             var proposed = ModuleSetStore.Propose(baseDirectory, landed,
                 proposedBy: Environment.MachineName,
                 onCorrupt: msg => logger?.LogWarning("{Message}", msg));
@@ -817,8 +850,8 @@ public sealed class ModuleLandingService : IDisposable
         // Read ONCE: the surface below is measured against the landed set, and the previous
         // generation (#3649) is taken from the same read, so the two cannot disagree about which
         // generation this module currently has.
-        var landedBefore = ModuleActivationSidecar.Read(baseDirectory,
-            msg => logger?.LogWarning("{Message}", msg));
+        var landedBefore = ModuleActivationSidecar.ReadFor(baseDirectory,
+            msg => logger?.LogWarning("{Message}", msg), platform);
         var surface = PlatformSurface(landedBefore);
         var linkVerdict = LinkVerdict();
         var held = linkVerdict.MayLoad ? null : linkVerdict.Report();
@@ -1058,20 +1091,26 @@ public sealed class ModuleLandingService : IDisposable
             MinMeshVersion = minMeshVersion,
             SourceCommit = sourceCommit,
             YieldsToNewerHead = keepNewerHead,
-            LinkableHere = held is null,
         };
         void OnCorrupt(string message) => logger?.LogWarning("{Message}", message);
+        // 🚨 What THIS platform measured about these bytes, recorded under THIS platform's identity
+        // (Copilot's review of #4427). Loadability is a fact about the bytes AND the image, so a
+        // replica on another image — or a later one on this image after a sibling landed — records
+        // its own measurement instead of finding the first replica's frozen in the landing record.
+        // Written before the landing record, so a record is never visible without its verdict.
+        if (platform() is { Length: > 0 } measuredOn)
+            ModuleActivationSidecar.WriteVerdict(baseDirectory, name, generation, measuredOn, held is null);
         var recorded = ModuleActivationSidecar.WriteLanding(baseDirectory, record);
-        var state = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name, OnCorrupt);
+        var state = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name, OnCorrupt, platform);
         // The same bundle landed before, so its record was already here. Usually a no-op — but an
         // adopt landing re-installing the generation this deployment ran before (the Store's
         // rollback) must still take the head, so a landing that WOULD move it records a
         // re-arrival of its own instead of relying on a record that arrived earlier.
         if (!recorded
-            && ModuleActivationSidecar.ReArrival(baseDirectory, state, record, DateTime.UtcNow) is { } again)
+            && ModuleActivationSidecar.ReArrival(baseDirectory, state, record, DateTime.UtcNow, platform) is { } again)
         {
             ModuleActivationSidecar.WriteLanding(baseDirectory, again);
-            state = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name, OnCorrupt);
+            state = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name, OnCorrupt, platform);
         }
         var entry = state.Derived
             ?? throw new InvalidOperationException(
@@ -1116,8 +1155,19 @@ public sealed class ModuleLandingService : IDisposable
         // with no reader). Two replicas may overwrite each other's projection, exactly as before;
         // for a module with records a current image never reads a head from it, so that lost
         // update now reaches only an older image, which had it anyway.
-        if (!entry.Equals(state.Stored))
-            ModuleActivationSidecar.WriteEntry(baseDirectory, entry);
+        //
+        // 🚨 And it is marked as a PROJECTION (ProjectionOf), which is what keeps it from ever
+        // deciding anything for a current image (Copilot's review of #4427): a landing that derived
+        // "installed" before another replica's uninstall can still write this file after that
+        // uninstall — re-reading first would not be a compare-and-swap — but a current image orders
+        // the uninstall's TOMBSTONE against this landing's RECORD by arrival and never reads
+        // installed-ness from a projection. An image that predates the records reads this file as
+        // its whole answer, and for it the file stays last-writer-wins, as it always was.
+        beforeProjecting?.Invoke(name);
+        if (state.Stored is not { ProjectionOf: not null } stored
+            || !entry.Equals(stored with { ProjectionOf = null }))
+            ModuleActivationSidecar.WriteEntry(baseDirectory,
+                entry with { ProjectionOf = ModuleActivationSidecar.LatestEventName(state) });
         // Bytes landed (head or shelf), so a refusal marker from an earlier landing of this module
         // no longer describes the state (#4083).
         ModuleActivationSidecar.ClearRefused(baseDirectory, name);
@@ -1299,12 +1349,14 @@ public sealed class ModuleLandingService : IDisposable
                 name, generation, restored.Count, string.Join(", ", restored));
     }
 
-    private void RemoveCore(string name)
+    // Internal for the #4427 review pins (InternalsVisibleTo): an uninstall on a second REPLICA
+    // runs inside the first one's projection window, on the calling thread.
+    internal void RemoveCore(string name)
     {
         ValidateFileName(name, "module name");
 
-        var list = ModuleActivationSidecar.Read(baseDirectory,
-            msg => logger?.LogError("{Message}", msg));
+        var list = ModuleActivationSidecar.ReadFor(baseDirectory,
+            msg => logger?.LogError("{Message}", msg), platform);
         var existing = list.Entries.FirstOrDefault(e =>
             string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase));
         if (existing is null)
@@ -1316,6 +1368,23 @@ public sealed class ModuleLandingService : IDisposable
         // directory (or its fallback's, #3649) 'referenced', or the GC pass could never reclaim
         // them. Written to THIS module's own file, never through the shared index (#2090): an
         // uninstall racing another module's landing used to drop whichever entry lost.
+        //
+        // 🚨 #4026, Copilot's review of #4427 — the uninstall is an EVENT first: a tombstone in the
+        // module's record directory, immutable and ordered by its own arrival against every landing
+        // record. A current image reads "uninstalled" whenever the newest tombstone is newer than
+        // every landing, WHATEVER the per-module file says — so a landing on another replica that
+        // derived "installed" before this tombstone and writes its projection after it cannot bring
+        // the module back. No record is deleted: the landings before the tombstone simply stop
+        // counting, which also makes the next landing a first landing (the documented "uninstall,
+        // then publish the older build" rollback), and retention retires them once they change
+        // nothing. Deleting records instead would be an order nothing can rely on — a landing
+        // writing its record while they are deleted.
+        var tombstone = ModuleActivationSidecar.WriteUninstall(baseDirectory, name,
+            ModuleActivationSidecar.LatestEventName(
+                ModuleActivationSidecar.ReadModuleHead(baseDirectory, name, msg => logger?.LogError("{Message}", msg), platform)));
+        // The disabled per-module file is what an image that predates the records reads. It is a
+        // projection of the tombstone, marked as one, so it decides nothing for a current image.
+        beforeProjecting?.Invoke(name);
         ModuleActivationSidecar.WriteEntry(baseDirectory,
             existing with
             {
@@ -1324,13 +1393,9 @@ public sealed class ModuleLandingService : IDisposable
                 PreviousDirectory = null,
                 PreviousVersion = null,
                 PreviousFrameworkMvid = null,
+                PreviousSourceCommit = null,
+                ProjectionOf = tombstone,
             });
-        // #4026 — and the module's landing records, AFTER the disabled entry that actually
-        // uninstalls it (a disabled stored entry outranks every record). What removing them buys is
-        // that the NEXT landing is a first landing: the documented way to roll a registry back is
-        // "uninstall, then publish the older build", and records left behind would still rank the
-        // newer build above it.
-        ModuleActivationSidecar.RemoveLandingRecords(baseDirectory, name);
         ModuleActivationSidecar.SetPendingRestart(baseDirectory, true);
         // An uninstalled module has no head to have measured (#3650); a marker left behind would
         // be inert (its generation is gone) but is one more thing to explain.
@@ -1399,7 +1464,7 @@ public sealed class ModuleLandingService : IDisposable
             .Where(Directory.Exists)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        return ModulePlatformSurface.OfRunningProcess([AppContext.BaseDirectory, .. landed]);
+        return platformSurface([AppContext.BaseDirectory, .. landed]);
     }
 
     private static void ValidateFileName(string? value, string what)
