@@ -78,16 +78,19 @@ If active bleeding genuinely needs a stopgap first, say so EXPLICITLY ("this is 
 
 Full reference: [/async](.claude/skills/async/SKILL.md) · [RemovingHandWovenGates.md](src/MeshWeaver.Documentation/Data/Architecture/RemovingHandWovenGates.md) · [ControlledIoPooling.md](src/MeshWeaver.Documentation/Data/Architecture/ControlledIoPooling.md) · memory `feedback_no_semaphoreslim`.
 
+<!-- shared-rule:begin never-hand-roll-ui -->
 ## 🚨🚨🚨 ABSOLUTE: Never hand-roll UI / data-binding / persistence / submit — use the framework
 
 **A "UI feature" means wiring up the framework's EXISTING pieces, never reinventing them.** Before writing ANY UI/binding/persistence code, FIND the existing area/control/macro/extension and use it; if you are reaching for `GetDataStream`/`Subscribe`/`Update`/`CombineLatest`/a new wrapper for a UI feature, STOP.
 
 - **Editing a node's content** → bind the GUI DIRECTLY to the node stream (`MeshNodeContentEditorControl.ForType`, `MarkdownEditorControl.WithAutoSave`, `MeshNodePickerControl`). 🚨 **NEVER replicate the node into a layout-area `/data/{id}` copy plus a save subscription** — any `*AutoSave` helper, or a "Save" button that reads `/data` and writes the node, is the forbidden replicate-then-save antipattern (two stores drift; the save loop clobbers unedited fields).
 - **Tabular / structured data → a framework CONTROL, NEVER hand-built HTML.** `Controls.DataGrid` + `PropertyColumnControl<T>`, composed with `Controls.Stack`/`LayoutGrid`/`Title`/`Markdown`. **FORBIDDEN:** `StringBuilder`/`$"<table>…"`, any `RenderHtml`-shaped helper, or `Controls.Html(handBuiltMarkup)` for structured data.
+- **A page is composed from the platform's layout controls — never your own UI framework** (maintainer, 2026-09-15). `Controls.Stack`/`LayoutGrid`/`Splitter`/`Title`/`Markdown`, `Controls.DataGrid` + `PropertyColumnControl<T>` for rows, `CodeEditorControl` (read-only) for code, `Controls.Progress`, `Controls.Button`. **FORBIDDEN:** a CSS system or inline-style framework of your own, and `Controls.Html` markup for layout or code. If the platform lacks a control, add it to the platform — never work around it in a node.
 - **Form controls** → the `Edit` macro + `[UiControl<T>]`/`[Description]`/`[Editable(false)]`; no hand-built selects/checkboxes/textareas + a data section. **Submitting a chat message** → the existing `hub.StartThread(...)` / `hub.SubmitMessage(...)` extensions; no wrapper class, no path→id resolution.
 - **Never** `.Take(1)` on a stream feeding a live data-bound view — it freezes the binding.
 
-Full reference: [/gui](.claude/skills/gui/SKILL.md) · [GUI/DataBinding.md](src/MeshWeaver.Documentation/Data/GUI/DataBinding.md) · memory `feedback_no_handrolling`.
+Full reference: <!--slot:reference-->[/gui](.claude/skills/gui/SKILL.md) · [GUI/DataBinding.md](src/MeshWeaver.Documentation/Data/GUI/DataBinding.md) · memory `feedback_no_handrolling`<!--/slot-->.
+<!-- shared-rule:end never-hand-roll-ui -->
 
 ## 🚨🚨🚨 ABSOLUTE: Never change log levels in code for debug reasons
 
