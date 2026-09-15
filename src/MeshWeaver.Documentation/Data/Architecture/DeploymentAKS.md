@@ -474,9 +474,16 @@ only the first is a wait:
   `RuntimeGrainServices` with `Name or service not known` out of `MembershipTableManager`
   ([#3780](https://github.com/Systemorph/MeshWeaver/issues/3780)). What made that expensive to read was
   the init container's PASS: it said nothing about the connection that failed, so a gate that was never
-  covering the host looked like a transient resolver blip. The probe's coverage is now asserted at render
-  time by invariant 16 of `deploy/aks/scripts/check-chart-invariants.sh`, on a fixture whose mesh and
-  orleans databases are on different servers; and
+  covering the host looked like a transient resolver blip. 🚨 **One exception, the Key Vault case**: an
+  external database whose `ConnectionStrings__memex` is NOT in the values (every record-driven instance,
+  whose string arrives on a CSI SecretProviderClass) probes `config.<half>.MEMEX_HOST` — the values'
+  string there is only the chart's in-cluster placeholder, and probing it spun forever on
+  `memex-postgres-service` (pearl, 2026-09-15; see
+  [Deployment environment layers](/Doc/Architecture/DeploymentEnvLayers)). On a `postgres.enabled: false`
+  release the chart refuses to render any probe of `memex-postgres-service`, whichever input names it.
+  The probe's coverage is now asserted at render time by invariants 16 and 17 of
+  `deploy/aks/scripts/check-chart-invariants.sh`, on fixtures whose mesh and orleans databases are on
+  different servers and whose connection string comes from Key Vault; and
 - the portal's **`DbVersionGate`** hosted service does a **one-shot check at startup, and does not wait**. It
   reads `admin.mesh_nodes.db_version` once and, if it is below the `ExpectedDbVersion` constant compiled into
   the build, logs `Critical` and calls `lifetime.StopApplication()`.
