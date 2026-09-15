@@ -1117,16 +1117,30 @@ def read_repository_roster(root: str) -> tuple[dict[str, str], list[str]]:
     return table, problems
 
 
-def check_repository_roster(axis2: list[OverlayScan], declared: dict[str, str]) -> list[str]:
+def check_repository_roster(axis2: list[OverlayScan], declared: dict[str, str],
+                            complete: bool = True) -> list[str]:
     """Hold the `repositories` table to the repositories the fleet scan actually found, both ways.
 
-    A repository whose tree could not be READ is skipped here and ONLY here: `build_plan` has
+    A repository whose tree could not be READ is not compared here, and ONLY here: `build_plan` has
     already made it a blocker, so it is never a silent pass — believing an absence measured through
-    an unreadable tree is the trap this whole script is made of."""
+    an unreadable tree is the trap this whole script is made of. 🚨 It is still counted as REACHED,
+    though: leaving it out would make a correctly declared repository produce the stale-line blocker
+    below as well, and *"no repository the fleet scan reached carries an overlay under that name"* is
+    a false sentence about a repository the scan reached and could not read (#4396 review).
+
+    🚨 `complete` IS THE DENOMINATOR, AND THE TWO DIRECTIONS DO NOT SHARE IT. "This repository is
+    not declared" is sound over any scan — a repository that IS in front of you and unnamed is
+    unnamed. "This declaration names nobody" is only sound over the WHOLE fleet, and `--repos` and
+    `--root` deliberately scan part of it, so asserting it there would red every partial run on a
+    record that is right. It is the invocation MODE that decides — `--discover` — never whether
+    some input happens to be present, and a partial run PRINTS that it did not make the second
+    assertion, because "not checked" and "checked and clean" are the confusion this file is made
+    of."""
     problems: list[str] = []
     seen: set[str] = set()
     for scan in axis2:
         if scan.unreadable:
+            seen.add(scan.gh_repo)
             continue           # already a blocker; an unread tree proves no absence
         if not scan.files:
             continue           # a repository with no deployment overlay at all
@@ -1143,12 +1157,13 @@ def check_repository_roster(axis2: list[OverlayScan], declared: dict[str, str]) 
             "repository nobody has declared brings its installations into this run unread — which "
             "is how `Systemorph/PartnerRe.Memex` reached the fleet on 2026-09-14 and took this "
             "lane down the same night. Add it, with what it is.")
-    for repo in sorted(set(declared) - seen):
-        problems.append(
-            f"`.github/acr-retention/{ROSTER_PATH}` declares repository `{repo}` and no repository "
-            "the fleet scan reached carries a deployment overlay under that name. A declaration "
-            "for a repository that is gone accounts for nothing and hides the next one — delete "
-            "the line.")
+    if complete:
+        for repo in sorted(set(declared) - seen):
+            problems.append(
+                f"`.github/acr-retention/{ROSTER_PATH}` declares repository `{repo}` and no "
+                "repository the fleet scan reached carries a deployment overlay under that name. A "
+                "declaration for a repository that is gone accounts for nothing and hides the next "
+                "one — delete the line.")
     return problems
 
 
@@ -1238,6 +1253,7 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str, 
     # repository's installation and no other; an unqualified one is resolvable only while exactly
     # one repository declares the id, because otherwise a single line would exempt an installation
     # nobody wrote it about.
+    applied_by: dict[str, str] = {}
     for entry_key in sorted(roster):
         state, reason, repo = roster[entry_key]
         if repo:
@@ -1259,6 +1275,21 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str, 
                 "nothing and hides the next one — delete the line.")
             continue
         for target in targets:
+            # 🚨 THE ALIAS PAIR, WHICH THE READER CANNOT SEE (#4396 review). `{"id": "memex"}` and
+            # `{"id": "memex", "repo": "Systemorph/Memex"}` are two DIFFERENT keys, so the roster's
+            # own declared-twice check passes them both — and where that id is unique they resolve
+            # to the SAME installation, which is then assigned twice in key order. A contradictory
+            # `not-installed` line would win or lose by repository-name casing, and winning would
+            # skip a live installation's probe AND its running-set protection. Whether two entries
+            # alias each other is knowable only here, where the fleet's ids are known.
+            if applied_by.get(target.key):
+                blockers.append(
+                    f"{ROSTER_PATH} declares `{applied_by[target.key]}` AND `{entry_key}`, and "
+                    f"both resolve to the same installation (`{target.label}`). Which state is in "
+                    "force would be decided by the order of the keys, so neither is — and the "
+                    "loser is invisible. Keep one line.")
+                continue
+            applied_by[target.key] = entry_key
             target.state, target.reason = state, reason
 
     for instance in instances.values():
@@ -1778,6 +1809,7 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
         # declaration says "never published by this fleet", while release.yml mirrors three
         # repositories there on every official release (#4323). A count alone would have hidden it.
         publications = read_registry_publications(root)
+        rules = read_registry_rules(root)
         for host in sorted(by_host):
             references = sorted(set(by_host[host]))
             disposition = dispositions.get(host, ("undeclared", ""))[0]
@@ -1799,7 +1831,18 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
                 references = [reference for reference in references if reference not in ours]
                 if not references:
                     continue
-            if disposition == "fleet-unlockable":
+            if disposition == "fleet-unlockable" and rules.get(host) == "out-of-estate":
+                # 🚨 NOT A KEEP SENTENCE FOR AN ESTATE THIS RECORD MEASURES NOTHING ABOUT (#4396
+                # review). "A cleanup must KEEP" reads as a protected set this lane derived and
+                # stands behind; for `out-of-estate` the record says the opposite in as many words,
+                # and a report contradicting the declaration it is printed beside is how a reader
+                # ends up acting on the wrong one.
+                emit(f"      {host} (declared fleet-unlockable, retention `out-of-estate`): "
+                     f"{len(references)} committed reference(s), listed and NOT a protected set. "
+                     "This registry is in an estate outside this fleet's reach; what is kept or "
+                     "deleted there is decided there, this record measures nothing about it, and "
+                     "nothing here protects these")
+            elif disposition == "fleet-unlockable":
                 emit(f"      {host} (declared fleet-unlockable): {len(references)} committed "
                      "reference(s) a cleanup must KEEP")
             elif disposition == "third-party":
@@ -2091,7 +2134,7 @@ def read_inventory(registry: Registry) -> tuple[dict[str, list[Manifest]], dict[
 
 
 def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool,
-        local_root: str | None) -> int:
+        local_root: str | None, fleet_is_complete: bool = True) -> int:
     registry = Registry(registry_name)
     registry.control_probe()          # dies red if the registry does not answer
 
@@ -2120,7 +2163,17 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
     # installations into this run unread — the exemption the qualification would otherwise buy.
     repository_roster, repository_problems = read_repository_roster(local_root or ".")
     plan.blockers.extend(repository_problems)
-    plan.blockers.extend(check_repository_roster(axis2, repository_roster))
+    # 🚨 `fleet_is_complete` IS THE DENOMINATOR, and only `--discover` supplies one. The strict
+    # direction — a repository in front of us that the table does not name — is sound over any
+    # scan and always runs. The stale direction asserts that NOTHING ELSE in the fleet answers to
+    # a declared name, which a `--repos`/`--root` scan cannot know, so a partial run SAYS it did
+    # not make that assertion rather than making it wrongly or skipping it silently (#4396 review).
+    if not fleet_is_complete:
+        print("repository roster: PARTIAL scan — every repository in front of this run is still "
+              "held to the `repositories` table, but the STALE direction (a declared repository "
+              "nothing answers to) is NOT asserted. Only --discover enumerates the whole fleet.")
+    plan.blockers.extend(check_repository_roster(axis2, repository_roster,
+                                                 complete=fleet_is_complete))
     dispositions, disposition_problems = read_registry_dispositions(local_root or ".")
     plan.blockers.extend(disposition_problems)
     plan.instances, instance_blockers = build_instances(axis2, roster)
@@ -2921,6 +2974,33 @@ def read_registry_publications(root: str) -> dict[str, set[str]]:
             declared[host] = {str(repo).strip() for repo in publishes["repositories"]
                               if str(repo).strip()}
     return declared
+
+
+def read_registry_rules(root: str) -> dict[str, str]:
+    """What retention RULE each registry entry declares — `(host → rule)`.
+
+    Read leniently and used only to LABEL, exactly like `read_registry_publications`:
+    `--check-registry-retention` is what holds a rule to anything, and a malformed entry has
+    already reddened there. It exists because the report must not print *"a cleanup must KEEP"*
+    over a host whose own record says this fleet measures nothing about it (#4396 review)."""
+    path = Path(root) / ".github" / "acr-retention" / ROSTER_PATH
+    rules: dict[str, str] = {}
+    if not path.is_file():
+        return rules
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return rules
+    registries = document.get("registries")
+    if not isinstance(registries, dict):
+        return rules           # `read_registry_dispositions` already reds on that shape
+    for host, entry in registries.items():
+        if not isinstance(entry, dict):
+            continue
+        retention = entry.get("retention")
+        if isinstance(retention, dict):
+            rules[host] = str(retention.get("rule", "")).strip()
+    return rules
 
 
 def check_publication_accounting(root: str, registries: dict) -> tuple[list[str], str]:
@@ -5631,6 +5711,20 @@ ingress:
               "ARM 24g: a `repo` shorthand was accepted; it matches nothing, so the entry would "
               "exempt nobody while reading as a declaration")
 
+    # ── ARM 24h: the ALIAS PAIR — two entries that RESOLVE to one installation (#4396 review) ───
+    # 🚨 The roster reader cannot see this one: `memex` and `Systemorph/Memex:memex` are different
+    # KEYS, so its own declared-twice check passes them both, and where that id is unique they
+    # resolve to the SAME installation. Assigned in key order, a contradictory `not-installed`
+    # would win or lose by repository-name casing — and winning would skip a LIVE installation's
+    # probe and its running-set protection while the run reported success.
+    plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
+                        roster={"memex-cloud": ("not-installed", "stale line", ""),
+                                "Systemorph/Memex:memex-cloud":
+                                    ("live", "", "Systemorph/Memex")})
+    check(any("both resolve to the same installation" in b for b in plan.blockers),
+          f"ARM 24h: an unqualified entry and a qualified one for the SAME installation were both "
+          f"applied, in key order, with the loser invisible: {plan.blockers}")
+
     # ── ARM 35: the REPOSITORY roster — the half that stops qualification becoming exemption ────
     # 🚨 WITHOUT THIS ARM THE FIX IS THE NEXT DEFECT. Keying by `gh_repo:id` is what lets two
     # repositories each declare a `memex`; on its own it also means a new deployments repository
@@ -5657,6 +5751,28 @@ ingress:
           "ARM 35: a repository whose tree could NOT be read was reported as an undeclared one. "
           "An absence read through an unreadable tree is not a measured absence, and build_plan "
           "has already made it a blocker")
+    # 🚨 …and it is still REACHED (#4396 review). Leaving it out of `seen` made a CORRECTLY declared
+    # repository produce the stale-line blocker as well, which says "no repository the fleet scan
+    # reached carries an overlay under that name" about one the scan reached and could not read —
+    # a second, contradictory sentence pointing the reader at the wrong file.
+    check(not check_repository_roster([_unreadable], {"Systemorph/Dark": "declared, unreadable"}),
+          "ARM 35: a DECLARED repository whose tree could not be read was ALSO reported as a stale "
+          "declaration. Two contradictory blockers about one repository send the reader to delete "
+          "the line that is right")
+    # ── the DENOMINATOR: only a full discovery may assert that a declaration names nobody ───────
+    _partial = check_repository_roster(pair2, {"Systemorph/Memex": "ours",
+                                               "Systemorph/PartnerRe.Memex": "theirs",
+                                               "Systemorph/NotScannedHere": "elsewhere"},
+                                       complete=False)
+    check(not _partial,
+          f"ARM 35: a PARTIAL scan (`--repos` / `--root`) asserted that a declared repository it "
+          f"never looked at is gone. Those modes deliberately scan part of the fleet, so the stale "
+          f"direction would red every partial run on a record that is right: {_partial}")
+    _partial_strict = check_repository_roster(pair2, {"Systemorph/Memex": "ours"}, complete=False)
+    check(any("PartnerRe.Memex" in p for p in _partial_strict),
+          f"ARM 35: a partial scan stopped holding the repositories IN FRONT OF IT to the table. "
+          f"The two directions have different denominators; only one of them needs the whole "
+          f"fleet: {_partial_strict}")
     # …and the same run must still be RED overall, so the skip above can never be a pass.
     plan, _, _ = _drive(clean1, [_unreadable], FakeRegistry(_inventory(), FAKE_TAGS))
     check(plan.blockers,
@@ -5834,7 +5950,7 @@ env:
           "unresolved tag / indeterminate / unreadable registry all RED with nothing released, "
           "release arm off by default and live when enabled, report-only writes nothing, a lock "
           "write that exits 0 without taking and one whose read-back cannot answer are both RED "
-          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), an UNDECLARED registry REDS wherever it appears, a declared `fleet-unlockable` one is counted on its own line saying protection there is UNVERIFIED, pinning in BOTH is RED because half covered is not covered, a `*.azurecr.io` that is not this registry is foreign, helm's split repository/tag shape is read, and a reference inside a COMMENT is prose. WHAT DELETES FROM IT (#4230, the SECOND question about the same unit): every declared registry must say what deletes from it or go RED, an empty table is zero-asked rather than clean, a `nothing-deletes` enumeration in which NOTHING is `present` inspected nothing, a `present` written as the STRING \"true\" is RED, the rule and the disposition are checked against EACH OTHER in both directions, a `derived-protected-set` axis that merely WARNS on an incomplete derivation is RED because on a registry with NO LOCK that deletes more rather than protecting less — and the arm that is not about JSON: the committed CHART is re-derived, so a `kind: Job`/`kind: CronJob` rendered beside the registry (quoted or bare), a `maintenance:` window that MOVED, a NEW key in that stanza, the stanza VANISHING, and an executable deletion anywhere in `deploy/`/`.github/` each go RED while the record still reads 'nothing deletes' — with the sweep's every spelling PROVEN to match on a synthetic control, and a deleter named inside a COMMENT proven NOT to. WHAT THIS FLEET PUBLISHES TO IT (#4323, the THIRD question about the same unit): the push targets are DERIVED from the publishing lanes — every `--tag` and every mirror-image-to-registry.sh destination, shell continuations joined, with the two readers falsified SEPARATELY because disabling the mirror call loses a whole registry while disabling the join loses one repository — a `third-party` host this fleet pushes to with no `publishes` block is RED (that is the defect, and it validated green for a day), an undeclared push target is RED, the declared repositories are held to the derived set in BOTH directions, `operator-retained` is the only rule a publication may claim and may enumerate no deleters and authorize no cleanup, a `fleet-unlockable` host is NOT made to declare the same fact twice, a renamed lane REDS rather than deriving nothing — and the two arms that stop the block being prose: an overlay pinning one of OUR published repositories is RED while the bootstrap image on the SAME host is not, and the report never prints our own images under 'declared NOT ours to retain'. WHICH REPOSITORY DECLARES IT (#3438, the identity): an installation is `owner/name:id`, so TWO deployments repositories may each declare a `memex` and both are built, probed at their own hosts and protected against their own repository's pins — while ONE repository declaring an id in two overlays is still ambiguous and still RED, and two installations of the same id can never be LABELLED the same way. The roster resolves against that identity: an entry naming its `repo` reaches only that repository's installation, an unqualified entry for an id two repositories declare is RED rather than applied to either, and an `id` carrying a `:` or a `repo` that is not an `owner/name` is refused before it can exempt nobody while reading as a declaration. AND THE HALF THAT STOPS THE QUALIFICATION BECOMING AN EXEMPTION: every repository whose tree carries deployment overlay FILES must be named in the `repositories` table — an undeclared one is RED on the real decision path, a stale name is RED, a repository whose tree could NOT be read is skipped there and still reds the run, and the control (a fully declared fleet) passes. OUT OF ESTATE: our images in a registry outside this fleet's reach are declared rather than described falsely — the rule PRINTS on every run, may enumerate no deleters, must name its `estate` and must carry `cleanupAuthorized: false`, and it is REFUSED for any host this fleet's own publishing lanes push to and refused outright where that derivation cannot be trusted, which is what keeps it from being a trapdoor out of `nothing-deletes`.")
+          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), an UNDECLARED registry REDS wherever it appears, a declared `fleet-unlockable` one is counted on its own line saying protection there is UNVERIFIED, pinning in BOTH is RED because half covered is not covered, a `*.azurecr.io` that is not this registry is foreign, helm's split repository/tag shape is read, and a reference inside a COMMENT is prose. WHAT DELETES FROM IT (#4230, the SECOND question about the same unit): every declared registry must say what deletes from it or go RED, an empty table is zero-asked rather than clean, a `nothing-deletes` enumeration in which NOTHING is `present` inspected nothing, a `present` written as the STRING \"true\" is RED, the rule and the disposition are checked against EACH OTHER in both directions, a `derived-protected-set` axis that merely WARNS on an incomplete derivation is RED because on a registry with NO LOCK that deletes more rather than protecting less — and the arm that is not about JSON: the committed CHART is re-derived, so a `kind: Job`/`kind: CronJob` rendered beside the registry (quoted or bare), a `maintenance:` window that MOVED, a NEW key in that stanza, the stanza VANISHING, and an executable deletion anywhere in `deploy/`/`.github/` each go RED while the record still reads 'nothing deletes' — with the sweep's every spelling PROVEN to match on a synthetic control, and a deleter named inside a COMMENT proven NOT to. WHAT THIS FLEET PUBLISHES TO IT (#4323, the THIRD question about the same unit): the push targets are DERIVED from the publishing lanes — every `--tag` and every mirror-image-to-registry.sh destination, shell continuations joined, with the two readers falsified SEPARATELY because disabling the mirror call loses a whole registry while disabling the join loses one repository — a `third-party` host this fleet pushes to with no `publishes` block is RED (that is the defect, and it validated green for a day), an undeclared push target is RED, the declared repositories are held to the derived set in BOTH directions, `operator-retained` is the only rule a publication may claim and may enumerate no deleters and authorize no cleanup, a `fleet-unlockable` host is NOT made to declare the same fact twice, a renamed lane REDS rather than deriving nothing — and the two arms that stop the block being prose: an overlay pinning one of OUR published repositories is RED while the bootstrap image on the SAME host is not, and the report never prints our own images under 'declared NOT ours to retain'. WHICH REPOSITORY DECLARES IT (#3438, the identity): an installation is `owner/name:id`, so TWO deployments repositories may each declare a `memex` and both are built, probed at their own hosts and protected against their own repository's pins — while ONE repository declaring an id in two overlays is still ambiguous and still RED, and two installations of the same id can never be LABELLED the same way. The roster resolves against that identity: an entry naming its `repo` reaches only that repository's installation, an unqualified entry for an id two repositories declare is RED rather than applied to either, and an `id` carrying a `:` or a `repo` that is not an `owner/name` is refused before it can exempt nobody while reading as a declaration. AND THE HALF THAT STOPS THE QUALIFICATION BECOMING AN EXEMPTION: every repository whose tree carries deployment overlay FILES must be named in the `repositories` table — an undeclared one is RED on the real decision path, a stale name is RED, a repository whose tree could NOT be read is skipped there and still reds the run, and the control (a fully declared fleet) passes — while the STALE direction, which needs the WHOLE fleet as its denominator, is asserted only over a full discovery, so a `--repos` / `--root` scan neither reds on a record that is right nor stays silent about not having asked. Two roster entries that RESOLVE to one installation are RED rather than applied in key order with the loser invisible, and a DECLARED repository whose tree could not be read does not also produce the contradictory stale line. OUT OF ESTATE: our images in a registry outside this fleet's reach are declared rather than described falsely — the rule PRINTS on every run, may enumerate no deleters, must name its `estate` and must carry `cleanupAuthorized: false`, and it is REFUSED for any host this fleet's own publishing lanes push to and refused outright where that derivation cannot be trusted, which is what keeps it from being a trapdoor out of `nothing-deletes` — and the report calls its references a LIST rather than \"a protected set a cleanup must KEEP\", which would contradict the declaration printed beside it.")
     return 0
 
 
@@ -5883,7 +5999,8 @@ def main() -> int:
     release_enabled = (args.release_unpinned
                        or os.environ.get("MW_ACR_RELEASE_UNPINNED", "").strip().lower() == "true")
     print(f"scanning {len(repos)} repository(ies) on both pin axes: {', '.join(repos)}")
-    return run(repos, args.registry, args.apply, release_enabled, args.root)
+    return run(repos, args.registry, args.apply, release_enabled, args.root,
+               fleet_is_complete=bool(args.discover))
 
 
 if __name__ == "__main__":
