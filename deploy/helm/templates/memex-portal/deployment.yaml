@@ -285,6 +285,7 @@ spec:
             - {{ toYaml . | nindent 14 | trim }}
             {{- end }}
           env:
+            {{- include "memex.dbReleaseEnv" (dict "root" $ "half" "memex_portal") | nindent 12 }}
             # 🩺 Crash diagnostics. We hit a native SIGSEGV (exit 139) in the Npgsql → SslStream TLS
             # read path: the process dies with NO managed exception, so the logs show nothing useful.
             # Write a dump to /data/dumps (the dedicated memex-dumps emptyDir below — createdump does

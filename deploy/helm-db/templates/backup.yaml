@@ -1,0 +1,36 @@
+{{- if .Values.backup.enabled }}
+---
+# Where the Barman Cloud plugin writes WAL and base backups — one prefix per namespace, so two
+# instances' archives can never interleave in one container.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: {{ printf "%s-store" .Release.Name | quote }}
+  labels:
+    {{- include "memexdb.labels" . | nindent 4 }}
+spec:
+  retentionPolicy: {{ .Values.backup.retention | quote }}
+  configuration:
+    destinationPath: {{ printf "%s/%s" (trimSuffix "/" .Values.backup.destinationPath) .Release.Namespace | quote }}
+    azureCredentials:
+      inheritFromAzureAD: true
+    wal:
+      compression: gzip
+    data:
+      compression: gzip
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ printf "%s-daily" .Release.Name | quote }}
+  labels:
+    {{- include "memexdb.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ .Release.Name | quote }}
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
+{{- end }}

@@ -50,6 +50,18 @@ param acrSku string = 'Premium'
 @description('Kubernetes version. Empty = region default.')
 param kubernetesVersion string = ''
 
+@description('db pool node count (Doc/Architecture/InClusterDatabases) — 0 = no db pool; 2 = the fleet shape, one node per zone.')
+param dbPoolCount int = 0
+
+@description('db pool VM size.')
+param dbPoolVmSize string = 'Standard_E4ds_v5'
+
+@description('Zones the db pool spans.')
+param dbPoolZones array = [
+  '1'
+  '2'
+]
+
 @description('System node pool VM size.')
 param systemNodeVmSize string = 'Standard_D4s_v5'
 
@@ -217,6 +229,9 @@ module aks 'modules/aks.bicep' = {
     minNodeCount: minNodeCount
     maxNodeCount: maxNodeCount
     availabilityZones: availabilityZones
+    dbPoolCount: dbPoolCount
+    dbPoolVmSize: dbPoolVmSize
+    dbPoolZones: dbPoolZones
     tags: tags
   }
 }
