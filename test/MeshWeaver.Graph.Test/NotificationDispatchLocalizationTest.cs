@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using Microsoft.Extensions.Configuration;
 using MeshWeaver.Data;
@@ -41,16 +42,44 @@ public class NotificationDispatchLocalizationTest(ITestOutputHelper output) : Mo
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            .ConfigureServices(services => services
-                .AddSingleton<IEmailSender>(mail)
-                // 🚨 The CTA button is emitted only when a base URL resolves, so without this the
-                // email carries no button — and an assertion about the CTA LABEL would pass by
-                // asserting nothing was there. Same shape WebhookInboxTest uses for its secret.
-                .AddSingleton<IConfiguration>(new ConfigurationBuilder()
-                    .AddInMemoryCollection(new Dictionary<string, string?>
-                    {
-                        ["Portal:BaseUrl"] = BaseUrl,
-                    }).Build()));
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton<IEmailSender>(mail);
+
+                // 🚨 The CTA button is emitted only when a base URL resolves, so a mesh without one
+                // sends an email with NO button — and an assertion about the CTA label would then
+                // pass by asserting nothing was there.
+                //
+                // 🚨 And it must LAYER onto the host's configuration, never replace it. A bare
+                // AddSingleton<IConfiguration> wins the resolve and takes every other key with it;
+                // HeldSourceSaysItIsHeldTest measured that as a credential save refusing with
+                // "no master key is configured (Ai:KeyProtection:MasterKey)" — a failure about a key
+                // the test never mentioned.
+                var configured = services.LastOrDefault(d => d.ServiceType == typeof(IConfiguration));
+                if (configured is not null)
+                    services.Remove(configured);
+                return services.AddSingleton<IConfiguration>(sp =>
+                {
+                    var layered = new ConfigurationBuilder();
+                    if (Materialise(configured, sp) is { } host)
+                        layered.AddConfiguration(host);
+                    return layered
+                        .AddInMemoryCollection(
+                            ImmutableDictionary<string, string?>.Empty.Add("Portal:BaseUrl", BaseUrl))
+                        .Build();
+                });
+            });
+
+    /// <summary>The host's own <c>IConfiguration</c>, from whichever registration shape it used, or
+    /// null when the host registered none. Never silently empty on an unrecognised shape: a test
+    /// whose mesh lost every configuration key fails somewhere else entirely.</summary>
+    private static IConfiguration? Materialise(ServiceDescriptor? descriptor, IServiceProvider sp)
+        => descriptor is null ? null
+            : descriptor.ImplementationFactory is { } factory ? (IConfiguration)factory(sp)
+            : descriptor.ImplementationInstance is IConfiguration instance ? instance
+            : throw new InvalidOperationException(
+                "The IConfiguration registration is neither a factory nor an instance, so this test "
+                + "cannot layer onto it — and silently dropping it would lose every other key.");
 
     private const string BaseUrl = "https://portal.test";
 
@@ -116,8 +145,13 @@ public class NotificationDispatchLocalizationTest(ITestOutputHelper output) : Mo
         // keys but dropped the arguments would satisfy every key assertion above and render
         // "Sie haben jetzt {role}-Zugriff auf „{name}“." to the reader — GetNamed deliberately keeps
         // an unbound name VISIBLE, so the damage is a literal placeholder, not a blank.
-        stored.MessageArgs.Should().ContainKey("role");
-        stored.MessageArgs.Should().ContainKey("name");
+        // BY NAME, not "both values appear somewhere": a dispatch that swapped them
+        // (role = TeamSpace, name = Editor) renders a wrong sentence out of the right words, and a
+        // contains-both assertion would call that a pass. Values come back from storage as
+        // JsonElement, so compare their rendered text rather than casting (the silent-null trap).
+        stored.MessageArgs!["role"].ToString().Should().Be("Editor");
+        stored.MessageArgs["name"].ToString().Should().Be("TeamSpace");
+        stored.TitleArgs!["name"].ToString().Should().Be("TeamSpace");
         stored.LocalizedMessage("de").Should().Contain("Editor").And.Contain("TeamSpace");
         stored.LocalizedMessage("de").Should().NotContain("{",
             "an unbound named argument survives as a literal {name} in the rendered sentence");
@@ -178,7 +212,10 @@ public class NotificationDispatchLocalizationTest(ITestOutputHelper output) : Mo
         sent.Body.Should().Contain("Quarterly Report &#246;ffnen",
             "the CTA label is resolved by a third call and needs a third assertion");
         sent.Body.Should().NotContain(">Open Quarterly Report<");
-        sent.Body.Should().Contain($"{BaseUrl}/Quarterly Report",
+        // 🚨 The HREF, not the URL text. EmailTemplate also prints the raw URL in a <p> beneath the
+        // button, so matching the bare URL would still pass on a regression that dropped the <a>
+        // and kept the fallback line — a non-vacuity control that is itself vacuous.
+        sent.Body.Should().Contain($"<a href=\"{BaseUrl}/Quarterly Report\"",
             "the control on the assertion above: a button that was never rendered would make the "
             + "German-label check pass by checking nothing — the CTA is emitted only when a base "
             + "URL resolves, which is why this mesh configures one");
