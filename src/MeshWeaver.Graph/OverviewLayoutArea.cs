@@ -301,7 +301,7 @@ public static class OverviewLayoutArea
     /// <c>&lt;svg&gt;</c> is embedded, an image URL (or <c>data:</c>/path) becomes an <c>&lt;img&gt;</c>,
     /// and anything else (an emoji / short glyph) is shown as text. Empty when there is no icon.
     /// </summary>
-    private static string RenderNodeIconHtml(string? icon)
+    internal static string RenderNodeIconHtml(string? icon)
     {
         if (string.IsNullOrWhiteSpace(icon))
             return "";
@@ -324,12 +324,20 @@ public static class OverviewLayoutArea
             : $"<span style=\"font-size:28px; line-height:1;\">{System.Web.HttpUtility.HtmlEncode(trimmed)}</span>";
     }
 
-    /// <summary>Forces an inline <c>&lt;svg&gt;</c> to fill its container by injecting a
+    /// <summary>Puts an inline <c>&lt;svg&gt;</c> icon through the backplate policy
+    /// (<see cref="IconBackplate.Ensure"/>) and then forces it to fill its container, by injecting a
     /// <c>width/height:100%</c> style onto the root element — so an icon with a <c>viewBox</c> but no
     /// explicit <c>width</c>/<c>height</c> (which a browser would render at the ~300×150 default and
-    /// overflow the tile) scales to its box instead.</summary>
+    /// overflow the tile) scales to its box instead.
+    ///
+    /// <para>🚨 The plate is not the caller's to remember, for the reason
+    /// <see cref="MeshNodeImageHelper.SizeInlineSvg"/> carries in full (#4350): this sizer is the
+    /// last thing that touches the markup before it is injected into a raw-HTML title row, so a
+    /// <c>currentColor</c> outline that skipped the policy inherited the heading's color and
+    /// vanished on one of the two themes. An icon that already paints its own full-bleed plate is
+    /// returned byte-identical.</para></summary>
     internal static string SizeInlineSvg(string svg) =>
-        System.Text.RegularExpressions.Regex.Replace(svg.Trim(), "^<svg\\b",
+        System.Text.RegularExpressions.Regex.Replace(IconBackplate.Ensure(svg).Trim(), "^<svg\\b",
             "<svg style=\"width:100%;height:100%\" preserveAspectRatio=\"xMidYMid meet\"",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
