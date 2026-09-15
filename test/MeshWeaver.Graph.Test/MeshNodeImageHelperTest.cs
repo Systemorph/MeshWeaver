@@ -72,12 +72,23 @@ public class MeshNodeImageHelperTest
         var sized = MeshNodeImageHelper.SizeInlineSvg(svg, 48);
         sized.Should().StartWith("<svg style=\"width: 48px; height: 48px; display: block;\"");
         sized.Should().Contain("viewBox=\"0 0 24 24\"");
+        // 🚨 And it PLATES (#4350). This icon paints no ground of its own, so injected as authored
+        // it would take the surrounding text color and disappear on one of the two themes — the
+        // size lands on the generated plate, which is the outermost element. Every raw-HTML surface
+        // in the repo reaches for this function, which is why the policy lives in it rather than in
+        // each caller's memory; InlineSvgRenderPathTest drives those callers one by one.
+        sized.Should().Contain("<rect width='24' height='24' rx='5'");
+        sized.Should().Contain("M0 0h24v24", "the authored glyph survives plating");
     }
 
+    /// <summary>A value that is not inline svg comes back as it went in — including the
+    /// whitespace-only case, which the plating step (#4350) must not turn into an empty string.</summary>
     [Theory]
     [InlineData(null)]
     [InlineData("")]
+    [InlineData("   ")]
     [InlineData("not an svg")]
+    [InlineData("/static/NodeTypeIcons/box.svg")]
     public void SizeInlineSvg_PassesThrough_NonSvg(string? value)
         => MeshNodeImageHelper.SizeInlineSvg(value!, 48).Should().Be(value);
 

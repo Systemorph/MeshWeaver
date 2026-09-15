@@ -573,7 +573,7 @@ public static class MeshNodeLayoutAreas
     /// Renders the node icon as a clickable tile that opens the icon-picker dialog when the
     /// user has edit rights. Falls back to a placeholder (dashed border) when no icon is set.
     /// </summary>
-    private static UiControl BuildClickableIcon(
+    internal static UiControl BuildClickableIcon(
         LayoutAreaHost host, MeshNode? node, string? iconValue, string? rawIcon, bool canEdit)
     {
         const string tileStyle = "width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--neutral-layer-2); flex-shrink: 0;";
@@ -1672,14 +1672,18 @@ public static class MeshNodeLayoutAreas
     /// Renders the node's icon/logo for content self-reference.
     /// Priority: content.avatar > content.logo > node.Icon
     /// </summary>
-    private static UiControl RenderNodeIcon(MeshNode node, string _)
+    internal static UiControl RenderNodeIcon(MeshNode node, string _)
     {
         var imageUrl = GetNodeImageUrl(node);
         var iconUrl = !string.IsNullOrEmpty(imageUrl) ? imageUrl : "/static/NodeTypeIcons/document.svg";
         var name = node.Name ?? node.Id;
 
+        // Inline svg goes through MeshNodeImageHelper.SizeInlineSvg, which plates it (#4350) AND
+        // gives it the 24px box: injected raw, an icon authored with a viewBox and no width/height
+        // rendered at the browser's ~300×150 default inside a 24px div, and a currentColor outline
+        // took the text color and disappeared on one of the two themes.
         var iconHtml = iconUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase)
-            ? $"<div style=\"width: 24px; height: 24px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;\">{iconUrl}</div>"
+            ? $"<div style=\"width: 24px; height: 24px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;\">{MeshNodeImageHelper.SizeInlineSvg(iconUrl, 24)}</div>"
             : $"<img src=\"{iconUrl}\" alt=\"\" style=\"width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;\" />";
 
         return Controls.Html($@"
