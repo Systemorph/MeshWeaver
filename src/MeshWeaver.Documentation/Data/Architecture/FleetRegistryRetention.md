@@ -526,6 +526,45 @@ continuations unread, which is why it asserts the repository set.
 moves**. That is recorded in `publishes.runFrom` rather than fixed here: it is a deployment-defaults
 decision, not a retention one, and changing it moves what an unconfigured install runs.
 
+### 8.6 🚨 `out-of-estate` — our images in a registry outside this fleet's reach (#3438)
+
+`Systemorph/PartnerRe.Memex` joined the fleet on 2026-09-14 with a **live** control instance
+(`partnerre.meshweaver.cloud`) whose overlay pins the portal and migration images in
+`memexaksacrqoqqdqnhlaksg.azurecr.io` — an ACR in the **`PartnerRe Memex` subscription**, which this
+lane's OIDC credential does not reach at all. Every rule in the vocabulary was a *false sentence*
+about it:
+
+| rule | why it is false here |
+|---|---|
+| `not-ours` | the images **are** ours, mirrored from the platform's own build — and a `third-party` disposition also **reds** the lane, because an installation whose every pin is third-party is one whose running set no registry holding our images accounts for |
+| `nothing-deletes` | its enumeration is held to a committed **chart** this gate re-derives the deleters from, plus the ACL carrying the `delete` action. An ACR renders neither; nothing in this repository could re-derive a word of it |
+| `derived-protected-set` | it asserts a cleanup exists there that deletes only the complement of a derived set. Nobody here is in a position to say that |
+
+Leaving it undeclared reds the lane; a false declaration is worse than a red. So the vocabulary grew
+a word for the fact: **the registry is in an estate outside this fleet's reach, what deletes from it
+is decided there, this record measures nothing about it, and no cleanup is authorized here.** It
+requires `estate` (whose decision it is, and where that decision lives) and
+`cleanupAuthorized: false`, and it may **not** carry `deleters` — the same refusal
+`operator-retained` carries, for the same reason.
+
+🚨 **It is not §8.3's trapdoor reopened, and the guard is DERIVED rather than declared.** A host this
+fleet's own publishing lanes push to may never take this rule — and that is exactly
+`cr.meshweaver.cloud` and `meshweaver.azurecr.io`, the two hosts where the trapdoor would have
+mattered. The refusal reads the same derived push-target set §8.4 does, and a run whose derivation
+cannot be trusted (it does not even derive the registry this lane locks) **refuses** the rule rather
+than allowing it: the derivation is the whole of this rule's safety, and one that cannot refuse must
+not permit.
+
+Every run **prints** the host on its own line saying this record measures nothing about it —
+*"not ours to answer"* and *"clean"* are different sentences, which is the same reasoning as the
+`unverified` lines in §6.
+
+For the record and **not** as a claim this gate re-derives: read-only from a maintainer credential on
+2026-09-15, that registry carried **zero** `az acr task`s and its untagged-manifest retention policy
+read `status: disabled` — so nothing deletes there today either. It is written into the record as
+evidence for whoever asks, never as a measurement the lane repeats, because it cannot: the nightly
+run holds no credential for that subscription.
+
 ## Related
 
 - [ArtifactRetentionInterlock](/Doc/Architecture/ArtifactRetentionInterlock) — the same question for
