@@ -1,7 +1,7 @@
 ---
 Name: A timed-out test now stops waiting
 Category: Feature
-Description: The test framework moved to xunit.v3 4.0.1, and every test that declares a Timeout now hands the test's cancellation token to the wait it is parked in — so when the timeout fires, the wait ends and the run moves on, instead of the verdict being written over a body that is still blocked.
+Description: The test framework moved to xunit.v3 4.0.1, and every test that declares a Timeout now hands the test's cancellation token to the wait it parks in — so when the timeout fires, the wait ends and the run moves on, instead of the verdict being written over a body that is still blocked.
 Icon: Timer
 Order: -20260915
 ---
@@ -32,6 +32,18 @@ call it waits on:
 
 A synchronous test with a `Timeout` has nothing to hand the token to; it observes the token at its
 first statement, which is the analyzer's documented form for that shape.
+
+**Where the token stops, and why that is said out loud.** The analyzer is satisfied by one reference
+anywhere in a test method, which is not the same as the body actually stopping. Every wait a test
+reaches *directly* now takes the token, and so do the helpers a test parks in longest — the E2E
+suites' `PollAsync` loops (11 files, 24 call sites), their compile- and activity-status polls, and
+the sync suites' `ConfigWhen` / `QueryShows` / `DeliverGreenBuild`. What is deliberately left is
+recorded rather than implied: a wait a test parks on **purpose** (the park is what the test
+measures), a **fixture's** startup wait, which runs before any test owns a token, and a remaining
+population of helper-level waits that are already bounded by their own Rx `.Timeout(…)` — 271 of
+them, measured, tracked separately. None of them can hang a run; they can end it later than the
+verdict, which is a smaller defect than the one this change closes and is not worth pretending was
+also fixed.
 
 Nothing was suppressed to get here: neither rule was added to `NoWarn`, and no test's timeout,
 assertion or wait was changed. One fixture had two public constructors, which xunit 4.x refuses; the

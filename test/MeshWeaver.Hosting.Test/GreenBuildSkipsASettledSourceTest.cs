@@ -131,7 +131,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
     [Fact(Timeout = 240_000)]
     public async Task AContentVerdictAtThisCommit_CostsNoSecondClone_AndANewCommitStillDoesImport()
     {
-        var space = await Arrange("Cs");
+        var space = await Arrange("Cs", TestContext.Current.CancellationToken);
 
         // ── 1. A real import at BuiltSha whose every failure is a verdict about the content: a
         //       nested Space, which the mesh's own rules refuse with InvalidPath ("A 'Space' owns
@@ -151,7 +151,8 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
             "re-reading these same bytes re-derives this same refusal, so attempting the same "
             + "commit again cannot accomplish anything");
 
-        var afterFirst = await ConfigWhen(space, c => c.LastAttemptedCommitSha is { Length: > 0 });
+        var afterFirst = await ConfigWhen(space, c => c.LastAttemptedCommitSha is { Length: > 0 },
+            TestContext.Current.CancellationToken);
         Output.WriteLine(
             $"config: attempted={afterFirst.LastAttemptedCommitSha} final={afterFirst.LastAttemptWasFinal} "
             + $"baseline={afterFirst.LastSyncCommitSha ?? "(none)"} outcome={afterFirst.LastSyncOutcome}");
@@ -168,7 +169,8 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         // The processor selects its candidates from an eventually-consistent QUERY, never from the
         // node stream, so delivering the instant the stream shows the new content would race the
         // index rather than measure the decision.
-        await QueryShows(space, c => c.LastAttemptedCommitSha == BuiltSha);
+        await QueryShows(space, c => c.LastAttemptedCommitSha == BuiltSha,
+            TestContext.Current.CancellationToken);
 
         // ── 2. THE MEASURED SHAPE. The same green build arrives again — three workflows go green on
         //       one merge, and a `*/15` cron probe re-delivers the unchanged tip 96 times a day.
@@ -178,7 +180,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
             + "subdirectory scopes only the parse, so an attempt that can change nothing still "
             + "transfers the whole repository (#3945)");
 
-        var again = await DeliverGreenBuild(BuiltSha);
+        var again = await DeliverGreenBuild(BuiltSha, TestContext.Current.CancellationToken);
         again.Should().Be(1, "the build completion is still recorded — only the IMPORT is skipped");
         await noSecondClone;
 
@@ -188,7 +190,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
                 + "ONE commit already judged, never to the source");
 
         repoClient.Sha = NextSha;
-        await DeliverGreenBuild(NextSha);
+        await DeliverGreenBuild(NextSha, TestContext.Current.CancellationToken);
 
         (await newCommitClones).Should().Be(NextSha,
             "and it must ask for the commit THAT BUILD proved, not the branch (MeshWeaver.Plugins#1430)");
@@ -217,7 +219,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
     [Fact(Timeout = 240_000)]
     public async Task AFailureThatMightNotRecur_IsStillAttemptedAtTheSameCommit()
     {
-        var space = await Arrange("Rt");
+        var space = await Arrange("Rt", TestContext.Current.CancellationToken);
 
         // ── 1. One node lands; one faults because its store is unreachable. Not a rule about the
         //       bytes — an outage, which the very same bytes may sail through next time.
@@ -237,7 +239,8 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         first.VerdictIsFinal.Should().BeFalse(
             "so re-running MIGHT do better, and the engine must say so rather than settle");
 
-        var afterFirst = await ConfigWhen(space, c => c.LastAttemptedCommitSha is { Length: > 0 });
+        var afterFirst = await ConfigWhen(space, c => c.LastAttemptedCommitSha is { Length: > 0 },
+            TestContext.Current.CancellationToken);
         Output.WriteLine(
             $"config: attempted={afterFirst.LastAttemptedCommitSha} final={afterFirst.LastAttemptWasFinal} "
             + $"baseline={afterFirst.LastSyncCommitSha ?? "(none)"} outcome={afterFirst.LastSyncOutcome}");
@@ -251,7 +254,8 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         afterFirst.LastSyncCommitSha.Should().BeNull(
             "the baseline is held for the same reason it always was — some node did not land (#2229 item C)");
 
-        await QueryShows(space, c => c.LastAttemptedCommitSha == BuiltSha);
+        await QueryShows(space, c => c.LastAttemptedCommitSha == BuiltSha,
+            TestContext.Current.CancellationToken);
 
         // ── 2. THE POSITIVE CONTROL. The same green build arrives again and MUST be acted on.
         var retried = repoClient.Fetches.Should().Within(TestTimeouts.Convergence * 2)
@@ -259,7 +263,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
                 + "attempted at the same commit — the next delivery is the only thing that retries "
                 + "it, and a skip here would make a transient store fault permanent (#3101)");
 
-        await DeliverGreenBuild(BuiltSha);
+        await DeliverGreenBuild(BuiltSha, TestContext.Current.CancellationToken);
 
         (await retried).Should().Be(BuiltSha,
             "at the commit that build proved, exactly as an ordinary delivery would");
@@ -270,7 +274,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
     /// <summary>A fresh Space with a sync source pointed at the fixture repository, and the
     /// credential seeded for the identity the import will actually resolve — the config's CREATOR
     /// (the activity-owner model), read off the node rather than assumed.</summary>
-    private async Task<string> Arrange(string prefix)
+    private async Task<string> Arrange(string prefix, CancellationToken cancellationToken)
     {
         var space = prefix + Guid.NewGuid().ToString("N")[..8];
         await NodeFactory.CreateNode(new MeshNode(space)
@@ -279,18 +283,18 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
             Name = "Settled source",
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Timeout(TestTimeouts.Convergence).Await();
+        }).Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
         var configNode = await Sync
             .SaveConfig(space, RepoUrl, "main", null,
                 createBranchIfMissing: false, createRepoIfMissing: false)
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
         var syncOwner = configNode.CreatedBy is { Length: > 0 } creator ? creator : UserId;
         Output.WriteLine($"sync config {configNode.Path} createdBy={syncOwner}");
         await Credentials
             .Save(syncOwner, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
-            .Timeout(TestTimeouts.Convergence).Await();
+            .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
         return space;
     }
 
@@ -301,7 +305,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
     /// Every ambient identity is dropped so the processor's own System impersonation is what carries
     /// the lookups and the write, as it must on an access-gated portal.</para>
     /// </summary>
-    private async Task<int> DeliverGreenBuild(string headSha)
+    private async Task<int> DeliverGreenBuild(string headSha, CancellationToken cancellationToken)
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.ClearHostIdentity();
@@ -310,7 +314,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         try
         {
             return await Webhooks.Process("workflow_run", GreenBuildPayload(headSha))
-                .Timeout(TestTimeouts.Convergence).Await();
+                .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
         }
         finally
         {
@@ -348,7 +352,8 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
     /// <paramref name="predicate"/> — never a query (eventually consistent, and this reads right
     /// after a write), and never a bare first emission (the cache can replay the pre-write value).
     /// </summary>
-    private async Task<GitHubSyncConfig> ConfigWhen(string space, Func<GitHubSyncConfig, bool> predicate)
+    private async Task<GitHubSyncConfig> ConfigWhen(string space, Func<GitHubSyncConfig, bool> predicate,
+        CancellationToken cancellationToken)
     {
         var path = GitHubSyncService.ConfigPath(space);
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
@@ -357,7 +362,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
                         && predicate(c))
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(cancellationToken);
         return node.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)!;
     }
 
@@ -368,7 +373,8 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
     /// than the decision. (In production a stale index costs one extra clone, which is the very
     /// thing this issue is about, so the race is real and is not the subject.)
     /// </summary>
-    private Task QueryShows(string space, Func<GitHubSyncConfig, bool> predicate)
+    private Task QueryShows(string space, Func<GitHubSyncConfig, bool> predicate,
+        CancellationToken cancellationToken)
         => Observable.Interval(50.Milliseconds()).StartWith(0L)
             .SelectMany(_ => MeshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{GitHubSyncService.ConfigPath(space)}"))
@@ -377,7 +383,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
                 n.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions) is { } cfg && predicate(cfg)))
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
-            .Await();
+            .Await(cancellationToken);
 
     // ── the substituted IO boundaries ────────────────────────────────────────
 

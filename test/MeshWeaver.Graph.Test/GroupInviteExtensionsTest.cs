@@ -60,10 +60,12 @@ public class GroupInviteExtensionsTest(ITestOutputHelper output) : MonolithMeshT
         // Wait until the account is queryable by email (the extension looks it up that way).
         await meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:User content.email:{email}"))
             .Where(c => c.ChangeType == QueryChangeType.Initial && c.Items.Any(n => n.Id == userId))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds())
+            .Await(TestContext.Current.CancellationToken);
 
         var outcome = await Mesh.InviteToGroup(GroupPath, email, invitedBy: "admin")
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds())
+            .Await(TestContext.Current.CancellationToken);
         Assert.Equal(GroupInviteOutcome.Added, outcome);
 
         // The membership landed at {group}/{user}_Membership with the group entry.
@@ -71,7 +73,8 @@ public class GroupInviteExtensionsTest(ITestOutputHelper output) : MonolithMeshT
             .Where(n => n?.Content is GroupMembership gm
                         && gm.Member == userId
                         && gm.Groups.Any(e => e.Group == GroupPath))
-            .FirstAsync().Timeout(20.Seconds());
+            .FirstAsync().Timeout(20.Seconds())
+            .Await(TestContext.Current.CancellationToken);
     }
 
     [Fact(Timeout = 60000)]
@@ -81,7 +84,8 @@ public class GroupInviteExtensionsTest(ITestOutputHelper output) : MonolithMeshT
         await SeedGroupAsync(TestContext.Current.CancellationToken);
 
         var outcome = await Mesh.InviteToGroup(GroupPath, email, invitedBy: "admin")
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds())
+            .Await(TestContext.Current.CancellationToken);
         Assert.Equal(GroupInviteOutcome.Invited, outcome);
 
         // An AddToGroup event subscription was created to add this email's User to the group on sign-up.
@@ -91,11 +95,13 @@ public class GroupInviteExtensionsTest(ITestOutputHelper output) : MonolithMeshT
                 && s.TriggerType == EventTriggerType.NodeChange
                 && s.ContinuationType == EventContinuationType.AddToGroup
                 && s.MatchValue == email && s.TargetPath == GroupPath))
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds())
+            .Await(TestContext.Current.CancellationToken);
 
         // An Invitation node was created for the email (the InvitationEmailSender emails it).
         await Mesh.GetWorkspace().GetMeshNodeStream($"{InvitationNodeType.Namespace}/{SpaceInviteService.Slug(email)}")
             .Where(n => n?.Content is Invitation inv && inv.Email == email)
-            .FirstAsync().Timeout(30.Seconds());
+            .FirstAsync().Timeout(30.Seconds())
+            .Await(TestContext.Current.CancellationToken);
     }
 }

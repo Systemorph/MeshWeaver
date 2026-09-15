@@ -44,7 +44,7 @@ public class ChatComposerSwitchSelectionTest(PortalFixture fixture)
         (await PollAsync(async () =>
                 await harnessReady.CountAsync() > 0
                 && (await harnessReady.First.InnerTextAsync()).Contains("MeshWeaver", StringComparison.OrdinalIgnoreCase),
-                TimeSpan.FromSeconds(30)))
+                TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken))
             .Should().BeTrue("the composer must bind to the MeshWeaver harness before /agent and /model are testable");
 
         // ── /agent → picker → pick first agent → the Agent status chip reflects the selection ─────────
@@ -72,7 +72,7 @@ public class ChatComposerSwitchSelectionTest(PortalFixture fixture)
         // The read-only Harness chip must reflect the switch (LastSegment of the new harness path) — poll
         // since the chip updates reactively off the composer write.
         var changed = await PollAsync(async () =>
-            (await harnessChip.First.InnerTextAsync()).Trim() != before, TimeSpan.FromSeconds(15));
+            (await harnessChip.First.InnerTextAsync()).Trim() != before, TimeSpan.FromSeconds(15), cancellationToken: TestContext.Current.CancellationToken);
         changed.Should().BeTrue($"switching the harness via /harness must change the Harness status chip from '{before}'");
 
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/composer-switch.png", FullPage = true });
@@ -164,13 +164,14 @@ public class ChatComposerSwitchSelectionTest(PortalFixture fixture)
     }
 
     /// <summary>Polls <paramref name="predicate"/> every 300ms until true or <paramref name="timeout"/> elapses.</summary>
-    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)
+    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             if (await predicate()) return true;
-            await Task.Delay(300);
+            await Task.Delay(300, cancellationToken);
         }
         return false;
     }

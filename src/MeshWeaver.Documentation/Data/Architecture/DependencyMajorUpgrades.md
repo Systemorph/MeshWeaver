@@ -410,7 +410,11 @@ projects import core's `test/Directory.Packages.props` (which imports core's roo
 repository's working tree on 2026-09-15: **2,646 timed tests in 634 files, 2,184 of which reference
 no cancellation token at all** — a *floor* for what its `-warnaserror` build will report, since the
 analyzer also rejects a body that references some other token. That satellite also needs its own
-`global.json` before any `dotnet test` there will run, and the `dotnet test … -warnaserror --logger
-trx` invocations in core's `node-repo-module-pack.yml` reusable workflow have to move to the MTP
-flags **in the same change set** — they are VSTest-only today, deliberately, because every satellite
-is still on the 3.x line and flipping them early would break the repos that have not moved yet.
+`global.json` before any `dotnet test` there will run, and **two** core-owned reusable workflows
+invoke `dotnet test` with VSTest-only flags (`-warnaserror`, `--logger "trx;…"`) against satellite
+suites — `node-repo-module-pack.yml` (a module's sibling `*.Test` project, ×2 call sites) and
+`node-repo-platform-canary.yml` (the scheduled pin-vs-main canary). Both have to move to the MTP
+flags **in the same change set** as the pin. They are VSTest-only today, deliberately: every
+satellite is still on the 3.x line, and flipping them early would break the repos that have not
+moved yet. 🚨 `-warnaserror` is the one to watch — under MTP it does not error out loudly, it
+yields `Zero tests ran` with exit 5, so a canary that "ran" would have measured nothing.

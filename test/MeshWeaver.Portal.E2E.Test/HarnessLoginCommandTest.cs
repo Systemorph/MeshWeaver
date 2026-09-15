@@ -46,7 +46,7 @@ public class HarnessLoginCommandTest(PortalFixture fixture)
         (await PollAsync(async () =>
                 await harnessChip.CountAsync() > 0
                 && (await harnessChip.First.InnerTextAsync()).Contains(harnessId, StringComparison.OrdinalIgnoreCase),
-                TimeSpan.FromSeconds(30)))
+                TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken))
             .Should().BeTrue($"the composer must bind to the {harnessId} harness");
 
         // ── 1) Accept the /login completion (Tab) — this is what fired the bug ───────────────────────
@@ -65,7 +65,7 @@ public class HarnessLoginCommandTest(PortalFixture fixture)
 
         var sawError = await PollAsync(async () =>
             await routingError.CountAsync() > 0 || await genericError.CountAsync() > 0,
-            TimeSpan.FromSeconds(6));
+            TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
 
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = $"/tmp/harness-login-{harnessId}.png", FullPage = true });
 
@@ -79,7 +79,7 @@ public class HarnessLoginCommandTest(PortalFixture fixture)
         await send.ClickAsync(new LocatorClickOptions { Timeout = 15_000 });
 
         var connectWidget = page.GetByText($"Log in to {harnessLabel}", new PageGetByTextOptions { Exact = false });
-        var opened = await PollAsync(async () => await connectWidget.CountAsync() > 0, TimeSpan.FromSeconds(20));
+        var opened = await PollAsync(async () => await connectWidget.CountAsync() > 0, TimeSpan.FromSeconds(20), cancellationToken: TestContext.Current.CancellationToken);
 
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = $"/tmp/harness-login-{harnessId}-connect.png", FullPage = true });
 
@@ -102,13 +102,14 @@ public class HarnessLoginCommandTest(PortalFixture fixture)
         await page.WaitForTimeoutAsync(800);
     }
 
-    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)
+    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             if (await predicate()) return true;
-            await Task.Delay(300);
+            await Task.Delay(300, cancellationToken);
         }
         return false;
     }

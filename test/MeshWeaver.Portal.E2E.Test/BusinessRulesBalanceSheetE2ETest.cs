@@ -61,7 +61,7 @@ public class BusinessRulesBalanceSheetE2ETest(PortalFixture fixture, ITestOutput
         // ── 2. Wait for the BalanceSheet NodeType's dynamic compile (5 Source files +
         //       the built-in scope generator) to SETTLE before creating the typed instance.
         var settled = await WaitForCompileAsync(context, token, "PensionFund/BalanceSheet",
-            TimeSpan.FromSeconds(180));
+            TimeSpan.FromSeconds(180), TestContext.Current.CancellationToken);
         Assert.True(settled, "the BalanceSheet NodeType compile must settle Ok — " +
                              "a compile error here means the scope generator / compile path broke");
 
@@ -155,7 +155,8 @@ public class BusinessRulesBalanceSheetE2ETest(PortalFixture fixture, ITestOutput
     }
 
     /// <summary>Polls the NodeType node via the mesh get API until its compilationStatus is Ok.</summary>
-    private async Task<bool> WaitForCompileAsync(IBrowserContext context, string token, string path, TimeSpan timeout)
+    private async Task<bool> WaitForCompileAsync(IBrowserContext context, string token, string path,
+        TimeSpan timeout, CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         string last = "";
@@ -177,7 +178,7 @@ public class BusinessRulesBalanceSheetE2ETest(PortalFixture fixture, ITestOutput
                 output.WriteLine($"compile settled at Error:\n{last[..Math.Min(last.Length, 2000)]}");
                 return false;
             }
-            await Task.Delay(2000);
+            await Task.Delay(2000, cancellationToken);
         }
         output.WriteLine($"compile poll timed out; last get:\n{last[..Math.Min(last.Length, 2000)]}");
         return false;

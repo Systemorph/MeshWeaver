@@ -248,7 +248,9 @@ public class DisposalStallWatchdogTest : HubTestBase
 
         var started = DateTime.UtcNow;
         victim.Dispose();
-        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(60.Seconds());
+        await victim.DisposalCompleted.FirstOrDefaultAsync()
+            .Await(TestContext.Current.CancellationToken)
+            .WaitAsync(60.Seconds(), TestContext.Current.CancellationToken);
         var elapsed = DateTime.UtcNow - started;
 
         elapsed.Should().BeGreaterThan(TimeSpan.FromSeconds(7),

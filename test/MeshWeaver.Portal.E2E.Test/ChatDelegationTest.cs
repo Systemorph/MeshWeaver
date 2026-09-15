@@ -125,7 +125,7 @@ public class ChatDelegationTest(PortalFixture fixture)
         (await PollAsync(async () =>
                 await agentChip.CountAsync() > 0
                 && (await agentChip.First.InnerTextAsync()).Contains("Coordinator", StringComparison.OrdinalIgnoreCase),
-                TimeSpan.FromSeconds(40)))
+                TimeSpan.FromSeconds(40), cancellationToken: TestContext.Current.CancellationToken))
             .Should().BeTrue("the composer must bind to the seeded coordinator agent so the round delegates");
 
         // Skip cleanly if this portal has no model (Send is gated by design) — a delegation round needs one.
@@ -152,7 +152,7 @@ public class ChatDelegationTest(PortalFixture fixture)
         var delegationLink = page.Locator(".thread-msg-delegation-link");
         var delegated = await PollAsync(
             async () => await delegationEntry.CountAsync() > 0 && await delegationLink.CountAsync() > 0,
-            TimeSpan.FromSeconds(150));
+            TimeSpan.FromSeconds(150), cancellationToken: TestContext.Current.CancellationToken);
 
         if (!delegated)
         {
@@ -182,7 +182,7 @@ public class ChatDelegationTest(PortalFixture fixture)
         var toolResult = page.Locator(".thread-msg-tool-result");
         var resultBack = await PollAsync(
             async () => await completedDelegation.CountAsync() > 0 || await toolResult.CountAsync() > 0,
-            TimeSpan.FromSeconds(150));
+            TimeSpan.FromSeconds(150), cancellationToken: TestContext.Current.CancellationToken);
 
         // The parent thread carries the coordinator's assistant bubble (which hosts the delegation entry).
         (await page.Locator(".thread-msg-bubble.thread-msg-assistant").CountAsync())
@@ -208,7 +208,7 @@ public class ChatDelegationTest(PortalFixture fixture)
             .WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
         var subRendered = await PollAsync(
             async () => await subPage.Locator(".thread-msg-bubble.thread-msg-assistant").CountAsync() > 0,
-            TimeSpan.FromSeconds(90));
+            TimeSpan.FromSeconds(90), cancellationToken: TestContext.Current.CancellationToken);
         await subPage.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/chat-subthread-open.png", FullPage = true });
         subRendered.Should().BeTrue(
             "opening the spawned sub-thread must render its OWN conversation (the worker's assistant bubble) " +
@@ -229,13 +229,14 @@ public class ChatDelegationTest(PortalFixture fixture)
         await page.WaitForTimeoutAsync(800);
     }
 
-    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)
+    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             if (await predicate()) return true;
-            await Task.Delay(400);
+            await Task.Delay(400, cancellationToken);
         }
         return false;
     }

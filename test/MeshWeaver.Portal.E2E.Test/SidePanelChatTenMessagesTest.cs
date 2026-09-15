@@ -121,7 +121,7 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
 
             // (a) The user's bubble landed — poll the COUNT (>= i+1), robust to bubbles re-keying on the
             //     thread rebind (a specific .Nth(i) wait is brittle across re-renders).
-            (await PollAsync(async () => await userBubbles.CountAsync() >= i + 1, TimeSpan.FromSeconds(15)))
+            (await PollAsync(async () => await userBubbles.CountAsync() >= i + 1, TimeSpan.FromSeconds(15), cancellationToken: TestContext.Current.CancellationToken))
                 .Should().BeTrue($"the user bubble for message {i + 1} must appear (saw {await userBubbles.CountAsync()})");
 
             // No submit error surfaced.
@@ -130,7 +130,7 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
 
             // (b) The assistant reply for this round (count >= i+1), then (c) the round settles so the next
             //     Send re-enables.
-            (await PollAsync(async () => await assistantBubbles.CountAsync() >= i + 1, RoundDuration))
+            (await PollAsync(async () => await assistantBubbles.CountAsync() >= i + 1, RoundDuration, cancellationToken: TestContext.Current.CancellationToken))
                 .Should().BeTrue($"round {i + 1} must produce an assistant reply (saw {await assistantBubbles.CountAsync()})");
             await execBar.WaitForAsync(
                 new LocatorWaitForOptions { State = WaitForSelectorState.Detached, Timeout = RoundMs });
@@ -157,13 +157,14 @@ public class SidePanelChatTenMessagesTest(PortalFixture fixture)
     // A real LLM round can take a while; poll the assistant-bubble count up to this bound.
     private static readonly TimeSpan RoundDuration = TimeSpan.FromMilliseconds(RoundMs);
 
-    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)
+    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             if (await predicate()) return true;
-            await Task.Delay(300);
+            await Task.Delay(300, cancellationToken);
         }
         return false;
     }

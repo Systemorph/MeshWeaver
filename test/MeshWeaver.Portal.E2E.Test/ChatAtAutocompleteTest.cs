@@ -57,7 +57,7 @@ public class ChatAtAutocompleteTest(PortalFixture fixture)
         (await PollAsync(async () =>
                 await harnessChip.CountAsync() > 0
                 && (await harnessChip.First.InnerTextAsync()).Contains("MeshWeaver", StringComparison.OrdinalIgnoreCase),
-                TimeSpan.FromSeconds(30)))
+                TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken))
             .Should().BeTrue("the composer must bind to the MeshWeaver harness so @ routes to the node-reference orchestrator");
 
         var editor = page.Locator(".thread-chat-footer .monaco-editor").Last;
@@ -71,7 +71,7 @@ public class ChatAtAutocompleteTest(PortalFixture fixture)
             if (await rows.CountAsync() == 0) return false;
             localCombined = string.Join(" | ", await rows.AllInnerTextsAsync());
             return localCombined.Contains("Zebra", StringComparison.OrdinalIgnoreCase);
-        }, TimeSpan.FromSeconds(20));
+        }, TimeSpan.FromSeconds(20), cancellationToken: TestContext.Current.CancellationToken);
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/at-autocomplete-local.png", FullPage = true });
         foundLocal.Should().BeTrue(
             $"typing @Zebra must surface the seeded '{MarkerName}' node from the user's own partition subtree. " +
@@ -86,7 +86,7 @@ public class ChatAtAutocompleteTest(PortalFixture fixture)
             partitionCombined = string.Join(" | ", await rows.AllInnerTextsAsync());
             // The user's own partition is always a partition; assert at least one partition row appears.
             return partitionCombined.Length > 0;
-        }, TimeSpan.FromSeconds(20));
+        }, TimeSpan.FromSeconds(20), cancellationToken: TestContext.Current.CancellationToken);
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/at-autocomplete-partitions.png", FullPage = true });
         foundPartitions.Should().BeTrue(
             "typing @/ must expand from Partitions (the orchestrator PartitionList mode). Saw rows: " + partitionCombined);
@@ -119,13 +119,14 @@ public class ChatAtAutocompleteTest(PortalFixture fixture)
         await page.WaitForTimeoutAsync(800);
     }
 
-    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)
+    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             if (await predicate()) return true;
-            await Task.Delay(300);
+            await Task.Delay(300, cancellationToken);
         }
         return false;
     }

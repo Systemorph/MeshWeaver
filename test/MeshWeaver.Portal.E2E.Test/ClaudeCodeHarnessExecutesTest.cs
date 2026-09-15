@@ -44,7 +44,7 @@ public class ClaudeCodeHarnessExecutesTest(PortalFixture fixture)
         (await PollAsync(async () =>
                 await harnessChip.CountAsync() > 0
                 && (await harnessChip.First.InnerTextAsync()).Contains("ClaudeCode", StringComparison.OrdinalIgnoreCase),
-                TimeSpan.FromSeconds(30)))
+                TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken))
             .Should().BeTrue("the composer must bind to the ClaudeCode harness");
 
         // Skip cleanly if this portal has no model (Send is gated by design) — under the playwright skill a
@@ -72,7 +72,7 @@ public class ClaudeCodeHarnessExecutesTest(PortalFixture fixture)
         //    when logged in, or a graceful error cell like "Not logged in · Please run /login"), rather
         //    than hanging on a broken --mcp-config.
         var bubbles = page.Locator(".thread-msg-bubble");
-        var completed = await PollAsync(async () => await bubbles.CountAsync() >= 2, TimeSpan.FromSeconds(150));
+        var completed = await PollAsync(async () => await bubbles.CountAsync() >= 2, TimeSpan.FromSeconds(150), cancellationToken: TestContext.Current.CancellationToken);
 
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/claude-execute.png", FullPage = true });
 
@@ -101,13 +101,14 @@ public class ClaudeCodeHarnessExecutesTest(PortalFixture fixture)
         await page.WaitForTimeoutAsync(800);
     }
 
-    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)
+    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             if (await predicate()) return true;
-            await Task.Delay(400);
+            await Task.Delay(400, cancellationToken);
         }
         return false;
     }

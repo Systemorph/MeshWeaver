@@ -32,7 +32,7 @@ public class DefaultHarnessIsMeshWeaverTest(PortalFixture fixture)
         var composerPath = $"{fixture.UserId}/_Thread/ThreadComposer";
         await fixture.DeleteNodeAsync(context, token, composerPath);
         await PollAsync(async () => !await fixture.CanReadNodeAsync(context, token, composerPath),
-            TimeSpan.FromSeconds(15));
+            TimeSpan.FromSeconds(15), cancellationToken: TestContext.Current.CancellationToken);
 
         var page = await context.NewPageAsync();
         await page.SetViewportSizeAsync(1400, 1000);
@@ -53,7 +53,7 @@ public class DefaultHarnessIsMeshWeaverTest(PortalFixture fixture)
         var isMeshWeaver = await PollAsync(async () =>
             await harnessChip.CountAsync() > 0
             && (await harnessChip.First.InnerTextAsync()).Contains("MeshWeaver", StringComparison.OrdinalIgnoreCase),
-            TimeSpan.FromSeconds(40));
+            TimeSpan.FromSeconds(40), cancellationToken: TestContext.Current.CancellationToken);
 
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/default-harness.png", FullPage = true });
         isMeshWeaver.Should().BeTrue(
@@ -61,13 +61,14 @@ public class DefaultHarnessIsMeshWeaverTest(PortalFixture fixture)
             "catalog; defaulting to a CLI harness hides skills (the prod 'no skills auto-expand' root cause)");
     }
 
-    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout)
+    private static async Task<bool> PollAsync(Func<Task<bool>> predicate, TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             if (await predicate()) return true;
-            await Task.Delay(300);
+            await Task.Delay(300, cancellationToken);
         }
         return false;
     }
