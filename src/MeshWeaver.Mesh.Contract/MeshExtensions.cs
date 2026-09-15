@@ -2805,8 +2805,18 @@ public static class MeshExtensions
                                         //     before the failing sibling reports — leaving the
                                         //     subtree partially destroyed when the user expected an
                                         //     all-or-nothing failure.
+                                        //     🚨 TWO bounds, ordered by construction (#1198): the
+                                        //     stage keeps `budget`, and every LEG of the fan-out
+                                        //     takes one rung inside it via MeshOperationOptions.Nest
+                                        //     — strictly smaller, so a leaf that never answers is
+                                        //     refused BY NAME instead of consuming the whole
+                                        //     subtree's budget anonymously. Derived, never a second
+                                        //     constant: equal budgets are what this issue is named
+                                        //     after.
                                         var preValidate = capturedRequest.Recursive
-                                            ? PreValidateDescendantsObs(issuingHub, path, collected.ToDelete, request.AccessContext, budget, logger)
+                                            ? PreValidateDescendantsObs(
+                                                issuingHub, path, collected.ToDelete, request.AccessContext,
+                                                budget, opts.Nest(budget), logger)
                                             : Observable.Return<(string Path, string Error, NodeDeletionRejectionReason Reason)?>(null);
 
                                         return preValidate.SelectMany(failure =>
@@ -3624,6 +3634,32 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// How many descendant <see cref="ValidateDeleteRequest"/>s the delete pre-flight keeps IN
+    /// FLIGHT at once.
+    ///
+    /// <para><b>Why a cap at all.</b> A bare <c>Observable.Merge</c> subscribes every leg
+    /// immediately, so a recursive delete posted ONE request per descendant simultaneously — 83 of
+    /// them in the 2026-09-10 occurrence of issue #1198, and a Space of ~1,400 nodes is an ordinary
+    /// shape here. Each post can ACTIVATE that leaf's per-node hub (NodeType compile, dependency
+    /// load, a storage read), so the fan-out is an unbounded activation burst, which is this repo's
+    /// documented route to a wedge: storm → action block saturated → liveness probe times out →
+    /// pod pulled from the Service → 502 → SIGKILL. <c>Merge</c>'s own <c>maxConcurrent</c> is the
+    /// bound, never a <c>SemaphoreSlim</c> (which would park a hub thread).</para>
+    ///
+    /// <para><b>Why not smaller.</b> The cap is a runaway-fan-out STOP, not a throttle: it has to
+    /// stay wide enough that a healthy fan-out of any realistic subtree still settles well inside
+    /// the stage budget. 64 is four times the per-adapter storage READ cap
+    /// (<c>IoPoolOptions.PostgresRead</c> = 16) that each leg's own node read contends for, so for a
+    /// subtree spanning the usual handful of satellite adapters this cap is never the narrower
+    /// gate — the storage pool is.</para>
+    ///
+    /// <para><b>And it cannot strand the fan-out</b>, because every leg now carries its own bound
+    /// (see <see cref="PreValidateDescendantsObs"/>): a silent leaf holds its slot for one leg
+    /// budget and then reports ITSELF, which ends the stage with that leaf named.</para>
+    /// </summary>
+    private const int PreValidateFanOutConcurrency = 64;
+
+    /// <summary>
     /// Bulk-atomic pre-flight: post <see cref="ValidateDeleteRequest"/> at every
     /// descendant address (root excluded — already validated by the caller) and
     /// return the FIRST failure as <c>(Path, Error, Reason)</c>, or <c>null</c>
@@ -3649,13 +3685,33 @@ public static class MeshExtensions
     /// continuations running on the routing action block (issue #2477). The permission verdict is
     /// unaffected because the delivery's <c>AccessContext</c> is stamped explicitly below; the
     /// leaf's gate reads that, never the sender address.</para>
+    ///
+    /// <para>🚨 <b>Every leg carries its OWN bound (<paramref name="legTimeout"/>), and the whole
+    /// fan-out is capped at <see cref="PreValidateFanOutConcurrency"/> in flight</b> — the
+    /// behavioural half of issue #1198. <paramref name="timeout"/> is now a BACKSTOP over a set of
+    /// individually-bounded legs, not the fan-out's only terminal: a descendant whose per-node hub
+    /// never answers is refused by NAME, at a rung strictly inside the stage, while its siblings
+    /// finish normally. Before this, one silent hub spent the entire subtree's budget and the only
+    /// report was an anonymous "7 of 83 descendant(s) did not answer" — the diagnostic list #1294
+    /// added, with nothing to attribute it to.</para>
     /// </summary>
+    /// <param name="issuingHub">The off-router issuing hub that posts every leg.</param>
+    /// <param name="rootPath">The subtree root being deleted.</param>
+    /// <param name="allPaths">The delete plan; the root is excluded here.</param>
+    /// <param name="callerAccessContext">Stamped on every leg — see the remarks.</param>
+    /// <param name="timeout">The STAGE backstop: fires only if the fan-out itself stops
+    /// progressing, since every leg terminates within <paramref name="legTimeout"/>.</param>
+    /// <param name="legTimeout">One leg's bound. Must be strictly smaller than
+    /// <paramref name="timeout"/> — derive it with <c>MeshOperationOptions.Nest</c> rather than
+    /// configuring a second value, because equal budgets are not an ordering (#1198).</param>
+    /// <param name="logger">Where a per-leaf refusal is reported.</param>
     private static IObservable<(string Path, string Error, NodeDeletionRejectionReason Reason)?> PreValidateDescendantsObs(
         IMessageHub issuingHub,
         string rootPath,
         ImmutableHashSet<string> allPaths,
         AccessContext? callerAccessContext,
         TimeSpan timeout,
+        TimeSpan legTimeout,
         ILogger logger)
     {
         var descendants = allPaths
@@ -3664,28 +3720,36 @@ public static class MeshExtensions
         if (descendants.Length == 0)
             return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(null);
 
-        // 🚨 Who has NOT answered yet. This fan-out waits for EVERY descendant under ONE
-        // timeout, so a single unresponsive per-node hub times out the whole delete with the
-        // subtree untouched — and the operator's only evidence used to be an anonymous
-        // "[DeleteNode] timeout … partial-deleted=0" (issue #1198). Read exclusively from the
-        // timeout factory below, so a healthy fan-out pays one dictionary removal per leaf.
+        // 🚨 Who has NOT answered yet — filled when a leg is actually POSTED, never seeded up
+        // front (issue #1198). The merge below is capped, so at any instant some legs have not
+        // been subscribed at all; a map seeded with every descendant would let the stage backstop
+        // name paths nobody ever asked. That is the same class of untruth as the `unanswered=-`
+        // this issue already fixed on the commit stage: a field that does not abstain, it asserts.
         // Method-local (never static), and concurrent because Merge answers on many threads.
         var unanswered = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(
-            descendants.Select(p => new KeyValuePair<string, byte>(p, 0)),
             StringComparer.OrdinalIgnoreCase);
+        var posted = 0;
 
-        var perPath = descendants.Select(p => issuingHub
-            // 🚨 Stamp the caller's AccessContext on every ValidateDeleteRequest.
-            // This post fires from a SelectMany continuation on the workspace's
-            // emission scheduler where AsyncLocal AccessContext is unreliable —
-            // without an explicit stamp, the PostPipeline falls back to whatever
-            // hub-self impersonation is ambient (e.g. `sync/<streamId>`) and the
-            // owner's [RequiresPermission(Delete)] gate denies. The original
-            // request's AccessContext carries the caller's full identity + roles,
-            // captured at handler entry where AsyncLocal was correct.
-            .Observe(new ValidateDeleteRequest(p, rootPath), o => callerAccessContext is null
-                ? o.WithTarget(new Address(p))
-                : o.WithTarget(new Address(p)).WithAccessContext(callerAccessContext))
+        var perPath = descendants.Select(p => Observable
+            .Defer(() =>
+            {
+                // Outstanding from the moment this leg is posted, not from the moment the fan-out
+                // was planned — see the note on `unanswered` above.
+                unanswered.TryAdd(p, 0);
+                System.Threading.Interlocked.Increment(ref posted);
+                return issuingHub
+                    // 🚨 Stamp the caller's AccessContext on every ValidateDeleteRequest.
+                    // This post fires from a SelectMany continuation on the workspace's
+                    // emission scheduler where AsyncLocal AccessContext is unreliable —
+                    // without an explicit stamp, the PostPipeline falls back to whatever
+                    // hub-self impersonation is ambient (e.g. `sync/<streamId>`) and the
+                    // owner's [RequiresPermission(Delete)] gate denies. The original
+                    // request's AccessContext carries the caller's full identity + roles,
+                    // captured at handler entry where AsyncLocal was correct.
+                    .Observe(new ValidateDeleteRequest(p, rootPath), o => callerAccessContext is null
+                        ? o.WithTarget(new Address(p))
+                        : o.WithTarget(new Address(p)).WithAccessContext(callerAccessContext));
+            })
             .Take(1)
             .Select(d =>
             {
@@ -3698,6 +3762,25 @@ public static class MeshExtensions
                 // occurrence unreadable all over again.
                 return (p, resp.Errors[0], resp.Reason);
             })
+            // 🚨 ONE BOUND PER LEG — the behavioural half of issue #1198. Before this the whole
+            // fan-out shared ONE bound, so a single silent per-node hub consumed the entire
+            // subtree's budget and the delete was refused by an anonymous "7 of 83 descendant(s)
+            // did not answer" (memex-cloud 2026-09-10, path sglauser/AgenticBusiness). The list
+            // was the diagnostic half, landed in #1294; what it could not do is ATTRIBUTE — every
+            // healthy leaf had answered in milliseconds and still paid the silent one's 30 s.
+            //
+            // The rung is one INSIDE the stage that encloses this fan-out, derived by
+            // MeshOperationOptions.Nest at the call site, never a constant of its own: strictly
+            // below `timeout` so the leg's named refusal always beats the stage's anonymous one,
+            // and strictly above the bound the leaf's own HandleValidateDeleteRequest takes (one
+            // rung deeper again) so a leaf that IS alive still gets to say which of ITS reads
+            // starved. Equal budgets are not an ordering — that is the defect this issue is named
+            // after, and it is the reason the value is derived rather than written.
+            .TimeoutAtStage(legTimeout, () => DeleteStageTimeout(
+                DeleteStage.PreValidateDescendants,
+                $"the descendant '{p}' did not answer ValidateDeleteRequest within "
+                + $"{legTimeout.TotalSeconds:0}s — its per-node hub never replied, so THIS ONE node "
+                + $"refused the recursive delete of '{rootPath}' and the subtree is untouched"))
             .Catch<(string, string, NodeDeletionRejectionReason)?, Exception>(ex =>
             {
                 // The [RequiresPermission(Delete)] gate on ValidateDeleteRequest refused
@@ -3713,33 +3796,58 @@ public static class MeshExtensions
                     return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(
                         (p, ex.Message, NodeDeletionRejectionReason.Unauthorized));
                 }
+                // 🚨 The leg's own bound lapsed: this leaf never spoke. That is an AVAILABILITY
+                // failure, not a verdict — same vocabulary and the same reasoning as
+                // NodeDeletionRejectionReason.Unavailable everywhere else on this path, and the
+                // difference between "retry, a hub is not answering" and "your content is not
+                // deletable". Reporting it as ValidationFailed would send an operator looking for
+                // a validator that does not exist.
+                if (ex is TimeoutException)
+                {
+                    logger.LogWarning(
+                        "[DeleteNode] pre-flight leaf silent {Path}: {Message}", p, ex.Message);
+                    return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(
+                        (p, ex.Message, NodeDeletionRejectionReason.Unavailable));
+                }
                 logger.LogWarning(ex,
                     "[DeleteNode] pre-validate descendant failed {Path}", p);
                 return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(
                     (p, ex.Message, NodeDeletionRejectionReason.ValidationFailed));
             })
-            // Answered — pass or fail, the leaf spoke. Whatever is LEFT in the map when the
-            // stage times out is the set of hubs that did not.
+            // Answered — pass, fail, or its own leg bound lapsing. Whatever is LEFT in the map
+            // when the STAGE backstop fires is what neither answered nor reported itself.
             .Do(answer => unanswered.TryRemove(p, out _)));
 
         // Collect every descendant's outcome; emit the first non-null failure
         // (or null when all pass). Merge — not Concat — so independent
         // per-leaf hubs validate in parallel; the failure with the lowest
-        // emission order wins via FirstOrDefault.
-        return Observable.Merge(perPath)
+        // emission order wins via FirstOrDefault. Bounded: see
+        // PreValidateFanOutConcurrency for why an unbounded fan-out is a storm.
+        return Observable.Merge(perPath, PreValidateFanOutConcurrency)
             .Where(r => r.HasValue)
             .Take(1)
             .DefaultIfEmpty(null)
+            // 🚨 A BACKSTOP, no longer the fan-out's only bound. Every leg above terminates within
+            // `legTimeout`, so reaching this one means the fan-out ITSELF stopped progressing —
+            // and the report has to say what it actually knows: how many posted legs are still
+            // outstanding, out of how many were posted, out of how many were planned. Those are
+            // three different numbers once the merge is capped, and collapsing them was how the
+            // pre-flight used to claim a leaf "did not answer" a request it had never sent.
             .TimeoutAtStage(timeout, () =>
             {
                 var pending = unanswered.Keys
                     .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
+                var sent = System.Threading.Volatile.Read(ref posted);
                 var ex = DeleteStageTimeout(
                     DeleteStage.PreValidateDescendants,
-                    $"{pending.Length} of {descendants.Length} descendant(s) of '{rootPath}' did not "
-                    + $"answer ValidateDeleteRequest within {timeout.TotalSeconds:0}s, so the delete "
-                    + "was refused with the subtree untouched"
+                    $"the pre-flight fan-out for '{rootPath}' did not settle within "
+                    + $"{timeout.TotalSeconds:0}s: {pending.Length} of {sent} posted "
+                    + $"ValidateDeleteRequest(s) still outstanding ({descendants.Length} descendant(s) "
+                    + $"planned, at most {PreValidateFanOutConcurrency} in flight). Each leg carries "
+                    + $"its own {legTimeout.TotalSeconds:0}s bound and reports itself by name, so "
+                    + "reaching THIS bound means the fan-out as a whole stalled, not that one leaf "
+                    + "was slow"
                     + (pending.Length == 0
                         ? string.Empty
                         : $": {string.Join(", ", pending.Take(10))}"
@@ -3933,13 +4041,20 @@ public static class MeshExtensions
     /// returns the first validator failure as an Error (empty Warnings in the default
     /// implementation — custom hubs can override this handler to emit Warnings).
     ///
-    /// <para>🚨 Everything here runs on the CONTRACTED rung
-    /// (<see cref="MeshOperationOptions.NestedTimeout"/>), never the operation budget — issue
+    /// <para>🚨 Everything here runs on a CONTRACTED rung, never the operation budget — issue
     /// #1198. This handler exists only to answer a caller's pre-flight fan-out, which is already
-    /// holding <see cref="MeshOperationOptions.Timeout"/> open across EVERY descendant; bounding
-    /// the read at that same value meant the descendant could never be the one to give up, so its
-    /// answer — the only one that knows which node and which read — was always discarded in favour
-    /// of the caller's anonymous "N descendants did not answer".</para>
+    /// holding a bound open; bounding the read at that same value meant the descendant could never
+    /// be the one to give up, so its answer — the only one that knows which node and which read —
+    /// was always discarded in favour of the caller's anonymous "N descendants did not answer".</para>
+    ///
+    /// <para>🚨 <b>And the rung moved one deeper when the caller's fan-out gained a PER-LEG bound.</b>
+    /// The leg the caller holds open around this exchange is itself
+    /// <see cref="MeshOperationOptions.NestedTimeout"/>; a handler bounded at that same value can
+    /// never fire first, because the caller's clock starts one post, one route and one activation
+    /// earlier. So this takes <c>Nest(NestedTimeout)</c> — one rung inside the leg — and the
+    /// ordering stage &gt; leg &gt; answer holds by construction rather than by coincidence. That is
+    /// the same argument, applied one level out, that <see cref="MeshOperationOptions"/> states for
+    /// the ladder as a whole.</para>
     /// </summary>
     private static IMessageDelivery HandleValidateDeleteRequest(
         IMessageHub hub,
@@ -3957,7 +4072,9 @@ public static class MeshExtensions
         // would see during the real delete.
         var proxyDeleteRequest = new DeleteNodeRequest(path);
 
-        var nested = opts.NestedTimeout;
+        // One rung inside the caller's per-leg bound — see the remarks above. Derived, so the
+        // ordering cannot drift apart again: there is nothing to drift against.
+        var nested = opts.Nest(opts.NestedTimeout);
 
         existingNodeObs
             .Timeout(nested, Observable.Defer(() => Observable.Throw<MeshNode?>(

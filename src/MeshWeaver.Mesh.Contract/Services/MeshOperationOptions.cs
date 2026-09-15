@@ -97,12 +97,19 @@ public sealed record MeshOperationOptions
     private readonly double minNestingFraction = 0.5;
 
     /// <summary>
-    /// <b>Rung 2 — a handler that runs INSIDE another operation's bounded stage.</b> Two shapes on
-    /// the delete path: the descendant hub answering the pre-flight
-    /// <c>ValidateDeleteRequest</c> fan-out, and a cascade leg re-entering
-    /// <c>HandleDeleteNodeRequest</c> from within the root's commit stage. Both are nested by
-    /// construction — the callee only ever runs because a caller is already holding a bound open —
-    /// so both must be strictly quicker to give up than that caller.
+    /// <b>Rung 2 — work that runs INSIDE another operation's bounded stage.</b> Two shapes on the
+    /// delete path: ONE LEG of the pre-flight <c>ValidateDeleteRequest</c> fan-out, as the caller
+    /// bounds it, and a cascade leg re-entering <c>HandleDeleteNodeRequest</c> from within the
+    /// root's commit stage. Both are nested by construction — neither ever runs except because a
+    /// caller is already holding a bound open — so both must be strictly quicker to give up than
+    /// that caller.
+    ///
+    /// <para>🚨 <b>A leg is what makes a silent hub ATTRIBUTABLE</b> (issue #1198). The pre-flight
+    /// fan-out used to carry one bound over the whole merge, so a single unresponsive per-node hub
+    /// consumed the entire subtree's budget and the delete was refused by an anonymous "7 of 83
+    /// descendant(s) did not answer". With the bound on each leg instead, the silent leaf is the
+    /// one that reports — by name, at a rung strictly inside the stage — and its siblings still
+    /// finish normally.</para>
     /// </summary>
     public TimeSpan NestedTimeout => Nest(Timeout);
 
@@ -126,6 +133,14 @@ public sealed record MeshOperationOptions
     /// validator is a singleton and cannot know its depth per call, so it always takes the DEEPEST
     /// rung — which is below every enclosing bound on every path, and therefore safe on all of
     /// them.</para>
+    ///
+    /// <para>🚨 <b>It shares this rung with the pre-flight leaf's own storage read, and that is
+    /// correct</b>: <c>HandleValidateDeleteRequest</c> bounds its node read at <c>Nest(NestedTimeout)</c>
+    /// too, because it answers a rung-2 LEG. The two are SIBLINGS, not nested — the read completes
+    /// before the validator chain starts, so only one of them is ever running and the value tells
+    /// them apart the way the six delete STAGES are told apart by name. Equal-by-coincidence is the
+    /// defect this type exists to prevent; equal-between-siblings is not that, and the distinction
+    /// is what the word NESTED does all the work for here.</para>
     /// </summary>
     public TimeSpan PermissionEstablishmentBudget => Nest(NestedTimeout);
 

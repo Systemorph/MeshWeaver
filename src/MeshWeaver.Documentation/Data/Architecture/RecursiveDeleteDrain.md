@@ -125,12 +125,94 @@ genuinely stuck subtree still fails with `could not drain the subtree after N pa
 does this need", it is "is the bound measuring the right quantity, and does the check look at the
 whole subtree".
 
+## 4. The pre-flight fan-out is bounded PER LEG, and the stage bound is a backstop
+
+Before the commit runs at all, a recursive delete posts a `ValidateDeleteRequest` at **every**
+descendant and waits for every answer (`PreValidateDescendantsObs`). That pre-flight is what makes
+the operation atomic: a descendant that refuses — a validator, or the per-leaf
+`[RequiresPermission(Delete)]` gate — aborts the whole subtree before one row is removed.
+
+It used to carry **one** bound over the whole fan-out. So one unresponsive per-node hub spent the
+entire subtree's budget and the delete was refused by a report about the fan-out rather than about
+the node:
+
+```text
+[DeleteNode:pre-validate-descendants] 7 of 83 descendant(s) of 'sglauser/AgenticBusiness'
+  did not answer ValidateDeleteRequest within 30s …
+```
+
+`unanswered=` (issue #1294) made that line READABLE — it names the seven. What one bound could not
+do is ATTRIBUTE: the other 76 leaves had answered in milliseconds and still paid the silent ones'
+30 s, and the refusal that reached the caller was the STAGE's, at the same rung the whole operation
+is bounded at.
+
+Each leg now carries its own bound, one rung inside the stage:
+
+```csharp
+PreValidateDescendantsObs(…, budget, opts.Nest(budget), …)   // stage bound, leg bound
+
+// inside, per descendant:
+.TimeoutAtStage(legTimeout, () => DeleteStageTimeout(PreValidateDescendants,
+    $"the descendant '{p}' did not answer ValidateDeleteRequest within {legTimeout}s …"))
+.Catch(ex => ex is TimeoutException
+    ? Return((p, ex.Message, NodeDeletionRejectionReason.Unavailable))   // ONE named refusal
+    : …)
+```
+
+Three properties, and each is the reason for a choice above:
+
+- **The rung is derived, never configured.** `MeshOperationOptions.Nest` is strictly contracting, so
+  `leaf answer < leg < stage` holds for every configuration. Equal budgets are not an ordering —
+  the outer clock always starts first — and that is the defect #1198 is named after. The leaf's own
+  `HandleValidateDeleteRequest` therefore moved one rung deeper too, so a leaf that IS alive still
+  gets to say which of *its* reads starved instead of being preempted by the caller's new leg bound.
+- **A silent leaf is `Unavailable`, not `ValidationFailed`.** It decided nothing. Reporting an
+  availability failure as a verdict sends a correctly-entitled user to request permissions they
+  already hold (#1446) — and `IMeshService.DeleteNode` maps the two reasons to different exception
+  types, so the distinction reaches the caller.
+- **The fan-out is capped** (`PreValidateFanOutConcurrency`). A bare `Observable.Merge` subscribes
+  every leg at once, and each post can ACTIVATE that leaf's per-node hub — an unbounded activation
+  burst on a subtree of any size. The cap cannot strand the fan-out, because every leg terminates
+  within its own budget. It does mean the "outstanding", "posted" and "planned" counts are three
+  different numbers, and the stage backstop reports all three: claiming a leaf "did not answer" a
+  request that was never sent is the same class of untruth as the `unanswered=-` this issue already
+  fixed on the commit stage.
+
+The stage bound survives as a **backstop**: every leg terminates on its own, so reaching it means
+the fan-out as a whole stopped progressing, and it says so rather than blaming a leaf.
+
+### What is NOT fixed: the commit's writes serialize process-wide
+
+#1198's third item reads *"the `commit` stage's N-deletes-over-a-cap-1 `pg:{adapter}` pool"*. As
+written it is **falsified** by §3 above: since the bound became a no-progress watchdog, serializing
+the drain's own N writes cannot time it out — every removal resets the clock.
+
+What is measurable and remains open is a different mechanism. The cap-1 `pg:{provider}` write pool
+is **one process-wide gate**, not one per partition: every per-schema adapter is handed the same
+pool and the same shared `NpgsqlDataSource`. So a delete's next leaf removal queues behind
+*unrelated* writes from every other partition, and those do not tick this delete's progress — a
+portal under sustained write load can starve one drain for a whole budget with zero removals, which
+is the `made no progress for 30s` shape logged on 2026-09-14. Whether that is what happened is not
+decidable from the line.
+
+🚨 **Raising the cap is not the fix.** It is half a connection budget (16 reads + 1 write under the
+shared source's `MaxPoolSize=50`, see [Controlled I/O Pooling](../ControlledIoPooling)), and the
+measurement that would justify a different number — the queue-wait distribution on `pg:{provider}`
+under load — is not instrumented.
+
 ## Where this is pinned
 
 `test/MeshWeaver.Graph.Test/DeleteDrainCompletionTest.cs` drives both symptoms on a real Monolith
 mesh: a delete that removes plan + 1 while outliving its operation budget must SUCCEED, a root put
 back once must be drained by a follow-up pass so that success means it is gone, and a root that
 survives every pass must FAIL naming itself.
+
+`DeleteCommitTimeoutNamesWhatIsStuckTest` pins what a stalled commit SAYS — the paths the plan still
+owes, by name. `DeletePreflightNamesTheSilentDescendantTest` pins §4: a subtree whose middle
+descendant carries a validator that never emits must be refused by that ONE path's name, as
+`Unavailable`, inside the stage's budget, with its siblings answered and the subtree untouched.
+Reverted against `main` it fails exactly as production did — the stage backstop, at the full budget,
+reporting the fan-out instead of the node.
 
 ## Related
 
