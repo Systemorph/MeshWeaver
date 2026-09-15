@@ -126,6 +126,17 @@ proposed that as the mesh's module set. Now:
 - so is a module that has records and whose `<Name>.json` exists but cannot be read — that file may
   be an older image's install or uninstall, and a stale legacy-aggregate row behind it must not
   decide in its place (the aggregate's own write time is its time now, never the unreadable file's);
+- a `<Name>.json` that does not hold ITS OWN entry — JSON `null`, an entry with no name, or an entry
+  naming a different module — is corrupt exactly as a record that does not hash to its own name is:
+  reported, keyed by the FILE's name, and never accepted under the other module's name (sorted
+  after that module's own file, it would silently replace it);
+- the STORED layer's own faults count too (Copilot's review of #4438): if the per-module entry files
+  cannot be listed, every module that has records is dropped, and so is every landing or uninstall
+  refused — any module's entry may be among them; if the legacy aggregate `activation.json` cannot
+  be read, every module that has records and **no readable `<Name>.json` of its own** is dropped —
+  its only entry may be in the aggregate. A module WITH its own readable file is not: that file
+  outranks the aggregate's row by name, so the aggregate cannot hide it — and the aggregate is never
+  rewritten, so an unreadable one could otherwise drop every store module for good;
 - if the record directories cannot even be listed, every current-image projection is dropped — it is
   a decision some record may have overtaken;
 - `ProposeModuleSet` **refuses** to propose from a read with any fault (it throws; every caller
@@ -192,9 +203,18 @@ is compared with are the file server's, and a pod running behind it would otherw
 re-landing before the uninstall it follows and land nothing. If the modules GC retired the record
 between the landing's existence check and its read, the landing records it again, once.
 
-**Ties.** A landing whose record carries the same stamp as the newest uninstall counts as AFTER it,
-unless that tombstone names it as the event it followed (`after`) — the uninstall saw it, so it was
-before. The first build dropped every same-tick landing silently.
+**Ties.** At the newest uninstall's own tick, what decides is what that uninstall OBSERVED. Its
+tombstone's `after` names the newest event it saw — ties at one tick going to the ordinal-greatest
+name — so it is a **watermark**: an event at that tick whose name sorts at or below it was seen and
+precedes the uninstall; one above it was not and follows it. That covers an older image's install
+too: every older-image event has an identity — the file name its snapshot has, or WILL have once a
+current image preserves it (`OlderImageEventName`) — which `LatestEventName` includes, so an
+uninstall that saw an older image's live entry names it before any snapshot exists (Copilot's
+review of #4438; the previous build counted every such tied install as after the uninstall and left
+the module enabled). An older image's own uninstall states no `after`, so at its tick every landing
+counts as after it. The first build of this design dropped every same-tick landing silently. The
+residue is a tie inside the tie: an event the uninstall did NOT see, landing in its watermark's very
+tick with a name sorting below it, reads as seen.
 
 ### Compatibility with images already deployed
 
@@ -245,6 +265,9 @@ change (the same seam applied, nothing else):
 | an older image adopts 1.5.0 over 1.6.0; a current image shelves 1.4.0 | head **1.6.0** | head 1.5.0 |
 | an unreadable tombstone / head record / `<Name>.json` over a stale aggregate row | module **loaded** (uninstalled, or at an older generation) | module dropped and reported; no set proposed |
 | four builds measured the module; only the oldest ranks 1.5.0 as its fallback | 1.5.0's bytes **kept** | reclaimed; verdicts of builds outside the protected set retired |
+| the aggregate is unreadable and the module has records but no `<Name>.json` of its own | module **derived** from its records, an uninstall **tombstoned** over the partial read | dropped and reported; the uninstall refuses |
+| an uninstall stamped in the same tick as the older image's install it observed | module **enabled** | uninstalled |
+| `<Name>.json` holds `null`, an entry with no name, or another module's entry | read as **absent**, the module derived from its records (the misaddressed entry surfacing as a module of its own) | corrupt: reported, the module dropped |
 
 The second row is worth noticing: even the order that kept the right head lost the older build's
 fallback slot, so the modules GC would have reclaimed it five minutes later.

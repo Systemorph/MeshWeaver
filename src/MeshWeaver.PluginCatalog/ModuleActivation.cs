@@ -386,6 +386,14 @@ public sealed record ModuleEntrySnapshot
     /// <summary>When that image wrote it — the event's arrival, carried in the content because the
     /// snapshot file itself is written later.</summary>
     public required DateTime WrittenAtUtc { get; init; }
+
+    /// <summary>
+    /// The snapshot's own file name — its IDENTITY as an event, the name an uninstall's
+    /// <see cref="ModuleUninstallRecord.After"/> states when this was the newest event it observed
+    /// (Copilot's review of #4438). Set when read from disk; never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public string? EventName { get; init; }
 }
 
 /// <summary>
@@ -561,8 +569,31 @@ public static class ModuleActivationSidecar
     internal sealed record StoredActivation(
         ModuleActivationList List,
         ImmutableDictionary<string, DateTime> WrittenAt,
-        ImmutableHashSet<string> Unreadable)
+        ImmutableHashSet<string> Unreadable,
+        ImmutableHashSet<string> PerModule,
+        bool AggregateUnreadable,
+        bool EntriesUnlisted)
     {
+        /// <summary>
+        /// 🚨 Why this module's stored entry is NOT known, or null when it is (Copilot's review of
+        /// #4438). A stored-layer fault is an input fault like any record's: its own entry file
+        /// unreadable; the entry files not even listable, which can hide any module's entry; or the
+        /// legacy aggregate unreadable while this module has no readable per-module file — the
+        /// aggregate could hold its only entry. A module that HAS a readable per-module file cannot
+        /// be hidden by the aggregate, whose rows that file outranks by name; that scoping matters,
+        /// because the aggregate is never rewritten and an unreadable one could stay unreadable.
+        /// </summary>
+        public string? Hides(string moduleName) =>
+            Unreadable.Contains(moduleName)
+                ? "its per-module entry file exists but could not be read as its own entry, and that "
+                  + "file may be an older image's install or uninstall"
+                : EntriesUnlisted
+                    ? "the per-module entry files could not be listed, so its entry may be among them"
+                    : AggregateUnreadable && !PerModule.Contains(moduleName)
+                        ? "the legacy aggregate activation.json could not be read and the module has no "
+                          + "readable per-module entry file, so its entry may be in the aggregate"
+                        : null;
+
         /// <summary>The stored entry for a module, or null.</summary>
         public ModuleActivationEntry? For(string moduleName) =>
             List.Entries.FirstOrDefault(e => string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
@@ -584,7 +615,7 @@ public static class ModuleActivationSidecar
     /// per-module files.</summary>
     internal static StoredActivation ReadStoredActivation(string baseDirectory, Action<string>? onCorrupt)
     {
-        var (legacy, legacyWrittenAt) = ReadLegacy(baseDirectory, onCorrupt);
+        var (legacy, legacyWrittenAt, aggregateUnreadable) = ReadLegacy(baseDirectory, onCorrupt);
         var byName = ImmutableDictionary.Create<string, ModuleActivationEntry>(StringComparer.OrdinalIgnoreCase);
         var writtenAt = ImmutableDictionary.Create<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         var order = ImmutableList<string>.Empty;
@@ -620,7 +651,10 @@ public static class ModuleActivationSidecar
                 TierRefusals = [.. ReadTierRefusals(baseDirectory).Values],
             },
             writtenAt,
-            files.Unreadable);
+            files.Unreadable,
+            files.Entries.Select(e => e.Entry.Name).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+            aggregateUnreadable,
+            !files.Listed);
     }
 
     /// <summary>
@@ -665,10 +699,9 @@ public static class ModuleActivationSidecar
             }
             if (log.IsEmpty)
                 continue;
-            if (stored.Unreadable.Contains(moduleName))
+            if (stored.Hides(moduleName) is { } hidden)
             {
-                Drop(moduleName, "its per-module entry file exists but could not be read, and that file "
-                    + "may be an older image's install or uninstall");
+                Drop(moduleName, hidden);
                 continue;
             }
             var entry = stored.For(moduleName);
@@ -852,6 +885,20 @@ public static class ModuleActivationSidecar
     private static string SnapshotAddress(string text) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 
+    private static string SnapshotText(ModuleActivationEntry entry, DateTime writtenAt) =>
+        JsonSerializer.Serialize(
+            new ModuleEntrySnapshot { Entry = entry with { UnloadableFrameworkMvid = null }, WrittenAtUtc = writtenAt },
+            Json);
+
+    /// <summary>
+    /// The IDENTITY of an older image's event: the file name its snapshot has — or WILL have, once
+    /// a current image preserves it — so an uninstall that observed the live entry can name it in
+    /// <see cref="ModuleUninstallRecord.After"/> before any snapshot exists (Copilot's review of
+    /// #4438). Deterministic: it is the content address of the snapshot this image writes.
+    /// </summary>
+    internal static string OlderImageEventName(ModuleActivationEntry entry, DateTime writtenAt) =>
+        "entry." + SnapshotAddress(SnapshotText(entry, writtenAt)) + SnapshotSuffix;
+
     private static string LandingRecordFileName(ModuleLandingRecord record) =>
         record.Directory + "." + LandingRecordAddress(record) + ".json";
 
@@ -944,13 +991,9 @@ public static class ModuleActivationSidecar
     {
         if (state.Stored is not { ProjectionOf: null } entry || state.StoredAtUtc is not { } writtenAt)
             return;
-        var text = JsonSerializer.Serialize(
-            new ModuleEntrySnapshot { Entry = entry with { UnloadableFrameworkMvid = null }, WrittenAtUtc = writtenAt },
-            Json);
         WriteOnce(baseDirectory, entry.Name,
-            Path.Combine(LandingRecordsDirectory(baseDirectory, entry.Name),
-                "entry." + SnapshotAddress(text) + SnapshotSuffix),
-            text);
+            Path.Combine(LandingRecordsDirectory(baseDirectory, entry.Name), OlderImageEventName(entry, writtenAt)),
+            SnapshotText(entry, writtenAt));
     }
 
     /// <summary>
@@ -1037,34 +1080,35 @@ public static class ModuleActivationSidecar
         string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
         ReadRecordFiles<ModuleLandingRecord>(baseDirectory, moduleName, "*.json", onCorrupt,
             (record, _) => LandingRecordFileName(record),
-            (record, at) => record with { RecordedAtUtc = at },
+            (record, at, _) => record with { RecordedAtUtc = at },
             record => record.Name);
 
     private static ImmutableList<(string Path, ModuleUninstallRecord Record)> ReadUninstallFiles(
         string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
         ReadRecordFiles<ModuleUninstallRecord>(baseDirectory, moduleName, "*" + UninstallSuffix, onCorrupt,
             (record, _) => UninstallFileName(record),
-            (record, at) => record with { RecordedAtUtc = at },
+            (record, at, _) => record with { RecordedAtUtc = at },
             record => record.Name);
 
     private static ImmutableList<(string Path, ModulePlatformVerdict Record)> ReadVerdictFiles(
         string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
         ReadRecordFiles<ModulePlatformVerdict>(baseDirectory, moduleName, "*" + VerdictSuffix, onCorrupt,
             (record, _) => record.Directory + "." + VerdictAddress(record) + VerdictSuffix,
-            (record, at) => record with { RecordedAtUtc = at },
+            (record, at, _) => record with { RecordedAtUtc = at },
             record => record.Name);
 
     private static ImmutableList<(string Path, ModuleEntrySnapshot Record)> ReadSnapshotFiles(
         string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
         ReadRecordFiles<ModuleEntrySnapshot>(baseDirectory, moduleName, "*" + SnapshotSuffix, onCorrupt,
             (_, text) => "entry." + SnapshotAddress(text) + SnapshotSuffix,
-            // A snapshot's arrival is the older image's write, carried in its content.
-            (record, _) => record,
+            // A snapshot's arrival is the older image's write, carried in its content; its identity
+            // is its own file name.
+            (record, _, fileName) => record with { EventName = fileName },
             record => record.Entry.Name);
 
     private static ImmutableList<(string Path, T Record)> ReadRecordFiles<T>(
         string baseDirectory, string moduleName, string pattern, Action<string>? onCorrupt,
-        Func<T, string, string> expectedName, Func<T, DateTime, T> stamp, Func<T, string> nameOf)
+        Func<T, string, string> expectedName, Func<T, DateTime, string, T> stamp, Func<T, string> nameOf)
         where T : class
     {
         if (!IsValidModuleName(moduleName))
@@ -1105,7 +1149,7 @@ public static class ModuleActivationSidecar
                         + $"is not the record the name addresses; module '{moduleName}' cannot be read whole.");
                     continue;
                 }
-                builder.Add((file.FullName, stamp(record, read.WrittenAtUtc)));
+                builder.Add((file.FullName, stamp(record, read.WrittenAtUtc, file.Name)));
             }
             // EVERY failure, not only a parse error — an SMB sharing violation arrives as
             // IOException. Reported, and the activation read drops the WHOLE module for it: an
@@ -1233,28 +1277,52 @@ public static class ModuleActivationSidecar
         var storedAt = storedActivation.WrittenAtOf(name);
         var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt);
         var present = GenerationPresence(baseDirectory);
-        return new ModuleHeadState(stored, storedAt, storedActivation.Unreadable.Contains(name), log,
+        return new ModuleHeadState(stored, storedAt, storedActivation.Hides(name) is not null, log,
             log.Whole
                 ? DeriveEntry(name, stored, storedAt, log, generation => present(name, generation), log.LinkableOn(platform))
                 : null);
     }
 
-    /// <summary>The newest event in a module's record directory — landing or tombstone — as
-    /// <c>&lt;file name&gt;@&lt;arrival ticks&gt;</c>, or null when there is none. What a projection
-    /// states it was derived from, and what an uninstall states it followed.</summary>
+    /// <summary>The newest event of a module — a landing record, a tombstone, or an OLDER image's
+    /// install or uninstall (its snapshot, or the live entry under the name its snapshot will have)
+    /// — as <c>&lt;name&gt;@&lt;arrival ticks&gt;</c>, or null when there is none. What a projection
+    /// states it was derived from, and what an uninstall states it followed. Ties at one tick go to
+    /// the ordinal-greatest name, which is what makes <see cref="ModuleUninstallRecord.After"/> a
+    /// WATERMARK: every event the uninstall saw sorts at or below it.</summary>
     internal static string? LatestEventName(ModuleHeadState state) =>
         state.Log.Records
             .Select(r => (At: r.RecordedAtUtc, Name: LandingRecordFileName(r)))
             .Concat(state.Log.Uninstalls.Select(u => (At: u.RecordedAtUtc, Name: UninstallFileName(u))))
+            .Concat(OlderImageEvents(state.Stored, state.StoredAtUtc, state.Log).Select(e => (e.At, e.Name)))
             .OrderByDescending(e => e.At)
             .ThenByDescending(e => e.Name, StringComparer.Ordinal)
             .Select(e => e.Name + "@" + e.At.Ticks)
             .FirstOrDefault();
 
-    /// <summary>The file name an uninstall's <see cref="ModuleUninstallRecord.After"/> names
-    /// (<c>&lt;file name&gt;@&lt;ticks&gt;</c>), or null.</summary>
-    private static string? AfterFileName(string? after) =>
-        after is null || after.LastIndexOf('@') is var at && at <= 0 ? after : after[..at];
+    /// <summary>An older image's events for one module, each with its identity: every snapshot, and
+    /// the live stored entry when an image that predates the records wrote it.</summary>
+    private static ImmutableList<(ModuleActivationEntry Entry, DateTime At, string Name)> OlderImageEvents(
+        ModuleActivationEntry? stored, DateTime? storedAtUtc, ModuleLog log) =>
+        log.Snapshots
+            .Select(s => (Entry: s.Entry, At: s.WrittenAtUtc, Name: s.EventName ?? OlderImageEventName(s.Entry, s.WrittenAtUtc)))
+            .Concat(stored is { ProjectionOf: null } && storedAtUtc is { } storedAt
+                ? [(Entry: stored, At: storedAt, Name: OlderImageEventName(stored, storedAt))]
+                : [])
+            .ToImmutableList();
+
+    /// <summary>The watermark an uninstall's <see cref="ModuleUninstallRecord.After"/> states
+    /// (<c>&lt;name&gt;@&lt;ticks&gt;</c>): the newest event it observed. Null when it observed none, or
+    /// when the value does not parse.</summary>
+    private static (string Name, long Ticks)? ParseAfter(string? after)
+    {
+        if (after is null)
+            return null;
+        var at = after.LastIndexOf('@');
+        return at > 0 && long.TryParse(after.AsSpan(at + 1), System.Globalization.NumberStyles.None,
+                   System.Globalization.CultureInfo.InvariantCulture, out var ticks)
+            ? (after[..at], ticks)
+            : null;
+    }
 
     /// <summary>
     /// The record a RE-arrival must write, or null when this landing needs none (#4026). Called
@@ -1355,30 +1423,38 @@ public static class ModuleActivationSidecar
             return null;
         var records = log.Records;
 
-        // The older image's events: the live stored entry when that image wrote it, and every
-        // snapshot a current image took of one before overwriting it.
-        var olderImage = log.Snapshots.Select(s => (Entry: s.Entry, At: s.WrittenAtUtc))
-            .Concat(stored is { ProjectionOf: null } && storedAtUtc is { } storedAt
-                ? [(Entry: stored, At: storedAt)]
-                : [])
-            .ToImmutableList();
+        // The older image's events, each with its identity: the live stored entry when that image
+        // wrote it, and every snapshot a current image took of one before overwriting it.
+        var olderImage = OlderImageEvents(stored, storedAtUtc, log);
 
+        // 🚨 The newest uninstall, and the WATERMARK of what it observed (Copilot's review of #4438).
+        // At the uninstall's own tick, an event it observed precedes it — a landing record or an
+        // older image's install alike — and one it did not observe follows it. The watermark is its
+        // `after`: the newest event it saw, ties going to the ordinal-greatest name, so every event
+        // it saw sorts at or below it. An older image's uninstall states no `after`; at its tick,
+        // every landing counts as after it.
         var uninstalls = log.Uninstalls
-            .Select(u => (At: u.RecordedAtUtc, Followed: AfterFileName(u.After)))
-            .Concat(olderImage.Where(e => !e.Entry.Enabled).Select(e => (At: e.At, Followed: (string?)null)))
+            .Select(u => (At: u.RecordedAtUtc, Watermark: ParseAfter(u.After)))
+            .Concat(olderImage.Where(e => !e.Entry.Enabled)
+                .Select(e => (At: e.At, Watermark: ((string Name, long Ticks)?)null)))
             .ToImmutableList();
         DateTime? lastUninstall = uninstalls.IsEmpty ? null : uninstalls.Max(u => u.At);
-        var followed = uninstalls
-            .Where(u => u.At == lastUninstall && u.Followed is not null)
-            .Select(u => u.Followed!)
-            .ToImmutableHashSet(StringComparer.Ordinal);
-        bool Live(DateTime arrival, string? fileName) =>
+        var watermarks = uninstalls
+            .Where(u => u.At == lastUninstall && u.Watermark is not null)
+            .Select(u => u.Watermark!.Value)
+            .ToImmutableList();
+        bool Live(DateTime arrival, string? eventName) =>
             lastUninstall is not { } uninstalledAt
             || arrival > uninstalledAt
-            || (arrival == uninstalledAt && (fileName is null || !followed.Contains(fileName)));
+            || (arrival == uninstalledAt
+                && (eventName is null
+                    || !watermarks.Any(w => w.Ticks == uninstalledAt.Ticks
+                                            && string.CompareOrdinal(eventName, w.Name) <= 0)));
 
         var candidates = records.Where(r => Live(r.RecordedAtUtc, LandingRecordFileName(r)))
-            .Concat(CarriedCandidates(stored, olderImage, records).Where(c => Live(c.RecordedAtUtc, null)))
+            .Concat(CarriedCandidates(stored, olderImage, records)
+                .Where(c => Live(c.Candidate.RecordedAtUtc, c.EventName))
+                .Select(c => c.Candidate))
             .ToImmutableList();
 
         if (candidates.IsEmpty)
@@ -1484,8 +1560,9 @@ public static class ModuleActivationSidecar
     /// neither yielding, so among themselves they reproduce the stored head and they never outrank
     /// a record.
     /// </summary>
-    private static IEnumerable<ModuleLandingRecord> CarriedCandidates(
-        ModuleActivationEntry? stored, ImmutableList<(ModuleActivationEntry Entry, DateTime At)> olderImage,
+    private static IEnumerable<(ModuleLandingRecord Candidate, string? EventName)> CarriedCandidates(
+        ModuleActivationEntry? stored,
+        ImmutableList<(ModuleActivationEntry Entry, DateTime At, string Name)> olderImage,
         IReadOnlyList<ModuleLandingRecord> records)
     {
         bool Unrecorded(string generation) => !records.Any(r => SameGeneration(r.Directory, generation));
@@ -1502,22 +1579,22 @@ public static class ModuleActivationSidecar
             RecordedAtUtc = at,
         };
 
-        foreach (var (entry, at) in olderImage.Where(e => e.Entry.Enabled))
+        foreach (var (entry, at, name) in olderImage.Where(e => e.Entry.Enabled))
         {
             if (ModuleActivationBoot.PreviousGeneration(entry) is { Directory.Length: > 0 } previous
                 && Unrecorded(previous.Directory!))
-                yield return As(entry, previous, DateTime.MinValue);
+                yield return (As(entry, previous, DateTime.MinValue), null);
             if (!string.IsNullOrWhiteSpace(entry.Directory))
-                yield return As(entry, entry, at);
+                yield return (As(entry, entry, at), name);
         }
 
         if (stored is not { Enabled: true, ProjectionOf: not null })
             yield break;
         if (ModuleActivationBoot.PreviousGeneration(stored) is { Directory.Length: > 0 } carriedPrevious
             && Unrecorded(carriedPrevious.Directory!))
-            yield return As(stored, carriedPrevious, DateTime.MinValue);
+            yield return (As(stored, carriedPrevious, DateTime.MinValue), null);
         if (!string.IsNullOrWhiteSpace(stored.Directory) && Unrecorded(stored.Directory!))
-            yield return As(stored, stored, DateTime.MinValue.AddTicks(1));
+            yield return (As(stored, stored, DateTime.MinValue.AddTicks(1)), null);
     }
 
     private static bool SameGeneration(string? left, string? right) =>
@@ -2131,7 +2208,7 @@ public static class ModuleActivationSidecar
         var legacyPath = SidecarPath(baseDirectory);
         if (!File.Exists(legacyPath))
             return;
-        var (legacy, _) = ReadLegacy(baseDirectory, null);
+        var (legacy, _, _) = ReadLegacy(baseDirectory, null);
         if (!legacy.PendingRestart)
             return;
         try
@@ -2185,8 +2262,9 @@ public static class ModuleActivationSidecar
         SetPendingRestart(baseDirectory, list.PendingRestart);
     }
 
-    /// <summary>The legacy aggregate file and the time it was written, read from ONE handle.</summary>
-    private static (ModuleActivationList List, DateTime? WrittenAtUtc) ReadLegacy(
+    /// <summary>The legacy aggregate file, the time it was written (read from ONE handle), and
+    /// whether it exists but could not be read — a stored-layer fault the derivation must see.</summary>
+    private static (ModuleActivationList List, DateTime? WrittenAtUtc, bool Unreadable) ReadLegacy(
         string baseDirectory, Action<string>? onCorrupt)
     {
         var path = SidecarPath(baseDirectory);
@@ -2198,9 +2276,9 @@ public static class ModuleActivationSidecar
             // REPORTED and skipped, never allowed to escape. Boot calls this un-wrapped, so an
             // escaping exception would take the portal down over a transient volume blip.
             if (TryReadWithWriteTime(path) is not { } read)
-                return (new ModuleActivationList(), null);
+                return (new ModuleActivationList(), null, false);
             return (JsonSerializer.Deserialize<ModuleActivationList>(read.Text, Json) ?? new ModuleActivationList(),
-                read.WrittenAtUtc);
+                read.WrittenAtUtc, false);
         }
         catch (Exception ex)
         {
@@ -2209,7 +2287,7 @@ public static class ModuleActivationSidecar
                 + $"{ex.Message}) — the entries it holds are skipped. Store-installed modules "
                 + "recorded there will NOT load until the file is repaired or the modules are "
                 + "re-installed.");
-            return (new ModuleActivationList(), null);
+            return (new ModuleActivationList(), null, true);
         }
     }
 
@@ -2219,7 +2297,7 @@ public static class ModuleActivationSidecar
     /// and the module names whose file exists but could not be read.
     /// </summary>
     private static (ImmutableList<(ModuleActivationEntry Entry, DateTime WrittenAtUtc)> Entries,
-        ImmutableHashSet<string> Unreadable) ReadEntryFiles(string baseDirectory, Action<string>? onCorrupt)
+        ImmutableHashSet<string> Unreadable, bool Listed) ReadEntryFiles(string baseDirectory, Action<string>? onCorrupt)
     {
         var directory = EntriesDirectory(baseDirectory);
         ImmutableList<string> files;
@@ -2235,7 +2313,7 @@ public static class ModuleActivationSidecar
                 $"Module activation entries under '{directory}' could not be listed "
                 + $"({ex.GetType().Name}: {ex.Message}) — store-installed modules will NOT load "
                 + "until the volume is readable again.");
-            return ([], ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase));
+            return ([], ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase), false);
         }
 
         var entries = ImmutableList.CreateBuilder<(ModuleActivationEntry, DateTime)>();
@@ -2248,9 +2326,25 @@ public static class ModuleActivationSidecar
                     // Vanished between the listing and the read — another replica re-landing that
                     // very module. Its next read sees the new file; nothing else is affected.
                     continue;
-                if (JsonSerializer.Deserialize<ModuleActivationEntry>(read.Text, Json) is { } entry
-                    && !string.IsNullOrWhiteSpace(entry.Name))
-                    entries.Add((entry, read.WrittenAtUtc));
+                // 🚨 The file must hold ITS OWN entry (Copilot's review of #4438), exactly as a record
+                // must hash to its own name: JSON null, an entry with no name, or an entry naming a
+                // different module is not what this file addresses. It is corrupt — reported, and
+                // keyed by the FILE's name so the module it belongs to is known not to be whole —
+                // never skipped in silence, and never accepted under the other module's name (where,
+                // sorted after that module's own file, it would silently replace it).
+                var fileModule = Path.GetFileNameWithoutExtension(file);
+                if (JsonSerializer.Deserialize<ModuleActivationEntry>(read.Text, Json) is not { } entry
+                    || string.IsNullOrWhiteSpace(entry.Name)
+                    || !string.Equals(entry.Name, fileModule, StringComparison.OrdinalIgnoreCase))
+                {
+                    unreadable.Add(fileModule);
+                    onCorrupt?.Invoke(
+                        $"Module activation entry '{file}' does not hold the entry its name addresses "
+                        + "(it is null, has no name, or names another module) — that ONE module is "
+                        + "skipped; every other activation entry is unaffected.");
+                    continue;
+                }
+                entries.Add((entry, read.WrittenAtUtc));
             }
             // 🚨 EVERY failure, not only a parse error. An SMB sharing violation or lease conflict
             // arrives as IOException/UnauthorizedAccessException, and letting it escape would fail
@@ -2266,7 +2360,7 @@ public static class ModuleActivationSidecar
                     + "entry. Every other activation entry is unaffected.");
             }
         }
-        return (entries.ToImmutable(), unreadable.ToImmutable());
+        return (entries.ToImmutable(), unreadable.ToImmutable(), true);
     }
 
     /// <summary>
