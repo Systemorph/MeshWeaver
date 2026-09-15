@@ -389,11 +389,26 @@ Three things changed, so that neither path can produce that render again:
 
 What is deliberately *not* gated the same way: the mesh string's chart-side copy on a record-driven
 instance is a shadowed placeholder by design (layer 3 supplies the real one), so `helm template`
-still accepts it. That leaves one known consequence for the next operator image, which will carry
-the #4173 probe: on an instance with no vault half, the probe derives its target from that
-placeholder and holds at `Init:0/1` naming `memex-postgres-service` — a diagnosable stall, not a
-crash loop, and the reason the record path should eventually feed `databaseConnectionSecret` into
-`secrets.<half>.ConnectionStrings__memex` as well.
+still accepts it. That left one known consequence for the first operator image carrying the #4173
+probe: on an instance with no vault half, the probe derived its target from that placeholder.
+
+**It happened — pearl, 2026-09-15 10:15–10:30Z**, the first record-driven Provision on chart
+`0a45bccfc`: the migration Job and the portal both looped `waiting for postgres at
+memex-postgres-service:5432` / `nc: bad address 'memex-postgres-service'`, on a release that renders
+no such Service — while the record had rendered the right server into `config.<half>.MEMEX_HOST`
+(`memexaks-pg.postgres.database.azure.com`). `build`, provisioned on the pre-#4173 chart that probed
+MEMEX_HOST, came up.
+
+So the chart now chooses the mesh endpoint in one place, `memex.meshProbeGroup`
+(`templates/_database.tpl`), per half: `postgres.enabled` → the in-cluster Service (the only case
+that may name it); a values `ConnectionStrings__memex` → the host it names (#4173, unchanged);
+otherwise — the Key Vault case — `config.<half>.MEMEX_HOST:MEMEX_PORT`; and with neither the render
+**fails**, the #3780 rule. `check-chart-invariants.sh` guards it three ways: a pearl-shaped fixture
+(no values string, a CSI class mapping `ConnectionStrings__memex`) whose probe must be the
+record's host; invariant 17, that no wait-for-postgres ever names `memex-postgres-service` on a
+release that does not render it; and a second refusal control for the no-host render. Feeding
+`databaseConnectionSecret` into `secrets.<half>.ConnectionStrings__memex` remains the fuller fix —
+until then the probe gates the address the record declares, not the string the process opens.
 
 ## Related
 

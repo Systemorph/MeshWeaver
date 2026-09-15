@@ -548,7 +548,39 @@ def _cs_hosts(cs):
     return hosts, (p.group(1) if p else "5432")
 
 
-def _probe_coverage(kind_name, obj_kind, obj, secret_obj, label):
+# The in-cluster Postgres Service — rendered only when `postgres.enabled`. A connection string in the
+# chart's OWN Secret that names it on a release that does not render it is the chart's placeholder
+# (`memex.meshConnectionString`'s default): it is SHADOWED by a later envFrom source (a Key Vault CSI
+# class) or the process dies on it. Invariants 16 and 17 read this flag.
+pg_rendered = next(iter(by_kind("Service", "memex-postgres-service")), None) is not None
+
+
+def _waiter_command(obj):
+    pod_spec = (((obj or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
+    waiter = next(
+        (c for c in (pod_spec.get("initContainers") or []) if c.get("name") == "wait-for-postgres"),
+        None,
+    )
+    return None if waiter is None else " ".join(waiter.get("command") or [])
+
+
+def _secret_refs_after(obj, secret_name):
+    """Does any container of `obj` list a secretRef AFTER the chart's own Secret in envFrom? That is
+    the only way the chart Secret's placeholder connection string is shadowed (Kubernetes keeps the
+    LAST envFrom source on a key clash)."""
+    pod_spec = (((obj or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
+    for c in pod_spec.get("containers") or []:
+        refs = [
+            ((e.get("secretRef") or {}).get("name"))
+            for e in (c.get("envFrom") or [])
+            if e.get("secretRef")
+        ]
+        if secret_name in refs and refs.index(secret_name) < len(refs) - 1:
+            return True
+    return False
+
+
+def _probe_coverage(kind_name, obj_kind, obj, secret_obj, label, cfg_obj=None):
     """Every host `secret_obj` names must appear in the wait-for-postgres command of `obj`.
 
     🚨 It counts its check FIRST and has no early return that skips one. An absent object or an
@@ -599,9 +631,16 @@ def _probe_coverage(kind_name, obj_kind, obj, secret_obj, label):
             "PASSES — 'the gate could not run' must never read as 'the gate passed'.",
         )
         return
+    shadowed = []
     for key, (hosts, port) in sorted(opened.items()):
         for host in hosts:
             if host in probed:
+                continue
+            if host == "memex-postgres-service" and not pg_rendered:
+                # The chart's placeholder on an external database — the Key Vault case. What the
+                # process opens is the shadowing source's string, whose host the chart cannot read;
+                # the gate must then wait for the record-rendered address instead (asserted below).
+                shadowed.append(key)
                 continue
             finding(
                 f"{label}: {key} names host '{host}:{port}' that wait-for-postgres does not probe",
@@ -610,9 +649,31 @@ def _probe_coverage(kind_name, obj_kind, obj, secret_obj, label):
                 "MembershipTableManager on a name that never resolved. Derive the probe from the "
                 "connection strings (templates/_database.tpl), never from a parallel config value.",
             )
+    if shadowed:
+        cfg_host = (((cfg_obj or {}).get("data") or {}).get("MEMEX_HOST") or "").strip()
+        if not cfg_host or cfg_host == "memex-postgres-service" or cfg_host not in probed:
+            finding(
+                f"{label}: {', '.join(shadowed)} is the chart's in-cluster placeholder on an external "
+                f"database, and wait-for-postgres does not probe the record-rendered MEMEX_HOST "
+                f"('{cfg_host or 'blank'}')",
+                "the connection string then arrives from Key Vault, whose host the chart cannot read, "
+                "so MEMEX_HOST is the only rendered address of the server the process opens. Without "
+                "it the gate waits for a Service this release does not render (pearl, 2026-09-15).",
+            )
+        if not _secret_refs_after(obj, kind_name):
+            finding(
+                f"{label}: {', '.join(shadowed)} names memex-postgres-service, which this release does "
+                f"not render, and no envFrom source after {kind_name} shadows it",
+                "the process would open the placeholder and die at boot. Supply the connection string "
+                "in values, or through a Key Vault class (keyVaultSecrets.secrets), whose synced Secret "
+                "is listed after the chart's own.",
+            )
 
 
-_probe_coverage("memex-portal-secrets", "Deployment", dep, secret, "portal")
+_probe_coverage(
+    "memex-portal-secrets", "Deployment", dep, secret, "portal",
+    next(iter(by_kind("ConfigMap", "memex-portal-config")), None),
+)
 # The migration Job's name carries .Release.Revision, so it is matched by PREFIX rather than by a
 # fixed name — a lookup that silently found nothing would make this half of the check vacuous.
 _probe_coverage(
@@ -627,7 +688,33 @@ _probe_coverage(
     ),
     next(iter(by_kind("Secret", "memex-migration-secrets")), None),
     "migration",
+    next(iter(by_kind("ConfigMap", "memex-migration-config")), None),
 )
+
+# ---- 17. the in-cluster Postgres is probed ONLY when the chart renders it ----
+# 🚨 pearl, 2026-09-15: a record-driven instance (connection string in Key Vault, none in values) on
+# chart 0a45bccfc rendered `for g in memex-postgres-service:5432` into BOTH init containers, on a
+# release that renders no such Service. `nc` never resolves it, so the gate neither passes nor
+# fails — it spins, and the rollout waits until its deadline with nothing red anywhere.
+checks += 1
+if not pg_rendered:
+    _migration_job = next(
+        (
+            d for d in by_kind("Job")
+            if ((d.get("metadata") or {}).get("name") or "").startswith("memex-migration-")
+        ),
+        None,
+    )
+    for _label, _obj in (("portal", dep), ("migration", _migration_job)):
+        _probed = _waiter_command(_obj)
+        if _probed and "memex-postgres-service" in _probed:
+            finding(
+                f"{_label}: wait-for-postgres probes memex-postgres-service, which this release does "
+                "not render (postgres.enabled is false)",
+                "the init container can never succeed and never fails — it spins until the rollout "
+                "deadline. On an external database the probe is the values' connection string, or "
+                "the record-rendered config MEMEX_HOST (templates/_database.tpl → memex.meshProbeGroup).",
+            )
 
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:

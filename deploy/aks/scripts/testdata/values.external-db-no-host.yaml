@@ -1,0 +1,11 @@
+# REFUSAL CONTROL for check-chart-invariants.sh — an EXTERNAL database with no host anywhere.
+#
+# `postgres.enabled: false`, no `secrets.<half>.ConnectionStrings__memex` in values, and
+# `config.<half>.MEMEX_HOST` left at the chart's in-cluster default. There is then no input naming a
+# database this release can reach: the only host left is `memex-postgres-service`, which a
+# `postgres.enabled: false` release does not render, and a wait-for-postgres init container
+# probing it spins forever (pearl, 2026-09-15). The chart must REFUSE this render, naming both
+# inputs, and check-chart-invariants.sh asserts the refusal carries `names no external database
+# host`. A green render of this file is the regression. No credential anywhere.
+postgres:
+  enabled: false

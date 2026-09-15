@@ -937,7 +937,12 @@ secrets:
 # MeshWeaver#4173, and the two come from different halves of the values with nothing comparing
 # them: an explicit ConnectionStrings__orleans naming another host was gated by nothing, which is
 # #3780 (Init:1/1, then the silo dies in MembershipTableManager on a name that never resolved).
-# MEMEX_HOST/MEMEX_PORT remain as published configuration; they no longer decide what is waited for.
+# MEMEX_HOST/MEMEX_PORT remain as published configuration, and they decide the probe in ONE case:
+# an external database (postgres.enabled: false) whose connection string is NOT in these values —
+# the record-driven Key Vault case, where a CSI SecretProviderClass supplies ConnectionStrings__memex.
+# Without that case the probe fell back to the in-cluster default and spun forever on
+# memex-postgres-service (pearl, 2026-09-15). With neither a values string nor a real MEMEX_HOST the
+# render fails, naming both. The in-cluster Service is probed ONLY when postgres.enabled renders it.
 postgres:
   enabled: true
 
