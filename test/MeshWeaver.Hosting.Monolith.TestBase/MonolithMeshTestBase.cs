@@ -1036,7 +1036,8 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             .ObserveCompletion(
                 ex => FileOutput.WriteLine(
                     $"[SEED] SeedTopLevel({node.Id}): create faulted AFTER the wait settled — "
-                    + $"reported, not orphaned: {ex.GetType().Name}: {ex.Message}"))!;
+                    + $"reported, not orphaned: {ex.GetType().Name}: {ex.Message}"),
+                cancellationToken: TestContext.Current.CancellationToken)!;
     }
 
     /// <summary>

@@ -91,7 +91,7 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 () => Access.ImpersonateAsSystem(),
                 _ => MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}")).Take(1)
                     .Select(c => c.Items.FirstOrDefault(n => n.Path == path)))
-            .FirstAsync().Await();
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
 
     private Task<MeshNode> CreateTarget(string path, CancellationToken cancellationToken = default) =>
         WriteAsSystem(new MeshNode(path)

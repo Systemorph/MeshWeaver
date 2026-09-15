@@ -314,7 +314,7 @@ public class SpeculativeCheckCannotAnswerGreenForAnUncheckedNodeTest(ITestOutput
                 Configuration = $"config => config.WithContentType<{id}>()"
             },
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         await MeshService.CreateNode(new MeshNode($"{id}.cs", $"{typePath}/Source")
         {
@@ -326,7 +326,7 @@ public class SpeculativeCheckCannotAnswerGreenForAnUncheckedNodeTest(ITestOutput
                 Language = "csharp"
             },
             State = MeshNodeState.Active,
-        }).Should().Within(TestTimeouts.Convergence).Emit();
+        }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         return (typePath, $"{typePath}/Source/{id}.cs", id);
     }

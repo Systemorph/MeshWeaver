@@ -410,11 +410,37 @@ projects import core's `test/Directory.Packages.props` (which imports core's roo
 repository's working tree on 2026-09-15: **2,646 timed tests in 634 files, 2,184 of which reference
 no cancellation token at all** — a *floor* for what its `-warnaserror` build will report, since the
 analyzer also rejects a body that references some other token. That satellite also needs its own
-`global.json` before any `dotnet test` there will run, and **two** core-owned reusable workflows
-invoke `dotnet test` with VSTest-only flags (`-warnaserror`, `--logger "trx;…"`) against satellite
-suites — `node-repo-module-pack.yml` (a module's sibling `*.Test` project, ×2 call sites) and
-`node-repo-platform-canary.yml` (the scheduled pin-vs-main canary). Both have to move to the MTP
-flags **in the same change set** as the pin. They are VSTest-only today, deliberately: every
-satellite is still on the 3.x line, and flipping them early would break the repos that have not
-moved yet. 🚨 `-warnaserror` is the one to watch — under MTP it does not error out loudly, it
-yields `Zero tests ran` with exit 5, so a canary that "ran" would have measured nothing.
+`global.json` before any `dotnet test` there will run.
+
+**Where `global.json` reaches, measured rather than assumed.** `dotnet test` selects its runner from
+the first `global.json` found walking **UP from the current directory**. Measured on the .NET
+10.0.400 SDK, 2026-09-15, with `dotnet test --help` as the instrument (it announces which runner it
+is): a `global.json` in a **sibling** directory of the cwd does **not** apply — the help still says
+*".NET Test Command for VSTest"* — while one in the cwd or in an **ancestor** does. That settles a
+question two reviews got wrong in opposite directions. **Two** core-owned reusable workflows invoke
+`dotnet test` against satellite suites — `node-repo-module-pack.yml` (a module's sibling `*.Test`
+project, ×2 call sites) and `node-repo-platform-canary.yml` (the scheduled pin-vs-main canary) — and
+both run with cwd = the **caller's** checkout while keeping the platform in a **sibling** checkout
+(`$GITHUB_WORKSPACE/meshweaver`, `…/core-pin`, `…/core-main`). So core's own `global.json` never
+reaches them and cannot break them; the **caller's** does, which means a satellite adding one is
+exactly the event that would have. Both lanes therefore now read the caller's `global.json` and
+choose their own flags — VSTest (`-warnaserror`, `--logger "trx;…"`) when it selects nothing, and
+xunit's MTP reporter (`--report-xunit-trx`, `--report-xunit-trx-filename`) when it selects
+Microsoft.Testing.Platform. Nothing about a 3.x caller changes, and a repo that moves no longer has
+to land a core PR in the same change set to keep its lane working.
+
+Three more measurements the lanes are built on, same SDK and day: `-p:` properties **do** reach the
+build under MTP (falsified with `-p:LangVersion=7.0` → `error CS8630`, exit 1), so
+`-p:MeshWeaverRoot=…` and `-p:CIRun=true` survive the flip; xunit's trx reporter writes the **same**
+`TeamTest/2010` schema the canary's parser already reads (`ResultSummary`, `Counters`,
+`UnitTestResult outcome`), so no parser moved; and 🚨 **both `-warnaserror` and `--logger` end an
+MTP run as `Zero tests ran`, exit 5** — no trx, nothing executed. That is the failure shape to fear,
+because the module-pack lane records it as *"the module's own suite failed"* and the canary records
+it as *"comparison incomplete"*; neither says "this lane passed the wrong flags".
+
+🚨 **And the canary's build-failure classifier had to widen for this bump specifically.** It read
+`error (?:CS|FS|BC)[0-9]+` to decide whether a failed build was the code's fault or the
+infrastructure's — so ~2,000 `error xUnit1069` at core main, the break this whole entry is about,
+classified as **unknown**, which suppresses the report and preserves the tracking issue rather than
+raising one. It now matches any diagnostic id except `MSB`/`NU`/`NETSDK`, which stay
+infrastructure.

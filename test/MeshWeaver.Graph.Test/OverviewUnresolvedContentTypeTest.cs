@@ -9,6 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Xunit;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -144,7 +145,8 @@ public class OverviewUnresolvedContentTypeTest(ITestOutputHelper output) : HubTe
         var stream = GetClient().GetWorkspace()
             .GetRemoteStream<JsonElement, LayoutAreaReference>(CreateHostAddress(), reference);
         return (await stream.GetControlStream(reference.Area!)
-            .Should().Within(10.Seconds()).Match(x => x != null))!;
+            .Should().Within(10.Seconds()).Match(x => x != null,
+                cancellationToken: TestContext.Current.CancellationToken))!;
     }
 
     [HubFact]

@@ -83,10 +83,10 @@ public class StaleMainNodeRepairTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     private Task<StaleMainNodeRepairReport> RepairAsync(params string[] roots)
-        => StaleMainNodeRepair.Repair(Mesh, roots).Timeout(Budget).Await();
+        => StaleMainNodeRepair.Repair(Mesh, roots).Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
     private Task<StaleMainNodeRepairReport> DetectAsync(params string[] roots)
-        => StaleMainNodeRepair.Detect(Mesh, roots).Timeout(Budget).Await();
+        => StaleMainNodeRepair.Detect(Mesh, roots).Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
     /// <summary>
     /// The mutual cycle from the issue: two Active copies of one node in different partitions, each

@@ -39,7 +39,8 @@ public class RecycleNodeWaitsForTheInstallHoldingTheRootTest(ITestOutputHelper o
         var path = $"{TestPartition}/{id}";
         await NodeFactory
             .CreateNode(new MeshNode(id, TestPartition) { Name = id, NodeType = "Markdown" })
-            .Should().Emit("the node the recycle targets has to exist first");
+            .Should().Emit("the node the recycle targets has to exist first",
+                cancellationToken: TestContext.Current.CancellationToken);
         return path;
     }
 

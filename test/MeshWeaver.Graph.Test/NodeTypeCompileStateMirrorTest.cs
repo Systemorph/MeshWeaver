@@ -98,5 +98,5 @@ public class NodeTypeCompileStateMirrorTest(ITestOutputHelper output) : Monolith
             .Where(s => s is not null && predicate(s))
             .FirstAsync()
             .Timeout(60.Seconds())
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 }

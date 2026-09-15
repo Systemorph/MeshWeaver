@@ -87,7 +87,7 @@ public class RoutingQuiescenceTest
                     Volatile.Write(ref inFlightWhenStopped, inFlight);
                     Volatile.Write(ref stopped, 1);
                 })
-                .Await();
+                .Await(TestContext.Current.CancellationToken);
     }
 
     private static async Task<int> WaitForCount(RoutingQuiescence quiescence, int expected) =>

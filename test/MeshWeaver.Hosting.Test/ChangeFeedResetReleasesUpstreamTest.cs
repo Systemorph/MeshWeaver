@@ -110,7 +110,7 @@ public class ChangeFeedResetReleasesUpstreamTest(ITestOutputHelper output) : Mon
             NodeType = "Markdown",
             State = MeshNodeState.Active,
         };
-        await NodeFactory.CreateNode(node).Should().Within(TestTimeouts.Convergence).Emit();
+        await NodeFactory.CreateNode(node).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         return path;
     }
 
@@ -125,7 +125,8 @@ public class ChangeFeedResetReleasesUpstreamTest(ITestOutputHelper output) : Mon
             .Materialize()
             .Should().Within(TestTimeouts.Convergence).Match(
                 n => n.Kind == NotificationKind.OnError,
-                "an owner that cannot answer the SubscribeRequest must surface as OnError");
+                "an owner that cannot answer the SubscribeRequest must surface as OnError",
+                    cancellationToken: TestContext.Current.CancellationToken);
         MeshNodeStreamCache.IsTransientOwnerFailure(failure.Exception!).Should().BeTrue(
             "precondition: the 'no response received' banner is the TRANSIENT class — the node "
             + "exists and its stream stays live, which is what makes the orphan heartbeat possible");
@@ -210,7 +211,8 @@ public class ChangeFeedResetReleasesUpstreamTest(ITestOutputHelper output) : Mon
         PublishChangeBroadcast(path);
 
         var eviction = await evictions.FirstAsync().Should().Within(TestTimeouts.Convergence).Emit(
-            "a change-feed event must evict the faulted entry so the next read re-probes", cancellationToken: TestContext.Current.CancellationToken);
+            "a change-feed event must evict the faulted entry so the next read re-probes",
+                cancellationToken: TestContext.Current.CancellationToken);
         Cache.IsReadStreamLive(path).Should().BeFalse(
             "the faulted entry is gone — from here on NOTHING in the cache references the path, so "
             + "this eviction was the last chance to release its upstream");

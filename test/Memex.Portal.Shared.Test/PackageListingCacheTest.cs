@@ -331,11 +331,12 @@ public class PackageListingCacheTest
     /// </summary>
     private static Task<IReadOnlyList<PackageManifest>> Listing(IPackageSource source, string gitRef = Ref) =>
         source.ListPackages(gitRef).Should().Within(TestTimeouts.Quick)
-            .Emit("the source must produce a listing");
+            .Emit("the source must produce a listing", cancellationToken: TestContext.Current.CancellationToken);
 
     private static Task<IReadOnlyList<PackageFile>> Files(IPackageSource source) =>
         source.FetchPackageFiles(Manifest("Hosting"), Ref).Should().Within(TestTimeouts.Quick)
-            .Emit("the source must produce the package's files");
+            .Emit("the source must produce the package's files",
+                cancellationToken: TestContext.Current.CancellationToken);
 
     private static long StopwatchTicks(TimeSpan span) =>
         (long)(span.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
@@ -354,7 +355,8 @@ public class PackageListingCacheTest
     {
         var listing = await Memex.Portal.Shared.Api.PluginRegistryEndpoints
             .ListAll([configured], caller, Observable.Return((IReadOnlyList<PublicationArtifact>)[]), null)
-            .Should().Within(TestTimeouts.Quick).Emit("the registry must answer this caller");
+            .Should().Within(TestTimeouts.Quick).Emit("the registry must answer this caller",
+                cancellationToken: TestContext.Current.CancellationToken);
         return listing.Packages.Select(p => p.Id).ToArray();
     }
 

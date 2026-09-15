@@ -116,6 +116,6 @@ public class AppArrangementRoundTripTest(ITestOutputHelper output) : MonolithMes
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         await access.RunAsSystem(() => mesh.CreateNode(node))
-            .FirstAsync().Timeout(Bound).Await();
+            .FirstAsync().Timeout(Bound).Await(TestContext.Current.CancellationToken);
     }
 }

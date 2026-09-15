@@ -68,7 +68,8 @@ public class HubWatcherStopsAtTeardownStartTest(ITestOutputHelper output) : HubT
     private static async Task ParkTheActionBlock(IMessageHub root, Stall stall)
     {
         root.Post(new Blocker(), o => o.WithTarget(root.Address));
-        await stall.Entered.Should().Within(10.Seconds()).Emit("the blocker handler must be running");
+        await stall.Entered.Should().Within(10.Seconds()).Emit("the blocker handler must be running",
+            cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]

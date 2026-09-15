@@ -213,7 +213,8 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
             };
             fixture.Victim.DeliverMessage(delivery);
             await arrived.Should().Within(TestTimeouts.Convergence).Emit(
-                "quiescing stops new work owned by this hub, but preserves transit traffic", cancellationToken: TestContext.Current.CancellationToken);
+                "quiescing stops new work owned by this hub, but preserves transit traffic",
+                    cancellationToken: TestContext.Current.CancellationToken);
         }
         finally
         {
@@ -233,6 +234,9 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
         {
             ReleaseParkedRequest();
             await PendingReply;
+            // 🚨 UNTOKENED ON PURPOSE (#4378): this exists to let the HELD victim finish its drain so
+            // the fixture tears down cleanly. A cancelled drain leaves the victim quiescing into a
+            // disposed mesh, which is the crash shape, not a faster test.
             await Victim.DisposalCompleted.FirstOrDefaultAsync().Await()
                 .WaitAsync(TestTimeouts.Convergence);
         }
@@ -294,7 +298,7 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
 
         await parkedArrived.Should().Within(TestTimeouts.Convergence).Emit(
             "the sink must be holding the victim's request, so the victim owes exactly one callback "
-            + "and cannot drain past Quiescing on its own");
+            + "and cannot drain past Quiescing on its own", cancellationToken: TestContext.Current.CancellationToken);
 
         // Dispose is a POST, not a blocking teardown: it returns and the phases advance on the
         // victim's own turn loop.

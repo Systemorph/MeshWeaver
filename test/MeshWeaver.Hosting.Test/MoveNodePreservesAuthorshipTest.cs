@@ -143,5 +143,6 @@ public class MoveNodePreservesAuthorshipTest(ITestOutputHelper output) : Monolit
     /// </summary>
     private async Task<MeshNode> ReadExisting(string path) =>
         (await ReadNode(path).Should().Within(TestTimeouts.Convergence)
-            .Match(n => n is not null, $"the node at {path} must exist"))!;
+            .Match(n => n is not null, $"the node at {path} must exist",
+                cancellationToken: TestContext.Current.CancellationToken))!;
 }

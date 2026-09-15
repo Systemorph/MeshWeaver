@@ -112,7 +112,7 @@ public class ImportTypeBeforeInstanceTest(ITestOutputHelper output) : MonolithMe
     {
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null)
-            .FirstAsync().Timeout(60.Seconds()).Await();
+            .FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
         return node.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content ?? "";
     }
 

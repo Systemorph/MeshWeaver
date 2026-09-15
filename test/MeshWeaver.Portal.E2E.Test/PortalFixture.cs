@@ -376,6 +376,10 @@ public sealed class PortalFixture : IAsyncLifetime
             }
             catch
             {
+                // 🚨 UNTOKENED ON PURPOSE (#4378). This runs during FIXTURE CONSTRUCTION, before any
+                // test owns a token, so there is no test deadline to observe — the loop is bounded by
+                // `deadline` above. Every other helper-level wait in test/ takes the token; this one
+                // and the four listed in Doc/Architecture/WritingTests Rule 2a do not.
                 await Task.Delay(1000);
             }
         }

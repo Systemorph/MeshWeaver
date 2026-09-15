@@ -94,7 +94,7 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
             .Select(r => r.RawKey)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
     /// <summary>Where <see cref="MeshWeaverInstanceService.Register"/> puts the record: the owner's
     /// partition.</summary>

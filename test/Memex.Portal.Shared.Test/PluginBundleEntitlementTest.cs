@@ -94,7 +94,7 @@ public class PluginBundleEntitlementTest(ITestOutputHelper output) : MonolithMes
             .Select(r => r.RawKey)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .Await();
+            .Await(TestContext.Current.CancellationToken);
 
     /// <summary>Installs a package the production way, so the install record carries the same
     /// <c>Source</c> stamp the registry writes — the half of the grant pair that is not the id.</summary>

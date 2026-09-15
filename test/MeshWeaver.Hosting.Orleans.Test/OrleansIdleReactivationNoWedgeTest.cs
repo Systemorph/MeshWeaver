@@ -47,7 +47,7 @@ public class OrleansIdleReactivationNoWedgeTest(ITestOutputHelper output) : Orle
         var response = await client.Observe(
                 new CreateNodeRequest(new MeshNode(id, "TestUser") { Name = "Original", NodeType = "Markdown" }),
                 o => o.WithTarget(new Address("TestUser")))
-            .FirstAsync().Await().WaitAsync(45.Seconds());
+            .FirstAsync().Await(TestContext.Current.CancellationToken).WaitAsync(45.Seconds());
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
