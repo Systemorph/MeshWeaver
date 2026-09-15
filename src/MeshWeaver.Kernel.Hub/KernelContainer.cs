@@ -274,7 +274,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
                 var claim = new Claim();
                 if (!ImmutableInterlocked.Update(ref current, s => s.Closed ? s : s with { InFlight = s.InFlight.Add(claim) }))
                     return Observable.Throw<T>(new ObjectDisposedException(nameof(KernelContainer),
-                        "The kernel host was reclaimed after being idle; submit the code again."));
+                        "The kernel host is shutting down (idle reclamation or disposal); submit the code again."));
                 return Observable.Defer(() => dispatch(claim)).Finally(() => Release(claim));
             });
 
