@@ -36,6 +36,27 @@
    nothing, and "the gate could not determine what to wait for" must never render as "the gate
    passed". Same rule as AGENTS.md → "A gate NEVER tests its own inputs".
 
+   🚨 THE KEY VAULT CASE — the mesh string is not always in the values. Every record-driven instance
+   since MeshWeaver.Plugins#1721 carries `ConnectionStrings__memex` in Key Vault (`<prefix>db-
+   connection`), mounted by a CSI SecretProviderClass whose synced Secret OUTRANKS the chart's own
+   Secret in `envFrom`. Its values carry NO connection string, so "derive the host from the values'
+   connection string" derived it from the chart's in-cluster DEFAULT, `Host=memex-postgres-service`,
+   a Service a `postgres.enabled: false` release does not render. Measured on pearl, 2026-09-15
+   10:15–10:30Z (chart 0a45bccfc, the first provision after #4173): the migration Job and the portal
+   both looped `waiting for postgres at memex-postgres-service:5432` / `nc: bad address
+   'memex-postgres-service'` forever — while the record HAD rendered the right server into
+   `config.<half>.MEMEX_HOST` (`memexaks-pg.postgres.database.azure.com`). `build`, provisioned on the
+   pre-#4173 chart that probed MEMEX_HOST, came up. So `memex.meshProbeGroup` below is the ONE place
+   the mesh endpoint is chosen, per half:
+     * `postgres.enabled` → the in-cluster Service (the only case that may ever name it);
+     * the values carry `secrets.<half>.ConnectionStrings__memex` → the host that string names
+       (#4173, unchanged);
+     * otherwise — an EXTERNAL database whose string arrives from outside the values (Key Vault CSI,
+       or a hand-made class) → `config.<half>.MEMEX_HOST:MEMEX_PORT`, the record-rendered address of
+       the same server;
+     * and when even that is blank or still the in-cluster default → the render FAILS, naming both
+       inputs (the #3780 rule: refuse, never invent a host).
+
    Every template here takes `(dict "root" $ "half" "memex_portal" | "memex_migration")`.
 */ -}}
 
@@ -112,6 +133,24 @@
 {{- end -}}
 {{- end -}}
 
+{{- /* The MESH endpoint the half's gate waits for, as a host group — see the Key Vault case in the
+       header. The in-cluster Service is named ONLY when `postgres.enabled` renders it: on an
+       external database a probe of `memex-postgres-service` can never succeed and never fail, it
+       just spins (pearl, 2026-09-15). */ -}}
+{{- define "memex.meshProbeGroup" -}}
+{{- $secrets := index .root.Values.secrets .half | default dict -}}
+{{- if or .root.Values.postgres.enabled $secrets.ConnectionStrings__memex -}}
+{{- include "memex.dbHostGroup" (include "memex.meshConnectionString" .) -}}
+{{- else -}}
+{{- $config := index .root.Values.config .half | default dict -}}
+{{- $host := trim (toString ($config.MEMEX_HOST | default "")) -}}
+{{- if or (not $host) (eq $host "memex-postgres-service") -}}
+{{- fail (printf "memex.dbProbeTargets: '%s' runs on an EXTERNAL database (postgres.enabled is false) but names no external database host: secrets.%s.ConnectionStrings__memex is not in values (the Key Vault case — the string arrives through a CSI SecretProviderClass) and config.%s.MEMEX_HOST is %s. The only host left would be the chart's in-cluster default memex-postgres-service, a Service this release does not render, and wait-for-postgres would spin on it forever (pearl, 2026-09-15). Set config.%s.MEMEX_HOST (the record renders it from databaseServer/databaseHost) or supply the connection string in values. The same refusal as MeshWeaver#3780: never invent a database host." .half .half .half (ternary "blank" "still the in-cluster default memex-postgres-service" (not $host)) .half) -}}
+{{- end -}}
+{{- printf "%s:%s" $host (trim (toString ($config.MEMEX_PORT | default "5432"))) -}}
+{{- end -}}
+{{- end -}}
+
 {{- /* Every DISTINCT host GROUP the half's process will open, space-separated — the mesh database
        always, and the orleans one whenever AdoNet clustering is configured. Deduplicated, because
        the derived orleans string names the same server as the mesh one and probing it twice says
@@ -120,7 +159,7 @@
        🚨 Fails the render when no host could be derived. See the header. */ -}}
 {{- define "memex.dbProbeTargets" -}}
 {{- $targets := list -}}
-{{- $mesh := include "memex.dbHostGroup" (include "memex.meshConnectionString" .) -}}
+{{- $mesh := include "memex.meshProbeGroup" . -}}
 {{- if $mesh -}}{{- $targets = append $targets $mesh -}}{{- end -}}
 {{- if eq (include "memex.adoNetClustering" .) "true" -}}
 {{- $orleans := include "memex.dbHostGroup" (include "memex.orleansConnectionString" .) -}}
