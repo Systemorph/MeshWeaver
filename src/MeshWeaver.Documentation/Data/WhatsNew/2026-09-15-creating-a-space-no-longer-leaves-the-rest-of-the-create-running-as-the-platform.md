@@ -1,7 +1,7 @@
 ---
 Name: Creating a Space no longer leaves the rest of the create running as the platform
 Category: Fix
-Description: The grant that makes you the owner of a new Space ran as the platform and forgot to hand your identity back — so everything the create did next ran with full rights on some runs and with yours on others, which is why creating a page in a brand-new Space sometimes answered "Create permission required".
+Description: The grant that makes you the owner of a new Space ran as the platform and forgot to hand your identity back, so everything the create did next ran with full rights on some runs and with yours on others — one of the two causes behind "Create permission required" on a Space you had just made.
 Icon: ShieldKeyhole
 Order: -20260915
 ---
@@ -30,8 +30,13 @@ Create permission required"**, on a Space you had just created and do own.
 
 The borrowing is now opened and closed in one place, so the grant is still written by the platform
 and the create continues as you. Nothing about who may create a Space, or what you get when you do,
-has changed — a create that works today works exactly the same way, on every run rather than on
-most of them.
+has changed.
+
+**This is one of two causes, and the other is still open.** Deleting a Space and immediately creating
+a new one under the same name can still be refused when you put the first thing in it — that one is a
+separate timing problem in how a just-written grant becomes visible, it is still being investigated,
+and nothing here changes it. What is gone is the case where a Space that was never fully registered
+with the rest of the mesh left you unable to add to it.
 
 A write that quietly runs with more rights than the person who asked for it is the more serious half
 of this, even when it happens to succeed, so the boundary is now checked by a test rather than

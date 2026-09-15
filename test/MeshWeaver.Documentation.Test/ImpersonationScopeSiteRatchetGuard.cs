@@ -64,15 +64,20 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     /// the shape; this stops the list as a WHOLE from growing — including by the trick of adding a
     /// new file's line. Lower it whenever you delete or lower an entry.
     ///
-    /// <para><b>2026-09-15 — 66 → 65 by CONVERSION.</b>
+    /// <para><b>2026-09-15 — 66 → 64 by CONVERSION, and the slack is spent.</b>
     /// <c>src/MeshWeaver.Graph/Configuration/SpaceNodeType.cs</c> (1) is gone: the Space
     /// creator-Admin grant now runs through <c>AccessService.RunAsSystem</c>. That site was not a
     /// tidiness item — it LATCHED <c>system-security</c> onto the create flow that invoked the
     /// post-creation handler, which is why the framework's own
     /// <c>Admin/Partition/{id}</c> announcement was decided against two different identities in one
     /// run (#4061). Pinned by <c>SpaceGrantScopeDoesNotLatchTheCreateFlowTest</c>.</para>
+    ///
+    /// <para>🚨 The step down is TWO, not one, and the second is the point: the allow file summed to
+    /// 65 against a budget of 66, so one brand-new allowance could have been added without tripping
+    /// the total check at all — a ratchet with a free slot in it. The seed is now EXACT against the
+    /// file (64), and the correct next edit is still DOWNWARD.</para>
     /// </summary>
-    private const int TotalBudget = 65;
+    private const int TotalBudget = 64;
 
     /// <summary>Production roots. <c>test/</c> and <c>samples/</c> are deliberately out of scope —
     /// the leak there costs test isolation, not a user's permissions, and listing 21 more entries
