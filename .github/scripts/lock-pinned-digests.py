@@ -3017,8 +3017,14 @@ def read_registry_rules(root: str) -> dict[str, tuple[str, str]]:
             continue
         retention = entry.get("retention")
         if isinstance(retention, dict):
+            # 🚨 ONLY A NON-EMPTY STRING IS AN ESTATE (#4406 review). `str(None)` is `"None"`, so a
+            # record carrying `"estate": null` would render as `decided by: None` — a missing
+            # estate wearing the costume of a named one, in the line whose whole job is to say WHO
+            # answers. Anything that is not a string reads here as absent, and the validator below
+            # reds on it.
+            estate = retention.get("estate")
             rules[host] = (str(retention.get("rule", "")).strip(),
-                           str(retention.get("estate", "")).strip())
+                           estate.strip() if isinstance(estate, str) else "")
     return rules
 
 
@@ -3458,9 +3464,15 @@ def check_registry_retention(root: str) -> int:
                     "whole content of this rule is that what deletes there is decided outside this "
                     "fleet's reach; a list here would be a verdict about OUR artifacts resting on "
                     "nothing, and nothing in this repository could re-derive it.")
-            if not str(retention.get("estate", "")).strip():
+            # 🚨 A NON-STRING IS NOT AN ESTATE, AND `str()` WOULD HIDE THAT (#4406 review):
+            # `str(None)` is `"None"`, so `"estate": null` satisfied a truthiness test here AND
+            # rendered as `decided by: None` in the report — the same typed-quote-mark family as
+            # `present: "true"` one field along.
+            estate_value = retention.get("estate")
+            if not isinstance(estate_value, str) or not estate_value.strip():
                 problems.append(
-                    f"{where}.retention is `out-of-estate` and names no `estate`. Saying the "
+                    f"{where}.retention is `out-of-estate` and declares "
+                    f"`estate: {estate_value!r}`, which is not a non-empty string. Saying the "
                     "answer is somebody else's without saying WHOSE — the subscription, the "
                     "tenant, the repository that owns the decision — is the hand list again: the "
                     "next reader cannot tell a delegation from a shrug.")
@@ -3487,7 +3499,8 @@ def check_registry_retention(root: str) -> int:
                     + ", not from this record. A store our own lanes publish into is not an estate "
                     "whose retention is somebody else's to state; that is exactly the trapdoor out "
                     "of `nothing-deletes` this rule may not open. Say what keeps them.")
-            out_of_estate.append((host, str(retention.get("estate", "")).strip()))
+            out_of_estate.append(
+                (host, estate_value.strip() if isinstance(estate_value, str) else ""))
             continue
 
         if rule == "derived-protected-set":
@@ -5419,9 +5432,16 @@ ingress:
           f"ARM 36: an `out-of-estate` record enumerated somebody else's deleters. Nothing in this "
           f"repository can re-derive that list, so it is a verdict about OUR artifacts resting on "
           f"nothing — the false reassurance this table exists to refuse: {output}")
-    code, output = _verdict(_estate(drop=["estate"]))
-    check(code == 1 and "names no `estate`" in output,
-          f"ARM 36: 'the answer is somebody else's' passed with nobody named: {output}")
+    for _estate_value, _label in ((None, "ABSENT"), ({"estate": None}, "null"),
+                                  ({"estate": ""}, "empty"), ({"estate": 17}, "a number"),
+                                  ({"estate": ["them"]}, "a list")):
+        code, output = _verdict(_estate(drop=["estate"]) if _estate_value is None
+                                else _estate(retention=_estate_value))
+        check(code == 1 and "is not a non-empty string" in output,
+              f"ARM 36: 'the answer is somebody else's' passed with the estate {_label}. "
+              f"🚨 `str(None)` is the STRING \"None\", so a null estate satisfied a truthiness "
+              f"test AND rendered as `decided by: None` — a missing estate wearing the costume of "
+              f"a named one, in the line whose whole job is to say WHO answers: {output}")
     for _authorized, _label in ((True, "true"), ("false", 'the STRING "false"'),
                                 (None, "absent")):
         code, output = _verdict(
