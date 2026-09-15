@@ -657,6 +657,19 @@ public static class ModulePackCommand
         // collocated JS 404s. A standalone RCL publish lays them under wwwroot/ (its own assets at
         // the root, dependencies' already namespaced under wwwroot/_content/<Dep>/), which is the
         // exact shape MeshModuleStaticAssetExtensions serves from modules/<Name>/wwwroot.
+        //
+        // 🚨 THE PRECONDITION THIS WALK RESTS ON, stated because it was silently false for three
+        // weeks (#2384): EVERY asset kind must already be UNDER <out>/wwwroot at the relative path
+        // it will be served at. A directory walk cannot see an asset a producer only DECLARES, and
+        // two of the SDK's three kinds — the collocated `Foo.razor.js` and the `.styles.css`
+        // aggregate — exist nowhere in the project's own wwwroot/ tree. `dotnet publish` does
+        // materialise both there (measured against SDK 10.0.400, 2026-09-15:
+        // `Components/Badge.razor.js` lands at `publish/wwwroot/Components/Badge.razor.js`), so the
+        // SDK lane has always been complete; the CONTAINER lane's builder has to reproduce them,
+        // and `ProjectBuild.EmitStaticAssets` is where that obligation lives. Reading a
+        // static-web-assets manifest here instead would not help: the in-image builder writes none,
+        // and the lane that does write one already satisfies this walk.
+        // `check-bundle-static-assets.py` asserts the outcome per file, for both lanes.
         var assetRoot = Path.Combine(moduleDirectory, "wwwroot");
         var staticAssets = Directory.Exists(assetRoot)
             ? Directory.EnumerateFiles(assetRoot, "*", SearchOption.AllDirectories)
