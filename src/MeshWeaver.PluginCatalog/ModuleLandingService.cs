@@ -217,7 +217,8 @@ public sealed class ModuleLandingService : IDisposable
     /// real SMB lock.</summary>
     internal static int CollectGarbage(
         string baseDirectory, ILogger? logger, TimeSpan? minAge, DateTime? nowUtc,
-        Action<string>? deleteDirectory, CancellationToken cancellationToken = default)
+        Action<string>? deleteDirectory, CancellationToken cancellationToken = default,
+        Func<string?>? ownPlatform = null)
     {
         var modulesRoot = Path.Combine(baseDirectory, "modules");
         if (!Directory.Exists(modulesRoot))
@@ -240,8 +241,13 @@ public sealed class ModuleLandingService : IDisposable
         // has two images live on one volume, each ranking by its own link verdicts, so the derived
         // generations of EVERY platform a verdict exists for — and of the platform with none — are
         // referenced, never only this process's.
-        var stored = ModuleActivationSidecar.ReadStored(baseDirectory, OnReadFault);
-        var referenced = ModuleActivationSidecar.ReferencedGenerations(baseDirectory, stored, OnReadFault)
+        // 🚨 …for the PROTECTED platforms only (post-merge review of #4427): this pass's own, the one
+        // with no verdicts, and the two that measured each module most recently. The platform key
+        // is the framework identity, which changes with most builds, so protecting every platform
+        // that ever recorded a verdict kept every old build's fallback for the life of the module.
+        var own = (ownPlatform ?? ModuleActivationSidecar.LivePlatform)();
+        var stored = ModuleActivationSidecar.ReadStoredActivation(baseDirectory, OnReadFault);
+        var referenced = ModuleActivationSidecar.ReferencedGenerations(baseDirectory, stored, OnReadFault, own)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         // 🚨 #3649: an entry's PREVIOUS generation is referenced exactly like its head one. It is
         // the generation boot falls back to when the head does not load on this platform — for a
@@ -309,11 +315,10 @@ public sealed class ModuleLandingService : IDisposable
             {
                 if (cancellationToken.IsCancellationRequested)
                     break;
+                var storedEntry = stored.For(moduleName);
                 retired += ModuleActivationSidecar.PruneLandingRecords(
-                    baseDirectory, moduleName,
-                    stored.Entries.FirstOrDefault(e =>
-                        string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase)),
-                    cutoff,
+                    baseDirectory, moduleName, storedEntry,
+                    stored.WrittenAtOf(storedEntry?.Name ?? moduleName), cutoff, own,
                     msg => logger?.LogInformation("Modules GC: {Message}", msg));
             }
             retired += ModuleActivationSidecar.PruneLandingTemps(baseDirectory, cutoff);
@@ -746,8 +751,22 @@ public sealed class ModuleLandingService : IDisposable
     public IObservable<ModuleSet?> ProposeModuleSet()
         => pool.InvokeBlocking(_ =>
         {
+            // 🚨 Never from a PARTIAL read (post-merge review of #4427): a module the read dropped,
+            // or one derived without a record it could not read, would be proposed as the mesh's
+            // module set and carried to every replica that boots after it. Every caller catches
+            // this and leaves the mesh on its current set; the next wave proposes again.
+            var faults = ImmutableList<string>.Empty;
             var landed = ModuleActivationSidecar.ReadFor(baseDirectory,
-                msg => logger?.LogError("{Message}", msg), platform);
+                msg =>
+                {
+                    faults = faults.Add(msg);
+                    logger?.LogError("{Message}", msg);
+                }, platform);
+            if (!faults.IsEmpty)
+                throw new InvalidOperationException(
+                    $"Not proposing a module set: the activation record could not be read whole "
+                    + $"({faults.Count} fault(s): {string.Join(" | ", faults)}). A set proposed from it "
+                    + "could name generations the whole record does not.");
             var proposed = ModuleSetStore.Propose(baseDirectory, landed,
                 proposedBy: Environment.MachineName,
                 onCorrupt: msg => logger?.LogWarning("{Message}", msg));
@@ -1101,21 +1120,44 @@ public sealed class ModuleLandingService : IDisposable
         if (platform() is { Length: > 0 } measuredOn)
             ModuleActivationSidecar.WriteVerdict(baseDirectory, name, generation, measuredOn, held is null);
         var recorded = ModuleActivationSidecar.WriteLanding(baseDirectory, record);
-        var state = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name, OnCorrupt, platform);
+        // 🚨 Nothing is derived — and so nothing projected or reported — from a PARTIAL read (the
+        // post-merge review of #4427): an unreadable tombstone skipped would read an uninstalled
+        // module as installed, an unreadable head record an older generation as the head.
+        ModuleActivationSidecar.ModuleHeadState ReadWhole()
+        {
+            var read = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name, OnCorrupt, platform);
+            return read.Whole
+                ? read
+                : throw new InvalidOperationException(
+                    $"Module '{name}': its activation records could not be read whole, so nothing is "
+                    + "derived or projected from this landing now. Its bytes and its landing record are "
+                    + "on the volume; the next read that sees the records whole derives it.");
+        }
+        var state = ReadWhole();
+        // The record was already on the volume — and the modules GC may have retired it between
+        // that existence check and this read (it retires a record the answer does not need). This
+        // landing still happened, so it is recorded again, once, into a name that is now absent:
+        // not a retry of anything that failed.
+        if (!recorded && !state.Log.Records.Any(r => ModuleActivationSidecar.SameFacts(r, record)))
+        {
+            recorded = ModuleActivationSidecar.WriteLanding(baseDirectory, record);
+            state = ReadWhole();
+        }
         // The same bundle landed before, so its record was already here. Usually a no-op — but an
         // adopt landing re-installing the generation this deployment ran before (the Store's
         // rollback) must still take the head, so a landing that WOULD move it records a
         // re-arrival of its own instead of relying on a record that arrived earlier.
         if (!recorded
-            && ModuleActivationSidecar.ReArrival(baseDirectory, state, record, DateTime.UtcNow, platform) is { } again)
+            && ModuleActivationSidecar.ReArrival(baseDirectory, state, record, platform) is { } again)
         {
             ModuleActivationSidecar.WriteLanding(baseDirectory, again);
-            state = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name, OnCorrupt, platform);
+            state = ReadWhole();
         }
         var entry = state.Derived
             ?? throw new InvalidOperationException(
                 $"Module '{name}': the landing record for {generation} is not on the volume after it "
-                + "was written — a concurrent uninstall removed it. Nothing was activated; land it again.");
+                + "was written, and nothing else is recorded for the module. Nothing was activated; land "
+                + "it again.");
 
         // What this landing's report says, against the head as DERIVED — which on a quiet volume is
         // what the landing alone would have decided, and under a concurrent landing is the answer
@@ -1164,6 +1206,10 @@ public sealed class ModuleLandingService : IDisposable
         // installed-ness from a projection. An image that predates the records reads this file as
         // its whole answer, and for it the file stays last-writer-wins, as it always was.
         beforeProjecting?.Invoke(name);
+        // 🚨 …and an OLDER image's entry is preserved as an immutable event BEFORE it is overwritten
+        // (post-merge review of #4427): that file is the only trace of the older image's install or
+        // uninstall, and the derivation reads it as an event at its own write time.
+        ModuleActivationSidecar.PreserveOlderImageEntry(baseDirectory, state);
         if (state.Stored is not { ProjectionOf: not null } stored
             || !entry.Equals(stored with { ProjectionOf = null }))
             ModuleActivationSidecar.WriteEntry(baseDirectory,
@@ -1355,6 +1401,14 @@ public sealed class ModuleLandingService : IDisposable
     {
         ValidateFileName(name, "module name");
 
+        // Nothing is uninstalled over a PARTIAL read: the tombstone orders against what was read,
+        // and an older image's entry has to be preserved whole before it is overwritten.
+        var state = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name,
+            msg => logger?.LogError("{Message}", msg), platform);
+        if (!state.Whole)
+            throw new InvalidOperationException(
+                $"Module '{name}': its activation records could not be read whole, so nothing is "
+                + "uninstalled now; repeat the uninstall once they read whole.");
         var list = ModuleActivationSidecar.ReadFor(baseDirectory,
             msg => logger?.LogError("{Message}", msg), platform);
         var existing = list.Entries.FirstOrDefault(e =>
@@ -1380,11 +1434,11 @@ public sealed class ModuleLandingService : IDisposable
         // nothing. Deleting records instead would be an order nothing can rely on — a landing
         // writing its record while they are deleted.
         var tombstone = ModuleActivationSidecar.WriteUninstall(baseDirectory, name,
-            ModuleActivationSidecar.LatestEventName(
-                ModuleActivationSidecar.ReadModuleHead(baseDirectory, name, msg => logger?.LogError("{Message}", msg), platform)));
+            ModuleActivationSidecar.LatestEventName(state));
         // The disabled per-module file is what an image that predates the records reads. It is a
         // projection of the tombstone, marked as one, so it decides nothing for a current image.
         beforeProjecting?.Invoke(name);
+        ModuleActivationSidecar.PreserveOlderImageEntry(baseDirectory, state);
         ModuleActivationSidecar.WriteEntry(baseDirectory,
             existing with
             {

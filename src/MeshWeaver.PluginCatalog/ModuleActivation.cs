@@ -365,6 +365,30 @@ public sealed record ModulePlatformVerdict
 }
 
 /// <summary>
+/// An OLDER image's per-module entry, preserved as an immutable event (#4026, post-merge review of
+/// #4427). An image that predates the landing records records its install or uninstall ONLY as
+/// <c>activation.d/&lt;Name&gt;.json</c> without <see cref="ModuleActivationEntry.ProjectionOf"/>, and
+/// a current image reads that file as an event at its own write time — so the next current-image
+/// write of the file would erase the only trace of it. Before overwriting such a file, a current
+/// image writes this snapshot: the entry exactly as that image wrote it and the time it wrote it,
+/// read from the same handle as its bytes. The derivation treats a snapshot exactly as it treats
+/// the live file, so taking one changes no answer and the overwrite that follows loses nothing.
+///
+/// <para>Addressed by the SHA-256 of the file's own bytes (<c>entry.&lt;address&gt;.snapshot</c>):
+/// two replicas preserving the same file write one snapshot, and an entry shape that grows can only
+/// ever produce a second, identical event — never a record that fails its own name.</para>
+/// </summary>
+public sealed record ModuleEntrySnapshot
+{
+    /// <summary>The per-module entry exactly as the older image wrote it.</summary>
+    public required ModuleActivationEntry Entry { get; init; }
+
+    /// <summary>When that image wrote it — the event's arrival, carried in the content because the
+    /// snapshot file itself is written later.</summary>
+    public required DateTime WrittenAtUtc { get; init; }
+}
+
+/// <summary>
 /// The persisted per-deployment module-activation list — the content of the
 /// <c>modules/activation.json</c> sidecar (see <see cref="ModuleActivationSidecar"/>).
 /// </summary>
@@ -496,21 +520,20 @@ public static class ModuleActivationSidecar
 
     /// <summary>
     /// Reads the activation list: the legacy aggregate file unioned with every per-module entry
-    /// file, the per-module file winning by name — and then, for every module that has landing
-    /// records (<see cref="ModuleLandingRecord"/>, #4026), whether it is installed and which
-    /// generation it runs, DERIVED from the ordered records and tombstones, with the fallback ranked
-    /// by this process's own platform.
+    /// file, the per-module file winning by name — and then, for every module that has records
+    /// (<see cref="ModuleLandingRecord"/>, #4026), whether it is installed and which generation it
+    /// runs, DERIVED from the ordered events, with the fallback ranked by this process's platform.
     ///
     /// <para>An ABSENT file — either kind — is the normal fresh-deployment state and contributes
     /// nothing, silently. An UNREADABLE one is reported through <paramref name="onCorrupt"/> and
-    /// contributes nothing, so the skip is loud rather than silent — but 🚨 it no longer costs the
-    /// OTHER entries: one bad file used to collapse the entire answer to the empty list, which is
-    /// how a transient SMB read fault booted a pod with none of its store modules (#2189). The
-    /// caller still gets everything that WAS readable, plus one report per file that was not.</para>
+    /// costs exactly its own module, never the others (#2189). 🚨 For a module that has records it
+    /// costs that module WHOLE — it is dropped from the answer, never derived from what was
+    /// readable: an unreadable tombstone skipped would load an uninstalled module, an unreadable
+    /// head record skipped would promote an older generation, and either would then be proposed as
+    /// the mesh's module set. Dropping is what an unreadable entry always did before #4026.</para>
     ///
-    /// <para>A module with no landing records and no tombstones answers exactly as it did before
-    /// #4026, byte for byte — which is every module on a deployment until its first landing or
-    /// uninstall on an image that writes them.</para>
+    /// <para>A module with no landing records, tombstones or snapshots answers exactly as it did
+    /// before #4026, byte for byte.</para>
     /// </summary>
     public static ModuleActivationList Read(string baseDirectory, Action<string>? onCorrupt = null)
         => ReadFor(baseDirectory, onCorrupt, LivePlatform);
@@ -522,7 +545,7 @@ public static class ModuleActivationSidecar
     /// sees its internals.</summary>
     internal static ModuleActivationList ReadFor(
         string baseDirectory, Action<string>? onCorrupt, Func<string?> platform)
-        => ApplyLandingRecords(baseDirectory, ReadStored(baseDirectory, onCorrupt), onCorrupt, platform);
+        => ApplyLandingRecords(baseDirectory, ReadStoredActivation(baseDirectory, onCorrupt), onCorrupt, platform);
 
     /// <summary>The platform this process runs: the live framework identity — the same key a
     /// producer records beside its bytes. Resolved only when a verdict is actually consulted.</summary>
@@ -530,82 +553,136 @@ public static class ModuleActivationSidecar
         MeshWeaver.Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid;
 
     /// <summary>
+    /// The STORED layers, read once: the entries (aggregate, then per-module files winning by
+    /// name), the WRITE TIME of the file each entry came from — taken from the same open handle as
+    /// its content, so a concurrent replace can never pair one file's bytes with another's time —
+    /// and the names whose per-module file exists but could not be read.
+    /// </summary>
+    internal sealed record StoredActivation(
+        ModuleActivationList List,
+        ImmutableDictionary<string, DateTime> WrittenAt,
+        ImmutableHashSet<string> Unreadable)
+    {
+        /// <summary>The stored entry for a module, or null.</summary>
+        public ModuleActivationEntry? For(string moduleName) =>
+            List.Entries.FirstOrDefault(e => string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>When the file the module's stored entry came from was written, or null.</summary>
+        public DateTime? WrittenAtOf(string moduleName) =>
+            WrittenAt.TryGetValue(moduleName, out var at) ? at : null;
+    }
+
+    /// <summary>
     /// The STORED layers only — the legacy aggregate and the per-module entry files, the latter
     /// winning by name — with no landing record applied and no boot marker attached. What an
-    /// image that predates #4026 reads as its whole answer, and what the modules GC keeps
-    /// referenced for exactly that reason (a rolled-back replica boots from it).
+    /// image that predates #4026 reads as its whole answer.
     /// </summary>
     internal static ModuleActivationList ReadStored(string baseDirectory, Action<string>? onCorrupt = null)
-    {
-        var legacy = ReadLegacy(baseDirectory, onCorrupt);
-        var byName = new Dictionary<string, ModuleActivationEntry>(StringComparer.OrdinalIgnoreCase);
-        var order = new List<string>();
+        => ReadStoredActivation(baseDirectory, onCorrupt).List;
 
-        void Accept(ModuleActivationEntry entry)
+    /// <summary><see cref="ReadStored"/> with each entry's paired write time and the unreadable
+    /// per-module files.</summary>
+    internal static StoredActivation ReadStoredActivation(string baseDirectory, Action<string>? onCorrupt)
+    {
+        var (legacy, legacyWrittenAt) = ReadLegacy(baseDirectory, onCorrupt);
+        var byName = ImmutableDictionary.Create<string, ModuleActivationEntry>(StringComparer.OrdinalIgnoreCase);
+        var writtenAt = ImmutableDictionary.Create<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        var order = ImmutableList<string>.Empty;
+
+        void Accept(ModuleActivationEntry entry, DateTime? at)
         {
             if (string.IsNullOrWhiteSpace(entry.Name))
                 return;
             if (!byName.ContainsKey(entry.Name))
-                order.Add(entry.Name);
-            byName[entry.Name] = entry;
+                order = order.Add(entry.Name);
+            byName = byName.SetItem(entry.Name, entry);
+            writtenAt = at is { } time ? writtenAt.SetItem(entry.Name, time) : writtenAt.Remove(entry.Name);
         }
 
         foreach (var entry in legacy.Entries)
-            Accept(entry);
+            Accept(entry, legacyWrittenAt);
         // Per-module files last: a record written by the landing lane WINS over whatever the
         // frozen aggregate still says about that name (an uninstall must beat a stale enabled row).
         // Sorted so the union is deterministic regardless of directory-enumeration order.
-        foreach (var entry in ReadEntryFiles(baseDirectory, onCorrupt))
-            Accept(entry);
+        var files = ReadEntryFiles(baseDirectory, onCorrupt);
+        foreach (var (entry, at) in files.Entries)
+            Accept(entry, at);
 
-        return new ModuleActivationList
-        {
-            Entries = [.. order.Select(name => byName[name])],
-            // The marker is authoritative; the legacy flag is honoured once, for a deployment
-            // upgrading with the flag still set. Boot clears both.
-            PendingRestart = File.Exists(PendingRestartMarkerPath(baseDirectory)) || legacy.PendingRestart,
-            // #4097 — what the registry said this instance's plan refuses, from the markers the
-            // default install keeps in step with the registry's answer.
-            TierRefusals = [.. ReadTierRefusals(baseDirectory).Values],
-        };
+        return new StoredActivation(
+            new ModuleActivationList
+            {
+                Entries = [.. order.Select(name => byName[name])],
+                // The marker is authoritative; the legacy flag is honoured once, for a deployment
+                // upgrading with the flag still set. Boot clears both.
+                PendingRestart = File.Exists(PendingRestartMarkerPath(baseDirectory)) || legacy.PendingRestart,
+                // #4097 — what the registry said this instance's plan refuses, from the markers the
+                // default install keeps in step with the registry's answer.
+                TierRefusals = [.. ReadTierRefusals(baseDirectory).Values],
+            },
+            writtenAt,
+            files.Unreadable);
     }
 
     /// <summary>
-    /// Applies the landing records to the stored layers (#4026): every module that has landing
-    /// records or tombstones gets the entry <see cref="DeriveEntry"/> computes from them, for
-    /// <paramref name="platform"/>; a module with neither keeps its stored entry untouched; and the
-    /// boot's unloadable measurement (#3650) rides along last, against the head as derived.
+    /// Applies the records to the stored layers (#4026): every module that has landing records,
+    /// tombstones or snapshots gets the entry <see cref="DeriveEntry"/> computes from them, for
+    /// <paramref name="platform"/>; a module with none keeps its stored entry untouched; a module
+    /// whose records could not be read WHOLE is DROPPED, and says so; and the boot's unloadable
+    /// measurement (#3650) rides along last, against the head as derived.
     /// </summary>
     internal static ModuleActivationList ApplyLandingRecords(
-        string baseDirectory, ModuleActivationList stored, Action<string>? onCorrupt, Func<string?> platform)
+        string baseDirectory, StoredActivation stored, Action<string>? onCorrupt, Func<string?> platform)
     {
-        var byName = new Dictionary<string, ModuleActivationEntry>(StringComparer.OrdinalIgnoreCase);
-        var order = new List<string>();
-        foreach (var entry in stored.Entries)
+        var byName = stored.List.Entries.ToImmutableDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
+        var order = stored.List.Entries.Select(e => e.Name).ToImmutableList();
+
+        void Drop(string moduleName, string why)
         {
-            if (!byName.ContainsKey(entry.Name))
-                order.Add(entry.Name);
-            byName[entry.Name] = entry;
+            byName = byName.Remove(moduleName);
+            order = order.RemoveAll(n => string.Equals(n, moduleName, StringComparison.OrdinalIgnoreCase));
+            onCorrupt?.Invoke(
+                $"Module '{moduleName}' is NOT loaded from this read: {why}. A partial read would "
+                + "change which generation it runs — or whether it runs at all — so it is dropped "
+                + "whole, exactly as an unreadable activation entry always was; the next read that "
+                + "sees its records whole restores it.");
         }
 
+        var (names, listed) = ListRecordDirectories(baseDirectory, onCorrupt);
+        if (!listed)
+            // Which modules have records is unknown, so no PROJECTION can be trusted: a current
+            // image's per-module file is a decision some record or tombstone may have overtaken.
+            foreach (var projected in stored.List.Entries.Where(e => e.ProjectionOf is not null).ToImmutableList())
+                Drop(projected.Name, "the record directories under activation.d could not be listed");
+
         var present = GenerationPresence(baseDirectory);
-        foreach (var moduleName in ModuleNamesWithLandingRecords(baseDirectory, onCorrupt))
+        foreach (var moduleName in names)
         {
             var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt);
+            if (!log.Whole)
+            {
+                Drop(moduleName, $"{log.Faults} of its records could not be read");
+                continue;
+            }
             if (log.IsEmpty)
                 continue;
-            byName.TryGetValue(moduleName, out var entry);
+            if (stored.Unreadable.Contains(moduleName))
+            {
+                Drop(moduleName, "its per-module entry file exists but could not be read, and that file "
+                    + "may be an older image's install or uninstall");
+                continue;
+            }
+            var entry = stored.For(moduleName);
             var name = entry?.Name ?? moduleName;
-            var derived = DeriveEntry(name, entry, StoredAt(baseDirectory, name), log.Records, log.Uninstalls,
+            var derived = DeriveEntry(name, entry, stored.WrittenAtOf(name), log,
                 generation => present(name, generation), log.LinkableOn(platform));
             if (derived is null)
                 continue;
             if (!byName.ContainsKey(name))
-                order.Add(name);
-            byName[name] = derived;
+                order = order.Add(name);
+            byName = byName.SetItem(name, derived);
         }
 
-        return stored with
+        return stored.List with
         {
             // #3650 — the boot's measurement of each head generation rides along, from the
             // per-module marker file, only while the head is still the generation it measured.
@@ -616,16 +693,46 @@ public static class ModuleActivationSidecar
     }
 
     /// <summary>
+    /// How many OTHER platforms keep their fallback protected per module, besides the reader's own
+    /// and the platform with no verdicts: the most recent ones to measure the module, which in a
+    /// rolling update are the image being rolled to and the one being rolled from.
+    /// </summary>
+    internal const int RetainedPlatformsPerModule = 2;
+
+    /// <summary>
+    /// 🚨 The platforms whose fallback the modules GC protects for one module — BOUNDED by
+    /// construction (#4026 post-merge review). The platform key is the framework identity, which
+    /// changes with most builds, so "every platform with a verdict" grew by one platform per build
+    /// and pinned each old build's fallback record and bytes until uninstall. Protected instead:
+    /// the platform running the GC (<paramref name="own"/>), the platform with no verdicts (null,
+    /// which ranks every generation "never measured"), and the <see cref="RetainedPlatformsPerModule"/>
+    /// platforms whose newest verdict for this module is newest. Any other platform's fallback is
+    /// no longer protected and its verdicts are retired — a third image still live on the volume
+    /// then ranks those generations as "never measured", and its boot falls back through the image
+    /// baseline if the fallback it names is gone.
+    /// </summary>
+    internal static ImmutableList<string?> ProtectedPlatforms(ModuleLog log, string? own) =>
+        log.Verdicts
+            .GroupBy(v => v.Platform, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Max(v => v.RecordedAtUtc))
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
+            .Take(RetainedPlatformsPerModule)
+            .Select(g => (string?)g.Key)
+            .Append(string.IsNullOrWhiteSpace(own) ? null : own)
+            .Append(null)
+            .Distinct(StringComparer.Ordinal)
+            .ToImmutableList();
+
+    /// <summary>
     /// 🚨 Every generation SOME reader could run or fall back to — the modules GC's reference set
-    /// (#4026). The fallback is ranked per PLATFORM (<see cref="ModulePlatformVerdict"/>), and a
-    /// rolling update has two images live on one volume, so a GC pass on either must keep the
-    /// fallback of EVERY platform it has a verdict for, plus the one a platform with no verdicts
-    /// ranks — and the generations the stored entries name, which an image that predates the
-    /// records boots from. A superset of what any reader reads, so no pass ever reclaims bytes one
-    /// of them needs.
+    /// (#4026): the derived entry for every PROTECTED platform (<see cref="ProtectedPlatforms"/>) and
+    /// every stored entry's generations, which an image that predates the records boots from. A
+    /// module whose records cannot be read whole contributes its stored generations only, and its
+    /// fault reaches <paramref name="onCorrupt"/> — which makes the GC skip every generation delete
+    /// that pass (#2509).
     /// </summary>
     internal static ImmutableHashSet<string> ReferencedGenerations(
-        string baseDirectory, ModuleActivationList stored, Action<string>? onCorrupt)
+        string baseDirectory, StoredActivation stored, Action<string>? onCorrupt, string? own)
     {
         var referenced = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
         void Add(ModuleActivationEntry? entry)
@@ -635,20 +742,19 @@ public static class ModuleActivationSidecar
             if (!string.IsNullOrWhiteSpace(entry?.PreviousDirectory))
                 referenced.Add(entry.PreviousDirectory!);
         }
-        foreach (var entry in stored.Entries)
+        foreach (var entry in stored.List.Entries)
             Add(entry);
         var present = GenerationPresence(baseDirectory);
-        foreach (var moduleName in ModuleNamesWithLandingRecords(baseDirectory, onCorrupt))
+        var (names, _) = ListRecordDirectories(baseDirectory, onCorrupt);
+        foreach (var moduleName in names)
         {
             var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt);
-            if (log.IsEmpty)
+            if (!log.Whole || log.IsEmpty)
                 continue;
-            var entry = stored.Entries.FirstOrDefault(e =>
-                string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
+            var entry = stored.For(moduleName);
             var name = entry?.Name ?? moduleName;
-            var storedAt = StoredAt(baseDirectory, name);
-            foreach (var platform in log.Platforms)
-                Add(DeriveEntry(name, entry, storedAt, log.Records, log.Uninstalls,
+            foreach (var platform in ProtectedPlatforms(log, own))
+                Add(DeriveEntry(name, entry, stored.WrittenAtOf(name), log,
                     generation => present(name, generation), log.LinkableOn(() => platform)));
         }
         return referenced.ToImmutable();
@@ -658,10 +764,10 @@ public static class ModuleActivationSidecar
 
     /// <summary>
     /// The directory ONE module's records live in: <c>modules/activation.d/&lt;Name&gt;/</c> —
-    /// landing records (<c>*.json</c>), uninstall tombstones (<c>*.tombstone</c>) and platform
-    /// verdicts (<c>*.verdict</c>). A subdirectory, deliberately: every image that predates the
-    /// records enumerates <c>activation.d/*.json</c> at the TOP level only, so a record is invisible
-    /// to it rather than misread as an entry.
+    /// landing records (<c>*.json</c>), uninstall tombstones (<c>*.tombstone</c>), platform verdicts
+    /// (<c>*.verdict</c>) and older-image entry snapshots (<c>*.snapshot</c>). A subdirectory,
+    /// deliberately: every image that predates the records enumerates <c>activation.d/*.json</c> at
+    /// the TOP level only, so a record is invisible to it rather than misread as an entry.
     /// </summary>
     public static string LandingRecordsDirectory(string baseDirectory, string moduleName)
     {
@@ -675,6 +781,9 @@ public static class ModuleActivationSidecar
     /// <summary>The suffix of a platform verdict inside a module's record directory.</summary>
     public const string VerdictSuffix = ".verdict";
 
+    /// <summary>The suffix of an older-image entry snapshot inside a module's record directory.</summary>
+    public const string SnapshotSuffix = ".snapshot";
+
     /// <summary>
     /// 🚨 The CONTENT ADDRESS of one landing record: the FULL SHA-256, in lowercase hex, over the
     /// record's fields in a fixed order, each length-prefixed so no two different field tuples can
@@ -683,9 +792,7 @@ public static class ModuleActivationSidecar
     ///
     /// <para><b>The full digest, not the 16-hex truncation the generation leaf uses.</b> 64 bits
     /// cannot be called collision-free, and a collision HERE would let one replica's record stand
-    /// for another's — the lost update this design removes, back in a smaller window. The generation
-    /// leaf can afford the truncation because a collision there is two payloads sharing a
-    /// directory, which the bytes themselves would betray; a record has no second check.</para>
+    /// for another's — the lost update this design removes, back in a smaller window.</para>
     ///
     /// <para><b>A written-out canonical string, not the serialized JSON.</b> The JSON's property
     /// order is the CLR type's declaration order, so adding or reordering a property would
@@ -738,6 +845,19 @@ public static class ModuleActivationSidecar
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
+    /// <summary>The address of a snapshot: the SHA-256 of the file's own bytes. A snapshot carries a
+    /// whole <see cref="ModuleActivationEntry"/>, whose shape may grow, so it is addressed by what
+    /// was written rather than by a field list — a different image re-serializing it can only ever
+    /// write a second, identical event, never a mismatch.</summary>
+    private static string SnapshotAddress(string text) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+
+    private static string LandingRecordFileName(ModuleLandingRecord record) =>
+        record.Directory + "." + LandingRecordAddress(record) + ".json";
+
+    private static string UninstallFileName(ModuleUninstallRecord record) =>
+        "uninstalled." + UninstallAddress(record) + UninstallSuffix;
+
     /// <summary>The file ONE landing's record lives in:
     /// <c>modules/activation.d/&lt;Name&gt;/&lt;generation&gt;.&lt;record address&gt;.json</c>. The
     /// generation leads, so a reader sees which bytes a record is about from its name; the address
@@ -748,14 +868,8 @@ public static class ModuleActivationSidecar
     {
         ArgumentNullException.ThrowIfNull(record);
         ValidateGeneration(record.Directory);
-        return Path.Combine(
-            LandingRecordsDirectory(baseDirectory, record.Name),
-            record.Directory + "." + LandingRecordAddress(record) + ".json");
+        return Path.Combine(LandingRecordsDirectory(baseDirectory, record.Name), LandingRecordFileName(record));
     }
-
-    private static string UninstallPath(string baseDirectory, ModuleUninstallRecord record) =>
-        Path.Combine(LandingRecordsDirectory(baseDirectory, record.Name),
-            "uninstalled." + UninstallAddress(record) + UninstallSuffix);
 
     private static string VerdictPath(string baseDirectory, ModulePlatformVerdict verdict)
     {
@@ -782,10 +896,9 @@ public static class ModuleActivationSidecar
     ///
     /// <para>🚨 <b>That is the whole fix for <a href="https://github.com/Systemorph/MeshWeaver/issues/4026">#4026</a>.</b>
     /// Two replicas landing DIFFERENT content of one module write different names, so neither can
-    /// lose the other's landing — there is no shared cell left to have a lost update on. Two
-    /// writing the SAME record race for one name, and whichever wins wrote identical bytes. The
-    /// create does not need to be atomic for that to hold, which matters: .NET's no-overwrite move
-    /// is <c>link(2)</c> where the file system supports it and an existence check plus
+    /// lose the other's landing. Two writing the SAME record race for one name, and whichever wins
+    /// wrote identical bytes — so the create does not need to be atomic: .NET's no-overwrite move is
+    /// <c>link(2)</c> where the file system supports it and an existence check plus
     /// <c>rename(2)</c> where it does not (a CIFS mount), and the design survives both.</para>
     /// </summary>
     /// <returns>True when this call wrote the file; false when the record was already on the
@@ -806,9 +919,38 @@ public static class ModuleActivationSidecar
     public static string WriteUninstall(string baseDirectory, string moduleName, string? after)
     {
         var record = new ModuleUninstallRecord { Name = moduleName, After = after };
-        var path = UninstallPath(baseDirectory, record);
+        var path = Path.Combine(LandingRecordsDirectory(baseDirectory, moduleName), UninstallFileName(record));
         WriteOnce(baseDirectory, moduleName, path, JsonSerializer.Serialize(record, Json));
         return Path.GetFileName(path);
+    }
+
+    /// <summary>
+    /// 🚨 Preserves an OLDER image's per-module entry as an immutable event BEFORE a current image
+    /// overwrites it (#4026 post-merge review). An image that predates the records records its
+    /// install or uninstall ONLY as <c>&lt;Name&gt;.json</c> without <c>projectionOf</c>, and the
+    /// derivation reads that as an event at the file's write time — which the next current-image
+    /// write of the file used to erase, re-dating the carried generation to the beginning of time
+    /// (dead behind any tombstone, replayed first otherwise) or dropping the uninstall outright.
+    /// The snapshot is the entry exactly as that image wrote it, with the write time read from the
+    /// same handle as its bytes, and <see cref="DeriveEntry"/> treats it exactly as it treats the
+    /// live file — so taking it changes no answer, and the overwrite that follows loses nothing.
+    ///
+    /// <para>Nothing is written when the stored entry is already a current image's projection.
+    /// Two replicas preserving the same file write one snapshot. An older image's write that lands
+    /// AFTER this read and before the overwrite is not seen — last-writer-wins against that image,
+    /// as the file always was.</para>
+    /// </summary>
+    internal static void PreserveOlderImageEntry(string baseDirectory, ModuleHeadState state)
+    {
+        if (state.Stored is not { ProjectionOf: null } entry || state.StoredAtUtc is not { } writtenAt)
+            return;
+        var text = JsonSerializer.Serialize(
+            new ModuleEntrySnapshot { Entry = entry with { UnloadableFrameworkMvid = null }, WrittenAtUtc = writtenAt },
+            Json);
+        WriteOnce(baseDirectory, entry.Name,
+            Path.Combine(LandingRecordsDirectory(baseDirectory, entry.Name),
+                "entry." + SnapshotAddress(text) + SnapshotSuffix),
+            text);
     }
 
     /// <summary>
@@ -816,16 +958,21 @@ public static class ModuleActivationSidecar
     /// (<see cref="ModulePlatformVerdict"/>). Writes nothing when the newest verdict for this
     /// generation and platform already says the same; otherwise a new file superseding it, so a
     /// later measurement on the same platform wins by arrival and a measurement on ANOTHER platform
-    /// never touches this one's.
+    /// never touches this one's. 🚨 Refuses to write over a PARTIAL read of the verdicts — the
+    /// "newest" it would supersede could be the one it failed to read.
     /// </summary>
     /// <returns>True when a verdict file was written.</returns>
     public static bool WriteVerdict(
         string baseDirectory, string moduleName, string generation, string platform, bool linkable)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(platform);
-        var newest = NewestVerdict(
-            ReadVerdictFiles(baseDirectory, moduleName, onCorrupt: null).Select(f => f.Record),
-            generation, platform);
+        var faults = ImmutableList<string>.Empty;
+        var verdicts = ReadVerdictFiles(baseDirectory, moduleName, fault => faults = faults.Add(fault));
+        if (!faults.IsEmpty)
+            throw new InvalidOperationException(
+                $"Module '{moduleName}': the platform verdicts could not be read whole "
+                + $"({string.Join(" | ", faults)}) — no measurement is recorded over a partial read.");
+        var newest = NewestVerdict(verdicts.Select(f => f.Record), generation, platform);
         if (newest is not null && newest.Linkable == linkable)
             return false;
         var verdict = new ModulePlatformVerdict
@@ -878,8 +1025,9 @@ public static class ModuleActivationSidecar
     /// <summary>
     /// Every landing record of ONE module, each stamped with its file's write time as its arrival
     /// (<see cref="ModuleLandingRecord.RecordedAtUtc"/>). An unreadable or inconsistent record —
-    /// one whose content does not hash to its own name — costs exactly itself, reported through
-    /// <paramref name="onCorrupt"/>: the per-file rule of #2189, for the same reason.
+    /// one whose content does not hash to its own name — is reported through
+    /// <paramref name="onCorrupt"/> and left out of THIS list; the activation read drops the whole
+    /// module for it.
     /// </summary>
     public static ImmutableList<ModuleLandingRecord> ReadLandings(
         string baseDirectory, string moduleName, Action<string>? onCorrupt = null) =>
@@ -888,33 +1036,41 @@ public static class ModuleActivationSidecar
     private static ImmutableList<(string Path, ModuleLandingRecord Record)> ReadLandingFiles(
         string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
         ReadRecordFiles<ModuleLandingRecord>(baseDirectory, moduleName, "*.json", onCorrupt,
-            record => record.Directory + "." + LandingRecordAddress(record) + ".json",
+            (record, _) => LandingRecordFileName(record),
             (record, at) => record with { RecordedAtUtc = at },
             record => record.Name);
 
     private static ImmutableList<(string Path, ModuleUninstallRecord Record)> ReadUninstallFiles(
         string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
         ReadRecordFiles<ModuleUninstallRecord>(baseDirectory, moduleName, "*" + UninstallSuffix, onCorrupt,
-            record => "uninstalled." + UninstallAddress(record) + UninstallSuffix,
+            (record, _) => UninstallFileName(record),
             (record, at) => record with { RecordedAtUtc = at },
             record => record.Name);
 
     private static ImmutableList<(string Path, ModulePlatformVerdict Record)> ReadVerdictFiles(
         string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
         ReadRecordFiles<ModulePlatformVerdict>(baseDirectory, moduleName, "*" + VerdictSuffix, onCorrupt,
-            record => record.Directory + "." + VerdictAddress(record) + VerdictSuffix,
+            (record, _) => record.Directory + "." + VerdictAddress(record) + VerdictSuffix,
             (record, at) => record with { RecordedAtUtc = at },
             record => record.Name);
 
+    private static ImmutableList<(string Path, ModuleEntrySnapshot Record)> ReadSnapshotFiles(
+        string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
+        ReadRecordFiles<ModuleEntrySnapshot>(baseDirectory, moduleName, "*" + SnapshotSuffix, onCorrupt,
+            (_, text) => "entry." + SnapshotAddress(text) + SnapshotSuffix,
+            // A snapshot's arrival is the older image's write, carried in its content.
+            (record, _) => record,
+            record => record.Entry.Name);
+
     private static ImmutableList<(string Path, T Record)> ReadRecordFiles<T>(
         string baseDirectory, string moduleName, string pattern, Action<string>? onCorrupt,
-        Func<T, string> expectedName, Func<T, DateTime, T> stamp, Func<T, string> nameOf)
+        Func<T, string, string> expectedName, Func<T, DateTime, T> stamp, Func<T, string> nameOf)
         where T : class
     {
         if (!IsValidModuleName(moduleName))
             return [];
         var directory = Path.Combine(EntriesDirectory(baseDirectory), moduleName);
-        FileInfo[] files;
+        ImmutableList<FileInfo> files;
         try
         {
             files = Directory.Exists(directory)
@@ -926,8 +1082,7 @@ public static class ModuleActivationSidecar
         {
             onCorrupt?.Invoke(
                 $"Module records under '{directory}' could not be listed "
-                + $"({ex.GetType().Name}: {ex.Message}) — module '{moduleName}' is read from its "
-                + "stored entry alone until the volume is readable again.");
+                + $"({ex.GetType().Name}: {ex.Message}) — module '{moduleName}' cannot be read whole.");
             return [];
         }
 
@@ -936,33 +1091,30 @@ public static class ModuleActivationSidecar
         {
             try
             {
-                var text = TryReadAllText(file.FullName);
-                if (text is null)
+                if (TryReadWithWriteTime(file.FullName) is not { } read)
                     // Vanished between the listing and the read — the modules GC retiring a record
                     // the derivation no longer needs. Absence, not corruption.
                     continue;
-                var record = JsonSerializer.Deserialize<T>(text, Json);
+                var record = JsonSerializer.Deserialize<T>(read.Text, Json);
                 if (record is null
                     || !string.Equals(nameOf(record), moduleName, StringComparison.OrdinalIgnoreCase)
-                    || !string.Equals(file.Name, expectedName(record), StringComparison.Ordinal))
+                    || !string.Equals(file.Name, expectedName(record, read.Text), StringComparison.Ordinal))
                 {
                     onCorrupt?.Invoke(
                         $"Module record '{file.FullName}' does not match its own name — its content "
-                        + "is not the record the name addresses, so it is skipped; every other record "
-                        + $"of '{moduleName}' is unaffected.");
+                        + $"is not the record the name addresses; module '{moduleName}' cannot be read whole.");
                     continue;
                 }
-                builder.Add((file.FullName, stamp(record, file.LastWriteTimeUtc)));
+                builder.Add((file.FullName, stamp(record, read.WrittenAtUtc)));
             }
             // EVERY failure, not only a parse error — an SMB sharing violation arrives as
-            // IOException, and letting it escape would fail the whole activation read, which is
-            // #2189 restored. It costs the one record it names, loudly.
+            // IOException. Reported, and the activation read drops the WHOLE module for it: an
+            // answer derived without this record could differ from the one derived with it.
             catch (Exception ex)
             {
                 onCorrupt?.Invoke(
                     $"Module record '{file.FullName}' could not be read ({ex.GetType().Name}: "
-                    + $"{ex.Message}) — that ONE record is skipped; every other record of "
-                    + $"'{moduleName}' is unaffected.");
+                    + $"{ex.Message}) — module '{moduleName}' cannot be read whole.");
             }
         }
         return builder.ToImmutable();
@@ -970,44 +1122,49 @@ public static class ModuleActivationSidecar
 
     /// <summary>Every module name that has a record directory on this volume.</summary>
     public static ImmutableList<string> ModuleNamesWithLandingRecords(
-        string baseDirectory, Action<string>? onCorrupt = null)
+        string baseDirectory, Action<string>? onCorrupt = null) =>
+        ListRecordDirectories(baseDirectory, onCorrupt).Names;
+
+    private static (ImmutableList<string> Names, bool Listed) ListRecordDirectories(
+        string baseDirectory, Action<string>? onCorrupt)
     {
         var directory = EntriesDirectory(baseDirectory);
         try
         {
-            return Directory.Exists(directory)
+            return (Directory.Exists(directory)
                 ? [.. Directory.EnumerateDirectories(directory)
                     .Select(Path.GetFileName)
                     .Where(IsValidModuleName)
                     .Select(name => name!)
                     .OrderBy(name => name, StringComparer.Ordinal)]
-                : [];
+                : [], true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             onCorrupt?.Invoke(
                 $"Module record directories under '{directory}' could not be listed "
-                + $"({ex.GetType().Name}: {ex.Message}) — modules are read from their stored "
-                + "entries alone until the volume is readable again.");
-            return [];
+                + $"({ex.GetType().Name}: {ex.Message}).");
+            return ([], false);
         }
     }
 
-    /// <summary>One module's whole record directory, read once: its landing records, its uninstall
-    /// tombstones and its platform verdicts.</summary>
+    /// <summary>One module's whole record directory, read once: its landing records, uninstall
+    /// tombstones, platform verdicts and older-image entry snapshots — and how many of its files
+    /// could not be read, which makes the read NOT whole.</summary>
     internal sealed record ModuleLog(
         ImmutableList<ModuleLandingRecord> Records,
         ImmutableList<ModuleUninstallRecord> Uninstalls,
-        ImmutableList<ModulePlatformVerdict> Verdicts)
+        ImmutableList<ModulePlatformVerdict> Verdicts,
+        ImmutableList<ModuleEntrySnapshot> Snapshots,
+        int Faults = 0)
     {
-        /// <summary>No landing and no uninstall: the directory decides nothing, and the stored
-        /// entry answers as it did before #4026.</summary>
-        public bool IsEmpty => Records.IsEmpty && Uninstalls.IsEmpty;
+        /// <summary>Every file of the directory was read: the only state anything may be derived
+        /// from.</summary>
+        public bool Whole => Faults == 0;
 
-        /// <summary>Every platform a verdict was recorded for, plus null — the platform nobody
-        /// measured, which ranks every generation as unknown.</summary>
-        public IEnumerable<string?> Platforms =>
-            Verdicts.Select(v => (string?)v.Platform).Distinct(StringComparer.Ordinal).Append(null);
+        /// <summary>No landing, no uninstall and no older-image event: the directory decides
+        /// nothing, and the stored entry answers as it did before #4026.</summary>
+        public bool IsEmpty => Records.IsEmpty && Uninstalls.IsEmpty && Snapshots.IsEmpty;
 
         /// <summary>The newest verdict for a generation on the platform <paramref name="platform"/>
         /// names — resolved only if a verdict exists at all — or null when that platform never
@@ -1016,19 +1173,10 @@ public static class ModuleActivationSidecar
         {
             if (Verdicts.IsEmpty)
                 return _ => null;
-            string? resolved = null;
-            var asked = false;
-            return generation =>
-            {
-                if (!asked)
-                {
-                    resolved = platform();
-                    asked = true;
-                }
-                return string.IsNullOrWhiteSpace(resolved)
-                    ? null
-                    : NewestVerdict(Verdicts, generation, resolved)?.Linkable;
-            };
+            var resolved = new Lazy<string?>(platform, LazyThreadSafetyMode.None);
+            return generation => string.IsNullOrWhiteSpace(resolved.Value)
+                ? null
+                : NewestVerdict(Verdicts, generation, resolved.Value)?.Linkable;
         }
     }
 
@@ -1041,46 +1189,54 @@ public static class ModuleActivationSidecar
             .ThenByDescending(VerdictAddress, StringComparer.Ordinal)
             .FirstOrDefault();
 
-    private static ModuleLog ReadModuleLog(string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
-        new([.. ReadLandingFiles(baseDirectory, moduleName, onCorrupt).Select(f => f.Record)],
-            [.. ReadUninstallFiles(baseDirectory, moduleName, onCorrupt).Select(f => f.Record)],
-            [.. ReadVerdictFiles(baseDirectory, moduleName, onCorrupt).Select(f => f.Record)]);
-
-    /// <summary>When the stored entry for a module was last written: its per-module file's write
-    /// time, or the legacy aggregate's when only that carries it; null when neither exists.</summary>
-    private static DateTime? StoredAt(string baseDirectory, string moduleName)
+    private static ModuleLog ReadModuleLog(string baseDirectory, string moduleName, Action<string>? onCorrupt)
     {
-        var perModule = EntryPath(baseDirectory, moduleName);
-        if (File.Exists(perModule))
-            return File.GetLastWriteTimeUtc(perModule);
-        var aggregate = SidecarPath(baseDirectory);
-        return File.Exists(aggregate) ? File.GetLastWriteTimeUtc(aggregate) : null;
+        var faults = 0;
+        void Fault(string message)
+        {
+            faults++;
+            onCorrupt?.Invoke(message);
+        }
+        return new ModuleLog(
+            [.. ReadLandingFiles(baseDirectory, moduleName, Fault).Select(f => f.Record)],
+            [.. ReadUninstallFiles(baseDirectory, moduleName, Fault).Select(f => f.Record)],
+            [.. ReadVerdictFiles(baseDirectory, moduleName, Fault).Select(f => f.Record)],
+            [.. ReadSnapshotFiles(baseDirectory, moduleName, Fault).Select(f => f.Record)],
+            faults);
     }
 
     /// <summary>
     /// One module's activation state as the landing lane needs it: the STORED entry (what images
-    /// that predate the records read) and when it was written, the module's record directory, and
-    /// the entry DERIVED from all of it for this process's platform.
+    /// that predate the records read) with its paired write time, whether its file was readable,
+    /// the module's record directory, and the entry DERIVED from all of it for this process's
+    /// platform — only ever acted on when <see cref="Whole"/>.
     /// </summary>
     internal sealed record ModuleHeadState(
         ModuleActivationEntry? Stored,
         DateTime? StoredAtUtc,
+        bool StoredUnreadable,
         ModuleLog Log,
-        ModuleActivationEntry? Derived);
+        ModuleActivationEntry? Derived)
+    {
+        /// <summary>Everything this state was derived from was read. Nothing is written from a
+        /// state that is not.</summary>
+        public bool Whole => Log.Whole && !StoredUnreadable;
+    }
 
     /// <summary>Reads <see cref="ModuleHeadState"/> for one module.</summary>
     internal static ModuleHeadState ReadModuleHead(
         string baseDirectory, string moduleName, Action<string>? onCorrupt, Func<string?> platform)
     {
-        var stored = ReadStored(baseDirectory, onCorrupt).Entries.FirstOrDefault(e =>
-            string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
+        var storedActivation = ReadStoredActivation(baseDirectory, onCorrupt);
+        var stored = storedActivation.For(moduleName);
         var name = stored?.Name ?? moduleName;
-        var storedAt = StoredAt(baseDirectory, name);
+        var storedAt = storedActivation.WrittenAtOf(name);
         var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt);
         var present = GenerationPresence(baseDirectory);
-        return new ModuleHeadState(stored, storedAt, log,
-            DeriveEntry(name, stored, storedAt, log.Records, log.Uninstalls,
-                generation => present(name, generation), log.LinkableOn(platform)));
+        return new ModuleHeadState(stored, storedAt, storedActivation.Unreadable.Contains(name), log,
+            log.Whole
+                ? DeriveEntry(name, stored, storedAt, log, generation => present(name, generation), log.LinkableOn(platform))
+                : null);
     }
 
     /// <summary>The newest event in a module's record directory — landing or tombstone — as
@@ -1088,13 +1244,17 @@ public static class ModuleActivationSidecar
     /// states it was derived from, and what an uninstall states it followed.</summary>
     internal static string? LatestEventName(ModuleHeadState state) =>
         state.Log.Records
-            .Select(r => (At: r.RecordedAtUtc, Name: r.Directory + "." + LandingRecordAddress(r) + ".json"))
-            .Concat(state.Log.Uninstalls.Select(u =>
-                (At: u.RecordedAtUtc, Name: "uninstalled." + UninstallAddress(u) + UninstallSuffix)))
+            .Select(r => (At: r.RecordedAtUtc, Name: LandingRecordFileName(r)))
+            .Concat(state.Log.Uninstalls.Select(u => (At: u.RecordedAtUtc, Name: UninstallFileName(u))))
             .OrderByDescending(e => e.At)
             .ThenByDescending(e => e.Name, StringComparer.Ordinal)
             .Select(e => e.Name + "@" + e.At.Ticks)
             .FirstOrDefault();
+
+    /// <summary>The file name an uninstall's <see cref="ModuleUninstallRecord.After"/> names
+    /// (<c>&lt;file name&gt;@&lt;ticks&gt;</c>), or null.</summary>
+    private static string? AfterFileName(string? after) =>
+        after is null || after.LastIndexOf('@') is var at && at <= 0 ? after : after[..at];
 
     /// <summary>
     /// The record a RE-arrival must write, or null when this landing needs none (#4026). Called
@@ -1106,31 +1266,39 @@ public static class ModuleActivationSidecar
     /// Such a landing gets a NEW record, whose <see cref="ModuleLandingRecord.ReArrivalOf"/> names
     /// the latest record with the same facts, so the re-arrival carries its own arrival stamp
     /// without rewriting an existing file.
+    ///
+    /// <para>🚨 The hypothetical arrival is "after every event on the volume", never this pod's
+    /// clock: the stamps it is compared with are the FILE SERVER's, and a pod whose clock runs
+    /// behind it would otherwise place a re-landing before the uninstall it follows, compute "no
+    /// change", and silently land nothing.</para>
     /// </summary>
     internal static ModuleLandingRecord? ReArrival(
-        string baseDirectory, ModuleHeadState state, ModuleLandingRecord incoming, DateTime nowUtc,
-        Func<string?> platform)
+        string baseDirectory, ModuleHeadState state, ModuleLandingRecord incoming, Func<string?> platform)
     {
         if (state.Derived is { Enabled: true } head
             && SameGeneration(head.Directory, incoming.Directory)
             && string.Equals(head.Version, incoming.Version, StringComparison.Ordinal))
             return null;
-        var facts = incoming with { ReArrivalOf = null, RecordedAtUtc = default };
         var latest = state.Log.Records
-            .Where(r => r with { ReArrivalOf = null, RecordedAtUtc = default } == facts)
+            .Where(r => SameFacts(r, incoming))
             .OrderByDescending(r => r.RecordedAtUtc)
             .ThenBy(LandingRecordAddress, StringComparer.Ordinal)
             .FirstOrDefault();
         if (latest is null)
             return null;
+        var newestEvent = state.Log.Records.Select(r => r.RecordedAtUtc)
+            .Concat(state.Log.Uninstalls.Select(u => u.RecordedAtUtc))
+            .Concat(state.Log.Snapshots.Select(s => s.WrittenAtUtc))
+            .Append(state.StoredAtUtc ?? DateTime.MinValue)
+            .Max();
         var candidate = incoming with
         {
             ReArrivalOf = LandingRecordAddress(latest) + "@" + latest.RecordedAtUtc.Ticks,
-            RecordedAtUtc = nowUtc,
+            RecordedAtUtc = newestEvent == DateTime.MaxValue ? newestEvent : newestEvent.AddTicks(1),
         };
         var present = GenerationPresence(baseDirectory);
         var hypothetical = DeriveEntry(incoming.Name, state.Stored, state.StoredAtUtc,
-            state.Log.Records.Add(candidate), state.Log.Uninstalls,
+            state.Log with { Records = state.Log.Records.Add(candidate) },
             generation => present(incoming.Name, generation), state.Log.LinkableOn(platform));
         // Only a re-arrival that CHANGES the answer, and changes it to this landing, is written: a
         // lower label of the head's own bytes re-published folds to the entry already derived, and
@@ -1142,80 +1310,85 @@ public static class ModuleActivationSidecar
             : null;
     }
 
+    /// <summary>Two landing records state the same landing: every addressed fact but the
+    /// re-arrival link.</summary>
+    internal static bool SameFacts(ModuleLandingRecord left, ModuleLandingRecord right) =>
+        left with { ReArrivalOf = null, RecordedAtUtc = default }
+        == right with { ReArrivalOf = null, RecordedAtUtc = default };
+
     /// <summary>
     /// 🚨 THE DERIVATION (#4026): whether one module is installed, and if so its head generation
     /// and its #3649 fallback — computed from the module's ordered events, never read from a
-    /// pointer some replica may have replaced.
+    /// pointer some replica may have replaced. Only ever called on a log that was read WHOLE.
     ///
     /// <para><b>Installed or not is the ORDER of events.</b> The events are the landing records and
-    /// the uninstall tombstones, each at its own arrival, plus the stored entry when an image that
-    /// predates the records wrote it (it carries no <see cref="ModuleActivationEntry.ProjectionOf"/>):
-    /// an older image's uninstall is then an uninstall at the file's write time, and its landing a
-    /// landing of the head it names. A stored entry a CURRENT image wrote is only a projection and
-    /// is never an event — which is what keeps a stale projection, written after an uninstall it
-    /// did not see, from bringing the module back. The newest uninstall ends everything before it:
-    /// the module is uninstalled when nothing landed after it, and only the landings after it
-    /// count when something did.</para>
+    /// the uninstall tombstones, each at its own arrival, plus every OLDER-IMAGE entry — the stored
+    /// entry when an image that predates the records wrote it (it carries no
+    /// <see cref="ModuleActivationEntry.ProjectionOf"/>), and every snapshot a current image took of
+    /// such an entry before overwriting it — at the time that image wrote it: an install of the
+    /// head it names, or an uninstall. A stored entry a CURRENT image wrote is only a projection and
+    /// is never an event. The newest uninstall ends everything before it — and a landing in the
+    /// very same tick counts as after it unless the tombstone names it as the event it followed:
+    /// the module is uninstalled when nothing landed after it, and only the landings after it count
+    /// when something did.</para>
     ///
     /// <para><b>The head is a REPLAY, not a sort.</b> #3996's rule — <i>a shelf upload never
     /// displaces a head it ranks strictly below while that head's bytes are present</i> — is stated
     /// against an ARRIVING upload and is deliberately not a total order: an unversioned or
     /// non-SemVer label is absence of evidence and moves the head, an equal version moves it (a
-    /// rebuild), and an adopt landing always moves it. So the live landings are folded in ARRIVAL
-    /// order through exactly that predicate, which reproduces what a serialised sequence of the
-    /// same landings would have produced — and, because every replica folds the same files with the
-    /// same stamps, every replica reaches the same head, whatever image it runs.</para>
+    /// rebuild), and an adopt landing — or an older image's install — always moves it. So the live
+    /// landings are folded in ARRIVAL order through exactly that predicate, and every replica folds
+    /// the same files with the same stamps to the same head, whatever image it runs.</para>
     ///
     /// <para><b>The fallback is a RANK</b> over every other live generation: bytes present first,
     /// then loadable on the READER's platform (<paramref name="linkable"/> — measured "loads" above
     /// "never measured here" above measured "does not load"), then the higher version, ties keeping
     /// the earlier arrival. The only platform-dependent part of the answer, by design.</para>
-    ///
-    /// <para><b>Generations a projection names that no record does</b> (a pre-records head, carried
-    /// forward) join as the EARLIEST arrivals, so the first landing on a new image keeps the
-    /// fallback the deployment had and no migration pass rewrites anything.</para>
     /// </summary>
-    /// <param name="name">The module name.</param>
-    /// <param name="stored">The stored entry, enabled or not.</param>
-    /// <param name="storedAtUtc">When the stored entry's file was written.</param>
-    /// <param name="records">The module's landing records.</param>
-    /// <param name="uninstalls">The module's uninstall tombstones.</param>
-    /// <param name="present">Whether a generation's entry DLL is on the volume.</param>
-    /// <param name="linkable">The reader's platform's newest verdict for a generation; null when
-    /// never measured there.</param>
-    /// <returns>The derived entry, or null when the record directory decides nothing (no landing
-    /// and no uninstall), in which case the stored entry stands.</returns>
+    /// <returns>The derived entry, or null when the record directory decides nothing (no landing,
+    /// no uninstall, no older-image event), in which case the stored entry stands.</returns>
     internal static ModuleActivationEntry? DeriveEntry(
-        string name, ModuleActivationEntry? stored, DateTime? storedAtUtc,
-        IReadOnlyList<ModuleLandingRecord> records, IReadOnlyList<ModuleUninstallRecord> uninstalls,
+        string name, ModuleActivationEntry? stored, DateTime? storedAtUtc, ModuleLog log,
         Func<string, bool> present, Func<string, bool?> linkable)
     {
-        if (records.Count == 0 && uninstalls.Count == 0)
+        if (log.IsEmpty)
             return null;
+        var records = log.Records;
 
-        // An entry an image that predates the records wrote is an EVENT at the file's write time;
-        // one a current image wrote is a projection of events and decides nothing on its own.
-        var olderImageAt = stored is not null && stored.ProjectionOf is null ? storedAtUtc : null;
-        DateTime? lastUninstall = uninstalls.Count == 0 ? null : uninstalls.Max(u => u.RecordedAtUtc);
-        if (stored is { Enabled: false } && olderImageAt is { } uninstalledAt
-            && (lastUninstall is null || uninstalledAt > lastUninstall))
-            lastUninstall = uninstalledAt;
-        bool Live(DateTime arrival) => lastUninstall is null || arrival > lastUninstall;
+        // The older image's events: the live stored entry when that image wrote it, and every
+        // snapshot a current image took of one before overwriting it.
+        var olderImage = log.Snapshots.Select(s => (Entry: s.Entry, At: s.WrittenAtUtc))
+            .Concat(stored is { ProjectionOf: null } && storedAtUtc is { } storedAt
+                ? [(Entry: stored, At: storedAt)]
+                : [])
+            .ToImmutableList();
 
-        var candidates = ImmutableList.CreateBuilder<ModuleLandingRecord>();
-        candidates.AddRange(records.Where(r => Live(r.RecordedAtUtc)));
-        foreach (var carried in StoredCandidates(stored, olderImageAt, records))
-            if (Live(carried.RecordedAtUtc))
-                candidates.Add(carried);
+        var uninstalls = log.Uninstalls
+            .Select(u => (At: u.RecordedAtUtc, Followed: AfterFileName(u.After)))
+            .Concat(olderImage.Where(e => !e.Entry.Enabled).Select(e => (At: e.At, Followed: (string?)null)))
+            .ToImmutableList();
+        DateTime? lastUninstall = uninstalls.IsEmpty ? null : uninstalls.Max(u => u.At);
+        var followed = uninstalls
+            .Where(u => u.At == lastUninstall && u.Followed is not null)
+            .Select(u => u.Followed!)
+            .ToImmutableHashSet(StringComparer.Ordinal);
+        bool Live(DateTime arrival, string? fileName) =>
+            lastUninstall is not { } uninstalledAt
+            || arrival > uninstalledAt
+            || (arrival == uninstalledAt && (fileName is null || !followed.Contains(fileName)));
 
-        if (candidates.Count == 0)
+        var candidates = records.Where(r => Live(r.RecordedAtUtc, LandingRecordFileName(r)))
+            .Concat(CarriedCandidates(stored, olderImage, records).Where(c => Live(c.RecordedAtUtc, null)))
+            .ToImmutableList();
+
+        if (candidates.IsEmpty)
         {
             if (lastUninstall is null)
                 return null;
             // UNINSTALLED: nothing landed after the newest uninstall. No generation is held, so the
             // modules GC is free to reclaim them, exactly as the pre-#4026 uninstall entry read.
             var latest = records.OrderByDescending(r => r.RecordedAtUtc).FirstOrDefault();
-            return (stored ?? new ModuleActivationEntry
+            return (stored ?? olderImage.LastOrDefault().Entry ?? new ModuleActivationEntry
             {
                 Name = name,
                 Source = latest?.Source ?? ModuleActivationSources.Store,
@@ -1303,47 +1476,48 @@ public static class ModuleActivationSidecar
         && present(current.Directory);
 
     /// <summary>
-    /// The generations an ENABLED stored entry names, as candidates. From an entry an image that
-    /// predates the records wrote (<paramref name="olderImageAt"/> set), its head is a LANDING at
-    /// the file's write time — that image's install, ordered against every other event — and its
-    /// fallback an earliest arrival. From a current image's projection, only the generations no
-    /// record names, both as the earliest arrivals and neither yielding, so among themselves they
-    /// reproduce the stored head and they never outrank a record.
+    /// The generations the stored layers carry, as candidates. From every OLDER-IMAGE install (the
+    /// live entry that image wrote, and every snapshot of one): its head as a landing at the time
+    /// that image wrote it — that image's decision, ordered against every other event and never
+    /// yielding — and its fallback as an earliest arrival when no record names it. From a current
+    /// image's projection: only the generations no record names, both as the earliest arrivals and
+    /// neither yielding, so among themselves they reproduce the stored head and they never outrank
+    /// a record.
     /// </summary>
-    private static IEnumerable<ModuleLandingRecord> StoredCandidates(
-        ModuleActivationEntry? stored, DateTime? olderImageAt, IReadOnlyList<ModuleLandingRecord> records)
+    private static IEnumerable<ModuleLandingRecord> CarriedCandidates(
+        ModuleActivationEntry? stored, ImmutableList<(ModuleActivationEntry Entry, DateTime At)> olderImage,
+        IReadOnlyList<ModuleLandingRecord> records)
     {
-        if (stored is not { Enabled: true })
-            yield break;
         bool Unrecorded(string generation) => !records.Any(r => SameGeneration(r.Directory, generation));
-        if (ModuleActivationBoot.PreviousGeneration(stored) is { Directory.Length: > 0 } previous
-            && Unrecorded(previous.Directory!))
-            yield return new ModuleLandingRecord
-            {
-                Name = stored.Name,
-                Source = stored.Source,
-                PackagePath = stored.PackagePath,
-                Directory = previous.Directory!,
-                Version = previous.Version,
-                FrameworkMvid = previous.FrameworkMvid,
-                MinMeshVersion = stored.MinMeshVersion,
-                SourceCommit = previous.SourceCommit,
-                RecordedAtUtc = DateTime.MinValue,
-            };
-        if (!string.IsNullOrWhiteSpace(stored.Directory)
-            && (olderImageAt is not null || Unrecorded(stored.Directory!)))
-            yield return new ModuleLandingRecord
-            {
-                Name = stored.Name,
-                Source = stored.Source,
-                PackagePath = stored.PackagePath,
-                Directory = stored.Directory!,
-                Version = stored.Version,
-                FrameworkMvid = stored.FrameworkMvid,
-                MinMeshVersion = stored.MinMeshVersion,
-                SourceCommit = stored.SourceCommit,
-                RecordedAtUtc = olderImageAt ?? DateTime.MinValue.AddTicks(1),
-            };
+        static ModuleLandingRecord As(ModuleActivationEntry entry, ModuleActivationEntry generation, DateTime at) => new()
+        {
+            Name = entry.Name,
+            Source = entry.Source,
+            PackagePath = entry.PackagePath,
+            Directory = generation.Directory!,
+            Version = generation.Version,
+            FrameworkMvid = generation.FrameworkMvid,
+            MinMeshVersion = entry.MinMeshVersion,
+            SourceCommit = generation.SourceCommit,
+            RecordedAtUtc = at,
+        };
+
+        foreach (var (entry, at) in olderImage.Where(e => e.Entry.Enabled))
+        {
+            if (ModuleActivationBoot.PreviousGeneration(entry) is { Directory.Length: > 0 } previous
+                && Unrecorded(previous.Directory!))
+                yield return As(entry, previous, DateTime.MinValue);
+            if (!string.IsNullOrWhiteSpace(entry.Directory))
+                yield return As(entry, entry, at);
+        }
+
+        if (stored is not { Enabled: true, ProjectionOf: not null })
+            yield break;
+        if (ModuleActivationBoot.PreviousGeneration(stored) is { Directory.Length: > 0 } carriedPrevious
+            && Unrecorded(carriedPrevious.Directory!))
+            yield return As(stored, carriedPrevious, DateTime.MinValue);
+        if (!string.IsNullOrWhiteSpace(stored.Directory) && Unrecorded(stored.Directory!))
+            yield return As(stored, stored, DateTime.MinValue.AddTicks(1));
     }
 
     private static bool SameGeneration(string? left, string? right) =>
@@ -1357,14 +1531,16 @@ public static class ModuleActivationSidecar
     /// </summary>
     private static Func<string, string, bool> GenerationPresence(string baseDirectory)
     {
-        var known = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        var known = ImmutableDictionary.Create<string, bool>(StringComparer.OrdinalIgnoreCase);
         return (name, generation) =>
         {
             if (string.IsNullOrWhiteSpace(generation))
                 return false;
-            if (!known.TryGetValue(generation, out var exists))
-                known[generation] = exists = ModuleActivationBoot.LandedModuleDllExists(
-                    baseDirectory, new ModuleActivationEntry { Name = name, Directory = generation });
+            if (known.TryGetValue(generation, out var exists))
+                return exists;
+            exists = ModuleActivationBoot.LandedModuleDllExists(
+                baseDirectory, new ModuleActivationEntry { Name = name, Directory = generation });
+            known = known.SetItem(generation, exists);
             return exists;
         };
     }
@@ -1408,16 +1584,16 @@ public static class ModuleActivationSidecar
 
     /// <summary>
     /// 🚨 RETENTION for the records — without it, deriving the answer would trade a race for
-    /// unbounded growth (a record per publish per module for the life of a deployment). An event (a
-    /// landing record or a tombstone) is removed ONLY when the entry derived without it is IDENTICAL
-    /// to the entry derived with it, for EVERY platform a verdict exists for and for the platform
-    /// with none: retention can never change what <see cref="Read"/> answers on any image, which is
-    /// a rule that can be stated and tested instead of one that has to be trusted. A verdict goes
-    /// once a newer one for its generation and platform supersedes it, or once no remaining record
-    /// names its generation. On top of that it keeps everything younger than
-    /// <paramref name="cutoffUtc"/> (a write on another replica this one may not see whole yet —
-    /// #2303's window) and every record of a generation the STORED entry names (what an older image
-    /// boots from).
+    /// unbounded growth. An EVENT (a landing record, a tombstone, an older-image snapshot) is
+    /// removed ONLY when the entry derived without it is IDENTICAL to the entry derived with it —
+    /// for every PROTECTED platform (<see cref="ProtectedPlatforms"/>), and both with the stored
+    /// file as it is now and with it overwritten by a projection (which the next current-image
+    /// write does): retention can never change what <see cref="Read"/> answers on any protected
+    /// image, now or after that overwrite. A verdict goes once a newer one for its generation and
+    /// platform supersedes it, once no remaining record names its generation, or once its platform
+    /// is no longer protected. On top of that it keeps everything younger than
+    /// <paramref name="cutoffUtc"/> (#2303's window) and every record of a generation the STORED
+    /// entry names (what an older image boots from).
     ///
     /// <para>🚨 It removes RECORDS, never generation directories. Reclaiming bytes stays with
     /// <c>ModuleLandingService.CollectGarbage</c> behind its grace period and its fail-closed
@@ -1426,19 +1602,19 @@ public static class ModuleActivationSidecar
     /// </summary>
     /// <returns>How many record files were removed.</returns>
     internal static int PruneLandingRecords(
-        string baseDirectory, string moduleName, ModuleActivationEntry? stored, DateTime cutoffUtc,
-        Action<string>? onRemoved = null)
+        string baseDirectory, string moduleName, ModuleActivationEntry? stored, DateTime? storedAtUtc,
+        DateTime cutoffUtc, string? own, Action<string>? onRemoved = null)
     {
         var faults = 0;
         void Fault(string _) => faults++;
         var records = ReadLandingFiles(baseDirectory, moduleName, Fault);
         var uninstalls = ReadUninstallFiles(baseDirectory, moduleName, Fault);
         var verdicts = ReadVerdictFiles(baseDirectory, moduleName, Fault);
-        if (faults > 0 || (records.IsEmpty && uninstalls.IsEmpty && verdicts.IsEmpty))
+        var snapshots = ReadSnapshotFiles(baseDirectory, moduleName, Fault);
+        if (faults > 0 || (records.IsEmpty && uninstalls.IsEmpty && verdicts.IsEmpty && snapshots.IsEmpty))
             return 0;
 
         var name = stored?.Name ?? moduleName;
-        var storedAt = StoredAt(baseDirectory, name);
         var presence = GenerationPresence(baseDirectory);
         bool Present(string generation) => presence(name, generation);
         var storedGenerations = new[] { stored?.Directory, stored?.PreviousDirectory }
@@ -1446,17 +1622,19 @@ public static class ModuleActivationSidecar
             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
         var log = new ModuleLog(
             [.. records.Select(f => f.Record)], [.. uninstalls.Select(f => f.Record)],
-            [.. verdicts.Select(f => f.Record)]);
-        var platforms = log.Platforms.ToImmutableList();
+            [.. verdicts.Select(f => f.Record)], [.. snapshots.Select(f => f.Record)]);
+        var platforms = ProtectedPlatforms(log, own);
+        // The stored file as it is, and as the next current-image write leaves it: a projection.
+        var storedVariants = stored is { ProjectionOf: null }
+            ? ImmutableList.Create<ModuleActivationEntry?>(stored, stored with { ProjectionOf = "(overwritten)" })
+            : ImmutableList.Create(stored);
 
-        ImmutableList<ModuleActivationEntry?> DeriveAll(
-            ImmutableList<ModuleLandingRecord> r, ImmutableList<ModuleUninstallRecord> u) =>
-            [.. platforms.Select(platform =>
-                DeriveEntry(name, stored, storedAt, r, u, Present, log.LinkableOn(() => platform)))];
+        ImmutableList<ModuleActivationEntry?> DeriveAll(ModuleLog candidate) =>
+            [.. storedVariants.SelectMany(variant => platforms.Select(platform =>
+                DeriveEntry(name, variant, storedAtUtc, candidate, Present, log.LinkableOn(() => platform))))];
 
-        var keptRecords = log.Records;
-        var keptUninstalls = log.Uninstalls;
-        var target = DeriveAll(keptRecords, keptUninstalls);
+        var kept = log with { Verdicts = [] };
+        var target = DeriveAll(kept with { Verdicts = log.Verdicts });
         var removed = 0;
 
         bool Delete(string path, string what)
@@ -1479,8 +1657,9 @@ public static class ModuleActivationSidecar
             }
         }
 
-        var events = records.Select(f => (f.Path, At: f.Record.RecordedAtUtc, Landing: (ModuleLandingRecord?)f.Record, Uninstall: (ModuleUninstallRecord?)null))
-            .Concat(uninstalls.Select(f => (f.Path, At: f.Record.RecordedAtUtc, Landing: (ModuleLandingRecord?)null, Uninstall: (ModuleUninstallRecord?)f.Record)))
+        var events = records.Select(f => (f.Path, At: f.Record.RecordedAtUtc, Kind: 0, Index: log.Records.IndexOf(f.Record)))
+            .Concat(uninstalls.Select(f => (f.Path, At: f.Record.RecordedAtUtc, Kind: 1, Index: log.Uninstalls.IndexOf(f.Record))))
+            .Concat(snapshots.Select(f => (f.Path, At: f.Record.WrittenAtUtc, Kind: 2, Index: log.Snapshots.IndexOf(f.Record))))
             .OrderBy(e => e.At)
             .ThenBy(e => e.Path, StringComparer.Ordinal)
             .ToImmutableList();
@@ -1488,22 +1667,26 @@ public static class ModuleActivationSidecar
         {
             if (item.At > cutoffUtc)
                 continue;
-            if (item.Landing is { } landing)
+            ModuleLog without;
+            switch (item.Kind)
             {
-                if (storedGenerations.Contains(landing.Directory))
-                    continue;
-                var without = keptRecords.Remove(landing);
-                if (!DeriveAll(without, keptUninstalls).SequenceEqual(target) || !Delete(item.Path, "landing record"))
-                    continue;
-                keptRecords = without;
+                case 0:
+                    var landing = log.Records[item.Index];
+                    if (storedGenerations.Contains(landing.Directory))
+                        continue;
+                    without = kept with { Records = kept.Records.Remove(landing) };
+                    break;
+                case 1:
+                    without = kept with { Uninstalls = kept.Uninstalls.Remove(log.Uninstalls[item.Index]) };
+                    break;
+                default:
+                    without = kept with { Snapshots = kept.Snapshots.Remove(log.Snapshots[item.Index]) };
+                    break;
             }
-            else if (item.Uninstall is { } uninstall)
-            {
-                var without = keptUninstalls.Remove(uninstall);
-                if (!DeriveAll(keptRecords, without).SequenceEqual(target) || !Delete(item.Path, "uninstall tombstone"))
-                    continue;
-                keptUninstalls = without;
-            }
+            if (!DeriveAll(without with { Verdicts = log.Verdicts }).SequenceEqual(target)
+                || !Delete(item.Path, item.Kind switch { 0 => "landing record", 1 => "uninstall tombstone", _ => "older-image snapshot" }))
+                continue;
+            kept = without;
         }
 
         foreach (var (path, verdict) in verdicts)
@@ -1512,9 +1695,10 @@ public static class ModuleActivationSidecar
                 continue;
             var superseded = !Equals(NewestVerdict(log.Verdicts, verdict.Directory, verdict.Platform), verdict);
             var unnamed = !storedGenerations.Contains(verdict.Directory)
-                && !keptRecords.Any(r => SameGeneration(r.Directory, verdict.Directory));
-            if (superseded || unnamed)
-                Delete(path, "platform verdict");
+                && !kept.Records.Any(r => SameGeneration(r.Directory, verdict.Directory));
+            var unprotected = !platforms.Contains(verdict.Platform);
+            if (superseded || unnamed || unprotected)
+                Delete(path, unprotected ? "platform verdict (platform no longer protected)" : "platform verdict");
         }
         return removed;
     }
@@ -1528,7 +1712,7 @@ public static class ModuleActivationSidecar
         if (!Directory.Exists(directory))
             return 0;
         var removed = 0;
-        foreach (var temp in Directory.EnumerateFiles(directory, "*" + LandingTempSuffix).ToArray())
+        foreach (var temp in Directory.EnumerateFiles(directory, "*" + LandingTempSuffix).ToImmutableList())
         {
             if (File.GetLastWriteTimeUtc(temp) > cutoffUtc)
                 continue;
@@ -1539,9 +1723,9 @@ public static class ModuleActivationSidecar
     }
 
     /// <summary>
-    /// Removes one module's WHOLE record directory content — landing records, tombstones and
-    /// verdicts. Only the bulk <see cref="Write"/> does this: it states the answer outright, so no
-    /// event may outrank it. An uninstall never does — it writes a tombstone — because deleting
+    /// Removes one module's WHOLE record directory content — landing records, tombstones, verdicts
+    /// and snapshots. Only the bulk <see cref="Write"/> does this: it states the answer outright, so
+    /// no event may outrank it. An uninstall never does — it writes a tombstone — because deleting
     /// events is not an order anything can rely on.
     /// </summary>
     public static void RemoveLandingRecords(string baseDirectory, string moduleName)
@@ -1552,8 +1736,9 @@ public static class ModuleActivationSidecar
         foreach (var path in Directory.EnumerateFiles(directory)
                      .Where(p => p.EndsWith(".json", StringComparison.Ordinal)
                                  || p.EndsWith(UninstallSuffix, StringComparison.Ordinal)
-                                 || p.EndsWith(VerdictSuffix, StringComparison.Ordinal))
-                     .ToArray())
+                                 || p.EndsWith(VerdictSuffix, StringComparison.Ordinal)
+                                 || p.EndsWith(SnapshotSuffix, StringComparison.Ordinal))
+                     .ToImmutableList())
             File.Delete(path);
     }
 
@@ -1946,7 +2131,7 @@ public static class ModuleActivationSidecar
         var legacyPath = SidecarPath(baseDirectory);
         if (!File.Exists(legacyPath))
             return;
-        var legacy = ReadLegacy(baseDirectory, null);
+        var (legacy, _) = ReadLegacy(baseDirectory, null);
         if (!legacy.PendingRestart)
             return;
         try
@@ -2000,22 +2185,22 @@ public static class ModuleActivationSidecar
         SetPendingRestart(baseDirectory, list.PendingRestart);
     }
 
-    private static ModuleActivationList ReadLegacy(string baseDirectory, Action<string>? onCorrupt)
+    /// <summary>The legacy aggregate file and the time it was written, read from ONE handle.</summary>
+    private static (ModuleActivationList List, DateTime? WrittenAtUtc) ReadLegacy(
+        string baseDirectory, Action<string>? onCorrupt)
     {
         var path = SidecarPath(baseDirectory);
         try
         {
-            // 🚨 The READ is inside the try, not before it. Only genuine ABSENCE is silent
-            // (TryReadAllText); every other failure — an SMB sharing violation or lease conflict
-            // arriving as IOException/UnauthorizedAccessException just as much as a parse error —
-            // must be REPORTED and skipped, never allowed to escape. Boot calls this un-wrapped, so
-            // an escaping exception would take the portal down over a transient volume blip: worse
-            // than the silence this whole change exists to remove.
-            var text = TryReadAllText(path);
-            if (text is null)
-                return new ModuleActivationList();
-            return JsonSerializer.Deserialize<ModuleActivationList>(text, Json)
-                   ?? new ModuleActivationList();
+            // 🚨 The READ is inside the try, not before it. Only genuine ABSENCE is silent; every
+            // other failure — an SMB sharing violation or lease conflict arriving as
+            // IOException/UnauthorizedAccessException just as much as a parse error — must be
+            // REPORTED and skipped, never allowed to escape. Boot calls this un-wrapped, so an
+            // escaping exception would take the portal down over a transient volume blip.
+            if (TryReadWithWriteTime(path) is not { } read)
+                return (new ModuleActivationList(), null);
+            return (JsonSerializer.Deserialize<ModuleActivationList>(read.Text, Json) ?? new ModuleActivationList(),
+                read.WrittenAtUtc);
         }
         catch (Exception ex)
         {
@@ -2024,15 +2209,20 @@ public static class ModuleActivationSidecar
                 + $"{ex.Message}) — the entries it holds are skipped. Store-installed modules "
                 + "recorded there will NOT load until the file is repaired or the modules are "
                 + "re-installed.");
-            return new ModuleActivationList();
+            return (new ModuleActivationList(), null);
         }
     }
 
-    private static IEnumerable<ModuleActivationEntry> ReadEntryFiles(
-        string baseDirectory, Action<string>? onCorrupt)
+    /// <summary>
+    /// Every per-module entry file, each with the time it was written — read from the same handle
+    /// as its content, so a concurrent replace cannot pair one file's bytes with another's time —
+    /// and the module names whose file exists but could not be read.
+    /// </summary>
+    private static (ImmutableList<(ModuleActivationEntry Entry, DateTime WrittenAtUtc)> Entries,
+        ImmutableHashSet<string> Unreadable) ReadEntryFiles(string baseDirectory, Action<string>? onCorrupt)
     {
         var directory = EntriesDirectory(baseDirectory);
-        string[] files;
+        ImmutableList<string> files;
         try
         {
             files = Directory.Exists(directory)
@@ -2045,39 +2235,60 @@ public static class ModuleActivationSidecar
                 $"Module activation entries under '{directory}' could not be listed "
                 + $"({ex.GetType().Name}: {ex.Message}) — store-installed modules will NOT load "
                 + "until the volume is readable again.");
-            yield break;
+            return ([], ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase));
         }
 
+        var entries = ImmutableList.CreateBuilder<(ModuleActivationEntry, DateTime)>();
+        var unreadable = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
-            ModuleActivationEntry? entry;
             try
             {
-                var text = TryReadAllText(file);
-                if (text is null)
+                if (TryReadWithWriteTime(file) is not { } read)
                     // Vanished between the listing and the read — another replica re-landing that
-                    // very module. Its next read sees the new file; nothing else is affected, which
-                    // is the whole point of one file per module.
+                    // very module. Its next read sees the new file; nothing else is affected.
                     continue;
-                entry = JsonSerializer.Deserialize<ModuleActivationEntry>(text, Json);
+                if (JsonSerializer.Deserialize<ModuleActivationEntry>(read.Text, Json) is { } entry
+                    && !string.IsNullOrWhiteSpace(entry.Name))
+                    entries.Add((entry, read.WrittenAtUtc));
             }
             // 🚨 EVERY failure, not only a parse error. An SMB sharing violation or lease conflict
             // arrives as IOException/UnauthorizedAccessException, and letting it escape would fail
-            // the WHOLE activation read — restoring the exact all-or-nothing behaviour this change
-            // removes, and crashing boot, which calls Read un-wrapped. It costs the one module it
-            // names, loudly. Deliberately NOT retried: the contended window is now a single
-            // module's own record being replaced, and a retry loop here would be a band-aid over a
-            // condition the next boot resolves on its own.
+            // the WHOLE activation read and crash boot, which calls Read un-wrapped. It costs the
+            // one module it names, loudly — and, for a module that has landing records, that module
+            // WHOLE (the activation read drops it rather than guessing what this file said).
             catch (Exception ex)
             {
+                unreadable.Add(Path.GetFileNameWithoutExtension(file));
                 onCorrupt?.Invoke(
                     $"Module activation entry '{file}' could not be read ({ex.GetType().Name}: "
                     + $"{ex.Message}) — that ONE module is skipped; re-install it to repair the "
                     + "entry. Every other activation entry is unaffected.");
-                continue;
             }
-            if (entry is not null && !string.IsNullOrWhiteSpace(entry.Name))
-                yield return entry;
+        }
+        return (entries.ToImmutable(), unreadable.ToImmutable());
+    }
+
+    /// <summary>
+    /// Reads a file's content AND its write time from one open handle, answering null for "not
+    /// there". The handle is what pairs them: a writer renaming a new file over the path replaces
+    /// the directory entry, never the file this handle holds, so the time always belongs to the
+    /// bytes read. Opened with the most permissive sharing, so this read never refuses another
+    /// replica's replace.
+    /// </summary>
+    private static (string Text, DateTime WrittenAtUtc)? TryReadWithWriteTime(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var writtenAt = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            return (reader.ReadToEnd(), writtenAt);
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
         }
     }
 

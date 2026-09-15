@@ -26,6 +26,7 @@ chose this shape, kept because it is why the format looks the way it does.
 modules/activation.d/<Name>/<generation>.<SHA-256 of the record>.json       one landing, never rewritten
 modules/activation.d/<Name>/uninstalled.<SHA-256 of the tombstone>.tombstone one uninstall, never rewritten
 modules/activation.d/<Name>/<generation>.<SHA-256 of the verdict>.verdict    one platform's link measurement
+modules/activation.d/<Name>/entry.<SHA-256 of the file's bytes>.snapshot       an older image's entry, preserved
 modules/activation.d/<Name>.json                                             the STORED entry, still written
 modules/activation.json                                                      the legacy aggregate, read only
 ```
@@ -48,6 +49,11 @@ and a fact about the platform.
 
 **An uninstall tombstone** (`ModuleUninstallRecord`) is the uninstall as an event: `name` and
 `after`, the newest event it observed, so a second uninstall is a new file rather than a no-op.
+
+**An older-image snapshot** (`ModuleEntrySnapshot`) is an older image's `<Name>.json`, preserved
+before a current image overwrites it: the entry exactly as that image wrote it, and the time it
+wrote it (below). Addressed by the SHA-256 of the snapshot file's own bytes, because it carries a
+whole entry whose shape may grow.
 
 **A platform verdict** (`ModulePlatformVerdict`) is one measurement of whether a generation's bytes
 link on one platform build: `name`, `directory`, `platform` (the live framework identity — the key a
@@ -75,6 +81,57 @@ it is only a projection and is never an event.
   record and reads **uninstalled**, whatever `<Name>.json` says. The mirror (B decides an
   uninstall, A lands inside B's window, B's disabled file lands last) reads **installed** at A's
   build. `ConcurrentUninstallTest` pins both.
+
+### 🚨 An older image's event outlives the next current-image write of its file
+
+An image that predates the records records its install or uninstall ONLY as `<Name>.json`
+without `projectionOf`, and a current image reads that file as an event at its write time. The
+first build of this design let the NEXT current-image write of that file erase the event: from then
+on the carried generation was re-dated to the beginning of time — dead behind any tombstone, replayed
+first otherwise — and an older image's uninstall vanished outright (the post-merge review of #4427).
+Measured on `main` after #4427:
+
+- a current image uninstalls; during a rollback an older image reinstalls 1.7.0; a current image
+  shelves 1.6.1 and REPORTS that 1.7.0 stays the head — and the next read derives **1.6.1** with no
+  fallback, which `ProposeModuleSet` would carry fleet-wide (#3996 by another road);
+- an older image uninstalls; a current image lands 1.6.0 — and the pre-uninstall **1.7.0** comes
+  back as the head;
+- an older image adopts 1.5.0 over 1.6.0; a current image shelves 1.4.0 — and the head flips back
+  to **1.6.0**.
+
+So a current image, before it overwrites a `<Name>.json` that lacks `projectionOf` (a landing's
+projection, or an uninstall's disabled entry), first writes that entry as a **snapshot** — the entry
+and its write time, read from ONE open handle, so a concurrent replace can never pair one file's
+bytes with another's time (`PreserveOlderImageEntry`). The derivation treats every snapshot exactly
+as it treats the live file — an install of the head it names, never yielding, at the time that image
+wrote it; or an uninstall at that time — so taking the snapshot changes no answer and the overwrite
+that follows loses nothing. `ModuleActivationPostMergeTest` pins all three scenarios, each red on
+`main` and green here.
+
+The residue is the file's own: an older image's write that lands between a current image's read of
+`<Name>.json` and its overwrite is not seen, and is lost — last-writer-wins against that image, as
+the file always was, for the length of a mixed-image window.
+
+### 🚨 Fail closed: an unreadable record drops the module, it never changes the answer
+
+The first build skipped an unreadable record, tombstone or snapshot with a log line and derived
+from the rest — so the answer CHANGED: an SMB sharing violation on a tombstone at boot loaded an
+uninstalled module, one on the head record promoted an older generation, and the landing wave then
+proposed that as the mesh's module set. Now:
+
+- a module whose record directory cannot be read WHOLE — any file unreadable, or not matching its
+  own address, or the directory not listable — is **dropped from the read** and reported through
+  `onCorrupt`, exactly as an unreadable activation entry always was before #4026 ("that ONE module
+  is skipped"); the next read that sees it whole restores it;
+- so is a module that has records and whose `<Name>.json` exists but cannot be read — that file may
+  be an older image's install or uninstall, and a stale legacy-aggregate row behind it must not
+  decide in its place (the aggregate's own write time is its time now, never the unreadable file's);
+- if the record directories cannot even be listed, every current-image projection is dropped — it is
+  a decision some record may have overtaken;
+- `ProposeModuleSet` **refuses** to propose from a read with any fault (it throws; every caller
+  already logs and leaves the mesh on its current set), and a landing or an uninstall writes nothing
+  derived from a partial read — its record is on the volume, and the next whole read derives it;
+- `WriteVerdict` refuses to supersede a verdict it could not read.
 
 ### 🚨 What an image that predates the records sees when the two disagree
 
@@ -113,17 +170,31 @@ arrival):
   fallback the deployment had. `LinkVerdictPerPlatformTest` stands a second image up on one volume
   (a surface whose contract carries a type this build lacks) and pins that the old image falls back
   to 1.6.0 while the new one falls back to 1.7.0 — at the same moment.
-- **The modules GC keeps every platform's fallback**: its reference set is the derived entry for
-  every platform a verdict exists for, plus the platform with none, plus every stored entry's
-  generations (`ReferencedGenerations`). Both images are live during a roll, and a pass on either
-  must not reclaim the other's fallback.
+- **The modules GC keeps the fallback of a BOUNDED set of platforms** (`ProtectedPlatforms`): the
+  platform running the pass, the platform with no verdicts, and the **two** platforms whose newest
+  verdict for the module is newest — in a roll, the image being rolled to and the one being rolled
+  from — plus every stored entry's generations (`ReferencedGenerations`). The first build protected
+  every platform that ever recorded a verdict; the platform key is the framework identity, which
+  changes with most builds, so every old build pinned its own fallback record and bytes until
+  uninstall. A platform outside the set no longer protects its fallback and its verdicts are retired
+  after the grace window; a third image still live on the volume then ranks those generations as
+  "never measured", and if the fallback it names has been reclaimed its boot falls through to the
+  image baseline. `APlatformThatNoLongerMeasuresTheModule_StopsProtectingItsFallback` pins it.
 
 **A re-arrival** is the one case identical records would get wrong: an adopt landing re-installing
 the generation the deployment ran before (the Store's rollback), or any landing of a bundle after an
 uninstall that followed its first arrival, finds its record already on the volume. When it would
 change the answer, it writes a NEW record whose `reArrivalOf` names the latest record with the same
 facts — a new file with its own arrival, never a touch of an existing one. When it would not (an
-identical re-publish of the head, an older shelf upload), nothing is written.
+identical re-publish of the head, an older shelf upload), nothing is written. The hypothetical
+arrival it is judged at is "after every event on the volume", never the pod's clock — the stamps it
+is compared with are the file server's, and a pod running behind it would otherwise place the
+re-landing before the uninstall it follows and land nothing. If the modules GC retired the record
+between the landing's existence check and its read, the landing records it again, once.
+
+**Ties.** A landing whose record carries the same stamp as the newest uninstall counts as AFTER it,
+unless that tombstone names it as the event it followed (`after`) — the uninstall saw it, so it was
+before. The first build dropped every same-tick landing silently.
 
 ### Compatibility with images already deployed
 
@@ -141,11 +212,14 @@ migration pass exists.
 ### Retention can never change the answer
 
 Without retention, deriving trades a race for unbounded growth. `CollectGarbage` retires a landing
-record or a tombstone only when **the entry derived without it is identical, for every platform** —
-the ones a verdict exists for and the one with none (`PruneLandingRecords`) — behind the same
-fail-closed read-fault counter and grace window as the generation deletes, and never a record of a
-generation the stored entry names. A verdict goes once a newer one for its generation and platform
-supersedes it, or once no remaining record names its generation. "Keep the head's and the fallback's
+record, a tombstone or a snapshot only when **the entry derived without it is identical for every
+PROTECTED platform, both with `<Name>.json` as it is and with it overwritten by a projection** (the
+next current-image write does that — a snapshot the live file happens to duplicate is therefore never
+retired while it is the only thing that would survive the overwrite) (`PruneLandingRecords`), behind
+the same fail-closed read-fault counter and grace window as the generation deletes, and never a record
+of a generation the stored entry names. A verdict goes once a newer one for its generation and
+platform supersedes it, once no remaining record names its generation, or once its platform is no
+longer protected. "Keep the head's and the fallback's
 records" would be WRONG: an unversioned landing moves the head whatever it follows, so a later older
 shelf landing takes the head from it, and the head then depends on a record that is neither head
 nor fallback — retiring it would flip the head with nothing having landed
@@ -166,6 +240,11 @@ change (the same seam applied, nothing else):
 | the new image lands 1.7.0 after the old image measured it unloadable | new image's fallback **1.6.0** (the old image's frozen verdict) | new image 1.7.0, old image 1.6.0 |
 | an uninstall inside a landing's projection window | module **enabled** (stale projection) | uninstalled |
 | a landing inside an uninstall's projection window | module **disabled** (stale disabled entry) | installed at the new build |
+| an older image reinstalls 1.7.0 after an uninstall; a current image shelves 1.6.1 | head **1.6.1**, no fallback — on `main` after #4427 | head 1.7.0, fallback 1.6.1 |
+| an older image uninstalls; a current image lands 1.6.0 | head **1.7.0** — the pre-uninstall record, back | head 1.6.0, no fallback |
+| an older image adopts 1.5.0 over 1.6.0; a current image shelves 1.4.0 | head **1.6.0** | head 1.5.0 |
+| an unreadable tombstone / head record / `<Name>.json` over a stale aggregate row | module **loaded** (uninstalled, or at an older generation) | module dropped and reported; no set proposed |
+| four builds measured the module; only the oldest ranks 1.5.0 as its fallback | 1.5.0's bytes **kept** | reclaimed; verdicts of builds outside the protected set retired |
 
 The second row is worth noticing: even the order that kept the right head lost the older build's
 fallback slot, so the modules GC would have reclaimed it five minutes later.
@@ -422,6 +501,11 @@ reads the record before the mesh exists. It is built as described in the *As bui
 top of this page: the on-disk record changes shape additively, an
 older image reads and writes exactly what it always did, and retention is stated as an invariant
 (*it never changes what `Read` answers*) rather than a list of records to keep.
+
+What the post-merge review of #4427 changed: an older image's event is PRESERVED as a snapshot
+before its file is overwritten; an unreadable record DROPS its module instead of changing its
+answer, and nothing is proposed from such a read; the platforms that protect a fallback are BOUNDED
+to the pass's own, the one with none, and the two most recent to measure the module.
 
 What the design section priced and the build settled differently, after Copilot's review of
 #4427: enabled state is **not** read from the stored entry's flag — an uninstall is a tombstone
