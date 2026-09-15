@@ -495,10 +495,18 @@ def is_reference_assembly(path: str) -> bool:
 
 
 def discover_refs(refs_arg):
-    """Return ({name.dll: path}, search_roots). If --refs is a dir, glob its *.dll. Else
+    """Return ({name.dll: path}, search_roots, layout). If --refs is a dir, glob its *.dll. Else
        auto-discover the sibling core build (Debug preferred, else Release), deduped preferring the
        OWN project dir + newest. `search_roots` is the base dir(s) `discover_ai_refs` then scans for
-       the Microsoft.Extensions.AI assemblies (which live under `test/*/bin`, not `src/*/bin`)."""
+       the Microsoft.Extensions.AI assemblies (which live under `test/*/bin`, not `src/*/bin`).
+
+       `layout` is which of the two documented shapes the set came from, and it decides what a
+       COMPLETE set means (see `short_reference_set_refusal`): `"image"` — a FLAT directory of
+       assemblies extracted from the platform image (`--image`'s cache, CI's `refs/`), whose
+       contents are CONTAINER-built and therefore need the image's shared frameworks too; or
+       `"source-build"` — the per-project `<proj>/bin/<cfg>/net10.0` layout of a core checkout
+       built on this host with the SDK, which needs the reference pack and no shared frameworks."""
+    layout = "source-build"
     if refs_arg:
         # Prefer the PRECISE per-project output glob (the same clean set auto-discovery uses below):
         # <refs>/<proj>/bin/(Debug|Release)/net10.0/*.dll. A bare recursive **/*.dll also sweeps
@@ -514,6 +522,7 @@ def discover_refs(refs_arg):
                 break
         if not dlls:
             dlls = glob.glob(os.path.join(refs_arg, "**", "*.dll"), recursive=True)
+            layout = "image"        # a flat assemblies dir — the platform-image extraction
         # `--refs <core>/src` is the documented form, so the checkout is its parent.
         _refuse_if_sibling_stale(Path(refs_arg).resolve().parent)
         search_roots = [refs_arg]
@@ -560,7 +569,54 @@ def discover_refs(refs_arg):
     # invocation) would resolve against that temp dir, load nothing, and every NodeType would fail
     # CS0246 'MeshWeaver' could not be found (green locally with an ABSOLUTE --refs, red in CI). The
     # source .cs files are already resolve()d (see collect); do the same for refs.
-    return {n: os.path.abspath(p) for n, (p, _) in seen.items()}, search_roots
+    return {n: os.path.abspath(p) for n, (p, _) in seen.items()}, search_roots, layout
+
+
+# 🚨 A SHORT REFERENCE SET IS REFUSED, NEVER FILLED WITH A GUESS (#4404; MeshWeaver.Plugins#1911),
+# the same shape as MODULE_REFS_NOT_IN_IMAGE below, one layer down. Two holes used to be papered
+# over silently:
+#
+#   * NO SHARED FRAMEWORKS. A refs dir extracted from `/app/.` alone never carries
+#     System.Private.CoreLib.dll, so the run never entered implementation-framework mode. /app's
+#     assemblies are container-built and reference System.Private.CoreLib's identity DIRECTLY,
+#     which the SDK reference pack cannot resolve — so a pristine `main` reported 17 NodeTypes
+#     broken with CS0012, naming the CONTENT.
+#   * NO System.Reactive. The csproj filled that hole with a NuGet version — first a literal that
+#     lagged the platform's Rx major (6.1.0 against 7.0.0: 43 of 89 NodeTypes "broken" with
+#     CS1705), then a version read from Directory.Packages.props. Even a correctly derived version
+#     is a GUESS about what the image carries, and a guess that compiles is a confident answer to a
+#     question this gate cannot ask.
+#
+# Both produce a CONFIDENT WRONG ANSWER that accuses the content, and the natural response is to
+# "fix" source that was never broken. A gate that cannot answer must say so. In CI the set is
+# always complete (ci.yml copies /app/. AND /usr/share/dotnet/shared/.), so this never fires there;
+# it exists for the hand-run that first found #1911.
+def short_reference_set_refusal(refs, layout: str, where: str = "the reference set") -> str | None:
+    """The message refusing a reference set that cannot answer the question, or None. Pure."""
+    if layout == "image" and "System.Private.CoreLib.dll" not in refs:
+        return (
+            f"error: {where} came out of the platform image but carries NO shared frameworks —\n"
+            "  System.Private.CoreLib.dll is missing, so this run would compile against the SDK's\n"
+            "  reference pack instead of the assemblies the mesh actually loads.\n"
+            "  The image's assemblies are CONTAINER-built and reference System.Private.CoreLib's\n"
+            "  identity directly, which the ref pack cannot resolve: every NodeType binding one\n"
+            "  fails CS0012 naming the CONTENT, which reads as the repository breaking when the real\n"
+            "  fault is a short reference set (#1032, #1911). Refusing to report those as breaks.\n"
+            "\n  Refill the cache — fetch-refs.py copies /usr/share/dotnet/shared out of the image\n"
+            "  the way ci.yml does:\n"
+            "    python3 scripts/fetch-refs.py --force\n"
+            "  (a dir filled before #1911 is refilled by itself; --force refills one passed by hand.)")
+    if "System.Reactive.dll" not in refs:
+        return (
+            f"error: {where} carries NO System.Reactive.dll.\n"
+            "  Every MeshWeaver assembly binds Rx, so without it the NodeTypes that reach\n"
+            "  MeshWeaver.Messaging.Hub / Mesh.Contract / Graph cannot be compiled at all.\n"
+            "  This gate does NOT restore a NuGet version to fill the hole: a pin here lagged the\n"
+            "  platform's Rx major and reported 43 of 89 NodeTypes broken with CS1705, naming the\n"
+            "  CONTENT (#1911), and even a derived version is a guess about what the image carries.\n"
+            "\n  Use a complete set instead:\n"
+            "    python3 scripts/compile-check.py --image   # the platform image's own Rx")
+    return None
 
 
 # 🚨 THE MODULE ASSEMBLIES THAT LEFT THE PLATFORM IMAGE. These three are registry-served, so the
@@ -752,29 +808,6 @@ def write_project(work: Path, cs_files, refs: dict):
 
 
 
-def _rx_fallback_version() -> str:
-    """The Rx version to restore when the refs dir carries none — READ from the platform's own
-    `Directory.Packages.props`, never written here.
-
-    🚨 A literal in this file is a second place to forget, and it HAD been forgotten: it still said
-    `6.1.0` after the platform moved to `7.0.0` (AssemblyVersion 6.1.0.0 → 7.0.0.0), which is the
-    CS1705 half of MeshWeaver.Plugins#1911. The props file is also MeshWeaver.Plugins' version
-    source — it has no `Directory.Packages.props` of its own — so reading it is reading the one fact
-    both repositories already agree on.
-
-    Falls back to the literal only when the props file cannot be read at all (a refs-only checkout);
-    that value is then knowingly a guess, and it is the branch a refs dir with Rx never reaches.
-    """
-    props = ROOT / "Directory.Packages.props"
-    try:
-        m = re.search(r'Include="System\.Reactive"\s+Version="([^"]+)"', props.read_text(encoding="utf-8"))
-        if m:
-            return m.group(1)
-    except OSError:
-        pass
-    return "7.0.0"
-
-
 def build_csproj(work: Path, cs_files, ref_xml: str, with_config_check: bool = False,
                  impl_frameworks: bool = False) -> str:
     compiles = '    <Compile Include="GlobalUsings.cs" />\n'
@@ -792,28 +825,24 @@ def build_csproj(work: Path, cs_files, ref_xml: str, with_config_check: bool = F
     # and System.Reactive come from the same refs dir in this mode.
     impl_props = ("    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>\n"
                   if impl_frameworks else "")
-    # 🚨 THE Rx PIN IS EMITTED ONLY WHEN THE REFS DIR DOES NOT ALREADY CARRY System.Reactive
-    # (MeshWeaver.Plugins#1911). A hard-coded `Version="6.1.0"` beside a refs dir whose platform
-    # assemblies were built against Rx 7 is CS1705 BY CONSTRUCTION, on every NodeType whose set
-    # binds MeshWeaver.Messaging.Hub / Mesh.Contract / Graph:
+    # 🚨 THIS FILE NEVER RESTORES System.Reactive FROM NuGet — in ANY mode (#4404, after
+    # MeshWeaver.Plugins#1911). Rx comes from the reference set, full stop: `ref_xml` declares the
+    # refs dir's own `System.Reactive.dll` with a HintPath, and that is the exact assembly the
+    # platform image runs. A version literal written here was CS1705 BY CONSTRUCTION the day the
+    # platform moved to Rx 7, on every NodeType whose set binds MeshWeaver.Messaging.Hub /
+    # Mesh.Contract / Graph:
     #
     #   CS1705: Assembly 'MeshWeaver.Messaging.Hub' … uses 'System.Reactive, Version=7.0.0.0' which
     #           has a higher version than referenced assembly 'System.Reactive' … '6.1.0.0'
     #
-    # and the message names THIS REPO'S CONTENT ("13 NodeTypes breaking") rather than the reference
-    # set — a gate that is red on a green main is a gate people learn to ignore, which this file's
-    # header already says about the registry-served module assemblies one layer up.
-    #
-    # When the refs dir carries `System.Reactive.dll`, `ref_xml` already declares it with a HintPath,
-    # and THAT is authoritative: it is the exact assembly the platform image runs. Restoring a second
-    # copy from NuGet beside it can only ever agree by luck. So the pin is the fallback for a refs dir
-    # that has no Rx at all, never a competitor to one that does — and there is no version literal to
-    # go stale in the case that actually occurs.
-    rx_in_refs = 'Include="System.Reactive"' in ref_xml
+    # and the message named THIS REPO'S CONTENT ("13 NodeTypes breaking") rather than the reference
+    # set. So there is no fallback to restore: a refs dir WITHOUT `System.Reactive.dll` — or, in
+    # image layout, without `System.Private.CoreLib.dll` — is REFUSED by
+    # `short_reference_set_refusal` in `main` before any set is compiled, naming the refill command.
+    # Do not reintroduce a version literal "for the case the refs dir has none": that case exits
+    # before reaching this line, and a pin is a second place to forget that the platform moved.
     framework_items = ("" if impl_frameworks else
-                       '    <FrameworkReference Include="Microsoft.AspNetCore.App" />\n'
-                       + ("" if rx_in_refs else
-                          f'    <PackageReference Include="System.Reactive" Version="{_rx_fallback_version()}" />\n'))
+                       '    <FrameworkReference Include="Microsoft.AspNetCore.App" />\n')
     return f'''<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -993,38 +1022,56 @@ def _self_test() -> int:
             open(os.path.join(flat, name), "wb").close()
         open(os.path.join(flat, "sdk-generators", "Microsoft.Extensions.Logging.Generators.dll"), "wb").close()
         open(os.path.join(flat, "sdk-generators", "Innocent.Name.dll"), "wb").close()  # by DIRECTORY, not name
-        refs, _ = discover_refs(flat)
+        refs, _, _ = discover_refs(flat)
         kept = set(refs)
         if kept != {"System.Text.Json.dll", "MeshWeaver.Data.dll"}:
             failures.append(f"  reference-set filter kept {sorted(kept)!r}; expected only System.Text.Json.dll + MeshWeaver.Data.dll")
         if not is_reference_assembly(os.path.join(flat, "System.Text.Json.dll")):
             failures.append("  is_reference_assembly refused the real System.Text.Json.dll")
 
-    # 🚨 THE Rx PIN MUST NOT COMPETE WITH A REFS DIR THAT ALREADY CARRIES Rx
-    # (MeshWeaver.Plugins#1911). A `PackageReference System.Reactive 6.1.0` emitted beside a
-    # `<Reference>` to the platform's own System.Reactive is CS1705 on every NodeType binding
-    # MeshWeaver.Messaging.Hub — and the error names the repository's CONTENT, not the reference
-    # set, so it reads as "13 NodeTypes broke". All three branches are asserted because the bug was
-    # a branch nobody could see from the outside: CI always took the impl path, a laptop always took
-    # the other one, and only the laptop had a stale pin to trip over.
-    _rx_refs = '    <Reference Include="System.Reactive"><HintPath>/x/System.Reactive.dll</HintPath></Reference>'
-    _no_rx = '    <Reference Include="Foo"><HintPath>/x/Foo.dll</HintPath></Reference>'
-    _PIN = 'PackageReference Include="System.Reactive"'
-    if _PIN in build_csproj(Path("/tmp"), [], _rx_refs):
-        failures.append("  the Rx pin was emitted although the refs dir already carries System.Reactive "
-                        "— that is the CS1705 pairing (Plugins#1911)")
-    if _PIN not in build_csproj(Path("/tmp"), [], _no_rx):
-        failures.append("  the Rx pin was NOT emitted for a refs dir without System.Reactive — "
-                        "the fallback is gone and an Rx-using set has nothing to bind")
-    if _PIN in build_csproj(Path("/tmp"), [], _rx_refs, impl_frameworks=True):
-        failures.append("  the Rx pin leaked into implementation-framework mode, where every "
-                        "framework assembly must come from the refs dir")
-    # 🚨 And the fallback's VERSION is read from the platform's own props, never written here. The
-    # literal had already gone stale once (6.1.0 against a platform on 7.0.0) — that is the CS1705.
-    _declared = _rx_fallback_version()
-    if f'Version="{_declared}"' not in build_csproj(Path("/tmp"), [], _no_rx):
-        failures.append(f"  the Rx fallback does not carry Directory.Packages.props' own "
-                        f"{_declared} — a second version literal has drifted again")
+    # 🚨 THE SHORT-REFERENCE-SET REFUSAL MUST BE ABLE TO FIRE (#4404, MeshWeaver.Plugins#1911). It
+    # exists because the two holes it refuses do not LOOK like holes: they look like 17 NodeTypes
+    # breaking with CS0012, or 43 with CS1705, naming source that was never touched. A refusal that
+    # quietly finds nothing to refuse is indistinguishable from a complete reference set — so a
+    # DELIBERATELY SHORT set is asserted to fail, and a complete one to pass, in both layouts.
+    complete_image = {"MeshWeaver.Messaging.Hub.dll": "/x/MeshWeaver.Messaging.Hub.dll",
+                      "System.Reactive.dll": "/x/System.Reactive.dll",
+                      "System.Private.CoreLib.dll": "/x/shared-frameworks/System.Private.CoreLib.dll"}
+
+    def refuses(label: str, refs_set, layout: str, want):
+        got = short_reference_set_refusal(refs_set, layout, "the set")
+        if want is None and got is not None:
+            failures.append(f"  refusal {label}: expected a PASS, got:\n{got}")
+        elif want is not None and (got is None or want not in got):
+            failures.append(f"  refusal {label}: expected {want!r} in the refusal, got {got!r}")
+
+    # The measured case: exactly what an /app-only extraction produced — a complete set with no
+    # shared frameworks beside it.
+    no_shared = {k: v for k, v in complete_image.items() if k != "System.Private.CoreLib.dll"}
+    refuses("an image set with no shared frameworks", no_shared, "image",
+            "System.Private.CoreLib.dll is missing")
+    # …and it must name the one command that fixes it, or the reader is left where #1911 started.
+    refuses("the refusal names the refill", no_shared, "image", "scripts/fetch-refs.py --force")
+    # The other hole the csproj used to fill with a NuGet version.
+    refuses("a set with no Rx",
+            {k: v for k, v in complete_image.items() if k != "System.Reactive.dll"},
+            "image", "NO System.Reactive.dll")
+    refuses("a source build with no Rx",
+            {"MeshWeaver.Messaging.Hub.dll": "/x/bin/Release/net10.0/MeshWeaver.Messaging.Hub.dll"},
+            "source-build", "NO System.Reactive.dll")
+    # 🚨 THE CONTROL ARM. A refusal that also fires on a GOOD set is a gate nobody can use: a complete
+    # image cache, and the host-SDK core build that legitimately has no shared frameworks, must pass.
+    refuses("a complete image cache", complete_image, "image", None)
+    refuses("a core source build (the ref pack is correct there)",
+            {"MeshWeaver.Messaging.Hub.dll": "/c/src/X/bin/Release/net10.0/MeshWeaver.Messaging.Hub.dll",
+             "System.Reactive.dll": "/c/src/X/bin/Release/net10.0/System.Reactive.dll"},
+            "source-build", None)
+    # 🚨 …and NO version may come back. The generated csproj must never restore Rx from NuGet, in
+    # either mode: that restore is what compiled the platform's Rx 7 assemblies against a 6.1.
+    for impl in (False, True):
+        if "System.Reactive" in build_csproj(Path("/tmp"), [], "", impl_frameworks=impl):
+            failures.append(f"  the generated csproj names System.Reactive (impl_frameworks={impl}) "
+                            "— a guessed Rx version is back")
 
     # 🚨 THE MODULE-REFS GUARD MUST BE ABLE TO FIRE. Its whole job is to refuse a run whose
     # reference set is short, so a guard that silently finds nothing to complain about reads
@@ -1189,6 +1236,9 @@ def _self_test() -> int:
         print("\n".join(failures))
         return 1
     print(f"✓ using-directive parser: {len(cases)} shape(s) OK")
+    print("✓ short-reference-set refusal: fires on an image set with no shared frameworks and on any "
+          "set with no System.Reactive, names the refill, stays silent on a complete image cache and "
+          "on a core source build — and the generated csproj restores no Rx version (#4404)")
     print(f"✓ module-refs guard: detects a short reference set, collects exactly "
           f"{len(MODULE_REFS_NOT_IN_IMAGE)} registry-served assemblies, absolutized")
     print("✓ --modules scope: a subset selects only its packages, an unknown id and an empty list "
@@ -1245,7 +1295,7 @@ def main() -> int:
         spec.loader.exec_module(fetch_refs)
         refs_arg = str(fetch_refs.resolve(quiet=False))
 
-    refs, ref_roots = discover_refs(refs_arg)
+    refs, ref_roots, layout = discover_refs(refs_arg)
     _report_framework_provenance(refs, ref_roots)
     if not refs:
         # The image is the ZERO-BUILD path and the one CI uses; say so here rather than leaving
@@ -1254,6 +1304,13 @@ def main() -> int:
               "  python3 scripts/compile-check.py --image   # take them from the platform image "
               "(cached under ~/.cache/meshweaver/refs/, pulls once per pin)\n"
               "  …or pass --refs <dir>, or build a core checkout next to this repo.")
+        return 1
+    # 🚨 …and a set that is PRESENT can still be short. Refuse before compiling anything: the
+    # breaks a short set produces name the CONTENT, and cost an hour of "fixing" source that was
+    # never broken (#1911, #4404).
+    if (refusal := short_reference_set_refusal(
+            refs, layout, ref_roots[0] if ref_roots else "the reference set")) is not None:
+        print("\n" + refusal)
         return 1
     # Supply the Microsoft.Extensions.AI assemblies (mesh-provided at runtime, not in src/*/bin) so
     # AI-using sets compile for real instead of being masked as UNVERIFIABLE. If they genuinely can't
