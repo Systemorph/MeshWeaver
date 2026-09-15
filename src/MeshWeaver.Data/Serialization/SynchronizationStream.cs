@@ -1358,6 +1358,15 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         }
         Hub = syncHub;
 
+        // 🚨 THE OTHER HALF OF WHAT SPLITS THE REFUSAL FINGERPRINT (#3986 residue). THIS is the one
+        // place a `sync/{id}` sub-hub is created, so it is the one honest place to record that this
+        // HOST activation served that stream id. Everything a later refusal can say about "never
+        // registered on this activation" rests on this line — and it is the reason the ledger's
+        // lifetime has to be the host hub's: a reactivated per-node owner starts from empty, which
+        // is exactly the state a subscriber still holding the old stream id should read as.
+        // Records only — no behaviour, nothing held, nothing waited on.
+        SyncStreamActivationLedger.For(Host)?.RecordSyncHubRegistered(ClientId);
+
         // The outstanding fresh-snapshot re-ask dies with the stream — a pending Observe callback
         // that outlives it is exactly the leaked callback the quiescing budget flags.
         RegisterForDisposal(resyncSubscription);
