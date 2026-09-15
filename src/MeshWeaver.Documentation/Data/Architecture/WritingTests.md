@@ -92,7 +92,7 @@ Before writing a test, review the invariants every test must respect:
 >
 > 🚨 **Satisfying the analyzer is NOT the same as the body stopping, and the difference is the whole point of the rule.** `xUnit1069` is satisfied by ONE reference anywhere in the test method — so a test that hands the token to its first wait and then parks in a helper that polls on a bare `Task.Delay(300)` is green to the analyzer and still outlives its verdict. When you give a test the token, follow it to *every* wait the body can be sitting in: the helper's `Task.Delay`, its `.Await()`, its `WaitAsync(timeout)`, its `.Should()…Emit(…)`.
 >
-> **The helper-level population is swept, and its residue is named rather than implied** (#4378). Measured over `test/` on 2026-09-15 by scanning every `.Await()`, `Task.Delay`, `WaitAsync`, `ReactiveWait.First`, `ObserveCompletion` and `.Should()…Emit/Match/Complete/NotEmit` call and attributing it to the member that lexically owns it: **2,847 wait sites**, of which **194 in 110 files sat in a helper and took no token**. 185 of those now take one; the **8** that remain are deliberate, and each says so in a comment where it sits:
+> **The helper-level population is swept, and its residue is named rather than implied** (#4378). Measured over `test/` on 2026-09-15 by scanning every `.Await()`, `Task.Delay`, `WaitAsync`, `ReactiveWait.First`, `ObserveCompletion` and `.Should()…Emit/Match/Complete/NotEmit` call and attributing it to the member that lexically owns it: **2,847 wait sites**, of which **194 in 110 files sat in a helper and took no token**. 185 of those now take one; the **9** that remain are deliberate, and each says so in a comment where it sits:
 >
 > | left untokened | why |
 > |---|---|
@@ -100,6 +100,8 @@ Before writing a test, review the invariants every test must respect:
 > | `CollectibleUnloadDrain.WaitUntilCollectedAsync` | a teardown drain: teardown lets work finish, it is never forced |
 > | `QuiescingHubRefusesNewWorkTest.ReleaseAndDispose` | releases the held victim so the fixture can tear down cleanly |
 > | `RxFanOutInversionHarness.BothGatedHandlersComplete` | the `Task.Delay` **is** the deadlock bound; a cancelled bound would read as "deadlock detected" |
+> | `PodHubTransportTest.Settled` | the same shape, in the direction that is worse: `Settled` is consumed as `(await Settled(…)).Should().BeFalse(…)`, so a cancelled delay wins the `WhenAny` race and a timed-out test **passes** a negative assertion it never finished |
+> | `OrleansIdleReactivationNoWedgeTest.CreateNode` | the `.WaitAsync(45s)` wraps an `.Await(token)` that already cancels; a second token there is noise, not cover |
 > | `MeshTestRunnerTests`' `Sample` cases | they ARE the in-mesh runner's subject, including one that parks on `Task.Delay(Timeout.InfiniteTimeSpan)` so the runner's own timeout can be observed |
 >
 > Plus the two that Rule 2a already named and that live in test bodies rather than helpers: a wait the test PARKS on purpose (`IoPoolTest`'s in-flight leaf, a backlog of deferred requests).

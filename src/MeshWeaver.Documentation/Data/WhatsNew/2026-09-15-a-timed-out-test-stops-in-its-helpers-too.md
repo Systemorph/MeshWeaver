@@ -29,7 +29,7 @@ sites, **194 in 110 files sat in a helper and took no token**. **185 of them now
 `TestContext.Current.CancellationToken` otherwise — the same token the test body holds, and the
 documented default of the repository's own test-base primitives.
 
-**The five that deliberately do not, each saying so where it sits** — because a wait that must NOT be
+**The nine sites that deliberately do not, each saying so where it sits** — because a wait that must NOT be
 cancelled is a decision, not an oversight:
 
 | left untokened | why |
@@ -38,6 +38,7 @@ cancelled is a decision, not an oversight:
 | `CollectibleUnloadDrain.WaitUntilCollectedAsync` | a teardown drain — teardown lets work finish, it is never forced |
 | `QuiescingHubRefusesNewWorkTest.ReleaseAndDispose` | releases the held victim so the fixture tears down cleanly |
 | `RxFanOutInversionHarness.BothGatedHandlersComplete` | the delay **is** the deadlock bound; cancelling it would report "deadlock detected" for a test that merely ran out of time |
+| `PodHubTransportTest.Settled` | the same shape, worse: its result is read as `.Should().BeFalse(…)`, so a cancelled delay would make a timed-out test **pass** a negative assertion it never finished |
 | `MeshTestRunnerTests`' `Sample` cases | they are the in-mesh runner's subject, including one that parks forever so the runner's own timeout can be observed |
 
 **And what is still not fixed, said plainly: 1,292 wait sites inside test bodies still take no
