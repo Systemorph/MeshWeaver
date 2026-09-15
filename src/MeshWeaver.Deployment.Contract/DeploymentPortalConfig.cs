@@ -422,6 +422,15 @@ public static class DeploymentPortalConfig
         if (d.Operator is { Enabled: true })
             Set("Hosting__Operator__Enabled", "true");
 
+        // The executor switch (Plugins#1738), independent of Enabled: the Actions executor runs with
+        // the in-cluster Job disabled. Blank emits nothing, and the portal and the chart then both
+        // mean Job. ActionsExecutor reads Hosting:Operator:Executor and Hosting:Operator:Maintainer.
+        if (d.Operator is { } operatorSpec)
+        {
+            Set("Hosting__Operator__Executor", string.IsNullOrWhiteSpace(operatorSpec.Executor) ? null : operatorSpec.Executor.Trim());
+            Set("Hosting__Operator__Maintainer", string.IsNullOrWhiteSpace(operatorSpec.Maintainer) ? null : operatorSpec.Maintainer.Trim());
+        }
+
         foreach (var (key, value) in d.ExtraPortalConfig)
             if (!c.Keys.Contains(key, StringComparer.OrdinalIgnoreCase))
                 c[key] = value ?? "";

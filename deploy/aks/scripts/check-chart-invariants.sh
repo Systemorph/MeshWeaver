@@ -41,6 +41,8 @@
 #  15. a replica floor > 1 implies anti-affinity / spread    or every replica shares one node
 #  16. wait-for-postgres probes EVERY host the pod's connection strings name  or Init:1/1 proves
 #                                                             nothing about the connection that fails
+#  17. the operator EXECUTOR renders whatever `enabled` says  or Actions never reaches the pod that
+#                                                             switched the operator Job off
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -119,6 +121,13 @@ COMBOS=(
   # gate was blind to — the probe read config.MEMEX_HOST while the boot opened two SECRET
   # connection strings naming neither. Invariant 16 asserts the probe covers both.
   "a dedicated orleans server (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.dedicated-orleans-host.yaml"
+  # 🚨 The control instance on the ACTIONS executor (Plugins#1738): the operator Job OFF and the
+  # executor switched to aks-ops.yml through the GitHub App. The only combination that sets
+  # `hostingOperator.executor`, so without it the one render that must carry
+  # `Hosting__Operator__Executor: "Actions"` beside `Hosting__Operator__Enabled: "false"` exists
+  # nowhere. Invariant 17 checks the key in EVERY render; the evidence check below the loop
+  # asserts that this one rendered Actions.
+  "the Actions executor with the operator Job off (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-actions-executor.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -160,6 +169,24 @@ if [ "$rendered" -lt "${#COMBOS[@]}" ]; then
   report "only $rendered of ${#COMBOS[@]} values combinations rendered — treating as FAILURE rather than reporting 'no contradictions' on partial evidence"
 fi
 
+# The executor evidence (Plugins#1738): invariant 17 holds in every render, but it holds just as
+# well if NO render ever says Actions. So one combination must render the Actions executor with the
+# operator Job switched off, which is the shape memex.systemorph.com moves to. Read from the
+# rendered ConfigMaps above, not re-rendered.
+actions_rendered=0
+for r in "$WORK"/*.yaml; do
+  [ -f "$r" ] || continue
+  if grep -q '^  Hosting__Operator__Executor: "Actions"$' "$r" \
+     && grep -q '^  Hosting__Operator__Enabled: "false"$' "$r"; then
+    actions_rendered=1
+  fi
+done
+if [ "$actions_rendered" -eq 1 ]; then
+  ok "the Actions executor reaches the ConfigMap with the operator Job off"
+else
+  report "no combination rendered Hosting__Operator__Executor=\"Actions\" beside Hosting__Operator__Enabled=\"false\" — the executor switch cannot reach a pod that disabled the operator Job"
+fi
+
 # ---------------------------------------------------------------------------
 # REFUSALS — shapes the chart must NOT render, and must name why.
 #
@@ -179,6 +206,8 @@ fi
 # ---------------------------------------------------------------------------
 REFUSALS=(
   "AdoNet on an external database with no connection string in values (the #3780 render)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.adonet-external-db-no-connection-string.yaml|MeshWeaver#3780"
+  # Plugins#1738: an executor the portal would silently read as Job must fail the render.
+  "a misspelled operator executor|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-executor-misspelled.yaml|must be Job or Actions"
 )
 refused=0
 for entry in "${REFUSALS[@]}"; do

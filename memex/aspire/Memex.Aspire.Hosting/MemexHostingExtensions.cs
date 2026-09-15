@@ -219,6 +219,9 @@ public static class MemexHostingExtensions
     public static IResourceBuilder<MemexPortalResource> WithAi(this IResourceBuilder<MemexPortalResource> p, Func<AiProviders, AiProviders> configure) => p.Configure(r => r.WithAi(configure));
     /// <summary>The hosting operator — <see cref="DeploymentRecordExtensions.WithOperator"/>.</summary>
     public static IResourceBuilder<MemexPortalResource> WithOperator(this IResourceBuilder<MemexPortalResource> p, bool enabled = true, string? ns = null, string? serviceAccount = null, string? image = null, IEnumerable<KeyValuePair<string, string>>? environment = null) => p.Configure(r => r.WithOperator(enabled, ns, serviceAccount, image, environment));
+
+    /// <summary>The operator's executor and maintainer — <see cref="DeploymentRecordExtensions.WithOperatorExecutor"/>.</summary>
+    public static IResourceBuilder<MemexPortalResource> WithOperatorExecutor(this IResourceBuilder<MemexPortalResource> p, string executor, string? maintainer = null) => p.Configure(r => r.WithOperatorExecutor(executor, maintainer));
     /// <summary>Telemetry — <see cref="DeploymentRecordExtensions.WithTelemetry"/>.</summary>
     public static IResourceBuilder<MemexPortalResource> WithTelemetry(this IResourceBuilder<MemexPortalResource> p, string? otlpEndpoint, string? otlpProtocol = null) => p.Configure(r => r.WithTelemetry(otlpEndpoint, otlpProtocol));
     /// <summary>Idle policy — <see cref="DeploymentRecordExtensions.WithIdlePolicy"/>.</summary>

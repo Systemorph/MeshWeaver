@@ -695,6 +695,28 @@ public sealed record HostingOperatorSpec
     [Description("Job environment (KEY=VALUE)")]
     public ImmutableSortedDictionary<string, string> Environment { get; init; }
         = ImmutableSortedDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// WHICH executor runs this instance's lifecycle actions: <c>Job</c> (the in-cluster operator
+    /// Job; needs <see cref="Enabled"/>, <see cref="Image"/> and the jobrunner token) or
+    /// <c>Actions</c> (Systemorph/Memex <c>aks-ops.yml</c>, dispatched through the
+    /// <c>systemorph-com</c> GitHub App and approved in the mesh, Plugins#1738). Independent of
+    /// <see cref="Enabled"/> on purpose: the Actions path runs with the Job DISABLED, which is the
+    /// point, since it leaves no cluster credential in the portal. Blank means <c>Job</c>.
+    /// Renders <c>Hosting__Operator__Executor</c>, which the portal reads as
+    /// <c>Hosting:Operator:Executor</c>.
+    /// </summary>
+    [Description("Executor: Job (in-cluster operator Job) or Actions (aks-ops.yml through the GitHub App)")]
+    public string? Executor { get; init; }
+
+    /// <summary>
+    /// The ONE user id that may approve its own request on the Actions path: the maintainer of a
+    /// single-admin installation, compared with the id the mesh stamps on the approval write.
+    /// Blank means nobody may, and the approver must differ from the requester. Renders
+    /// <c>Hosting__Operator__Maintainer</c> (<c>Hosting:Operator:Maintainer</c>).
+    /// </summary>
+    [Description("Maintainer: the one user id that may approve its own request")]
+    public string? Maintainer { get; init; }
 }
 
 /// <summary>OpenTelemetry export.</summary>

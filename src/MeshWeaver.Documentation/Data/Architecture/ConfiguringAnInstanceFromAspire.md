@@ -199,6 +199,7 @@ configures no container.
 | `WithSocialLinkedIn(clientId)` | `SocialLinkedInClientId` | `config.memex_portal.Social__LinkedIn__ClientId` | `Social__LinkedIn__ClientId` |
 | `WithAi(configure)` | `Ai.OpenRouter`, `Ai.Anthropic`, `Ai.AzureFoundry`, `Ai.AzureAis`, `Ai.Tiers.Heavy`, `Ai.Tiers.Standard`, `Ai.Tiers.Light`, `Ai.Tiers.Utility` | `config.memex_portal.<Provider>__*`, `config.memex_portal.ModelTier__*` | `OpenRouter__Models__0`, `Anthropic__Models__0`, `AzureFoundry__Models__0`, `AzureAIS__Models__0`, `Features__Ai__Providers__Anthropic`, `Features__Ai__Providers__AzureFoundry`, `ModelTier__Heavy`, `ModelTier__Standard`, `ModelTier__Light`, `ModelTier__Utility` |
 | `WithOperator(enabled, ns, serviceAccount, image, environment)` | `Operator.Enabled`, `Operator.Namespace`, `Operator.ServiceAccount`, `Operator.Image`, `Operator.Environment` | `hostingOperator` | `Hosting__Operator__Enabled` |
+| `WithOperatorExecutor(executor, maintainer)` | `Operator.Executor`, `Operator.Maintainer` | `hostingOperator.executor`, `hostingOperator.maintainer` (rendered outside `enabled`: the Actions executor runs with the operator Job off) | `Hosting__Operator__Executor`, `Hosting__Operator__Maintainer` |
 | `WithRegistry(configure)` | `Registry.Host`, `Registry.Image`, `Registry.AuthImage`, `Registry.Issuer`, `Registry.StorageAccountName`, `Registry.StorageContainer`, `Registry.ServiceAccount`, `Registry.KeyVault`, `Registry.PublisherUsername`, `Registry.PublisherPasswordBcrypt`, `Registry.ValidationUrl`, `Registry.NotificationsUrl`, `Registry.Replicas` | `registry` | — |
 | `WithTelemetry(otlpEndpoint, otlpProtocol)` | `Telemetry.OtlpEndpoint`, `Telemetry.OtlpProtocol` | `config.memex_portal.OTEL_*` | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` |
 | `WithBackupStore(backupStore)` | `BackupStore` | — (the `Backup` action's target) | — |
@@ -403,6 +404,8 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `HostingOperatorSpec` | `ServiceAccount` | Operator service account | Operator-Dienstkonto |
 | `HostingOperatorSpec` | `Image` | Operator image | Operator-Image |
 | `HostingOperatorSpec` | `Environment` | Job environment (KEY=VALUE) | Job-Umgebung (KEY=VALUE) |
+| `HostingOperatorSpec` | `Executor` | Executor: Job (in-cluster operator Job) or Actions (aks-ops.yml through the GitHub App) | Ausführung: Job (Operator-Job im Cluster) oder Actions (aks-ops.yml über die GitHub-App) |
+| `HostingOperatorSpec` | `Maintainer` | Maintainer: the one user id that may approve its own request | Maintainer: die eine Benutzer-ID, die den eigenen Antrag genehmigen darf |
 | `TelemetrySpec` | `OtlpEndpoint` | OTLP endpoint | OTLP-Endpunkt |
 | `TelemetrySpec` | `OtlpProtocol` | OTLP protocol | OTLP-Protokoll |
 | `DrainSpec` | `DrainSeconds` | Drain ceiling in seconds (termination grace) | Drain-Obergrenze in Sekunden (Beendigungsfrist) |
