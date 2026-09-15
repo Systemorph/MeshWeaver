@@ -844,8 +844,12 @@ public static class StaticRepoImporter
         // customize it (the Doc welcome page); otherwise we synthesize a generic Space root. It is
         // included in the fingerprint so editing the welcome re-imports.
         var root = ResolveRoot(source);
+        // The inline content files are part of the content-version too: a commit that only adds,
+        // edits or removes one must not match the previous import's marker, or the mirror never
+        // runs (MeshWeaver#4394 exposed the gap — see PartitionSourceFingerprint.Compute).
         var fingerprint = PartitionSourceFingerprint.Compute(
-            nodes.Append(root).ToArray(), source.Versioned, hub.JsonSerializerOptions);
+            nodes.Append(root).ToArray(), source.Versioned, hub.JsonSerializerOptions,
+            source.EnumerateInlineContentSyncs());
         var activityId = $"import-{fingerprint}";
         var activityNamespace = $"{source.Partition}/_Activity";
         // 🚨 issue #919 — THE MARKER. Content-addressed BY DESIGN and therefore the ONE id that cannot
