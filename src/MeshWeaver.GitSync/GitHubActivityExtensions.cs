@@ -4,6 +4,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -30,6 +31,48 @@ namespace MeshWeaver.GitSync;
 /// </summary>
 public static class GitHubActivityExtensions
 {
+    /// <summary>
+    /// 🚨 <b>Holds the Space's root for exactly as long as the import writes under it (#3510).</b>
+    ///
+    /// <para><b>Why an import needs the same lease an install takes.</b> #4009 established the rule
+    /// — <i>the writer that is landing a tree under a root owns that root's lifetime</i> — and built
+    /// the gate: <c>NodeTypeRebindWatcher.WaitWhileAnInstallHoldsIt</c> and
+    /// <c>MeshOperations.Recycle</c>'s <c>WhenNoInstallHoldsRoot</c> both consult
+    /// <see cref="PackageRootInstallLeases"/> before posting a <c>DisposeRequest</c>. But a gate is
+    /// only as wide as the writers that actually TAKE the lease, and until this there was exactly
+    /// ONE in the fleet: <c>PackageInstaller.HoldRootDuringInstall</c>. A GitSync import lands a
+    /// whole partition tree — including the <c>NodeType</c> retypes that are precisely what
+    /// <c>RequiresRebind</c> fires on — and held nothing, so both gates found no holder and
+    /// proceeded. The root could then be recycled out from under the import's writes, which is
+    /// #3510's shape with a different writer.</para>
+    ///
+    /// <para><b>Released on every ending, because "defer" must mean waiting for a state that always
+    /// arrives.</b> <see cref="PackageRootInstallLeases.HoldDuring{T}"/> takes the hold through
+    /// <c>Observable.Using</c>, so it is released on completion, on fault AND on unsubscribe — an
+    /// import that fails releases, one whose caller navigates away releases, and the mesh takes the
+    /// registry with it. No timer force-releases anything.</para>
+    ///
+    /// <para><b>What is deliberately NOT deferred:</b> anything BENEATH the root. The lease key is
+    /// the Space path, matched exactly, so the per-type hubs that serve the recompiles an import
+    /// triggers still recycle freely — the same carve-out <c>PackageInstaller</c> documents, and the
+    /// reason neither can deadlock against the rebuilds it is waiting on.</para>
+    ///
+    /// <para>A mesh with no registry (a host that never registered it) passes straight through: the
+    /// gate cannot exist there either, so holding would protect nothing.</para>
+    /// </summary>
+    /// <param name="hub">The hub the import runs on.</param>
+    /// <param name="spacePath">The Space the import writes under — the lease key.</param>
+    /// <param name="holder">One short phrase naming who holds it and why; printed verbatim by the
+    /// recycle that defers, so it must never be blank (an unnamed holder reads as no holder).</param>
+    /// <param name="import">The import, as a cold observable.</param>
+    /// <returns><paramref name="import"/>, wrapped so the root is held for its subscription.</returns>
+    internal static IObservable<string> HoldSpaceDuringImport(
+        IMessageHub hub, string spacePath, string holder, IObservable<string> import)
+    {
+        var leases = hub.ServiceProvider.GetService<PackageRootInstallLeases>();
+        return leases is null ? import : leases.HoldDuring(spacePath, holder, import);
+    }
+
     /// <summary>
     /// 🚨 THE CLICK AUTHORIZES, THE SYSTEM EXECUTES — #820's install pattern, applied to the sync
     /// trigger (issue #811 part D, realized against this surface).
@@ -167,7 +210,10 @@ public static class GitHubActivityExtensions
         string? sourceId = null, bool force = false)
     {
         var pr = hub.ServiceProvider.GetRequiredService<PullRequestService>();
-        return TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
+        // 🚨 #3510 — hold the Space's root for the whole import; see HoldSpaceDuringImport.
+        return HoldSpaceDuringImport(hub, spacePath,
+            $"GitSync: an import is writing '{spacePath}' from the branch HEAD",
+            TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
             () => hub.RunActivity(spacePath, ActivityCategory.Import,
                 new LogMessage(
                         force ? $"Force-update {spacePath} to latest" : $"Update {spacePath} to latest",
@@ -197,7 +243,7 @@ public static class GitHubActivityExtensions
                         ctx.Log(ImportedLine(r, commitish: null));
                         return Unit.Default;
                     });
-                }, onActivityCreated));
+                }, onActivityCreated)));
     }
 
     /// <summary>
@@ -258,7 +304,10 @@ public static class GitHubActivityExtensions
 
         var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
         var shortSha = Short(commitSha);
-        return TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
+        // 🚨 #3510 — hold the Space's root for the whole import; see HoldSpaceDuringImport.
+        return HoldSpaceDuringImport(hub, spacePath,
+            $"GitSync: an unattended import is writing '{spacePath}' at the built commit {shortSha}",
+            TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
             () => hub.RunActivity(spacePath, ActivityCategory.Import,
                 new LogMessage(
                         $"Update {spacePath} to the built commit {shortSha}", LogLevel.Information)
@@ -280,7 +329,7 @@ public static class GitHubActivityExtensions
                             ctx.Log(ImportedLine(r, commitish: shortSha));
                             return Unit.Default;
                         });
-                }, onActivityCreated));
+                }, onActivityCreated)));
     }
 
     /// <summary>
@@ -308,7 +357,10 @@ public static class GitHubActivityExtensions
 
         var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
         var shortSha = Short(commitSha);
-        return TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
+        // 🚨 #3510 — hold the Space's root for the whole import; see HoldSpaceDuringImport.
+        return HoldSpaceDuringImport(hub, spacePath,
+            $"GitSync: a reconciling import is writing '{spacePath}' at the sealed commit {shortSha}",
+            TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
             () => hub.RunActivity(spacePath, ActivityCategory.Import,
                 new LogMessage(
                         $"Reconcile {spacePath} with the sealed commit {shortSha}", LogLevel.Information)
@@ -328,7 +380,7 @@ public static class GitHubActivityExtensions
                             ctx.Log(ImportedLine(r, commitish: shortSha));
                             return Unit.Default;
                         });
-                }, onActivityCreated));
+                }, onActivityCreated)));
     }
 
     /// <summary>The first 8 characters of a sha — what a human reads in a log line. Anything
@@ -344,7 +396,14 @@ public static class GitHubActivityExtensions
         Action<string>? onActivityCreated = null, string? sourceId = null, bool force = false)
     {
         var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
-        return hub.RunActivity(spacePath, ActivityCategory.Import,
+        // 🚨 #3510 — hold the Space's root for the whole import; see HoldSpaceDuringImport. This is
+        // the path the SETTINGS TAB's manual re-import takes (GitHubSyncSettingsTab), and it writes
+        // the same tree the unattended imports do; it was missed on the first pass, which is the
+        // very defect that section names — a guard whose reach is assumed reads as a guarantee it
+        // does not keep.
+        return HoldSpaceDuringImport(hub, spacePath,
+            $"GitSync: a re-import is writing '{spacePath}' at {commitish}",
+            hub.RunActivity(spacePath, ActivityCategory.Import,
             new LogMessage($"Re-import {spacePath} at {commitish}", LogLevel.Information)
                 .WithKey("activity.gitsync.reimport.title", ("space", spacePath), ("commitish", commitish)),
             ctx =>
@@ -363,7 +422,7 @@ public static class GitHubActivityExtensions
                     ctx.Log(ImportedLine(r, commitish));
                     return Unit.Default;
                 });
-            }, onActivityCreated);
+            }, onActivityCreated));
     }
 
     /// <summary>

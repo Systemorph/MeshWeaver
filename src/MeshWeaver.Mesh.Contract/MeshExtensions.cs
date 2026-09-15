@@ -585,6 +585,14 @@ public static class MeshExtensions
         // StorageAdapterChangeFeedExtensions helpers — no chance of publishing the
         // event before the storage write has committed.
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+        // 🚨 Captured HERE, on the handler's turn, and closed over — never read from inside the
+        // disposal action below. `Configuration.ParentHub` re-resolves from ParentServiceProvider,
+        // and by the time a ShutDown-phase registrant runs, that scope (or an ancestor of it) can
+        // already be closed: the resolve throws ObjectDisposedException, the verdict is never
+        // produced, and the caller burns its whole budget on the silence this registration exists
+        // to remove. Identical rule and identical incident to
+        // `DataExtensions.RegisterOwnerDisposingNack` on the UPDATE leg.
+        var parentHub = hub.Configuration.ParentHub;
 
         // 🚨 #981 — the ONE place a terminal CreateNodeResponse leaves this handler.
         //
@@ -599,12 +607,30 @@ public static class MeshExtensions
         // Every terminal post in this handler goes through here. A future branch that posts and
         // returns Empty therefore suppresses the backstop automatically — the invariant does not
         // depend on anyone remembering which branches can precede an empty completion.
-        var responded = false;
+        //
+        // 🚨 An INTERLOCKED claim, not a plain bool, and the gate now REFUSES a second answer
+        // rather than merely recording the first (#3510). Two things need that:
+        //   • the ShutDown-phase disposal NACK registered below runs on the DISPOSING thread, not
+        //     on this chain's, so "did anybody answer" has to be a race-free question — the same
+        //     `AckOnce` shape the patch leg's `RegisterOwnerDisposingNack` claims;
+        //   • exactly one terminal per correlation is what the #981 backstop already assumes. It
+        //     was enforced only for the backstop itself; making the claim the gate extends it to
+        //     every branch, which is what lets the NACK below be registered ONCE, at handler
+        //     entry, instead of per branch.
+        var responded = 0;
+        bool TryClaimResponse() => System.Threading.Interlocked.Exchange(ref responded, 1) == 0;
         void Respond(CreateNodeResponse response)
         {
-            responded = true;
-            hub.Post(response, o => o.ResponseFor(request));
+            if (!TryClaimResponse())
+                return;
+            PostCreateVerdict(hub, request, response, parentHub, logger);
         }
+
+        // 🚨 THE OWNER-SIDE DISPOSAL NACK FOR THE CREATE LEG (#3510's remaining half).
+        // Registered HERE — before the fail-fast returns below, so no branch can leave the handler
+        // without it — and claimed through the same gate, so a branch that already answered makes
+        // it a no-op. See RegisterCreateOwnerDisposingNack for what it does and what it costs.
+        RegisterCreateOwnerDisposingNack(hub, request, parentHub, TryClaimResponse, logger);
 
         if (meshConfig == null)
         {
@@ -1154,7 +1180,7 @@ public static class MeshExtensions
                     // So the only case left is genuinely unanswerable-otherwise, and the only
                     // correct answer for it is a failure: nothing emitted ⇒ no node was created
                     // ⇒ no Ok can ever be right.
-                    if (emitted || responded)
+                    if (emitted || System.Threading.Volatile.Read(ref responded) != 0)
                         return;
                     hub.NoteRequestStage(request.Id,
                         $"CREATE_CHAIN_COMPLETED_EMPTY path={node.Path} (unanswered — replying Fail)");
@@ -1172,6 +1198,203 @@ public static class MeshExtensions
                 });
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// 🚨 Did a route actually TAKE this reply — the predicate both create-verdict posts check.
+    ///
+    /// <para><c>null</c> and <see cref="MessageDeliveryState.Failed"/> are the refusals
+    /// <c>MessageService.PostImplGeneric</c> returns when the hub (and its parent) are past
+    /// <c>DisposeHostedHubs</c>, stamped <c>POST_REFUSED_SHUTTING_DOWN</c>.
+    /// <see cref="MessageDeliveryState.Ignored"/> belongs with them and is the one that reads like
+    /// a success: the storm breaker and the aggregate shedder return it WITHOUT enqueueing
+    /// anything, so treating it as carried would claim the once-only gate, skip the parent
+    /// fallback, and leave the caller waiting out its budget for a verdict that was dropped on the
+    /// floor. <c>MessageHub.TryDeliverNackInProcess</c> already rejects exactly this pair
+    /// (<c>is not (Failed or Ignored)</c>) for the same reason; this is that rule, not a new
+    /// one.</para>
+    /// </summary>
+    /// <param name="delivery">The post's result, or <c>null</c> when the transport returned none.</param>
+    /// <returns><c>true</c> when the reply was accepted for delivery.</returns>
+    private static bool WasCarried(IMessageDelivery? delivery)
+        => delivery is not null
+           && delivery.State is not (MessageDeliveryState.Failed or MessageDeliveryState.Ignored);
+
+    /// <summary>
+    /// 🚨 Posts a terminal <see cref="CreateNodeResponse"/> and VERIFIES that a route took it —
+    /// claim-then-verify, the same shape <c>DataExtensions.PostPatchVerdict</c> uses on the UPDATE
+    /// leg and for the same reason (#3196, carried to the create leg by #3510).
+    ///
+    /// <para><b>Why the post's result cannot be discarded.</b> The once-only gate is claimed BEFORE
+    /// this runs, which is right — two racing arms must not both answer. But latching is also what
+    /// disables the ONE route that still works during teardown: once claimed,
+    /// <see cref="RegisterCreateOwnerDisposingNack"/>'s claim returns false and its NACK is never
+    /// minted. So a post that is REFUSED — <c>MessageService.PostImplGeneric</c> stamps
+    /// <c>POST_REFUSED_SHUTTING_DOWN</c> and hands back a <see cref="MessageDeliveryState.Failed"/>
+    /// delivery once this hub is past <c>DisposeHostedHubs</c> — would throw the verdict away AND
+    /// shut the door behind it.</para>
+    ///
+    /// <para>The fallback is the PARENT, and the immediate parent only. Walking the chain to the
+    /// first ancestor that can still post is correct about the caller and was MEASURED at ~10× on
+    /// teardown (MeshWeaver.Content.Test 29 s → 176 s) because every hub going down with a delivery
+    /// outstanding then wakes callers mid-drain; it was implemented and reverted for that, and the
+    /// note lives on <c>RegisterOwnerDisposingNack</c>.</para>
+    ///
+    /// <para>A miss on both routes is a checked fact, not a guess, so it is logged rather than
+    /// swallowed — the caller is then genuinely unreachable from this process and will fall back to
+    /// its own bound.</para>
+    /// </summary>
+    /// <param name="hub">The hub that owes the reply.</param>
+    /// <param name="request">The in-flight create being answered.</param>
+    /// <param name="response">The verdict.</param>
+    /// <param name="parent">The parent hub, captured on the handler's turn — never resolved here,
+    /// which can run at disposal time.</param>
+    /// <param name="logger">Logger for the both-routes-missed case.</param>
+    private static void PostCreateVerdict(
+        IMessageHub hub,
+        IMessageDelivery<CreateNodeRequest> request,
+        CreateNodeResponse response,
+        IMessageHub? parent,
+        ILogger logger)
+    {
+        if (WasCarried(hub.Post(response, o => o.ResponseFor(request))))
+            return;
+
+        ReportVerdictWithNoRoute(hub, request, response, parent, logger, "[CreateNode]");
+    }
+
+    /// <summary>
+    /// Last-resort route for a create verdict this hub can no longer post, and the honest report
+    /// when there is none.
+    ///
+    /// <para>🚨 The level is CALIBRATED, not chosen once. A parent already past
+    /// <see cref="MessageHubRunLevel.DisposeHostedHubs"/> means the whole tree is going down, which
+    /// is the ROUTINE teardown shape — logging it at Warning would put a line in front of on-call
+    /// on every shutdown that had a create in flight, the same noise the create chain's cancellation
+    /// arm was demoted for. A parent that is still up and whose post is nevertheless refused is a
+    /// different fact: somebody in this process may be waiting for an answer that existed, and that
+    /// IS worth a Warning.</para>
+    /// </summary>
+    private static void ReportVerdictWithNoRoute(
+        IMessageHub hub,
+        IMessageDelivery<CreateNodeRequest> request,
+        CreateNodeResponse response,
+        IMessageHub? parent,
+        ILogger logger,
+        string channel)
+    {
+        if (parent is null || parent.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+        {
+            logger.LogDebug(
+                "{Channel} {Hub} owes a verdict for {Path} and no route remains — its own post is "
+                + "closed (run level {RunLevel}) and its parent is past DisposeHostedHubs, i.e. the "
+                + "whole tree is going down. Request {RequestId}.",
+                channel, hub.Address, request.Message.Node.Path, hub.RunLevel, request.Id);
+            return;
+        }
+
+        if (WasCarried(parent.Post(response, o => o.ResponseFor(request))))
+            return;
+
+        logger.LogWarning(
+            "{Channel} the verdict for request {RequestId} on {Hub} reached NO route: this hub's "
+            + "post was refused (run level {RunLevel}) and its parent {Parent}, which is still up, "
+            + "could not carry it either. A requester in this process is now waiting out its own "
+            + "bound for an answer that existed. Path: {Path}.",
+            channel, request.Id, hub.Address, hub.RunLevel, parent.Address,
+            request.Message.Node.Path);
+    }
+
+    /// <summary>
+    /// 🚨 <b>Owner-side disposal NACK for an in-flight <see cref="CreateNodeRequest"/> — the
+    /// remaining half of #3510, and the exact counterpart of
+    /// <c>DataExtensions.RegisterOwnerDisposingNack</c> on the UPDATE leg.</b>
+    ///
+    /// <para><b>The asymmetry it removes.</b> <see cref="HandleCreateNodeRequest"/> returns
+    /// <c>Processed()</c> immediately and owes its reply from a DETACHED reactive chain whose legs
+    /// reach storage, the partition bootstrap, the validators and the post-creation handlers — all
+    /// of which can be waiting on something that dies with this hub. Rx's <c>onCompleted</c>
+    /// backstop covers "the chain ended without emitting"; NOTHING covered "the chain never
+    /// terminated at all", which is the outcome a hub going away under it produces. The requester
+    /// was then left with silence: CD 7950's trail ends
+    /// <c>HANDLER_ENTER → UPSERT_READ absent → create → HANDLER_EXIT state=Processed ⇒ (nothing)</c>,
+    /// and the install ran out its ten-minute bound with no name for what happened. #3603's
+    /// <see cref="InnerCreateVerdictBound"/> made that a NAMED refusal instead of a hang, but a
+    /// refusal is still a failure: where the update leg is told <c>OwnerDisposing</c> and re-drives
+    /// against the fresh activation and SUCCEEDS, the create leg could only say "the outcome is
+    /// unknown".</para>
+    ///
+    /// <para><b>Why the code is <see cref="MeshNodeErrorCode.OwnerDisposing"/> and what it claims
+    /// here.</b> On the patch leg the code carries "provably NEVER applied", because the owner
+    /// registers it at handler entry, where the merge demonstrably has not run. A create is not
+    /// that shape: the row may already be written when the hub goes. So this NACK claims only what
+    /// the code's retry contract needs — <i>this activation went away owing the verdict, and a
+    /// re-drive against the fresh one is meaningful</i> — and the message says so rather than
+    /// promising rollback. The re-drive is safe BY CONSTRUCTION: a create whose row did land is
+    /// answered <see cref="NodeCreationRejectionReason.NodeAlreadyExists"/>, which the upsert's
+    /// create arm already folds into the update path, and which a direct caller reads as the
+    /// definite answer it is.</para>
+    ///
+    /// <para><b>Transport: the PARENT, and no sink.</b> Disposal actions run in the ShutDown phase,
+    /// where this hub's own <c>Post</c> is gated closed, so the NACK posts through the parent —
+    /// correlation rides <c>ResponseFor</c>'s RequestId, never the posting hub's identity. There is
+    /// deliberately no <c>ILatePatchVerdictSink</c> analogue: that registry serves
+    /// <c>MeshNodeStreamHandle.UpdateRemote</c>'s armed write watches, whose ~2 s bounded wait has
+    /// usually closed by the time a late verdict lands. A create's waiter is an ordinary
+    /// <c>hub.Observe</c> callback that stays armed for the caller's whole budget, so the post IS
+    /// the designed seam here — the same distinction <c>RoutePatchVerdict</c> draws when it posts
+    /// FIRST on the live path.</para>
+    ///
+    /// <para><b>What it costs, stated rather than hidden.</b> One registrant per create, held in the
+    /// hub's composite until the hub is disposed — <c>RegisterForDisposal</c> has no unregister, and
+    /// giving it one would be a member added to <c>IMessageHub</c>. The UPDATE leg already registers
+    /// two to four per patch on the owning hub (<c>RegisterOwnerDisposingNack</c>, the ack watcher's
+    /// <c>postSub</c>/<c>deferSub</c>/<c>flushSub</c>), so this is the established multiplicity, at
+    /// half of it.</para>
+    /// </summary>
+    /// <param name="hub">The hub handling the create — the activation whose disposal strands it.</param>
+    /// <param name="request">The in-flight create to NACK on disposal.</param>
+    /// <param name="parent">The parent hub, captured on the handler's turn. 🚨 Never resolved from
+    /// inside the disposal action: a hub's lifetime scope (or an ancestor's) can already be closed
+    /// when a ShutDown-phase registrant runs, and the resolve then throws where the verdict is owed.</param>
+    /// <param name="tryClaimResponse">Claims the handler's once-only response gate; false ⇒ the
+    /// create has already been answered and this registration is a no-op.</param>
+    /// <param name="logger">Logger, captured on the handler's turn for the same reason as
+    /// <paramref name="parent"/>.</param>
+    private static void RegisterCreateOwnerDisposingNack(
+        IMessageHub hub,
+        IMessageDelivery<CreateNodeRequest> request,
+        IMessageHub? parent,
+        Func<bool> tryClaimResponse,
+        ILogger logger)
+    {
+        var hubPath = hub.Address.ToString();
+        hub.RegisterForDisposal(_ =>
+        {
+            if (!tryClaimResponse())
+                return;
+            var nodeErr = new MeshNodeError(
+                MeshNodeErrorCode.OwnerDisposing,
+                hubPath,
+                $"the activation '{hubPath}' handling this create was disposed before the create "
+                + "chain reached a verdict — the create was NOT completed by that activation; "
+                + "re-drive it against the fresh one (a row that did land answers "
+                + "NodeAlreadyExists). 🚨 The hub is NAMED in the sentence, not only in the "
+                + "structured payload: the requester is usually in another process and sees none of "
+                + "this hub's log, so an unnamed teardown leaves the next occurrence unattributable "
+                + "from the only side that can see it.");
+            var resp = CreateNodeResponse.Fail(nodeErr.Message, NodeCreationRejectionReason.Unavailable)
+                with { NodeError = nodeErr };
+            hub.NoteRequestStage(request.Id, "CREATE_OWNER_DISPOSING_NACK");
+            // 🚨 This hub's OWN Post is gated closed in the ShutDown phase, so the NACK travels
+            // through the parent — and where even that cannot carry it, the report is calibrated
+            // rather than shouted. See ReportVerdictWithNoRoute. The framework's last-resort
+            // in-process carrier (MessageHub.TryDeliverNackInProcess, #4072) covers a
+            // DeliveryFailure in that state; a typed reply has no such bypass, and inventing one
+            // for this leg would be a second transport for every ordinary create.
+            ReportVerdictWithNoRoute(hub, request, resp, parent, logger,
+                "[CreateNode] OwnerDisposing NACK:");
+        });
     }
 
     /// <summary>
@@ -4714,8 +4937,15 @@ public static class MeshExtensions
     /// does on EVERY plugin package install — the inner create's response never arrives, so neither
     /// the onNext nor the onError arm ever runs and the caller waits out its entire budget in
     /// silence. Making the leg total converts an unbounded hang into a named refusal; it does not
-    /// buy headroom, and it does not remove the need for the owner-side disposal NACK the UPDATE
-    /// leg gets from <c>RegisterOwnerDisposingNack</c>, which is the remaining half of #3510.</para>
+    /// buy headroom.</para>
+    ///
+    /// <para>🚨 <b>And it is the BACKSTOP, not the answer.</b> The owner-side NACK it used to name as
+    /// #3510's remaining half now exists — <see cref="RegisterCreateOwnerDisposingNack"/> — so a
+    /// create whose handling activation is disposed under it is answered
+    /// <see cref="MeshNodeErrorCode.OwnerDisposing"/> in milliseconds and re-driven against the
+    /// fresh activation, exactly as the UPDATE leg is. This bound still covers every OTHER way the
+    /// response can fail to arrive (a leg parked on something that is not a hub teardown, a route
+    /// that never answers), and reaching it remains a refusal with a name rather than a hang.</para>
     /// </summary>
     internal static TimeSpan InnerCreateVerdictBound =>
         LatePatchResponseRegistry.WriteVerdictBound + TimeSpan.FromSeconds(5);
@@ -4971,6 +5201,37 @@ public static class MeshExtensions
                             // resolves.
                             ApplyUpdateViaStream(node, existingNodeType: null);
                         }
+                        // 🚨 AN OwnerDisposing NACK IS NOT RE-DRIVEN HERE, AND THE REASON IS
+                        // STRUCTURAL (#3510). The obvious symmetry with the patch leg — re-enqueue
+                        // against the fresh activation, capped at
+                        // MeshNodeStreamHandle.MaxOwnerDisposingReenqueues — would be UNREACHABLE
+                        // code on this branch, and unreachable code that looks like a recovery is
+                        // worse than none: it reads to the next person as a covered case.
+                        //
+                        // The inner create is posted to THIS hub's own address (see the #981 note
+                        // above, which is why it must stay that way), so the ONLY activation whose
+                        // disposal can mint that NACK for it is this hub — and a hub past
+                        // DisposeHostedHubs cannot take a re-drive. A re-attempt would buy a second
+                        // InnerCreateVerdictBound of silence before the identical refusal, which is
+                        // the band-aid shape this repository refuses.
+                        //
+                        // 🚨 AND A CALLER-SIDE RE-DRIVE IS NOT SHIPPED EITHER, ON EVIDENCE. The
+                        // obvious next move — re-post from `MeshService.CreateNode`, the way
+                        // `MeshNodeStreamHandle` re-enqueues a patch — was written and MEASURED, and
+                        // it does not work on this lane: node CRUD executes on
+                        // `portal/nodeops-{meshId}`, a stream-ROUTED address that is unregistered
+                        // when its hub is disposed and is NOT re-materialised by posting to it. The
+                        // re-post is answered `RouteMessage: NotFound … No node found at
+                        // 'portal/nodeops-…'`, so the retry buys one extra round trip before the
+                        // identical failure — a bound-widening band-aid, not a recovery. Making that
+                        // address re-form is its own change; until it does, a retry here would be a
+                        // promise the transport cannot keep.
+                        //
+                        // What this branch does IS the Expectation #3510 states — *"the install
+                        // fails in milliseconds with a name instead of running out a 10-minute
+                        // bound"*: the caller is answered IMMEDIATELY, carrying the owner's own
+                        // words and its structured code, instead of waiting out
+                        // InnerCreateVerdictBound for "the outcome is unknown".
                         else
                             PostFail(
                                 // The inner Error is the create handler's own words — verbatim

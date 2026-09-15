@@ -72,6 +72,32 @@ public record CreateNodeResponse(MeshNode? Node)
     public NodeCreationRejectionReason? RejectionReason { get; init; }
 
     /// <summary>
+    /// 🚨 Structured failure payload for the CREATE leg — the exact counterpart of
+    /// <see cref="PatchDataResponse.NodeError"/> on the UPDATE leg, added for #3510.
+    ///
+    /// <para><b>Why <see cref="RejectionReason"/> could not carry it.</b>
+    /// <see cref="NodeCreationRejectionReason"/> says why a create was REFUSED — a verdict about
+    /// the request. <see cref="MeshNodeErrorCode.OwnerDisposing"/> says something different in
+    /// kind: the activation that was handling the create went away, so there is no verdict about
+    /// the request at all and a retry against the fresh activation is meaningful. That distinction
+    /// is the whole content of the code, and the update leg has carried it since #3499; folding it
+    /// into a rejection reason would have told the caller its request had been judged.</para>
+    ///
+    /// <para><b>Populated alongside <see cref="Error"/>, never instead of it</b>, exactly as on the
+    /// patch leg: <see cref="Error"/> is filled from <see cref="MeshNodeError.Message"/> so a
+    /// string-only caller keeps working, while a caller that can act on the code switches on it.
+    /// It also survives the translation to an exception — <c>NodeCreationFailure.ToException</c>
+    /// stamps it on <see cref="Exception.Data"/> under
+    /// <see cref="NodeCreationFailure.NodeErrorKey"/>, so the sanctioned
+    /// <c>IMeshService.CreateNode</c> surface, whose failure IS an exception, does not lose the
+    /// code on the way out.</para>
+    ///
+    /// <para><c>null</c> on success and on every ordinary refusal — a create that was judged has a
+    /// <see cref="RejectionReason"/>, not a node error.</para>
+    /// </summary>
+    public MeshNodeError? NodeError { get; init; }
+
+    /// <summary>
     /// Creates a successful response with the created node.
     /// </summary>
     public static CreateNodeResponse Ok(MeshNode node) => new(node);
@@ -876,6 +902,19 @@ public static class NodeCreationFailure
     public const string RejectionReasonKey = "MeshWeaver.NodeCreationRejectionReason";
 
     /// <summary>
+    /// 🚨 Key under which <see cref="CreateNodeResponse.NodeError"/> is carried on
+    /// <see cref="Exception.Data"/> (#3510) — so a caller that only ever sees the EXCEPTION can act
+    /// on the structured <see cref="MeshNodeErrorCode"/> instead of pattern-matching a sentence.
+    ///
+    /// <para><see cref="RejectionReasonKey"/> cannot stand in for it: a rejection reason says why a
+    /// create was JUDGED, and <see cref="MeshNodeErrorCode.OwnerDisposing"/> says there was no
+    /// judgement at all — the activation went away owing one. Collapsing the two would tell a
+    /// caller its request had been refused when it had never been evaluated, which is exactly the
+    /// mistake #3050 corrected one branch over.</para>
+    /// </summary>
+    public const string NodeErrorKey = "MeshWeaver.MeshNodeError";
+
+    /// <summary>
     /// The exception for a failed create, with the typed reason attached. One place, so the two
     /// create surfaces cannot drift in either the mapping or the stamping.
     /// </summary>
@@ -890,6 +929,8 @@ public static class NodeCreationFailure
             _ => new InvalidOperationException(response.Error ?? "Node creation failed")
         };
         ex.Data[RejectionReasonKey] = response.RejectionReason;
+        if (response.NodeError is { } nodeError)
+            ex.Data[NodeErrorKey] = nodeError;
         return ex;
     }
 
