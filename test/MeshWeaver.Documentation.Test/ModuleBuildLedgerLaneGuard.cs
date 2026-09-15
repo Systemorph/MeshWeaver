@@ -157,12 +157,20 @@ public class ModuleBuildLedgerLaneGuard
     }
 
     /// <summary>
-    /// The ledger's evidence is a <c>ledger.trx</c>, and which flags produce one is the CALLER's
-    /// choice, not this lane's: <c>dotnet test</c> selects its runner from the first
-    /// <c>global.json</c> found walking up from the CURRENT DIRECTORY, and this lane runs with the
-    /// caller's checkout as the cwd (the platform's own sits in a SIBLING checkout and never
-    /// applies — measured on the .NET 10.0.400 SDK, 2026-09-15). So the body must carry BOTH
-    /// branches and hand the chosen one to the invocation.
+    /// The ledger's evidence is a <c>ledger.trx</c>, and which flags produce one depends on the
+    /// runner: <c>dotnet test</c> selects it from the first <c>global.json</c> found walking up from
+    /// the CURRENT DIRECTORY, and this lane runs with the caller's checkout as the cwd (the
+    /// platform's own sits in a SIBLING checkout and never applies by itself — measured on the .NET
+    /// 10.0.400 SDK, 2026-09-15). So the body must carry BOTH branches and hand the chosen one to
+    /// the invocation.
+    ///
+    /// <para>🚨 <b>And the PLATFORM's <c>global.json</c> is read too, with the command run from its
+    /// checkout when only it selects Microsoft.Testing.Platform (#4414).</b> The suite compiles
+    /// against the platform's Directory.Packages.props, so the xunit.v3 version is the platform's;
+    /// xunit.v3 4.x refuses VSTest on .NET 10. Reading the caller's file alone ran
+    /// MeshWeaver.Plugins, which has none, under VSTest against a framework that refuses it, and
+    /// main-cd failed every module suite with nothing executed. A body that reads only the caller
+    /// passes every other assertion here — so this one names the platform read and the cd.</para>
     ///
     /// <para>🚨 Asserting only the VSTest literal is what this guard used to do, and it would have
     /// stayed green while the MTP branch wrote no trx at all — under Microsoft.Testing.Platform
@@ -175,6 +183,13 @@ public class ModuleBuildLedgerLaneGuard
         Assert.Contains("--logger \"trx;LogFileName=ledger.trx\"", body, StringComparison.Ordinal);
         Assert.Contains("--report-xunit-trx --report-xunit-trx-filename ledger.trx", body, StringComparison.Ordinal);
         Assert.Contains("--results-directory \"$1\"", body, StringComparison.Ordinal);
+        Assert.True(
+            body.Contains("elif selects_mtp \"$GITHUB_WORKSPACE/meshweaver\"; then", StringComparison.Ordinal)
+            && body.Contains("TEST_CWD=\"$GITHUB_WORKSPACE/meshweaver\"", StringComparison.Ordinal)
+            && body.Contains("cd \"$TEST_CWD\"", StringComparison.Ordinal),
+            $"the `{job}` job must follow the PLATFORM's test runner when the caller selects none, and "
+            + "run `dotnet test` from the platform checkout so its global.json applies (#4414) — the "
+            + "caller's global.json alone ran xunit.v3 4.x under VSTest, which it refuses");
         Assert.True(
             body.Contains("mapfile -t flags < <(test_flags \"$RUNNER_TEMP/trx/$MODULE\")", StringComparison.Ordinal)
             && body.Contains("\"${flags[@]}\"", StringComparison.Ordinal),
