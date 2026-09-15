@@ -586,6 +586,7 @@ public static class PluginBundleEndpoints
                 BundleReader.Manifest? manifest;
                 IReadOnlyList<BundleReader.ModuleFile> files;
                 IReadOnlyList<BundleReader.ModuleAsset> assets;
+                IReadOnlyList<BundleReader.ModuleAsset> natives;
                 try
                 {
                     (manifest, files) = BundleReader.ReadModule(bytes);
@@ -594,6 +595,10 @@ public static class PluginBundleEndpoints
                     // handler as a 500 — telling the publisher "the server broke" for what is
                     // simply an unreadable upload, the case this catch already classifies.
                     assets = BundleReader.ReadModuleAssets(bytes);
+                    // Same guard, same reason (#4126): a declared native at a layout the loader
+                    // never probes makes ReadModuleNativeAssets throw, and that is an unreadable
+                    // UPLOAD — a 400 naming it, never a 500 telling the publisher the server broke.
+                    natives = BundleReader.ReadModuleNativeAssets(bytes);
                 }
                 catch (Exception exception)
                 {
@@ -617,7 +622,12 @@ public static class PluginBundleEndpoints
                     // the only reason a portal was styled at all (#2221). Same read the consumer's
                     // own landing does (PluginBundleClient.LandFromBundle), so shelf and adopt
                     // place byte-identical content.
-                    assets);
+                    assets,
+                    // 🚨 AND THE NATIVES (#4126), for the same reason one step harder: a consumer
+                    // fetches what the shelf holds, so an engine dropped here is a module that
+                    // lands everywhere downstream, loads, and throws DllNotFoundException at its
+                    // first P/Invoke — with nothing in any log to connect the two.
+                    natives);
                 if (accepted is null)
                 {
                     logger?.LogWarning("Module publish for {Plugin} REFUSED: {Reason}", plugin, decline);
@@ -659,7 +669,9 @@ public static class PluginBundleEndpoints
                         packagePath: accepted.PackagePath,
                         version: accepted.Version,
                         minMeshVersion: accepted.MinMeshVersion,
-                        staticAssets: accepted.StaticAssets)
+                        staticAssets: accepted.StaticAssets,
+                        sourceCommit: accepted.SourceCommit,
+                        nativeAssets: accepted.NativeAssets)
                         .FirstAsync()
                         .ObserveCompletion(
                             ex => logger?.LogWarning(ex,
@@ -1920,6 +1932,12 @@ public static class PluginBundleEndpoints
             {
                 var (files, assets, decline) = ModuleBundleSource.CollectVersion(
                     landing.BaseDirectory, package.Module!, activation, package.ShelfVersion);
+                // 🚨 The shelf's NATIVE tree (#4126) — a separate call rather than a fourth tuple
+                // element, because widening that tuple rewrites a signature a sibling repository
+                // already destructures into three. It resolves the SAME generation by the same
+                // rule, so the two readings cannot name different bytes.
+                var natives = ModuleBundleSource.NativeAssetsOf(
+                    landing.BaseDirectory, package.Module!, activation, package.ShelfVersion);
                 if (decline is not null)
                     logger?.LogInformation(
                         "Plugin bundles: {Plugin} declares module '{Module}' but it is not served: {Reason}",
@@ -1933,7 +1951,7 @@ public static class PluginBundleEndpoints
                 // publication sealed for this identity.
                 var served = ServedModuleBytes.Resolve(
                     package.Module, package.PluginId, files, assets, recorded,
-                    publishedRoot, identity, logger);
+                    publishedRoot, identity, logger, natives);
                 if (served.Divergence is not null)
                     logger?.LogWarning(
                         "Plugin bundles: {Plugin} on framework {Identity} — {Divergence}",
@@ -1976,6 +1994,7 @@ public static class PluginBundleEndpoints
     {
         var moduleFiles = module.Files;
         var moduleAssets = module.Assets;
+        var moduleNatives = module.Natives;
         var entries = new List<NuGetPackageWriter.Entry>();
         var assemblyRecords = new List<object>();
 
@@ -2028,6 +2047,19 @@ public static class PluginBundleEndpoints
                 NuGetPackageWriter.ModuleAssetEntryPathFor(local.RelativePath), local.Open));
         }
 
+        // 🚨 And the module's RID-specific NATIVE payloads, under the third folder (#4126). Same
+        // argument as the assets one step harder: a registry whose shelf holds the engine and
+        // serves a bundle without it hands every consumer downstream a module that lands, loads,
+        // renders — and throws DllNotFoundException at the first P/Invoke, with nothing in any log
+        // connecting that to the serve. The relative path is preserved because it IS the layout
+        // ModuleNativeAssets probes.
+        foreach (var moduleNative in moduleNatives)
+        {
+            var local = moduleNative;
+            entries.Add(new NuGetPackageWriter.Entry(
+                NuGetPackageWriter.ModuleNativeEntryPathFor(local.RelativePath), local.Open));
+        }
+
         var manifest = new PackagingManifest(
             package.PluginId, package.PackageId, package.Version, package.PluginId, null, []);
 
@@ -2069,6 +2101,13 @@ public static class PluginBundleEndpoints
                         staticAssets = moduleAssets.Count == 0
                             ? null
                             : moduleAssets.Select(a => a.RelativePath).ToArray(),
+                        // #4126 — declared for exactly the same reason, and read back by
+                        // BundleReader.ReadModuleNativeAssets under the same all-or-nothing rule.
+                        // Omitted when there are none, so a bundle from a module that ships no
+                        // engine and one from before this section existed read identically.
+                        nativeAssets = moduleNatives.Count == 0
+                            ? null
+                            : moduleNatives.Select(n => n.RelativePath).ToArray(),
                         // 🚨 Where these bytes came from, and — when the registry could not supply
                         // the build this bundle's own assemblies record — what disagreed (#3244).
                         // On the wire, not merely in a log, for the same reason `misses` is: a
