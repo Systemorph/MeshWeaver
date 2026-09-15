@@ -92,6 +92,23 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
         new("\"(activity\\.[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*)\"",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// The same matcher for the OTHER persisted namespace (Systemorph/MeshWeaver#4373). A
+    /// notification stores its key and is resolved when somebody reads the row, so a key that is in
+    /// no catalog renders a raw <c>notification.…</c> token in a bell row — invisible to
+    /// <c>LocalizationTest</c>, which compares the two catalogs against EACH OTHER and is silent on
+    /// a key that is in neither.
+    ///
+    /// <para>🚨 The trailing group is optional so an INTERPOLATED key
+    /// (<c>$"notification.plugins.discovery.{Key(status)}.title"</c>) is captured as its literal
+    /// PREFIX — <c>notification.plugins.discovery.</c> — rather than dropped. A dropped key is one
+    /// this guard silently stops checking, which is the failure mode it exists to prevent, so the
+    /// prefix is checked as a prefix instead (some catalog key must start with it).</para>
+    /// </summary>
+    private static readonly Regex NotificationKeyLiteral =
+        new("\"(notification\\.[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*\\.?)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private const string AllowFileName = "UnkeyedActivityLogMessages.allow";
 
     [Fact]
@@ -293,6 +310,54 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// 🚨 The same guard for <c>notification.*</c> (Systemorph/MeshWeaver#4373), and for the same
+    /// reason: a notification persists its KEY and is resolved when somebody reads the row, so a
+    /// typo or a rename that missed the JSON renders a raw <c>notification.…</c> token in the bell —
+    /// in BOTH languages, with <c>LocalizationTest</c> green, because that file compares the two
+    /// catalogs against each other and cannot see a key missing from both.
+    ///
+    /// <para>A key assembled by interpolation is checked as its literal PREFIX: some catalog key
+    /// must start with it. That is weaker than checking the whole key and is what keeps the
+    /// dynamically-selected discovery keys from being silently exempt.</para>
+    /// </summary>
+    [Fact]
+    public void EveryNotificationKeyNamedInSourceIsInTheEnglishCatalog()
+    {
+        var root = SourceScan.FindRepoRoot();
+        var named = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in SourceScan.SourceFiles(root, ScannedRoots))
+        {
+            var text = ReadOrEmpty(file);
+            if (!text.Contains("notification.", StringComparison.Ordinal))
+                continue;
+            foreach (Match m in NotificationKeyLiteral.Matches(text))
+                named.Add(m.Groups[1].Value);
+        }
+
+        var whole = named.Where(k => !k.EndsWith('.')).ToArray();
+        var prefixes = named.Where(k => k.EndsWith('.')).ToArray();
+
+        Assert.True(whole.Length > 0,
+            "No whole `notification.*` key literal was found anywhere under "
+            + string.Join(", ", ScannedRoots)
+            + ". Either every notification went back to a rendered English string — which is the "
+            + "#4373 regression — or this scan is pointed at the wrong tree and has checked nothing.");
+
+        var missing = whole
+            .Where(k => !LocalizationCatalog.Keys.Contains(k))
+            .Concat(prefixes.Where(p =>
+                !LocalizationCatalog.Keys.Any(k => k.StartsWith(p, StringComparison.Ordinal))))
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(missing.Length == 0,
+            "These notification keys (or key prefixes) are used in src/ but match NO catalog key, so "
+            + "they render as raw tokens in the bell. Add them to BOTH strings.en.json and "
+            + "strings.de.json:\n  "
+            + string.Join("\n  ", missing));
+    }
+
+    /// <summary>
     /// 🚨 Every language's rendering of an <c>activity.*</c> key must name the SAME placeholders.
     /// A translator who drops <c>{path}</c> silently deletes the one piece of information the line
     /// carries — "Kein Node unter dem Pfad" tells a German operator nothing — and one who mistypes
@@ -300,9 +365,10 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     /// which compares KEY SETS, nor to the plugins-repo drift guard, which compares values against
     /// core rather than against each other.
     ///
-    /// <para>Only <c>activity.*</c> is checked: the ~1,170 older keys are positional (<c>{0}</c>),
-    /// where reordering across languages is deliberate and a count check would be the right test
-    /// instead. Named placeholders are the shape this rule fits.</para>
+    /// <para>Only the two PERSISTED namespaces are checked — <c>activity.*</c> and
+    /// <c>notification.*</c> (#4373), which are the ones whose arguments are stored by NAME. The
+    /// ~1,170 older keys are positional (<c>{0}</c>), where reordering across languages is
+    /// deliberate and a count check would be the right test instead.</para>
     /// </summary>
     [Fact]
     public void EveryActivityKeyNamesTheSamePlaceholdersInEveryLanguage()
@@ -310,12 +376,14 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
         var placeholder = new Regex(@"\{([A-Za-z_][A-Za-z0-9_]*)\}",
             RegexOptions.CultureInvariant);
         var activityKeys = LocalizationCatalog.Keys
-            .Where(k => k.StartsWith("activity.", StringComparison.Ordinal))
+            .Where(k => k.StartsWith("activity.", StringComparison.Ordinal)
+                        || k.StartsWith("notification.", StringComparison.Ordinal))
             .OrderBy(k => k, StringComparer.Ordinal)
             .ToArray();
 
         Assert.True(activityKeys.Length > 0,
-            "the English catalog carries no activity.* key — this check would pass on nothing");
+            "the English catalog carries no activity.*/notification.* key — this check would pass "
+            + "on nothing");
 
         var mismatches = new List<string>();
         foreach (var key in activityKeys)

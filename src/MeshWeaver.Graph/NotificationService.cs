@@ -519,7 +519,8 @@ public static class NotificationService
                     ? LocalizationCatalog.Get("notification.email.open", locale)
                     : ctaLabel),
             ctaUrl: ctaUrl,
-            footerNote: footerNote);
+            footerNote: footerNote,
+            locale: locale);
     }
 
     private static string? ResolveBaseUrl(IMessageHub hub)

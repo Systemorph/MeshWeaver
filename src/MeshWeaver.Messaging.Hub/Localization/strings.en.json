@@ -1509,6 +1509,7 @@
   "logIncident.refused.commentMessage": "The update could not be posted: {0}\n\n{1} occurrence(s) never reached the issue — the incident has fired {2} time(s), {3} of them reported there. A quiet issue thread does NOT mean the incident is quiet.\n\nIncident: {4}",
   "logIncident.refused.fileTitle": "Incident {0} could not be filed",
   "logIncident.refused.fileMessage": "The issue could not be opened: {0}\n\nThe incident has fired {1} time(s) and has no ticket.\n\nIncident: {2}",
+  "notification.email.standingFooter": "You received this because someone shared content with this email address on Memex.",
   "notification.email.open": "Open",
   "notification.packageUpdate.available.title": "Update available: {name}",
   "notification.packageUpdate.available.bodyFiles": "A new build of {name} is available ({changed} file(s) changed, {removed} removed). {provenance}.",
