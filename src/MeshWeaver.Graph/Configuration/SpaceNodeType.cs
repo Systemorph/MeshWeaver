@@ -76,6 +76,13 @@ public record Space
     /// use. Nothing in core or MeshWeaver.Plugins reads this property (measured 2026-09-15: its
     /// declaration is the only occurrence in either repo), so it is kept, nullable, for the rows
     /// that already carry a value rather than removed from a public surface.</para>
+    ///
+    /// <para>🚨 <b>The first import after this change rewrites each declared Space ONCE</b>, and
+    /// that is intended rather than overlooked: the owner-side upsert replaces the whole
+    /// <c>Content</c>, so a stamp a previous import invented is dropped. Nothing real is lost —
+    /// that value was a different clock reading on every previous import, which is the defect — and
+    /// after that one write the node is stable forever. A Space whose declaration DOES carry
+    /// <c>createdAt</c> keeps it, on that import and every one after.</para>
     /// </summary>
     public DateTimeOffset? CreatedAt { get; init; }
 }
