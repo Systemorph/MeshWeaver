@@ -20,6 +20,7 @@
          their decision table is pinned in core (GreenBuildPublishSignalTest) rather than travelling
          to the satellite with the suite that boots one. -->
     <InternalsVisibleTo Include="MeshWeaver.Documentation.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Documentation" />
   </ItemGroup>
 
   <ItemGroup>

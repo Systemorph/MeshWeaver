@@ -22,6 +22,7 @@
          cache / refresh-floor / fail-closed rules are exercised without reaching GitHub over the
          network. Same white-box grant, same reason, as the three above. -->
     <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_MemexPortalShared" />
   </ItemGroup>
 
   <ItemGroup>

@@ -27,6 +27,7 @@
     <!-- #2469: pins FieldsLandedIn (the Patch/Update landed-write check) directly against a
          hand-built fixture — same "internal primitive, not the tool surface" pattern as above. -->
     <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_MemexPortalShared" />
   </ItemGroup>
 
 </Project>

@@ -5,13 +5,28 @@
          PresentationScreenTest, next to the rest of the screen's behaviour, so the completion
          surface's rule cannot drift from the one the tile surfaces apply. -->
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Cli" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_CompilerPipeline" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_ContainerImages" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_ContentCollections" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Data" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_DeploymentContract" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Documentation" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_HostingOrleans" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Layout" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_MessagingHub" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_PluginTester" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_PortalE2E" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Graph" />
     <!-- The recycled-hub refusal (AccessControlPipeline.IsHubGone / RecyclingRefusal, issue #2727)
          is pinned there: its discrimination and its WORDING are both contract, and the wording is
          only meaningful against MeshNodeStreamCache's transient classifier in the same assembly. -->
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Hosting" />
     <!-- InstanceKeyLiveResolutionTest probes MeshNodeStreamCache.IsReadStreamLive / ReadStreamEvictions
          to prove the registry authenticator reads through the process-wide cache (#3119). -->
     <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_MemexPortalShared" />
   </ItemGroup>
   <PropertyGroup>
     <ProjectGuid>{93595120-3ccf-45c6-8783-4829a1120166}</ProjectGuid>

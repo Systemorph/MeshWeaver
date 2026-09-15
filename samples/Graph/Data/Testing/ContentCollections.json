@@ -1,0 +1,21 @@
+{
+  "$type": "MeshNode",
+  "id": "ContentCollections",
+  "namespace": "Testing",
+  "path": "Testing/ContentCollections",
+  "mainNode": "Testing/ContentCollections",
+  "name": "MeshWeaver.ContentCollections.Test (in-mesh)",
+  "description": "MeshWeaver.ContentCollections.Test migrated in-mesh (.github/scripts/generate-in-mesh-suites.py, 2026-09-13): 1 of 12 files, 1 [MeshFact]/[MeshTheory] cases, run by MeshWeaver.Testing.InMesh.MeshTestRunner (#4184) in the samples gate's mesh; InMeshTestBase and XunitShims laid in from .github/scripts/in-mesh/. Refused, still on xunit: 11 — ContentCollectionClaimApplyRaceTest.cs: overrides the fixture's Configure(Host|Client|Mesh) — the pre-boot service substitution facility, not something the live mesh can fake; ContentCollectionConnectionOwnedByHubTest.cs: overrides the fixture's Configure(Host|Client|Mesh) — the pre-boot service substitution facility, not something the live mesh can fake; ContentCollectionDiesWithItsHubTest.cs: overrides the fixture's Configure(Host|Client|Mesh) — the pre-boot service substitution facility, not something the live mesh can fake; ContentCollectionIngestOrderTest.cs: overrides the fixture's Configure(Host|Client|Mesh) — the pre-boot service substitution facility, not something the live mesh can fake; ContentCollectionWriteIngestTest.cs: overrides the fixture's Configure(Host|Client|Mesh) — the pre-boot service substitution facility, not something the live mesh can fake; ContentServiceDelegationTest.cs: overrides the fixture's Configure(Host|Client|Mesh) — the pre-boot service substitution facility, not something the live mesh can fake; ContentSyncIsNeverBuiltWholeTest.cs: overrides the fixture's Configure(Host|Client|Mesh) — the pre-boot service substitution facility, not something the live mesh can fake; ImageContentGuardTest.cs: overrides the fixture's Configure(Host|Client|Mesh) — the pre-boot service substitution facility, not something the live mesh can fake; NodeHubContentCollectionTest.cs: overrides the fixture's Configure(Host|Client|Mesh) — the pre-boot service substitution facility, not something the live mesh can fake; ObservableCollectionSurfaceTest.cs: overrides the fixture's Configure(Host|Client|Mesh) — the pre-boot service substitution facility, not something the live mesh can fake; OversizedContentTravelsOutOfBandTest.cs: overrides the fixture's Configure(Host|Client|Mesh) — the pre-boot service substitution facility, not something the live mesh can fake",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "state": "Active",
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "description": "An in-mesh test suite.",
+    "configuration": "config => config.WithContentType<MeshWeaver.Markdown.MarkdownContent>().AddMarkdownViews().AddLayout(layout => layout.WithView(\"Tests\", (host, ctx) => MeshWeaver.Testing.InMesh.MeshTestRunner.Area(host, \"Testing/ContentCollections\", typeof(ContentCollectionWriteReadRaceTest).Assembly)))",
+    "includeGlobalTypes": true,
+    "sources": [
+      "namespace:Source scope:subtree"
+    ]
+  }
+}
