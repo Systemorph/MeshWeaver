@@ -302,8 +302,15 @@ public static class DataExtensions
         // walk, so it is recorded whether or not the sub-hub is still there to receive it: the
         // whole point is that a LATER refusal can say "the subscriber released this stream" instead
         // of naming all three causes at once. Records only; routing is unchanged below.
+        //
+        // 🚨 Recorded across the SAME self-and-ancestors chain the sub-hub search walks, for the
+        // reason that walk exists: the `sync/{id}` can have been registered on an ANCESTOR of the
+        // hub this handler happens to run on. Marking only this hub would leave the ancestor's
+        // entry unmarked, and a real subscriber release would then be reported as an owner-side
+        // reap. Marking is a dictionary lookup that creates nothing, so a chain hop that never
+        // served this stream costs one miss and records nothing.
         if (streamMessage is UnsubscribeRequest)
-            SyncStreamActivationLedger.For(hub)?.RecordUnsubscribeReceived(streamMessage.StreamId);
+            RecordUnsubscribeAcrossChain(hub, streamMessage.StreamId);
 
         request = request.ForwardTo(SynchronizationAddress.Create(streamMessage.StreamId));
 
@@ -480,11 +487,31 @@ public static class DataExtensions
         StreamMessage streamMessage, object message, TimeSpan heldFor)
     {
         if (message is IUserAction userAction)
-            RefuseUserAction(
-                hub, ClassifyLostStream(walked, streamMessage.StreamId), request, streamMessage,
-                userAction, heldFor);
+        {
+            var (cause, ledger) = ClassifyLostStream(walked, streamMessage.StreamId);
+            RefuseUserAction(hub, cause, ledger, request, streamMessage, userAction, heldFor);
+        }
         else
             LogStreamMessageDrop(hub, request, streamMessage, message, heldFor);
+    }
+
+    /// <summary>
+    /// Marks an arriving <see cref="UnsubscribeRequest"/> on <paramref name="hub"/> and every
+    /// ancestor — see the call site for why the chain and not just this hub. Terminates on a
+    /// self-parent, exactly as the sub-hub search does: <c>Configuration.ParentHub</c> resolves to
+    /// the hub ITSELF for a root/mesh hub, and a walk without that guard never advances.
+    /// </summary>
+    private static void RecordUnsubscribeAcrossChain(IMessageHub hub, string streamId)
+    {
+        var current = hub;
+        while (current is not null)
+        {
+            SyncStreamActivationLedger.For(current)?.RecordUnsubscribeReceived(streamId);
+            var parent = current.Configuration.ParentHub;
+            if (ReferenceEquals(parent, current))
+                break;
+            current = parent;
+        }
     }
 
     /// <summary>
@@ -503,30 +530,56 @@ public static class DataExtensions
     /// an absence, and an absence that any ledger cannot vouch for
     /// (<see cref="LostStreamCause.NoRecord"/>) is reported as exactly that rather than as
     /// <see cref="LostStreamCause.NeverRegistered"/>.</para>
+    ///
+    /// <para>🚨 <b>An UNRESOLVABLE ledger is not evidence of absence.</b> The hub whose name the
+    /// refusal carries is <c>walked[0]</c>, and it always has this service registered — the data
+    /// plugin is what installs <c>RouteStreamMessage</c> in the first place — so a
+    /// <see langword="null"/> there means its DI scope has closed, which is routine on the teardown
+    /// path a refusal fires from. Reporting that as
+    /// <see cref="LostStreamCause.NeverRegistered"/> would print the very fingerprint this change
+    /// exists to make trustworthy, on no evidence at all; it answers
+    /// <see cref="LostStreamCause.LedgerUnavailable"/> instead, unless another walked hub produced
+    /// something stronger.</para>
+    ///
+    /// <para>The ledger that GROUNDS the verdict comes back with it, so the bounded-ledger line can
+    /// state the numbers of the ledger that actually established the uncertainty rather than
+    /// re-resolving a different one.</para>
     /// </summary>
-    private static LostStreamCause ClassifyLostStream(
+    private static (LostStreamCause Cause, SyncStreamActivationLedger? Grounding) ClassifyLostStream(
         IReadOnlyList<IMessageHub> walked, string streamId)
     {
         var verdict = LostStreamCause.NeverRegistered;
-        foreach (var candidate in walked)
+        SyncStreamActivationLedger? grounding = null;
+        SyncStreamActivationLedger? refusingHubLedger = null;
+        for (var i = 0; i < walked.Count; i++)
         {
-            switch (SyncStreamActivationLedger.For(candidate)?.Classify(streamId))
+            var ledger = SyncStreamActivationLedger.For(walked[i]);
+            if (i == 0)
+                refusingHubLedger = ledger;
+            // A hub with no ledger — no data plugin, or a closed DI scope — says nothing either
+            // way, and must never be read as "this stream was never served".
+            if (ledger is null)
+                continue;
+            switch (ledger.Classify(streamId))
             {
                 case LostStreamCause.ReleasedBySubscriber:
-                    return LostStreamCause.ReleasedBySubscriber;
+                    return (LostStreamCause.ReleasedBySubscriber, ledger);
                 case LostStreamCause.ReapedByOwner:
                     verdict = LostStreamCause.ReapedByOwner;
+                    grounding = ledger;
                     break;
                 case LostStreamCause.NoRecord when verdict == LostStreamCause.NeverRegistered:
                     verdict = LostStreamCause.NoRecord;
+                    grounding = ledger;
                     break;
-                // NeverRegistered from one ledger says nothing about the others; a hub with no
-                // ledger at all (no data plugin, or a closed DI scope) equally says nothing.
+                // NeverRegistered from one ledger says nothing about the others.
                 default:
                     break;
             }
         }
-        return verdict;
+        if (verdict == LostStreamCause.NeverRegistered && refusingHubLedger is null)
+            return (LostStreamCause.LedgerUnavailable, null);
+        return (verdict, grounding ?? refusingHubLedger);
     }
 
     /// <summary>
@@ -581,8 +634,9 @@ public static class DataExtensions
     /// <c>Doc/Architecture/RefusingALostUserAction</c>.</para>
     /// </summary>
     private static void RefuseUserAction(
-        IMessageHub hub, LostStreamCause cause, IMessageDelivery request,
-        StreamMessage streamMessage, IUserAction userAction, TimeSpan heldFor)
+        IMessageHub hub, LostStreamCause cause, SyncStreamActivationLedger? grounding,
+        IMessageDelivery request, StreamMessage streamMessage, IUserAction userAction,
+        TimeSpan heldFor)
     {
         try
         {
@@ -622,12 +676,12 @@ public static class DataExtensions
                         messageType, userAction.ActionArea, streamMessage.StreamId,
                         hub.Address, request.Sender, age);
                     break;
-                default:
-                    // 🚨 The ledger states its OWN denominator here, because that is the entire
-                    // content of this branch: it is not a cause, it is "I can no longer tell the
-                    // last two apart", and a reader needs the numbers to know how far from an
-                    // answer it is.
-                    var ledger = SyncStreamActivationLedger.For(hub);
+                case LostStreamCause.NoRecord:
+                    // 🚨 The GROUNDING ledger states its OWN numbers — the one that actually
+                    // established the uncertainty, which on a routed shape need not be this hub's.
+                    // That is the entire content of this branch: it is not a cause, it is "I can no
+                    // longer tell the last two apart", and the numbers are how far from an answer
+                    // it is.
                     logger?.LogError(
                         "REFUSING {MessageType} on area {Area} for stream {StreamId} on hub {Address}: "
                         + "this hub holds NO RECORD of the stream — its activation ledger has already "
@@ -635,7 +689,21 @@ public static class DataExtensions
                         + "'served and long since ended' cannot be told apart. The action did NOT run "
                         + "and never will. Sender: {Sender}.{Age}",
                         messageType, userAction.ActionArea, streamMessage.StreamId, hub.Address,
-                        ledger?.Pruned ?? 0, ledger?.Held ?? 0, request.Sender, age);
+                        grounding?.Pruned ?? 0, grounding?.Held ?? 0, request.Sender, age);
+                    break;
+                default:
+                    // 🚨 Nothing was ASKED — the refusing hub's ledger could not be resolved at all
+                    // (its DI scope has closed). Deliberately NOT the sentence above: that one
+                    // reports numbers, and there are none. Reporting this as "never registered"
+                    // would print the fingerprint this whole change exists to make trustworthy, on
+                    // no evidence.
+                    logger?.LogError(
+                        "REFUSING {MessageType} on area {Area} for stream {StreamId} on hub {Address}: "
+                        + "this hub could NOT BE ASKED which end the stream met — its activation "
+                        + "ledger was no longer resolvable, which is what a hub tearing down looks "
+                        + "like. The action did NOT run and never will. Sender: {Sender}.{Age}",
+                        messageType, userAction.ActionArea, streamMessage.StreamId,
+                        hub.Address, request.Sender, age);
                     break;
             }
 

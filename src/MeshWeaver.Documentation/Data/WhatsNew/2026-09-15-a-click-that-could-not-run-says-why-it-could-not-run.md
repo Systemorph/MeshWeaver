@@ -33,9 +33,10 @@ filed together and the wrong one was investigated twice.
 - **The part of the portal you were talking to had restarted.** Your page was still holding a
   connection to something that no longer exists.
 
-There is also a fourth line, and it is the honest one: if the portal no longer holds enough history
-to tell the last two apart, it says exactly that — and shows the numbers it is working from —
-rather than guessing.
+There are also two honest non-answers, which matter as much as the three above. If the portal no
+longer holds enough history to tell the last two apart, it says exactly that — and shows the numbers
+it is working from. And if the part of the portal being asked was already shutting down and could not
+be asked at all, it says that instead of guessing. Neither is dressed up as a cause.
 
 Nothing waits longer, nothing is retried, and no refused action was turned into a silently accepted
 one. A refused action is still refused, and you are still told. The only thing that changed is that

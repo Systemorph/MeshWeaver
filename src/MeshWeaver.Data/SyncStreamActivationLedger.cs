@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Data;
 
@@ -40,6 +42,15 @@ internal enum LostStreamCause
     /// reactivation that never happened.
     /// </summary>
     NoRecord,
+
+    /// <summary>
+    /// 🚨 Also not a cause: the ledger of the hub doing the refusing could not be RESOLVED at all
+    /// (its DI scope has closed — a refusal routinely fires while a hub tears down). Never produced
+    /// by <see cref="SyncStreamActivationLedger.Classify"/>; produced by the caller that folds the
+    /// walked hubs' answers. Distinct from <see cref="NoRecord"/> because there are no numbers to
+    /// state: nothing was asked, as opposed to asked and answered "I have aged that out".
+    /// </summary>
+    LedgerUnavailable,
 }
 
 /// <summary>
@@ -71,29 +82,25 @@ internal enum LostStreamCause
 /// <para>🚨 <b>Bounded, and the bound is VISIBLE rather than silent.</b> One entry per distinct
 /// stream id served, and a long-lived owner on a written path mints fresh ones (the change-feed
 /// eviction / re-lease cycle documented on <c>Workspace._remoteStreamLeases</c>). So the ledger
-/// prunes its oldest entries past <see cref="Capacity"/> — and the instant it has pruned ANYTHING,
-/// an absent id answers <see cref="LostStreamCause.NoRecord"/> rather than
-/// <see cref="LostStreamCause.NeverRegistered"/>, because the two are no longer distinguishable.
-/// A diagnostic that cannot fail to give an answer is not a diagnostic.</para>
+/// prunes its oldest entries past <see cref="SyncStreamOptions.ActivationLedgerCapacity"/> — and the
+/// instant it has pruned ANYTHING, an absent id answers <see cref="LostStreamCause.NoRecord"/>
+/// rather than <see cref="LostStreamCause.NeverRegistered"/>, because the two are no longer
+/// distinguishable. A diagnostic that cannot fail to give an answer is not a diagnostic.</para>
 /// </summary>
 internal sealed class SyncStreamActivationLedger
 {
     /// <summary>
-    /// How many stream ids this hub keeps the disposition of. Sized for "how many streams was this
-    /// hub serving around the time of the refusal", which is the only question the ledger answers:
-    /// a refusal names a stream that ended recently (the click raced its teardown), so recency is
-    /// what has to survive. NOT a correctness bound — running past it costs the
-    /// <see cref="LostStreamCause.NeverRegistered"/>/<see cref="LostStreamCause.NoRecord"/>
-    /// distinction on that hub and nothing else.
+    /// How many stream ids this hub keeps the disposition of — see
+    /// <see cref="SyncStreamOptions.ActivationLedgerCapacity"/>.
     /// </summary>
-    private const int Capacity = 512;
+    private readonly int capacity;
 
     /// <summary>
-    /// How far past <see cref="Capacity"/> the ledger is allowed to run before a prune pass. A
+    /// How far past <see cref="capacity"/> the ledger is allowed to run before a prune pass. A
     /// prune is one O(n) sweep, so the slack is what makes it amortize to one sweep per
-    /// <see cref="Slack"/> new streams instead of one per new stream once full.
+    /// <see cref="slack"/> new streams instead of one per new stream once full.
     /// </summary>
-    private const int Slack = 128;
+    private readonly int slack;
 
     /// <summary>
     /// The dispositions, keyed by stream id. <see cref="ConcurrentDictionary{TKey,TValue}"/> is the
@@ -105,16 +112,32 @@ internal sealed class SyncStreamActivationLedger
     private long sequence;
     private long pruned;
 
-    /// <summary>Records that a <c>sync/{streamId}</c> sub-hub was registered on this hub activation.</summary>
+    /// <summary>Resolved from the hub's own options, so a test can make the bounded answer
+    /// observable without minting hundreds of streams.</summary>
+    public SyncStreamActivationLedger(IOptions<SyncStreamOptions>? options = null)
+    {
+        capacity = Math.Max(1, options?.Value?.ActivationLedgerCapacity ?? 512);
+        slack = Math.Max(1, capacity / 4);
+    }
+
+    /// <summary>
+    /// Records that a <c>sync/{streamId}</c> sub-hub was registered on this hub activation.
+    ///
+    /// <para>🚨 REPLACES any previous disposition for that id rather than keeping it. A stream id is
+    /// deliberately REUSED across a re-subscribe (<c>JsonSynchronizationStream.Resubscribe</c> means
+    /// "refresh MY stream"), and this constructor only runs when a genuinely NEW sub-hub is being
+    /// created — i.e. the previous incarnation is gone. Carrying its
+    /// <see cref="Disposition.ReleasedBySubscriber"/> flag forward would report the SECOND life's
+    /// owner-side reap as the FIRST life's subscriber release, which is precisely the conflation
+    /// this class exists to end; carrying its sequence forward would also age the live entry out
+    /// ahead of younger ones.</para>
+    /// </summary>
     internal void RecordSyncHubRegistered(string? streamId)
     {
         if (string.IsNullOrEmpty(streamId))
             return;
         var seq = Interlocked.Increment(ref sequence);
-        dispositions.AddOrUpdate(
-            streamId,
-            _ => new Disposition(seq),
-            (_, existing) => existing);
+        dispositions[streamId] = new Disposition(seq);
         PruneIfOverflowing(seq);
     }
 
@@ -138,7 +161,9 @@ internal sealed class SyncStreamActivationLedger
 
     /// <summary>
     /// Says which of <see cref="LostStreamCause"/> applies to <paramref name="streamId"/> — asked
-    /// only when a stream message for it is already being refused.
+    /// only when a stream message for it is already being refused. Never answers
+    /// <see cref="LostStreamCause.LedgerUnavailable"/>: a ledger that can answer at all is, by
+    /// definition, available.
     /// </summary>
     internal LostStreamCause Classify(string? streamId)
     {
@@ -163,17 +188,17 @@ internal sealed class SyncStreamActivationLedger
     internal long Pruned => Interlocked.Read(ref pruned);
 
     /// <summary>
-    /// Drops the entries older than the newest <see cref="Capacity"/>, in one pass, once the ledger
-    /// has run <see cref="Slack"/> past its capacity. Lock-free and never waits: two threads that
+    /// Drops the entries older than the newest <see cref="capacity"/>, in one pass, once the ledger
+    /// has run <see cref="slack"/> past its capacity. Lock-free and never waits: two threads that
     /// prune at once remove the same entries, and <c>TryRemove</c> is idempotent, so the only
     /// consequence is that <see cref="pruned"/> counts each removal once — which is all
     /// <see cref="Classify"/> reads it for (has anything aged out at all).
     /// </summary>
     private void PruneIfOverflowing(long newestSequence)
     {
-        if (dispositions.Count <= Capacity + Slack)
+        if (dispositions.Count <= capacity + slack)
             return;
-        var cutoff = newestSequence - Capacity;
+        var cutoff = newestSequence - capacity;
         foreach (var entry in dispositions)
         {
             if (entry.Value.Sequence > cutoff)
@@ -204,8 +229,10 @@ internal sealed class SyncStreamActivationLedger
     /// <summary>
     /// The ledger of <paramref name="hub"/>, or <see langword="null"/> when it has none to give —
     /// a hub whose DI scope has already closed, which is routine on the paths that read this (a
-    /// refusal fires while a hub is tearing down). Resolving a diagnostic must never itself become
-    /// a fault.
+    /// refusal fires while a hub is tearing down), or a hub with no data plugin at all. Resolving a
+    /// diagnostic must never itself become a fault, and a <see langword="null"/> here is
+    /// <see cref="LostStreamCause.LedgerUnavailable"/> — NOT evidence that a stream was never
+    /// served.
     /// </summary>
     internal static SyncStreamActivationLedger? For(IMessageHub? hub)
     {

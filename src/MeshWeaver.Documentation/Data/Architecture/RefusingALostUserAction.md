@@ -391,11 +391,26 @@ id:
 | recorded by | where | what it means |
 |---|---|---|
 | `RecordSyncHubRegistered` | `SynchronizationStream`'s constructor — the one place a `sync/{id}` sub-hub is created | this host activation SERVED that stream id |
-| `RecordUnsubscribeReceived` | `RouteStreamMessage`, before the sub-hub walk | an `UnsubscribeRequest` for it REACHED this hub |
+| `RecordUnsubscribeReceived` | `RouteStreamMessage`, before the sub-hub walk, across the hub AND its ancestors | an `UnsubscribeRequest` for it REACHED this hub |
 
 It holds no message, changes no routing, and is read only when a message is already being refused.
 Nothing retries, nothing waits, and no bound moves — the three things this page has ruled out since
 #3566 stay ruled out.
+
+Two details of the recording are load-bearing, and both are the same mistake avoided twice:
+
+- **The unsubscribe is marked across the self-and-ancestors chain**, for the reason the sub-hub
+  search walks that chain at all — a `sync/{id}` can be registered on an *ancestor* of the hub
+  `RouteStreamMessage` happens to run on. Marking only the routing hub would leave the ancestor's
+  entry unmarked and report a real subscriber release as an owner-side reap. Marking creates
+  nothing (it only updates an entry that exists), so a chain hop that never served the stream costs
+  one dictionary miss.
+- **A registration REPLACES any previous disposition for that id**, rather than keeping it. A stream
+  id is deliberately reused across a re-subscribe (`Resubscribe` means *"refresh MY stream"*), and
+  the constructor runs only when a genuinely new sub-hub is built — i.e. the previous incarnation is
+  gone. Carrying its "released by the subscriber" flag forward would report the second life's
+  owner-side reap as the first life's subscriber release: the same conflation, one level down, and
+  invisible because both sentences are plausible.
 
 That the ledger dies with the activation is not an implementation detail, it is the whole answer:
 a recycled owner starts from empty, and a subscriber still holding a stream id from the previous
@@ -425,6 +440,18 @@ A diagnostic that cannot fail to give an answer is not a diagnostic. The fourth 
 FULL ledger can never masquerade as the third cause, which is the one reading that would send the
 next reader hunting a reactivation that never happened.
 
+🚨 **And a FIFTH line, for when nothing was asked at all.** A refusal routinely fires while a hub is
+tearing down, and a hub whose DI scope has closed hands back no ledger. That is *not* evidence that
+a stream was never served — it is the absence of evidence — so it gets its own sentence, with no
+numbers in it, because there are none:
+
+> *this hub could NOT BE ASKED which end the stream met — its activation ledger was no longer
+> resolvable, which is what a hub tearing down looks like*
+
+The same rule governs the ancestor walk: a searched hub with no ledger is skipped rather than read
+as a "no", and only the hub whose name the line actually carries can turn an absence into the third
+cause.
+
 ### The measurement
 
 `RefusalNamesWhichEndTheStreamMetTest` produces each cause by its own real route, against real
@@ -435,6 +462,8 @@ hubs, and reads the refusals out of the host's own log:
 | `AStreamThisActivationNeverServed_IsNamedAsSuch` | a click naming a stream id this owner never served | the third sentence, and NEITHER of the other two |
 | `AStreamTheSubscriberReleased_IsNamedAsSuch` | a real remote stream, disposed — its `UnsubscribeRequest` reaches the owner and kills the sub-hub | the first sentence, and neither of the other two |
 | `AStreamTheOwnerReaped_IsNamedAsSuch` | a bare `SubscribeRequest`, then the owner's own `sync/{id}` disposed — the route `EvictClientSubscriptions` takes | the second sentence, and neither of the other two |
+| `AStreamIdReusedAfterAReleaseIsJudgedOnItsSecondLife` | the same stream id served, released, then served AGAIN on the same activation, and ended by the owner | the SECOND life's sentence — the first life's release must not be carried forward |
+| `AnAgedOutStreamSaysSoRatherThanClaimingItWasNeverServed` | the ledger's capacity lowered to 1 (`SyncStreamOptions.ActivationLedgerCapacity`) and three streams served | the fourth sentence and its numbers, NOT the third cause's |
 | `AnAcceptedActionIsStillNotDiscarded` | POSITIVE: `SubmitUserAction` on a live stream | the action RUNS, and no refusal line is written at all |
 
 The reaped case deliberately has **no client-side stream** behind it: one would re-subscribe on the
@@ -442,12 +471,12 @@ owner's `StreamEndedEvent` and re-create a `sync/{id}` under the same stream id,
 undone by a race and the test would measure whichever won. With nothing to re-ask, the window is
 closed by construction rather than by a wait.
 
-**Falsified by reverting the attribution** (the single shared sentence restored) and rerunning:
-`Failed: 3, Passed: 1` — all three cause tests red on their own assertion, and the positive control
-**stays green**, which is why it exists: a "fix" that refused everything with a more descriptive
-sentence would satisfy all three of the others on its own. The pairwise *"and NEITHER of the other
-two"* assertions are the other half of that — they are what a re-merge of two causes into one
-sentence reds on.
+**Falsified by reverting the attribution** (the single shared sentence restored), rebuilding the test
+project and rerunning: `Failed: 5, Passed: 1` — every cause test red on its own assertion, and the
+positive control **stays green**, which is why it exists: a "fix" that refused everything with a more
+descriptive sentence would satisfy all five of the others on its own. The pairwise *"and NEITHER of
+the other two"* assertions are the other half of that — they are what a re-merge of two causes into
+one sentence reds on.
 
 ## What this deliberately does not do
 

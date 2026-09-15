@@ -53,6 +53,7 @@ public class RefusalNamesWhichEndTheStreamMetTest : HubTestBase
     private const string ReleasedBySubscriber = "the SUBSCRIBER RELEASED this stream";
     private const string ReapedByOwner = "this hub SERVED this stream on the current activation";
     private const string NeverRegistered = "NO sync hub for this stream was EVER registered";
+    private const string NoRecord = "this hub holds NO RECORD of the stream";
 
     /// <summary>
     /// How long the owner holds a stream message whose <c>sync/{id}</c> is not registered before
@@ -60,6 +61,15 @@ public class RefusalNamesWhichEndTheStreamMetTest : HubTestBase
     /// test wait: it is what makes each refusal below arrive deterministically instead of racing.
     /// </summary>
     private static readonly TimeSpan OwnerHoldsAnUnroutableAction = TimeSpan.FromMilliseconds(400);
+
+    /// <summary>
+    /// How many stream dispositions the owner's activation ledger keeps
+    /// (<c>SyncStreamOptions.ActivationLedgerCapacity</c>). The framework default is 512; a test
+    /// that has to reach the BOUNDED answer lowers it before the host is built, which is the only
+    /// way to observe that branch without minting hundreds of streams. Instance state, and read
+    /// lazily by <see cref="ConfigureHost"/> on the first <c>GetHost()</c>.
+    /// </summary>
+    private int ledgerCapacity = 512;
 
     /// <summary>
     /// 🚨 REPLAY-backed, never a bare <see cref="Subject{T}"/>. A refusal is written from the
@@ -95,8 +105,11 @@ public class RefusalNamesWhichEndTheStreamMetTest : HubTestBase
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => base.ConfigureHost(configuration)
-            .WithServices(services => services.Configure<SyncStreamOptions>(
-                o => o.SyncHubRegistrationGrace = OwnerHoldsAnUnroutableAction))
+            .WithServices(services => services.Configure<SyncStreamOptions>(o =>
+            {
+                o.SyncHubRegistrationGrace = OwnerHoldsAnUnroutableAction;
+                o.ActivationLedgerCapacity = ledgerCapacity;
+            }))
             .AddLayout(layout => layout.WithView(Area, ClickArea()));
 
     /// <inheritdoc />
@@ -185,6 +198,87 @@ public class RefusalNamesWhichEndTheStreamMetTest : HubTestBase
             + "platform, not the client, dropped the subscription");
         refusal.Should().NotContain(NeverRegistered);
         refusal.Should().NotContain(ReleasedBySubscriber);
+    }
+
+    /// <summary>
+    /// 🚨 A stream id has a SECOND LIFE, and the refusal must judge the one that just ended.
+    ///
+    /// <para><c>JsonSynchronizationStream.Resubscribe</c> deliberately REUSES a stream id, and after
+    /// an owner-side stream ends the same id can be served again on the same activation. A ledger
+    /// that kept the first life's "the subscriber released it" flag would report the second life's
+    /// owner-side reap as a subscriber release — the same conflation, one level down, and invisible
+    /// because both sentences are plausible.</para>
+    /// </summary>
+    [HubFact]
+    public async Task AStreamIdReusedAfterAReleaseIsJudgedOnItsSecondLife()
+    {
+        var client = GetClient();
+        var streamId = "reused-" + Guid.NewGuid().AsString();
+
+        var firstLife = await OwnerServedStreamWithNoClientSideStream(client, streamId);
+        client.Post(new UnsubscribeRequest(streamId), o => o.WithTarget(CreateHostAddress()));
+        await firstLife.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+            "the release has to have been seen and acted on before the id can be re-served");
+
+        // The SAME id, served again on the SAME activation — and this time the owner ends it.
+        var secondLife = await OwnerServedStreamWithNoClientSideStream(client, streamId);
+        secondLife.Dispose();
+        await secondLife.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+            "the second life's sub-hub must be gone before a click can miss it");
+
+        client.Post(new ClickedEvent(ButtonArea, streamId), o => o.WithTarget(CreateHostAddress()));
+
+        var refusal = await AwaitRefusalFor(streamId);
+
+        refusal.Should().Contain(ReapedByOwner,
+            "the SECOND life was ended by the owner; carrying the FIRST life's release forward "
+            + "would put a designed refusal's sentence on a live defect");
+        refusal.Should().NotContain(ReleasedBySubscriber);
+    }
+
+    /// <summary>
+    /// 🚨 The BOUNDED answer, which is the safeguard the other three rest on: once the ledger has
+    /// aged anything out, an absent stream id is no longer evidence of "never served here" — it is
+    /// equally "served, and long since ended". It has to SAY that, with its own numbers, rather
+    /// than printing the third cause's fingerprint on a full ledger.
+    ///
+    /// <para>The capacity is lowered to 1 so this is reachable with three streams instead of six
+    /// hundred. Nothing else about the path differs — the same ledger, the same switch, the same
+    /// real hubs.</para>
+    /// </summary>
+    [HubFact]
+    public async Task AnAgedOutStreamSaysSoRatherThanClaimingItWasNeverServed()
+    {
+        // 🚨 BEFORE the first GetHost() — ConfigureHost reads this when the host is built.
+        ledgerCapacity = 1;
+        var client = GetClient();
+
+        var aged = "aged-" + Guid.NewGuid().AsString();
+        var agedHub = await OwnerServedStreamWithNoClientSideStream(client, aged);
+        // It has to be GONE for the click to miss it — a live sub-hub simply receives the click,
+        // which is the healthy path and measures nothing.
+        agedHub.Dispose();
+        await agedHub.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+            "the sub-hub must be gone before a click can miss it");
+
+        // Two more streams push its disposition past the capacity, so the ledger no longer holds
+        // the record it would have answered from.
+        await OwnerServedStreamWithNoClientSideStream(client, "aged-" + Guid.NewGuid().AsString());
+        await OwnerServedStreamWithNoClientSideStream(client, "aged-" + Guid.NewGuid().AsString());
+
+        client.Post(new ClickedEvent(ButtonArea, aged), o => o.WithTarget(CreateHostAddress()));
+
+        var refusal = await AwaitRefusalFor(aged);
+
+        refusal.Should().Contain(NoRecord,
+            "the ledger has pruned this stream's disposition, so it can no longer tell 'never "
+            + "served here' from 'served and long since ended' — and a diagnostic that cannot fail "
+            + "to give an answer is not a diagnostic");
+        refusal.Should().Contain("aged",
+            "and it states its OWN numbers, so a reader knows how far from an answer it is");
+        refusal.Should().NotContain(NeverRegistered,
+            "which is the whole point: a FULL ledger must never masquerade as the cause that sends "
+            + "the next reader hunting a reactivation that never happened");
     }
 
     /// <summary>
@@ -280,12 +374,24 @@ public class RefusalNamesWhichEndTheStreamMetTest : HubTestBase
             + "difference between the reaped cause and the never-registered one");
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// 🚨 The subjects are disposed AFTER the base teardown, in a <c>finally</c>. The base drains
+    /// and disposes the mesh, which LOGS while it does so — and every record goes through
+    /// <see cref="SubjectLoggerProvider"/> into <see cref="logRecords"/>, whose
+    /// <c>OnNext</c> throws once disposed. Disposing first turns an ordinary teardown into a fault
+    /// inside a logger call.
+    /// </summary>
     public override async ValueTask DisposeAsync()
     {
-        clicked.Dispose();
-        logRecords.Dispose();
-        await base.DisposeAsync();
+        try
+        {
+            await base.DisposeAsync();
+        }
+        finally
+        {
+            clicked.Dispose();
+            logRecords.Dispose();
+        }
     }
 
     /// <summary>Publishes every record the host produced into the owning test's instance subject.</summary>
