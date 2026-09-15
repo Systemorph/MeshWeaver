@@ -1,7 +1,11 @@
 ---
 Name: Reading a Bake Publication Receipt
 Category: Architecture
-Description: The one line a platform bake prints about what it published, field by field — and the outcome that had no word for it, so a target that already held the publication rendered exactly like a publication that reached nothing. Both readers got it wrong on the same two runs: a human filed it as release markers written for nothing, and the platform resolver passed two sealed sets over.
+Description: >-
+  The one line a platform bake prints about what it published, field by field — and the outcome that
+  had no word for it, so a target that already held the publication rendered exactly like a
+  publication that reached nothing. Both readers got it wrong on the same two runs: a human filed it
+  as release markers written for nothing, and the platform resolver passed two sealed sets over.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h13l3 3v15l-3-2-3 2-3-2-3 2-3-2z"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg>
 ---
 

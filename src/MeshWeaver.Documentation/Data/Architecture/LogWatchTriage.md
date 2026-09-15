@@ -207,6 +207,55 @@ would now claim 62 occurrences across 26 pods and two portals for a node that ha
 since. **A stuck syncer and an accurate counter are indistinguishable from the issue page** — check
 `error` and `occurrencesAtLastComment` on the incident before quoting either number.
 
+### 🚨 When a fingerprint OUTLIVES its issue: repoint the link, never `Suppress`
+
+Step 3 above ends "file the traffic where it belongs". When the traffic already *has* a home, that
+is still not the end of it: the incident goes on carrying the **original** issue's number, so every
+future fold reopens the wrong ticket — indefinitely, and with a comment that reads as *"your fix did
+not work"*.
+
+Measured on [#1134](https://github.com/Systemorph/MeshWeaver/issues/1134), fingerprint
+`9ca334c1e8dad9ca` (category `Polly`). The issue was filed on timeout events that could not be
+attributed to any call path — `Source: '-standard//Standard-AttemptTimeout'`, the empty client name
+of the ONE shared `ConfigureHttpClientDefaults` pipeline. #1133/#1137 fixed that by re-registering
+the registry clients by name (`ServiceDefaults.AddServiceDefaults`). `samples[]` is a ROLLING window
+— it holds the last `MaxSamples` lines, not the history — so it can say what the events carry NOW,
+never that every occurrence since a fix was attributed: read 2026-09-15, all ten name a pipeline
+(`plugin-registry-standard//…`, one `plugin-registry-bundles-standard//…`) and none carries the
+unattributed form. What
+keeps folding onto the fingerprint is the registry LATENCY *behind* those timeouts —
+[#4222](https://github.com/Systemorph/MeshWeaver/issues/4222)'s subject, not #1134's, because the
+normalizer masks the `Source:` value and every Polly `OnTimeout` on every pipeline shares one
+identity. The issue was closed on its own evidence on 09-13 and again on 09-14; the watcher reopened
+it both times within hours. Three sessions re-derived that before anyone changed the field.
+
+**The redirect is two fields on the incident**, and the watcher's own code is what makes it safe:
+
+| Code | Why the repoint is safe |
+|---|---|
+| `NextRequest`: `{ IssueNumber: not null } => Comment` | the link is read from the LIVE node on every fold, never cached — a new value takes effect on the next recurrence |
+| `ClaimRequest`: a `File` on a ticketed incident is granted as `Comment` | repointing can never mint a second issue, whatever the status says |
+| `LogIncidentFiler.Comment` → `Reopen` | reads the TARGET issue and reopens it when closed **while `ReopenOnRecurrence` is on** (the default), so the traffic arrives as a reopen of the ticket that owns it — the notification you actually want. With the option off the recurrence still comments on the new target; it simply does not reopen it, so the redirect lands either way |
+| `OccurrencesAtLastComment` / `LastCommentedAt` are not touched | the first comment on the new target continues the count instead of restarting it |
+
+```jsonc
+// patch @Admin/_LogIncident/9ca334c1e8dad9ca   — applied 2026-09-15, v1641 → v1642
+{ "content": { "issueNumber": 4222,
+               "issueUrl": "https://github.com/Systemorph/MeshWeaver/issues/4222" } }
+```
+
+🚨 **`Suppress` is the wrong tool here and the damage is silent.** It stops tickets while occurrences
+keep counting — which destroys the very instrument the receiving issue's closing condition names
+("this incident's `occurrences` stops advancing over a week with the consumer still polling").
+Suppress is for a line that should never have minted an incident. A fault that still fires and still
+matters wants an issue — just not *that* one.
+
+**What the redirect is not.** It does not re-fingerprint anything (the paragraph above holds: the
+node keeps the identity it was minted under), and it does not merge the two histories — the old
+issue keeps its own evidence table and its own close. Say what you did on **both** threads: the
+incident node is the only place the link lives, and a reader who finds the new ticket reopening from
+a fingerprint filed under an old title has no other way to know why.
+
 ### The two cases this has to get right
 
 Both are measured, both from `memex-cloud` on 2026-08-17 (#1787), and
@@ -536,7 +585,10 @@ A recurrence is therefore always folded onto the ticket that exists:
   on a ticketed incident obeys the same bound a `Comment` request does, so a continuously-firing
   fault cannot turn its own issue into a feed.
 - A **closed** issue is reopened first (`ReopenOnRecurrence`). A defect that returns after someone
-  closed its ticket is exactly what should notify.
+  closed its ticket is exactly what should notify — but when the fold is no longer about that
+  ticket's own defect, the fix is to
+  [repoint the link](#-when-a-fingerprint-outlives-its-issue-repoint-the-link-never-suppress),
+  never to suppress the incident.
 - A comment that lands writes the incident back to `Filed`, clearing a stale `Failed` — leaving it
   is what let ingest re-triage a ticketed incident in the first place.
 

@@ -1,7 +1,11 @@
 ---
 Name: Live Mirrors and the Change Feed — Why Every Write Ends Its Own Streams
 Category: Architecture
-Description: Every cross-hub write evicts, and then disposes, the mirror of the node it wrote to — sending UnsubscribeRequest to the owner and making the owner announce StreamEndedEvent for a subscriber that is already gone. That is the RCA of #2776, the two arithmetic traps that made it read as a hub teardown, and the measurement showing why the obvious fix is wrong.
+Description: >-
+  Every cross-hub write evicts, and then disposes, the mirror of the node it wrote to — sending
+  UnsubscribeRequest to the owner and making the owner announce StreamEndedEvent for a subscriber that
+  is already gone. That is the RCA of #2776, the two arithmetic traps that made it read as a hub
+  teardown, and the measurement showing why the obvious fix is wrong.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/><circle cx="8" cy="6" r="2" fill="currentColor"/><circle cx="16" cy="12" r="2" fill="currentColor"/><circle cx="10" cy="18" r="2" fill="currentColor"/></svg>
 ---
 

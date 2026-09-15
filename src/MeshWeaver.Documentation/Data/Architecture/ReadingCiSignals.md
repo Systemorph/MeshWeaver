@@ -1,7 +1,12 @@
 ---
 Name: Reading CI Signals
 Category: Architecture
-Description: What a check's colour actually means — why a SKIPPED required context counts as satisfied everywhere while a NEVER-REPORTED one blocks forever under classic protection yet merges under a ruleset, why a red on a non-required check does not block, the i18n mirror that reds every downstream PR until it lands, and the shape most of these share: a narrow instrument answering correctly while the reader generalises it into a claim it never measured.
+Description: >-
+  What a check's colour actually means — why a SKIPPED required context counts as satisfied everywhere
+  while a NEVER-REPORTED one blocks forever under classic protection yet merges under a ruleset, why a
+  red on a non-required check does not block, the i18n mirror that reds every downstream PR until it
+  lands, and the shape most of these share: a narrow instrument answering correctly while the reader
+  generalises it into a claim it never measured.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
 ---
 

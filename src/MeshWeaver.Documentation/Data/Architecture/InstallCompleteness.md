@@ -1,7 +1,10 @@
 ---
 Name: Install Completeness
 Category: Architecture
-Description: An install that half-lands must not read as a complete one. What the install record DECLARES landed, compared against what is actually in the mesh — the comparison nothing made until #3485, the five verdicts it can reach, and why only one of them is a pass.
+Description: >-
+  An install that half-lands must not read as a complete one. What the install record DECLARES landed,
+  compared against what is actually in the mesh — the comparison nothing made until #3485, the five
+  verdicts it can reach, and why only one of them is a pass.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h13M3 10h9M3 15h6"/><path d="M15 15l3 3 5-5"/></svg>
 ---
 

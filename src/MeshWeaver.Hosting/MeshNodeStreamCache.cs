@@ -2806,8 +2806,32 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// superseded set, which would be the #1311 bug in miniature.</para>
     /// </summary>
     private sealed record QueryCacheEntry(
-        System.Collections.Immutable.ImmutableDictionary<string, IObservable<IEnumerable<MeshNode>>> BySignature,
+        System.Collections.Immutable.ImmutableDictionary<string, QueryChain> BySignature,
         string LatestSignature);
+
+    /// <summary>
+    /// One registered query set: the shared observable callers get, paired with the OWNER of its
+    /// upstream connection.
+    ///
+    /// <para>🚨 The owner is per-chain rather than the cache-wide <see cref="_queryConnections"/>
+    /// so that an eviction can release THAT chain's upstream and nothing else. Without it an
+    /// eviction could only forget the map entry: <c>AutoConnect(1)</c> never disconnects, so the
+    /// forgotten chain would keep its <c>SyncedQueryMeshNodes</c>, its provider subscription and
+    /// its change-feed subscription alive for the life of the process — over a partition whose
+    /// store has been dropped, in the <see cref="InvalidatePartition"/> case. The per-chain owner
+    /// is itself registered with <see cref="_queryConnections"/>, so cache disposal still releases
+    /// every one of them in a single step.</para>
+    ///
+    /// <para>A caller still holding an evicted chain's observable is REFUSED by
+    /// <c>AutoConnectOwnedBy</c>'s guard — an <see cref="ObjectDisposedException"/> naming the query
+    /// id, which is why the owner name carries it — rather than parked on a replay nothing will
+    /// feed. It cannot get a stale answer either way: every caller that goes through
+    /// <see cref="GetQueryRaw"/> after the eviction is handed a fresh chain, because the map entry
+    /// is gone.</para>
+    /// </summary>
+    private sealed record QueryChain(
+        IObservable<IEnumerable<MeshNode>> Stream,
+        System.Reactive.Disposables.CompositeDisposable Connection);
 
     private System.Collections.Immutable.ImmutableDictionary<object, QueryCacheEntry> _queries =
         System.Collections.Immutable.ImmutableDictionary<object, QueryCacheEntry>.Empty;
@@ -2834,7 +2858,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // ratcheted by RootedRxConnectionRatchetGuard.
     private readonly System.Reactive.Disposables.CompositeDisposable _queryConnections = new();
 
-    /// <summary>Test probe: synced-query upstream connections this cache currently holds.</summary>
+    /// <summary>Test probe: synced-query upstream connections this cache currently holds — one
+    /// per registered query CHAIN, since each chain's connection is owned by its own
+    /// <see cref="QueryChain.Connection"/> registered here (so an eviction can release one chain
+    /// without touching its siblings). A chain evicted as faulted (<see cref="EvictFaultedQuery"/>)
+    /// or as belonging to a torn-down partition (<see cref="InvalidatePartition"/>) drops out of
+    /// the count with its owner.</summary>
     internal int LiveQueryConnections => _queryConnections.Count;
 
     /// <summary>Test probe: <c>true</c> once <see cref="Dispose"/> has released every synced-query
@@ -2900,7 +2929,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             var current = _queries;
             var hasEntry = current.TryGetValue(id, out var entry);
             if (hasEntry && entry!.BySignature.TryGetValue(signature, out var existing))
-                return (existing, signature);
+                return (existing.Stream, signature);
+
+            // This chain's own connection owner — released by an eviction of THIS set alone, and
+            // by the cache's disposal through _queryConnections (see QueryChain).
+            //
+            // 🚨 Rooted in the registry BEFORE the CAS publishes the chain, and removed again if
+            // the CAS loses. The other order leaves a gap: between publishing the QueryChain and
+            // registering its owner, a concurrent EvictQueryId can read the entry, call
+            // Remove(owner) on an owner the composite does not hold yet — a silent no-op — and
+            // this Add would then re-root a chain that has just been evicted, leaving it connected
+            // to a dropped partition until cache disposal. Registering first makes "reachable in
+            // _queries" imply "reachable in _queryConnections" at every instant.
+            var connectionOwner = new System.Reactive.Disposables.CompositeDisposable();
+            // On an already disposed registry Add disposes the owner on the spot, which cancels the
+            // pool-queued connect — the same late-connect resolution AutoConnectOwnedBy performs.
+            _queryConnections.Add(connectionOwner);
 
             // Deferred + thread-pool subscribe-on + Replay(1).RefCount: a
             // shared cached observable. The lambda inside Defer runs on the
@@ -2977,7 +3021,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // rebuilt query never accumulates dead handles), disposes it on the spot when it
                 // arrives after the cache's Dispose() — the late-connect race resolved by
                 // construction — and refuses a subscriber that arrives after the release.
-                .AutoConnectOwnedBy(_queryConnections, nameof(MeshNodeStreamCache));
+                .AutoConnectOwnedBy(connectionOwner, $"{nameof(MeshNodeStreamCache)} query '{id}'");
                 // ReplaySubject (backing Replay(1)) already serialises
                 // OnNext/Subscribe internally — no .Synchronize() needed.
                 // Adding it would route every emission through an additional
@@ -3025,11 +3069,17 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // its own shared subscription instead of being evicted (see QueryCacheEntry).
             var bySignature = hasEntry
                 ? entry!.BySignature
-                : System.Collections.Immutable.ImmutableDictionary<string, IObservable<IEnumerable<MeshNode>>>.Empty;
-            var updated = current.SetItem(id, new QueryCacheEntry(bySignature.SetItem(signature, stream), signature));
+                : System.Collections.Immutable.ImmutableDictionary<string, QueryChain>.Empty;
+            var updated = current.SetItem(id,
+                new QueryCacheEntry(
+                    bySignature.SetItem(signature, new QueryChain(stream, connectionOwner)), signature));
             if (Interlocked.CompareExchange(ref _queries, updated, current) == current)
                 return (stream, signature);
-            // CAS lost — another thread won concurrently; retry the read.
+            // CAS lost — another thread won concurrently. This chain was never handed to anyone
+            // and AutoConnect(1) means it never connected, so releasing its owner disposes an
+            // empty registration; leaving it would grow the registry by one per contended miss.
+            _queryConnections.Remove(connectionOwner);
+            // Retry the read.
         }
     }
 
@@ -3065,7 +3115,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             var current = _queries;
             if (!current.TryGetValue(id, out var entry)
                 || !entry.BySignature.TryGetValue(signature, out var found)
-                || !ReferenceEquals(found, faulted))
+                || !ReferenceEquals(found.Stream, faulted))
                 return; // already replaced (or evicted) by another caller — never touch a newer chain
 
             // Drop only the faulted SET. Sibling sets registered under the same id are healthy
@@ -3075,7 +3125,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 ? current.Remove(id)
                 : current.SetItem(id, entry with { BySignature = remaining });
             if (Interlocked.CompareExchange(ref _queries, updated, current) == current)
+            {
+                // Release the dropped chain's connection owner so the registry keeps tracking LIVE
+                // chains only. The faulted chain's own upstream is already gone (its terminal
+                // dropped the handle from this owner), so this removes an EMPTY owner — but leaving
+                // it would make LiveQueryConnections grow by one per fault for the life of the
+                // process, which is exactly the accumulation AutoConnectOwnedBy exists to prevent.
+                _queryConnections.Remove(found.Connection);
                 break;
+            }
         }
 
         logger.LogWarning(ex,
@@ -3095,8 +3153,65 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     public IObservable<IEnumerable<MeshNode>>? GetQuery(object id)
         => _queries.TryGetValue(id, out var entry)
             && entry.BySignature.TryGetValue(entry.LatestSignature, out var latest)
-                ? latest
+                ? latest.Stream
                 : null;
+
+    /// <inheritdoc />
+    public void InvalidatePartition(string partition)
+    {
+        // 🚨 The set is ENUMERATED by the security layer, never inferred from the id's SHAPE. A
+        // name test ("the id ends in `:{partition}`") is not a statement about anchoring: the
+        // GLOBAL gated-node folds are spelled `$security-gated:{nodeType}`, and a NodeType name and
+        // a partition name come from the same alphabet — so a Space called `Course` would have
+        // evicted the mesh-wide gate fold for a NodeType called `Course`, by coincidence of naming.
+        // SecurityQueries.PartitionAnchoredQueryIds mints its ids from the same helpers the fold
+        // mints its own with, so what is created and what is dropped cannot drift.
+        foreach (var id in MeshWeaver.Mesh.Security.SecurityQueries.PartitionAnchoredQueryIds(partition))
+            EvictQueryId(id, partition);
+    }
+
+    /// <summary>
+    /// Drops every query set registered under <paramref name="id"/> and releases each one's
+    /// upstream connection. Unlike <see cref="EvictFaultedQuery"/> — which is pair-exact on
+    /// (id, signature) because it reacts to ONE chain's terminal — this drops the id outright: the
+    /// store the whole id reads has ceased to exist, so every signature registered under it is
+    /// serving a fold of something that is gone.
+    /// </summary>
+    private void EvictQueryId(object id, string partition)
+    {
+        while (true)
+        {
+            var current = _queries;
+            if (!current.TryGetValue(id, out var entry))
+                return;
+
+            var updated = current.Remove(id);
+            if (Interlocked.CompareExchange(ref _queries, updated, current) != current)
+                continue; // CAS lost — re-read and retry; nothing has been released yet.
+
+            // Only the CAS winner releases, so a concurrent eviction can never tear down a chain a
+            // competing snapshot still had in the map. The owner is registered BEFORE the chain is
+            // published (see GetQueryRaw), so a chain reachable here is always reachable in the
+            // registry too. Remove disposes what it removes; on an already disposed registry it is
+            // a no-op, the cache teardown having got there first.
+            foreach (var chain in entry.BySignature.Values)
+                _queryConnections.Remove(chain.Connection);
+
+            // Drop the memoised option wrappers that closed over the released chains — otherwise
+            // the eviction would be invisible from the public surface, exactly as #1316 documents
+            // for the faulted case.
+            foreach (var key in _optionsWrappedQueries.Keys)
+                if (Equals(key.Id, id))
+                    _optionsWrappedQueries.TryRemove(key, out _);
+
+            logger.LogDebug(
+                "MeshNodeStreamCache: dropped query '{QueryId}' ({Count} query set(s)) after partition "
+                + "'{Partition}' was torn down — the next read mints a fresh chain from the store "
+                + "instead of serving a fold of a store that no longer exists.",
+                id, entry.BySignature.Count, partition);
+            return;
+        }
+    }
 
     public IObservable<IEnumerable<MeshNode>> GetQuery(object id, JsonSerializerOptions options, params string[] queries)
     {

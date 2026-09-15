@@ -1,7 +1,10 @@
 ---
 Name: Dangling NodeTypes
 Category: Architecture
-Description: A node can reference a NodeType that resolves to nothing. The two ways it happened, why one is refused with a named bypass and the other is reported rather than blocked, and the repair path both decisions had to leave open — issue #2993.
+Description: >-
+  A node can reference a NodeType that resolves to nothing. The two ways it happened, why one is
+  refused with a named bypass and the other is reported rather than blocked, and the repair path both
+  decisions had to leave open — issue #2993.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6"/><path d="M5.5 8.5 9 12"/><path d="M18.5 8.5 15 12"/><circle cx="12" cy="16" r="5"/><path d="m9.5 18.5 5-5"/></svg>
 ---
 

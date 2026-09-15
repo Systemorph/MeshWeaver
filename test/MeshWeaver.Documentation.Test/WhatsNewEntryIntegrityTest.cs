@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using Xunit;
+using YamlDotNet.Serialization;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -92,15 +93,34 @@ public class WhatsNewEntryIntegrityTest
         return entries;
     }
 
-    /// <summary>The lines of the leading <c>---</c> block, or null when the file has none.</summary>
-    private static IReadOnlyList<string>? ReadFrontMatter(string content)
+    /// <summary>
+    /// The leading <c>---</c> block, PARSED — or null when the file has none.
+    ///
+    /// <para>🚨 This used to split the block into lines and read each field with a
+    /// <c>StartsWith("Key:")</c> match. That is the same reader <c>MarkdownFileParser</c>'s RESCUE
+    /// uses, not the one the runtime uses when the document is well-formed — so it agreed with the
+    /// feed only by luck. Twelve entries once satisfied this test with front matter a YAML parser
+    /// refused outright, which is exactly the state the test exists to prevent; and a block scalar
+    /// (<c>Description: >-</c>) would have satisfied it with the literal marker <c>"&gt;-"</c> as
+    /// the description, however empty the folded body. One artefact must not have two readers.</para>
+    /// </summary>
+    private static IReadOnlyDictionary<string, string>? ReadFrontMatter(string content)
     {
-        var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        if (lines.Length == 0 || lines[0].Trim() != "---")
+        var normalized = content.Replace("\r\n", "\n", StringComparison.Ordinal);
+        if (!normalized.StartsWith("---\n", StringComparison.Ordinal))
+            return null;
+        var end = normalized.IndexOf("\n---", 3, StringComparison.Ordinal);
+        if (end < 0)
             return null;
 
-        var end = Array.FindIndex(lines, 1, line => line.Trim() == "---");
-        return end < 0 ? null : lines[1..end];
+        var parsed = new DeserializerBuilder().Build()
+            .Deserialize<Dictionary<string, object>>(normalized[4..end]);
+        return parsed is null
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : parsed.ToDictionary(
+                kv => kv.Key,
+                kv => kv.Value?.ToString() ?? string.Empty,
+                StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -108,10 +128,6 @@ public class WhatsNewEntryIntegrityTest
     /// <c>Name</c>/<c>Category</c>/<c>Order</c> by their declared casing, so a lowercase
     /// <c>category:</c> would be silently dropped rather than accepted here.
     /// </summary>
-    private static string? Field(IEnumerable<string> frontMatter, string key)
-    {
-        var prefix = key + ":";
-        var line = frontMatter.FirstOrDefault(l => l.StartsWith(prefix, StringComparison.Ordinal));
-        return line?[prefix.Length..].Trim().Trim('"').Trim();
-    }
+    private static string? Field(IReadOnlyDictionary<string, string> frontMatter, string key) =>
+        frontMatter.TryGetValue(key, out var value) ? value : null;
 }

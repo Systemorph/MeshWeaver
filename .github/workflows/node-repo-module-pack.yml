@@ -1917,6 +1917,11 @@ jobs:
       # build logic, not platform source, and its two halves (here and in `verify`) must be the
       # same version or the receipt field and the reader disagree about its shape.
       MODULE_SET_CENSUS: ${{ github.workspace }}/build-logic/.github/scripts/module-set-census.py
+      # The per-file static-asset assertion (#2384). 🚨 build-logic-ref, NOT platform-ref, for the
+      # reason stated two lines above: the platform checkout may deliberately predate this lane, so
+      # reading a gate the lane itself introduced out of THAT tree is a file-not-found on every
+      # satellite whose pin has not moved yet. A gate ships with the workflow that calls it.
+      BUNDLE_STATIC_ASSETS: ${{ github.workspace }}/build-logic/.github/scripts/check-bundle-static-assets.py
     # Inherit the caller's least-privilege map; declaring OIDC here rejects basic-auth callers at
     # graph creation time, before this job's `acr-login` mode can choose its conditional steps.
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
@@ -2636,6 +2641,21 @@ jobs:
                       echo "closure: $ride RIDES — the module's private closure (deps.json-derived, from the image or the shelf)"
                     done < "$packdir/module-libs.txt"
                   fi
+                  # 🚨 The NATIVE half of the same closure (MeshWeaver#4126). A SECOND manifest, not
+                  # more lines in module-libs.txt, because the two are declared by OPPOSITE rules:
+                  # `--with` refuses a path component (the flat closure has no place for one) while
+                  # `--with-native` requires the path, since runtimes/<rid>/native/<file> is exactly
+                  # what the module loader probes. The builder derived these from the image's and the
+                  # shelf's own deps.json and laid them out under the pack input; a payload it did
+                  # not derive cannot reach a bundle, which is what makes this provenance and not a
+                  # glob. Its ABSENCE is a statement — this module ships no engine.
+                  if [ -f "$packdir/module-natives.txt" ]; then
+                    while IFS= read -r native; do
+                      [ -n "$native" ] || continue
+                      printf '%s\n%s\n' --with-native "$native" >> "$packargs"
+                      echo "closure: $native RIDES — a native payload of the module's private closure (deps.json-derived, from the image or the shelf)"
+                    done < "$packdir/module-natives.txt"
+                  fi
                   echo "closure: NO --deps-closure on the container path — there is no SDK deps.json to derive one from."
                   echo "closure: complete BY RECORD instead — the builder walked the module's own package references over the image's and the shelf's deps.json and copied everything the shared framework does not supply; it refuses BY NAME anything neither supplies, and this lane passes no --extra-refs."
                   # 🚨 THE BINDING IDENTITY, CHECKED (MeshWeaver#143): the expected value is the one
@@ -2971,21 +2991,42 @@ jobs:
                   "$manifest" > /dev/null \
                   || { echo "::error::the container-built bundle carries a non-MeshWeaver assembly with NO builder provenance (not in the builder's module-libs.txt) — its closure cannot be accounted for, so the pack fails rather than landing a module that faults at first use"; exit 1; }
                 echo "container path: closure is entry + module-owned MeshWeaver siblings + the manifested private closure, as recorded"
-                # 🚨 The STATIC-ASSET half, asserted — because its absence is the one failure with no
-                # symptom at any later gate: the publish 200s, the module lands and loads, every page
-                # renders, only UNSTYLED (#2221's exact signature; PluginBundlePublishAssetsTest names
-                # it). The packer nulls `staticAssets` when the pack input has no wwwroot, and nothing
-                # downstream distinguishes "this module ships no assets" from "the compiler forgot
-                # them" — so this lane distinguishes it HERE, from the source of truth: a project that
-                # has *.razor.css or wwwroot/ in its tree must produce a bundle that declares assets.
-                src_dir="$GITHUB_WORKSPACE/$(dirname "$PROJECT")"
-                if [ -d "$src_dir/wwwroot" ] \
-                   || find "$src_dir" -name '*.razor.css' -not -path '*/bin/*' -not -path '*/obj/*' -print -quit | grep -q .; then
-                  jq -e '(.module.staticAssets // []) | length > 0' "$manifest" > /dev/null \
-                    || { echo "::error::$MODULE has wwwroot/ or *.razor.css in its source tree, but the container-built bundle declares NO staticAssets — it would land, load, and render unstyled with nothing in any log (#2221). The builder must emit wwwroot/ (its .styles.css aggregate included) into the pack input."; exit 1; }
-                  echo "container path: staticAssets declared ($(jq '(.module.staticAssets // []) | length' "$manifest") file(s)) for a source tree that has assets"
-                fi
+                # 🚨 The same accountability for the NATIVE section (MeshWeaver#4126). A loadable
+                # binary in a bundle is the one payload a consumer EXECUTES, so it may be there only
+                # with builder provenance: module-natives.txt names every payload the builder derived
+                # from the image's and the shelf's deps.json. Anything else has no accountable origin
+                # — the 2026-08-19/20 shape, one step more dangerous.
+                native_manifest="$PACKDIR/module-natives.txt"
+                allowed_natives="$( [ -f "$native_manifest" ] && tr '\n' ';' < "$native_manifest" || true )"
+                jq -e --arg allowed "$allowed_natives" \
+                  '($allowed | split(";") | map(select(length > 0))) as $declared
+                   | [(.module.nativeAssets // [])[]
+                      | select(. as $n | $declared | index($n) | not)]
+                   | length == 0' \
+                  "$manifest" > /dev/null \
+                  || { echo "::error::the container-built bundle carries a NATIVE payload with NO builder provenance (not in the builder's module-natives.txt) — a loadable binary whose origin this lane cannot account for, so the pack fails rather than shipping it"; exit 1; }
+                echo "container path: $(jq '(.module.nativeAssets // []) | length' "$manifest") native payload(s) declared, every one with builder provenance"
               fi
+              # 🚨 The STATIC-ASSET half, asserted PER FILE — because its absence is the one failure
+              # with no symptom at any later gate: the publish 200s, the module lands and loads,
+              # every page renders, only UNSTYLED (#2221) or with a view whose dynamic import 404s
+              # (#2384). This used to be `staticAssets | length > 0`, guarded by "does the project
+              # have wwwroot/ or *.razor.css", and it was blind twice over: OpenStreetMap's 7
+              # vendored Leaflet files satisfied `7 > 0` while the one file its view imports was
+              # missing, and AppleMaps — no wwwroot/, no scoped CSS, one collocated .razor.js — did
+              # not meet the `if` at all and shipped unexamined for three weeks. A COUNT cannot see
+              # a missing member, and a guard that asks about a different input cannot fail on this
+              # one. The script derives the expected set from the PROJECT TREE (wwwroot/**, each
+              # collocated *.razor.js paired with its component, the .styles.css aggregate when
+              # there is scoped CSS) and names every one the bundle does not declare.
+              # 🚨 NO `if`, and BOTH lanes. The property is about the bundle, not about which
+              # compiler produced it; a module that implies no assets prints `0 expected` and
+              # passes, which is a STATED zero rather than a skipped check.
+              test -f "$BUNDLE_STATIC_ASSETS" || { echo "::error::the resolved build-logic ref carries no .github/scripts/check-bundle-static-assets.py, so this bundle's static assets cannot be checked against its project tree. That is RED, never a skip: 'the assets could not be checked' and 'they were checked and complete' must not look the same (#2384). Move an explicit build-logic-ref to a commit that carries it, or omit it to use job.workflow_sha."; exit 1; }
+              python3 "$BUNDLE_STATIC_ASSETS" \
+                --module "$MODULE" \
+                --project "$GITHUB_WORKSPACE/$PROJECT" \
+                --manifest "$manifest"
               bk set --module "$MODULE" "bundle=$bundle"
               echo "bundle OK ($MODULE):"; jq . "$manifest"
             )

@@ -149,7 +149,54 @@ public sealed class PartitionDropPostDeletionHandler : INodePostDeletionHandler
                 partition, providers.Count, deletedNode.NodeType, deletedBy ?? "system"))
             .Select(_ => Unit.Default);
 
-        return dropStores.Concat(DeletePartitionDefinition(partition)).TakeLast(1);
+        return dropStores
+            .Concat(DeletePartitionDefinition(partition))
+            .TakeLast(1)
+            .Do(_ => DropCachedPartitionQueries(partition));
+    }
+
+    /// <summary>
+    /// Drops the process-wide synced queries anchored to <paramref name="partition"/> — the last
+    /// step of the teardown, and the one that makes it COMPLETE in memory as the
+    /// <c>DROP SCHEMA … CASCADE</c> makes it complete in the store.
+    ///
+    /// <para>🚨 <b>Why the store drop alone is not the whole teardown</b>
+    /// (Systemorph/MeshWeaver.Plugins#1870). <c>$security-access:{partition}</c> — the ONE query
+    /// every permission check on this partition reads (<c>PermissionEvaluator
+    /// .ObserveEffectiveAssignments</c>) — is a process-wide fold seeded from a single store
+    /// listing and kept current by change events, connected for the life of the process. Dropping
+    /// the schema destroyed what it mirrors and left the fold in place, so a partition later
+    /// recreated under the same id was decided by the OLD chain: on a first-ever create the query
+    /// is minted AFTER <c>SpacePostCreationHandler</c>'s <c>{id}/_Access</c> grant and its seeding
+    /// listing therefore contains it by construction, while on a recreate the surviving fold could
+    /// only learn the new grant from a change event racing the rest of the create — the create
+    /// returned "you own this Space" and the creator's next write was refused with
+    /// <c>Access denied: Create permission required for node '{id}/page'</c>. Measured on
+    /// <c>SpaceRecreateGrantVisibilityPgTests</c>: the resident query survived the drop in 8 of 8
+    /// runs, holding an EMPTY fold while the store held the grant.</para>
+    ///
+    /// <para>🚨 <b>The set is enumerated, not pattern-matched.</b> <c>InvalidatePartition</c> drops
+    /// exactly the ids <c>SecurityQueries.PartitionAnchoredQueryIds</c> names, which are minted from
+    /// the same helpers the fold mints its own with. A name test such as "the id ends in
+    /// <c>:{partition}</c>" would also have matched the GLOBAL gated-node folds
+    /// (<c>$security-gated:{nodeType}</c>), because a NodeType name and a partition name come from
+    /// the same alphabet — a Space called <c>Course</c> dropping the mesh-wide gate fold for a
+    /// NodeType called <c>Course</c>.</para>
+    ///
+    /// <para>Runs only on a SUCCESSFUL teardown — a failed store drop leaves the partition (and
+    /// therefore its caches) in place for a retry, which is the same reason the definition node
+    /// stays. In-memory and synchronous; the cache is optional so a minimal fixture without one
+    /// simply has nothing to drop.</para>
+    /// </summary>
+    private void DropCachedPartitionQueries(string partition)
+    {
+        var cache = hub.ServiceProvider.GetService<Mesh.Services.IMeshNodeStreamCache>();
+        if (cache is null)
+            return;
+        cache.InvalidatePartition(partition);
+        logger?.LogDebug(
+            "Dropped process-wide queries anchored to partition '{Partition}' after its teardown",
+            partition);
     }
 
     /// <summary>

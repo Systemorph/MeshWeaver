@@ -325,9 +325,9 @@ because of what the first live run found** ([run 34852827116](https://github.com
 - And that listing immediately earned itself: **two of `ghcr.io`'s five references are
   `systemorph/*`** — our own images — on a host whose declaration reads *"never published by this
   fleet"*, while `release.yml` mirrors three repositories there on every official release. **A count
-  alone would have hidden it.** Filed as #4323; the disposition is not changed here, because
-  `third-party` → `fleet-unlockable` is a *loosening* (an installation pinning only there stops
-  being red) and that is a decision, not a correction.
+  alone would have hidden it.** Filed as #4323 and **answered in §8**, which also measures why
+  `third-party` → `fleet-unlockable` — the correction the issue proposes — is not merely a
+  loosening but a **false red** on `memex-cloud`.
 - A **moving tag** is flagged where it appears — against the shared `FLOATING_TAGS` set
   (`latest`, `main`, `master`, `edge`, `stable`, `nightly`), case-insensitively, **not** the string
   `latest`: the extractor preserves whichever one an overlay wrote, and the other five move exactly
@@ -353,6 +353,178 @@ because of what the first live run found** ([run 34852827116](https://github.com
    It is the difference between a cleanup that can ever be safe and one that cannot.
 4. **#4066 item 1** — map `MapContainerImages` in a host, or delete the assembly. Nothing in this
    page depends on the answer: §5.1 shows the mirror cannot supply the inventory either way.
+5. **§8.5 — the chart's default images.** Should an unconfigured install pull the platform from
+   `ghcr.io/systemorph/…:latest`, a store this fleet publishes to and does not retain, at a moving
+   tag? The record now *states* that it does; whether it should is a deployment decision.
+
+## 8. 🚨 What this fleet PUBLISHES to a registry — the third question (#4323)
+
+`disposition` answers *"can THIS lane lock that host"*. `retention` answers *"what deletes from
+it"*. Neither asks **"does this fleet publish there at all"**, and for `ghcr.io` the record answered
+that unasked question wrongly, in two fields at once:
+
+```json
+"disposition": "third-party",
+"reason": "Somebody else's images, never ours to protect and never published by this fleet. …"
+"retention": { "rule": "not-ours",
+  "reason": "Nothing this fleet produces is stored on ghcr.io, …" }
+```
+
+**Both sentences were false, and both validated green** — because every arm of the gate asks the
+record what it *says*, and nothing asked the workflows what they *do*.
+
+### 8.1 What the fleet actually does, measured
+
+`main-cd.yml`'s promote job, run 34918214035, 2026-09-15T02:27Z — an ordinary promoting run:
+
+```
+pushing … to ghcr.io/systemorph/mw-plugin-test:3.0.0-ci.8630   (+ :b63310a, :main, :latest)
+pushing … to ghcr.io/systemorph/memex-migration:3-latest       (+ :3.0-latest, :3.0.0-latest, :3.0.0-ci.8630)
+pushing … to ghcr.io/systemorph/memex-portal-ai:3-latest       (+ :3.0-latest, :3.0.0-latest, :3.0.0-ci.8630)
+```
+
+**Twelve tags across three of our own repositories, on every promoting run.** And `release.yml` —
+the lane #4323 named — **has never run**: the workflow reports `total_count: 0`. So the continuous
+lane is the *whole* of the publication, and the mirror is older and busier than the issue's framing.
+
+### 8.2 🚨 Why the disposition was NOT flipped: the correct-sounding fix REDS the lane
+
+`third-party` → `fleet-unlockable` reads like the correction. It is not, and the reason is
+measurable rather than a matter of taste. `memex-cloud`'s overlay pins **both**:
+
+```yaml
+portal:   { image: "meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8411" }
+registry: { image: "ghcr.io/distribution/distribution:3.1.1@sha256:bca247…" }
+```
+
+With `ghcr.io` declared `fleet-unlockable`, `unlockable_registries` becomes non-empty while
+`repositories` already is, and `resolve_running_sets` fires **"half its running set would be
+protected and half would not"** — over an installation whose every image *of ours* is in this ACR
+and locked. `pause.reEnableWhen` is *"lock-pinned-digests is green"*, so that false red would stand
+between the fleet and re-enabling cleanup: the exact failure the `registries` table was built to
+end, manufactured by its own fix.
+
+**The unit is the defect, not the value.** `ghcr.io` is the fleet's only MIXED host —
+`systemorph/*` is ours, `distribution/*`, `oras-project/*` and `actions/*` are not — and a single
+per-host disposition is false about one half whichever way it reads:
+
+| value | false about | consequence |
+|---|---|---|
+| `third-party` | `systemorph/*` | our own mirror declared "never published by this fleet" — #4323 |
+| `fleet-unlockable` | `distribution/*` | **`memex-cloud` reds**, and the cleanup re-enable is blocked behind it |
+
+The host unit was justified by a measurement — *"exactly two hosts … `ghcr.io` (2, one of which was
+a line of prose)"* — that was true of the **overlays** on 2026-09-13 and is still true of them
+today. Nothing about the fleet changed; what changed is that #4315 widened the extractor, so the
+report now sees the chart's own defaults and the mixture became visible.
+
+### 8.3 The `publishes` block, and `operator-retained`
+
+The disposition keeps the meaning every axis reads it for — **what the fleet PULLS**, which is what
+an installation's running set is made of — and the publication is declared as its own fact on the
+same unit:
+
+```json
+"ghcr.io": {
+  "disposition": "third-party",          // what we PULL here: distribution, oras — somebody else's
+  "publishes": {
+    "repositories": ["systemorph/memex-portal-ai", "systemorph/memex-migration",
+                     "systemorph/mw-plugin-test"],
+    "producedBy": [".github/workflows/main-cd.yml", ".github/workflows/release.yml"],
+    "runFrom": "NO INSTALLATION. …",
+    "retention": { "rule": "operator-retained", "operator": "GitHub (GitHub Packages / ghcr.io)",
+                   "cleanupAuthorized": false, "reason": "…" }
+  }
+}
+```
+
+**`operator-retained` is a publication into a store this fleet does not operate**, and it is
+deliberately *not* a host-level rule — allowing it there would be a trapdoor out of
+`nothing-deletes`, letting any registry answer the second question with *"somebody else's problem"*.
+It may **not** carry `deleters`: GitHub Packages is rendered by no file of ours and its ACL is not
+ours to read, so an enumeration would be a verdict about **our** artifacts resting on nothing — the
+same false reassurance `not-ours` refuses one field along (§R0's *"an enumeration in which nothing
+is present is one that inspected nothing"*). It may not authorize a cleanup either.
+
+What *is* established, and is why the mirror is a publication rather than a store: **every reference
+is a copy by digest of a manifest that exists, locked, in `meshweaver.azurecr.io`**, and
+`cr.meshweaver.cloud` carries the same set for the installations that actually run from a registry.
+A GHCR retention event loses a *mirror*. The consumer that would notice is MeshWeaver.Plugins, which
+pins `ghcr.io/systemorph/mw-plugin-test:latest` as `MW_TEST_IMAGE`.
+
+### 8.4 The gate DERIVES the publication, and the declaration is load-bearing
+
+`--check-registry-retention` reads the push targets off the **committed lanes** — `main-cd.yml` and
+`release.yml` — and holds the table to them. A record that checks itself passes on the day it stops
+being true.
+
+🚨 **Reading a lane is where this kind of derivation goes quietly wrong, so the parsing is stated
+rather than assumed.** A workflow spells one push in more ways than a naive reader expects, and
+every one of these appears in these two lanes:
+
+| spelling | where | read by |
+|---|---|---|
+| `--tag "<host>/<repo>:<tag>"` | main-cd phases A–D | the `--tag` scan |
+| `mirror-image-to-registry.sh <src> <dst>…` | every fleet-registry mirror | the call scan — **no `--tag` on the line at all** |
+| destinations on the next line behind a `\` | phase B's `mw-plugin-test` mirror | the continuation join |
+| a YAML **folded** `run: >`, arguments on following lines, **no backslash** | `main-cd.yml:1260`, `:1416` | the folded-scalar join |
+| `"${{ env.ACR }}/…"` | main-cd's tag lines | the workflow's own `env:` map |
+| a plain shell `"$ACR/…"` / `"${ACR}/…"` | `release.yml:272`, `:275`, `:279` | the same map |
+| `"$NS/$repo"` inside `for repo in …; do` | release.yml's mirror loop | the loop expansion (`$NS` resolved from the owner, and the *assignment* asserted) |
+| `"${margs[@]}"` | phase D's mirror | the array-append collection |
+
+🚨 **An UNRESOLVED host is a PROBLEM, never a silent drop, and the order of the two tests is the
+whole point** — a host still carrying `$` has no dot, so a Docker-Hub short-name test placed first
+discards it with no error. That is a push target dropped silently by the one derivation whose job is
+to make a dropped push target impossible: this issue's own defect, one register down.
+
+| the lanes push to a host that… | the run |
+|---|---|
+| is `fleet-unlockable` | accounted for — the host-level declaration already says our images live there |
+| carries a `publishes` block naming exactly the derived repositories | accounted for |
+| is `third-party` with **no** `publishes` | **RED**, naming the repositories and the lanes — *this is #4323* |
+| the table does not declare at all | **RED** |
+| is named in `publishes` but pushed by nothing | **RED** — a stale entry exempts nothing and hides the next one |
+| is `meshweaver.azurecr.io` | skipped **by name and printed** — it is the registry this lane locks, the subject of the script rather than a foreign host it declares |
+
+Three more hold the *declaration* rather than the derivation:
+
+- **`producedBy` is held to the derived producers**, not to the host's name appearing somewhere in
+  the file — a comment satisfies a substring test, and a misattributed lane reads as evidence. Both
+  directions: a named lane that emits nothing for this host, and an emitting lane the record does
+  not name.
+- **A whole-host `publishes` block whose lanes have stopped pushing is RED.** The population is the
+  *union* of derived hosts and declared publishers, because a loop over derived hosts alone never
+  visits a stale block — it would pass having inspected nothing.
+- **`cleanupAuthorized` must be the boolean `false`**, not merely "not the singleton `True`". This
+  file has already paid for the other spelling twice, on `inForce` and on `present`: every
+  `is True` reader treats the string `"true"` as absent.
+
+Two further arms stop the block being prose:
+
+- **An overlay may not PIN a published repository.** An installation pinning
+  `ghcr.io/systemorph/memex-portal-ai` is running *our* images from a store nothing of ours retains
+  and this lane cannot lock — and the host's `third-party` disposition would wave it through in the
+  one branch (pins here *and* there) that prints success. It fires on nobody today, which is exactly
+  the claim `runFrom` makes and therefore exactly the claim that must red when it stops being true.
+- **The report splits a mixed host's references.** Printing our own two chart-default references
+  under *"declared NOT ours to retain"* would be the record's false sentence reproduced in the one
+  artifact a reader checks it against.
+
+Every arm is driven both ways by `--self-test` (ARM 34 / 34b), and each negative control was proven
+to fire by neutering its subject — including the two readers that decide the derivation separately:
+disabling the mirror-call reader loses the host, and disabling the continuation join loses
+`mw-plugin-test` alone. An arm asserting only the host's presence would have passed with
+continuations unread, which is why it asserts the repository set.
+
+### 8.5 What #4323 leaves open
+
+**The chart's defaults still point at GHCR, at a moving tag.** `deploy/helm/values.yaml` defaults
+`portal.image` to `ghcr.io/systemorph/memex-portal-ai:latest` and `migration.image` to
+`ghcr.io/systemorph/memex-migration:latest` (the ACA bicep and the AKS README say the same), so an
+**unconfigured install pulls the platform from a store this fleet does not retain, at a tag that
+moves**. That is recorded in `publishes.runFrom` rather than fixed here: it is a deployment-defaults
+decision, not a retention one, and changing it moves what an unconfigured install runs.
 
 ## Related
 
