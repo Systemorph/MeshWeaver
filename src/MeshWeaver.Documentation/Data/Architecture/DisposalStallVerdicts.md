@@ -786,6 +786,53 @@ NOTHING rather than merely that the hub survived. Its negative control (the hop 
 projects rebuilt) emits `{"status":"Recycled", …}` while the lease is held; the pass-through case
 stays green.
 
+### 🚨 A gate is only as wide as the writers that TAKE the lease, and there was exactly ONE
+
+The table above asks "who posts a `DisposeRequest` without consulting the lease". There is a second,
+quieter question with the same consequence and no entry anywhere: **who WRITES a whole tree under a
+root without taking one.** A writer that holds nothing is invisible to the gate — both consulting
+sites find no holder, both proceed, and the log shows a recycle that looks perfectly ordinary. It is
+the same failure mode as an un-run gate: "nobody was installing" and "the installer did not say so"
+are indistinguishable from the outside.
+
+Measured 2026-09-14 on `main`: `grep -rn "HoldDuring\|leases\.Hold" src` returned **one** production
+site — `PackageInstaller.HoldRootDuringInstall`. Every other writer that lands a package-shaped tree
+held nothing:
+
+| writer | what it writes | held a lease |
+|---|---|---|
+| `PackageInstaller.Install` / `InstallNodeRepoDelta` | the package's tree under its root | yes |
+| `GitHubActivityExtensions`' FOUR import entry points | the whole Space tree, **including the `NodeType` retypes `RequiresRebind` fires on** | **no** → now yes |
+| the Plugins-side `Store/Publishing/Source/SystemInstall` plan (`CreateRoot` → `RetypeRoot` → `WireSync` → `ImportLatest` → `CompileAllTypes`) | a provisioned Space, root retype included | **no** (MeshWeaver.Plugins; separate change) |
+
+The GitSync half is closed by `GitHubActivityExtensions.HoldSpaceDuringImport`, which wraps **all
+four** import entry points in `PackageRootInstallLeases.HoldDuring` keyed on the Space path:
+`UpdateToLatestFromGitHub`, `UpdateToProvenCommitFromGitHub`, `ReconcileAtProvenCommitFromGitHub` and
+`ReimportFromGitHub`. `CommitToGitHub` is deliberately NOT wrapped: it exports the Space to the repo
+and writes no mesh nodes, so holding there would defer recycles for a reader.
+
+🚨 **The fourth one is the lesson, not a footnote.** `ReimportFromGitHub` — the settings tab's manual
+re-import — was missed on the first pass because it is the one import that does not go through
+`TriggerAuthorizedAsSystem`, so it did not match the shape the other three share. It writes the same
+tree they do. A reader who took "the import entry points are covered" on trust would have inherited
+exactly the defect this section names: a guard whose reach is assumed reads as a guarantee it does
+not keep. Enumerate the writers; do not pattern-match them.
+
+Everything the installer's lease gets, this gets for the same reasons and by the same mechanism: the
+hold is `Observable.Using`, so it is released on completion, on fault and on unsubscribe, with no
+timer; the key is the Space path matched exactly, so per-type hubs beneath it still recycle and the
+import cannot deadlock against the rebuilds it triggers; and a host with no registry passes straight
+through, because a mesh that has no registry has no gate to protect either.
+
+`GitSyncImportHoldsTheSpaceRootTest` pins all three release arms, the pass-through control, and — the
+control that matters most, because #4009's own review caught exactly this in the installer — that a
+**sibling** Space is not held. A lease on the wrong root reads in the log exactly like a lease that
+is working.
+
+🚨 **Established from code, not from a measured occurrence on those paths.** No bake failure has yet
+been attributed to a GitSync import losing its root; what is measured is that the gate could not see
+it. That is the claim.
+
 ### Two repairs considered and REJECTED, with the reason
 
 Both were raised in review, both look right, and both are wrong as stated. Recording why is the
