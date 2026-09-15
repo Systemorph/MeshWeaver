@@ -57,9 +57,20 @@ public static class IconRasterizer
     /// <para>The mark is fitted to the square by its own <c>viewBox</c> — scaled by the smaller
     /// axis and centred, so a non-square mark keeps its aspect ratio instead of being stretched.
     /// The ground is left TRANSPARENT: a favicon is painted onto whatever the browser's tab strip
-    /// or bookmark bar uses, and every authored mark already paints its own plate
-    /// (<c>IconBackplate</c> guarantees it), so inventing a background here would draw a border
-    /// around a mark that already has one.</para>
+    /// or bookmark bar uses, and every mark reaching here already paints its own plate, so
+    /// inventing a background here would draw a border around a mark that already has one.</para>
+    ///
+    /// <para>🚨 That premise is LOAD-BEARING, and it was false (#4350). It holds because
+    /// <see cref="SeoResolver.ResolveIconSvg"/> — the one producer of the markup this method
+    /// rasterizes — puts the icon through <c>IconBackplate.Ensure</c>. It does NOT hold of authored
+    /// markup in general, and the failure it produces is the invisible kind rather than the loud
+    /// one: an icon authored as a <c>currentColor</c> outline has no surrounding text to inherit a
+    /// color from here, so it paints in the INITIAL color — black — and the transparent ground
+    /// leaves nothing else. Measured: a black hairline, every painted pixel under RGB 40, the rest
+    /// of the canvas alpha 0. <see cref="IsFullyTransparent"/> does not catch it (pixels WERE
+    /// painted), so it is served behind a 200 and simply cannot be seen on a dark tab strip. The
+    /// fix is the plate at the producer, never a background invented here — inventing one would
+    /// draw a border around every mark that already has its own.</para>
     ///
     /// <para>Pure: same markup and size → same bytes, which is what makes the endpoint's strong
     /// ETag meaningful.</para>
