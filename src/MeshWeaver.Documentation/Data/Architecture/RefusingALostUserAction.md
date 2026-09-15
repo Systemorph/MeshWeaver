@@ -1,7 +1,7 @@
 ---
 Name: Refusing a Lost User Action
 Category: Architecture
-Description: A user action is refused visibly when its stream is already gone, and an accepted action now holds the sender's ordinary quiesce drain until its owner-side handler acknowledges it.
+Description: A user action is refused visibly when its stream is already gone, an accepted action holds the sender's ordinary quiesce drain until its owner-side handler acknowledges it, and the refusal names WHICH of the three ends the stream met.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11.5 4.5 7 6 5.5 9 8.5 15 2.5l1.5 1.5z"/><path d="M3 13a9 9 0 1 0 9-9"/><line x1="12" y1="12" x2="12" y2="12.01"/></svg>
 ---
 
@@ -354,6 +354,101 @@ part worth keeping, because they are what separates a control from a duplicate:
 The middle row is the reason (b) exists at all: a submission path that refused every click satisfies
 every defect-direction assertion on this page.
 
+## 🚨 One sentence for three causes — the residue, and what it cost
+
+**Everything above was merged, deployed, and the issue was reopened anyway.** Not because the fix
+regressed: because the refusal sentence could not say which of three things had happened, so the
+incident fingerprint that folds recurrences together folded a *designed refusal* and a *live defect*
+into one ticket.
+
+The line, as it stood:
+
+```
+REFUSING ClickedEvent on area Overview/Actions/1 for stream iUuXw_4bgUmNKx3-U8N3eQ on hub
+rbuergi/Requests/provision-pearl-20260914: the target stream is gone (disposed circuit, released
+read stream, or never-created sync hub), so the action the user asked for did NOT run and never
+will.
+```
+
+Three causes, one sentence, one fingerprint. `Admin/_LogIncident/c3ea7263f217a7f3` carried three
+occurrences: 2026-09-10 22:08Z and 2026-09-11 09:34Z, both on **pre-fix images**, and 2026-09-14
+22:14:51Z on an image that provably carries the fix
+(`memex.meshweaver.cloud/api/version` → `c84c6c0550`, and
+`git merge-base --is-ancestor 1594bb31e4 c84c6c0550` → true). The third one's owner is a **per-node
+request hub** and its `sync/{id}` had never been registered on the activation that received the
+click — the third cause, which the client-side ordering fix cannot reach by construction.
+
+So the bot reopened a fixed issue, correctly, on evidence that named nothing. Two triages were spent
+re-deriving which cause each occurrence was, from the surrounding facts, because the line itself
+could not say.
+
+### What the owner records, and what it is not
+
+One `SyncStreamActivationLedger` per hub — an INSTANCE registered beside `IWorkspace` in the data
+plugin's services, so **its lifetime IS the activation it answers about**. Two booleans per stream
+id:
+
+| recorded by | where | what it means |
+|---|---|---|
+| `RecordSyncHubRegistered` | `SynchronizationStream`'s constructor — the one place a `sync/{id}` sub-hub is created | this host activation SERVED that stream id |
+| `RecordUnsubscribeReceived` | `RouteStreamMessage`, before the sub-hub walk | an `UnsubscribeRequest` for it REACHED this hub |
+
+It holds no message, changes no routing, and is read only when a message is already being refused.
+Nothing retries, nothing waits, and no bound moves — the three things this page has ruled out since
+#3566 stay ruled out.
+
+That the ledger dies with the activation is not an implementation detail, it is the whole answer:
+a recycled owner starts from empty, and a subscriber still holding a stream id from the previous
+activation is then *correctly* reported as addressing something that no longer exists.
+
+### The three sentences
+
+Each cause is its own literal log **template**, not a parameter on a shared one, so the split holds
+however a reader derives a fingerprint — from the template or from the rendered line.
+
+| cause | the refusal says | what it means for whoever reads it |
+|---|---|---|
+| **released by the subscriber** | *the SUBSCRIBER RELEASED this stream — an UnsubscribeRequest for it reached this hub* | the designed refusal. A click raced a teardown the client itself asked for. Nothing to fix here; this is the case the ordering fix above made rare |
+| **reaped by the owner** | *this hub SERVED this stream on the current activation and was never told to unsubscribe, so the OWNER side ended it* | an idle release, a workspace eviction, `EvictClientSubscriptions`. The person is still on the page and the PLATFORM dropped the subscription |
+| **never registered on this activation** | *NO sync hub for this stream was EVER registered on the current activation* | the 2026-09-14 shape. A per-node owner deactivated under a live subscription — where a real resubscribe-before-accept fix would belong, and it is not this one |
+
+🚨 **And a fourth line that is not a cause.** The ledger is bounded (one entry per distinct stream
+id; a long-lived owner on a written path mints fresh ones through the change-feed eviction cycle
+documented on `Workspace._remoteStreamLeases`). The moment it has pruned anything, an ABSENT stream
+id is no longer evidence of "never registered" — it is equally "registered, and long since aged
+out". So it says exactly that, with its own numbers:
+
+> *this hub holds NO RECORD of the stream — its activation ledger has already aged N disposition(s)
+> out and holds M, so 'never served here' and 'served and long since ended' cannot be told apart*
+
+A diagnostic that cannot fail to give an answer is not a diagnostic. The fourth line exists so a
+FULL ledger can never masquerade as the third cause, which is the one reading that would send the
+next reader hunting a reactivation that never happened.
+
+### The measurement
+
+`RefusalNamesWhichEndTheStreamMetTest` produces each cause by its own real route, against real
+hubs, and reads the refusals out of the host's own log:
+
+| test | route | asserts |
+|---|---|---|
+| `AStreamThisActivationNeverServed_IsNamedAsSuch` | a click naming a stream id this owner never served | the third sentence, and NEITHER of the other two |
+| `AStreamTheSubscriberReleased_IsNamedAsSuch` | a real remote stream, disposed — its `UnsubscribeRequest` reaches the owner and kills the sub-hub | the first sentence, and neither of the other two |
+| `AStreamTheOwnerReaped_IsNamedAsSuch` | a bare `SubscribeRequest`, then the owner's own `sync/{id}` disposed — the route `EvictClientSubscriptions` takes | the second sentence, and neither of the other two |
+| `AnAcceptedActionIsStillNotDiscarded` | POSITIVE: `SubmitUserAction` on a live stream | the action RUNS, and no refusal line is written at all |
+
+The reaped case deliberately has **no client-side stream** behind it: one would re-subscribe on the
+owner's `StreamEndedEvent` and re-create a `sync/{id}` under the same stream id, so the reap would be
+undone by a race and the test would measure whichever won. With nothing to re-ask, the window is
+closed by construction rather than by a wait.
+
+**Falsified by reverting the attribution** (the single shared sentence restored) and rerunning:
+`Failed: 3, Passed: 1` — all three cause tests red on their own assertion, and the positive control
+**stays green**, which is why it exists: a "fix" that refused everything with a more descriptive
+sentence would satisfy all three of the others on its own. The pairwise *"and NEITHER of the other
+two"* assertions are the other half of that — they are what a re-merge of two causes into one
+sentence reds on.
+
 ## What this deliberately does not do
 
 - **Any retry, resubscribe or widened grace.** The issue rules all three out and so does this: an
@@ -361,6 +456,11 @@ every defect-direction assertion on this page.
   and moving the 5-second grace only moves the cliff.
 - **The harness half.** A Store install click with no outcome check and no wait — unlike its sibling
   `install()` helper, which retries in rounds — stays in MeshWeaver.Education#275.
+- **Making a lost action run, now that the cause is named.** Naming the cause is an ATTRIBUTION
+  change: it tells a reader which of the three they are looking at, and gives the third one — an
+  owner-side per-node hub deactivating under a live subscriber — a ticket of its own instead of
+  reopening this one. A resubscribe-before-accept fix for that route would belong there, and it
+  would still not be a timer, a retry or a widened grace.
 
 ## Related
 
