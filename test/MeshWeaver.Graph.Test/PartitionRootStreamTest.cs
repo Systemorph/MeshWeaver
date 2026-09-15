@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -193,12 +192,14 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
             // navigation says so in as many words). Asserting a non-null control on every area
             // turned "this page also has an index" into a 12 s timeout that said nothing about
             // the icon under test.
+            // Whichever comes first: the area's first real control, or "nothing" once the probe
+            // budget runs out. Awaited through the package's own wait (Should().Within), never an
+            // observable-to-task bridge (ObservableToTaskBridgeGuard: "no ToTask ever").
             var control = await stream.GetControlStream(area)
                 .Where(c => c != null)
                 .Take(1)
-                .Timeout(ProbeBudget)
-                .Catch((Exception _) => Observable.Return<UiControl?>(null))
-                .ToTask();
+                .Amb(Observable.Timer(ProbeBudget).Select(_ => (UiControl?)null))
+                .Should().Within(ProbeBudget + ReadBudget).Match(_ => true);
             if (control is null)
                 return;
             if (control is HtmlControl html
