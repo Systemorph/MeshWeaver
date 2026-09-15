@@ -2090,6 +2090,14 @@ jobs:
     - name: "The lane platform resolver chooses by the rule and refuses every dead end (self-test)"
       run: python3 .github/scripts/resolve-platform.py --self-test
 
+    # The recorder that writes a DEAD test host into its own trx (#2495) — here and, from the
+    # platform checkout, in every satellite's suite loop. Its reason to exist is the host that wrote
+    # nothing, which is also the host whose results DIRECTORY was never created (MeshWeaver.Plugins,
+    # 2026-09-15: `[Errno 2]`, the crash unrecorded). Offline cases: no directory, a streamed trx,
+    # a truncated trx.
+    - name: "The host-crash recorder writes a dead host into its trx, directory and all (self-test)"
+      run: python3 .github/scripts/record-host-crash.py --self-test
+
     # 🚨 Every job in every workflow carries a LITERAL `timeout-minutes` <= 45 (maintainer, 2026-09-02:
     # "hard cut CI runs after 45min — we pay all this"). GitHub's default is 360; one uncapped job in
     # the module-pack lane held a runner for six hours per run across 19 concurrent Plugins runs and
