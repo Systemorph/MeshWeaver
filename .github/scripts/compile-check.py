@@ -751,6 +751,30 @@ def write_project(work: Path, cs_files, refs: dict):
     (work / "refs.txt").write_text(ref_xml, encoding="utf-8")
 
 
+
+def _rx_fallback_version() -> str:
+    """The Rx version to restore when the refs dir carries none — READ from the platform's own
+    `Directory.Packages.props`, never written here.
+
+    🚨 A literal in this file is a second place to forget, and it HAD been forgotten: it still said
+    `6.1.0` after the platform moved to `7.0.0` (AssemblyVersion 6.1.0.0 → 7.0.0.0), which is the
+    CS1705 half of MeshWeaver.Plugins#1911. The props file is also MeshWeaver.Plugins' version
+    source — it has no `Directory.Packages.props` of its own — so reading it is reading the one fact
+    both repositories already agree on.
+
+    Falls back to the literal only when the props file cannot be read at all (a refs-only checkout);
+    that value is then knowingly a guess, and it is the branch a refs dir with Rx never reaches.
+    """
+    props = ROOT / "Directory.Packages.props"
+    try:
+        m = re.search(r'Include="System\.Reactive"\s+Version="([^"]+)"', props.read_text(encoding="utf-8"))
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    return "7.0.0"
+
+
 def build_csproj(work: Path, cs_files, ref_xml: str, with_config_check: bool = False,
                  impl_frameworks: bool = False) -> str:
     compiles = '    <Compile Include="GlobalUsings.cs" />\n'
@@ -768,9 +792,28 @@ def build_csproj(work: Path, cs_files, ref_xml: str, with_config_check: bool = F
     # and System.Reactive come from the same refs dir in this mode.
     impl_props = ("    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>\n"
                   if impl_frameworks else "")
+    # 🚨 THE Rx PIN IS EMITTED ONLY WHEN THE REFS DIR DOES NOT ALREADY CARRY System.Reactive
+    # (MeshWeaver.Plugins#1911). A hard-coded `Version="6.1.0"` beside a refs dir whose platform
+    # assemblies were built against Rx 7 is CS1705 BY CONSTRUCTION, on every NodeType whose set
+    # binds MeshWeaver.Messaging.Hub / Mesh.Contract / Graph:
+    #
+    #   CS1705: Assembly 'MeshWeaver.Messaging.Hub' … uses 'System.Reactive, Version=7.0.0.0' which
+    #           has a higher version than referenced assembly 'System.Reactive' … '6.1.0.0'
+    #
+    # and the message names THIS REPO'S CONTENT ("13 NodeTypes breaking") rather than the reference
+    # set — a gate that is red on a green main is a gate people learn to ignore, which this file's
+    # header already says about the registry-served module assemblies one layer up.
+    #
+    # When the refs dir carries `System.Reactive.dll`, `ref_xml` already declares it with a HintPath,
+    # and THAT is authoritative: it is the exact assembly the platform image runs. Restoring a second
+    # copy from NuGet beside it can only ever agree by luck. So the pin is the fallback for a refs dir
+    # that has no Rx at all, never a competitor to one that does — and there is no version literal to
+    # go stale in the case that actually occurs.
+    rx_in_refs = 'Include="System.Reactive"' in ref_xml
     framework_items = ("" if impl_frameworks else
                        '    <FrameworkReference Include="Microsoft.AspNetCore.App" />\n'
-                       '    <PackageReference Include="System.Reactive" Version="6.1.0" />\n')
+                       + ("" if rx_in_refs else
+                          f'    <PackageReference Include="System.Reactive" Version="{_rx_fallback_version()}" />\n'))
     return f'''<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -956,6 +999,32 @@ def _self_test() -> int:
             failures.append(f"  reference-set filter kept {sorted(kept)!r}; expected only System.Text.Json.dll + MeshWeaver.Data.dll")
         if not is_reference_assembly(os.path.join(flat, "System.Text.Json.dll")):
             failures.append("  is_reference_assembly refused the real System.Text.Json.dll")
+
+    # 🚨 THE Rx PIN MUST NOT COMPETE WITH A REFS DIR THAT ALREADY CARRIES Rx
+    # (MeshWeaver.Plugins#1911). A `PackageReference System.Reactive 6.1.0` emitted beside a
+    # `<Reference>` to the platform's own System.Reactive is CS1705 on every NodeType binding
+    # MeshWeaver.Messaging.Hub — and the error names the repository's CONTENT, not the reference
+    # set, so it reads as "13 NodeTypes broke". All three branches are asserted because the bug was
+    # a branch nobody could see from the outside: CI always took the impl path, a laptop always took
+    # the other one, and only the laptop had a stale pin to trip over.
+    _rx_refs = '    <Reference Include="System.Reactive"><HintPath>/x/System.Reactive.dll</HintPath></Reference>'
+    _no_rx = '    <Reference Include="Foo"><HintPath>/x/Foo.dll</HintPath></Reference>'
+    _PIN = 'PackageReference Include="System.Reactive"'
+    if _PIN in build_csproj(Path("/tmp"), [], _rx_refs):
+        failures.append("  the Rx pin was emitted although the refs dir already carries System.Reactive "
+                        "— that is the CS1705 pairing (Plugins#1911)")
+    if _PIN not in build_csproj(Path("/tmp"), [], _no_rx):
+        failures.append("  the Rx pin was NOT emitted for a refs dir without System.Reactive — "
+                        "the fallback is gone and an Rx-using set has nothing to bind")
+    if _PIN in build_csproj(Path("/tmp"), [], _rx_refs, impl_frameworks=True):
+        failures.append("  the Rx pin leaked into implementation-framework mode, where every "
+                        "framework assembly must come from the refs dir")
+    # 🚨 And the fallback's VERSION is read from the platform's own props, never written here. The
+    # literal had already gone stale once (6.1.0 against a platform on 7.0.0) — that is the CS1705.
+    _declared = _rx_fallback_version()
+    if f'Version="{_declared}"' not in build_csproj(Path("/tmp"), [], _no_rx):
+        failures.append(f"  the Rx fallback does not carry Directory.Packages.props' own "
+                        f"{_declared} — a second version literal has drifted again")
 
     # 🚨 THE MODULE-REFS GUARD MUST BE ABLE TO FIRE. Its whole job is to refuse a run whose
     # reference set is short, so a guard that silently finds nothing to complain about reads
