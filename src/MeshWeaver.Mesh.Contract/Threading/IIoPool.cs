@@ -120,4 +120,18 @@ public interface IIoPool
 
     /// <summary>Operations currently in flight through this pool. Diagnostics / tests only.</summary>
     int CurrentInFlight { get; }
+
+    /// <summary>
+    /// How long granted work WAITED for a slot on this pool, as a distribution.
+    ///
+    /// <para>The companion to <see cref="CurrentInFlight"/>, and the one that answers a different
+    /// question: in-flight says how much is running NOW, this says what it COST to get there. A
+    /// cap is too small when the tail buckets fill, not when the mean rises — see
+    /// <see cref="IoPoolWaitStats"/> for why that distinction is the whole point (MeshWeaver#1198).</para>
+    ///
+    /// <para>Defaulted to <see cref="IoPoolWaitStats.Empty"/> so an implementation that does not
+    /// instrument is not obliged to — an empty reading is honest ("this pool reports nothing"),
+    /// and the caller can tell it from a busy pool by <see cref="IoPoolWaitStats.Samples"/>.</para>
+    /// </summary>
+    IoPoolWaitStats QueueWait => IoPoolWaitStats.Empty;
 }
