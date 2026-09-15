@@ -135,8 +135,9 @@ neither of them a bug in the sweep:
    denominator against an RLS-filtered one — not an independent per-replica verdict (corrected on
    [#4320](https://github.com/Systemorph/MeshWeaver/issues/4320)). The genuinely per-replica signals
    are `/health`'s `content-types` (a read that degraded on THIS replica) and `bake-report`'s
-   store-probe states (`Baked` / `BytesMissing` / `FrameworkStale` / pending), which probe this
-   replica's own assembly store.
+   `Baked` / `BytesMissing` split — the only states decided by probing this replica's own assembly
+   store. `FrameworkStale`, `NeverBuilt` and `PreviouslyBroken` are decided from the shared record
+   alone (`NodeTypeBakeStatus.ClassifyDetailed` returns them before the store is asked).
 
 🚨 And `/health` answers about **one replica you did not choose**: six calls to the same host landed
 on at least five replicas, whose bake sweeps ranged from 2026-09-12T12:55Z to 2026-09-14T08:44Z and
@@ -146,8 +147,9 @@ control instance's `{ "requestedAction": "Sample" }` — see [Operating From The
 for the portal namespaces, so every `Ops/Status/*` reads `notScraped: true / replicas: []` until
 [#4218](https://github.com/Systemorph/MeshWeaver/issues/4218) is fixed, and a `Sample` today carries no
 per-replica `/health` body at all. What does protect a roll is the new replica's `nodetype_bake`
-readiness gate, which refuses readiness for a type that REGRESSED on its image — and passes one already
-at `Error`, so such a type is never named by it.
+readiness gate — **when it is registered and armed** (the host registers it only under `gateBake`,
+and an unarmed gate admits traffic) — which refuses readiness for a type that REGRESSED on its image
+and passes one already at `Error`, so such a type is never named by it.
 
 ## What would close this class
 
