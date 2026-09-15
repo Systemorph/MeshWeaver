@@ -1,7 +1,9 @@
 ---
 Name: NuGet Packages
 Category: Documentation
-Description: Load any NuGet package directly from an interactive markdown code cell using the #r "nuget:..." directive — no SDK, no restart.
+Description: >-
+  Load any NuGet package directly from an interactive markdown code cell using the #r "nuget:..."
+  directive — no SDK, no restart.
 ---
 
 Interactive markdown in MeshWeaver is backed by a Roslyn scripting kernel (`Microsoft.CodeAnalysis.CSharp.Scripting`). It supports the same package-management directive Polyglot Notebooks made familiar: `#r "nuget:PackageId, Version"` — but the implementation is MeshWeaver's own, not .NET Interactive's. MeshWeaver resolves the package in-process using `NuGet.Protocol`, `NuGet.Packaging`, and `NuGet.Resolver` — no .NET SDK, no MSBuild — adds its assemblies to the kernel's compilation references, and the package is usable immediately without restarting the portal.

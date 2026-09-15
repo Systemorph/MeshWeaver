@@ -1,7 +1,10 @@
 ---
 Name: Thread Chat in React
 Category: Documentation
-Description: The React chat — watching the thread node and its message satellites, composer gating, and submission via startThread/submitMessage: the same node shapes as the .NET HubThreadExtensions surface, no parallel protocol.
+Description: >-
+  The React chat — watching the thread node and its message satellites, composer gating, and
+  submission via startThread/submitMessage: the same node shapes as the .NET HubThreadExtensions
+  surface, no parallel protocol.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
 ---
 
