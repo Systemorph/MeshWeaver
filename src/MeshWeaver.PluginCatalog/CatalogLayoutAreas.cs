@@ -1168,10 +1168,52 @@ public static class CatalogLayoutAreas
 
                 if (record?.InstalledFiles is not { Count: > 0 })
                     return Full();
+                var baseline = record;
+
+                // 🚨 #4355 — THE DELTA'S BASELINE IS A CLAIM ABOUT THE MESH, AND ONLY ITS OWNER MAY
+                // MAKE IT. `record.InstalledFiles` describes what THIS installer last wrote. On a
+                // partition a sync source keeps current, a second writer has rewritten the content
+                // since — the seal reconciler re-imports the whole partition at the sealed commit and
+                // does not touch this record — so the diff declares "unchanged" for files the mesh no
+                // longer holds at that content and never fetches them. Measured on
+                // memex.systemorph.com 2026-09-14: `Store/Core/Source/StoreTexts.cs` was identical
+                // between the record's 1.10.14 and the served 1.11.1, was skipped, and stayed at the
+                // git tree's 1.10.3 text while five sibling types landed at 1.11.1 —
+                // `CS1061 'StoreTexts' does not contain a definition for 'ExploreCta'`.
+                //
+                // So where the installer does not own the content, the incremental path is not
+                // available: a FULL install writes every file the package ships and stamps a record
+                // that is true of the mesh again. `Undetermined` takes the same arm — a baseline that
+                // could not be shown trustworthy is not a trustworthy baseline — and the extra cost
+                // is one full package fetch, paid only when an update is actually landing (the
+                // hash-equal skip above is unaffected) and only on a synced partition.
+                //
+                // This is the OTHER half of the invariant from the gate in PackageUpdateReconciler:
+                // that one stops the unattended lane from BECOMING the second writer; this one holds
+                // for every lane that still writes here by design — the seal-pinned boot install
+                // (#4259) and a human's Update click — so no lane can diff against a record that has
+                // stopped describing the partition.
+                return PartitionContentOwnership
+                    .Observe(hub, PackageInstaller.TargetPartitionOf(pkg.Id, baseline), pkg.Id, logger)
+                    .SelectMany(ownership => ownership.InstallerOwnsTheContent
+                        ? Incremental(baseline)
+                        : FullBecauseTheBaselineIsNotOurs(ownership));
+
+                IObservable<InstallResult> FullBecauseTheBaselineIsNotOurs(
+                    PartitionContentOwnershipVerdict ownership)
+                {
+                    logger?.LogWarning(
+                        "Updating {Id}: its install record's {Files} declared file(s) cannot be used "
+                        + "as a diff baseline — {Because}. Installing in FULL instead, so the record "
+                        + "describes the partition again (MeshWeaver#4355).",
+                        pkg.Id, baseline.InstalledFiles!.Count, ownership.Because);
+                    return Full();
+                }
+
                 // Verified INSIDE the Catch, never around it: a fall-back to Full() is itself
                 // verified, and wrapping the whole thing would report the landing twice.
-                return Verified(WithModule(
-                        IncrementalUpdate(hub, source, sourceRef, pkg, record, logger, authorizingUserId)))
+                IObservable<InstallResult> Incremental(PackageManifest current) => Verified(WithModule(
+                        IncrementalUpdate(hub, source, sourceRef, pkg, current, logger, authorizingUserId)))
                     .Catch<InstallResult, Exception>(ex =>
                     {
                         // A REFUSAL is not a failure to fall back from — the full install would be
