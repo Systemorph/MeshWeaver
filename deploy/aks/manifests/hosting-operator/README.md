@@ -50,6 +50,23 @@ config:
 🚨 **Only on the control instance.** `Hosting:Operator:Enabled` on a tenant portal would give that
 tenant's pod the ability to start a job that can delete any namespace on the cluster.
 
+### Which executor runs the actions
+
+`hostingOperator.executor` (record: `operator.executor`) picks how the control instance runs its
+lifecycle actions (Plugins#1738):
+
+| Executor | What runs an action | What the portal needs |
+|---|---|---|
+| `Job` (default) | This operator image, as a Job in `memex-ops` | `enabled: true`, `image`, the jobrunner token mount |
+| `Actions` | Systemorph/Memex `aks-ops.yml`, dispatched through the `systemorph-com` GitHub App and approved in the mesh | Nothing on the cluster: run it with `enabled: false` |
+
+The chart renders `Hosting__Operator__Executor` outside the `enabled` block, because the Actions
+executor is meant to run with the Job switched off. `hostingOperator.maintainer` (record:
+`operator.maintainer`) names the one user id that may approve its own request, and renders only when
+set. Any executor other than `Job` or `Actions` fails the render, since the portal reads every other
+value as `Job`. `check-chart-invariants.sh` asserts both halves (invariant 17 and the Actions
+fixture).
+
 ## The image is published on every push to `main`
 
 `meshweaver.azurecr.io/hosting-operator:<short sha>` (immutable — what a deployment record pins)

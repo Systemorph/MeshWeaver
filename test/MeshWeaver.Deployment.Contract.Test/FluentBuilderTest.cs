@@ -58,6 +58,35 @@ public class FluentBuilderTest
     }
 
     [Fact]
+    public void TheActionsExecutorReachesTheConfigWithTheOperatorJobOff()
+    {
+        // Plugins#1738: the control instance runs its actions through aks-ops.yml and the GitHub App,
+        // with the in-cluster Job disabled. The switch must therefore render on its own, and the
+        // Job flag must NOT come along with it.
+        var record = new DeploymentContent().WithOperatorExecutor(" actions ", "rbuergi");
+        Assert.False(record.Operator!.Enabled);
+        Assert.Equal("Actions", record.Operator.Executor);
+        Assert.Equal("rbuergi", record.Operator.Maintainer);
+
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+        {
+            var config = DeploymentPortalConfig.PortalConfig(record, options);
+            Assert.Equal("Actions", config["Hosting__Operator__Executor"]);
+            Assert.Equal("rbuergi", config["Hosting__Operator__Maintainer"]);
+            Assert.False(config.ContainsKey("Hosting__Operator__Enabled"), "the executor switch must not arm the operator Job");
+        }
+
+        // Switching back keeps the maintainer, and an operator without an executor emits no key.
+        Assert.Equal("rbuergi", record.WithOperatorExecutor("Job").Operator!.Maintainer);
+        var jobOnly = DeploymentPortalConfig.PortalConfig(new DeploymentContent().WithOperator(), PortalConfigOptions.Helm);
+        Assert.False(jobOnly.ContainsKey("Hosting__Operator__Executor"), "blank means Job, and the chart's default says so");
+        Assert.False(jobOnly.ContainsKey("Hosting__Operator__Maintainer"));
+
+        // The portal reads anything but "Actions" as Job, so a misspelling must not reach it.
+        Assert.Throws<ArgumentException>(() => new DeploymentContent().WithOperatorExecutor("Action"));
+    }
+
+    [Fact]
     public void TheSameRecordRendersTheSameKeysForHelmAndForAspire()
     {
         // The two renderers differ in exactly the ways PortalConfigOptions names: Helm emits the

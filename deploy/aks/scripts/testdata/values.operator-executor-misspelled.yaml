@@ -1,0 +1,7 @@
+# FIXTURE for check-chart-invariants.sh (a REFUSAL) — an operator executor the portal would read as
+# Job. ActionsExecutor.ExecutorOf treats anything but "Actions" as the in-cluster Job, so "Action"
+# would silently keep the path the switch exists to leave. The chart must refuse the render and say
+# "must be Job or Actions" (Plugins#1738).
+hostingOperator:
+  enabled: false
+  executor: "Action"
