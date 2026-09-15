@@ -172,6 +172,10 @@ public static class DataExtensions
                 });
                 sc.AddScoped<IAutocompletePrefixRegistry, AutocompletePrefixRegistry>();
                 sc.AddScoped<IDataValidator, RlsDataValidator>();
+                // Scoped, i.e. one INSTANCE per hub, so its lifetime IS the activation it answers
+                // about — see SyncStreamActivationLedger for why "on this activation" is the whole
+                // content of the answer, and NoStaticState for why it can never be static.
+                sc.AddScoped<SyncStreamActivationLedger>();
                 sc.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider, DataAutocompleteProvider>());
                 return sc;
             })
@@ -294,6 +298,13 @@ public static class DataExtensions
         if (message is not StreamMessage streamMessage)
             return Observable.Return(request);
 
+        // 🚨 ONE HALF OF WHAT SPLITS THE REFUSAL FINGERPRINT (#3986 residue). Recorded BEFORE the
+        // walk, so it is recorded whether or not the sub-hub is still there to receive it: the
+        // whole point is that a LATER refusal can say "the subscriber released this stream" instead
+        // of naming all three causes at once. Records only; routing is unchanged below.
+        if (streamMessage is UnsubscribeRequest)
+            SyncStreamActivationLedger.For(hub)?.RecordUnsubscribeReceived(streamMessage.StreamId);
+
         request = request.ForwardTo(SynchronizationAddress.Create(streamMessage.StreamId));
 
         // Walk the parent chain looking for the sync sub-hub. The sync hub may
@@ -356,7 +367,7 @@ public static class DataExtensions
         // register, so drop straight away.
         if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
         {
-            RefuseStreamMessage(hub, request, streamMessage, message, heldFor: TimeSpan.Zero);
+            RefuseStreamMessage(hub, walked, request, streamMessage, message, heldFor: TimeSpan.Zero);
             return Observable.Return(request.Ignored());
         }
 
@@ -388,7 +399,7 @@ public static class DataExtensions
             .ToArray();
         if (hubAddedSignals.Length == 0)
         {
-            RefuseStreamMessage(hub, request, streamMessage, message, heldFor: TimeSpan.Zero);
+            RefuseStreamMessage(hub, walked, request, streamMessage, message, heldFor: TimeSpan.Zero);
             return;
         }
 
@@ -437,7 +448,7 @@ public static class DataExtensions
                     // the run" for two unrelated suites when both had ended theirs at ~0.1 s. A
                     // diagnostic that misdates its own subject is worse than none.
                     if (System.Threading.Interlocked.Exchange(ref delivered, 1) == 0)
-                        RefuseStreamMessage(hub, request, streamMessage, message, grace);
+                        RefuseStreamMessage(hub, walked, request, streamMessage, message, grace);
                     sub.Dispose();
                 });
 
@@ -465,13 +476,57 @@ public static class DataExtensions
     /// than a delivery.</para>
     /// </summary>
     private static void RefuseStreamMessage(
-        IMessageHub hub, IMessageDelivery request, StreamMessage streamMessage, object message,
-        TimeSpan heldFor)
+        IMessageHub hub, IReadOnlyList<IMessageHub> walked, IMessageDelivery request,
+        StreamMessage streamMessage, object message, TimeSpan heldFor)
     {
         if (message is IUserAction userAction)
-            RefuseUserAction(hub, request, streamMessage, userAction, heldFor);
+            RefuseUserAction(
+                hub, ClassifyLostStream(walked, streamMessage.StreamId), request, streamMessage,
+                userAction, heldFor);
         else
             LogStreamMessageDrop(hub, request, streamMessage, message, heldFor);
+    }
+
+    /// <summary>
+    /// 🚨 WHICH of the three ends this stream met — the residue of issue #3986, and the reason it
+    /// was reopened by an occurrence the original fix could not reach.
+    ///
+    /// <para>The refusal sentence named all three causes at once, so the incident fingerprint
+    /// conflated a DESIGNED refusal (the subscriber released the stream; a click raced the release
+    /// it asked for) with a LIVE defect (an owner-side per-node hub deactivated while a subscriber
+    /// was still attached). One sentence answered for both, the bot folded them into one issue, and
+    /// two triages were spent re-deriving which one they were looking at.</para>
+    ///
+    /// <para>The ledgers are asked of EVERY hub the sub-hub search walked, not just this one, for
+    /// the reason the walk itself exists: the <c>sync/{id}</c> may have been registered on an
+    /// ancestor. Folded most-specific-first — an explicit release outranks a reap, a reap outranks
+    /// an absence, and an absence that any ledger cannot vouch for
+    /// (<see cref="LostStreamCause.NoRecord"/>) is reported as exactly that rather than as
+    /// <see cref="LostStreamCause.NeverRegistered"/>.</para>
+    /// </summary>
+    private static LostStreamCause ClassifyLostStream(
+        IReadOnlyList<IMessageHub> walked, string streamId)
+    {
+        var verdict = LostStreamCause.NeverRegistered;
+        foreach (var candidate in walked)
+        {
+            switch (SyncStreamActivationLedger.For(candidate)?.Classify(streamId))
+            {
+                case LostStreamCause.ReleasedBySubscriber:
+                    return LostStreamCause.ReleasedBySubscriber;
+                case LostStreamCause.ReapedByOwner:
+                    verdict = LostStreamCause.ReapedByOwner;
+                    break;
+                case LostStreamCause.NoRecord when verdict == LostStreamCause.NeverRegistered:
+                    verdict = LostStreamCause.NoRecord;
+                    break;
+                // NeverRegistered from one ledger says nothing about the others; a hub with no
+                // ledger at all (no data plugin, or a closed DI scope) equally says nothing.
+                default:
+                    break;
+            }
+        }
+        return verdict;
     }
 
     /// <summary>
@@ -512,23 +567,77 @@ public static class DataExtensions
     /// <para>The sentence the person reads is localized off the ACTING USER's
     /// <c>AccessContext.Locale</c> — the one carried by the delivery being refused — never an
     /// ambient culture, which on Blazor Server is the container's and identical for every viewer.</para>
+    ///
+    /// <para>🚨 <b>The operator line names WHICH end the stream met, and each cause is its own
+    /// literal TEMPLATE</b> (the #3986 residue). One sentence for three causes meant one
+    /// fingerprint for three causes: an incident opened on the ordering defect was reopened three
+    /// days after that defect was fixed and deployed, by a DIFFERENT route — an owner-side per-node
+    /// hub whose <c>sync/{id}</c> was never registered on the activation that got the click — which
+    /// the fix could not reach and the sentence could not distinguish. The cause is part of the
+    /// message template rather than a parameter so the split holds however a reader's fingerprint
+    /// is derived (from the template, or from the rendered line). Nothing else changes: the same
+    /// <c>Error</c> level, the same refusal, the same sentence to the person. See
+    /// <see cref="SyncStreamActivationLedger"/> and
+    /// <c>Doc/Architecture/RefusingALostUserAction</c>.</para>
     /// </summary>
     private static void RefuseUserAction(
-        IMessageHub hub, IMessageDelivery request, StreamMessage streamMessage,
-        IUserAction userAction, TimeSpan heldFor)
+        IMessageHub hub, LostStreamCause cause, IMessageDelivery request,
+        StreamMessage streamMessage, IUserAction userAction, TimeSpan heldFor)
     {
         try
         {
             var age = DescribeHold(heldFor);
-            hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger(typeof(DataExtensions).FullName!)
-                .LogError(
-                    "REFUSING {MessageType} on area {Area} for stream {StreamId} on hub {Address}: "
-                    + "the target stream is gone (disposed circuit, released read stream, or "
-                    + "never-created sync hub), so the action the user asked for did NOT run and "
-                    + "never will. Sender: {Sender}.{Age}",
-                    request.Message.GetType().Name, userAction.ActionArea, streamMessage.StreamId,
-                    hub.Address, request.Sender, age);
+            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(DataExtensions).FullName!);
+            var messageType = request.Message.GetType().Name;
+            switch (cause)
+            {
+                case LostStreamCause.ReleasedBySubscriber:
+                    logger?.LogError(
+                        "REFUSING {MessageType} on area {Area} for stream {StreamId} on hub {Address}: "
+                        + "the SUBSCRIBER RELEASED this stream — an UnsubscribeRequest for it reached "
+                        + "this hub — so the action raced a teardown the client itself asked for. It "
+                        + "did NOT run and never will. Sender: {Sender}.{Age}",
+                        messageType, userAction.ActionArea, streamMessage.StreamId,
+                        hub.Address, request.Sender, age);
+                    break;
+                case LostStreamCause.ReapedByOwner:
+                    logger?.LogError(
+                        "REFUSING {MessageType} on area {Area} for stream {StreamId} on hub {Address}: "
+                        + "this hub SERVED this stream on the current activation and was never told to "
+                        + "unsubscribe, so the OWNER side ended it (an idle release, a workspace "
+                        + "eviction, a sub-hub teardown) while the subscriber was still attached. The "
+                        + "action did NOT run and never will. Sender: {Sender}.{Age}",
+                        messageType, userAction.ActionArea, streamMessage.StreamId,
+                        hub.Address, request.Sender, age);
+                    break;
+                case LostStreamCause.NeverRegistered:
+                    logger?.LogError(
+                        "REFUSING {MessageType} on area {Area} for stream {StreamId} on hub {Address}: "
+                        + "NO sync hub for this stream was EVER registered on the current activation, "
+                        + "so the subscriber is addressing an activation that no longer exists (a "
+                        + "per-node hub that deactivated under a live subscription, or a subscribe "
+                        + "that never completed here). The action did NOT run and never will. "
+                        + "Sender: {Sender}.{Age}",
+                        messageType, userAction.ActionArea, streamMessage.StreamId,
+                        hub.Address, request.Sender, age);
+                    break;
+                default:
+                    // 🚨 The ledger states its OWN denominator here, because that is the entire
+                    // content of this branch: it is not a cause, it is "I can no longer tell the
+                    // last two apart", and a reader needs the numbers to know how far from an
+                    // answer it is.
+                    var ledger = SyncStreamActivationLedger.For(hub);
+                    logger?.LogError(
+                        "REFUSING {MessageType} on area {Area} for stream {StreamId} on hub {Address}: "
+                        + "this hub holds NO RECORD of the stream — its activation ledger has already "
+                        + "aged {Aged} disposition(s) out and holds {Held}, so 'never served here' and "
+                        + "'served and long since ended' cannot be told apart. The action did NOT run "
+                        + "and never will. Sender: {Sender}.{Age}",
+                        messageType, userAction.ActionArea, streamMessage.StreamId, hub.Address,
+                        ledger?.Pruned ?? 0, ledger?.Held ?? 0, request.Sender, age);
+                    break;
+            }
 
             // Tell whoever is still attached. A hub already past DisposeHostedHubs declines its own
             // posts, and a NACK addressed to ourselves is noise, so both are excluded — this is
