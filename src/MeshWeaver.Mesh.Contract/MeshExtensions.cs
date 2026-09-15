@@ -3735,8 +3735,14 @@ public static class MeshExtensions
             {
                 // Outstanding from the moment this leg is posted, not from the moment the fan-out
                 // was planned — see the note on `unanswered` above.
-                unanswered.TryAdd(p, 0);
+                //
+                // 🚨 COUNT FIRST, then mark outstanding. The stage backstop reads both from another
+                // thread and prints them as "{pending} of {posted}"; with the writes the other way
+                // round a snapshot taken between them reads `1 of 0`, which is not a number anyone
+                // can act on. This order can only ever under-report by one — "0 of 1 posted", which
+                // is true: the request is counted before it can be outstanding.
                 System.Threading.Interlocked.Increment(ref posted);
+                unanswered.TryAdd(p, 0);
                 return issuingHub
                     // 🚨 Stamp the caller's AccessContext on every ValidateDeleteRequest.
                     // This post fires from a SelectMany continuation on the workspace's

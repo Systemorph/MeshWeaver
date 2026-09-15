@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -61,7 +62,8 @@ public class DeletePreflightNamesTheSilentDescendantTest(ITestOutputHelper outpu
     /// Three, not one: the subject is that the SILENT leaf is named and the healthy ones are not,
     /// which a single-descendant subtree cannot tell apart from "the report echoes the plan".
     /// </summary>
-    private static readonly string[] DescendantIds = ["healthy-a", SilentId, "healthy-b"];
+    private static readonly ImmutableArray<string> DescendantIds =
+        ["healthy-a", SilentId, "healthy-b"];
 
     private readonly SilentOnOnePathDeletionValidator validator =
         new($"{TestPartition}/{RootId}/{SilentId}");
