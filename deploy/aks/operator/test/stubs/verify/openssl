@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# A stand-in `openssl` for the hosting-verify certificate tests. It serves ONE certificate, named
+# by $HOSTING_VERIFY_STUB_CN and $HOSTING_VERIFY_STUB_SANS; with HOSTING_VERIFY_STUB_NOCERT set it
+# serves none, which is the "no TLS at all" shape.
+set -u
+case "${1:-}" in
+  s_client)
+    [ -n "${HOSTING_VERIFY_STUB_NOCERT:-}" ] && exit 1
+    printf -- '-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n' ;;
+  x509)
+    [ -n "${HOSTING_VERIFY_STUB_NOCERT:-}" ] && exit 1
+    cat >/dev/null
+    case "$*" in
+      *subjectAltName*) printf 'X509v3 Subject Alternative Name: \n    DNS:%s\n' "${HOSTING_VERIFY_STUB_SANS:-${HOSTING_VERIFY_STUB_CN:-other.example.com}}" ;;
+      *subject*)        printf 'subject=CN=%s\n' "${HOSTING_VERIFY_STUB_CN:-other.example.com}" ;;
+    esac ;;
+  *) exit 1 ;;
+esac

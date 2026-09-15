@@ -7,6 +7,15 @@
 # DNS resolving to the ingress, the certificate matching the host, and the app returning 200. A
 # rollout status proves none of them. This is the step that turns "helm says deployed" into "a
 # browser can open it", so it deliberately does NOT pass --insecure.
+#
+# 🚨 AND IT NAMES WHICH ONE FAILED. Without a certificate of its own, an ingress serves the
+# controller's fallback — another instance's certificate, valid but for the wrong host. curl then
+# refuses the connection, so this step used to spend 30 attempts × 10 s and report "never
+# answered", which reads like a dead app and sends the reader to the pods. It is not the app: it
+# is the certificate. So on failure the served certificate is read and compared against the host,
+# and the refusal says whether NO certificate was served, the WRONG one was, or TLS was fine and
+# the application answered badly. pearl.meshweaver.cloud served CN=memex.meshweaver.cloud for nine
+# hours on 2026-09-15 while its portal was healthy (Systemorph/Memex, the pearl Provision).
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
@@ -34,22 +43,61 @@ fi
 url="https://${host}${path}"
 hosting::log "probing ${url}"
 
+# The certificate the host actually serves, as "subject|SAN list" — empty when no handshake.
+served_cert() {
+  local pem
+  pem="$(echo | openssl s_client -servername "$host" -connect "${host}:443" 2>/dev/null \
+    | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p')"
+  [ -n "$pem" ] || return 1
+  local subject sans
+  subject="$(printf '%s\n' "$pem" | openssl x509 -noout -subject 2>/dev/null | sed 's/^subject= *//')"
+  sans="$(printf '%s\n' "$pem" | openssl x509 -noout -ext subjectAltName 2>/dev/null \
+    | tr ',' '\n' | sed -n 's/.*DNS://p' | tr -d ' ' | tr '\n' ' ')"
+  printf '%s|%s' "${subject:-unknown}" "${sans}"
+}
+
+# Does a name on the certificate cover this host? Exact match, or a wildcard covering ONE label.
+covers_host() {
+  local names="$1" n
+  for n in $names; do
+    [ "$n" = "$host" ] && return 0
+    case "$n" in
+      \*.*) [ "${host#*.}" = "${n#\*.}" ] && [ "${host%%.*}" != "$host" ] && return 0 ;;
+    esac
+  done
+  return 1
+}
+
 last_status="" last_error=""
 for i in $(seq 1 "$attempts"); do
   # --fail-with-body is not universal on alpine curl; read the status explicitly instead.
   last_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url" 2>/tmp/hosting-verify.err)" || true
   last_error="$(cat /tmp/hosting-verify.err 2>/dev/null || true)"
   if [ "$last_status" = "200" ] || [ "$last_status" = "302" ] || [ "$last_status" = "401" ]; then
-    hosting::log "answered ${last_status} on attempt ${i}"
+    # curl verified the chain and the hostname to get here (no --insecure, deliberately). Read the
+    # certificate back anyway and assert it names THIS host: the assertion is what keeps a future
+    # --insecure, or a proxy that terminates elsewhere, from turning this gate into a 200-check.
+    cert="$(served_cert || true)"
+    names="${cert#*|}"
+    if [ -n "$cert" ] && ! covers_host "$names"; then
+      hosting::die "https://${host}${path} answered ${last_status}, but the certificate served is '${cert%%|*}' (names: ${names:-none}) — not this host's. An instance reachable only over the wrong certificate is not provisioned: every browser refuses it."
+    fi
+    hosting::log "answered ${last_status} on attempt ${i} over verified TLS, certificate ${cert%%|*}"
     hosting::say verify "$last_status"
-    # Report the certificate the host actually served, so a wrong-cert ingress is visible in the log
-    # rather than only in a browser.
-    subject="$(echo | openssl s_client -servername "$host" -connect "${host}:443" 2>/dev/null \
-      | openssl x509 -noout -subject 2>/dev/null || true)"
-    [ -n "$subject" ] && hosting::log "served certificate ${subject}"
+    hosting::say tls_subject "${cert%%|*}"
     exit 0
   fi
   [ "$i" -lt "$attempts" ] && sleep 10
 done
 
-hosting::die "https://${host}${path} never answered (last status '${last_status:-none}'${last_error:+, last transport error: ${last_error}}) after ${attempts} attempts. An instance that helm deployed but nobody can open is not provisioned. Check, in this order: the A record resolves to the ingress IP, the TLS secret matches this host, the portal pods are Ready."
+# Which of the three failed? Read the certificate the host serves and say so plainly, instead of
+# sending the reader to the pods for what is a certificate problem nine times out of ten.
+cert="$(served_cert || true)"
+if [ -z "$cert" ]; then
+  hosting::die "https://${host}${path} never answered and the host served NO certificate at all after ${attempts} attempts (last status '${last_status:-none}'${last_error:+, transport: ${last_error}}). Either the A record does not resolve to the ingress yet, or no TLS secret exists for this host — the TLS step is what creates it."
+fi
+names="${cert#*|}"
+if ! covers_host "$names"; then
+  hosting::die "https://${host}${path} is served the WRONG certificate: '${cert%%|*}' (names: ${names:-none}), which does not cover ${host}. That is the ingress controller's fallback, served because this host has no certificate of its own — the portal may well be healthy behind it. Fix the certificate (the TLS step), not the pods."
+fi
+hosting::die "https://${host}${path} never answered (last status '${last_status:-none}'${last_error:+, last transport error: ${last_error}}) after ${attempts} attempts, although TLS is correct: the certificate '${cert%%|*}' covers this host. So DNS and the certificate are fine and the APPLICATION did not answer — check the portal pods and their logs."
