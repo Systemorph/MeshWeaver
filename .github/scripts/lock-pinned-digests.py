@@ -1117,6 +1117,18 @@ def read_repository_roster(root: str) -> tuple[dict[str, str], list[str]]:
     return table, problems
 
 
+def scan_is_complete(discover: bool, root: str | None) -> bool:
+    """Does THIS invocation enumerate the whole fleet? Only `--discover`, and only without `--root`.
+
+    🚨 A PURE FUNCTION BECAUSE `main()` IS NOT FALSIFIABLE (#4400 review). `--root` wins over
+    `--discover` in the branch that builds the repository list, so the two together are a
+    ONE-repository local scan wearing a discovery flag — and reading completeness off the flag alone
+    would let such a run assert that every declared repository it never looked at is gone. The
+    decision is the invocation MODE, never whether an input happens to be present, and it lives here
+    so `--self-test` can drive all four combinations."""
+    return bool(discover) and not root
+
+
 def check_repository_roster(axis2: list[OverlayScan], declared: dict[str, str],
                             complete: bool = True) -> list[str]:
     """Hold the `repositories` table to the repositories the fleet scan actually found, both ways.
@@ -1831,7 +1843,8 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
                 references = [reference for reference in references if reference not in ours]
                 if not references:
                     continue
-            if disposition == "fleet-unlockable" and rules.get(host) == "out-of-estate":
+            rule, estate = rules.get(host, ("", ""))
+            if disposition == "fleet-unlockable" and rule == "out-of-estate":
                 # 🚨 NOT A KEEP SENTENCE FOR AN ESTATE THIS RECORD MEASURES NOTHING ABOUT (#4396
                 # review). "A cleanup must KEEP" reads as a protected set this lane derived and
                 # stands behind; for `out-of-estate` the record says the opposite in as many words,
@@ -1839,9 +1852,9 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
                 # ends up acting on the wrong one.
                 emit(f"      {host} (declared fleet-unlockable, retention `out-of-estate`): "
                      f"{len(references)} committed reference(s), listed and NOT a protected set. "
-                     "This registry is in an estate outside this fleet's reach; what is kept or "
-                     "deleted there is decided there, this record measures nothing about it, and "
-                     "nothing here protects these")
+                     "This registry is in an estate outside this fleet's reach; this record "
+                     "measures nothing about it and nothing here protects these. What is kept or "
+                     f"deleted there is decided by: {estate or '🚨 <the record names no estate>'}")
             elif disposition == "fleet-unlockable":
                 emit(f"      {host} (declared fleet-unlockable): {len(references)} committed "
                      "reference(s) a cleanup must KEEP")
@@ -2976,15 +2989,20 @@ def read_registry_publications(root: str) -> dict[str, set[str]]:
     return declared
 
 
-def read_registry_rules(root: str) -> dict[str, str]:
-    """What retention RULE each registry entry declares — `(host → rule)`.
+def read_registry_rules(root: str) -> dict[str, tuple[str, str]]:
+    """What each registry entry declares about retention — `(host → (rule, estate))`.
+
+    🚨 THE `estate` IS CARRIED, NOT ONLY THE RULE (#4400 review). An `out-of-estate` line that says
+    only "outside this fleet's reach" tells a reader that nobody here answers and not WHO does, so
+    the list is unauditable exactly where it matters — the record names the estate, and the report
+    printed beside it must say the same thing.
 
     Read leniently and used only to LABEL, exactly like `read_registry_publications`:
     `--check-registry-retention` is what holds a rule to anything, and a malformed entry has
     already reddened there. It exists because the report must not print *"a cleanup must KEEP"*
     over a host whose own record says this fleet measures nothing about it (#4396 review)."""
     path = Path(root) / ".github" / "acr-retention" / ROSTER_PATH
-    rules: dict[str, str] = {}
+    rules: dict[str, tuple[str, str]] = {}
     if not path.is_file():
         return rules
     try:
@@ -2999,7 +3017,8 @@ def read_registry_rules(root: str) -> dict[str, str]:
             continue
         retention = entry.get("retention")
         if isinstance(retention, dict):
-            rules[host] = str(retention.get("rule", "")).strip()
+            rules[host] = (str(retention.get("rule", "")).strip(),
+                           str(retention.get("estate", "")).strip())
     return rules
 
 
@@ -5445,10 +5464,62 @@ ingress:
     # fixtures — and the host it names is NOT one this fleet publishes to.
     _committed_registries = json.loads(
         Path(".github/acr-retention/instances.json").read_text(encoding="utf-8"))["registries"]
-    check(any(((entry.get("retention") or {}).get("rule")) == "out-of-estate"
-              for entry in _committed_registries.values()),
+    _estate_hosts = sorted(host for host, entry in _committed_registries.items()
+                           if ((entry.get("retention") or {}).get("rule")) == "out-of-estate")
+    check(_estate_hosts,
           "ARM 36: no committed registry declares `out-of-estate`, so the branch this repository's "
           "own record depends on is driven by fixtures alone")
+
+    # ── ARM 36b: the REPORT says so too, and it names the estate (#4400 review) ─────────────────
+    # 🚨 ARM 36 validates the RECORD through `check_registry_retention` and never renders a line.
+    # A regression to the old *"a cleanup must KEEP"* wording — a protected-set claim over a
+    # registry whose own record says this fleet measures nothing about it — would leave the whole
+    # suite green, and the report is the one artifact a reader checks the declaration against.
+    if _estate_hosts:
+        _estate_host = _estate_hosts[0]
+        _estate_scan = _scan2("Systemorph/Estate", FIXTURE_OVERLAY_FOREIGN.replace(
+            "cr.meshweaver.cloud", _estate_host),
+            "deployments/aks/estate/values.estate.yaml")
+        plan, _, _ = _drive(clean1, clean2 + [_estate_scan],
+                            FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                            dispositions={_estate_host: ("fleet-unlockable", "their estate")},
+                            publications_root=HERE_ROOT)
+        _printed = io.StringIO()
+        with contextlib.redirect_stdout(_printed):
+            report(plan, clean1, clean2 + [_estate_scan], REGISTRY_DEFAULT, _inventory(),
+                   apply=False, release_enabled=False, root=HERE_ROOT)
+        _estate_report = _printed.getvalue()
+        _estate_block = next((line for line in _estate_report.splitlines()
+                              if line.strip().startswith(_estate_host)), "")
+        check("NOT a protected set" in _estate_block,
+              f"ARM 36b: the report printed an `out-of-estate` registry's references as a protected "
+              f"set a cleanup must KEEP. That contradicts the declaration printed beside it, in the "
+              f"artifact a reader checks the declaration against: {_estate_block or _estate_report[-900:]}")
+        check("a cleanup must KEEP" not in _estate_block,
+              f"ARM 36b: the KEEP wording survived on an `out-of-estate` host: {_estate_block}")
+        _declared_estate = str(
+            (_committed_registries[_estate_host].get("retention") or {}).get("estate", ""))
+        check(_declared_estate[:40] and _declared_estate[:40] in _estate_block,
+              f"ARM 36b: the line does not NAME the estate the record names, so a reader is told "
+              f"that nobody here answers and not WHO does — which is what makes the list "
+              f"auditable: {_estate_block}")
+        # 🚨 THE NEGATIVE CONTROL: the branch must be chosen by the RULE, not by the disposition.
+        # `cr.meshweaver.cloud` is `fleet-unlockable` too, and its references ARE a protected set.
+        _keep_scan = _scan2("Systemorph/Memex", FIXTURE_OVERLAY_FOREIGN,
+                            "deployments/aks/build/values.build.public.yaml")
+        plan, _, _ = _drive(clean1, clean2 + [_keep_scan],
+                            FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
+                            dispositions={"cr.meshweaver.cloud": ("fleet-unlockable", "ours")},
+                            publications_root=HERE_ROOT)
+        _printed = io.StringIO()
+        with contextlib.redirect_stdout(_printed):
+            report(plan, clean1, clean2 + [_keep_scan], REGISTRY_DEFAULT, _inventory(),
+                   apply=False, release_enabled=False, root=HERE_ROOT)
+        check("a cleanup must KEEP" in _printed.getvalue(),
+              "ARM 36b: a `fleet-unlockable` registry whose retention is NOT `out-of-estate` lost "
+              "its protected-set sentence, so the new branch is firing on the disposition rather "
+              "than on the rule — and `cr.meshweaver.cloud`'s references really are a set a "
+              "cleanup must keep")
 
     # ── ARM 31: the decided WINDOW is asserted on the record, and the assertion can fail ────────
     # 🚨 The control that matters is the one this repository's own record FAILED on 2026-09-13:
@@ -5773,6 +5844,20 @@ ingress:
           f"ARM 35: a partial scan stopped holding the repositories IN FRONT OF IT to the table. "
           f"The two directions have different denominators; only one of them needs the whole "
           f"fleet: {_partial_strict}")
+    # 🚨 …and WHICH invocations supply that denominator, driven as a pure function because `main()`
+    # is argparse and nothing here can falsify it (#4400 review). `--root` wins over `--discover`
+    # in the branch that builds the repository list, so the pair is a ONE-repository local scan.
+    check(scan_is_complete(True, None), "ARM 35: `--discover` alone was not read as a full fleet")
+    check(not scan_is_complete(False, None),
+          "ARM 35: `--repos` was read as a full fleet, so a partial list would assert that every "
+          "repository it did not name is gone")
+    check(not scan_is_complete(False, "/checkout"),
+          "ARM 35: `--root` was read as a full fleet")
+    check(not scan_is_complete(True, "/checkout"),
+          "ARM 35: `--root` WITH `--discover` was read as a full fleet. `--root` wins in the branch "
+          "that builds the repository list, so that pair scans ONE repository while claiming the "
+          "denominator of the whole fleet — and every declared repository it never looked at would "
+          "read as gone")
     # …and the same run must still be RED overall, so the skip above can never be a pass.
     plan, _, _ = _drive(clean1, [_unreadable], FakeRegistry(_inventory(), FAKE_TAGS))
     check(plan.blockers,
@@ -6000,7 +6085,7 @@ def main() -> int:
                        or os.environ.get("MW_ACR_RELEASE_UNPINNED", "").strip().lower() == "true")
     print(f"scanning {len(repos)} repository(ies) on both pin axes: {', '.join(repos)}")
     return run(repos, args.registry, args.apply, release_enabled, args.root,
-               fleet_is_complete=bool(args.discover))
+               fleet_is_complete=scan_is_complete(args.discover, args.root))
 
 
 if __name__ == "__main__":
