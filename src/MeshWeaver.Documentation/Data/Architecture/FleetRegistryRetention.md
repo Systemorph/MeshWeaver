@@ -454,10 +454,29 @@ pins `ghcr.io/systemorph/mw-plugin-test:latest` as `MW_TEST_IMAGE`.
 
 ### 8.4 The gate DERIVES the publication, and the declaration is load-bearing
 
-`--check-registry-retention` reads the push targets off the **committed lanes** — every `--tag`
-argument and every `mirror-image-to-registry.sh` destination in `main-cd.yml` and `release.yml`,
-with shell continuations joined and `$NS` / `$repo` / `${{ env.* }}` resolved — and holds the table
-to them. A record that checks itself passes on the day it stops being true.
+`--check-registry-retention` reads the push targets off the **committed lanes** — `main-cd.yml` and
+`release.yml` — and holds the table to them. A record that checks itself passes on the day it stops
+being true.
+
+🚨 **Reading a lane is where this kind of derivation goes quietly wrong, so the parsing is stated
+rather than assumed.** A workflow spells one push in more ways than a naive reader expects, and
+every one of these appears in these two lanes:
+
+| spelling | where | read by |
+|---|---|---|
+| `--tag "<host>/<repo>:<tag>"` | main-cd phases A–D | the `--tag` scan |
+| `mirror-image-to-registry.sh <src> <dst>…` | every fleet-registry mirror | the call scan — **no `--tag` on the line at all** |
+| destinations on the next line behind a `\` | phase B's `mw-plugin-test` mirror | the continuation join |
+| a YAML **folded** `run: >`, arguments on following lines, **no backslash** | `main-cd.yml:1260`, `:1416` | the folded-scalar join |
+| `"${{ env.ACR }}/…"` | main-cd's tag lines | the workflow's own `env:` map |
+| a plain shell `"$ACR/…"` / `"${ACR}/…"` | `release.yml:272`, `:275`, `:279` | the same map |
+| `"$NS/$repo"` inside `for repo in …; do` | release.yml's mirror loop | the loop expansion (`$NS` resolved from the owner, and the *assignment* asserted) |
+| `"${margs[@]}"` | phase D's mirror | the array-append collection |
+
+🚨 **An UNRESOLVED host is a PROBLEM, never a silent drop, and the order of the two tests is the
+whole point** — a host still carrying `$` has no dot, so a Docker-Hub short-name test placed first
+discards it with no error. That is a push target dropped silently by the one derivation whose job is
+to make a dropped push target impossible: this issue's own defect, one register down.
 
 | the lanes push to a host that… | the run |
 |---|---|
@@ -467,6 +486,19 @@ to them. A record that checks itself passes on the day it stops being true.
 | the table does not declare at all | **RED** |
 | is named in `publishes` but pushed by nothing | **RED** — a stale entry exempts nothing and hides the next one |
 | is `meshweaver.azurecr.io` | skipped **by name and printed** — it is the registry this lane locks, the subject of the script rather than a foreign host it declares |
+
+Three more hold the *declaration* rather than the derivation:
+
+- **`producedBy` is held to the derived producers**, not to the host's name appearing somewhere in
+  the file — a comment satisfies a substring test, and a misattributed lane reads as evidence. Both
+  directions: a named lane that emits nothing for this host, and an emitting lane the record does
+  not name.
+- **A whole-host `publishes` block whose lanes have stopped pushing is RED.** The population is the
+  *union* of derived hosts and declared publishers, because a loop over derived hosts alone never
+  visits a stale block — it would pass having inspected nothing.
+- **`cleanupAuthorized` must be the boolean `false`**, not merely "not the singleton `True`". This
+  file has already paid for the other spelling twice, on `inForce` and on `present`: every
+  `is True` reader treats the string `"true"` as absent.
 
 Two further arms stop the block being prose:
 

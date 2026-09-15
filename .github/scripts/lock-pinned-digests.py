@@ -2510,39 +2510,76 @@ def _workflow_env(text: str) -> dict[str, str]:
     return values
 
 
-def _continued_lines(text: str) -> list[tuple[int, str]]:
-    """The file's lines with shell continuations JOINED, each carrying the number it STARTS on.
+# A YAML FOLDED scalar — `run: >` / `>-` / `>+` — whose body is joined into ONE shell line at
+# runtime with no backslash anywhere.
+_FOLDED_RUN = re.compile(r"^(\s*)-?\s*run:\s*>[-+]?\s*$")
 
-    🚨 The destinations of a `mirror-image-to-registry.sh` call routinely sit on the line after the
-    source, behind a `\\`. Read line-by-line, that call publishes to nothing — and a host whose
-    only publication is spelled across two lines is a host the accounting never asks about."""
+
+def _continued_lines(text: str) -> list[tuple[int, str]]:
+    """The file's lines as the SHELL will see them, each carrying the number it STARTS on.
+
+    Two joins, because a workflow spells one command across several physical lines in two different
+    ways and BOTH appear in these lanes:
+
+      * a shell continuation — a trailing `\\`. `mirror-image-to-registry.sh`'s destinations
+        routinely sit on the line after the source that way.
+      * 🚨 a YAML FOLDED scalar — `run: >` — which has no backslash at all and is folded into one
+        line by the YAML parser before any shell sees it. `main-cd.yml:1260` and `:1416` mirror the
+        portal and migration staging tags to the fleet registry exactly so, and read line-by-line
+        those calls publish to NOTHING (#4362 review).
+
+    A host whose only publication is spelled across lines is a host the accounting never asks
+    about — which is the very defect this derivation exists to make impossible."""
     joined: list[tuple[int, str]] = []
     buffer = ""
     start = 1
-    for number, line in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        folded = _FOLDED_RUN.match(line)
+        if folded and not buffer:
+            # Everything more-indented than the `run:` key is one folded command.
+            indent = len(folded.group(1))
+            body: list[str] = []
+            cursor = index + 1
+            while cursor < len(lines):
+                nxt = lines[cursor]
+                if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= indent:
+                    break
+                body.append(nxt.strip())
+                cursor += 1
+            joined.append((index + 1, " ".join(part for part in body if part)))
+            index = cursor
+            continue
         if not buffer:
-            start = number
+            start = index + 1
         stripped = line.rstrip()
         if stripped.endswith("\\"):
             buffer += stripped[:-1] + " "
+            index += 1
             continue
         joined.append((start, buffer + stripped))
         buffer = ""
+        index += 1
     if buffer:
         joined.append((start, buffer))
     return joined
 
 
-def publish_targets(root: str) -> tuple[dict[str, set[str]], list[str], int]:
+def publish_targets(root: str) -> tuple[dict[str, set[str]], dict[str, set[str]], list[str], int]:
     """Every `(host, repository)` this repository's own workflows PUSH an image to.
 
-    Returns the targets by host, any problems, and the number of `--tag` arguments read — the
-    denominator, because "no publication found" and "nothing was parsed" are the same output
-    without it, and that is the confusion this whole family is made of.
+    Returns the targets by host, the PRODUCERS by host (which lane actually emits each — so a
+    record's `producedBy` is held to the derivation rather than to the presence of the host's name
+    somewhere in a file, which a comment satisfies), any problems, and the number of image
+    references read — the denominator, because "no publication found" and "nothing was parsed" are
+    the same output without it, and that is the confusion this whole family is made of.
 
     🚨 DERIVED FROM THE WORKFLOWS, NEVER FROM THE RECORD. The record is what this checks."""
     base = Path(root) / ".github" / "workflows"
     targets: dict[str, set[str]] = {}
+    producers: dict[str, set[str]] = {}
     problems: list[str] = []
     arguments = 0
     for name in PUBLISHING_WORKFLOWS:
@@ -2591,19 +2628,30 @@ def publish_targets(root: str) -> tuple[dict[str, set[str]], list[str], int]:
                 arguments += 1
                 # Strip the tag: the LAST colon that is not inside a `${{ … }}` expansion.
                 image = re.sub(r":[^:/]*$", "", reference)
+                # 🚨 A WORKFLOW SPELLS ITS REGISTRY THREE WAYS AND ALL THREE APPEAR IN THESE LANES:
+                # `${{ env.ACR }}` (main-cd's tag lines), a plain shell `$ACR` / `${ACR}` exported
+                # from the SAME top-level `env:` map (release.yml:272, :275, :279), and a literal.
+                # Expanding only the first left every release-lane target reading as the host
+                # `$ACR` (#4362 review).
                 for key, value in environment.items():
-                    image = image.replace("${{ env.%s }}" % key, value)
+                    image = (image.replace("${{ env.%s }}" % key, value)
+                                  .replace("${%s}" % key, value)
+                                  .replace("$%s" % key, value))
                 if "/" not in image:
                     continue
                 host, _, repository = image.partition("/")
-                if "." not in host and host != "localhost":
-                    continue          # a Docker Hub short name, not a registry this fleet runs
+                # 🚨 THE UNRESOLVED CHECK COMES FIRST, AND THAT ORDER IS THE WHOLE POINT. A host
+                # still carrying `$` has no dot, so the Docker-Hub short-name test below would
+                # DISCARD it silently — a push target dropped with no error, by a derivation whose
+                # entire job is to make a dropped push target impossible. Unresolved is a PROBLEM.
                 if "${{" in host or "$" in host:
                     problems.append(
                         f".github/workflows/{name}:{number} pushes to a registry host this check "
                         f"could not resolve (`{host}`). An unresolved push target is not an absent "
                         "one — it is a publication nothing in the table has to account for.")
                     continue
+                if "." not in host and host != "localhost":
+                    continue          # a Docker Hub short name, not a registry this fleet runs
                 if namespace:
                     repository = repository.replace("${NS}", namespace).replace("$NS", namespace)
                 expansions = [repository]
@@ -2622,6 +2670,7 @@ def publish_targets(root: str) -> tuple[dict[str, set[str]], list[str], int]:
                             "repository this check could not resolve to a literal name.")
                         continue
                     targets.setdefault(host, set()).add(expanded)
+                    producers.setdefault(host, set()).add(f".github/workflows/{name}")
     if not targets and not problems:
         problems.append(
             "ZERO publication targets were derived from "
@@ -2629,7 +2678,7 @@ def publish_targets(root: str) -> tuple[dict[str, set[str]], list[str], int]:
             + ". Both lanes push images today, so zero means the derivation stopped matching, not "
               "that this fleet stopped publishing — and an empty derivation accounts for every "
               "registry equally well.")
-    return targets, problems, arguments
+    return targets, producers, problems, arguments
 
 
 # A `publishes` block's retention may ONLY be this, and it is deliberately NOT in `RETENTION_RULES`.
@@ -2652,12 +2701,24 @@ def read_registry_publications(root: str) -> dict[str, set[str]]:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return declared
-    for host, entry in (document.get("registries") or {}).items():
+    registries = document.get("registries")
+    # 🚨 A NON-MAPPING `registries` MUST NOT RAISE HERE. `read_registry_dispositions` already reds
+    # on that shape, and this reader runs inside the LIVE locking run — an AttributeError would
+    # replace a named blocker with a stack trace and take the whole sweep down (#4362 review).
+    if not isinstance(registries, dict):
+        return declared
+    for host, entry in registries.items():
         if not isinstance(entry, dict):
             continue
         publishes = entry.get("publishes")
         if isinstance(publishes, dict) and isinstance(publishes.get("repositories"), list):
-            declared[host] = {str(repo) for repo in publishes["repositories"]}
+            # 🚨 STRIPPED, exactly as `check_publication_accounting` strips. A value written as
+            # `" systemorph/memex-portal-ai "` would otherwise satisfy the accounting arm and match
+            # NOTHING here — so an overlay could run a published repository with the ARM 34b
+            # blocker silently inert, which is a declaration that passes while protecting nobody
+            # (#4362 review).
+            declared[host] = {str(repo).strip() for repo in publishes["repositories"]
+                              if str(repo).strip()}
     return declared
 
 
@@ -2680,8 +2741,15 @@ def check_publication_accounting(root: str, registries: dict) -> tuple[list[str]
         half whichever value it takes.
 
     Returns the problems and the denominator line, which is PRINTED whatever the verdict."""
-    targets, problems, references = publish_targets(root)
-    hosts = sorted(set(targets) - {LANE_REGISTRY})
+    targets, producers, problems, references = publish_targets(root)
+    # 🚨 THE POPULATION IS THE UNION, NOT THE DERIVED SET (#4362 review). Looping over derived hosts
+    # alone means that if BOTH lanes stop pushing to a host while its `publishes` block stays in the
+    # record, the host is never visited — so the promised stale check, and every validation under
+    # it, passes having inspected nothing. A whole-host stale entry is the same defect as a stale
+    # repository, one level up, and it reads exactly like a clean record.
+    declared_publishers = {host for host, entry in registries.items()
+                           if isinstance(entry, dict) and entry.get("publishes") is not None}
+    hosts = sorted((set(targets) | declared_publishers) - {LANE_REGISTRY})
     denominator = (
         f"publication accounting: {references} image reference(s) read across "
         + ", ".join(PUBLISHING_WORKFLOWS)
@@ -2692,8 +2760,15 @@ def check_publication_accounting(root: str, registries: dict) -> tuple[list[str]
         + f"; {len(hosts)} left for the table to account for.")
 
     for host in hosts:
-        pushed = sorted(targets[host])
+        pushed = sorted(targets.get(host, set()))
         entry = registries.get(host)
+        if not pushed and isinstance(entry, dict) and entry.get("publishes") is not None:
+            problems.append(
+                f"{ROSTER_PATH}: `registries.{host}` carries a `publishes` block and NOTHING in "
+                + " / ".join(PUBLISHING_WORKFLOWS) + f" pushes to `{host}` any more. A publication "
+                "record outliving its publication exempts nothing and hides the next one — delete "
+                "the block, or restore the lane.")
+            continue
         if not isinstance(entry, dict):
             problems.append(
                 f"{ROSTER_PATH}: this fleet PUBLISHES {len(pushed)} repository(ies) to `{host}` "
@@ -2754,18 +2829,32 @@ def check_publication_accounting(root: str, registries: dict) -> tuple[list[str]
                 "was derived from, the next reader cannot tell a publication that still happens "
                 "from one that was removed.")
         else:
-            for candidate in produced_by:
-                relative = str(candidate).strip()
-                lane = Path(root) / relative
-                if not lane.is_file():
+            named_lanes = {str(candidate).strip() for candidate in produced_by
+                           if str(candidate).strip()}
+            for relative in sorted(named_lanes):
+                if not (Path(root) / relative).is_file():
                     problems.append(
                         f"{where}.publishes names `producedBy: {relative}`, which is not a file in "
                         "this repository. A record pointing at a moved lane checks nothing.")
-                elif host not in lane.read_text(encoding="utf-8"):
-                    problems.append(
-                        f"{where}.publishes names `{relative}` as producing `{host}` and that file "
-                        f"does not mention `{host}`. Either the publication moved or the record "
-                        "did not — and a `producedBy` that names the wrong lane reads as evidence.")
+            # 🚨 HELD TO THE DERIVATION, NOT TO THE HOST'S NAME APPEARING SOMEWHERE IN THE FILE
+            # (#4362 review). A comment mentioning `ghcr.io`, or a lane that stopped emitting it,
+            # satisfies a substring test — so a misattributed producer would read as evidence. The
+            # derived set is which lanes actually EMIT a reference to this host.
+            emitting = producers.get(host, set())
+            misattributed = sorted(named_lanes - emitting
+                                   - {lane for lane in named_lanes
+                                      if not (Path(root) / lane).is_file()})
+            unnamed = sorted(emitting - named_lanes)
+            if misattributed:
+                problems.append(
+                    f"{where}.publishes names {', '.join(misattributed)} as producing `{host}`, and "
+                    f"no image reference to that host is derived from "
+                    f"{'it' if len(misattributed) == 1 else 'them'}. A lane that no longer emits "
+                    "this host — or never did — reads as evidence while naming nothing.")
+            if unnamed:
+                problems.append(
+                    f"{where}.publishes does not name {', '.join(unnamed)}, which DOES push to "
+                    f"`{host}`. A producer the record has not seen is a publication nobody reviewed.")
 
         if not str(publishes.get("runFrom", "")).strip():
             problems.append(
@@ -2801,11 +2890,19 @@ def check_publication_accounting(root: str, registries: dict) -> tuple[list[str]
                 "operate. We cannot measure GitHub's deletion mechanisms from a committed file, so "
                 "such a list would be a verdict about OUR artifacts resting on nothing — the same "
                 "false reassurance `not-ours` refuses.")
-        if retention.get("cleanupAuthorized") is True:
+        # 🚨 STRICTLY `false`, NOT MERELY "not the singleton True" (#4362 review). This file has
+        # already paid for the other spelling twice — `inForce` and `present` both written as the
+        # STRING "true", which every `is True` reader silently treats as absent. A truthy non-bool
+        # here would pass as though a cleanup were forbidden while a later consumer reads it as
+        # authorization.
+        authorized = retention.get("cleanupAuthorized")
+        if authorized is not False:
             problems.append(
-                f"{where}.publishes.retention declares `cleanupAuthorized: true` for a store this "
-                "fleet does not operate. There is no cleanup of ours to authorize there, and the "
-                "day there is, it is not authorized by this record.")
+                f"{where}.publishes.retention declares `cleanupAuthorized: {authorized!r}`, and the "
+                "only value a publication into somebody else's store may carry is the boolean "
+                "`false`. There is no cleanup of ours to authorize there — and a truthy non-boolean "
+                "(the STRING \"true\", say) is read as absent by every `is True` reader in this "
+                "file while a later consumer may read it as authorization.")
     return problems, denominator
 
 
@@ -4591,7 +4688,7 @@ ingress:
     HERE_ROOT = str(HERE.parent.parent)
 
     # (a) THE MEASUREMENT. Derived from the committed lanes, not from the record it checks.
-    _targets, _problems, _references = publish_targets(HERE_ROOT)
+    _targets, _producers, _problems, _references = publish_targets(HERE_ROOT)
     check(not _problems,
           f"ARM 34: the publication derivation could not read this repository's own lanes: "
           f"{_problems}")
@@ -4627,6 +4724,63 @@ ingress:
           f"`mw-plugin-test` reaches it through a mirror call whose destinations are on the "
           f"CONTINUATION line, and it is the one repository that vanishes when the join stops")
 
+    # 🚨 A WORKFLOW SPELLS ONE COMMAND ACROSS LINES TWO WAYS, AND ONLY ONE HAS A BACKSLASH
+    # (#4362 review). `main-cd.yml:1260` and `:1416` mirror the portal and migration staging tags to
+    # the fleet registry inside a YAML FOLDED scalar — `run: >`, the arguments on the following
+    # physical lines, no continuation character anywhere — and read line-by-line those calls
+    # publish to NOTHING. Driven as a fixture rather than against the live file so the arm keeps
+    # its subject when the workflow moves.
+    _folded = ('jobs:\n  x:\n    steps:\n      - name: mirror\n        run: >\n'
+               '          .github/scripts/mirror-image-to-registry.sh\n'
+               '          "src.example/portal:staging"\n'
+               '          "folded.example/portal:staging"\n'
+               '      - name: next\n        run: echo done\n')
+    _folded_lines = dict(_continued_lines(_folded))
+    check(any("mirror-image-to-registry.sh" in line and "folded.example/portal:staging" in line
+              for line in _folded_lines.values()),
+          f"ARM 34: a YAML FOLDED `run: >` command was not joined, so a publication spelled the way "
+          f"main-cd spells its fleet-registry mirrors is derived from nothing: {_folded_lines}")
+    check(any("echo done" in line and "mirror-image-to-registry.sh" not in line
+              for line in _folded_lines.values()),
+          "ARM 34: the folded-scalar join swallowed the SIBLING step. A join that runs past the "
+          "block's indentation would merge unrelated commands and invent push targets")
+
+    # 🚨 AND THE HOST MAY BE A PLAIN SHELL VARIABLE. `release.yml` writes `"$ACR/$repo:$VERSION"`
+    # off the same top-level `env:` map that main-cd reaches as `${{ env.ACR }}`. Expanding only
+    # the expression form left `$ACR` as the host — which has no dot, so the Docker-Hub short-name
+    # test DISCARDED it silently: a push target dropped with no error by the one derivation whose
+    # job is to make a dropped push target impossible.
+    with tempfile.TemporaryDirectory() as scratch:
+        lanes = Path(scratch) / ".github" / "workflows"
+        lanes.mkdir(parents=True)
+        (lanes / "main-cd.yml").write_text(
+            'env:\n  ACR: shell.example\n'
+            '    run: |\n'
+            '      docker buildx imagetools create --tag "$ACR/portal:v" "$ACR/portal:staging"\n',
+            encoding="utf-8")
+        (lanes / "release.yml").write_text(
+            'env:\n  ACR: shell.example\n'
+            '    run: |\n'
+            '      docker buildx imagetools create --tag "${ACR}/migration:v" "x"\n',
+            encoding="utf-8")
+        _shell, _, _shell_problems, _ = publish_targets(scratch)
+        check(_shell.get("shell.example") == {"portal", "migration"},
+              f"ARM 34: a bare `$ACR` / `${{ACR}}` host was not expanded from the workflow's own "
+              f"`env:` map: {_shell} {_shell_problems}")
+
+        # …and an UNRESOLVABLE one is a PROBLEM, never a silent discard. The order of the two tests
+        # is the whole arm: an unresolved host has no dot, so the short-name test would drop it.
+        (lanes / "main-cd.yml").write_text(
+            'env:\n  ACR: shell.example\n'
+            '    run: |\n'
+            '      docker buildx imagetools create --tag "$MYSTERY/portal:v" "x"\n',
+            encoding="utf-8")
+        _, _, _unresolved, _ = publish_targets(scratch)
+        check(any("could not resolve" in problem for problem in _unresolved),
+              f"ARM 34: an UNRESOLVED registry host was silently discarded as a Docker Hub short "
+              f"name instead of reported. A push target dropped with no error is exactly the "
+              f"defect this derivation exists to make impossible: {_unresolved}")
+
     # (b) THIS REPOSITORY'S OWN RECORD now accounts for all of it.
     _live, _ = check_publication_accounting(HERE_ROOT, json.loads(
         (Path(HERE_ROOT) / ".github" / "acr-retention" / ROSTER_PATH).read_text(encoding="utf-8")
@@ -4653,7 +4807,7 @@ ingress:
             "producedBy": [".github/workflows/main-cd.yml"],
             "runFrom": "no installation",
             "retention": {"rule": "operator-retained", "operator": "Someone Else",
-                          "reason": "their store, their retention"},
+                          "reason": "their store, their retention", "cleanupAuthorized": False},
         }
         block["retention"].update(overrides.pop("retention", {}))
         block.update(overrides)
@@ -4671,6 +4825,27 @@ ingress:
 
     def _accounting(registries: dict, publishing=_PUBLISHING) -> tuple[int, str]:
         return _verdict(registries, publishing=publishing)
+
+    # 🚨 THE READER THAT ONLY LABELS MUST NOT RAISE, AND MUST NORMALIZE LIKE THE ONE THAT REDS
+    # (#4362 review). It runs inside the LIVE locking run, where an AttributeError would replace a
+    # named blocker with a stack trace; and a repository written with stray whitespace would satisfy
+    # the accounting arm — which strips — while matching nothing here, leaving ARM 34b's blocker
+    # silently inert over a declaration that reads complete.
+    with tempfile.TemporaryDirectory() as scratch:
+        record = Path(scratch) / ".github" / "acr-retention"
+        record.mkdir(parents=True)
+        (record / ROSTER_PATH).write_text('{"registries": ["not", "a", "mapping"]}',
+                                          encoding="utf-8")
+        check(read_registry_publications(scratch) == {},
+              "ARM 34: a non-mapping `registries` raised or returned a verdict from the lenient "
+              "publication reader. `read_registry_dispositions` reds on that shape; this one must "
+              "hand the run back its named blocker, never a stack trace")
+        (record / ROSTER_PATH).write_text(json.dumps({"registries": {"h.example": {
+            "publishes": {"repositories": ["  us/portal  ", ""]}}}}), encoding="utf-8")
+        check(read_registry_publications(scratch) == {"h.example": {"us/portal"}},
+              f"ARM 34: the publication reader did not strip its repository names the way the "
+              f"accounting arm does, so a padded value passes the gate and matches no overlay: "
+              f"{read_registry_publications(scratch)}")
 
     # The CONTROL: a mixed host that declares its publication passes.
     code, output = _accounting(_mixed())
@@ -4733,6 +4908,43 @@ ingress:
     code, output = _accounting(_mixed(publishes={"retention": {"cleanupAuthorized": True}}))
     check(code == 1 and "cleanupAuthorized" in output,
           f"ARM 34: a record authorized a cleanup in a store this fleet does not operate: {output}")
+    # 🚨 AND THE STRING "true" — the spelling this file has already paid for twice, on `inForce`
+    # and on `present`. Every `is True` reader treats it as absent, so a check that rejects only
+    # the singleton lets it through as though a cleanup were forbidden (#4362 review).
+    code, output = _accounting(_mixed(publishes={"retention": {"cleanupAuthorized": "true"}}))
+    check(code == 1 and "cleanupAuthorized" in output,
+          f"ARM 34: `cleanupAuthorized` written as the STRING \"true\" passed as if it were "
+          f"`false`: {output}")
+    code, output = _accounting(_mixed(publishes={"retention": {"cleanupAuthorized": None}}))
+    check(code == 1 and "cleanupAuthorized" in output,
+          f"ARM 34: an ABSENT `cleanupAuthorized` passed — it would default to whatever the next "
+          f"reader assumes: {output}")
+
+    # 🚨 A WHOLE-HOST STALE BLOCK (#4362 review). Looping over DERIVED hosts alone meant that if
+    # both lanes stopped pushing to a host while its `publishes` block stayed, the host was never
+    # visited — so the stale check and every validation beneath it passed having inspected nothing,
+    # which reads exactly like a clean record.
+    code, output = _verdict(_mixed(), publishing={
+        "main-cd.yml": 'env:\n  ACR: ' + LANE_REGISTRY + '\n    run: |\n'
+                       '      docker buildx imagetools create --tag "${{ env.ACR }}/portal:v" "x"\n',
+        "release.yml": 'env:\n  ACR: ' + LANE_REGISTRY + '\n    run: |\n'
+                       '      docker buildx imagetools create --tag "${{ env.ACR }}/portal:w" "x"\n',
+    })
+    check(code == 1 and "publication record outliving its publication" in output,
+          f"ARM 34: a `publishes` block for a host NOTHING pushes to any more was never even "
+          f"visited, so it exempted itself: {output}")
+
+    # 🚨 `producedBy` IS HELD TO THE DERIVATION, not to the host's name appearing in the file — a
+    # comment satisfies a substring test, and a misattributed producer reads as evidence.
+    code, output = _accounting(_mixed(publishes={
+        "producedBy": [".github/workflows/main-cd.yml", ".github/workflows/release.yml"]}))
+    check(code == 1 and "no image reference to that host is derived" in output,
+          f"ARM 34: `producedBy` named a lane that pushes only to the LANE registry as a producer "
+          f"of a foreign host, and the substring test accepted it: {output}")
+    code, output = _accounting(_mixed(publishes={"producedBy": [".github/workflows/release.yml"]}))
+    check(code == 1 and ("does not name" in output or "no image reference" in output),
+          f"ARM 34: a lane that DOES push to the host went unnamed by `producedBy` and nothing "
+          f"noticed — a producer the record has not seen is a publication nobody reviewed: {output}")
 
     # `runFrom` — the whole difference between a publication and a source this lane must protect.
     code, output = _accounting(_mixed(publishes={"runFrom": ""}))
@@ -4740,11 +4952,6 @@ ingress:
           f"ARM 34: a publication block left unsaid whether any INSTALLATION runs from it: {output}")
 
     # `producedBy` has to name a lane that actually pushes THERE.
-    code, output = _accounting(_mixed(publishes={
-        "producedBy": [".github/workflows/release.yml"]}))
-    check(code == 1 and "does not mention" in output,
-          f"ARM 34: `producedBy` named a lane that never pushes to that host, and a wrong "
-          f"attribution reads as evidence: {output}")
     code, output = _accounting(_mixed(publishes={"producedBy": [".github/workflows/gone.yml"]}))
     check(code == 1 and "not a file in this repository" in output,
           f"ARM 34: `producedBy` pointed at a moved lane and still checked: {output}")
