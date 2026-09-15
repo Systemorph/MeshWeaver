@@ -134,8 +134,20 @@ def expected_assets(project: Path, module: str) -> dict[str, str]:
     return implied
 
 
+class CannotReadManifest(Exception):
+    """The bundle manifest exists but could not be read as JSON."""
+
+
 def declared_assets(manifest: Path) -> list[str]:
-    document = json.loads(manifest.read_text(encoding="utf-8"))
+    # 🚨 utf-8-sig, not utf-8. The manifest is written by the PACK — .NET's default
+    # UTF8Encoding emits a byte-order mark — while this gate is Python, whose "utf-8"
+    # codec treats a BOM as content and makes json.loads raise. utf-8-sig decodes a
+    # plain UTF-8 file identically and additionally strips the mark, so it is correct
+    # for both producers and can never be the narrower choice.
+    try:
+        document = json.loads(manifest.read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+        raise CannotReadManifest(f"{manifest}: {type(exc).__name__}: {exc}") from exc
     module = document.get("module") or {}
     return list(module.get("staticAssets") or [])
 
@@ -146,7 +158,17 @@ def check(module: str, project: Path, manifest: Path, *, out=sys.stdout) -> int:
     except CannotCompute as refusal:
         print(f"::error::{module}: {refusal}", file=out)
         return 1
-    declared = declared_assets(manifest)
+    # 🚨 An unreadable manifest is a REFUSAL, not a crash. An uncaught traceback is
+    # indistinguishable from the harness dying, and a reader chases the pack instead of
+    # the one line that names the file — which is exactly what a UTF-8 BOM cost the whole
+    # Plugins bundle lane on 2026-09-15.
+    try:
+        declared = declared_assets(manifest)
+    except CannotReadManifest as refusal:
+        print(f"::error::{module}: the bundle manifest could not be read, so its declared "
+              f"static assets cannot be compared with what the project implies — {refusal}",
+              file=out)
+        return 1
     have = set(declared)
     missing = {path: why for path, why in sorted(implied.items()) if path not in have}
 
@@ -291,6 +313,40 @@ def self_test() -> int:
                 print(f"  FAIL  [{index}] {title}: {'; '.join(problems)}\n{output}")
             else:
                 print(f"  ok    [{index}] {title}")
+
+    # ── the manifest READER, which the table above cannot reach ────────────────────────────
+    # Every case above writes its manifest with this file's own helper, so none of them can
+    # see how a manifest written by SOMEONE ELSE decodes. These two do.
+    for title, write, want_exit, needle in [
+        ("a BOM-prefixed manifest (as .NET writes it) is read, not rejected",
+         lambda path: path.write_bytes(
+             b"\xef\xbb\xbf" + json.dumps({
+                 "plugin": "P", "version": "1.0.0",
+                 "module": {"assemblyName": "Plain", "staticAssets": []},
+             }).encode("utf-8")),
+         0, "0 asset(s) implied"),
+        ("a manifest that is not JSON REFUSES by name instead of raising",
+         lambda path: path.write_text("{ not json", encoding="utf-8"),
+         1, "the bundle manifest could not be read"),
+    ]:
+        with tempfile.TemporaryDirectory() as raw:
+            root = _tree(Path(raw) / "proj", {"Plain.csproj": "<Project/>"})
+            manifest = Path(raw) / "manifest.json"
+            write(manifest)
+            buffer = io.StringIO()
+            try:
+                got = check("Plain", next(root.glob("*.csproj")), manifest, out=buffer)
+            except Exception as exc:                      # noqa: BLE001 — that IS the defect
+                failures += 1
+                print(f"  FAIL  [bom] {title}: raised {type(exc).__name__}: {exc}")
+                continue
+            output = buffer.getvalue()
+            if got != want_exit or needle not in output:
+                failures += 1
+                print(f"  FAIL  [bom] {title}: exit {got} (wanted {want_exit}); "
+                      f"output {output!r}")
+            else:
+                print(f"  ok    [bom] {title}")
 
     fires = sum(1 for case in _CASES if case[3] == 1)
     print(f"\n{len(_CASES)} case(s): {fires} must FAIL the gate, {len(_CASES) - fires} must PASS it.")
