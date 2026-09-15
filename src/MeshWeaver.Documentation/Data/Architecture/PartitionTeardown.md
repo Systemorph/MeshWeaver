@@ -111,6 +111,72 @@ never races):
 
 100% reactive — the async DDL edge is sealed inside each provider's `IIoPool`.
 
+## The teardown has a MEMORY half, and forgetting it broke the recreate
+
+The `DROP SCHEMA … CASCADE` makes a teardown complete **in the store**. It does not make it
+complete **in the process**, and for two years it did not have to — until the same partition id was
+created again.
+
+**`$security-access:{partition}` is the query every permission check on a partition reads**
+(`PermissionEvaluator.ObserveEffectiveAssignments` → `IMeshNodeStreamCache.GetQuery`). It is a
+*fold*, not a lookup: `SyncedQueryMeshNodes` seeds it from ONE store listing taken when the chain is
+built, applies change events to that seed forever after, and `AutoConnect(1)` keeps it connected for
+the life of the process. Dropping the partition destroyed the store the fold mirrors and left the
+fold registered — so a partition recreated under the same id was decided by the chain built for its
+predecessor.
+
+That makes the two creates asymmetric, and the asymmetry is the whole bug:
+
+| | first-ever create | recreate under the same id (before the fix) |
+|---|---|---|
+| when `$security-access:{id}` is built | **after** `SpacePostCreationHandler` writes `{id}/_Access/{creator}_Access` — the child create is what first takes a decision on the partition | long before, for the previous incarnation |
+| how the creator's grant gets into it | the seeding listing **reads it from the store** | only a change event can add it |
+| can the next write race the grant? | no — correct by construction | **yes** |
+
+So the create returned "you own this Space" (that is what `FailsCreateOnError = true` on the
+post-creation handler is *for*) while the authority that decides the creator's next write still said
+otherwise, and the write was refused with
+`Access denied: Create permission required for node '{id}/page'` — intermittently, by timing.
+
+**Measured** (`SpaceRecreateGrantVisibilityPgTests`, MeshWeaver.Plugins — the only harness that can
+drop a schema): before the fix the query was still registered after the schema was gone in **8 of 8**
+runs, holding an EMPTY fold while the store held the grant. On an idle laptop the fold emptied
+~53 ms into the delete and was repaired ~62 ms later; on a loaded CI runner the child create lands
+inside that window, which is the flake reported as MeshWeaver#4061 finding 2.
+
+**The fix is the missing half of the teardown**, not a wait, a retry or a widened window:
+`PartitionDropPostDeletionHandler` calls `IMeshNodeStreamCache.InvalidatePartition(partition)` as its
+last step, dropping every cached query whose id is anchored to that partition (`…:{partition}`) and
+releasing each chain's upstream connection. The next decision on that id then mints a fresh chain
+whose seeding listing reads the store the partition actually has — which is precisely the property
+the first-ever create had all along.
+
+Three boundaries are deliberate:
+
+- **Only on a SUCCESSFUL teardown.** A failed store drop leaves the partition in place for a retry,
+  so its caches stay too — the same reason the definition node stays (see the ordering contract
+  above).
+- **Anchored is ENUMERATED, never inferred from the id's shape.**
+  `SecurityQueries.PartitionAnchoredQueryIds(partition)` is the complete list, minted from the same
+  helpers the fold mints its own ids with, so what is created and what is dropped cannot drift. A
+  name test — "the id ends in `:{partition}`" — is *not* a statement about anchoring: the global
+  gated-node folds are spelled `$security-gated:{nodeType}`, and a NodeType name and a partition
+  name come from the same alphabet, so a Space called `Course` would have dropped the mesh-wide
+  gate fold for a NodeType called `Course`. The root-scope twins (`$security-access:`,
+  `$security-policy:`) and every global fold belong to no partition and are never in the set — an
+  eviction reaching the root scope would drop every user's platform-wide grants on every Space
+  delete, a mesh-wide denial storm instead of one refused create, so both harnesses carry that as
+  an explicit negative control.
+- **The chain's connection is released, not merely forgotten.** `AutoConnect(1)` never disconnects,
+  so an eviction that only dropped the map entry would leave a `SyncedQueryMeshNodes` — with its
+  provider and change-feed subscriptions — running against a dropped schema for the life of the
+  process. Each chain therefore owns its own connection registration inside the cache's registry.
+
+The residual window is the one a first create has too: if something opens the query between the
+teardown and the recreate's grant write, that fold starts empty and waits for the change event like
+any other. Nothing about this fix claims to remove eventual consistency from the security fold — it
+removes the *asymmetry* that made a recreate worse than a create.
+
 ## The guards, and what each can actually catch
 
 Two, deliberately, because they fail in different places.
