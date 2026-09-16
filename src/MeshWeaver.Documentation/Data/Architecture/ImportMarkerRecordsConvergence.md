@@ -177,6 +177,7 @@ about who writes nodes, not a law of nature, so it is stated here rather than le
 
 ## Related
 
+- [A Content Verdict Is Per Node](/Doc/Architecture/AContentVerdictIsPerNode) — the other claim the marker used to make on too little evidence: a refusal earned by ONE node, recorded as a verdict about the partition
 - [The Prune Requires a Complete Listing](/Doc/Architecture/PruneRequiresACompleteListing) — the two reads the prune's inference rests on
 - [Static Repo Import](/Doc/Architecture/StaticRepoImport) — the pipeline, and the marker's place in it
 - [Retiring a NodeType](/Doc/Architecture/RetiringANodeType) — what a retirement has to remove beyond the source files

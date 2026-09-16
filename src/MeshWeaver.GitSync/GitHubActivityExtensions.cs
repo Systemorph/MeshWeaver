@@ -240,7 +240,7 @@ public static class GitHubActivityExtensions
                         // deletes user-visible data, and "pruned N" alone left no record of WHAT.
                         if (r.PrunedPaths.Count > 0)
                             ctx.Log(PrunedLine(r));
-                        ctx.Log(ImportedLine(r, commitish: null));
+                        LogImportOutcome(ctx, r, commitish: null);
                         return Unit.Default;
                     });
                 }, onActivityCreated)));
@@ -326,7 +326,7 @@ public static class GitHubActivityExtensions
                         {
                             if (r.PrunedPaths.Count > 0)
                                 ctx.Log(PrunedLine(r));
-                            ctx.Log(ImportedLine(r, commitish: shortSha));
+                            LogImportOutcome(ctx, r, commitish: shortSha);
                             return Unit.Default;
                         });
                 }, onActivityCreated)));
@@ -377,7 +377,7 @@ public static class GitHubActivityExtensions
                         {
                             if (r.PrunedPaths.Count > 0)
                                 ctx.Log(PrunedLine(r));
-                            ctx.Log(ImportedLine(r, commitish: shortSha));
+                            LogImportOutcome(ctx, r, commitish: shortSha);
                             return Unit.Default;
                         });
                 }, onActivityCreated)));
@@ -419,7 +419,7 @@ public static class GitHubActivityExtensions
                     // deletes user-visible data, and "pruned N" alone left no record of WHAT.
                     if (r.PrunedPaths.Count > 0)
                         ctx.Log(PrunedLine(r));
-                    ctx.Log(ImportedLine(r, commitish));
+                    LogImportOutcome(ctx, r, commitish);
                     return Unit.Default;
                 });
             }, onActivityCreated));
@@ -443,6 +443,71 @@ public static class GitHubActivityExtensions
 
     private static bool IsSkipped(StaticRepoImportResult result) =>
         string.Equals(result.Outcome, "Skipped", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 🚨 <b>Issue #4456 — an import that LOST nodes must not render as a green activity.</b>
+    ///
+    /// <para>Every outcome line here was written at <see cref="LogLevel.Information"/>, whatever the
+    /// import actually did. <c>RunActivity</c> derives the activity's <c>maxSeverity</c> and terminal
+    /// <c>status</c> from the levels of the lines it collects, so a GitSync import that dropped a
+    /// source node reported <c>maxSeverity: Information</c> and <c>status: Succeeded</c> — measured
+    /// on memex.systemorph.com, 2026-09-15, on the very import that lost
+    /// <c>Hosting/Deployment/Source/SelfUpdateRouting</c>. The outcome word sat in the middle of a
+    /// green sentence, the failure count was not in it at all, and nothing anywhere said WHICH node.
+    /// Five NodeTypes then parked on that symbol, and the first sign anyone had was a compile error
+    /// on a file that is plainly in git.</para>
+    ///
+    /// <para>So the LEVEL follows the outcome: <c>Failed</c> is an error, any <c>ImportedWith…</c> is
+    /// a warning (nodes did not land, creates were blocked, or assets were refused — every one of
+    /// them a state the partition is left INCOMPLETE in), and everything else stays
+    /// informational.</para>
+    /// </summary>
+    private static LogLevel LevelFor(StaticRepoImportResult result) =>
+        string.Equals(result.Outcome, "Failed", StringComparison.OrdinalIgnoreCase)
+            ? LogLevel.Error
+            : result.Outcome.StartsWith("ImportedWith", StringComparison.OrdinalIgnoreCase)
+                ? LogLevel.Warning
+                : LogLevel.Information;
+
+    /// <summary>
+    /// 🚨 <b>Issue #4459 / #4456 — the ONE place a sync activity reports an import's outcome.</b>
+    /// The nodes that did not land are named FIRST (and at Warning, which is what colours the
+    /// activity), then the outcome line. Every call site goes through this rather than logging
+    /// <see cref="ImportedLine"/> directly, so a fifth one cannot quietly re-acquire the
+    /// green-on-a-partial-import shape the issues were filed on.
+    /// </summary>
+    private static void LogImportOutcome(
+        ActivityContext ctx, StaticRepoImportResult result, string? commitish)
+    {
+        if (FailedNodesLine(result) is { } failedNodes)
+            ctx.Log(failedNodes);
+        ctx.Log(ImportedLine(result, commitish));
+    }
+
+    /// <summary>
+    /// 🚨 <b>Issue #4459 / #4456 — the sentence that NAMES what did not land.</b> The importer
+    /// reports its failures as paths now (<see cref="StaticRepoImportResult.FailedPaths"/>); this is
+    /// where an operator reading the sync activity sees them. Bounded, so a pathological source
+    /// cannot write an unbounded activity line.
+    /// </summary>
+    private static LogMessage? FailedNodesLine(StaticRepoImportResult result)
+    {
+        if (result.FailedPaths.Count == 0)
+            return null;
+        const int Named = 10;
+        var paths = string.Join("; ", result.FailedPaths
+                .Take(Named)
+                .Select(f => $"{f.NodePath} ({f.Reason})"))
+            + (result.FailedPaths.Count > Named
+                ? $", … (+{result.FailedPaths.Count - Named} more)"
+                : "");
+        return new LogMessage(
+                $"⚠ {result.FailedPaths.Count} node(s) did NOT land and are NOT in the mesh — "
+                + $"anything referencing them will not compile: {paths}",
+                LogLevel.Warning)
+            .WithKey("activity.gitsync.failedNodes",
+                ("count", result.FailedPaths.Count), ("paths", paths));
+    }
 
     /// <summary>
     /// The terminal import line, keyed so a German viewer reads it in German (#3281). Four keys
@@ -469,12 +534,16 @@ public static class GitHubActivityExtensions
                         ("fingerprint", result.Fingerprint), ("markerPath", markerPath),
                         ("commitish", commitish));
 
+        // 🚨 #4459/#4456 — the LEVEL follows the outcome (see LevelFor); the nodes that did not land
+        // get their OWN keyed line (see FailedNodesLine), so a German reader gets a German sentence
+        // around the paths rather than an English one smuggled in as an argument.
+        var level = LevelFor(result);
         return commitish is null
-            ? new LogMessage($"Imported {DescribeOutcome(result)}.", LogLevel.Information)
+            ? new LogMessage($"Imported {DescribeOutcome(result)}.", level)
                 .WithKey("activity.gitsync.import.done",
                     ("outcome", result.Outcome), ("count", result.Count))
             : new LogMessage(
-                    $"Re-imported {DescribeOutcome(result)} at {commitish}.", LogLevel.Information)
+                    $"Re-imported {DescribeOutcome(result)} at {commitish}.", level)
                 .WithKey("activity.gitsync.reimport.done",
                     ("outcome", result.Outcome), ("count", result.Count), ("commitish", commitish));
     }
