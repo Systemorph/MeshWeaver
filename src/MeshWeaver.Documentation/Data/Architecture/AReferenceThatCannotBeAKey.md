@@ -263,15 +263,15 @@ restarts and the state being measured is destroyed. The census runs in ~10 ms.
 
 ## 8. What this does NOT claim
 
-- **Not that the population is now bounded in general.** 46 of the 63 duplicate mints are the
+- **Not that the population is now bounded in general.** 57 of the 80 duplicate mints are the
   configured branch. They are correct by contract and retire with their subscriber, but nothing here
   measured that they DO retire — only that they are not the equality defect.
-- **Not a slope.** Four readings minutes apart, three of which the census itself perturbed, measure
+- **Not a slope.** Five readings minutes apart, each of which the census itself perturbed, measure
   boundedness, not a rate. A rate needs readings hours apart on an unperturbed pod.
 - **Not a like-for-like comparison with #3432's own baselines**, which were taken on
   memex.meshweaver.cloud — still on `c84c6c05`, still unrolled. The comparative reading this thread
   has wanted since 2026-09-13 still needs that instance rolled.
-- **Not that `Doc/Architecture` was the only victim.** 18 is what one node hub on one replica had
+- **Not that `Doc/Architecture` was the only victim.** 24 is what one node hub on one replica had
   accumulated; the defect is in the reference type, so its cost is per content-enabled node hub and
   per read.
 
@@ -464,8 +464,14 @@ foreach (var h in syncHubs)
         continue;
     }
 
-    string refType, refStr, hostAddr, owner;
+    string refType, refTypeId, refStr, hostAddr, owner;
+    // 🚨 TWO names, on purpose. `Name` is for DISPLAY; it is NOT a type identity — two
+    // WorkspaceReference implementations in different namespaces or assemblies share it, and here
+    // that is routine rather than exotic (every NodeType recompile mints a same-named type in a new
+    // collectible assembly). The KEY below uses the assembly-qualified name, so same-named types
+    // from different assemblies stay different keys.
     try { refType = mine.Reference?.GetType().Name ?? "null"; } catch { refType = "?"; }
+    try { refTypeId = mine.Reference?.GetType().AssemblyQualifiedName ?? "null"; } catch { refTypeId = "?"; }
     try { refStr = mine.Reference?.ToString() ?? ""; } catch { refStr = "?"; }
     try { hostAddr = (Prop(mine, "Host") as IMessageHub)?.Address?.ToString() ?? "?"; } catch { hostAddr = "?"; }
     try { owner = mine.Owner?.ToString() ?? "?"; } catch { owner = "?"; }
@@ -477,11 +483,15 @@ foreach (var h in syncHubs)
     byRefAndHost[k] = byRefAndHost.TryGetValue(k, out var c3) ? c3 + 1 : 1;
     if (!examples.ContainsKey(k))
         examples[k] = $"host={hostAddr} owner={owner} ref={(refStr.Length > 160 ? refStr[..160] : refStr)}";
-    // 🚨 GROUP ON THE FULL REFERENCE. Truncating here would merge two DISTINCT long references
-    // that share a host, owner and prefix into one bucket and report them as a duplicate mint —
-    // a false positive in exactly the direction this reading is used to argue. Truncate only what
-    // is DISPLAYED (`examples` above); never what is COMPARED.
-    var pairKey = $"host={hostAddr} owner={owner} ref={refStr}";
+    // 🚨 THE KEY CARRIES THE TYPE IDENTITY AND THE FULL RENDERING. Three mistakes here each
+    // manufacture false duplicates, in exactly the direction this reading is used to argue:
+    //   · TRUNCATING merges two distinct long references sharing a host, owner and prefix;
+    //   · dropping the TYPE merges references of DIFFERENT types that render alike
+    //     (`CollectionReference("x")` and a `JsonPointerReference` can both print `/x`);
+    //   · using the type's SHORT NAME merges same-named types from different assemblies, which
+    //     this mesh mints routinely — one per NodeType recompile.
+    // Truncate only what is DISPLAYED (`examples` above); never what is COMPARED.
+    var pairKey = $"host={hostAddr} owner={owner} type={refTypeId} ref={refStr}";
     pairs.Add(pairKey);
     if (!liveRefs.TryGetValue(pairKey, out var bucket)) { bucket = new List<object>(); liveRefs[pairKey] = bucket; }
     if (mine.Reference is not null) bucket.Add(mine.Reference);

@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -40,10 +41,15 @@ namespace MeshWeaver.ContentCollections.Test;
 /// whole population moved 311 → 312: it mints on every read, for ever.
 /// See <c>Doc/Architecture/AReferenceThatCannotBeAKey</c>.</para>
 ///
-/// <para>🚨 <b>Both directions are asserted.</b>
-/// <see cref="AConfiguredReduce_StillMintsOneSyncHubPerCall"/> drives the deliberately-uncached
-/// configured overload through the same counter and shows it grow. Without it, "the count did not
-/// move" would also pass on a build where the counter is blind.</para>
+/// <para>🚨 <b>Both directions are asserted, and neither by a global count.</b> Each arm records
+/// the ADDRESSES of the <c>sync/</c> hubs its own calls resolved to, so an unrelated stream created
+/// on the host mid-test cannot land inside the measurement — the before/after delta that used to be
+/// here is the shape that produced #4300's false <c>+6</c>.
+/// <see cref="ReadingTheSameCollectionReference_DoesNotMintASyncHubPerRead"/> asserts the five reads
+/// resolve to ONE address; <see cref="AConfiguredReduce_StillMintsOneSyncHubPerCall"/> drives the
+/// deliberately-uncached configured overload and asserts FIVE distinct addresses, none of them the
+/// shared stream's. Without that second arm, "they were all the same hub" would also pass on a build
+/// where the assertion cannot discriminate.</para>
 /// </summary>
 public class ReferenceAsCacheKeyTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -160,7 +166,8 @@ public class ReferenceAsCacheKeyTest(ITestOutputHelper output) : HubTestBase(out
     /// <summary>
     /// 🚨 <b>THE BEHAVIOURAL HALF.</b> Repeated plain reads of the same collection-config reference
     /// share ONE stream, so the owning hub's <c>sync/</c> population is bounded by DISTINCT
-    /// REFERENCES, not by reads. On the unfixed build this reads <c>+5</c>.
+    /// REFERENCES, not by reads. On the unfixed build the five reads resolve to FIVE different
+    /// <c>sync/</c> hub addresses — one permanent hub per read.
     /// </summary>
     [HubFact]
     public async Task ReadingTheSameCollectionReference_DoesNotMintASyncHubPerRead()
@@ -169,8 +176,8 @@ public class ReferenceAsCacheKeyTest(ITestOutputHelper output) : HubTestBase(out
         await host.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
         var workspace = host.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        // The FIRST read legitimately builds the stream; the baseline is taken after it, so what is
-        // measured is the SECOND read onwards — exactly the population this issue is about.
+        // The FIRST read legitimately builds the stream; what is measured is the SECOND read
+        // onwards — exactly the population this issue is about.
         var first = workspace.GetStream(new ContentCollectionReference(["content"]), null);
         (first is not null).Should().BeTrue("the collection-config reduction must be registered on this hub");
 
@@ -178,14 +185,14 @@ public class ReferenceAsCacheKeyTest(ITestOutputHelper output) : HubTestBase(out
         // delta is the shape that produced #4300's false +6: an unrelated stream created between
         // the two samples lands inside the measurement. The reads' OWN hub addresses cannot be
         // polluted by anything else on the host.
-        var minted = new List<Address>();
+        var minted = ImmutableList<Address>.Empty;
         for (var i = 0; i < Reads; i++)
         {
             var again = workspace.GetStream(new ContentCollectionReference(["content"]), null);
             ReferenceEquals(again, first).Should().BeTrue(
                 "a plain reduce of an equal reference is SHARED — a second instance is a second "
                 + "SynchronizationStream and a second permanent sync/ hub on this node hub");
-            minted.Add(again!.Hub.Address);
+            minted = minted.Add(again!.Hub.Address);
         }
 
         var distinct = minted.Distinct().Count();
@@ -198,9 +205,11 @@ public class ReferenceAsCacheKeyTest(ITestOutputHelper output) : HubTestBase(out
     }
 
     /// <summary>
-    /// 🚨 <b>THE CONTROL IN THE OTHER DIRECTION — the counter can see growth.</b> A genuinely
-    /// caller-specific configuration is uncached BY CONTRACT, so five calls make five hubs. If this
-    /// ever goes flat the counter has stopped measuring and the arm above is vacuous.
+    /// 🚨 <b>THE CONTROL IN THE OTHER DIRECTION — the assertion can see separate hubs.</b> A
+    /// genuinely caller-specific configuration is uncached BY CONTRACT, so five calls resolve to
+    /// five DISTINCT <c>sync/</c> hub addresses, none of them the shared stream's. If this ever
+    /// collapses to one address the assertion has stopped discriminating and the arm above is
+    /// vacuous.
     /// </summary>
     [HubFact]
     public async Task AConfiguredReduce_StillMintsOneSyncHubPerCall()
@@ -211,16 +220,16 @@ public class ReferenceAsCacheKeyTest(ITestOutputHelper output) : HubTestBase(out
 
         var shared = workspace.GetStream(new ContentCollectionReference(["content"]), null);
 
-        // 🚨 SCOPED, for the same reason as the arm above: assert the identity of the hubs THESE
-        // calls minted, not the host's total. `Be(Reads)` on a global delta can fail when every
+        // 🚨 SCOPED, for the same reason as the arm above: assert the IDENTITY of the hubs THESE
+        // calls resolved to, never the host's total. A global `Be(Reads)` delta can fail when every
         // call behaved correctly, and relaxing it to `>=` would make a missing mint invisible —
         // both readings are wrong, which is what #4300 cost.
-        var minted = new List<Address>();
+        var minted = ImmutableList<Address>.Empty;
         for (var i = 0; i < Reads; i++)
         {
             var configured = workspace.GetStream(
                 new ContentCollectionReference(["content"]), x => x.WithClientId($"caller-{i}"));
-            minted.Add(configured!.Hub.Address);
+            minted = minted.Add(configured!.Hub.Address);
         }
 
         Output.WriteLine($"DIAG configured: calls={Reads} distinctSyncHubs={minted.Distinct().Count()}");
@@ -233,7 +242,7 @@ public class ReferenceAsCacheKeyTest(ITestOutputHelper output) : HubTestBase(out
             + "the same thing and neither discriminates");
 
         var live = host.ServiceProvider.GetRequiredService<HostedHubsCollection>()
-            .Hubs.Select(h => h.Address).ToHashSet();
+            .Hubs.Select(h => h.Address).ToImmutableHashSet();
         minted.Should().OnlyContain(a => live.Contains(a),
             "every hub these calls minted must actually be hosted — a counted address that is not "
             + "in the collection would mean the count is not measuring the population");
@@ -343,7 +352,4 @@ public class ReferenceAsCacheKeyTest(ITestOutputHelper output) : HubTestBase(out
     /// never scanned — it exists so the predicate above is asserted to be able to say NO.</summary>
     private sealed record ProbeReference(params string[] Names) : WorkspaceReference<object>;
 
-    private static int LiveSyncHubs(IMessageHub hub) =>
-        hub.ServiceProvider.GetRequiredService<HostedHubsCollection>()
-            .Hubs.Count(h => h.Address.Type == SynchronizationAddress.AddressType);
 }
