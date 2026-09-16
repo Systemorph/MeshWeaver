@@ -308,9 +308,17 @@ public record SubscribeAck;
 
 /// <summary>
 /// Ids of the synchronization requests to be stopped (generated with request)
+///
+/// <para>🚨 <see cref="ICorrelatedBySender"/>: the owner's per-subscriber stream is keyed on the
+/// subscriber that OPENED it, and this release is issued from the same <c>workspace.Hub</c> as the
+/// <see cref="SubscribeRequest"/> it pairs with (<c>JsonSynchronizationStream.CreateExternalClient</c>
+/// — the subscribe at its <c>postSubscribeRequest</c>, the release in its disposable). So the
+/// sender is correlation state, not an incidental origin: where that workspace belongs to the root
+/// mesh hub, a <c>mesh/{id}</c> sender here is correct rather than router traffic to be hopped off
+/// (MeshWeaver#4489, split from #1140).</para>
 /// </summary>
 [SystemMessage]
-public record UnsubscribeRequest(string StreamId) : StreamMessage(StreamId);
+public record UnsubscribeRequest(string StreamId) : StreamMessage(StreamId), ICorrelatedBySender;
 
 /// <summary>
 /// Server-initiated stream error: routed through <c>RouteStreamMessage</c> to the
