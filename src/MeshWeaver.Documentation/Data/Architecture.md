@@ -226,6 +226,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Per-Tab Session State](PerTabSessionState) — a node is shared by every tab of one account, so "which page is this viewer on" and "navigate ME there" can never live on one
 - [Blazor Async](BlazorAsync)
 - [Available Controls](UserInterface/AvailableControls)
+- [Node Page Provenance](NodePageProvenance) — the landing page carries "who wrote this, and when" by default; declining it is a sentence, not an absence
 - [Menus as Data](MenuAsData) — re-word a menu without a build
 - [The Menu Contribution Boundary](MenuContributionBoundary) — what may be data, what stays compiled
 - [Markdown Fence Extensions](MarkdownFenceExtensions) — the platform emits a marker, the clients hydrate it; a new fence is always a two-repo change
