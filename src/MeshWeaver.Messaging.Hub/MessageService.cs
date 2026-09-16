@@ -622,7 +622,7 @@ public class MessageService : IMessageService
     /// </summary>
     /// <param name="delivery">The delivery to classify.</param>
     /// <returns>True when a sender is waiting for a reply to this delivery.</returns>
-    private static bool IsAwaitedBySender(IMessageDelivery delivery) =>
+    internal static bool IsAwaitedBySender(IMessageDelivery delivery) =>
         (delivery.Message is IRequest
          || (delivery.Message is RawJson rawJson
              && !rawJson.Content.Contains(nameof(DeliveryFailure), StringComparison.Ordinal)))
@@ -740,9 +740,16 @@ public class MessageService : IMessageService
         // permanent leak, which is the exemption-outliving-its-reason defect (#3647) in a new
         // costume. Past that bound the honest act is to ANSWER the requester — see the refusal
         // branch in ScheduleNotify, which reports a correlated reply to the party it was FOR.
+        //
+        // 🚨 …and a request one of this hub's hosted hubs ACCEPTED before its own teardown is still
+        // carried OUT while this hub is disposing it (#3986): that phase is when the child is asked to
+        // go down, and its accepted backlog runs ahead of its own ShutdownRequest. Refusing it here
+        // discarded a person's click the portal had already taken. See
+        // MessageHub.CarriesAcceptedWorkOfAHostedHub for the bounds.
         if (runLevel >= MessageHubRunLevel.DisposeHostedHubs)
             return runLevel >= MessageHubRunLevel.ShutDown
-                   || !delivery.Properties.ContainsKey(PostOptions.RequestId);
+                   || (!delivery.Properties.ContainsKey(PostOptions.RequestId)
+                       && !(hub is MessageHub carrier && carrier.CarriesAcceptedWorkOfAHostedHub(delivery)));
 
         // ---- Tier 1: Quiescing ----
         if (delivery.Properties.ContainsKey(PostOptions.RequestId))
