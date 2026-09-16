@@ -216,6 +216,17 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <summary>Number of operations currently executing through this pool.</summary>
     public int CurrentInFlight => Volatile.Read(ref _inFlight);
 
+    /// <summary>
+    /// The cap this pool was created with — how many operations it will run at once.
+    ///
+    /// <para>🚨 A queue depth is meaningless without it. "41 waiting" says nothing until you know
+    /// whether the pool runs 1 at a time or 256; the pair <c>(cap, waiting)</c> is what says
+    /// whether the cap is the constraint, and it is the reading MeshWeaver#1198 asks the
+    /// <c>pg:{provider}</c> write pool for. Diagnostics / readouts only — nothing may branch on it
+    /// to decide how much work to issue.</para>
+    /// </summary>
+    public int MaxConcurrency => _maxConcurrency;
+
     // 🚨 WHICH leaf, not just how many. The residual a dirty teardown reports has been an
     // anonymous "AgentStore=1" — enough to know a pool did not drain, never enough to fix it.
     // #2480 added the POOL NAME for exactly this reason and stopped one level short: measured

@@ -3185,6 +3185,30 @@ public static class MeshExtensions
                                                     .Except(done, StringComparer.OrdinalIgnoreCase)
                                                     .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                                                     .ToArray();
+                                                // 🚨 WAS THE DRAIN STUCK, OR WAS IT NEVER ADMITTED?
+                                                // (#1198, the last item this issue stayed open on.)
+                                                // "Made no progress" has two causes that the
+                                                // watchdog cannot tell apart on its own: the store
+                                                // took the call and went silent, or the next leaf
+                                                // removal never got an I/O pool slot because
+                                                // unrelated writes from every other partition were
+                                                // ahead of it — the cap-1 `pg:{provider}` write
+                                                // pool is ONE process-wide gate, not one per
+                                                // partition. Those call for opposite responses and
+                                                // the line named neither, which is why the
+                                                // 2026-09-06 `0 of 1 planned` and 2026-09-14
+                                                // `3 of 9 planned` occurrences were both
+                                                // undecidable from the report they produced.
+                                                //
+                                                // The reading is free here — IoPoolRegistry is
+                                                // mesh-scoped and every counter is lock-free — and
+                                                // ONE of its two answers is conclusive: nothing
+                                                // queued means nothing was waiting for a slot, so
+                                                // the drain was stuck somewhere a cap cannot
+                                                // explain. The other is a lead, and the sentence
+                                                // says "had work queued", never "caused".
+                                                var queueing = IoPoolQueueReport.Describe(
+                                                    hub.ServiceProvider.GetService<IoPoolRegistry>());
                                                 var ex = DeleteStageTimeout(
                                                     DeleteStage.Commit,
                                                     $"the bottom-up delete of '{path}' made no progress for "
@@ -3196,7 +3220,8 @@ public static class MeshExtensions
                                                         : $"; still owed by the plan: {string.Join(", ", stuck.Take(10))}"
                                                           + (stuck.Length > 10
                                                               ? $" (+{stuck.Length - 10} more)"
-                                                              : string.Empty)));
+                                                              : string.Empty))
+                                                    + $". At the timeout: {queueing}");
                                                 // Carry the REAL progress: the timeout discards the fan-out's
                                                 // own bookkeeping, and reporting 0 here is what made #1198 look
                                                 // like a pre-commit failure.
