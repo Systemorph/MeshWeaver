@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.RegularExpressions;
 using MeshWeaver.Deployment;
 using Xunit;
 
@@ -23,18 +24,97 @@ namespace MeshWeaver.Deployment.Contract.Test;
 public class RequiredModuleAuthorityTest
 {
     /// <summary>
-    /// 🚨 The two halves of the contract live in two assemblies that may not reference each other:
-    /// the record renders from MeshWeaver.Deployment.Contract (ZERO MeshWeaver references — it
-    /// ships inside the published Aspire package) and the host reads from MeshWeaver.Mesh.Contract.
-    /// The key is therefore spelled twice, and a rename on one side would silently stop the other
-    /// from ever seeing the claim: rendered and never read is indistinguishable from not rendered.
-    /// This holds the spelling to the one the reader uses.
+    /// The key's SHAPE, which is all this project can see: it references only
+    /// MeshWeaver.Deployment.Contract, so comparing the constant here against a literal proves the
+    /// renderer did not drift — and could never catch a rename of the READER's constant in
+    /// MeshWeaver.Mesh.Contract.
+    ///
+    /// <para>🚨 That cross-assembly assertion is the one that matters (rendered-but-never-read is
+    /// indistinguishable from not rendered) and it lives in
+    /// <c>ConfiguredModuleActivationTest.TheRENDERERAndTheREADERSpellTheClaimTheSameWay</c>, in
+    /// MeshWeaver.Compiler.Pipeline.Test, which sees BOTH assemblies. Do not "strengthen" this one
+    /// by adding a second literal beside the first: a check that compares a constant with its own
+    /// spelling cannot fail for the reason it exists.</para>
     /// </summary>
     [Fact]
-    public void TheAuthorityKeyIsSpelledTheWayTheHostReadsIt()
+    public void TheAuthorityKeyLivesUnderTheModulesSection()
     {
         Assert.Equal("Modules:RequiredIsAuthoritative", DeploymentPortalConfig.RequiredIsAuthoritativeKey);
         Assert.StartsWith(DeploymentPortalConfig.ModulesSection + ":", DeploymentPortalConfig.RequiredIsAuthoritativeKey, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 The chart's <c>Modules__Required__N</c> block names every key LITERALLY, so it has a
+    /// hand-written ceiling; a slot above it reaches no container in Kubernetes. That was merely
+    /// wrong while the entries were a by-index overlay (the image's entry stood); under the
+    /// authority claim it means the module is NOT REQUIRED AT ALL. So the number the contract
+    /// reports problems against has to be the number the template actually renders — read from the
+    /// template, not restated.
+    /// </summary>
+    [Fact]
+    public void TheDeclaredCeilingIsTheOneTheChartRenders()
+    {
+        var root = RepoRoot();
+        Assert.SkipWhen(root is null, "repository tree not reachable from the test bin — the chart is read from it");
+        var chart = Path.Combine(root!, "deploy", "helm", "templates", "memex-portal", "config.yaml");
+        Assert.True(File.Exists(chart), $"the portal ConfigMap template is not at {chart}");
+
+        var rendered = Regex.Matches(File.ReadAllText(chart), @"^\s*Modules__Required__(\d+):", RegexOptions.Multiline)
+            .Select(m => int.Parse(m.Groups[1].Value))
+            .Distinct()
+            .Order()
+            .ToArray();
+
+        Assert.True(rendered.Length > 0, "the chart renders no Modules__Required__N key at all");
+        Assert.Equal(0, rendered[0]);
+        Assert.Equal(Enumerable.Range(0, rendered[^1] + 1), rendered);
+        Assert.Equal(DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot, rendered[^1]);
+    }
+
+    [Fact]
+    public void ASlotAboveTheChartsCeiling_IsREPORTED_NotSilentlyDropped()
+    {
+        var over = DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot + 1;
+        var record = new DeploymentContent()
+            .WithRequiredModuleSlot(over, "MeshWeaver.Mcp")
+            .WithRequiredModulesAuthoritative();
+
+        var problem = Assert.Single(DeploymentPortalConfig.ChartModuleSlotProblems(record));
+        Assert.Contains("MeshWeaver.Mcp.dll", problem, StringComparison.Ordinal);
+        Assert.Contains(over.ToString(), problem, StringComparison.Ordinal);
+
+        // A deliverable slot is not a problem — the check is about the ceiling, not about slots.
+        Assert.Empty(DeploymentPortalConfig.ChartModuleSlotProblems(
+            new DeploymentContent().WithRequiredModuleSlot(DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot, "MeshWeaver.Mcp")));
+        Assert.Empty(DeploymentPortalConfig.ChartModuleSlotProblems(null));
+    }
+
+    [Fact]
+    public void TheCeilingIsTheCHARTS_SoTheRouteNeutralSpecProblemsDoesNotCarryIt()
+    {
+        // 🚨 The Aspire route injects whatever PortalConfig emits, ceiling and all, so it delivers
+        // slot 20 correctly. A route-neutral "why the spec cannot bring an instance up" answer that
+        // named it would be FALSE for an Aspire run — which is why the check is its own, chart-named
+        // surface a Helm renderer asks alongside SpecProblems rather than something folded into it.
+        var over = DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot + 1;
+        var record = new DeploymentContent()
+            .WithRequiredModuleSlot(over, "MeshWeaver.Mcp")
+            .WithRequiredModulesAuthoritative();
+
+        Assert.Empty(DeploymentPortalConfig.SpecProblems(record.PluginRepos, record.PreInstall));
+
+        // And the emitted key is really there on both routes — the slot is delivered, it is the
+        // CHART that would not carry it.
+        Assert.Equal("MeshWeaver.Mcp.dll", DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Aspire(null))[$"Modules__Required__{over}"]);
+        Assert.Equal("MeshWeaver.Mcp.dll", DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Helm)[$"Modules__Required__{over}"]);
+    }
+
+    private static string? RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
+            dir = dir.Parent;
+        return dir?.FullName;
     }
 
     [Fact]
@@ -120,6 +200,33 @@ public class RequiredModuleAuthorityTest
         Assert.DoesNotContain(
             DeploymentPortalConfig.BootConfigurationEntries(null),
             entry => entry.StartsWith("Modules:RequiredIsAuthoritative", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BOTHRoutesRenderTheSameSlots_ExplicitOnesIncluded()
+    {
+        // 🚨 The catalog config file used to render the CONTIGUOUS list alone and drop every
+        // explicit RequiredModuleSlots entry, so two renderers of ONE record described different
+        // required sets. Harmless while both were read as a by-index overlay; with the claim beside
+        // them the two routes would state two different COMPLETE sets, and the route that dropped
+        // the slot would say MCP is not required at all.
+        var record = new DeploymentContent()
+            .WithRequiredModules("MeshWeaver.Speech")
+            .WithRequiredModuleSlot(7, "MeshWeaver.Mcp")
+            .WithRequiredModulesAuthoritative();
+
+        var portal = DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Helm)
+            .Where(kv => kv.Key.StartsWith("Modules__Required__", StringComparison.Ordinal))
+            .Select(kv => $"{kv.Key.Replace("__", ":")}={kv.Value}")
+            .Order()
+            .ToArray();
+        var catalog = DeploymentPortalConfig.BootConfigurationEntries(record)
+            .Where(entry => entry.StartsWith("Modules:Required:", StringComparison.Ordinal))
+            .Order()
+            .ToArray();
+
+        Assert.Equal(["Modules:Required:0=MeshWeaver.Speech.dll", "Modules:Required:7=MeshWeaver.Mcp.dll"], catalog);
+        Assert.Equal(portal, catalog);
     }
 
     [Fact]

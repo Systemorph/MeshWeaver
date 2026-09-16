@@ -32,6 +32,27 @@ public static class DeploymentPortalConfig
     /// </summary>
     public const string RequiredIsAuthoritativeKey = $"{ModulesSection}:RequiredIsAuthoritative";
 
+    /// <summary>
+    /// The HIGHEST <c>Modules:Required:N</c> index the HELM CHART renders. It names every key
+    /// literally (no <c>range</c>, which the key-literal guards cannot see), so the list has a
+    /// hand-written ceiling and a slot above it reaches no container IN KUBERNETES.
+    ///
+    /// <para>🚨 <b>A chart property, not a contract one.</b> The Aspire route has no such ceiling —
+    /// it injects whatever <see cref="PortalConfig"/> emits as container environment — so a slot
+    /// above this delivers correctly on a laptop and vanishes in the cluster, which is precisely why
+    /// it is worth naming rather than a reason to stay quiet. <see cref="ChartModuleSlotProblems"/>
+    /// is scoped to the chart for the same reason: a route-neutral "the spec cannot come up" surface
+    /// that carried it would be false for an Aspire run.</para>
+    ///
+    /// <para>🚨 And the consequence is worse than it was. An unrendered slot used to mean "the
+    /// image's entry at that index stands", which is merely wrong; under
+    /// <see cref="RequiredIsAuthoritativeKey"/> it means the module is NOT REQUIRED AT ALL, because
+    /// the claim excludes the image's list. <c>RequiredModuleAuthorityTest</c> holds this number to
+    /// the chart's actual block — a constant that drifts from the template is the Memex#128/#131
+    /// shape wearing a different hat.</para>
+    /// </summary>
+    public const int MaxChartRenderedRequiredModuleSlot = 19;
+
     /// <summary>Conventional suffix of the vault secret holding the main DB connection string.</summary>
     public const string DatabaseSecretSuffix = "db-connection";
 
@@ -306,13 +327,60 @@ public static class DeploymentPortalConfig
     /// </summary>
     public static ImmutableList<string> BootConfigurationEntries(DeploymentContent? record)
     {
-        var entries = ConfigurationEntries(record?.PluginRepos, record?.PreInstall)
-            .AddRange(ModuleEntries(record?.RequiredModules));
+        var entries = ConfigurationEntries(record?.PluginRepos, record?.PreInstall);
+        if (record is null)
+            return entries;
+
+        // 🚨 ModuleSlots, NOT ModuleEntries: the same slots PortalConfig emits. This route used to
+        // render the contiguous list alone and drop every explicit RequiredModuleSlots entry, so
+        // the two renderers of ONE record described different required sets — the drift this type
+        // exists to make impossible. Harmless while both were read as a by-index OVERLAY; with the
+        // claim beside them the two routes would state two different COMPLETE sets, and the one
+        // that dropped a slot would say a module is not required at all.
+        foreach (var (slot, assembly) in ModuleSlots(record))
+            entries = entries.Add($"{ModulesSection}:Required:{slot}={assembly}");
+
         // The authority claim rides with the entries it qualifies, on BOTH routes — an entry list
         // delivered without it reads as a by-index overlay, which is what it was before #4476.
-        return record?.RequiredModulesAuthoritative == true
+        return record.RequiredModulesAuthoritative
             ? entries.Add($"{RequiredIsAuthoritativeKey}=true")
             : entries;
+    }
+
+    /// <summary>
+    /// The required-module slots this record declares that the HELM CHART does not render — a slot
+    /// above <see cref="MaxChartRenderedRequiredModuleSlot"/>, which its literal-key block does not
+    /// carry. Empty when every slot is inside the block.
+    ///
+    /// <para>🚨 <b>Scoped to the chart on purpose, and NOT folded into
+    /// <see cref="SpecProblems(IEnumerable{PluginRepoMount}, IEnumerable{string})"/>.</b> The Aspire
+    /// route injects whatever <see cref="PortalConfig"/> emits, ceiling and all, so it delivers such
+    /// a slot correctly — a route-neutral "why the spec cannot come up" answer that named it would
+    /// be false for an Aspire run. A Helm renderer asks this ALONGSIDE the spec problems; anything
+    /// else must not.</para>
+    ///
+    /// <para>Reported rather than dropped, for the same reason <see cref="Validate"/> reports a
+    /// half-configured mount: a slot the chart does not carry is invisible at deploy time — helm
+    /// succeeds, the ConfigMap is well-formed, and the module is quietly not required. It is also
+    /// the nastiest shape of all, because it WORKS under Aspire and disappears in the cluster.
+    /// Pure.</para>
+    /// </summary>
+    public static ImmutableList<string> ChartModuleSlotProblems(DeploymentContent? record)
+    {
+        if (record is null)
+            return ImmutableList<string>.Empty;
+        var problems = ImmutableList.CreateBuilder<string>();
+        foreach (var (slot, assembly) in ModuleSlots(record))
+            if (slot > MaxChartRenderedRequiredModuleSlot)
+                problems.Add(
+                    $"required module '{assembly}' is declared at slot {slot}, above the highest "
+                    + $"slot the Helm chart renders ({MaxChartRenderedRequiredModuleSlot}) — in "
+                    + "Kubernetes it would reach no container, so the module would not be required "
+                    + "at all (the Aspire route delivers it, so this works locally and disappears "
+                    + "in the cluster). Raise the chart's Modules__Required__N block (one hasKey "
+                    + "entry per index) and MaxChartRenderedRequiredModuleSlot together, or move "
+                    + "the entry into the contiguous requiredModules list.");
+        return problems.ToImmutable();
     }
 
     /// <summary>

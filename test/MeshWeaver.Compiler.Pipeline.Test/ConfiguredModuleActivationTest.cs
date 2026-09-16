@@ -166,7 +166,7 @@ public class ConfiguredModuleActivationTest
     /// outside this repository can see the length, so "put your entry at the first free slot" is
     /// advice that expires.
     /// </summary>
-    private static readonly string[] ImageBaseline =
+    private static readonly ImmutableArray<string> ImageBaseline =
     [
         "MeshWeaver.Blazor.Radzen.dll",
         "MeshWeaver.Blazor.Analysis.dll",
@@ -183,7 +183,7 @@ public class ConfiguredModuleActivationTest
     /// What every fleet record names today — five, against the image's nine (the `memex`, `pearl`
     /// and `memex-cloud` fixtures in <c>MeshWeaver.Deployment.Contract.Test</c>).
     /// </summary>
-    private static readonly string[] TheRecordsOwnList =
+    private static readonly ImmutableArray<string> TheRecordsOwnList =
     [
         "MeshWeaver.Blazor.Radzen.dll",
         "MeshWeaver.Blazor.Analysis.dll",
@@ -193,7 +193,11 @@ public class ConfiguredModuleActivationTest
     ];
 
     /// <summary>The overlay a record renders: one <c>Modules:Required:N</c> key per entry.</summary>
-    private static Dictionary<string, string?> Rendered(bool authoritative, params string[] entries)
+    private static Dictionary<string, string?> Rendered(bool authoritative) =>
+        Rendered(authoritative, ImmutableArray<string>.Empty);
+
+    /// <summary>As above, for a deployment that renders entries.</summary>
+    private static Dictionary<string, string?> Rendered(bool authoritative, ImmutableArray<string> entries)
     {
         var overlay = new Dictionary<string, string?>(StringComparer.Ordinal);
         for (var i = 0; i < entries.Length; i++)
@@ -273,7 +277,7 @@ public class ConfiguredModuleActivationTest
     public void AnUnlayeredConfiguration_HasNothingToShadow()
     {
         // One source, no overrides — today's default, and it must stay silent.
-        Assert.Empty(MeshBuilderModuleActivation.ShadowedRequired(Config(ImageBaseline)));
+        Assert.Empty(MeshBuilderModuleActivation.ShadowedRequired(Config([.. ImageBaseline])));
     }
 
     // ───────── #4476: a deployment states the COMPLETE required set ─────────
@@ -373,11 +377,35 @@ public class ConfiguredModuleActivationTest
     }
 
     [Fact]
+    public void TheRENDERERAndTheREADERSpellTheClaimTheSameWay()
+    {
+        // 🚨 The two halves live in assemblies that may not reference each other: the record renders
+        // from MeshWeaver.Deployment.Contract (ZERO MeshWeaver references by design — it ships
+        // inside the published Aspire package) and the host reads from MeshWeaver.Mesh.Contract, so
+        // the key is spelled TWICE. A rename on one side would silently stop the other from ever
+        // seeing the claim, and rendered-but-never-read is indistinguishable from not rendered:
+        // every record keeps behaving as a by-index overlay and nothing anywhere says why.
+        //
+        // This assertion lives HERE and not beside the renderer because this project sees BOTH
+        // assemblies (through MeshWeaver.PluginCatalog). The same two constants compared inside
+        // MeshWeaver.Deployment.Contract.Test would be the renderer against a literal — a check
+        // that cannot fail for the reason it exists.
+        Assert.Equal(
+            MeshBuilderModuleActivation.RequiredIsAuthoritativeKey,
+            MeshWeaver.Deployment.DeploymentPortalConfig.RequiredIsAuthoritativeKey);
+
+        // And the rendered ENV form is what the chart and the Aspire adapter put on the container.
+        Assert.Equal(
+            "Modules__RequiredIsAuthoritative",
+            MeshBuilderModuleActivation.RequiredIsAuthoritativeKey.Replace(":", "__"));
+    }
+
+    [Fact]
     public void AnUnlayeredConfiguration_HasNothingUNSTATED()
     {
         // One source: the image's list IS the deployment's list. Reporting all nine would make the
         // check noise on every host that layers nothing — a Monolith, a test mesh, the CLI.
-        Assert.Empty(MeshBuilderModuleActivation.UnstatedRequired(Config(ImageBaseline)));
+        Assert.Empty(MeshBuilderModuleActivation.UnstatedRequired(Config([.. ImageBaseline])));
     }
 
     [Fact]
