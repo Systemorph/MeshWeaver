@@ -124,6 +124,11 @@ public static class GlobalSettingsNodeType
             .AddDefaultGlobalSettingsMenuItems()
             .AddLayout(layout => layout
                 .WithDefaultArea(GlobalSettingsLayoutArea.GlobalSettingsArea)
-                .WithView(GlobalSettingsLayoutArea.GlobalSettingsArea, GlobalSettingsLayoutArea.GlobalSettings))
+                // #4500: this page names its own default area, so it never went through the
+                // framework Overview and shipped without provenance. "Who last changed the
+                // platform's settings, and when" is the first thing an administrator looking at
+                // this page wants to know, so the framework composes the line above it.
+                .WithNodePage(GlobalSettingsLayoutArea.GlobalSettingsArea,
+                    GlobalSettingsLayoutArea.GlobalSettings))
     };
 }

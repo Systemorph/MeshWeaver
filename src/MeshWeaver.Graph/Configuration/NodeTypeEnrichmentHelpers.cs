@@ -2825,12 +2825,13 @@ internal static class NodeTypeEnrichmentHelpers
     {
         Func<MessageHubConfiguration, MessageHubConfiguration> overlay =
             config => config.AddLayout(layout =>
-                layout.WithView(MeshNodeLayoutAreas.OverviewArea, (host, _) =>
+                layout.WithNodePage(MeshNodeLayoutAreas.OverviewArea, (host, _) =>
                     Observable.Return<UiControl?>(Controls.Stack
                         .WithStyle(CompilationErrorCardStyle)
                         .WithView(Controls.Markdown(BuildExecutionRefusedMarkdown(
                             (key, args) => host.Localize(key, args),
-                            nodeType, fingerprints, activityPath))))));
+                            nodeType, fingerprints, activityPath)))),
+                    ExecutionRefusedProvenance));
 
         var nack = new UnhandledMessageNack(
             $"{summary} {NodeTypeExecutionGate.RecoveryVerb}",
@@ -2950,8 +2951,8 @@ internal static class NodeTypeEnrichmentHelpers
         CreateCompilationInProgressConfiguration(string nodeType, string instancePath)
         => config => config.AddLayout(layout =>
         {
-            var withOverview = layout.WithView(MeshNodeLayoutAreas.OverviewArea,
-                (host, _) => Progress(host, $"/{instancePath}"));
+            var withOverview = layout.WithNodePage(MeshNodeLayoutAreas.OverviewArea,
+                (host, _) => Progress(host, $"/{instancePath}"), EmergencyPageProvenance);
             return withOverview.WithView(
                 ctx => !withOverview.HasNamedRenderer(ctx.Area),
                 (host, ctx) => Progress(host, RedirectTarget(ctx.Area))
@@ -3143,11 +3144,38 @@ internal static class NodeTypeEnrichmentHelpers
         // localized off the viewing user's AccessContext (host.Localize) rather than
         // baked in English at enrichment time.
         return config => config.AddLayout(layout =>
-            layout.WithView(MeshNodeLayoutAreas.OverviewArea, (host, ctx) =>
+            layout.WithNodePage(MeshNodeLayoutAreas.OverviewArea, (host, ctx) =>
                 Observable.Return<UiControl?>(
                     BuildCompilationErrorMarkdown(errorMessage, guidance, intro, callToAction,
-                        activityPath, host.Localize("ui.viewCompileLog")))));
+                        activityPath, host.Localize("ui.viewCompileLog"))),
+                EmergencyPageProvenance));
     }
+
+    /// <summary>
+    /// Why the compile-error / compile-in-progress overlays carry no provenance line (#4500).
+    ///
+    /// <para>These are not the node's page — they are what stands in its place while the page
+    /// cannot be built. The node's own <c>Created</c>/<c>Updated</c> stamps describe the INSTANCE,
+    /// and the thing that is broken is its TYPE; printing them above a compiler diagnostic answers
+    /// a question nobody on this page is asking, and pushes the diagnostic down the screen. The
+    /// emergency card is deliberately a narrow, centred card with nothing else on it.</para>
+    /// </summary>
+    private static readonly NodePageProvenance EmergencyPageProvenance = NodePageProvenance.Declined(
+        "An emergency overlay stands in for a page that cannot be built: the node's own stamps "
+        + "describe the instance while the broken thing is its TYPE, so they answer nothing a "
+        + "reader of a compiler diagnostic is asking. The card is deliberately the only thing on "
+        + "the page. The real provenance is one click away on the node's Data area, which every "
+        + "viewer with Read can open.");
+
+    /// <summary>
+    /// Why the execution-refused overlay carries no provenance line (#4500) — same reasoning as
+    /// <see cref="EmergencyPageProvenance"/>, with the refusal's own two fingerprints already on
+    /// the card as the thing a reader is actually chasing.
+    /// </summary>
+    private static readonly NodePageProvenance ExecutionRefusedProvenance = NodePageProvenance.Declined(
+        "The refusal card already names the two fingerprints that differ — the adopted build and "
+        + "the live one — which is the provenance a reader of THIS page is chasing. The node's own "
+        + "Created/Updated stamps describe the instance, not the build mismatch that refused it.");
 
     /// <summary>The emergency page's card chrome — shared by every overlay cause so the refusal page
     /// and the compile-error page cannot drift apart visually.</summary>

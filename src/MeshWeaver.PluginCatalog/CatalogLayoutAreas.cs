@@ -99,7 +99,11 @@ public static class CatalogLayoutAreas
             .AddDefaultLayoutAreas()
             .AddMeshDataSource(s => s.WithContentType<PluginCatalogContent>())
             .AddLayout(layout => layout
-                .WithView(MeshNodeLayoutAreas.OverviewArea, Overview)
+                // #4500: this page replaced the framework Overview and silently dropped the
+                // provenance line with it. A catalog node is content — it is declared, published
+                // and re-pointed by people — so "who set this source up, and when" is a question
+                // its page is genuinely asked. WithNodePage composes the line above the catalog.
+                .WithNodePage(MeshNodeLayoutAreas.OverviewArea, Overview)
                 .WithView(CatalogArea, Catalog));
             // Create / Delete are no longer re-registered here: their views ride the
             // MeshWeaver.Graph.Views module, which registers them on every per-node hub, so this
