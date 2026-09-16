@@ -802,6 +802,63 @@ teardown, not evidence of parallel load. The test's own precondition also passed
 ThreadPool leg out directly: `source.HasObservers` is only true once `source.Subscribe(observer)` has
 run, so the subscribe had already landed before `Dispose()` was called.
 
+### 🚨 A drain callback registered LATE runs on the SUBSCRIBER — so it is registered disarmed, before the leaf
+
+The canceller thread (#2394, #4448) decides where `_poolCts.Cancel()` is **called**. It says nothing
+about a callback that is **registered after** the cancel, and `CancellationToken.Register` on a token
+that is already cancelled registers nothing at all: it runs the callback synchronously, on the
+registering thread (#4524).
+
+`SubscribeThroughPool` registers one such callback per subscription — `inner.Dispose();
+observer.OnCompleted();`, the subscription's whole downstream teardown — and it registers it inside the
+subscribe, on the subscriber's thread: a hub action block, a grain turn, `OrderedRouteDispatcher.DrainNext`.
+The refusal that should keep it out is read when the cold observable is **built** (`_draining`), and the
+admission region only refuses once `_disposing` is set, which `Drain()` never does. So a leg built a
+moment before a drain and subscribed as its cancel lands is admitted, reaches `Register` on a cancelled
+token, and runs its teardown on the subscriber. Two orderings reach it, and the second is worse:
+
+| order on the subscriber | what the late callback is |
+|---|---|
+| cancel lands before the setup leaf gets a pool thread | a *second* terminal — the setup leaf's cancelled gate wait also reports one, from the pool; whichever arrives first is the one downstream sees |
+| the setup leaf (started first) opens the source, **then** the cancel lands, **then** `Register` runs | the leg's **only** terminal |
+
+**The fix changes the order, not `Drain()`'s admission.** The registration is created **first** and
+**disarmed**; `armed` is published (with `Interlocked.Exchange`) once `Register` has returned; only then
+is the setup leaf started. That publication is the synchronisation point. A callback that finds itself
+unarmed ran before it — inline inside `Register`, or on the canceller at any moment up to the
+`Exchange`, including after `Register` returned — so the cancel was requested before the setup leaf
+exists, and that leaf cannot miss it: its linked token is created cancelled, its gate wait throws, and
+its error arm delivers `OnCompleted` from a pool thread. The CTS's state transition and the arm are
+both full fences, so a callback reading `armed == 0` and a leaf reading the token as uncancelled cannot
+both happen. Starting the leaf after the registration also removes the second row: the source is never
+opened without an armed registration covering it. The two producers share one exactly-once latch, so
+the hand-off is explicit; the producer that takes it delivers the terminal in a `finally`, so a
+throwing source `Dispose()` cannot leave the latch taken and the observer unterminated.
+
+Neither shape the issue sketched closes the window. Refusing new regions in `Drain()` still admits a
+subscribe that was already past its region check when the grace expired and the cancel ran. Checking
+`IsCancellationRequested` before registering is check-then-act against the same cancel — and "route the
+terminal through the canceller" has nothing to route to, because that thread exits once its one cancel
+has run.
+
+**Proven by widening, not sweeping.** `IoPoolLateDrainRegistrationTest` builds the leg while the pool is
+alive, lets `Drain()` complete — it joins the cancel — and only then subscribes from a dedicated thread,
+so the entire drain sits inside the window. The one other producer of a terminal, the setup leaf, is
+parked at a test seam (`IoPool.OnSubscribeSetupLeafStarting`) until `Subscribe()` has returned; without
+it the test would pass whenever the pool thread happened to win the race. Against main's ordering
+(seam only) it fails every run with `Did not expect value to be 10` — the subscriber's own thread id; with
+the fix it passes, and reverting the fix lines and **rebuilding** turns it red again.
+
+**What this does not cover — measured, and left open.** The two *refusals* still terminate inline:
+a leg **built** after `Drain()` gets `Cancelled<T>()` (`Observable.Throw` on the immediate scheduler),
+and one subscribed after `Dispose()` is refused by the admission region with an explicit
+`observer.OnError(...)`. A probe measured both as `OnError: OperationCanceledException` on the
+subscriber's thread, inside `Subscribe()`. That is a refusal at the door rather than a late
+registration, and it runs through every entry point, not only `SubscribeThroughPool`. But
+`OrderedRouteDispatcher.DrainNext` states that a leg "can never complete inside its own subscribe call",
+so after a drain each refused leg's `.Finally` re-enters `DrainNext` on the same stack — recursion as
+deep as that destination's queue (read from the code, not measured). Tracked in #4530.
+
 ---
 
 ## Applied to (current scope)
