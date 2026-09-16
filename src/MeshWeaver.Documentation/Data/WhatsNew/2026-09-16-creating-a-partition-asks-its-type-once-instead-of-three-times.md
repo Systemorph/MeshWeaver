@@ -17,7 +17,10 @@ Each of them asked the type's declaration independently. For a type registered i
 is free — the answer is in process. For a type declared in **mesh content** it is two reads: one to
 establish that the definition exists, one to read it authoritatively. Three checks, two reads each:
 **six reads for one fact that cannot meaningfully change between them**. Those three now share one
-resolution, so the same create costs two.
+resolution, so that phase of the create costs two.
+
+A fourth check runs *after* the row is written, and it still asks on its own — deliberately, see
+below — so a whole create of this kind now makes two resolutions rather than four.
 
 ## What this changes, and what it deliberately does not
 

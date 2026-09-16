@@ -10,9 +10,10 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 A NodeType declares `ownsPartition: true` and every instance of it is then a **partition root**: a
 top-level node whose path is just its id, with its own backing schema, its own `Admin/Partition`
 record and its creator as its Admin. Four checks on the create path need that one fact, and
-`PartitionOwningTypes.OwnsPartition` is the one answer for all of them — for a type registered in
+`PartitionOwningTypes.OwnsPartition` is the one RESOLVER all four use — for a type registered in
 `src/` and for one declared in mesh content (`Crm/Client`), which is compiled live and is invisible
-to the static registry.
+to the static registry. Three of the four also share one ANSWER; the fourth resolves again after the
+write, on purpose. Which is which, and why, is the rest of this page.
 
 ## What one resolution costs
 
@@ -27,8 +28,17 @@ established by the listing first; and the content then comes from the authoritat
 from the index, because this is one known path the create is GATING on.
 
 The answer is a **tri-state**: `true`, `false`, or `null` — "could not be established". `null` is
-never folded into `false`: every caller turns it into `PartitionOwningTypes.Undetermined`, a
-`NodeRejectionReason.Unavailable` that fails the create CLOSED while saying it reached no verdict.
+never folded into `false`, and every caller fails CLOSED on it — but by two different mechanisms,
+because they sit on two different sides of the write:
+
+- the three **validators** return `PartitionOwningTypes.Undetermined`, a
+  `NodeRejectionReason.Unavailable` that refuses the create while saying it reached no verdict. The
+  row is never written.
+- the **post-creation handler** runs after the row exists, so there is no verdict left to return: it
+  FAULTS the create (`access.partitionCreate.ownerUnestablished`) and, being `FailsCreateOnError`,
+  the create is reported as failed and the row compensated. `false` takes the same path there — at
+  that point a type that does not own a partition contradicts the decision that let the root be
+  written, so it is a fault and not a quiet skip.
 
 ## The four checks, and the one that keeps its own view
 
@@ -43,8 +53,9 @@ The first three run back to back, as one `Concat` over one `NodeValidationContex
 a single resolution through `PartitionOwningTypes.OwnsPartitionOnce`, which memoizes on
 `NodeValidationContext.PartitionOwnership` — a `PartitionOwnershipMemo` built fresh per operation,
 so it can leak across neither operations nor users, and keyed by node TYPE, so a context copied for
-a different node can never read another type's answer. A top-level create of an in-mesh owning type
-went from three resolutions (six reads) to one (two).
+a different node can never read another type's answer. The PRE-WRITE phase of a top-level create of
+an in-mesh owning type went from three resolutions (six reads) to one (two); the whole create still
+costs two resolutions — four reads — because the post-creation handler deliberately makes its own.
 
 🚨 **That is a semantic change, not only a saving.** Three independent resolutions could DISAGREE if
 the declaration were edited between them, and the disagreement failed the create closed. Sharing one

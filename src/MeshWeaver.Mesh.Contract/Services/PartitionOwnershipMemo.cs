@@ -58,8 +58,18 @@ public sealed class PartitionOwnershipMemo
     /// </summary>
     /// <param name="nodeType">The NodeType being judged. Must not be empty.</param>
     /// <param name="resolve">
-    /// The resolver, run at most once per operation and per type. Cold — deferred to subscribe, so a
-    /// check that composes this observable without subscribing costs nothing and counts as nothing.
+    /// The resolver. Cold — deferred to subscribe, so a check that composes this observable without
+    /// subscribing costs nothing and counts as nothing.
+    ///
+    /// <para>🚨 <b>The guarantee is about the ANSWER, not about the number of runs.</b> The checks
+    /// of one operation subscribe SEQUENTIALLY — the validator chain is a <c>Concat</c>, so the
+    /// second subscribes only after the first has completed — and for them this runs exactly once.
+    /// Two subscriptions that genuinely OVERLAPPED could both pass the lookup and run it twice;
+    /// only the first answer is ever recorded, and <see cref="Once"/> emits that recorded answer to
+    /// both, so the shared view holds either way. The cost of the overlap is one redundant
+    /// resolution — the behaviour before this memo existed — never a disagreement. Coordinating the
+    /// in-flight run instead would mean a gate, which this codebase does not permit and which would
+    /// buy nothing the sequential case does not already have.</para>
     /// </param>
     /// <returns>The tri-state: owns / does not own / could not be established.</returns>
     public IObservable<bool?> Once(string nodeType, Func<IObservable<bool?>> resolve)
