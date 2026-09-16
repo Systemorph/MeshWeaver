@@ -1218,7 +1218,7 @@ public static class MeshExtensions
     /// <returns><c>true</c> when the reply was accepted for delivery.</returns>
     private static bool WasCarried(IMessageDelivery? delivery)
         => delivery is not null
-           && delivery.State is not (MessageDeliveryState.Failed or MessageDeliveryState.Ignored);
+           && delivery.WasAcceptedForDelivery;
 
     /// <summary>
     /// 🚨 Posts a terminal <see cref="CreateNodeResponse"/> and VERIFIES that a route took it —
