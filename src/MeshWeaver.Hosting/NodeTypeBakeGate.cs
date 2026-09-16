@@ -247,10 +247,13 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     public IReadOnlyDictionary<string, string> Retired => retired;
 
     /// <summary>
-    /// Types that failed with NO working build to regress from — a type that was already broken on
-    /// the way in, or any failure during the FIRST bake of an instance that has never built
-    /// anything (<c>DynamicTypePreWarmer.RegressionBaseline</c> empties the baseline there, because
-    /// no previous image is serving and refusing readiness would protect nobody).
+    /// Types that failed with NO working build to regress from — either of two independent facts:
+    /// the type was already broken on the way in
+    /// (<see cref="PreWarmOutcome.WasHealthyBeforeBake"/> is <c>false</c>), or this instance has
+    /// never built anything, so any failure during that FIRST bake lands here
+    /// (<see cref="PreWarmOutcome.HasRegressionBaseline"/> is <c>false</c>, from
+    /// <c>DynamicTypePreWarmer.IsFirstBake</c> — no previous image is serving, so refusing readiness
+    /// would protect nobody).
     ///
     /// <para>Holds exactly what WOULD have gated had there been something to regress from: the
     /// no-baseline question is asked after the timeout, content and retirement classifications, so
@@ -364,10 +367,10 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
         }
 
         // No working build to regress FROM: pre-existing breakage, or the first bake of an instance
-        // that has never built anything (DynamicTypePreWarmer.RegressionBaseline empties the
-        // baseline there, because no previous image is serving and refusing readiness would protect
-        // nobody). Never gates — but it is RECORDED rather than dropped, because a failure nobody
-        // can see is how a fresh portal ends up serving 503 with an empty health payload.
+        // that has never built anything (DynamicTypePreWarmer.IsFirstBake, carried here as
+        // HasRegressionBaseline, because no previous image is serving and refusing readiness would
+        // protect nobody). Never gates — but it is RECORDED rather than dropped, because a failure
+        // nobody can see is how a fresh portal ends up serving 503 with an empty health payload.
         //
         // 🚨 Classified LAST, after the three "not a verdict" buckets above, and the order is the
         // whole point: on a first bake EVERY outcome arrives with no baseline, so testing this
@@ -376,7 +379,12 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
         // retirement still means the repository dropped the type, whether or not anything was built
         // here before. This bucket therefore holds exactly what WOULD have gated had there been
         // something to regress from.
-        if (!outcome.WasHealthyBeforeBake)
+        // 🚨 Two independent facts, and either one alone means "nothing to regress from": the type
+        // was already broken on the way in, or this instance has never built anything. They are NOT
+        // one field — collapsing them made a never-built type report "was not healthy" to this gate
+        // while the GO's own copy of the rule read it straight off the entry and said the opposite
+        // (#4496). See PreWarmOutcome.HasRegressionBaseline.
+        if (!outcome.HasRegressionBaseline || !outcome.WasHealthyBeforeBake)
         {
             withoutBaseline[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
             return false;

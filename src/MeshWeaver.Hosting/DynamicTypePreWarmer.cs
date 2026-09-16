@@ -166,15 +166,44 @@ public record PreWarmOutcome(string TypePath, PreWarmStatus Status, string? Deta
         Status is PreWarmStatus.Compiled or PreWarmStatus.AlreadyBaked;
 
     /// <summary>
-    /// Whether this NodeType was WORKING before the sweep started — the regression baseline, taken
-    /// from <see cref="NodeTypeBakeEntry.WasHealthy"/>.
+    /// Whether this NodeType was WORKING before the sweep started — a FACT about the type, taken
+    /// faithfully from <see cref="NodeTypeBakeEntry.WasHealthy"/>, which counts
+    /// <see cref="BakeState.NeverBuilt"/> as healthy: a type nobody has built yet is not damaged
+    /// goods.
     ///
     /// <para>Only a failure on a type that was previously healthy is a REGRESSION, and only a
     /// regression may hold a pod out of rotation. A type that was already sitting at
     /// <c>CompilationStatus.Error</c> before this image failing again is not new damage — gating on it
     /// would let one abandoned NodeType block every future deploy.</para>
+    ///
+    /// <para>🚨 This is HALF of the gating question; the other half is
+    /// <see cref="HasRegressionBaseline"/>, and the two are deliberately separate fields. They were
+    /// briefly collapsed into this one (#4472) by stamping it from a baseline that had already been
+    /// emptied for a first bake, which made a never-built type report
+    /// <c>WasHealthyBeforeBake == false</c> — "this type was broken on the way in", said about a type
+    /// nothing had ever built. It reached the right verdict through a false statement, and the two
+    /// readers then disagreed: <c>BuildProtocolDriver.OutcomesOf</c> stamps this field straight off
+    /// the entry, so the GO still saw <c>true</c> while the gate saw <c>false</c> for the same type
+    /// (#4496).</para>
     /// </summary>
     public bool WasHealthyBeforeBake { get; init; } = true;
+
+    /// <summary>
+    /// Whether this instance had ANY previous build to regress from — <c>false</c> only on the first
+    /// bake of a brand-new instance, where every type in the report is
+    /// <see cref="BakeState.NeverBuilt"/> (see <see cref="DynamicTypePreWarmer.IsFirstBake"/>).
+    ///
+    /// <para>A report-level fact carried per outcome so a gate need not re-read the report. It is
+    /// the reason a first rollout does not gate itself: refusing readiness stalls the rollout "with
+    /// the previous image still serving", and on a first rollout there is no previous image and no
+    /// previous pod, so refusing protects nobody.</para>
+    ///
+    /// <para>Kept apart from <see cref="WasHealthyBeforeBake"/> because the two answer different
+    /// questions — "was THIS TYPE working?" and "is there anything here to protect?" — and only
+    /// their conjunction may gate. Defaults to <c>true</c> so every hand-built outcome keeps the
+    /// strict reading.</para>
+    /// </summary>
+    public bool HasRegressionBaseline { get; init; } = true;
 
     /// <summary>
     /// 🚨 WALL-CLOCK COST of this one type's bake — the number that was missing.
@@ -807,22 +836,56 @@ public static class DynamicTypePreWarmer
         && report.Entries.All(e => e.State is BakeState.NeverBuilt);
 
     /// <summary>
-    /// The regression baseline for <paramref name="report"/>: the types that were working on the way
+    /// The regression baseline for <paramref name="report"/>: the types that were WORKING on the way
     /// in, so a downstream gate can tell a NEW failure from one that was already broken (see
     /// <see cref="PreWarmOutcome.WasHealthyBeforeBake"/>).
     ///
-    /// <para>EMPTY on a first bake (<see cref="IsFirstBake"/>) — nothing was working, so nothing can
-    /// regress. Narrow on purpose: ONE baked type means a working instance, and there the gate keeps
-    /// its full strictness, because a newly failing type CAN be this image's doing.</para>
+    /// <para>🚨 Faithful to <see cref="NodeTypeBakeEntry.WasHealthy"/> and nothing else — a
+    /// <see cref="BakeState.NeverBuilt"/> type IS in this set, because it is not damaged goods.
+    /// Whether the baseline may be USED to gate is the separate question
+    /// <see cref="IsFirstBake"/> answers, carried to the gate as
+    /// <see cref="PreWarmOutcome.HasRegressionBaseline"/>.</para>
+    ///
+    /// <para>This function briefly returned EMPTY on a first bake (#4472). That reached the right
+    /// gating verdict, but by asserting something false about every type in the report — and since
+    /// <c>BuildProtocolDriver.OutcomesOf</c> stamps the same field straight off the entry, the GO and
+    /// the gate ended up disagreeing about one type (#4496). Two facts, two fields; a helper that
+    /// pre-combines them is how they drift.</para>
     /// </summary>
     /// <param name="report">The bake report read before anything is rebuilt.</param>
     public static ImmutableHashSet<string> RegressionBaseline(NodeTypeBakeReport report) =>
-        IsFirstBake(report)
-            ? ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase)
-            : report.Entries
-                .Where(e => e.WasHealthy)
-                .Select(e => e.TypePath)
-                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        report.Entries
+            .Where(e => e.WasHealthy)
+            .Select(e => e.TypePath)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 🚨 <b>THE stamp — the ONLY place either gating fact is written onto an outcome.</b> Reads a
+    /// report once and returns the projection that sets both
+    /// <see cref="PreWarmOutcome.WasHealthyBeforeBake"/> and
+    /// <see cref="PreWarmOutcome.HasRegressionBaseline"/>.
+    ///
+    /// <para>It exists because the alternative has already failed once. The sweep and
+    /// <c>BuildProtocolDriver.OutcomesOf</c> both mint outcomes for the same gate, and each used to
+    /// derive the fields its own way — one from a set, one from the entry. #4472 changed one of
+    /// those derivations and the two silently disagreed about a never-built type for the whole of
+    /// #4496: the GO held where the gate did not, with nothing red, because a duplicated rule does
+    /// not announce that its copies have diverged.</para>
+    ///
+    /// <para>So there is one derivation and two call sites, not two derivations. Both facts come
+    /// off the SAME report, computed once per sweep rather than per outcome.</para>
+    /// </summary>
+    /// <param name="report">The bake report read before anything is rebuilt.</param>
+    public static Func<PreWarmOutcome, PreWarmOutcome> BaselineStamp(NodeTypeBakeReport report)
+    {
+        var healthyBefore = RegressionBaseline(report);
+        var hasBaseline = !IsFirstBake(report);
+        return outcome => outcome with
+        {
+            WasHealthyBeforeBake = healthyBefore.Contains(outcome.TypePath),
+            HasRegressionBaseline = hasBaseline,
+        };
+    }
 
     private static IObservable<PreWarmOutcome> WarmPending(
         IMessageHub mesh,
@@ -848,7 +911,9 @@ public static class DynamicTypePreWarmer
         // The regression baseline, captured BEFORE anything is rebuilt: which types were working on
         // the way in. A type missing from this set was already broken, so its failure is pre-existing
         // damage rather than something this image caused — see PreWarmOutcome.WasHealthyBeforeBake.
-        var healthyBefore = RegressionBaseline(report);
+        // ONE stamp, shared with BuildProtocolDriver.OutcomesOf so the two cannot derive the
+        // gating facts differently — see BaselineStamp for why that is not a hypothetical.
+        var stampBaseline = BaselineStamp(report);
         if (IsFirstBake(report))
             logger?.LogWarning(
                 "DynamicTypePreWarmer: FIRST BAKE — all {Count} NodeType(s) are NeverBuilt on this "
@@ -1076,8 +1141,9 @@ public static class DynamicTypePreWarmer
                 .Concat()
                 // Stamp the regression baseline on every outcome so a downstream readiness gate can
                 // tell a NEW failure from one that was already broken on the way in, without having
-                // to re-read the report.
-                .Select(o => o with { WasHealthyBeforeBake = healthyBefore.Contains(o.TypePath) });
+                // to re-read the report — and, beside it, whether this instance has any previous
+                // build to regress FROM.
+                .Select(stampBaseline);
 
         if (order.Count == 0)
             return Observable.Empty<PreWarmOutcome>();
