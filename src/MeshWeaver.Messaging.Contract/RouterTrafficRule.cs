@@ -44,6 +44,15 @@ public static class RouterTrafficRule
         if (message is HeartBeatEvent)
             return null;
 
+        // The sender is what the RECEIVER correlates this delivery by, so there is no hop that
+        // would silence the report without breaking the pairing — see ICorrelatedBySender, which
+        // documents what implementing it claims. Same reason as the two exclusions around it: a
+        // report nobody may act on trains people to mute the channel. Declared by the message's own
+        // type rather than matched here by name, so the exclusion travels with the contract and a
+        // rename cannot quietly turn it off (#4489).
+        if (message is ICorrelatedBySender)
+            return null;
+
         var targetIsRouter = string.Equals(targetAddressType, AddressExtensions.MeshType, StringComparison.Ordinal);
         var senderIsRouter = string.Equals(senderAddressType, AddressExtensions.MeshType, StringComparison.Ordinal);
 
