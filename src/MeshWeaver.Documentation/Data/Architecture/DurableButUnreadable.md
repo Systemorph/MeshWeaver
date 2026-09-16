@@ -1,7 +1,7 @@
 ---
 Name: Durable But Unreadable
 Category: Architecture
-Description: A write that is acknowledged, versioned and permanently invisible. Two confirmed live instances on two different portals, one of them in a plain user partition with no plugin involved. How to tell it apart from the two read seams disagreeing, and why a mint-time read-back is the only acknowledgement worth trusting.
+Description: A write that is acknowledged, versioned and permanently invisible. Three confirmed live instances across two portals - a plugin partition, a plain user partition, and a system partition on the control instance. How to tell it apart from the two read seams disagreeing, and why a mint-time read-back is the only acknowledgement worth trusting.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3"/><path d="M20 5v6"/><path d="m16 16 6 6"/><path d="m22 16-6 6"/></svg>
 ---
 
@@ -33,7 +33,7 @@ Run all three before concluding anything. Two of them agreeing is not enough, in
   the only seam that distinguishes "the write never happened" from "the write happened and is
   unreachable", and those have opposite repairs.
 
-## The two confirmed instances (measured 2026-09-01)
+## The three confirmed instances (the first two measured 2026-09-01)
 
 **`AgenticEngineering` on memex.systemorph.com** — a Store-plugin partition, 371 nodes written by the
 2026-08-28 install/import.
@@ -59,6 +59,24 @@ partition, one node written by self-service instance registration.
   seconds later, same `system-security` identity, different partition — **is readable**, v1,
   `Active`.
 
+**`Deployments/pearl-provision-20260914` on memex.systemorph.com** (measured 2026-09-15, re-measured
+2026-09-16) — a **system partition on the control instance**, one `Hosting/InstanceAction` created by
+an approved operation request. Filed as
+[#4513](https://github.com/Systemorph/MeshWeaver/issues/4513), from
+[MeshWeaver.Plugins#1922](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1922).
+
+- `get_versions Deployments/pearl-provision-20260914` → **53 rows, v1 … v62, every one
+  `system-security`**, name and `nodeType` intact. v62 carried `state: Running`, step 14/18, log
+  through 10:45:18Z — so the control plane ran it for half an hour against a current row it kept
+  writing.
+- `get @Deployments/pearl-provision-20260914` → *Not found*, a day later, read as a **global admin**.
+- `search namespace:Deployments scope:children nodeType:Hosting/InstanceAction` → 12 siblings,
+  `coverage.partitions: ["deployments"]`, the same call and the same credential. That is the
+  negative control: the partition is readable, the query shape works, this one node is not in it.
+- The replica logged `MeshNodeContentDegradedException … stayed an untyped JsonElement` for this path
+  at 10:16:50Z — which is why the degrade was the obvious suspect, and it is still not the cause
+  (see below).
+
 ## What that pair rules out
 
 The second instance is decisive, and it costs the first instance its stated root cause:
@@ -78,6 +96,14 @@ the reader cannot find while its version rows exist. Note also that neither part
 partition index — `autocomplete @/sglauser` → 0 results, while `search namespace:sglauser
 scope:descendants` returns its content, and the same split was reported for every partition created
 on 2026-08-28 on the other portal.
+
+**And what the third adds.** `Deployments` is not a partition created in that window, not a plugin
+partition and not a user's — it is a long-lived system partition on the control instance whose other
+rows read fine in the same call. So "a young or unindexed partition" is out as a precondition; the
+shared destination property survives only in its weaker form (*the writer does not live there*). The
+third instance also carries the **first per-node negative control**: a sibling created the same way,
+in the same partition, read in the same query, at the same second. Use that shape when measuring the
+next one — it is what separates "this partition is unreadable" from "this row is".
 
 ## Why it costs so much more than one node
 
@@ -179,14 +205,35 @@ ruled out** (a degrade leaves the node *in* the listing with unusable content, a
 returns fully-typed content here, so the discriminator resolves); **the listing/index path — ruled
 in.**
 
+> 🚨 **The degrade is ruled out by the CODE as well, so nobody need re-test it.** It keeps being the
+> obvious suspect because the replica does log `MeshNodeContentDegradedException` for the very path
+> (it did for the third instance too), but that exception is **constructed as a logger argument and
+> never thrown** — its own doc comment says so. Every seam returns the node after logging:
+> `ObjectPolymorphicConverter` catches the four deserialization exceptions and returns
+> `cleanedElement.Clone()` (`src/MeshWeaver.Messaging.Hub/Serialization/ObjectPolymorphicConverter.cs`),
+> and both `MeshNodeStreamCache` seams (`GetStream`, `GetQuery`) return the node. A degrade can make
+> content unusable; it cannot make a row absent. The only exception-to-absence conversion on the
+> exact-path read is `PipelineFaultOrStopped` in `StorageAdapterMeshQueryProvider`, which empties the
+> WHOLE per-query result rather than one row, and logs a Warning when it does.
+
 ## Open
 
-*Why the AgenticEngineering rows specifically are unreachable* is not settled from the MCP surface
-alone — it needs the partition schema inspected on that portal (`main_node`, `partition_access` and
+*Why these rows specifically are unreachable* is not settled from the MCP surface alone — it needs
+the partition schema inspected on that portal (`main_node`, `partition_access` and
 `user_effective_permissions` for `agenticengineering`, against the same three columns for
-`agenticprimer`, which works). Both instances above are still live and reproduce on demand, so the
-evidence has not decayed. Do not repair either by restoring versions until the read seam is
-understood; a restore takes the same path and can land the same way.
+`agenticprimer`, which works; and for `deployments`, where the control is one ROW rather than one
+partition — `pearl-provision-20260914` against a sibling that reads, [#4513](https://github.com/Systemorph/MeshWeaver/issues/4513)).
+All three instances above are still live and reproduce on demand, so the evidence has not decayed.
+Do not repair any of them by restoring versions until the read seam is understood; a restore takes
+the same path and can land the same way.
+
+**The one thing every caller can do meanwhile is the read-back**, and it now has a worked call site:
+`Essentials/OperationRequest`'s plan DSL confirms a created node is readable before its step reports
+`created`, and fails the step naming the inconsistency when it is not
+([MeshWeaver.Plugins#1972](https://github.com/Systemorph/MeshWeaver.Plugins/pull/1972)). A step that
+says `created` because the create call returned cannot distinguish this failure from success, which
+is how the third instance surfaced as thirty minutes of `not yet visible` instead of one named
+error.
 
 ### Candidates from the code (not yet confirmed against a live schema)
 
