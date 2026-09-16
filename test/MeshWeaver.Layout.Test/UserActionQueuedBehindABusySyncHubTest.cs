@@ -41,6 +41,9 @@ namespace MeshWeaver.Layout.Test;
 ///     accepted never left. Fixed by <c>MessageHub.CarriesAcceptedWorkOfAHostedHub</c>, and each of
 ///     its two halves (the child's route-up, the parent's intake gate) reds this test on its own
 ///     when removed.</item>
+///   <item><see cref="AClickTakenOnAfterItsSyncHubWasAskedToGoDownIsRefusedNotCarried"/> — the other
+///     side of the fence: a click queued BEHIND the sync hub's own <c>ShutdownRequest</c> is new work
+///     and must still be refused. Reds if the fix's "still below Quiescing" clause is dropped.</item>
 /// </list></para>
 /// </summary>
 public class UserActionQueuedBehindABusySyncHubTest(ITestOutputHelper output) : HubTestBase(output)
@@ -57,6 +60,10 @@ public class UserActionQueuedBehindABusySyncHubTest(ITestOutputHelper output) : 
     // A release INTO the client sync hub's parked turn: a volatile int polled under a bounded
     // SpinWait.SpinUntil, written in a finally so a failing assertion cannot strand the turn.
     private int releasePark;
+
+    // How the park ended: 1 = on the condition the test meant, 2 = on its budget. A park that ran out
+    // of budget let the click leave at an unknown point, and a green result would then prove nothing.
+    private int parkOutcome;
 
     private UiControl ClickArea()
         => Controls.Stack.WithView(
@@ -98,6 +105,7 @@ public class UserActionQueuedBehindABusySyncHubTest(ITestOutputHelper output) : 
 
         (await Outcome()).Should().Be("ran",
             "a click the portal accepted must reach the owner-side handler before the stream's release does (#3986)");
+        AssertTheParkHeldUntilTheTeardownStarted();
 
         await ownerSyncHub.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
             "and the release must still reach the owner once the click has run — ordering, never "
@@ -126,6 +134,7 @@ public class UserActionQueuedBehindABusySyncHubTest(ITestOutputHelper output) : 
             (await Outcome()).Should().Be("ran",
                 "a click the portal accepted must reach the owner-side handler even when the portal hub "
                 + "that hosts its stream is torn down while the click is still queued (#3986)");
+            AssertTheParkHeldUntilTheTeardownStarted();
         }
         finally
         {
@@ -133,6 +142,49 @@ public class UserActionQueuedBehindABusySyncHubTest(ITestOutputHelper output) : 
         }
 
         await AssertTheSenderWasAnsweredNotCancelled(syncHub);
+    }
+
+    /// <summary>
+    /// 🚨 The other side of the fence — what the carve-out must NOT carry. A click the sync hub takes on
+    /// AFTER its own teardown began queues BEHIND its <c>ShutdownRequest</c>, is routed from
+    /// <c>Quiescing</c>, and must be refused rather than carried out through a parent that is disposing
+    /// it. Without this, "carry what a hosted hub accepted" could quietly become "carry anything a hosted
+    /// hub sends while it is still around" and nothing would go red.
+    ///
+    /// <para>Deterministic, not raced: the park itself submits the click, only once the client hub's
+    /// <c>DisposeHostedHubs</c> has asked this sync hub to go down AND that hub's <c>ShutdownRequest</c>
+    /// is provably in its queue (nothing else is sent to this hub on a static area).</para>
+    /// </summary>
+    [HubFact]
+    public async Task AClickTakenOnAfterItsSyncHubWasAskedToGoDownIsRefusedNotCarried()
+    {
+        var (client, stream, syncHub, _) = await SubscribedStream();
+        syncHub.InvokeAsync(() =>
+        {
+            var asked = SpinWait.SpinUntil(
+                () => syncHub.IsDisposing && QueuedBehindThisTurn(syncHub) >= 1,
+                TestTimeouts.Convergence);
+            Volatile.Write(ref parkOutcome, asked ? 1 : 2);
+            stream.SubmitUserAction(new ClickedEvent(ButtonArea, stream.StreamId), onRefused: refusals.OnNext);
+        });
+        client.Dispose();
+
+        (await Outcome()).Should().StartWith("refused",
+            "a click taken on after its sync hub's teardown began is new work — carrying it out through a "
+            + "disposing parent would turn the #3986 carve-out into an open door");
+        AssertTheParkHeldUntilTheTeardownStarted();
+    }
+
+    /// <summary>
+    /// How many deliveries wait in <paramref name="hub"/>'s main queue behind the turn it is running —
+    /// read from the hub's own one-line diagnostics, the same instrument
+    /// <c>GateOpenMustNotLetARunningTurnOvertakeTheBacklogTest</c> uses.
+    /// </summary>
+    private static int QueuedBehindThisTurn(IMessageHub hub)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            hub.GetPendingRequestDiagnostics(), @"Queue\(buffer=(?<n>-?\d+),");
+        return match.Success ? int.Parse(match.Groups["n"].Value) : -1;
     }
 
     /// <summary>
@@ -159,11 +211,19 @@ public class UserActionQueuedBehindABusySyncHubTest(ITestOutputHelper output) : 
             .Emit("the click must either run or be refused — silence is the defect this issue is about",
                 cancellationToken: TestContext.Current.CancellationToken);
 
-    private void ParkTheSyncHub(IMessageHub syncHub, Func<bool> alsoReleaseWhen)
+    private void ParkTheSyncHub(IMessageHub syncHub, Func<bool> releaseWhen)
         => syncHub.InvokeAsync(() =>
-            SpinWait.SpinUntil(
-                () => Volatile.Read(ref releasePark) == 1 || alsoReleaseWhen(),
-                TestTimeouts.Convergence));
+        {
+            var released = SpinWait.SpinUntil(
+                () => Volatile.Read(ref releasePark) == 1 || releaseWhen(),
+                TestTimeouts.Convergence);
+            Volatile.Write(ref parkOutcome, released ? 1 : 2);
+        });
+
+    private void AssertTheParkHeldUntilTheTeardownStarted()
+        => Volatile.Read(ref parkOutcome).Should().Be(1,
+            "the sync hub must have stayed parked until the teardown had started — a park that ran out "
+            + "of budget released the click at an unknown point, and a green result would prove nothing");
 
     private async Task<(IMessageHub Client, ISynchronizationStream<JsonElement> Stream, IMessageHub SyncHub, IMessageHub OwnerSyncHub)>
         SubscribedStream()

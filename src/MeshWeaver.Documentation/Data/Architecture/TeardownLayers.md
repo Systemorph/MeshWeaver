@@ -223,9 +223,10 @@ true only AFTER they have gone** (#3986). `DisposeHostedHubs` is the phase in wh
 hosted hubs to go down, and each one's `ShutdownRequest` queues behind the work it already accepted.
 A request a hosted hub accepted before its own teardown and is sending out now is therefore carried —
 in the child's route-up and at the parent's intake, by the one predicate
-`MessageHub.CarriesAcceptedWorkOfAHostedHub` — while the parent is IN `DisposeHostedHubs`, only for an
-awaited request, only transit, only from a hosted hub still below `Quiescing`, and only while the
-parent's own parent still routes. Measured: without it, a person's click queued on a busy
+`MessageHub.CarriesAcceptedWorkOfAHostedHub` — while the parent is IN `DisposeHostedHubs`, only for a
+request its originating hub still holds a response callback for, only transit, only while the hosted
+hub handing it up is still below `Quiescing` (so it was queued ahead of that hub's own
+`ShutdownRequest`), and only while the parent's own parent still routes. Measured: without it, a person's click queued on a busy
 `sync/{id}` hub was refused at the per-circuit portal hub's door on circuit close and never ran. See
 [Refusing a Lost User Action](../RefusingALostUserAction) for the measurement and its falsifications.
 

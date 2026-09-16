@@ -622,7 +622,7 @@ public class MessageService : IMessageService
     /// </summary>
     /// <param name="delivery">The delivery to classify.</param>
     /// <returns>True when a sender is waiting for a reply to this delivery.</returns>
-    internal static bool IsAwaitedBySender(IMessageDelivery delivery) =>
+    private static bool IsAwaitedBySender(IMessageDelivery delivery) =>
         (delivery.Message is IRequest
          || (delivery.Message is RawJson rawJson
              && !rawJson.Content.Contains(nameof(DeliveryFailure), StringComparison.Ordinal)))

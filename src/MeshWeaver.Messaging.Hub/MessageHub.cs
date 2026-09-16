@@ -1763,13 +1763,19 @@ public sealed class MessageHub : IMessageHub
     /// <list type="bullet">
     ///   <item>only while this hub is IN <see cref="MessageHubRunLevel.DisposeHostedHubs"/> — before it
     ///     the gate is open, after it there are no children left whose work could still be owed;</item>
-    ///   <item>only a request a sender AWAITS (the gate's own <c>IsAwaitedBySender</c>) — fire-and-forget
-    ///     keeps its historical drop, and a REPLY already has its own exemption;</item>
+    ///   <item>only a request its ORIGINATING hub holds a live response callback for — the receipt that
+    ///     hub's <c>Quiescing</c> drain is waiting on. A one-way <see cref="IRequest"/> posted without
+    ///     <c>Observe</c> has nobody waiting and keeps its historical drop, as does fire-and-forget; a
+    ///     REPLY already has its own exemption;</item>
     ///   <item>only TRANSIT — a request addressed to THIS hub is new work for a hub that is going away
     ///     and stays refused;</item>
-    ///   <item>only from a hosted hub still BELOW <see cref="MessageHubRunLevel.Quiescing"/> — i.e. one
-    ///     that has not handled its own <c>ShutdownRequest</c> yet, so what it sends is work it took on
-    ///     before its teardown; once it is draining, its own tier-1 gate already refuses new requests;</item>
+    ///   <item>only while the hosted hub handing it up is still BELOW <see cref="MessageHubRunLevel.Quiescing"/>.
+    ///     That is the acceptance fence, and it is structural rather than a snapshot: routing runs inside
+    ///     that hub's own turn, and it leaves <see cref="MessageHubRunLevel.Started"/> only by handling
+    ///     its own <c>ShutdownRequest</c>, which its <c>Dispose()</c> posts FIFO. So a delivery routed from
+    ///     a hub still below <c>Quiescing</c> was queued AHEAD of that request — accepted before its
+    ///     teardown — and one it takes on afterwards queues BEHIND it, is routed from <c>Quiescing</c>, and
+    ///     is refused here (<c>UserActionQueuedBehindABusySyncHubTest</c> pins both sides);</item>
     ///   <item>only when this hub's PARENT still routes — in a whole-tree teardown the parent is going too,
     ///     the request could only be dropped one hop later, and the requester is better served by the
     ///     immediate transient refusal it gets today than by waiting out its quiesce budget for it.</item>
@@ -1781,22 +1787,37 @@ public sealed class MessageHub : IMessageHub
     {
         if (RunLevel != MessageHubRunLevel.DisposeHostedHubs
             || delivery.Properties.ContainsKey(PostOptions.RequestId)
-            || !MessageService.IsAwaitedBySender(delivery)
             || delivery.Target is not { } target
-            || (target with { Host = null }).Equals(Address)
+            || (target with { Host = null }).Equals(Address with { Host = null })
             || (messageService as MessageService)?.ParentHub is not { RunLevel: < MessageHubRunLevel.DisposeHostedHubs })
             return false;
-        return HostedHubThatSent(delivery.Sender) is { RunLevel: < MessageHubRunLevel.Quiescing };
+        var (handedUpBy, originator) = HostedHubsThatSent(delivery.Sender);
+        return handedUpBy is { RunLevel: < MessageHubRunLevel.Quiescing }
+               && originator is MessageHub waiting
+               && waiting.AwaitsResponseTo(delivery.Id);
     }
 
     /// <summary>
-    /// The hosted hub of THIS hub that handed <paramref name="sender"/>'s delivery up, or <c>null</c>.
-    /// The route-up stamps each parent onto the OUTERMOST host of the sender
-    /// (<c>AddressExtensions.WithHost</c>) — except a mesh parent, which is not stamped — so
-    /// once this hub's own stamp is peeled off, the outermost address left is the hosted hub the
-    /// delivery came from. Looked up, never created.
+    /// True while this hub holds a live response callback for the request it posted with
+    /// <paramref name="messageId"/> — i.e. something here is still waiting for that answer.
     /// </summary>
-    private IMessageHub? HostedHubThatSent(Address? sender)
+    private bool AwaitsResponseTo(string? messageId)
+    {
+        if (string.IsNullOrEmpty(messageId))
+            return false;
+        lock (responseSubjects)
+            return responseSubjects.ContainsKey(messageId);
+    }
+
+    /// <summary>
+    /// The hosted hub of THIS hub that handed <paramref name="sender"/>'s delivery up, and the hub
+    /// that originally posted it (the same hub unless it came from further down), or <c>null</c>s.
+    /// The route-up stamps each parent onto the OUTERMOST host of the sender
+    /// (<c>AddressExtensions.WithHost</c>) — except a mesh parent, which is not stamped — so once
+    /// this hub's own stamp is peeled off, the outermost address left is the hosted hub that handed
+    /// it up and the innermost is the originator. Looked up level by level, never created.
+    /// </summary>
+    private (IMessageHub? HandedUpBy, IMessageHub? Originator) HostedHubsThatSent(Address? sender)
     {
         var levels = ImmutableList<Address>.Empty;
         for (var level = sender; level is not null; level = level.Host)
@@ -1804,9 +1825,13 @@ public sealed class MessageHub : IMessageHub
         var outermost = levels.Count - 1;
         if (outermost >= 0 && levels[outermost].Equals(Address with { Host = null }))
             outermost--;
-        return outermost < 0
-            ? null
-            : GetHostedHub(levels[outermost], c => c, HostedHubCreation.Never);
+        if (outermost < 0)
+            return (null, null);
+        var handedUpBy = GetHostedHub(levels[outermost], c => c, HostedHubCreation.Never);
+        var originator = handedUpBy;
+        for (var i = outermost - 1; originator is not null && i >= 0; i--)
+            originator = originator.GetHostedHub(levels[i], HostedHubCreation.Never);
+        return (handedUpBy, originator);
     }
 
     private IObservable<IMessageDelivery> ExecuteRequest(
