@@ -125,6 +125,13 @@ public record NodeTypeCompileState
     /// is NOT DETERMINED, an empty list is "checked, every declared query matched".</summary>
     public System.Collections.Immutable.ImmutableList<string>? FailedSourceQueries { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.CompilationImportRefusals"/> — the source nodes
+    /// an IMPORT recorded as refused that explain the standing failure's unresolved names (#4469).
+    /// Mirrored for the same reason as the queries beside it, and with the same three-shape
+    /// contract: <c>null</c> is NOT DETERMINED, an empty list is "the bookkeeping was read and
+    /// explains none of these names".</summary>
+    public System.Collections.Immutable.ImmutableList<ImportRefusal>? CompilationImportRefusals { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.AdoptedSourceFingerprint"/>.</summary>
     public string? AdoptedSourceFingerprint { get; init; }
 
@@ -188,6 +195,7 @@ public record NodeTypeCompileState
                 CompiledFrameworkVersion = definition.CompiledFrameworkVersion,
                 FailedBuildInputs = definition.FailedBuildInputs,
                 FailedSourceQueries = definition.FailedSourceQueries,
+                CompilationImportRefusals = definition.CompilationImportRefusals,
                 AdoptedSourceFingerprint = definition.AdoptedSourceFingerprint,
                 AdoptedSourcePaths = definition.AdoptedSourcePaths,
                 AdoptedSourceIncludes = definition.AdoptedSourceIncludes,
@@ -212,6 +220,7 @@ public record NodeTypeCompileState
         && RequestedSourceStampAt is null
         && CompiledFrameworkVersion is null && FailedBuildInputs is null
         && FailedSourceQueries is null
+        && CompilationImportRefusals is null
         && AdoptedSourceFingerprint is null && AdoptedSourcePaths is null
         && AdoptedSourceIncludes is null && CurrentSourceIncludes is null
         && AdoptedModuleVersion is null

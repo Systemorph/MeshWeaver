@@ -1304,7 +1304,24 @@ internal static class NodeTypeBatchBake
         var changeFeed = mesh.ServiceProvider.GetService<IMeshChangeFeed>();
         var options = mesh.JsonSerializerOptions;
 
-        return storage
+        // 🚨 #4469 — THE BAKE ASKS THE SAME QUESTION THE ACTIVATION PATH DOES, and it has to.
+        // `CompilationStatus` and `CompilationError` are ONE shared record with two writers, so a
+        // bake that stamped an undiagnosed failure over a diagnosed one would ERASE the sentence
+        // naming the import — and the boot-time bake is precisely the writer that runs after a
+        // roll, which is the moment the five parked Hosting types were discovered. Null when the
+        // compile succeeded or the question could not be answered; it costs no mesh read at all
+        // unless the failure is an unresolved NAME.
+        var importRefusals = ok
+            ? Observable.Return<ImmutableList<ImportRefusal>?>(null)
+            : ImportRefusalDiagnosis.ForFailedCompile(
+                mesh, typeNode.Path, result?.Diagnostics,
+                NodeTypeCompilationHelpers.SummarizeCompileError(result, error), logger);
+
+        return importRefusals
+            .Take(1)
+            .SelectMany(refusals => BuildStampAt(refusals));
+
+        IObservable<Unit> BuildStampAt(ImmutableList<ImportRefusal>? refusals) => storage
             .Read(typeNode.Path, options)
             .Take(1)
             // The durable version the stamp is computed FROM — 0 when there is no row at all, which
@@ -1337,7 +1354,7 @@ internal static class NodeTypeBatchBake
                         : NodeTypeCompilationHelpers.ApplyCompileFailure(
                             def, result, error, activityPath: null,
                             mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
-                            typeNode.Path))
+                            typeNode.Path, refusals))
                     // The batch driver has no Pending→Compiling flip to stamp this at, and the
                     // shared field-set deliberately does not touch it (the activation path owns it
                     // there). Written here so a per-type duration is derivable FROM THE MESH on both

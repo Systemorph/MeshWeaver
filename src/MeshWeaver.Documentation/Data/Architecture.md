@@ -173,6 +173,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [When a Publication Seal Stops Advancing](PublicationSealStarvation) — a Space converges on a green build only while the publication sealed for THIS instance's framework identity keeps reaching the built commit; when the instance's identity and the lane that publishes for it drift apart that condition stops being satisfiable, and until the hold was recorded on the node a held source was byte-identical to a settled one
 - [The Import Marker Records Convergence](ImportMarkerRecordsConvergence)
 - [A Content Verdict Is Per Node](AContentVerdictIsPerNode) — one unstorable byte in one file earned a partition-wide "these bytes cannot import" verdict and took every instance action offline for an evening; where the refusal is remembered now, and what an import must name when it loses a node
+- [A Parked Type Names the Import](AParkedTypeNamesTheImport) — a NodeType failing on `CS0246` for a symbol whose file is plainly in git is an IMPORT state, not a code one; how the compile failure is joined to the import that lost the file, why the join is scoped to the types that actually reference it, and the three answers it keeps apart so an import is never accused of a deletion it did not make
 - [Instance Sync — bi-directional space replication between MeshWeaver instances](InstanceSync)
 - [Managing Partition Sync (Admin Guide)](PartitionSyncGuide)
 - [Static Node Providers](StaticNodeProviders)
