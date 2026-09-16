@@ -1186,19 +1186,22 @@ public class MeshOperations
         var address = !string.IsNullOrEmpty(addressPart) ? new Address(addressPart) : hub.Address;
 
         // 🚨 ISSUED OFF THE ROUTER (#1140) — see ReadHub — but ONLY when the read actually LEAVES
-        // this hub. A UCR whose very first segment is a prefix keyword ("$area…") carries no address
-        // part, and the read is then addressed at THIS hub's own data layer. Hopping the sender
-        // there would leave the target on the old hub, turning a local self-post into a routed
-        // request the ROUTER then has to EXECUTE — and portal/reads-{meshId} registers no handlers,
-        // so hopping the target too would address a hub that can never answer. That is the same
-        // structural exclusion the lifecycle ratchet makes for a self-directed post: a rule whose
-        // remedy is nonsense at a site must not be applied there.
+        // this hub, and that is decided by the resolved TARGET, never by whether an address part was
+        // written. A UCR may address this very hub EXPLICITLY (`mesh/{id}/$area/…` parses an
+        // addressPart that resolves straight back to `hub.Address`), so testing the address part for
+        // emptiness would hop the sender to portal/reads-{meshId} while leaving the target on this
+        // hub: the router becomes the TARGET of a work delivery and a local self-read turns into a
+        // routed request the ROUTER has to EXECUTE — the opposite of the fix. Hopping the target too
+        // is not available either: portal/reads-{meshId} registers NO handlers, so it could never
+        // answer. Comparing the resolved address is the same structural exclusion the lifecycle
+        // ratchet makes for a self-directed post — a rule whose remedy is nonsense at a site must
+        // not be applied there. (Copilot on #4487; the emptiness test was the first spelling.)
         //
         // Spelled as the seam CALL rather than through the cached `ReadHub` property deliberately:
         // the receiver of a post is what RouterAsRouterCapableReceiverRatchetGuard reads, and a
         // local bound from anything but a seam call would make this site invisible to it. One
         // GetMeshHub() walk per UCR resolution is the price of staying measurable.
-        var issuingHub = !string.IsNullOrEmpty(addressPart) ? hub.ReadIssuingHub() : hub;
+        var issuingHub = address.Equals(hub.Address) ? hub : hub.ReadIssuingHub();
 
         logger.LogInformation("Resolving Unified Path: address={Address}, remainder={Remainder}",
             addressPart, remainder);

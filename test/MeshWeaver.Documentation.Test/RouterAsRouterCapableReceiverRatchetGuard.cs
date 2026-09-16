@@ -295,6 +295,21 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
                     hub.Observe(new PatchDataRequest(r, j), o => o.WithTarget(new Address(p)));
             }
             """);
+        // 🚨 THE SYNTAX-ONLY EVASION (Copilot on #4487). A QUALIFIED receiver must declare and match
+        // as the same expression on both sides. While the declaration was read by a regex that
+        // grabbed the identifier next to the seam, `this.hub.NodeOperationIssuingHub()` declared
+        // `hub` while the sibling post read as `this.hub` — so qualifying the receiver dropped the
+        // sibling out of the denominator and past the ratchet, having changed nothing but spelling.
+        AssertOneViolatingSite(
+            "a QUALIFIED receiver: this.hub declares and this.hub posts",
+            """
+            class P
+            {
+                void Declares() => this.hub.NodeOperationIssuingHub().Post(new A(), o => o.WithTarget(t));
+
+                void Violating() => this.hub.Post(new B(), o => o.WithTarget(other));
+            }
+            """);
         AssertOneViolatingSite(
             "MeshNodeEditor: the write beside the hopped Move, on the same field",
             """
@@ -406,12 +421,17 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
     /// <summary>
     /// <see cref="DeclaredIn"/> over ALREADY-masked code, so the per-file scan masks once rather
     /// than once for the declaration pass and again for the call pass.
+    ///
+    /// <para>🚨 The receiver is read with the SAME walker the post scan uses
+    /// (<see cref="RouterOriginScan.ReceiverOfSeamCall"/>), because a declaration and a post have to
+    /// agree on what "the same receiver" is. Reading the declaration with a regex that grabbed the
+    /// identifier next to the seam made <c>this.hub.NodeOperationIssuingHub()</c> declare <c>hub</c>
+    /// while a sibling <c>this.hub.Post(…)</c> read as <c>this.hub</c> — so a syntax-only
+    /// qualification dropped the sibling out of the denominator as an unrelated receiver and evaded
+    /// the ratchet entirely. Planted as a case below.</para>
     /// </summary>
     private static ImmutableHashSet<string> DeclaredInMasked(string code) =>
-        RouterOriginScan.SeamCallOnReceiver
-            .Matches(code)
-            .Select(m => m.Groups[1].Value)
-            .ToImmutableHashSet(StringComparer.Ordinal);
+        RouterOriginScan.ReceiverOfSeamCall(code).ToImmutableHashSet(StringComparer.Ordinal);
 
     private static IReadOnlyList<Site> Scan(string root) =>
         SourceScan.SourceFiles(root, ScannedRoots)

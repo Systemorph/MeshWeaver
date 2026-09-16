@@ -38,14 +38,22 @@ internal static class RouterOriginScan
         new(@"(?:NodeOperationIssuingHub|ReadIssuingHub)\s*\(\s*\)", RegexOptions.Compiled);
 
     /// <summary>
-    /// A seam call together with the RECEIVER it is called on — <c>hub</c> in
-    /// <c>hub.NodeOperationIssuingHub()</c>. Group 1 is that receiver, and it is the whole basis of
-    /// the receiver-derived denominator: writing this call is the author's own statement, in
-    /// production code, that this hub reference can be the router.
+    /// A seam call, matched so that the RECEIVER it is called on can be read off the text before it.
+    /// Writing this call is the author's own statement, in production code, that the receiver can be
+    /// the router, so it is the whole basis of the receiver-derived denominator.
+    ///
+    /// <para>🚨 It deliberately captures NOTHING. The receiver is taken by
+    /// <see cref="ReceiverOfSeamCall"/>, which runs the SAME <see cref="Receiver"/> walker the post
+    /// scan uses — because the two have to agree on what "the same receiver" is. A regex that
+    /// grabbed the identifier immediately before the seam would read
+    /// <c>this.hub.NodeOperationIssuingHub()</c> as declaring <c>hub</c> while <c>Receiver</c> reads
+    /// a sibling <c>this.hub.Post(…)</c> as <c>this.hub</c>: the two spellings would not match, the
+    /// sibling would fall out of the denominator as an unrelated receiver, and a SYNTAX-ONLY
+    /// qualification would evade the ratchet. That is the same class of hole #4477's review round
+    /// closed for the sibling guard, and it was found the same way here (Copilot on #4487).</para>
     /// </summary>
-    internal static readonly Regex SeamCallOnReceiver =
-        new(@"\b([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(?:NodeOperationIssuingHub|ReadIssuingHub)\s*\(\s*\)",
-            RegexOptions.Compiled);
+    internal static readonly Regex SeamCallMarker =
+        new(@"\.\s*(?:NodeOperationIssuingHub|ReadIssuingHub)\s*\(\s*\)", RegexOptions.Compiled);
 
     /// <summary>A name bound to a seam call — <c>var issuingHub = hub.NodeOperationIssuingHub();</c>
     /// and the lazily-cached property spelling both land here.</summary>
@@ -74,6 +82,16 @@ internal static class RouterOriginScan
     /// <summary>Every name this file binds to a seam call.</summary>
     internal static HashSet<string> SeamAliasesIn(string code) =>
         SeamAlias.Matches(code).Select(m => m.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Every receiver a seam is CALLED ON in <paramref name="code"/> (already masked), read with the
+    /// same <see cref="Receiver"/> walker the post scan uses so the two spellings compare equal —
+    /// see <see cref="SeamCallMarker"/> for why that matters.
+    /// </summary>
+    internal static IEnumerable<string> ReceiverOfSeamCall(string code) =>
+        SeamCallMarker.Matches(code)
+            .Select(m => Receiver(code, m.Index))
+            .Where(r => r.Length > 0);
 
     /// <summary>
     /// Whether <paramref name="receiver"/> is off the router: it either IS a seam call, or names a

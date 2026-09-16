@@ -239,11 +239,22 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
     /// green. <c>new MeshNodeEditor(Mesh, path)</c> is the root-hub branch, and this reads what the
     /// detector actually logged rather than what the source says.</para>
     ///
-    /// <para><b>The positive anchor is not decoration.</b> <c>Update</c> RETURNS WITHOUT POSTING
+    /// <para><b>What it pins is the OUTCOME, not the mechanism — which is why it survived the
+    /// mechanism changing under it.</b> The first fix hopped the bespoke post onto the issuing seam;
+    /// the review round replaced it with the canonical
+    /// <c>workspace.GetMeshNodeStream(path).Update(…)</c>, whose cache hub is off the router by
+    /// construction. Measured across that change, this edit now emits NO router-traffic record at
+    /// all rather than a correctly-addressed one — the exchange stopped existing rather than moving.
+    /// Either way the assertion is the same and a revert to <c>hub.Post</c> reproduces #1140's line
+    /// from this exact frame.</para>
+    ///
+    /// <para><b>The positive anchor is not decoration.</b> <c>Update</c> RETURNS WITHOUT WRITING
     /// when its <c>BehaviorSubject</c> has not yet seen the node (<c>if (current is null) return;</c>),
     /// so "no router traffic" would be trivially true of an editor that never got its first
     /// snapshot. Awaiting the node — and then the edited value coming back through the same live
-    /// subscription — is what makes the silence below mean something.</para>
+    /// subscription — is what makes the silence below mean something. It is also the only thing that
+    /// would catch the write being dropped outright: the stream's <c>Update</c> is a COLD
+    /// observable, so an unsubscribed one silently does nothing.</para>
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task ANodeEditIssuedFromTheRootMeshHub_NeverPostsTheDataChangeAsTheRouter()
@@ -266,23 +277,29 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
             .Await(TestContext.Current.CancellationToken);
 
         applied.Name.Should().Be(edited,
-            "the edit has to have LANDED — Update returns without posting anything at all when the "
-            + "editor has no snapshot yet, and 'no router traffic' is trivially true of a write "
-            + "that never happened");
+            "the edit has to have LANDED — Update returns without writing anything at all when the "
+            + "editor has no snapshot yet, and its stream write is a COLD observable, so 'no router "
+            + "traffic' is trivially true of a write that never happened");
 
         DumpReports();
-        // Filtered on the exchange, exactly as the teardown filters are: the origin site always
-        // carries the real CLR type, and the receiver side reports a routed payload as RawJson, so
-        // the reply's own type is matched too. A blanket "no router traffic anywhere" assertion
-        // would red on any unrelated pre-existing line and teach the next reader to widen it.
-        Origins().Where(r => r.MessageType == nameof(DataChangeRequest)).Should().BeEmpty(
-            "#1140: a DataChangeRequest posted from the root mesh hub leaves stamped "
-            + "`Sender = mesh/{id}`. MeshNodeEditor must issue it from the same seam it already "
-            + "gives the MoveNodeRequest ten lines below");
-        Reports().Where(r => r.MessageType is nameof(DataChangeRequest) or nameof(DataChangeResponse))
+        // 🚨 The ORIGIN side is asserted WHOLESALE, and that is a measurement rather than optimism:
+        // this seeded edit emits zero origin records today, and the origin line names its own call
+        // site — so any record here is both a real violation and immediately actionable, which is
+        // exactly the assertion worth being strict about.
+        Origins().Should().BeEmpty(
+            "#1140: an edit driven from the ROOT mesh hub must put the router on no end of any "
+            + "delivery it causes. Before the fix this frame produced `DataChangeRequest … sender: "
+            + "mesh/{id}` straight from MeshNodeEditor.Update; the write now goes through the node's "
+            + "own stream, whose cache hub is off the router by construction");
+        // The RECEIVER side stays filtered on the write exchange. It reports a routed payload as
+        // RawJson, so it cannot attribute a line to a caller — a blanket assertion there would red
+        // on any unrelated pre-existing line and teach the next reader to widen it rather than read
+        // it.
+        Reports().Where(r => r.MessageType is nameof(DataChangeRequest) or nameof(DataChangeResponse)
+                        or nameof(PatchDataChangeRequest))
             .Should().BeEmpty(
-                "and neither end of the exchange may be the router at the receiving hub either — "
-                + "the reply addressed back at mesh/{id} is #1140's second production line");
+                "and neither end of the write exchange may be the router at the receiving hub "
+                + "either — the reply addressed back at mesh/{id} is #1140's second production line");
     }
 
     /// <summary>The node the recycle targets has to exist before it can be torn down.</summary>
