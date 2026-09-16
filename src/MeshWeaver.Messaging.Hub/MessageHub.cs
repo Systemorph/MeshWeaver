@@ -1733,6 +1733,82 @@ public sealed class MessageHub : IMessageHub
     }
 
 
+    /// <summary>
+    /// 🚨 True when <paramref name="delivery"/> is a request one of THIS hub's hosted hubs ACCEPTED
+    /// before its own teardown began, now on its way OUT through this hub — which this hub must still
+    /// carry while it is disposing that very hub (Systemorph/MeshWeaver#3986).
+    ///
+    /// <para><b>The defect this closes.</b> A parent in <see cref="MessageHubRunLevel.DisposeHostedHubs"/>
+    /// refused every transit delivery (tier 2 of the teardown intake gate, and the route-up check in
+    /// <c>HierarchicalRouting</c>), on the stated ground that "the children are going down with it".
+    /// But that phase is exactly when the children are ASKED to go down: each one's
+    /// <c>ShutdownRequest</c> queues FIFO behind the work it already accepted, and that work runs
+    /// first — "teardown lets accepted work FINISH" (<c>Doc/Architecture/TeardownLayers</c>). So a
+    /// hosted hub still holding accepted outbound work when its parent reached this phase had that
+    /// work refused at the only door it has. Measured: a person's click, accepted by the stream's
+    /// <c>sync/{id}</c> hub while its queue was busy, then the per-circuit portal hub disposed on
+    /// circuit close — the click was refused with <c>cannot route ClickedEvent … its parent hub … is
+    /// shutting down (RunLevel=DisposeHostedHubs)</c> and never reached the owner
+    /// (<c>UserActionQueuedBehindABusySyncHubTest</c>).</para>
+    ///
+    /// <para><b>Why carrying it is safe, by construction rather than by a wait.</b> This hub does not
+    /// reach <see cref="MessageHubRunLevel.ShutDown"/> until every hosted hub has signalled
+    /// <c>DisposalCompleted</c>, and a hosted hub cannot complete before it has handed its accepted
+    /// backlog up — so the delivery is in this hub's queue before this hub's own ShutDown phase is
+    /// even posted, and leaves through its router while that router is still running. The answer comes
+    /// back through the reply exemption the gate already has, into the child's <c>Quiescing</c> drain,
+    /// which is waiting for exactly it. Nothing new waits, nothing is timed.</para>
+    ///
+    /// <para><b>Deliberately narrow — every clause is a reason, not a heuristic:</b>
+    /// <list type="bullet">
+    ///   <item>only while this hub is IN <see cref="MessageHubRunLevel.DisposeHostedHubs"/> — before it
+    ///     the gate is open, after it there are no children left whose work could still be owed;</item>
+    ///   <item>only a request a sender AWAITS (the gate's own <c>IsAwaitedBySender</c>) — fire-and-forget
+    ///     keeps its historical drop, and a REPLY already has its own exemption;</item>
+    ///   <item>only TRANSIT — a request addressed to THIS hub is new work for a hub that is going away
+    ///     and stays refused;</item>
+    ///   <item>only from a hosted hub still BELOW <see cref="MessageHubRunLevel.Quiescing"/> — i.e. one
+    ///     that has not handled its own <c>ShutdownRequest</c> yet, so what it sends is work it took on
+    ///     before its teardown; once it is draining, its own tier-1 gate already refuses new requests;</item>
+    ///   <item>only when this hub's PARENT still routes — in a whole-tree teardown the parent is going too,
+    ///     the request could only be dropped one hop later, and the requester is better served by the
+    ///     immediate transient refusal it gets today than by waiting out its quiesce budget for it.</item>
+    /// </list></para>
+    /// </summary>
+    /// <param name="delivery">The delivery being routed up to (or arriving at) this hub.</param>
+    /// <returns><c>true</c> when this hub must carry it despite disposing its hosted hubs.</returns>
+    internal bool CarriesAcceptedWorkOfAHostedHub(IMessageDelivery delivery)
+    {
+        if (RunLevel != MessageHubRunLevel.DisposeHostedHubs
+            || delivery.Properties.ContainsKey(PostOptions.RequestId)
+            || !MessageService.IsAwaitedBySender(delivery)
+            || delivery.Target is not { } target
+            || (target with { Host = null }).Equals(Address)
+            || (messageService as MessageService)?.ParentHub is not { RunLevel: < MessageHubRunLevel.DisposeHostedHubs })
+            return false;
+        return HostedHubThatSent(delivery.Sender) is { RunLevel: < MessageHubRunLevel.Quiescing };
+    }
+
+    /// <summary>
+    /// The hosted hub of THIS hub that handed <paramref name="sender"/>'s delivery up, or <c>null</c>.
+    /// The route-up stamps each parent onto the OUTERMOST host of the sender
+    /// (<c>AddressExtensions.WithHost</c>) — except a mesh parent, which is not stamped — so
+    /// once this hub's own stamp is peeled off, the outermost address left is the hosted hub the
+    /// delivery came from. Looked up, never created.
+    /// </summary>
+    private IMessageHub? HostedHubThatSent(Address? sender)
+    {
+        var levels = ImmutableList<Address>.Empty;
+        for (var level = sender; level is not null; level = level.Host)
+            levels = levels.Add(level with { Host = null });
+        var outermost = levels.Count - 1;
+        if (outermost >= 0 && levels[outermost].Equals(Address with { Host = null }))
+            outermost--;
+        return outermost < 0
+            ? null
+            : GetHostedHub(levels[outermost], c => c, HostedHubCreation.Never);
+    }
+
     private IObservable<IMessageDelivery> ExecuteRequest(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
