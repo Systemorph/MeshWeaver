@@ -1,4 +1,4 @@
-namespace MeshWeaver.Messaging;
+﻿namespace MeshWeaver.Messaging;
 
 /// <summary>
 /// Whether a delivery involves the ROOT MESH HUB — the router — as an end, and in which role.
@@ -50,6 +50,13 @@ public static class RouterTrafficRule
         // report nobody may act on trains people to mute the channel. Declared by the message's own
         // type rather than matched here by name, so the exclusion travels with the contract and a
         // rename cannot quietly turn it off (#4489).
+        //
+        // 🚨 Reaches the caller that still holds the TYPE. ReportRouterTrafficOrigin does (it runs
+        // at Post); ReportRouterTraffic runs at the top of DeliverMessage, BEFORE RouteMessageAsync
+        // unpacks, so a cross-hub delivery arrives as RawJson and matches nothing here. That is a
+        // property of every cross-hub delivery rather than of this exclusion, and it is stated in
+        // RouterTrafficDetection.md rather than worked around by putting a detector concern into
+        // the wire format.
         if (message is ICorrelatedBySender)
             return null;
 

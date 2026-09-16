@@ -81,7 +81,8 @@ not also being the target is the undeliverable-mail NACK (`RoutingServiceBase.Po
 honestly `mesh/{id}`). Both are excluded by the shared predicate, at both sites.
 
 **A delivery the receiver correlates BY ITS SENDER.** A message implementing
-`ICorrelatedBySender` is excluded at both sites. The claim it carries is about the RECEIVER: some
+`ICorrelatedBySender` is excluded wherever the detector can still SEE its type — see the scope note
+below, which is narrower than it looks. The claim it carries is about the RECEIVER: some
 earlier delivery already told that receiver to remember this sender, and this one is only meaningful
 against that memory — so re-posting it from an off-router hub, the one change that would silence the
 report, is precisely what breaks the pairing.
@@ -102,6 +103,24 @@ the identity function for a non-router caller and the sender there is incidental
 So the recorded decision is that a `mesh/{id}` sender on this release is **correct**, not a violation
 awaiting a fix, and the detector should stop demanding a change nobody may make. Reporting it is the
 shape that trains people to mute the channel.
+
+🚨 **Scope: this reaches the ORIGIN site, and the receiver site only for a delivery that never left
+the process.** `ReportRouterTraffic` runs at the top of `DeliverMessage` (`MessageHub.cs:2007`),
+*before* `RouteMessageAsync` unpacks — and a cross-hub delivery arrives packed, so at that point its
+`Message` is `RawJson` and no message-typed exclusion can match it. Measured on `memex` the same day
+this was written, the two lines are exactly that pair:
+
+```
+ROUTER_TRAFFIC ORIGIN: DisposeRequest was POSTED with the mesh hub as sender   ← typed
+ROUTER_TRAFFIC:        RawJson has the mesh hub as sender                      ← packed
+```
+
+So the release's ORIGIN line — the one #4489's evidence names, and the one that names a call site an
+engineer could act on — stops. A receiver-side `RawJson` line may still print for the same delivery.
+That is **not** a gap this exclusion opened: it is a property of every cross-hub delivery, it names
+no message type and no call site, and narrowing it is a different change about where the receiver
+detector runs relative to unpacking. Carrying the claim in the envelope instead was considered and
+rejected here: it would put a detector concern into the wire format for one message.
 
 🚨 **Why a marker on the message rather than an allow-file line.** The exclusion travels with the
 contract, so a rename cannot silently detach it, and it is visible where the decision applies rather
@@ -264,16 +283,19 @@ question rather than a month-long one.
 > `RawJson has the mesh hub as sender (sender: mesh/…, target: TestData/RouterTrafficEditorProbe)`
 > followed by `DataChangeResponse … target: mesh/…`.
 >
-> **One named residue stays open and is deliberately not fixed here —
+> **One named residue was left open by that change and has since been RESOLVED —
 > [#4489](https://github.com/Systemorph/MeshWeaver/issues/4489).** `JsonSynchronizationStream` posts
 > `new UnsubscribeRequest(reduced.StreamId)` on its own `hub`. That file declares no router-capable
 > receiver (it calls no seam), so it is outside this denominator, and `UnsubscribeRequest` is not a
 > lifecycle message, so it is outside the other one — **neither ratchet sees it**, and the
-> instrument that names it is the runtime origin line. Hopping it would not be a no-op either: it
-> would change which hub the unsubscribe ORIGINATES from, which the owner's per-subscriber
-> bookkeeping reads, while the SUBSCRIBE that pairs with it came from the same hub. That is a
-> correlation question, not a routing one, and it needs its own design — #4489 says what "done"
-> would look like.
+> instrument that named it was the runtime origin line. Hopping it would not have been a no-op
+> either: it would change which hub the unsubscribe ORIGINATES from, which the owner's
+> per-subscriber bookkeeping reads, while the SUBSCRIBE that pairs with it came from the same hub.
+>
+> That correlation question was answered rather than routed around: the sender is **correct**, and
+> the detector stops asking for a change nobody may make. See *"A delivery the receiver correlates
+> BY ITS SENDER"* above for the argument, the `ICorrelatedBySender` marker that carries it, and the
+> scope note on which of the two sites it actually reaches.
 
 The one seeded `src/` entry is not debt: it is the #981 self-targeted inner create inside the
 `CreateOrUpdateNodeRequest` **handler**, posted on and handled by the hub whose turn loop already

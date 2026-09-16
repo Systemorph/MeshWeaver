@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Xunit;
 
@@ -36,11 +36,38 @@ public class AnUnsubscribeIsCorrelatedByItsSenderTest
     {
         Assert.IsAssignableFrom<ICorrelatedBySender>(new UnsubscribeRequest("stream-1"));
 
-        // Consequence, stated at the predicate both detector sites evaluate: the release no longer
-        // reports in any of the three router positions.
+        // Consequence at the predicate: the release no longer reports in any of the three router
+        // positions. See TheExclusionCannotReachAPackedDelivery for which detector site that
+        // actually reaches — the answer is narrower than "both".
         Assert.Null(RouterTrafficRule.RoleOf("mesh", "portal", new UnsubscribeRequest("s")));
         Assert.Null(RouterTrafficRule.RoleOf("portal", "mesh", new UnsubscribeRequest("s")));
         Assert.Null(RouterTrafficRule.RoleOf("mesh", "mesh", new UnsubscribeRequest("s")));
+    }
+
+    /// <summary>
+    /// 🚨 <b>The LIMIT of the exclusion, pinned so nobody reads it as wider than it is.</b>
+    ///
+    /// <para><c>ReportRouterTraffic</c> runs at the top of <c>MessageHub.DeliverMessage</c>, BEFORE
+    /// <c>RouteMessageAsync</c> unpacks, so a delivery that crossed a hub boundary is still
+    /// <see cref="RawJson"/> when the receiver-side detector reads it — and a message-typed
+    /// exclusion matches nothing. Measured on <c>memex</c> the day this landed, the two live lines
+    /// are exactly that pair: <c>ORIGIN: DisposeRequest …</c> (typed) and
+    /// <c>ROUTER_TRAFFIC: RawJson …</c> (packed).</para>
+    ///
+    /// <para>So this change stops the ORIGIN line — the one #4489's evidence names, and the only one
+    /// that carries a call site an engineer can act on. It does not, and cannot, stop a receiver-side
+    /// <c>RawJson</c> line. That is a property of every cross-hub delivery, not a hole this opened;
+    /// the alternative — carrying the claim in the delivery envelope — would push a detector concern
+    /// into the wire format for one message.</para>
+    /// </summary>
+    [Fact]
+    public void TheExclusionCannotReachAPackedDelivery()
+    {
+        // What the receiver-side detector actually holds for a cross-hub delivery.
+        var packed = new RawJson("""{"$type":"MeshWeaver.Data.UnsubscribeRequest","streamId":"s"}""");
+
+        Assert.IsNotAssignableFrom<ICorrelatedBySender>(packed);
+        Assert.Equal("sender", RouterTrafficRule.RoleOf("portal", "mesh", packed));
     }
 
     /// <summary>
