@@ -776,6 +776,50 @@ if not pg_rendered:
                 "deadline. On an external database the probe is the values' connection string, or "
                 "the record-rendered config MEMEX_HOST (templates/_database.tpl → memex.meshProbeGroup).",
             )
+# ---- 18. the operator EXECUTOR reaches the pod, whatever `enabled` says ----
+# 🚨 Plugins#1738. `Hosting:Operator:Executor` selects how the control instance runs its lifecycle
+# actions: the in-cluster operator Job, or Systemorph/Memex aks-ops.yml through the GitHub App. The
+# Actions path runs with `hostingOperator.enabled: false`, so the key must render OUTSIDE the
+# enabled block. It rendered nowhere at all until this invariant, and the pod read Job whatever
+# anyone declared. Three things, in every render:
+#   * the key is there, and is Job or Actions (the portal reads anything else as Job);
+#   * a rendered maintainer is never blank (blank would read as "nobody", silently);
+#   * with the operator Job OFF, no Job-path key renders: an Actions installation must not carry a
+#     half-armed Job (image, token file, ops namespace) that only `enabled` was meant to switch on.
+checks += 1
+_executor = cfg_data.get("Hosting__Operator__Executor")
+if _executor is None:
+    finding(
+        "the ConfigMap renders no Hosting__Operator__Executor",
+        "ActionsExecutor reads Hosting:Operator:Executor. With no key the pod runs the in-cluster "
+        "operator Job whatever the overlay says. Render it OUTSIDE `if hostingOperator.enabled` "
+        "(templates/memex-portal/config.yaml).",
+    )
+elif str(_executor) not in ("Job", "Actions"):
+    finding(
+        f"Hosting__Operator__Executor renders {_executor!r}",
+        "the portal reads every value other than 'Actions' as Job, so this is the Job path wearing "
+        "a different name. The chart must refuse it instead.",
+    )
+if "Hosting__Operator__Maintainer" in cfg_data and not str(cfg_data["Hosting__Operator__Maintainer"]).strip():
+    finding(
+        "Hosting__Operator__Maintainer renders BLANK",
+        "a blank maintainer reads as 'nobody may self-approve', which is the absent case wearing a "
+        "key. Render the key only when a maintainer is set.",
+    )
+if str(cfg_data.get("Hosting__Operator__Enabled", "false")) != "true":
+    _job_keys = sorted(
+        k for k in cfg_data
+        if k.startswith("Hosting__Operator__")
+        and k not in ("Hosting__Operator__Enabled", "Hosting__Operator__Executor", "Hosting__Operator__Maintainer")
+    )
+    if _job_keys:
+        finding(
+            "the operator Job is OFF but its keys render: " + ", ".join(_job_keys),
+            "those keys arm the in-cluster Job (its image, its token file, its namespace). With "
+            "`enabled` false they must render nowhere, or the Actions lane ships beside a "
+            "half-armed Job path.",
+        )
 
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:

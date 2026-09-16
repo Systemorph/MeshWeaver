@@ -43,6 +43,8 @@
 #                                                             nothing about the connection that fails
 #  17. no wait-for-postgres probes memex-postgres-service unless the chart renders it  or the gate
 #                                                             spins forever on a name that never resolves
+#  18. the operator EXECUTOR renders whatever `enabled` says  or Actions never reaches the pod that
+#                                                             switched the operator Job off
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -127,6 +129,16 @@ COMBOS=(
   # here is the chart's in-cluster default, and pearl's pods waited forever for memex-postgres-service.
   # Invariants 16 and 17 assert the probe is the record-rendered MEMEX_HOST and never that Service.
   "a Key Vault connection string, record-driven (the pearl shape, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.keyvault-connection-string.yaml"
+  # 🚨 The control instance on the ACTIONS executor (Plugins#1738): the operator Job OFF and the
+  # executor switched to aks-ops.yml through the GitHub App. The only combination that sets
+  # `hostingOperator.executor`, so without it the one render that must carry
+  # `Hosting__Operator__Executor: "Actions"` beside `Hosting__Operator__Enabled: "false"` exists
+  # nowhere. Invariant 18 checks the key in EVERY render; the evidence check below the loop
+  # asserts that this one rendered Actions.
+  "the Actions executor with the operator Job off (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-actions-executor.yaml"
+  # A whitespace-only maintainer: the one render where "only when set" can be observed failing, if
+  # the template stops trimming. The evidence check asserts it renders NO maintainer key.
+  "a whitespace-only operator maintainer (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-maintainer-blank.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -168,6 +180,35 @@ if [ "$rendered" -lt "${#COMBOS[@]}" ]; then
   report "only $rendered of ${#COMBOS[@]} values combinations rendered — treating as FAILURE rather than reporting 'no contradictions' on partial evidence"
 fi
 
+# The executor evidence (Plugins#1738). Invariant 18 holds in every render, but it holds just as
+# well if NO render ever says Actions, or if the maintainer always rendered a non-blank default. So
+# three renders above are read by NAME (not re-rendered):
+#   * the Actions fixture, written loosely on purpose (`actions`, a padded maintainer), must render
+#     the canonical Executor "Actions" beside Enabled "false" and the TRIMMED maintainer exactly;
+#   * the whitespace-only maintainer and the chart defaults must render NO maintainer key.
+render_of() { echo "$WORK/$(echo "$1" | tr -c 'a-zA-Z0-9' '-').yaml"; }
+actions_render="$(render_of "the Actions executor with the operator Job off (fixture)")"
+executor_evidence=0
+if [ -f "$actions_render" ] \
+   && grep -q '^  Hosting__Operator__Executor: "Actions"$' "$actions_render" \
+   && grep -q '^  Hosting__Operator__Enabled: "false"$' "$actions_render" \
+   && grep -q '^  Hosting__Operator__Maintainer: "maintainer-id"$' "$actions_render"; then
+  executor_evidence=$((executor_evidence + 1))
+else
+  report "the Actions fixture did not render Executor=\"Actions\", Enabled=\"false\" and the trimmed Maintainer=\"maintainer-id\" — the executor switch or its maintainer does not reach a pod that disabled the operator Job"
+fi
+for combo in "a whitespace-only operator maintainer (fixture)" "self-host (neutral chart defaults)"; do
+  r="$(render_of "$combo")"
+  if [ -f "$r" ] && ! grep -q '^  Hosting__Operator__Maintainer:' "$r"; then
+    executor_evidence=$((executor_evidence + 1))
+  else
+    report "'$combo' renders a Hosting__Operator__Maintainer key, or did not render at all — an unset or blank maintainer must render NO key"
+  fi
+done
+if [ "$executor_evidence" -eq 3 ]; then
+  ok "the executor reaches the ConfigMap with the operator Job off; the maintainer renders trimmed, and only when set"
+fi
+
 # ---------------------------------------------------------------------------
 # REFUSALS — shapes the chart must NOT render, and must name why.
 #
@@ -189,6 +230,8 @@ REFUSALS=(
   "AdoNet on an external database with no connection string in values (the #3780 render)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.adonet-external-db-no-connection-string.yaml|MeshWeaver#3780"
   "an external database with neither a values connection string nor a MEMEX_HOST (the pearl refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-no-host.yaml|names no external database host"
   "an external database whose values string names the in-cluster Service (the explicit-placeholder refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-explicit-in-cluster-host.yaml|names the in-cluster Service memex-postgres-service"
+  # Plugins#1738: an executor the portal would silently read as Job must fail the render.
+  "a misspelled operator executor|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-executor-misspelled.yaml|must be Job or Actions"
 )
 refused=0
 for entry in "${REFUSALS[@]}"; do

@@ -318,6 +318,33 @@ data:
   delete namespaces and drop databases across the fleet. An installation that does not declare
   `hostingOperator.enabled` renders `false` and cannot be talked into provisioning anything. */}}
   Hosting__Operator__Enabled: "{{ (.Values.hostingOperator).enabled | default "false" }}"
+{{- /* ---- WHICH EXECUTOR runs the actions (Plugins#1738) — OUTSIDE the enabled block ----
+
+  🚨 OUTSIDE ON PURPOSE. The Actions executor dispatches Systemorph/Memex aks-ops.yml through the
+  systemorph-com GitHub App and runs with `hostingOperator.enabled: false`: no Job in the ops
+  namespace, no jobrunner token, no cluster credential in the portal. Rendered inside the block, the
+  switch would reach the pod only on an installation that still arms the Job it replaces, which is
+  the one shape it exists to leave. Until this line the chart named no such key, so the pod read Job
+  whatever the overlay declared: the `Modules__Root` class again (invariant 8), now invariant 18 of
+  check-chart-invariants.
+
+  Both values follow the record's rule (HostingOperatorSpec.TryCanonicalExecutor), so the two
+  renderers agree: the executor is trimmed and case-folded, and blank means Job. Any other value is
+  REFUSED, because ActionsExecutor.ExecutorOf reads anything but "Actions" as Job and a misspelling
+  would silently keep the in-cluster path. The maintainer (the one user id that may approve its own
+  request) is trimmed and renders only when non-blank; absent means nobody may. */}}
+{{- $operatorExecutorRaw := (.Values.hostingOperator).executor | default "" | toString | trim }}
+{{- $operatorExecutor := "Job" }}
+{{- if eq (lower $operatorExecutorRaw) "actions" }}
+{{- $operatorExecutor = "Actions" }}
+{{- else if and $operatorExecutorRaw (ne (lower $operatorExecutorRaw) "job") }}
+{{- fail (printf "hostingOperator.executor is %q, and it must be Job or Actions. The portal reads every other value as Job (ActionsExecutor.ExecutorOf), so this render would silently keep the in-cluster operator Job instead of the Actions lane it asks for." $operatorExecutorRaw) }}
+{{- end }}
+  Hosting__Operator__Executor: "{{ $operatorExecutor }}"
+{{- $operatorMaintainer := (.Values.hostingOperator).maintainer | default "" | toString | trim }}
+{{- if $operatorMaintainer }}
+  Hosting__Operator__Maintainer: {{ $operatorMaintainer | quote }}
+{{- end }}
 {{- if (.Values.hostingOperator).enabled }}
 {{- if not (.Values.hostingOperator).image }}
 {{- fail "hostingOperator.enabled is true but hostingOperator.image is unset. The operator runs every lifecycle action as a Job from that image; without it HostingOperator.Resolve refuses with 'no operator image configured' and every action on this installation fails at the point of use rather than here. Set hostingOperator.image to the hosting-operator build this fleet runs." }}
