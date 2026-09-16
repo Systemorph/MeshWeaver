@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -44,7 +45,10 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class NodePageProvenanceGuard
 {
-    private static readonly string[] ScannedRoots = ["src"];
+    // ImmutableArray, not string[]: a static array is a static MUTABLE collection — any caller can
+    // write through the reference — and the repo's rule is that only an IMMUTABLE static readonly
+    // lookup is allowed (Doc/Architecture/NoStaticState).
+    private static readonly ImmutableArray<string> ScannedRoots = ["src"];
 
     private const string AllowFileName = "NodePagesWithoutProvenance.allow";
 

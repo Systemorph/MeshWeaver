@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -16,36 +17,45 @@ namespace MeshWeaver.Graph.Test;
 /// Systemorph/MeshWeaver#4500 — "Provenance is opt-in per layout area", as a controlled experiment
 /// against a real mesh and a real layout client.
 ///
-/// <para>ONE variable between the two halves below: HOW the custom landing page is registered.
-/// Same mesh, same node, same viewer, same page content, same area. The half that registers it the
-/// way the whole fleet registers landing pages today — a bare <c>WithView(OverviewArea, …)</c> —
-/// renders a page with NO provenance; the half that registers it through <c>WithNodePage</c>
-/// renders the same page WITH it, supplied by the framework.</para>
+/// <para>ONE variable between the halves below: HOW the custom landing page is registered. Same
+/// mesh, same node, same viewer, same page content, same area. The half that registers it the way
+/// the whole fleet registers landing pages today — a bare <c>WithView(OverviewArea, …)</c> —
+/// renders a page with NO provenance strip; the half that registers it through
+/// <c>WithNodePage</c> renders the same page WITH one, supplied by the framework.</para>
 ///
-/// <para>🚨 <b>Why the negative half is a measurement and not a tautology.</b> "The provenance strip
-/// is absent" is also what you would observe if the area never rendered at all — a mistyped node
-/// path, a permission the test viewer lacks, a hub that never started. So the negative half waits
-/// for the page's OWN control first and only then asserts the strip's absence: the page is proven
-/// to be on screen at the moment the strip is proven not to be. Without that, this file would pass
-/// while measuring nothing, which is the failure mode AGENTS.md names as the dominant one.</para>
+/// <para>🚨 <b>The absence is asserted STRUCTURALLY, not on a timer.</b> The framework composes the
+/// strip and the page into ONE control — <c>Stack(NodeMeta, page)</c>, emitted together — so there
+/// is no window in which the page is on screen and the strip is still in flight. The assertion is
+/// therefore on the landing area's ROOT control: does its area list carry a
+/// <see cref="MeshNodeLayoutAreas.NodeMetaArea"/> child? That is decidable from one rendered value.
+/// A "nothing emitted within N seconds" wait would be weaker AND wrong here: a negative window
+/// always spends its whole budget, and <c>TestTimeouts.Quick</c> is CI-scaled to 36 s, which alone
+/// exceeds the 30 s <c>methodTimeout</c> — the first version of this file passed locally and timed
+/// out on every CI runner for exactly that reason.</para>
 ///
-/// <para>The instrument is the strip's stable area id (<see cref="MeshNodeLayoutAreas.NodeMetaArea"/>),
-/// not the rendered text. Asserting on the word "Created:" would assert that a German reader sees
-/// an English page — and would keep passing after somebody translated it.</para>
+/// <para>🚨 <b>Why it is a measurement and not a tautology.</b> "No strip" is also what you would
+/// observe if the page never rendered — a mistyped path, a missing permission, a hub that never
+/// started. So every half asserts the page's OWN body is present in the same rendered tree it
+/// claims the strip is missing from. The page is proven to be on screen at the moment the strip is
+/// proven not to be.</para>
+///
+/// <para>The instrument is the strip's stable area id, never the rendered text. Asserting on the
+/// word "Created:" would assert that a German reader sees an English page, and would keep passing
+/// after somebody translated it.</para>
 /// </summary>
 public abstract class NodePageProvenanceExperimentBase(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
-    /// <summary>The node whose landing page both halves render. Plain — no NodeType, so it takes
+    /// <summary>The node whose landing page every half renders. Plain — no NodeType, so it takes
     /// the default chain and the only thing that differs is the registration under test.</summary>
     protected const string Node = "ProvenanceProbe";
 
     /// <summary>The area id of the custom page's own body — the positive signal that says "this
-    /// page rendered", so the negative assertion below cannot pass on an empty screen.</summary>
+    /// page rendered", so no negative assertion can pass on an empty screen.</summary>
     protected const string PageBodyArea = "ProbeBody";
 
     /// <summary>
-    /// The custom landing page, identical in both halves. A node type's designed overview in
+    /// The custom landing page, identical in every half. A node type's designed overview in
     /// miniature: it draws its own content and never calls <c>BuildHeader</c> — which is exactly
     /// what 82 of the 92 landing pages in MeshWeaver.Plugins do (measured 2026-09-16).
     /// </summary>
@@ -65,21 +75,42 @@ public abstract class NodePageProvenanceExperimentBase(ITestOutputHelper output)
                 new Address(Node), new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea))
             .GetControlStream(areaKey);
 
-    /// <summary>The store key of the provenance strip on a page the framework composed it for —
-    /// a direct named child of the composed frame, so the key is deterministic.</summary>
-    protected const string StripKey =
-        MeshNodeLayoutAreas.OverviewArea + "/" + MeshNodeLayoutAreas.NodeMetaArea;
-
-    /// <summary>Waits until the custom page itself is on screen. This is the control that makes
-    /// the strip assertions mean something.</summary>
-    protected async Task ThePageHasRendered()
+    /// <summary>
+    /// The landing area's root control, once it has rendered. ONE bounded wait per test — and it
+    /// completes as soon as the page is on screen rather than spending a budget.
+    /// </summary>
+    protected async Task<IContainerControl> LandingPageRoot()
     {
         var root = await Control(MeshNodeLayoutAreas.OverviewArea)
-            .Where(c => c is not null)
+            .Where(c => c is IContainerControl)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence);
-        Assert.NotNull(root);
+        return (IContainerControl)root!;
     }
+
+    /// <summary>Reads one of <paramref name="container"/>'s child areas by its rendered key.</summary>
+    protected async Task<IContainerControl> Child(NamedAreaControl area)
+    {
+        var control = await Control((string)area.Area)
+            .Where(c => c is IContainerControl)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence);
+        return (IContainerControl)control!;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="area"/> is the provenance strip. Matched on the rendered KEY's last
+    /// segment, which is what <see cref="MeshNodeLayoutAreas.NodeMetaArea"/> guarantees — nested
+    /// containers render into <c>{parentArea}/{childId}</c>, so the depth varies and the suffix
+    /// does not.
+    /// </summary>
+    protected static bool IsProvenanceStrip(NamedAreaControl area) =>
+        area.Area is string key
+        && key.EndsWith('/' + MeshNodeLayoutAreas.NodeMetaArea, StringComparison.Ordinal);
+
+    /// <summary>Whether <paramref name="area"/> is the probe page's own body.</summary>
+    protected static bool IsPageBody(NamedAreaControl area) =>
+        area.Area is string key && key.EndsWith('/' + PageBodyArea, StringComparison.Ordinal);
 }
 
 /// <summary>
@@ -101,12 +132,14 @@ public class ABareWithViewLosesProvenanceTest(ITestOutputHelper output)
     [HubFact]
     public async Task ThePageRenders_AndTheProvenanceStripIsGone()
     {
-        await ThePageHasRendered();
+        var root = await LandingPageRoot();
 
-        await Control(StripKey).Where(c => c is not null).Should().NotEmit(
-            TestTimeouts.Quick,
-            "a landing page registered with a bare WithView replaces the framework's Overview, "
-            + "and the provenance line goes with the renderer it rode on (#4500)");
+        // The page IS on screen — its own body is a direct child of the landing area's root,
+        // because nothing wrapped it.
+        Assert.Contains(root.Areas, IsPageBody);
+
+        // …and the provenance line is not, anywhere in that tree.
+        Assert.DoesNotContain(root.Areas, IsProvenanceStrip);
     }
 }
 
@@ -126,16 +159,17 @@ public class WithNodePageSuppliesProvenanceTest(ITestOutputHelper output)
             .AddMeshNodes(new MeshNode(Node) { Name = "Probe" });
 
     [HubFact]
-    public async Task ThePageRenders_AndCarriesTheProvenanceStrip()
+    public async Task ThePageRenders_BelowAProvenanceStrip()
     {
-        await ThePageHasRendered();
+        var root = await LandingPageRoot();
 
-        var strip = await Control(StripKey)
-            .Where(c => c is not null)
-            .FirstAsync()
-            .Timeout(TestTimeouts.Convergence);
+        Assert.Contains(root.Areas, IsProvenanceStrip);
 
-        Assert.NotNull(strip);
+        // The page is intact BELOW the strip — the framework composed, it did not replace. Found
+        // by taking the non-strip sibling's own rendered key rather than a positional guess.
+        var pageArea = Assert.Single(root.Areas.Where(a => !IsProvenanceStrip(a)));
+        var page = await Child(pageArea);
+        Assert.Contains(page.Areas, IsPageBody);
     }
 }
 
@@ -161,10 +195,9 @@ public class ADeclinedNodePageCarriesNoStripTest(ITestOutputHelper output)
     [HubFact]
     public async Task ThePageRenders_WithoutAStrip()
     {
-        await ThePageHasRendered();
+        var root = await LandingPageRoot();
 
-        await Control(StripKey).Where(c => c is not null).Should().NotEmit(
-            TestTimeouts.Quick,
-            "the page declined the line — and unlike the bare-WithView half, it said why");
+        Assert.Contains(root.Areas, IsPageBody);
+        Assert.DoesNotContain(root.Areas, IsProvenanceStrip);
     }
 }

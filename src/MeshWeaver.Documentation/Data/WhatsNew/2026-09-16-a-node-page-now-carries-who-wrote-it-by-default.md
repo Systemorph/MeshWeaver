@@ -1,15 +1,15 @@
 ---
 Name: A node page now carries who wrote it, by default
 Category: Fix
-Description: The Type · Created · Updated line rode on one renderer, so a node type that drew its own landing page dropped it without a trace. A census found 86 of the 99 such pages across the fleet had. The default is now the other way round, and a page that wants no provenance line has to say why.
+Description: The Type · Created · Updated line rode on one renderer, so a node type that drew its own landing page dropped it without a trace. A census found 86 of the 99 such pages across the fleet had lost it. The default is now the other way round, and a page that wants no provenance line has to say why.
 Icon: DocumentBulletList
 Order: -20260916
 ---
 
 # A node page now carries who wrote it, by default
 
-Every node page shows a provenance line under its title — `Type · Created · Updated`, in your own
-time zone, with the author beside each stamp. Except that it only ever came from one renderer: the
+A node page is meant to show a provenance line under its title — `Type · Created · Updated`, in your
+own time zone, with the author beside each stamp. It only ever came from one renderer, though: the
 framework's standard page. A node type with a designed landing page of its own replaced that
 renderer, and the line went with it.
 
@@ -36,5 +36,12 @@ Three pages in the platform gained the line as a result: the **plugin catalog**,
 and a **partition record**. The **user home** deliberately did not: the subject of that page is a
 person, and the node's stamps describe the row — `Updated … by system-security` because somebody
 flipped a preference — which is a database fact answering a question nobody asked about a colleague.
+
+**What has not changed yet**, deliberately: a landing page that still registers itself the old way
+renders exactly as it did. That covers the eighty-two pages in the plugin repositories — Spaces,
+code cells, threads, the Hosting and Edu families — each of which now needs the same one-word
+decision from whoever owns it, tracked as MeshWeaver.Plugins#1973. Nothing about those pages moved
+in this release; what moved is that the next person writing one cannot lose the line by saying
+nothing.
 
 Full detail: [Node Page Provenance](/Doc/Architecture/NodePageProvenance).
