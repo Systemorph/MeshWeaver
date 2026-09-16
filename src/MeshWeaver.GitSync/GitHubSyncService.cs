@@ -632,7 +632,13 @@ public sealed class GitHubSyncService
             (config.RepositoryUrl ?? "").Trim().TrimEnd('/').ToLowerInvariant(),
             string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch.Trim(),
             (config.Subdirectory ?? "").Trim().Trim('/'),
-            string.Join("", config.Ignore ?? SyncIgnore.Default),
+            // Exactly as SyncIgnore reads them: trimmed, blank and '#' comment lines dropped, and
+            // case-folded because the matcher is case-INSENSITIVE. Unset means the default rules;
+            // an explicit empty list stays distinct from it (it syncs Release/ too).
+            string.Join("", (config.Ignore ?? SyncIgnore.Default)
+                .Select(p => p.Trim())
+                .Where(p => p.Length > 0 && !p.StartsWith('#'))
+                .Select(p => p.ToLowerInvariant())),
             config.Direction.ToString(),
             config.TwoWay ? "two-way" : "git-first");
         var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonical));

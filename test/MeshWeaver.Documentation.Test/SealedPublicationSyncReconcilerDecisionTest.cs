@@ -170,6 +170,12 @@ public class SealedPublicationSyncReconcilerDecisionTest
             .Should().NotBe(fingerprint, "git paths are case-sensitive, so capitalisation IS a different read");
         GitHubSyncService.SourceFingerprint(baseline with { Ignore = [] })
             .Should().NotBe(fingerprint, "an explicit empty ignore list syncs Release/ too — a different import");
+        GitHubSyncService.SourceFingerprint(baseline with { Ignore = [" release/ ", "", "# the default, spelled out"] })
+            .Should().Be(fingerprint,
+                "SyncIgnore trims each pattern, drops blank and comment lines and matches case-insensitively, "
+                + "so this list IS the default rule set — an edit the importer cannot see must not unsettle a source");
+        GitHubSyncService.SourceFingerprint(baseline with { Ignore = ["Release/", "Drafts/"] })
+            .Should().NotBe(fingerprint, "an added rule changes what the import reads");
         GitHubSyncService.SourceFingerprint(baseline with { TwoWay = true })
             .Should().NotBe(fingerprint, "two-way changes what an import may overwrite, so it changes the verdict");
     }
