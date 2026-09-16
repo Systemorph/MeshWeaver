@@ -727,6 +727,18 @@ public sealed class IoPool : IIoPool, IDisposable
             }
         });
 
+    /// <summary>
+    /// Test seam (InternalsVisibleTo) — issue #4524. Runs on the pool thread at the very top of a
+    /// <see cref="SubscribeThroughPool{T}"/> setup leaf, before it touches the gate or the pool
+    /// token. Null in production.
+    ///
+    /// <para>A pooled subscription has TWO producers of a teardown terminal: the setup leaf (its
+    /// cancelled gate wait becomes <c>OnCompleted</c>) and the drain registration. A test parks the
+    /// first one here so that what it observes is the thread the SECOND delivers on — not which of
+    /// two racing producers happened to win, which is a coin toss no assertion can pin.</para>
+    /// </summary>
+    internal Action? OnSubscribeSetupLeafStarting { get; set; }
+
     /// <inheritdoc />
     public IObservable<T> SubscribeThroughPool<T>(IObservable<T> source) =>
         (_disposed || _draining) ? Cancelled<T>() : SubscribeThroughPoolCore(source);
@@ -749,6 +761,72 @@ public sealed class IoPool : IIoPool, IDisposable
                 // The long-lived subscription the setup leaf produces; disposed on unsubscribe OR pool drain.
                 var inner = new SingleAssignmentDisposable();
 
+                // The pool's own teardown terminal is EXACTLY-ONCE across its two producers — the drain
+                // registration and the setup leaf's error arm. A latch, not Rx's AutoDetachObserver
+                // quietly dropping the second, so the hand-off between them (#4524, below) is explicit:
+                // whichever producer takes it owns the terminal.
+                var terminated = 0;
+
+                // If the pool drains AFTER the subscribe completed, tear the live subscription down too
+                // — and TERMINATE the observer, which disposing it does not do.
+                //
+                // 🚨 THE OTHER HALF OF THE SAME LEAK — issue #1789. The setup leaf's error arm (below)
+                // covers a leg the drain cancels BEFORE or DURING `source.Subscribe(observer)`: its gate
+                // wait throws OperationCanceledException and the arm turns that into OnCompleted. A leg
+                // cancelled AFTER the subscribe completed never goes near that arm — it arrives here, and
+                // this registration used to call `inner.Dispose()` and nothing else. Disposing a
+                // subscription EMITS NOTHING: no OnCompleted, no OnError. So the observable returned by
+                // SubscribeThroughPool terminated in neither direction and every `.Finally(...)` hung off
+                // it never ran — exactly the bookkeeping that decrements RoutingGrain's `inFlightRoutes`
+                // and advances OrderedRouteDispatcher's per-destination FIFO. The slot leaked and the
+                // destination's queue stranded PERMANENTLY, which is also why `cleared after` became
+                // structurally impossible to log (it needs in-flight to fall back below half the
+                // threshold). Prod, 2026-08-17: two saturation Criticals ten minutes apart at identical
+                // depth, both emitted deep inside the termination grace period — i.e. after
+                // IoPool.Drain() had cancelled `_poolCts` — with no clear line in the whole window.
+                //
+                // OnCompleted, not OnError, for the same reason the arm below chose it: a drain is
+                // expected teardown, not a fault.
+                //
+                // This does NOT change IoPool.Drain()'s join reasoning: a leg past its subscribe holds
+                // no gate permit and is not counted in `_inFlight`, so terminating it moves neither the
+                // permit count Drain re-acquires nor the residual it reports.
+                //
+                // 🚨 REGISTERED DISARMED, AND BEFORE THE SETUP LEAF IS STARTED — issue #4524.
+                // `Register` on a token that is ALREADY cancelled registers nothing: it runs the callback
+                // synchronously, on the REGISTERING thread. That is this subscribe's thread — a hub action
+                // block, a grain turn, OrderedRouteDispatcher.DrainNext — and the callback is this
+                // subscription's whole downstream teardown. It happens whenever the drain's cancel lands
+                // between the build-time `_draining` refusal and this line: Drain() never sets
+                // `_disposing`, so the region above admits the subscribe. StartCanceller (#2394) moved the
+                // CALL to Cancel() off the caller; a callback registered LATE ran on the caller anyway.
+                //
+                // So the callback does nothing until `armed` is published, which happens only after
+                // Register has RETURNED. A callback that finds it unarmed ran either inline inside Register
+                // or on the canceller before Register returned — in both cases the cancel was requested
+                // BEFORE the setup leaf below exists. That leaf then cannot miss it: its linked token is
+                // created cancelled, its gate wait throws, and its error arm delivers the terminal from a
+                // pool thread. Both writes are full fences (the CTS's state CAS, the Exchange below), so a
+                // callback cannot read `armed == 0` while the leaf reads the token as uncancelled.
+                //
+                // And the ORDER is the other half of the fix. The setup leaf used to be started first, so
+                // it could subscribe the source before this registration existed; a cancel landing in that
+                // gap left the late, inline callback as the leg's ONLY terminal. Registered first, the
+                // source is never opened without an armed registration covering it.
+                var armed = 0;
+                // 🚨 No `catch (ObjectDisposedException)` here any more. That catch was the band-aid for
+                // exactly the window the region now closes: _poolCts cannot be disposed while this
+                // subscribe holds a region, so reading its Token is safe by construction. Catching it
+                // would only hide a region that was never entered.
+                var drainReg = _poolCts.Token.Register(() =>
+                {
+                    if (Volatile.Read(ref armed) == 0) return;
+                    if (Interlocked.Exchange(ref terminated, 1) != 0) return;
+                    inner.Dispose();
+                    observer.OnCompleted();
+                });
+                Interlocked.Exchange(ref armed, 1);
+
                 // Run the SUBSCRIBE — providers opening + the initial-snapshot emission that routes →
                 // CreateHub (Autofac BeginLifetimeScope) — as a TRACKED, GATED, pool-cancellable leaf,
                 // exactly like Invoke. So while that bounded, dangerous window runs it holds a gate permit
@@ -757,6 +835,7 @@ public sealed class IoPool : IIoPool, IDisposable
                 // while a BeginLifetimeScope is running (the endemic teardown SIGSEGV).
                 var setup = Observable.FromAsync(async subscriberCt =>
                     {
+                        OnSubscribeSetupLeafStarting?.Invoke();
                         if (!TryEnterGateRegion())
                             throw new OperationCanceledException(DisposedMessage);
                         try
@@ -799,7 +878,7 @@ public sealed class IoPool : IIoPool, IDisposable
                             // surfaced as a FAULT — but it must still TERMINATE the observer.
                             //
                             // 🚨 Swallowing it outright (the previous behaviour) left the subscriber with
-                            // neither OnCompleted nor OnError: the drain registration below disposes
+                            // neither OnCompleted nor OnError: the drain registration above disposes
                             // `inner`, and disposing a subscription emits nothing. The observable then
                             // never terminated, so every `.Finally(...)` hung off it never ran — which is
                             // exactly the bookkeeping that releases a route's in-flight slot and advances
@@ -808,55 +887,21 @@ public sealed class IoPool : IIoPool, IDisposable
                             // leaked its slot and stranded its destination's queue permanently. Silent
                             // non-termination is the one thing this codebase never tolerates: an error
                             // must reach a graceful sink, never a silent hang.
+                            //
+                            // This arm is also where a drain registration that found itself UNARMED
+                            // hands the terminal (#4524, above) — which is why it shares the latch.
+                            if (Interlocked.Exchange(ref terminated, 1) != 0) return;
                             if (ex is OperationCanceledException)
                                 observer.OnCompleted();
                             else
                                 observer.OnError(ex);
                         });
 
-                // If the pool drains AFTER the subscribe completed, tear the live subscription down too
-                // — and TERMINATE the observer, which disposing it does not do.
-                //
-                // 🚨 THE OTHER HALF OF THE SAME LEAK — issue #1789. The error arm above covers a leg the
-                // drain cancels BEFORE or DURING `source.Subscribe(observer)`: its gate wait throws
-                // OperationCanceledException and the arm turns that into OnCompleted. A leg cancelled
-                // AFTER the subscribe completed never goes near that arm — it arrives here, and this
-                // registration used to call `inner.Dispose()` and nothing else. Disposing a subscription
-                // EMITS NOTHING: no OnCompleted, no OnError. So the observable returned by
-                // SubscribeThroughPool terminated in neither direction and every `.Finally(...)` hung off
-                // it never ran — exactly the bookkeeping that decrements RoutingGrain's `inFlightRoutes`
-                // and advances OrderedRouteDispatcher's per-destination FIFO. The slot leaked and the
-                // destination's queue stranded PERMANENTLY, which is also why `cleared after` became
-                // structurally impossible to log (it needs in-flight to fall back below half the
-                // threshold). Prod, 2026-08-17: two saturation Criticals ten minutes apart at identical
-                // depth, both emitted deep inside the termination grace period — i.e. after
-                // IoPool.Drain() had cancelled `_poolCts` — with no clear line in the whole window.
-                //
-                // OnCompleted, not OnError, for the same reason the arm above chose it: a drain is
-                // expected teardown, not a fault. The latch makes the terminal exactly-once even if the
-                // drain races an unsubscribe (Rx's AutoDetachObserver would swallow a second one anyway;
-                // relying on that would leave the invariant implicit).
-                //
-                // This does NOT change IoPool.Drain()'s join reasoning: a leg past its subscribe holds
-                // no gate permit and is not counted in `_inFlight`, so terminating it moves neither the
-                // permit count Drain re-acquires nor the residual it reports.
-                var drainTerminated = 0;
-                // 🚨 No `catch (ObjectDisposedException)` here any more. That catch was the band-aid for
-                // exactly the window the region now closes: _poolCts cannot be disposed while this
-                // subscribe holds a region, so reading its Token is safe by construction. Catching it
-                // would only hide a region that was never entered.
-                var drainReg = _poolCts.Token.Register(() =>
-                {
-                    if (Interlocked.Exchange(ref drainTerminated, 1) != 0) return;
-                    inner.Dispose();
-                    observer.OnCompleted();
-                });
-
                 // 🚨 UNREGISTER, NEVER DISPOSE, the drain registration from the subscriber's side.
                 //
                 // CancellationTokenRegistration.Dispose() BLOCKS until a callback that is executing on
                 // another thread has finished (WaitForCallbackIfNecessary; only the callback's own
-                // thread is exempt). Unregister() never waits. The callback above is the subscriber's
+                // thread is exempt). Unregister() never waits. The drain callback is the subscriber's
                 // downstream teardown run inline on the IoPool-cancel thread — and Rx operators
                 // forward from their timers UNDER THEIR GATE: Throttle.Propagate calls ForwardOnNext
                 // inside `lock (_gate)`, Throttle.OnCompleted takes the same gate, and Take(1)
@@ -874,8 +919,8 @@ public sealed class IoPool : IIoPool, IDisposable
                 //
                 // Unregistering is exactly right for both orders: a callback that has not started is
                 // removed (the consumer left, nothing to terminate); one that IS running finishes on
-                // its own — `inner.Dispose()` is idempotent and the observer's OnCompleted is
-                // exactly-once through Rx's AutoDetachObserver — and nobody waits for it.
+                // its own — `inner.Dispose()` is idempotent and the observer's terminal is
+                // exactly-once through the `terminated` latch — and nobody waits for it.
                 return new CompositeDisposable(setup, inner, Disposable.Create(() => drainReg.Unregister()));
             }
             finally
