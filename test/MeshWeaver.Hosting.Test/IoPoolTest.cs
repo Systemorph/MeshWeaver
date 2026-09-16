@@ -993,6 +993,88 @@ public class IoPoolTest
             + "was over before it started");
     }
 
+    /// <summary>
+    /// 🚨 THE STANDING INVARIANT #4524 IS ABOUT: a LIVE pooled subscription's teardown runs on
+    /// neither the thread that SUBSCRIBED it nor the thread that tore the pool down.
+    ///
+    /// <para>The sibling <c>Drain_runsPooledSubscriptionTeardown_offTheCallersThread</c> pins only
+    /// the second half (#2394 — the thread calling <c>Drain</c>/<c>Dispose</c> is the mesh-teardown
+    /// thread). #4524 is the first half, and it had no guard at all: a late
+    /// <c>CancellationToken.Register</c> runs its callback inline, so the subscriber's thread — a hub
+    /// action block, a grain turn — ran the subscription's whole downstream teardown.</para>
+    ///
+    /// <para>🚨 <b>Read what this does and does not cover.</b> It is a standing invariant, NOT the
+    /// regression guard for the reorder that fixed #4524 — that guard is
+    /// <see cref="ASubscribeThatLandsOnAnAlreadyCancelledPool_IssuesNoLeaf"/>, which reds when the
+    /// registration is moved back below the leaf. The two-instruction interleave itself — a cancel
+    /// landing while a subscriber sits between admission and <c>Register</c> — cannot be produced
+    /// without widening that window in place, which is a measurement and not something a suite can
+    /// hold; the measurement is in <c>Doc/Architecture/ControlledIoPooling</c>. What this case holds
+    /// is the property a future change would have to break to reintroduce the defect from the other
+    /// direction: deciding to run the terminal inline "because it is cheaper".</para>
+    ///
+    /// <para>Deterministic: the subscribe is on its own thread and has provably RETURNED before the
+    /// pool is touched, so the registration is in place and the canceller owns the callback.</para>
+    /// </summary>
+    [Fact]
+    public async Task ALivePooledSubscriptionsTeardownRunsOnNeitherTheSubscriberNorTheDisposer()
+    {
+        var pool = new IoPool(2);
+        var subscribed = new AsyncSubject<Unit>();
+        var subscribeReturned = new AsyncSubject<Unit>();
+        var innerDisposed = new AsyncSubject<Unit>();
+        var teardownThread = 0;
+        var subscriberThread = 0;
+
+        var source = Observable.Create<int>(_ =>
+        {
+            subscribed.OnNext(Unit.Default);
+            subscribed.OnCompleted();
+            return System.Reactive.Disposables.Disposable.Create(() =>
+            {
+                Volatile.Write(ref teardownThread, Environment.CurrentManagedThreadId);
+                innerDisposed.OnNext(Unit.Default);
+                innerDisposed.OnCompleted();
+            });
+        });
+
+        IDisposable? sub = null;
+        var subscriber = new Thread(() =>
+        {
+            Volatile.Write(ref subscriberThread, Environment.CurrentManagedThreadId);
+            sub = pool.SubscribeThroughPool(source).Subscribe(_ => { }, _ => { });
+            subscribeReturned.OnNext(Unit.Default);
+            subscribeReturned.OnCompleted();
+        })
+        { IsBackground = true, Name = "pooled-subscriber" };
+        subscriber.Start();
+
+        await subscribed.Should().Within(Timeout5).Emit(
+            "the source must be live before the pool is torn down — this case is about a subscription "
+            + "that actually started",
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscribeReturned.Should().Within(Timeout5).Emit(
+            "and the subscribe must have RETURNED, so the drain registration is provably in place",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var disposerThread = Environment.CurrentManagedThreadId;
+        pool.Dispose();
+
+        await innerDisposed.Should().Within(Timeout5).Emit(
+            "disposal must tear the live inner subscription down",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var ranOn = Volatile.Read(ref teardownThread);
+        ranOn.Should().NotBe(Volatile.Read(ref subscriberThread),
+            "a live pooled subscription's downstream teardown must never run on the thread that "
+            + "subscribed it — that thread can be a hub action block or a grain turn, where "
+            + "arbitrary teardown is unbounded by construction (#4524)");
+        ranOn.Should().NotBe(disposerThread,
+            "nor on the thread that tore the pool down, which is the mesh-teardown thread (#2394)");
+
+        sub?.Dispose();
+    }
+
     [Fact]
     public async Task Unbounded_fallback_runs_the_leaf_on_the_threadpool()
     {

@@ -862,11 +862,23 @@ place reds it (`Expected value to be 0 … but found 1`), which is what makes it
 green line. It uses `Drain()` and not `Dispose()` deliberately: Dispose publishes `_disposing`, which
 makes `TryEnterGateRegion` refuse before the registration is ever reached.
 
-**Scope.** `SubscribeThroughPool` is the only entry point that registers a callback on `_poolCts`.
-`Invoke` / `InvokeStream` / `InvokeBlocking` reach the token through
-`CancellationTokenSource.CreateLinkedTokenSource`, whose own registration runs framework bookkeeping
-(it cancels the linked source) rather than application teardown, and does so on the pool thread
-running the leaf — not on the subscriber.
+**Scope, and the part of it that is NOT about the thread.** `SubscribeThroughPool` is the only entry
+point that registers an *application* callback on `_poolCts`. The other three reach the token through
+`CancellationTokenSource.CreateLinkedTokenSource`, whose own registration is framework bookkeeping —
+it cancels the linked source — and that is the whole reason they are not this defect. It is **not**
+because of where they run, and the three do not agree on that:
+
+| entry point | where the linked source is created |
+|---|---|
+| `Invoke`, `InvokeStream` | inside the `FromAsync` body, and both chains end `.SubscribeOn(TaskPoolScheduler.Default)` — so a ThreadPool thread, never the subscriber |
+| `InvokeBlocking` | inside `Observable.Create`'s subscribe delegate with **no** `SubscribeOn`, so **on the subscribing thread** — the work is moved off-thread by `_blockingFactory.StartNew`, which is later |
+
+So `InvokeBlocking` *does* touch an already-cancelled `_poolCts` on its subscriber. What runs there is
+bounded framework bookkeeping and never a downstream pipeline's teardown, which is why it is not
+#4524 — but the reason is **what** runs, not **where**, and a future change that hung application
+work off that token would land on the caller's thread with nothing to stop it. (Caught in review of
+this change; the original wording claimed all three register off-thread, which is false for
+`InvokeBlocking`.)
 
 
 ---
