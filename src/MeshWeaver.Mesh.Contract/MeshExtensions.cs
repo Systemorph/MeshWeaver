@@ -913,14 +913,26 @@ public static class MeshExtensions
                             // 4. Active state + creation stamps (Created/LastModified + identity).
                             //    Always stamp CreatedDate so the UI never has to guess a creation
                             //    time; if the caller pre-set it (import flow) we preserve it.
-                            var now = DateTimeOffset.UtcNow;
+                            //
+                            // 🚨 STORAGE-STABLE, INCLUDING THE CALLER'S OWN VALUE (#4506). The stamp
+                            // is minted through MeshNode.StorageStableNow and a caller-supplied one
+                            // is floored the same way, because BOTH end up in the same
+                            // microsecond-resolution column and the node this create EMITS is what
+                            // CompensateFailedCreate later compares the durable row against. An
+                            // unfloored stamp makes the rollback disown the very row it wrote — see
+                            // MeshNode.StorageStable for the measurement.
+                            var now = MeshNode.StorageStableNow();
                             var identity = capturedRequest.CreatedBy;
                             var newNode = node with
                             {
                                 State = MeshNodeState.Active,
-                                CreatedDate = node.CreatedDate == default ? now : node.CreatedDate,
+                                CreatedDate = node.CreatedDate == default
+                                    ? now
+                                    : MeshNode.StorageStable(node.CreatedDate),
                                 CreatedBy = string.IsNullOrEmpty(node.CreatedBy) ? identity : node.CreatedBy,
-                                LastModified = node.LastModified == default ? now : node.LastModified,
+                                LastModified = node.LastModified == default
+                                    ? now
+                                    : MeshNode.StorageStable(node.LastModified),
                                 LastModifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? identity : node.LastModifiedBy,
                                 // Stamp an initial Version of 1 so the post-save JSON includes the
                                 // field (the hub's JsonSerializerOptions has
@@ -1475,9 +1487,32 @@ public static class MeshExtensions
     ///   <item>A lineage check against the durable row: only a row whose
     ///     <see cref="MeshNode.CreatedDate"/> is still the stamp this create wrote is removed. A
     ///     different stamp means the path is no longer "our" node (a concurrent recreate), and
-    ///     the rollback stands down and says so rather than destroying someone else's state.</item>
+    ///     the rollback stands down and says so rather than destroying someone else's state. A row
+    ///     the store returns with NO stamp establishes neither and is reported
+    ///     <see cref="RollbackDisposition.Undetermined"/>.</item>
     /// </list>
     /// Re-running it is harmless: an already-absent row reports "nothing to roll back".</para>
+    ///
+    /// <para>🚨 <b>The check only works because the stamp is STORAGE-STABLE</b>
+    /// (<see cref="MeshNode.StorageStable"/>, #4506). It compares an in-memory value against the
+    /// same value after a round trip through a column, so a stamp the column cannot hold exactly
+    /// makes the rollback disown the row it just wrote. That is not hypothetical — it is what a raw
+    /// <c>DateTimeOffset.UtcNow</c> (100 ns) does against PostgreSQL <c>timestamptz</c>
+    /// (microseconds), and the failure mode is silent and in the WORSE direction: the ghost row
+    /// survives and the caller is told to clean up by hand. Both create paths therefore mint and
+    /// floor through <see cref="MeshNode.StorageStableNow"/>; do not reintroduce a bare
+    /// <c>UtcNow</c> stamp on a node.</para>
+    ///
+    /// <para>🚨 <b>It is a lineage check, NOT a transactional guarantee, and the gap is the read.</b>
+    /// The read and <c>DeleteAndPublish</c> are two separate storage turns with nothing holding the
+    /// row between them, and nothing serialises the path either — the create handler returns
+    /// <c>Processed()</c> immediately and this chain runs on the IO pool, not inside a hub turn. So
+    /// a delete-then-recreate that lands in the gap has its REPLACEMENT deleted. Closing that needs
+    /// a conditional delete in the <see cref="IStorageAdapter"/> contract (the DELETE-side twin of
+    /// <see cref="IStorageAdapter.WriteIfVersion"/>) implemented by every backend, which is tracked
+    /// on #4506 — it is deliberately not worked around here. See
+    /// <c>Doc/Architecture/BulkCreateCompensation</c> for exactly which interleavings the check does
+    /// and does not exclude.</para>
     ///
     /// <para><b>Partition artifacts are deliberately NOT dropped.</b> A top-level create may have
     /// provisioned the partition's backing store (schema + tables) through
@@ -1518,6 +1553,31 @@ public static class MeshExtensions
                 if (stored is null)
                     return Observable.Return(new RollbackOutcome(RollbackDisposition.NothingToRemove,
                         $"No row remains at '{created.Path}' — nothing to roll back."));
+
+                // 🚨 NO STAMP AT ALL IS NOT "SOMEBODY ELSE'S ROW" (#4506). The create path always
+                // stamps CreatedDate, so `created.CreatedDate` is never default here — but the
+                // STORED value can be, and then the lineage check has established NOTHING rather
+                // than established a mismatch. It happens for real: on Postgres the authorship
+                // columns live only on `mesh_nodes`, and every satellite table (`_Access`,
+                // `_Thread`, `_Activity`, `_Comment`, `Source`, …) is read with
+                // `NULL::timestamptz AS created_date`, so a rollback aimed at a satellite path
+                // reads `default` for EVERY row, ours included. Answering LeftInPlace there told
+                // the operator a specific, false thing — "the stored row is no longer the one this
+                // request wrote" — about a row nothing was compared on. Undetermined is the state
+                // that says what actually happened, and it is quoted for a human exactly the same
+                // way; neither state deletes anything.
+                if (stored.CreatedDate == default)
+                {
+                    logger.LogError(
+                        "[CreateNode] rollback UNDETERMINED at {Path}: the store returned a row carrying NO creation "
+                        + "stamp, so it could not be compared with this create's ({OurCreated:O}) — not deleting a row "
+                        + "whose lineage was never established",
+                        created.Path, created.CreatedDate);
+                    return Observable.Return(new RollbackOutcome(RollbackDisposition.Undetermined,
+                        $"The node at '{created.Path}' was NOT rolled back: the store returned the row without a "
+                        + "creation stamp, so whether it is the one this request wrote could NOT be established. "
+                        + "Check it manually before retrying."));
+                }
 
                 if (stored.CreatedDate != created.CreatedDate)
                 {
@@ -1802,14 +1862,21 @@ public static class MeshExtensions
                                 return Observable.Empty<(ImmutableList<MeshNode>, ImmutableList<string>)>();
                             }
 
-                            // ——— Phase 5: stamps — identical to the singular create. ———
-                            var now = DateTimeOffset.UtcNow;
+                            // ——— Phase 5: stamps — identical to the singular create, INCLUDING the
+                            // storage-stable mint (#4506): every node this batch emits carries a
+                            // timestamp its own row can hold exactly, because the rollback compares
+                            // these values against the durable ones. ———
+                            var now = MeshNode.StorageStableNow();
                             var stamped = toCreate.Select(n => n with
                             {
                                 State = MeshNodeState.Active,
-                                CreatedDate = n.CreatedDate == default ? now : n.CreatedDate,
+                                CreatedDate = n.CreatedDate == default
+                                    ? now
+                                    : MeshNode.StorageStable(n.CreatedDate),
                                 CreatedBy = string.IsNullOrEmpty(n.CreatedBy) ? capturedBy : n.CreatedBy,
-                                LastModified = n.LastModified == default ? now : n.LastModified,
+                                LastModified = n.LastModified == default
+                                    ? now
+                                    : MeshNode.StorageStable(n.LastModified),
                                 LastModifiedBy = string.IsNullOrEmpty(n.LastModifiedBy) ? capturedBy : n.LastModifiedBy,
                                 Version = n.Version > 0 ? n.Version : 1,
                             }).ToImmutableList();
