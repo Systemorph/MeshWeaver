@@ -192,6 +192,51 @@ fills.
   the only path, and it is **unavailable on enterprise tier**, whose estate is the client's own
   subscription.
 
+## The hand-off endpoint, and why it is not the inbox
+
+The values the wizard collects reach the instance's vault through **one endpoint on the control
+instance, at its own path** — `POST /api/hosting/setup-handoff` — and not through the control inbox.
+
+**The inbox persists every event it receives.** That is what makes it an inbox: a lost callback can
+be re-read. A body carrying a client's sign-in secret and model keys must not be persisted anywhere,
+so bending the inbox to make an exception for one event type would leave that exception one refactor
+away from being forgotten. The endpoint therefore keeps the inbox's **signature scheme** and none of
+its **storage**.
+
+**What is durable when it returns:** the vault objects, and nothing else. No node, no activity log,
+no inbox row, no request log, no echo in the response. The values live in the process's memory for
+the length of the call, and both the sending and receiving secret types override `ToString` so an
+interpolated log line cannot leak one.
+
+**Three checks, not one.** A signature proves the sender holds the shared secret; it says nothing
+about *when*, so a captured request would stay valid forever. So the door also requires a
+**timestamp** inside a five-minute window — judged in both directions, since a future timestamp
+would otherwise extend a captured request's life — and a **nonce** that is refused the second time.
+The replay check runs **last**, after the signature, so nobody who cannot sign can burn the nonces of
+requests they do not own. The nonce cache is per-process: a replay can land on another replica
+inside the window, which the short window and the fact that a hand-off is only accepted while the
+instance still has no administrator both bound. A durable nonce store would close it completely, and
+a nonce may be persisted because it is not a secret.
+
+**Refusals**, each distinguishable: an unconfigured endpoint answers **404** — indistinguishable from
+"no such route", so a control instance that does not offer this never advertises it; an unknown
+instance answers 404 with a reason; a replay answers 409; a stale request 400; anything unsigned or
+wrongly signed 401. A secret whose vault object name could not be derived is **refused rather than
+written under a guessed name**, because a secret the instance will never read is a secret nobody can
+find and an instance that still does not work.
+
+🚨 **The prerequisite is a role assignment.** The control instance writes with its own identity,
+which holds *Key Vault Secrets User* — read. Until it is granted **Secrets Officer** on the vault it
+writes to, every value refuses with the vault's own 403, reported as an actionable refusal rather
+than a mysterious failure. The alternatives are worse: handing the values to the operator lane would
+put them in workflow inputs, and letting the instance write its own would give every client portal
+write access to its secrets.
+
+**The plain half is reported, not applied.** The record values, the selected plugins and the
+administrator grant are writes to a deployment record and to another instance's mesh, which belong
+to the operator path the fleet already steers from. The endpoint returns them as pending rather than
+performing them quietly somewhere nobody audits.
+
 ## Considered and deferred: the instance asks for its own database
 
 Maintainer, 2026-09-16: *"ok. leave it as is for now."* The database stays **platform-provided at
