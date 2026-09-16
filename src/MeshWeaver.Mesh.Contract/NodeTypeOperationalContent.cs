@@ -28,6 +28,11 @@ namespace MeshWeaver.Mesh;
 /// differing only in bookkeeping has not changed.</item>
 /// </list>
 ///
+/// <para>🚨 One member is mesh-written and still must NOT be preserved on import, because dropping
+/// it is how it CLEARS — see <see cref="StrippedButNotPreserved"/>. Those are stripped by the first
+/// and third rules and skipped by the second, so the strip paths use the UNION and the preserve
+/// path uses <see cref="MemberNames"/> alone.</para>
+///
 /// <para>This is the transitional ownership rule until the compile state moves off the
 /// NodeTypeDefinition entirely (into the compile activity / a <c>_Compile</c> satellite the sync
 /// never touches); once that lands this class keeps legacy repo files and stored nodes honest.</para>
@@ -54,7 +59,7 @@ public static class NodeTypeOperationalContent
     /// four were missing that way. So the guard is now three: that inclusion, the reverse one over
     /// the control plane's naming convention, and a PARTITION that classifies every serialised
     /// member of the record as repo-authored, mesh-owned-and-masked, or (with its reason)
-    /// mesh-written-but-deliberately-unmasked. Only the partition sees a member spelled outside the
+    /// stripped-but-never-preserved. Only the partition sees a member spelled outside the
     /// convention — <c>dispatchedBuildInputs</c> was exactly that. See
     /// <c>Doc/Architecture/NodeTypeMemberOwnership</c>.</para>
     ///
@@ -159,6 +164,38 @@ public static class NodeTypeOperationalContent
     };
 
     /// <summary>
+    /// 🚨 MESH-WRITTEN, STRIPPED wherever a node becomes (or is compared as) a FILE — and
+    /// deliberately NOT PRESERVED from the live node on import. The THIRD ownership bucket (#4480),
+    /// and the one that needs a reason per entry, because it is the one place the two halves of the
+    /// seam rule come apart.
+    ///
+    /// <list type="bullet">
+    ///   <item><c>NodeTypeDefinition.PendingRetirement</c> — stamped by a
+    ///     repository-driven import when the repo RETIRED a type that still has live instances,
+    ///     through the probe's own <c>stream.Update</c> (never an upsert), and NOTHING in
+    ///     <c>src/</c> ever writes null back to it. The one thing that clears it is the repo
+    ///     shipping the type AGAIN: an upsert replaces the node's content wholesale, so a member
+    ///     the live node holds and the file does not simply goes away. Put it in
+    ///     <see cref="MemberNames"/> and the live value would win on every import — a re-shipped
+    ///     type would stay marked retired forever, and the bake gate reads a stamped type's compile
+    ///     failure as <c>Retired</c>, i.e. as a verdict that must NOT hold a rollout. But it is
+    ///     still runtime state, so a FILE must never carry it: the export strips it like everything
+    ///     else the mesh owns, and an authored value never lands.</item>
+    /// </list>
+    /// </summary>
+    public static readonly IReadOnlySet<string> StrippedButNotPreserved =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "pendingRetirement" };
+
+    /// <summary>
+    /// Everything a repo FILE must not carry — <see cref="MemberNames"/> plus
+    /// <see cref="StrippedButNotPreserved"/>. This is the set the strip paths and the
+    /// change-detection token use; the PRESERVE half uses <see cref="MemberNames"/> alone, and that
+    /// asymmetry IS the third bucket.
+    /// </summary>
+    private static readonly IReadOnlySet<string> FileExcludedMembers =
+        MemberNames.Concat(StrippedButNotPreserved).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The node with the operational members REMOVED from its content — the shape a repo file (and
     /// the change-detection token) uses. Non-NodeType nodes, non-object content, and content that
     /// carries none of the members pass through as the SAME instance (no reshaping).
@@ -168,7 +205,7 @@ public static class NodeTypeOperationalContent
         if (!IsNodeTypeNode(node) || ContentObject(node, options) is not { } content)
             return node;
         var removed = false;
-        foreach (var key in content.Select(member => member.Key).Where(MemberNames.Contains).ToArray())
+        foreach (var key in content.Select(member => member.Key).Where(FileExcludedMembers.Contains).ToArray())
             removed |= content.Remove(key);
         return removed ? node with { Content = content } : node;
     }
@@ -233,7 +270,7 @@ public static class NodeTypeOperationalContent
         {
             if (!property.CanRead || property.SetMethod is null)
                 continue;
-            if (MemberNames.Contains(property.Name))
+            if (FileExcludedMembers.Contains(property.Name))
             {
                 var current = property.GetValue(typed);
                 var blank = property.PropertyType.IsValueType
@@ -246,10 +283,10 @@ public static class NodeTypeOperationalContent
             }
             else if (property.GetCustomAttribute<JsonExtensionDataAttribute>() is not null
                      && property.GetValue(typed) is IDictionary<string, JsonElement> extra
-                     && extra.Keys.Any(MemberNames.Contains))
+                     && extra.Keys.Any(FileExcludedMembers.Contains))
             {
                 copy ??= clone.Invoke(typed, null);
-                var kept = extra.Where(kv => !MemberNames.Contains(kv.Key))
+                var kept = extra.Where(kv => !FileExcludedMembers.Contains(kv.Key))
                     .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
                 property.SetValue(copy, kept.Count == 0 ? null : kept);
             }
@@ -294,7 +331,7 @@ public static class NodeTypeOperationalContent
             return incoming;
         var liveContent = ContentObject(live, options);
         var merged = (JsonObject)original.DeepClone();
-        foreach (var key in merged.Select(member => member.Key).Where(MemberNames.Contains).ToArray())
+        foreach (var key in merged.Select(member => member.Key).Where(FileExcludedMembers.Contains).ToArray())
             merged.Remove(key);
         if (liveContent is not null)
             foreach (var (key, value) in liveContent.Where(member => MemberNames.Contains(member.Key)))

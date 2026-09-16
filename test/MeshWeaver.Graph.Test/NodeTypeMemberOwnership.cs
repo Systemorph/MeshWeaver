@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -21,8 +22,9 @@ namespace MeshWeaver.Graph.Test;
 /// convention would have named (<c>LatestAssemblyMvid</c>, <c>CompiledModulesHash</c>,
 /// <c>CompiledDependencies</c>) and one the convention CANNOT name, because it is spelled outside
 /// it (<c>DispatchedBuildInputs</c>). Two lists that both approximate the same set drift pairwise;
-/// this file is the single source, and <see cref="Classified"/> is the guard that does not depend
-/// on a member being SPELLED like runtime state.</para>
+/// this file is the single source, and the PARTITION guard
+/// (<c>NodeTypeOperationalContentTest.EverySerializedMember_IsClassified_ExactlyOnce</c>) is the
+/// one that does not depend on a member being SPELLED like runtime state.</para>
 /// </summary>
 internal static class NodeTypeMemberOwnership
 {
@@ -53,15 +55,21 @@ internal static class NodeTypeMemberOwnership
 
     /// <summary>
     /// The record's SERIALISED surface — the denominator every ownership guard counts against.
-    /// A <c>[JsonIgnore]</c> member (the <c>BuildCreate</c> delegate) never reaches a file or a
+    /// A member ignored <c>Always</c> (the <c>BuildCreate</c> delegate) never reaches a file or a
     /// wire payload, and the <c>[JsonExtensionData]</c> bag (<c>UnknownMembers</c>) is not a member
     /// at all but the round-trip buffer for members this shape does not declare — the seams handle
     /// it explicitly. Neither can be owned by anyone, so neither is classified.
+    ///
+    /// <para>🚨 The test is the CONDITION, never the attribute's presence.
+    /// <see cref="NodeTypeDefinition.IncludeGlobalTypes"/> carries
+    /// <c>[JsonIgnore(Condition = JsonIgnoreCondition.Never)]</c> — which means it is ALWAYS
+    /// written — so an attribute-presence filter would silently drop it from the denominator, and a
+    /// guard that quietly counts one member fewer is the very defect this file exists to close.</para>
     /// </summary>
     public static readonly ImmutableArray<PropertyInfo> SerializedProperties =
         typeof(NodeTypeDefinition)
             .GetProperties(BindingFlags.Instance | BindingFlags.Public)
-            .Where(p => p.GetCustomAttribute<JsonIgnoreAttribute>() is null
+            .Where(p => p.GetCustomAttribute<JsonIgnoreAttribute>()?.Condition is not JsonIgnoreCondition.Always
                         && p.GetCustomAttribute<JsonExtensionDataAttribute>() is null)
             .OrderBy(p => p.Name, StringComparer.Ordinal)
             .ToImmutableArray();
@@ -105,27 +113,14 @@ internal static class NodeTypeMemberOwnership
     ];
 
     /// <summary>
-    /// 🚨 MESH-WRITTEN, and DELIBERATELY NOT MASKED — the third bucket, and the only one that needs
-    /// a reason per entry. A member here is written by the runtime (so a committed file must not
-    /// carry it, and <see cref="ShippedNodeTypeStateTest"/> bans it), but the sync seams must NOT
-    /// preserve the live value over an incoming file's, because dropping it on re-import is how the
-    /// state is CLEARED.
-    ///
-    /// <list type="bullet">
-    ///   <item><see cref="NodeTypeDefinition.PendingRetirement"/> — stamped by a repository-driven
-    ///     import when the repo retired a type that still has live instances, through the probe's
-    ///     own <c>stream.Update</c> (never an upsert), and NOTHING in <c>src/</c> ever writes null
-    ///     back to it. The one thing that clears it is the repo shipping the type AGAIN: an upsert
-    ///     replaces the node's content wholesale, so an unmasked member present in the live node and
-    ///     absent from the file simply goes away. Mask it and a re-shipped type would stay marked
-    ///     retired forever — and the bake gate reads a stamped type's compile failure as
-    ///     <c>Retired</c>, i.e. as a verdict that must NOT hold a rollout.</item>
-    /// </list>
+    /// 🚨 MESH-WRITTEN, stripped from every FILE shape and deliberately NOT PRESERVED on import —
+    /// the third bucket. Read straight off the production set
+    /// (<see cref="NodeTypeOperationalContent.StrippedButNotPreserved"/>), which carries the reason
+    /// per entry: a bucket the tests declared for themselves would be a fourth copy of exactly the
+    /// list this file exists to keep single.
     /// </summary>
-    public static readonly ImmutableHashSet<string> MeshWrittenButUnmasked =
-    [
-        nameof(NodeTypeDefinition.PendingRetirement),
-    ];
+    public static IReadOnlySet<string> MeshWrittenButNotPreserved =>
+        NodeTypeOperationalContent.StrippedButNotPreserved;
 
     /// <summary>A property name as it appears in stored content.</summary>
     public static string CamelCase(string propertyName) =>
