@@ -38,9 +38,15 @@ LOKI_CONFIG = {
     'limits_config': {'retention_period': '720h'},
 }
 PROMTAIL_CONFIG = {'clients': [{'url': 'http://loki:3100/loki/api/v1/push'}]}
+PROMETHEUS_SERVER = {
+    'retention': '15d',
+    'extraArgs': {'storage.tsdb.retention.size': '6GB'},
+    'persistentVolume': {'enabled': True, 'size': '8Gi'},
+}
 
 
-def manifest(loki_config=None, promtail_config=None, omit_loki=False):
+def manifest(loki_config=None, promtail_config=None, omit_loki=False,
+             prometheus_args=None, prometheus_size='8Gi', omit_prometheus=False):
     documents = []
     if not omit_loki:
         documents.append({
@@ -54,12 +60,29 @@ def manifest(loki_config=None, promtail_config=None, omit_loki=False):
         'stringData': {'promtail.yaml': yaml.safe_dump(
             PROMTAIL_CONFIG if promtail_config is None else promtail_config)},
     })
+    if not omit_prometheus:
+        documents.extend([
+            {'kind': 'Deployment', 'metadata': {'name': 'loki-prometheus-server'},
+             'spec': {'template': {'spec': {
+                 'containers': [{'name': 'prometheus-server',
+                                 'args': prometheus_args if prometheus_args is not None else [
+                                     '--storage.tsdb.path=/data',
+                                     '--storage.tsdb.retention.time=15d',
+                                     '--storage.tsdb.retention.size=6GB'],
+                                 'volumeMounts': [{'name': 'storage-volume', 'mountPath': '/data'}]}],
+                 'volumes': [{'name': 'storage-volume', 'persistentVolumeClaim': {
+                     'claimName': 'loki-prometheus-server'}}],
+             }}}},
+            {'kind': 'PersistentVolumeClaim', 'metadata': {'name': 'loki-prometheus-server'},
+             'spec': {'resources': {'requests': {'storage': prometheus_size}}}},
+        ])
     return '\n---\n'.join(yaml.safe_dump(d) for d in documents)
 
 
 class CheckerVerdictTest(unittest.TestCase):
     def run_checker(self, values, *, rendered=None, binary_valid=True, binary_exit=0,
                     app_version='2.9.3'):
+        values = {'prometheus': self.CLEAN['prometheus'], **values}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'render.yaml').write_text(rendered if rendered is not None else manifest())
@@ -96,7 +119,8 @@ class CheckerVerdictTest(unittest.TestCase):
                                   capture_output=True, text=True, timeout=60)
 
     # The values the repository actually ships, in shape: every leaf reaches the render.
-    CLEAN = {'loki': {'config': LOKI_CONFIG}}
+    CLEAN = {'loki': {'config': LOKI_CONFIG},
+             'prometheus': {'enabled': True, 'server': PROMETHEUS_SERVER}}
 
     def test_clean_values_pass(self):
         """POSITIVE CONTROL. Without this, a checker that failed everything would pass this file."""
@@ -158,6 +182,63 @@ class CheckerVerdictTest(unittest.TestCase):
         result = self.run_checker(values)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn('does not know where', result.stdout)
+
+    def test_prometheus_missing_size_budget_fails(self):
+        result = self.run_checker(self.CLEAN, rendered=manifest(prometheus_args=[
+            '--storage.tsdb.path=/data', '--storage.tsdb.retention.time=15d']))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('retention.size', result.stdout)
+
+    def test_prometheus_budget_above_eighty_percent_fails(self):
+        values = json.loads(json.dumps(self.CLEAN))
+        values['prometheus']['server']['extraArgs']['storage.tsdb.retention.size'] = '7GB'
+        result = self.run_checker(values, rendered=manifest(prometheus_args=[
+            '--storage.tsdb.path=/data', '--storage.tsdb.retention.time=15d',
+            '--storage.tsdb.retention.size=7GB']))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('80%', result.stdout)
+
+    def test_prometheus_zero_budget_fails(self):
+        values = json.loads(json.dumps(self.CLEAN))
+        values['prometheus']['server']['extraArgs']['storage.tsdb.retention.size'] = '0B'
+        result = self.run_checker(values, rendered=manifest(prometheus_args=[
+            '--storage.tsdb.path=/data', '--storage.tsdb.retention.time=15d',
+            '--storage.tsdb.retention.size=0B']))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('positive', result.stdout)
+
+    def test_prometheus_budget_must_match_declared_value(self):
+        result = self.run_checker(self.CLEAN, rendered=manifest(prometheus_args=[
+            '--storage.tsdb.path=/data', '--storage.tsdb.retention.time=15d',
+            '--storage.tsdb.retention.size=5GB']))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('does not match', result.stdout)
+
+    def test_prometheus_missing_workload_fails(self):
+        result = self.run_checker(self.CLEAN, rendered=manifest(omit_prometheus=True))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('Deployment/loki-prometheus-server', result.stdout)
+
+    def test_prometheus_capacity_must_match_declared_value(self):
+        result = self.run_checker(self.CLEAN, rendered=manifest(prometheus_size='4Gi'))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('does not match', result.stdout)
+
+    def test_prometheus_declared_budget_cannot_disappear(self):
+        values = json.loads(json.dumps(self.CLEAN))
+        del values['prometheus']['server']['extraArgs']
+        result = self.run_checker(values)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('extraArgs', result.stdout)
+
+    def test_prometheus_data_must_be_on_rendered_pvc(self):
+        documents = list(yaml.safe_load_all(manifest()))
+        deployment = next(d for d in documents if d['kind'] == 'Deployment')
+        deployment['spec']['template']['spec']['volumes'][0] = {
+            'name': 'storage-volume', 'emptyDir': {}}
+        result = self.run_checker(self.CLEAN, rendered=yaml.safe_dump_all(documents))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('PVC', result.stdout)
 
 
 if __name__ == '__main__':
