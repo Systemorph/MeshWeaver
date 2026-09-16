@@ -89,7 +89,14 @@ public sealed class MeshNodeEditor : IMeshNodeEditor
         var current = node.Value;
         if (current is null) return;
         var updated = transform(current);
-        hub.Post(new DataChangeRequest { Updates = [updated] },
+        // 🚨 Off-router issuing (#1140), for the same reason Move below states — and this is the
+        // half that was left behind. Move hopped because MoveNodeRequest is a LIFECYCLE verb, which
+        // is the only family RouterAsNodeOperationOriginRatchetGuard's derived denominator covers;
+        // the DataChangeRequest beside it, on the SAME `hub` field this class has already declared
+        // router-capable, kept leaving stamped `Sender = mesh/{id}` and reaching the node's own hub
+        // that way. That is #1140's receiver-side line verbatim. NodeOperationIssuingHub is the
+        // identity function for every non-router hub, so nothing moves for anybody else.
+        hub.NodeOperationIssuingHub().Post(new DataChangeRequest { Updates = [updated] },
             o => o.WithTarget(new Address(CurrentPath)));
     }
 
