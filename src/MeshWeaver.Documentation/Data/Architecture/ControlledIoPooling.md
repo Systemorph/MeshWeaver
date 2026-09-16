@@ -611,7 +611,7 @@ file. Adding one would hide a region that was never entered.
 
 `Drain()` joins by re-acquiring every permit and then reports `0`, which the contract spells as *"no
 pool thread is still running"*. `CurrentInFlight` is the pool's own statement of the same fact. Those
-two must never be able to contradict each other, and for two releases they could: the shared exit path
+two must never be able to contradict each other, and with the old ordering they could: the shared exit path
 released the permit **before** it decremented `_inFlight`.
 
 ```csharp
@@ -669,6 +669,31 @@ under `DOTNET_PROCESSOR_COUNT=2` and full CPU saturation (#4448). The mechanism 
 
 That is also why this page carries the analysis rather than a sweep-style guard test: a probabilistic
 test that reproduces nothing on the hardware it runs on is a verification step that cannot fail.
+
+#### The sibling failure is NOT this, and the difference is the thread
+
+`IoPoolTest.Dispose_doesNotBlockOnASlowPooledSubscriptionTeardown` — a terminal that did not arrive
+within 5 s, #4448's original subject — takes a path that never calls `Drain()` and is not explained
+by the ordering above. Probing which thread delivers that terminal settles what it *cannot* be:
+
+```
+[run 0: terminal on 'IoPool-cancel', Dispose took 0 ms]   … 5 of 5 runs identical
+```
+
+`Dispose()` → `Thread.Start()` → `_poolCts.Cancel()` → the `SubscribeThroughPool` drain registration
+→ `inner.Dispose(); observer.OnCompleted()` → the subscriber's handler is **entirely on the dedicated
+`IoPool-cancel` OS thread**. No ThreadPool work item appears anywhere in it, and the subject the test
+awaits is an `AsyncSubject` that has already latched, so the `await` replays without needing a
+scheduled continuation either.
+
+So **.NET ThreadPool starvation is ruled out for that assertion by construction**, not merely by
+experiment — which also explains why a `DOTNET_PROCESSOR_COUNT=2` run could never have reproduced it,
+while the very same regime *is* the right instrument for the `Drain` failure above, whose leaf
+demonstrably unwinds on a `.NET TP Worker`. Two sibling tests in one class, and the thread is what
+tells them apart. What is left standing for the open one is OS-level: `Drain()`/`Dispose()` start a
+**brand-new OS thread per call**, and a thread creation the kernel delays past 5 s under a full
+shard's contention would miss the bound while every in-process instrument reads healthy. That is the
+next experiment, not a wider bound — 0 ms against 5 s is a ~5000× margin, so nothing there is slow.
 
 ---
 
