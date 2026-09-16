@@ -719,10 +719,88 @@ So **.NET ThreadPool starvation is ruled out for that assertion by construction*
 experiment — which also explains why a `DOTNET_PROCESSOR_COUNT=2` run could never have reproduced it,
 while the very same regime *is* the right instrument for the `Drain` failure above, whose leaf
 demonstrably unwinds on a `.NET TP Worker`. Two sibling tests in one class, and the thread is what
-tells them apart. What is left standing for the open one is OS-level: `Drain()`/`Dispose()` start a
-**brand-new OS thread per call**, and a thread creation the kernel delays past 5 s under a full
-shard's contention would miss the bound while every in-process instrument reads healthy. That is the
-next experiment, not a wider bound — 0 ms against 5 s is a ~5000× margin, so nothing there is slow.
+tells them apart. What is left standing for the open one is OS-level — and the section below settles
+which half of it is ours to fix.
+
+### 🚨 Teardown must not MINT the thread that delivers the terminal
+
+`Drain()` and `Dispose()` used to call `new Thread(...).Start()` **per call**. That put OS thread
+creation on the critical path of every pooled subscription's terminal: nothing downstream is
+delivered until that thread exists *and* is first scheduled. Two independent reasons that is a
+defect and not merely a cost:
+
+- **It is a blocking call inside the method whose contract forbids blocking.** `Thread.Start()` takes
+  the runtime's thread store lock and can queue behind a GC suspension. `Dispose()`'s own comment,
+  three lines above the call, is *"DISPOSE MUST NOT BLOCK"* — the same shape as the inline
+  `Cancel()` that #2394 removed from it, just one layer down.
+- **The latency it adds is unbounded and invisible.** Every in-process instrument reads healthy while
+  it elapses: `Dispose` returns in 0 ms, the awaited subject is a latched `AsyncSubject`, no gate
+  permit moves, `CurrentInFlight`/`CurrentlyWaiting` are both 0.
+
+So the canceller is now **started with the pool and parked** on a one-shot latch — a
+`CancellationTokenSource`'s wait handle, because the wait is raised once, never resets, and lasts the
+pool's whole lifetime, which is the one wait a *slim* spin-then-block primitive is documented not to
+be for. `Drain()`/`Dispose()` raise that latch instead of minting a thread; `Drain()` joins on a
+`ManualResetEventSlim` the canceller sets once `Cancel()` has *returned*, waited on with the drain
+budget exactly like `_blockingIdle`, in place of `Thread.Join`. The requester
+takes the gate region before raising the signal, exactly as it did before `Start()`, so `_poolCts` is
+still provably alive when the canceller wakes; the canceller publishes the completion event **before**
+handing that region back, because handing it back can complete disposal and dispose the very event a
+`Drain()` would be waiting on. The thread exits as soon as the one cancel it exists for has run, and
+`IoPoolRegistry` creates pools lazily by name, so the cost is one parked stack per resource class
+actually in use, for as long as it is in use.
+
+**Two consequences of owning a thread from the constructor, both of which had to be paid.** A thread
+is a **GC root**, so a pool that nobody disposes no longer merely leaks a semaphore that the
+collector reclaims — it parks a thread for the process's life. `ConcurrentDictionary.GetOrAdd` does
+not promise its value factory runs once, so `IoPoolRegistry.Get` now records what it built and
+disposes any candidate that lost the race, which wakes that canceller and lets it exit. And the
+thread is started with `Thread.UnsafeStart()`, never `Start()`: `Start` captures the starting
+thread's `ExecutionContext` and flows it for the thread's whole life, and a lazily-resolved pool is
+started from *whatever* caller first touched that resource class — a hub turn serving a viewer,
+say. A captured context would run every pooled subscription's downstream teardown under that user's
+`AsyncLocal` identity, `AccessService.Context` included, and pin it until the pool died. Identity-
+neutral is both correct and what the old shape gave for free, since it created the thread on the
+mesh-teardown thread, which carries none.
+
+#### What the widened window proves — and what it does not
+
+The race is two thread-state transitions wide and 26 class runs across three load regimes reproduced
+nothing, so the mechanism is established the same way #4466's was: by **widening the window in
+place** and watching the verdict flip. Two wideners, because there are two distinct latencies and
+only one of them is the pool's to remove:
+
+| widener (6 s, in place) | before — thread minted at teardown | after — canceller parked from the constructor |
+|---|---|---|
+| **A** — thread *creation* costs 6 s (sleep before `Start()`) | **FAILS**: `Expected 00:00:06.0026424 to be less than 00:00:02 … Dispose must return immediately` | **PASSES** (6.1 s test, all of it paid in the constructor) |
+| **B** — the canceller gets no timeslice for 6 s (sleep before `Cancel()`) | **FAILS**: *"…emit a value within 5s … The observable emitted nothing at all"* | **FAILS**, identically |
+| none | passes | passes |
+
+**A is the discriminator**: creation cost moved off the teardown path entirely. **B is the honest
+half**: it reproduces the merge-queue failure *verbatim*, including the message, and the fix does not
+change it — because "the OS did not run the thread" cannot be designed away while the cancel is
+forbidden to run on the caller. What the change does is reduce that residue from *create a thread,
+register it with the runtime, and have it first-scheduled* to *wake a thread that already exists*,
+which needs no thread store lock, no stack allocation and no GC-safe-point transition.
+
+So if this assertion ever fails again, the reading has already narrowed:
+`IoPoolTest.Dispose_doesNotBlockOnASlowPooledSubscriptionTeardown` now asserts `CancellerIsAlive`
+**before** the disposal it measures, and `TheCancellerThreadIsStartedWithThePool_NotAtTeardown` pins
+the property on its own. A green line there with a red terminal below it means the thread existed and
+the OS did not wake it — a host-level verdict, not a pool defect, and still never a reason to widen
+the 5 s bound.
+
+#### One forensic note on the occurrence, because it was read the other way round
+
+The original triage read the failure as *"the pooled subscribe landing ~3.4 s late on a busy
+ThreadPool, followed by `Within(5 s)` expiring"*, on the strength of *718 tests in 333 s* on that
+shard. `test/xunit.runner.json` sets `maxParallelThreads: 1` and `parallelizeTestCollections: false`,
+so **that assembly runs one test at a time** — the shard's 718 tests are never concurrent demand, and
+only one `IoPoolTest` case ran in that job at all. The 8.39 s hole in the runner log
+(17:54:16.97 → 17:54:25.36, with no other line in it) is this test plus the preceding class's mesh
+teardown, not evidence of parallel load. The test's own precondition also passed, which rules the
+ThreadPool leg out directly: `source.HasObservers` is only true once `source.Subscribe(observer)` has
+run, so the subscribe had already landed before `Dispose()` was called.
 
 ---
 

@@ -206,7 +206,18 @@ public class IoPoolQueueReportTest(ITestOutputHelper output)
         {
             // The second leaf can never start: the first holds the pool's only slot.
             var neverStarts = Park().Subscribe(_ => { }, _ => { });
-            SpinWait.SpinUntil(() => pool.CurrentlyWaiting > 0, Established);
+            // 🚨 WAIT FOR THE STATE THIS ASSERTS, NOT A WEAKER PROXY. `CurrentlyWaiting > 0` is
+            // already true the instant the FIRST leaf is queued — the gauge is raised on subscribe,
+            // before the scheduler grants it a slot — so a wait on it can return with BOTH leaves
+            // still queued and the assertion then reads 2, having measured a state the test is not
+            // about. The state it IS about is "one running, one queued", and `CurrentInFlight == 1`
+            // is what says the first leaf's delegate has started: the delegate leaves the waiting
+            // gauge and records its wait BEFORE it increments the in-flight count, so the two
+            // readings can only be (1, 1) together once that has happened.
+            SpinWait.SpinUntil(() => pool.CurrentInFlight == 1 && pool.CurrentlyWaiting == 1, Established);
+            pool.CurrentInFlight.Should().Be(1,
+                "the first leaf must be RUNNING — if it is still queued the test never reached the "
+                + "state it is about");
             pool.CurrentlyWaiting.Should().Be(1,
                 "exactly one leaf is queued behind the running one — if this is 0 the test never "
                 + "reached the state it is about");
