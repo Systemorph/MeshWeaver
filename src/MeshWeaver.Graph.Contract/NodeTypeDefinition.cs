@@ -308,6 +308,39 @@ public record NodeTypeDefinition
     public ImmutableList<DiagnosticInfo>? CompilationDiagnostics { get; init; }
 
     /// <summary>
+    /// 🚨 <b>Issue #4469 — the source nodes an IMPORT could not write that explain the unresolved
+    /// names in <see cref="CompilationDiagnostics"/>.</b> The structured half of the sentence that
+    /// leads <see cref="CompilationError"/>.
+    ///
+    /// <para><b>What it closes.</b> An import that loses one source node leaves the partition
+    /// referenced-but-incomplete — the files that REFERENCE the missing symbol landed, so every
+    /// NodeType built from them fails on <c>CS0246</c> for a symbol whose file is plainly in git,
+    /// and nothing anywhere connects the error to the import. On <c>memex.systemorph.com</c>,
+    /// 2026-09-15, that gap was an evening: a literal NUL byte in
+    /// <c>Hosting/Deployment/Source/SelfUpdateRouting.cs</c> cost one row, five Hosting NodeTypes
+    /// parked, and <c>Hosting/InstanceAction</c> was one of them, so no instance action ran on the
+    /// control instance at all.</para>
+    ///
+    /// <para><b>Three shapes, never two</b> — the same rule <see cref="FailedSourceQueries"/>
+    /// keeps, and here it is what makes the field safe to believe:</para>
+    /// <list type="bullet">
+    ///   <item><c>null</c> — NOT DETERMINED. No failure verdict stands (a success clears this), the
+    ///     failure was not about an unresolved NAME, the mesh keeps no import bookkeeping, or it
+    ///     could not be read. It NEVER means "no import lost anything".</item>
+    ///   <item>EMPTY — determined: the partition's import records no refusal that would explain
+    ///     these names, so look elsewhere (a deliberate deletion, or a module that is not loaded on
+    ///     this replica — MeshWeaver#3583, a different defect).</item>
+    ///   <item>NON-EMPTY — an import RECORDED a refusal for these source nodes and this compile
+    ///     failed on the names they define. The repair is in the repository, not in the code the
+    ///     diagnostics point at.</item>
+    /// </list>
+    ///
+    /// <para>🚨 Runtime state: never author it into a node file — <c>ShippedNodeTypeStateTest</c>
+    /// bans every member whose name starts <c>Compilation</c>, and this is one of them.</para>
+    /// </summary>
+    public ImmutableList<ImportRefusal>? CompilationImportRefusals { get; init; }
+
+    /// <summary>
     /// UTC timestamp when the currently-running compile started. Non-null only while
     /// <see cref="CompilationStatus"/> is <see cref="Mesh.Services.CompilationStatus.Compiling"/>.
     /// </summary>

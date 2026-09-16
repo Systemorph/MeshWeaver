@@ -1524,6 +1524,8 @@ internal static class NodeTypeCompilationHelpers
                     DispatchedBuildInputs = null,
                     CompilationStatus = CompilationStatus.Ok,
                     CompilationError = null,
+                    // #4469 — cleared wherever the error text is (Copilot review).
+                    CompilationImportRefusals = null,
                 };
         }
 
@@ -3572,9 +3574,36 @@ internal static class NodeTypeCompilationHelpers
             // a caller checking status first forever.
             DispatchedBuildInputs = null,
             CompilationStatus = CompilationStatus.Error,
-            CompilationError = reason
-                ?? parkedDef.CompilationError
-                ?? "Compilation is parked after a terminal failure; request a release (Compile) to retry.",
+            // 🚨 #4469 — A PARK MUST NOT ERASE THE DIAGNOSIS. This is the state an operator
+            // actually finds the system in: the compile that formed the verdict ran once, minutes
+            // or hours ago, and every later access is short-circuited through here with the park
+            // registry's remembered error — which is the bare Roslyn text. Replacing the recorded
+            // CompilationError with it would drop the one sentence that says the unresolved names
+            // are missing FILES, precisely when the reader arrives. The finding itself survives on
+            // CompilationImportRefusals (this is a `with` over the persisted definition), so it is
+            // re-composed rather than remembered as prose. The null branch keeps the recorded
+            // string, which already leads with it.
+            //
+            // 🚨 …but ONLY FOR THE VERDICT THAT EARNED IT (Copilot review). `formedUnderLiveInputs`
+            // already separates the two call sites exactly: FALSE is the parked short-circuit
+            // RE-SERVING the remembered compile failure — the same verdict the finding belongs to —
+            // while TRUE is a NEW gate verdict formed here and now (a delivery hold, an
+            // incompatible adopted build), which the finding says nothing about. A source change
+            // un-parks a type WITHOUT clearing the field, so prepending it to a later bundle or
+            // availability reason would attach an import diagnosis to a failure that has nothing to
+            // do with an import — the unfounded accusation this whole change set refuses to make.
+            CompilationError = reason is null
+                ? parkedDef.CompilationError
+                    ?? "Compilation is parked after a terminal failure; request a release (Compile) to retry."
+                : !formedUnderLiveInputs
+                    && ImportRefusalDiagnosis.Describe(parkedDef.CompilationImportRefusals) is { } lead
+                        ? $"{lead}\n{reason}"
+                        : reason,
+            // A NEW verdict formed here owns the record: a finding about the PREVIOUS one must not
+            // be left standing behind it, where a later settle could pick it up again.
+            CompilationImportRefusals = formedUnderLiveInputs
+                ? null
+                : parkedDef.CompilationImportRefusals,
             FailedBuildInputs = formedUnderLiveInputs
                 ? BuildInputsToken(modulesHash, parkedDef.CurrentSourceVersions)
                 : parkedDef.FailedBuildInputs,
@@ -3661,6 +3690,12 @@ internal static class NodeTypeCompilationHelpers
             CompilationStatus = CompilationStatus.Ok,
             CompilationError = null,
             CompilationDiagnostics = null,
+            // #4469 — the import verdict belongs to the FAILURE it explained. A type that now
+            // compiles has no unresolved names for a refusal to be the reason for, so leaving the
+            // finding standing would be an accusation about a state that no longer exists; and
+            // null is the honest value, because "this compile established that no import lost
+            // anything" is not something a SUCCESS measured.
+            CompilationImportRefusals = null,
             // 🚨 #2813 — Roslyn built these bytes HERE, from the source this mesh holds, so the
             // provenance is Compiled and nothing about an earlier adoption survives. Without this
             // the field was write-once-per-adoption: a type refused as stale and then successfully
@@ -3923,13 +3958,20 @@ internal static class NodeTypeCompilationHelpers
     /// leaves that field NOT DETERMINED rather than empty: a stamp that could not measure the
     /// coverage must never look like one that measured it and found nothing wrong.
     /// </param>
+    /// <param name="importRefusals">
+    /// 🚨 #4469 — the source nodes the partition's IMPORT recorded as refused that explain this
+    /// failure's unresolved names (<see cref="ImportRefusalDiagnosis.Explaining"/>), or
+    /// <c>null</c> when the question was not asked / could not be answered. Same three-shape rule as
+    /// <paramref name="nodeTypePath"/>'s coverage: null is NOT DETERMINED, never "none".
+    /// </param>
     internal static NodeTypeDefinition ApplyCompileFailure(
         NodeTypeDefinition def,
         NodeCompilationResult? result,
         Exception? error,
         string? activityPath,
         string? modulesHash = null,
-        string? nodeTypePath = null)
+        string? nodeTypePath = null,
+        System.Collections.Immutable.ImmutableList<ImportRefusal>? importRefusals = null)
     {
         // 🚨 Measured against the set the compile CONSUMED (the result's own snapshot when it
         // resolved one, else the node's live one) — the same evidence FailedBuildInputs uses, so
@@ -3942,6 +3984,16 @@ internal static class NodeTypeCompilationHelpers
             : CodeQueryResolver.DefaultSources.Count;
         var missingSources = SourceCoverage.Describe(
             nodeTypePath ?? "(unknown)", unmatched, declaredCount);
+
+        // 🚨 #4469 — the MORE SPECIFIC of the two "your source set is short" findings, so it leads
+        // when both fire: SourceCoverage says a declared query matched nothing; this names the exact
+        // file, the import that could not write it, and the write path's own reason.
+        var importRefused = ImportRefusalDiagnosis.Describe(importRefusals);
+        var lead = importRefused is null
+            ? missingSources
+            : missingSources is null
+                ? importRefused
+                : $"{importRefused}\n{missingSources}";
 
         return def with
         {
@@ -3957,12 +4009,17 @@ internal static class NodeTypeCompilationHelpers
             // and a reader who is not told that spends the investigation hunting the named symbols
             // through module surfaces that never carried them (measured: rbuergi/OperationRequest,
             // four days). Prefixed rather than replacing: the diagnostics are still the evidence.
-            CompilationError = missingSources is null
+            CompilationError = lead is null
                 ? SummarizeCompileError(result, error)
-                : $"{missingSources}\n{SummarizeCompileError(result, error)}",
+                : $"{lead}\n{SummarizeCompileError(result, error)}",
             CompilationDiagnostics = result?.Diagnostics is { Count: > 0 } ds
                 ? System.Collections.Immutable.ImmutableList.CreateRange(ds)
                 : null,
+            // 🚨 THE STRUCTURED HALF (#4469), under the same three-shape rule as
+            // FailedSourceQueries: null when the question was not asked or could not be answered,
+            // EMPTY when the import bookkeeping answered and explains nothing, non-empty when it
+            // does. "I could not look" must never render as "an import lost nothing".
+            CompilationImportRefusals = importRefusals,
             LastCompilationActivityPath = activityPath,
             CompiledSources = null,
             // 🚨 THE STRUCTURED HALF of the same finding — null when it could not be determined,
@@ -4407,8 +4464,27 @@ internal static class NodeTypeCompilationHelpers
                                 resolvedActivityPath, newReleasePath, logger)
                             : Observable.Return<(string? ReleasePath, string? Diagnosis)>(
                                 (newReleasePath, null)))
-                        .Subscribe(settle =>
+                        // 🚨 #4469 — THE JOIN POINT. A failure on an unresolved NAME asks the
+                        // partition's import bookkeeping whether it lost the file that would have
+                        // defined it, so the operator who lands on the compile error is told about
+                        // the import instead of hunting a symbol that is plainly in git. Bounded,
+                        // total and never faulting by contract, and it costs no read at all unless
+                        // the failure is of that one shape — so the terminal status write below
+                        // cannot be delayed or lost by asking. A success asks nothing: there are no
+                        // unresolved names for a refusal to be the reason for.
+                        .SelectMany(settle => ok
+                            ? Observable.Return<System.Collections.Immutable.ImmutableList<ImportRefusal>?>(null)
+                                .Select(refusals => (Settle: settle, Refusals: refusals))
+                            : ImportRefusalDiagnosis.ForFailedCompile(
+                                    hub, hubPath, outcome.Result?.Diagnostics,
+                                    SummarizeCompileError(outcome.Result, outcome.Error), logger)
+                                .Select(refusals => (Settle: settle, Refusals: refusals)))
+                        .Subscribe(joined =>
                     {
+                    var settle = joined.Settle;
+                    // null ⇒ NOT DETERMINED (not asked, no bookkeeping, or the read did not come
+                    // back); EMPTY ⇒ asked and nothing explains these names. Never collapsed.
+                    var importRefusals = joined.Refusals;
                     var newReleasePath = settle.ReleasePath;
                     // Terminal writes run under System — same rule as every other
                     // deferred pipeline in RunCompile (the ambient scope from the
@@ -4437,6 +4513,30 @@ internal static class NodeTypeCompilationHelpers
                                 ("location", outcome.Result!.AssemblyLocation)));
                     else
                     {
+                        // 🚨 #4469 — THE LINE AN OPERATOR READS, IN THEIR OWN LANGUAGE, and it goes
+                        // FIRST: the diagnostics below it are about a file the mesh does not hold,
+                        // and a reader told that afterwards has already started debugging the wrong
+                        // thing. It is emitted only where a refusal is RECORDED for a source node
+                        // whose identifier this failure could not resolve — never on "the read did
+                        // not answer", which is exactly the difference between naming a cause and
+                        // inventing one. The catalog key carries the fact; the path and the reason
+                        // ride as ARGUMENTS, because neither is translatable (#3236).
+                        if (importRefusals is { Count: > 0 } explained)
+                        {
+                            var refusedPaths = string.Join("; ", explained
+                                .Select(r => r.Reason is { Length: > 0 } reason
+                                    ? $"{r.NodePath} ({reason})"
+                                    : r.NodePath));
+                            activityMessages.Add(new LogMessage(
+                                $"⚠ {explained.Count} source node(s) this compile needs were REFUSED "
+                                + "by an import of this partition, so the mesh does NOT hold them — "
+                                + "the unresolved name(s) below are missing FILES, not missing "
+                                + $"modules: {refusedPaths}. Fix the source file in the repository "
+                                + "and re-import.",
+                                LogLevel.Error)
+                                .WithKey("activity.compile.importRefusedSources",
+                                    ("count", explained.Count), ("paths", refusedPaths)));
+                        }
                         // 🚨 Say WHICH failure this is. "Roslyn failed" in front of a source
                         // snapshot that never answered is the log-line version of the #1218 bug:
                         // Roslyn was never invoked, so a reader (or an operator reading a stalled
@@ -4567,7 +4667,7 @@ internal static class NodeTypeCompilationHelpers
                         var modulesHashNow = hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash;
                         var failed = ApplyCompileFailure(
                             def, outcome.Result, outcome.Error, resolvedActivityPath,
-                            modulesHashNow, hubPath);
+                            modulesHashNow, hubPath, importRefusals);
 
                         // 🚨 #4280 — A VERDICT ABOUT A SOURCE SET THAT NO LONGER EXISTS IS NOT A
                         // VERDICT. `def` here is the node as it is being committed against, so
