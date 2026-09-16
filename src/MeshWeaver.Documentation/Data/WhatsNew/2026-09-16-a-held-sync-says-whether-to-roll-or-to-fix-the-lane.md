@@ -2,7 +2,8 @@
 Name: A held sync says whether to roll or to fix the lane
 Category: Fix
 Description: A source held by the publication seal used to state the commit it was sealed at and stop there — a sentence equally consistent with a broken publishing lane and with an instance whose image has fallen behind. It now names which, and the remedy.
-Date: 2026-09-16
+Icon: ArrowSync
+Order: -20260916
 ---
 
 # A held sync says whether to roll or to fix the lane
