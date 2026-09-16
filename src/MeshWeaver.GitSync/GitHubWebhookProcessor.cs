@@ -558,10 +558,13 @@ public sealed class GitHubWebhookProcessor
             // 🚨 Ordered AFTER "already at this commit" on purpose: a converged source keeps
             // reporting the reason it has always reported, so this arm's appearance in a log is
             // itself the signal that a source is settled-but-not-converged.
-            : cfg.LastAttemptWasFinal
-              && string.Equals(cfg.LastAttemptedCommitSha, headSha, StringComparison.OrdinalIgnoreCase)
+            // 🚨 #4499 — the SAME predicate the seal reconciler asks, so the two unattended triggers
+            // cannot disagree; it also requires the verdict to have been reached under the source's
+            // CURRENT configuration, so an operator's correction re-attempts at the same commit.
+            : GitHubSyncService.HasFinalVerdictAt(cfg, headSha)
                 ? $"already attempted at this commit with a final verdict ('{cfg.LastSyncOutcome}') — "
-                  + "re-reading the same bytes re-derives it; the next new commit re-attempts"
+                  + "re-reading the same bytes under the same configuration re-derives it; a new "
+                  + "commit or an edit of the source re-attempts"
             : null;
 
     /// <summary>Maps a config node path (<c>{space}/_GitSync</c> or <c>{space}/_GitSync/{sourceId}</c>)

@@ -111,9 +111,19 @@ public class RefusedSourceSaysItIsRefusedTest(ITestOutputHelper output) : Monoli
         after.LastSyncNote.Should().Contain(MissingSubdirectory,
             "the note names the subdirectory, so the fix is readable without opening the logs — this "
             + "is a CONFIGURATION fault and the configuration is what has to change");
-        after.LastAttemptedCommitSha.Should().BeNull(
-            "the refusal happens BEFORE any import, so it must never leave a #3945 'already "
-            + "attempted at this commit' pointer that would licence a later pass to skip");
+        // 🚨 Revised by the second half of #4499. Clearing the attempt pair here kept the refusal
+        // RETRYABLE, and a refusal is the one outcome that no retry can change: the reconciler re-ran
+        // it on every publication announcement, ~32×/hour, at one unchanged sealed commit. What the
+        // pointer must never do is licence a skip after the source is CORRECTED — and that is what
+        // the configuration fingerprint scopes (RefusedSourceIsNotReattemptedTest measures both).
+        after.LastAttemptedCommitSha.Should().Be(HeadSha,
+            "the refusal is an attempt with a verdict about exactly the bytes at this commit");
+        after.LastAttemptWasFinal.Should().BeTrue(
+            "the same commit under the same subdirectory lists the same nothing — re-reading cannot "
+            + "change it, so the unattended triggers must stop re-reading it (#4499)");
+        after.LastAttemptedConfigFingerprint.Should().NotBeNullOrEmpty(
+            "and the verdict is scoped to the configuration it was read under, so correcting the "
+            + "subdirectory re-attempts at the same commit instead of waiting for the repository to move");
         after.LastSyncCommitSha.Should().NotBe(HeadSha,
             "nothing was read and nothing landed, so the SEEN pointer must not advance to a commit "
             + "this refusal never imported");
