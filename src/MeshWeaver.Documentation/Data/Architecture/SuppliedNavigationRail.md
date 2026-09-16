@@ -155,6 +155,29 @@ hidden it turns into the expand button. A shell that does not know the class lea
 bar's own collapse chevron in charge. (The Blazor portal's half lives in MeshWeaver.Plugins:
 `NavRailStateService`, `NavRailPanePresentation`, and the toggle in `PortalLayoutBase`.)
 
+**One sidebar, one button.** The index rail is not the only left-hand sidebar a page can have: the
+Threads app (`/{user}/Chat`) and every full-page thread show their thread list in the same place. It
+joins the same toggle and the same state (2026-09-16, the maintainer: *"when side menu (on left) is
+collapsed … the expand button is still to the left consuming real estate … integrate the open button
+… in the top menu bar, similar to how safari is doing it"*). The rule for any left sidebar is
+therefore:
+
+- **Collapsed takes zero width.** Nothing stays behind on the left edge — no strip, no reveal
+  button, no splitter bar. The header button is the only way back, which is why it is always there
+  while the page has a sidebar.
+- **The button never moves.** It sits at the left end of the top bar in both states and only swaps
+  its icon (`PanelLeftContract` ↔ `PanelLeftExpand`) and its localized name (`menu.hideSidebar` ↔
+  `menu.showSidebar`). A sidebar carries no collapse control of its own while a shell hosts this one
+  — two controls for one state is how the residual strip came about.
+- **The state is the reader's, not the page's.** Hiding the thread list also hides a document's index,
+  the way Safari's sidebar button hides whichever sidebar the window shows; the choice follows the
+  reader across pages and reloads.
+- **A sidebar reports its presence** (`NavRailStateService.Attach`/`Detach`, reconciled after every
+  render) so the button shows only while there is something to toggle, and it resolves the service
+  OPTIONALLY: in a host with no shell toggle it keeps its own collapse and reveal controls rather than
+  becoming impossible to reopen. The thread list's fold is `ThreadNavPresentation` in
+  `MeshWeaver.Blazor.Chat`.
+
 ## Why the plan is a pure record
 
 A `ContainerControl`'s child views are `protected`. A rail built straight into controls can be
