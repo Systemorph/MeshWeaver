@@ -139,10 +139,30 @@ bare number.**
   terminal status from those levels — which is why an import that dropped a source node showed up as
   `maxSeverity: Information`, `status: Succeeded`.
 
+## What this does not cover
+
+🚨 **An operator who starts from the COMPILE ERROR still has nothing pointing at the import.** Both
+issues list this as their third item, and it is deliberately not fixed here — it is
+[#4469](https://github.com/Systemorph/MeshWeaver/issues/4469).
+
+A partition left incomplete still hands the compiler source files that reference a symbol whose own
+file did not land, so the NodeType fails on `CS0246` / `CS0103` for a symbol that is plainly in git,
+and nothing in that message connects it to the import. What changed is the other direction: an
+operator reading the **sync activity** now learns which file is missing and why, and the activity is
+no longer green. The facts a fix needs are all recorded — the manifest's `!<token>` entries say which
+declared nodes the partition is missing — so #4469 is a wiring problem, not a measurement one.
+
+Note the granularity trap in it: refusing to compile a whole partition because one unrelated node was
+refused would re-create exactly the over-broad reading this page is about, so any fix has to be
+scoped to the types that actually reference the missing node.
+
 ## What this does not change
 
 - **`MayAdvanceBaseline` is untouched.** It already requires `Failed == 0`, so a partial import never
-  advanced the git baseline; that guard was working and is not what broke.
+  advanced the git baseline; that guard was working and is not what broke. A remembered refusal is
+  still reported as a failure, so the baseline is still held — the mesh genuinely is not at that
+  commit. `VerdictIsFinal` is also unchanged, so the delivery stays cheap
+  ([What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost)).
 - **A refusal is still a refusal.** If the bytes genuinely cannot be stored, no import creates the
   node — the repair is to fix the source file, which moves the fingerprint and the token. What
   changes is that the partition is no longer frozen around it, and that the file is *named*.
