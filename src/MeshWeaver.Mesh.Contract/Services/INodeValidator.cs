@@ -85,6 +85,15 @@ public record NodeValidationContext
     /// removed while its partition stays".
     /// </summary>
     public string? DeleteCascadeRootPath { get; init; }
+
+    /// <summary>
+    /// The ONE resolution of "does this node's NodeType own its partition?" that the checks of THIS
+    /// operation share (<c>PartitionOwningTypes.OwnsPartitionOnce</c>). A fresh context is built per
+    /// operation, so the memo cannot outlive it or cross users; see
+    /// <see cref="PartitionOwnershipMemo"/> for why sharing it is a deliberate semantic change and
+    /// for the window that is deliberately NOT collapsed.
+    /// </summary>
+    public PartitionOwnershipMemo PartitionOwnership { get; init; } = new();
 }
 
 /// <summary>
