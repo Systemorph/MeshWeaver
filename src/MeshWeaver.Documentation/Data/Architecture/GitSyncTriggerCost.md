@@ -90,7 +90,7 @@ built repository is nevertheless left alone:
 | `direction is ExportOnly` | the source refuses imports |
 | `branch 'X' != built branch 'Y'` | the build is not on the branch this source tracks |
 | **`already at this commit`** | **`lastSyncCommitSha == headSha`** |
-| **`already attempted at this commit with a final verdict`** | **`lastAttemptedCommitSha == headSha` AND `lastAttemptWasFinal`** (§7) |
+| **`already attempted at this commit with a final verdict`** | **`lastAttemptedCommitSha == headSha` AND `lastAttemptWasFinal` AND `lastAttemptedConfigFingerprint` matches the source's current configuration** (§7) |
 
 Only the last two are a *work* saving. Until the second one existed the saving was keyed on exactly
 one field, so deliveries two and three of a merge, and every cron tick until the next merge, were
@@ -248,8 +248,8 @@ gh api "repos/<owner>/<repo>/compare/<lastSyncCommitSha>...main" \
 Since §7 there is a third pair of fields to read, and for a settled source they are the ones that
 explain the frozen dates: `lastAttemptedCommitSha` (what the last attempt *looked at*) and
 `lastAttemptWasFinal` (whether looking again could change anything). The settings tab renders the
-second as *"this commit has a final verdict — the next new commit re-attempts"*, so a reader is not
-left to infer a stopped webhook from a stopped clock.
+second as *"this commit has a final verdict — a new commit or an edit of this source re-attempts"*,
+so a reader is not left to infer a stopped webhook from a stopped clock.
 
 ## 5. What the content-addressed marker does and does not close
 
@@ -348,13 +348,49 @@ or a skip would be licensed for an attempt that never happened. Three things cle
   *which* live nodes an import preserves — so any earlier "final at commit X" is stale;
 - **a hold** (the sealed-publication gate), because no attempt ran, and a seal arriving later is the
   archetype of a condition that clears without the commit moving;
-- **a new commit**, trivially — the recorded sha stops matching.
+- **a new commit**, trivially — the recorded sha stops matching;
+- **an edit of the source** (#4499) — repository, branch, subdirectory, ignore patterns, direction
+  or the two-way switch. The licence carries `lastAttemptedConfigFingerprint`, the configuration
+  the attempt read under, and a mismatch licenses nothing (next subsection).
 
 🚨 **What does NOT clear it, stated rather than hidden:** a mesh-side change at an unchanged commit —
 someone deleting the very node that was being preserved, say. The next green build still skips, and
 the source waits for the repository's next commit or for a human pressing **Update to latest**. That
 is the same contract `lastSyncCommitSha` has always had for the converging case, and it is the
 deliberate price of not re-cloning a repository ten times an hour to discover that nothing changed.
+
+### 🚨 Final for the CONFIGURATION too — and asked by BOTH unattended triggers (#4499)
+
+**Measured on memex.systemorph.com, 2026-09-16**, through the control instance's `Logs` action: 64
+refusal lines in one hour, not truncated — **~32 refusals/hour** — for two Spaces whose configured
+subdirectory matched nothing (`DeepSign` in MeshWeaver.Plugins, `UWDeepfield` in
+MeshWeaver.Reinsurance), always at the commit this instance's seal named. Each was a full fetch of the
+repository and an Activity node, and none could change anything. Two defects composed:
+
+- **The refusal cleared the pair instead of stamping it**, on the reading that a pointer left behind
+  would license skipping an import that never ran. But a refusal IS an attempt — the fetch ran and
+  the listing was read — and its verdict is as final as a content error: the same commit under the
+  same subdirectory lists the same nothing. It is now recorded as `(commit, final)`, final only when
+  the listing was complete (an empty answer from a truncated tree says nothing).
+- **The seal reconciler never asked.** `SealedSyncReconcile.Decide` runs on every
+  `Hosting/PlatformBuilds/<source>` announcement and imported any source whose `lastSyncCommitSha`
+  was behind the seal — which a source that cannot converge always is. It now asks the SAME
+  predicate as `SkipReason`, `GitHubSyncService.HasFinalVerdictAt`, after the gate, and answers the
+  settled case with `Plan.Settled`: a `None` that is logged once and **never recorded as a hold**,
+  because a hold clears the pair and would license the next announcement to refuse again.
+
+The reading that kept the pair cleared was protecting something real, and it is now protected
+properly: **a verdict is final for the bytes AS THIS SOURCE READS THEM.** The remedy for a refusal is
+to edit the source *at the same commit*, and a skip keyed on the commit alone would hold that
+correction until the repository happened to move. So the attempt records the fingerprint of every
+configuration field the import reads (`GitHubSyncService.SourceFingerprint` — repository, branch,
+trimmed and case-sensitive subdirectory, ignore patterns with unset read as the default, direction,
+two-way), and the predicate requires it to equal the fingerprint of the configuration the source
+carries NOW. This closes the same hole for every final verdict, not only refusals: re-scoping a
+settled `Preserved > 0` source by editing its ignore patterns used to wait for a new commit too.
+
+A pair recorded before the fingerprint existed carries none and licenses nothing, so each settled
+source is attempted **once** more after the change and records the fingerprint — the safe direction.
 
 ### The controls
 
