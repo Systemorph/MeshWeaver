@@ -165,6 +165,41 @@ public class RollbackLineageSurvivesTheStoresTimestampResolutionTest(ITestOutput
     }
 
     /// <summary>
+    /// 🚨 THE SAME PROPERTY ON THE SINGULAR CREATE — the path #638 is actually about, and a
+    /// SEPARATE stamping site in the source.
+    ///
+    /// <para>Both verbs stamp independently (<c>HandleCreateNodeRequest</c> and
+    /// <c>HandleCreateNodesRequest</c> each mint their own <c>now</c>) and both feed the one
+    /// <c>CompensateFailedCreate</c>. A test that drives only the bulk verb would therefore stay
+    /// green while a revert on the singular branch left the ORIGINAL rollback — the creator-grant
+    /// case this whole mechanism exists for — unable to recognise its own row. (Copilot review,
+    /// PR #4511.)</para>
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task TheSingularCreateRollsBackItsOwnRowToo_ThroughTheSameModelledColumn()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await SeedPartitionRoot();
+        _faultPath = NodePath(0);
+
+        var response = await CreateOne(NodePath(0), AuthoredCreatedDate, cancellationToken);
+
+        response.Success.Should().BeFalse(
+            "the critical post-creation handler failed, so the create's contract was not met");
+        response.Error.Should().Contain("was rolled back",
+            "the singular rollback must REMOVE its own row and say so — before the storage-stable "
+            + "mint it answered 'the stored row is no longer the one this request wrote' about the "
+            + "row it had itself written one millisecond earlier");
+        response.Error.Should().NotContain("no longer the one this request wrote",
+            "its own row is not somebody else's");
+
+        var remaining = await RemainingPaths(cancellationToken);
+        remaining.Should().BeEmpty(
+            "nothing this create wrote may survive it — a retry answers 'already exists' and, on the "
+            + "canonical Space case, nobody holds rights to clean up");
+    }
+
+    /// <summary>
     /// The stamp the create path MINTS is storage-stable too — the production shape, where no caller
     /// supplies a <see cref="MeshNode.CreatedDate"/> at all.
     ///
@@ -299,6 +334,35 @@ public class RollbackLineageSurvivesTheStoresTimestampResolutionTest(ITestOutput
             $"[bulk] success={delivery.Message.Success} failedPath={delivery.Message.FailedPath} "
             + $"created=[{string.Join(", ", delivery.Message.Created.Select(n => n.Path))}] "
             + $"error={delivery.Message.Error}");
+        return delivery.Message;
+    }
+
+    /// <summary>
+    /// Issues ONE <see cref="CreateNodeRequest"/> — the singular verb, whose stamping branch is
+    /// separate source from the batch's — carrying the same authored sub-microsecond
+    /// <see cref="MeshNode.CreatedDate"/>.
+    /// </summary>
+    private async Task<CreateNodeResponse> CreateOne(
+        string path, DateTimeOffset authoredCreatedDate, CancellationToken cancellationToken)
+    {
+        var node = MeshNode.FromPath(path) with
+        {
+            Name = "N0",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+            CreatedDate = authoredCreatedDate,
+            Content = new MarkdownContent { Content = "# N0\n\npage" },
+        };
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var delivery = await access
+            .RunAsSystem(() => ObserveNodeOperation(new CreateNodeRequest(node)))
+            .FirstAsync()
+            .Timeout(120.Seconds())
+            .Await(cancellationToken);
+
+        Output.WriteLine(
+            $"[single] success={delivery.Message.Success} error={delivery.Message.Error}");
         return delivery.Message;
     }
 
