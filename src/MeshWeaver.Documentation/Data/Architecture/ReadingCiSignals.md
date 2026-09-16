@@ -185,6 +185,43 @@ Two neighbouring pages carry the same lesson from other directions:
 [The Release Gate's Denominator](/Doc/Architecture/ReleaseGateDenominator) (a rate is meaningless
 until you state what it is over).
 
+## 🚨 An annotation belongs to an ATTEMPT, not to a run — a partial re-run erases it
+
+**`GET /actions/runs/{id}/jobs` answers with the LATEST attempt's job records.** After
+`rerun-failed-jobs`, GitHub re-creates a record for *every* job of the new attempt — including the
+ones it did not re-run — and **those records carry none of the earlier attempt's annotations**. The
+run still reads `success`. Anything that reads a fact out of an annotation therefore loses it, with
+no error and no red anywhere.
+
+Measured 2026-09-16 on MeshWeaver.Plugins (#4491):
+
+```
+main run 35073843357 resolved 3.0.0-ci.8721, died on an artifact-service 403
+(FinalizeArtifact; tests failed: 0), was re-run, concluded SUCCESS
+
+attempt 1, job 104721425856 (Resolve the released platform)  ->  annotation present
+attempt 2, job 104732056546 (same job, NOT re-run)           ->  0 annotations
+a PR's resolver, 6 minutes later                             ->  "no 'Platform for this run'
+                                                                  annotation — skipped"
+                                                             ->  pinned every PR to #8716
+```
+
+`main` had demonstrably passed on 8721, and every open pull request in the repo went on resolving
+8716 — including the one adopting a core capability that only exists from 8721 onwards. The
+resolver's sentence for this was *"`main` has not passed on it yet"*, which was **false**.
+
+**If you read an annotation, say which attempt you mean.** `/actions/runs/{id}/attempts/{n}/jobs`
+serves one attempt's records. Walk attempts **newest-first** and take the first that carries what
+you are looking for: a genuine re-resolution (a full re-run, or a re-run *of that job*) then still
+decides, and an older attempt is consulted only where the newer record is silent — which is exactly
+the carried-over case. Taking the oldest instead would let a stale verdict outrank a fresh one.
+
+This is the same attempt-scoping trap as `rerun-failed-jobs` reusing the previous attempt's
+artefact (#4303): a re-run is not a re-execution of the run, and the parts it did not re-run keep
+neither their outputs nor their annotations in the new attempt's records.
+
+---
+
 ## The same trap in the tools you write to watch CI
 
 Two bugs that make a monitor lie, both hit in one session:

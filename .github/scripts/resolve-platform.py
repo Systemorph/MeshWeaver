@@ -329,6 +329,26 @@ def run_jobs_of(fetch: Fetch, repo: str, run_id: int) -> list[dict]:
         page += 1
 
 
+def run_jobs_of_attempt(fetch: Fetch, repo: str, run_id: int, attempt: int) -> list[dict]:
+    """Every job record of ONE attempt of a run.
+
+    🚨 `/actions/runs/{id}/jobs` answers with the LATEST attempt's records, and a partial re-run
+    (`rerun-failed-jobs`) re-creates a record for every job of the new attempt — including the ones
+    it did not re-run — carrying NONE of the earlier attempt's annotations (#4491). An annotation
+    therefore belongs to an ATTEMPT, not to a run, and a reader that wants one has to say which.
+    """
+    jobs: list[dict] = []
+    page = 1
+    while True:
+        data = fetch(f"/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs"
+                     f"?per_page=100&page={page}")
+        rows = list(data.get("jobs") or [])
+        jobs += rows
+        if len(rows) < 100 or len(jobs) >= int(data.get("total_count") or 0):
+            return jobs
+        page += 1
+
+
 def run_jobs(fetch: Fetch, run_id: int) -> list[dict]:
     return run_jobs_of(fetch, CORE_REPO, run_id)
 
@@ -634,16 +654,57 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
         return None, notes
     for run in runs:
         run_id = int(run["id"])
-        jobs = [j for j in run_jobs_of(fetch, repo, run_id) if j.get("name") == PLATFORM_REF_JOB]
-        if not jobs:
-            notes.append(f"main run {run_id}: no `{PLATFORM_REF_JOB}` job — skipped")
+        # 🚨 NEWEST ATTEMPT FIRST, then older ones (#4491). `/runs/{id}/jobs` serves the latest
+        # attempt, and after a partial re-run every job of that attempt has a FRESH record — the
+        # carried-over `Resolve the released platform` among them — with none of the annotations
+        # the attempt that actually ran it published. Reading only the latest attempt therefore
+        # loses the run's contribution to the ceiling while the run still reads `success`, and the
+        # satellite then holds every pull request on an older set and says `main` has not passed on
+        # the newer one, which is FALSE. Measured 2026-09-16 on MeshWeaver.Plugins: run 35073843357
+        # resolved 3.0.0-ci.8721, died on an artifact-service 403, was re-run to success — attempt
+        # 1's job carried the annotation, attempt 2's record for the same job carried zero.
+        #
+        # The NEWEST attempt that carries one wins, so a genuine re-resolution (a full re-run, or a
+        # re-run OF this job) still decides; an older attempt is consulted only where the newer
+        # record is silent, which is exactly the carried-over case.
+        attempt_rows: list[dict] | None = None
+        searched = 0
+        unreadable: str | None = None
+        latest_attempt = max(1, int(run.get("run_attempt") or 1))
+        for attempt in range(latest_attempt, 0, -1):
+            try:
+                jobs_of = (run_jobs_of(fetch, repo, run_id) if attempt == latest_attempt
+                           else run_jobs_of_attempt(fetch, repo, run_id, attempt))
+            except ResolutionError as error:
+                unreadable = f"attempt {attempt} jobs unreadable ({error})"
+                continue
+            jobs = [j for j in jobs_of if j.get("name") == PLATFORM_REF_JOB]
+            if not jobs:
+                continue
+            searched += 1
+            try:
+                annotations = fetch(f"/repos/{repo}/check-runs/{int(jobs[0]['id'])}/annotations")
+            except ResolutionError as error:
+                unreadable = f"attempt {attempt} annotations unreadable ({error})"
+                continue
+            candidate = (annotations if isinstance(annotations, list)
+                         else annotations.get("annotations") or [])
+            if any(NOTICE_TITLE in str(row.get("title") or "") for row in candidate):
+                attempt_rows = candidate
+                if attempt != latest_attempt:
+                    notes.append(
+                        f"main run {run_id}: attempt {latest_attempt} carries no "
+                        f"`{NOTICE_TITLE}` annotation (a partial re-run re-creates the record "
+                        f"without it) — read from attempt {attempt}, which published one (#4491)")
+                break
+        if attempt_rows is None and searched == 0:
+            notes.append(f"main run {run_id}: no `{PLATFORM_REF_JOB}` job"
+                         + (f" ({unreadable})" if unreadable else "") + " — skipped")
             continue
-        try:
-            annotations = fetch(f"/repos/{repo}/check-runs/{int(jobs[0]['id'])}/annotations")
-        except ResolutionError as error:
-            notes.append(f"main run {run_id}: annotations unreadable ({error}) — skipped")
+        if attempt_rows is None and unreadable is not None:
+            notes.append(f"main run {run_id}: {unreadable} — skipped")
             continue
-        rows = annotations if isinstance(annotations, list) else annotations.get("annotations") or []
+        rows = attempt_rows or []
         # 🚨 EVERY matching annotation is read, and DISAGREEMENT is a refusal (#1826). This used to
         # take the FIRST match and break — and the list it reads is one the job's own self-test
         # steps write into: `test-platform-resolution.py` went through `emit`, so its FIXTURE set
@@ -667,7 +728,9 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             continue
         found = distinct[0] if distinct else None
         if found is None:
-            notes.append(f"main run {run_id}: no `{NOTICE_TITLE}` annotation — skipped")
+            notes.append(
+                f"main run {run_id}: no `{NOTICE_TITLE}` annotation on any of its "
+                f"{searched} attempt(s) carrying a `{PLATFORM_REF_JOB}` job — skipped")
             continue
         notes.append(f"main run {run_id} passed on core CD #{found}")
         best = found if best is None else max(best, found)
@@ -1874,6 +1937,59 @@ def self_test() -> int:
                   _fetch_main("3.0.0-ci.8203", job=False), None, "created 2026-09-14T08:00:00Z")
     _ceiling_case("…and tells the reader a newer run means the listing was stale, not main",
                   _fetch_main("3.0.0-ci.8203", job=False), None, "served a stale page")
+
+    # ── 🚨 AN ANNOTATION BELONGS TO AN ATTEMPT, NOT TO A RUN (#4491) ────────────────────────────
+    # `/runs/{id}/jobs` serves the LATEST attempt. After `rerun-failed-jobs`, GitHub re-creates a
+    # record for every job of the new attempt — including the ones it did not re-run — carrying
+    # none of the earlier attempt's annotations. The run still reads `success`, so its contribution
+    # to the ceiling vanishes silently and the satellite pins every pull request to an older set
+    # while stating, falsely, that `main` has not passed on the newer one.
+    #
+    # Measured 2026-09-16 on MeshWeaver.Plugins: run 35073843357 resolved 3.0.0-ci.8721, died on an
+    # artifact-service 403 (`FinalizeArtifact`, tests failed: 0), was re-run and concluded success.
+    # Attempt 1's `Resolve the released platform` job carried the annotation; attempt 2's record
+    # for the same, NOT-re-run job carried zero. Every open PR then resolved 8716 — including the
+    # one adopting a core capability that only exists from 8721 on.
+    def _fetch_attempts(latest: str | None, earlier: str | None, attempts: int = 2) -> Fetch:
+        """A run re-run `attempts` times: the latest attempt's record and attempt 1's disagree."""
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 556, "created_at": "2026-09-14T08:00:00Z", "run_attempt": attempts},
+                ]}
+            # The ATTEMPT-scoped endpoint must be asked for by path — a reader that keeps using
+            # `/runs/{id}/jobs` never reaches this branch and sees only the latest attempt.
+            if "/attempts/1/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 701, "name": PLATFORM_REF_JOB}]}
+            if "/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 702, "name": PLATFORM_REF_JOB}]}
+            for job_id, named in ((701, earlier), (702, latest)):
+                if f"/check-runs/{job_id}/annotations" in path:
+                    return {"annotations": [] if named is None else [
+                        {"title": NOTICE_TITLE, "message": f"{named} — core {B[:9]}"}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("a partial re-run erases the annotation from the latest attempt — the earlier "
+                  "attempt that published it is read instead (#4491)",
+                  _fetch_attempts(latest=None, earlier="3.0.0-ci.8721"), 8721, "8721")
+    _ceiling_case("…and the note SAYS it fell back, naming the attempt, so the log is not silent "
+                  "about where the number came from",
+                  _fetch_attempts(latest=None, earlier="3.0.0-ci.8721"), 8721,
+                  "read from attempt 1")
+    _ceiling_case("a genuine RE-RESOLUTION still decides — the NEWEST attempt carrying an "
+                  "annotation wins, never the oldest",
+                  _fetch_attempts(latest="3.0.0-ci.8730", earlier="3.0.0-ci.8721"), 8730, "8730")
+    _ceiling_case("…and that case does NOT claim a fallback happened",
+                  _fetch_attempts(latest="3.0.0-ci.8730", earlier="3.0.0-ci.8721"), 8730,
+                  "main run 556 passed on core CD #8730")
+    _ceiling_case("no attempt carrying the job published one ⇒ still skipped, and the note counts "
+                  "the attempts searched rather than implying one was never looked at",
+                  _fetch_attempts(latest=None, earlier=None), None, "2 attempt(s)")
 
     # ── 🚨 THE CEILING IS READ OUT OF A LIST THE SELF-TEST ALSO WRITES INTO (#1826) ─────────────
     # `Resolve the released platform` runs `resolve-platform.py --self-test` and
