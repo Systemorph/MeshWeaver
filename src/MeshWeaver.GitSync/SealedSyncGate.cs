@@ -72,6 +72,36 @@ public static class SealedSyncGate
     public static Verdict Decide(
         RepoIdentity repo, string headSha, string? lastSyncSha,
         IReadOnlyList<SealedSource> sealedForThisIdentity, string identity)
+        => Decide(repo, headSha, lastSyncSha, sealedForThisIdentity, identity, null);
+
+    /// <summary>
+    /// <see cref="Decide(RepoIdentity, string, string?, IReadOnlyList{SealedSource}, string)"/>,
+    /// plus the one fact that tells the two reasons for a hold apart.
+    ///
+    /// <para>🚨 A hold's sentence — "built at S, not sealed for this instance (identity I:
+    /// 'plugins' is sealed at C)" — is equally consistent with <b>nothing having sealed recently</b>
+    /// (the publishing lane is broken; act on the lane) and with <b>seals advancing under a newer
+    /// identity this instance does not run</b> (the image is behind; act with a roll). Those call
+    /// for opposite work, and the second has twice been read as the first
+    /// (MeshWeaver.Plugins#1823, #1798 — both filed against a lane that was green, with an empty
+    /// inbox, while memex.meshweaver.cloud sat held at <c>627fb3cd</c> under <c>sd608997…</c> and
+    /// the live publication was sealed under <c>s799247a…</c>). Passing
+    /// <see cref="SealedPublicationIndex.NewerLineThan"/> makes the note say which, in the same
+    /// sentence, to the operator who is already reading it.</para>
+    ///
+    /// <para>Null <paramref name="newerLine"/> is the honest "cannot place this instance on a
+    /// line" — the note then says exactly what it said before, and never guesses a direction.</para>
+    /// </summary>
+    /// <param name="repo">The repository the green build is of.</param>
+    /// <param name="headSha">The built commit.</param>
+    /// <param name="lastSyncSha">The commit the sync source currently sits on, or null.</param>
+    /// <param name="sealedForThisIdentity">What the registry sealed under this instance's framework identity.</param>
+    /// <param name="identity">This instance's framework identity — log copy only.</param>
+    /// <param name="newerLine">The newest publication line above this instance's, or null.</param>
+    public static Verdict Decide(
+        RepoIdentity repo, string headSha, string? lastSyncSha,
+        IReadOnlyList<SealedSource> sealedForThisIdentity, string identity,
+        PublicationLine? newerLine)
     {
         var mine = sealedForThisIdentity
             .Where(s => BelongsTo(s, repo, headSha, lastSyncSha))
@@ -86,15 +116,15 @@ public static class SealedSyncGate
               + $"'{witness.Source}' is sealed at {(witness.SourceCommit is null ? "an unknown commit" : Short(witness.SourceCommit))})"
             : $"built at {Short(headSha)}, and this instance's publication of '{witness.Source}' is not sealed "
               + $"(identity {identity}: {witness.Refusal})";
-        return new Verdict(false, reason);
+        return new Verdict(false, WithLine(reason, newerLine));
     }
 
     /// <summary>
     /// What a FIRST import of <paramref name="repo"/> must land on — the adopt-then-sync half of
-    /// <see cref="Decide"/>, for the one unattended importer that has no built commit to be gated
+    /// <see cref="Decide(RepoIdentity, string, string?, IReadOnlyList{SealedSource}, string)"/>, for the one unattended importer that has no built commit to be gated
     /// against (<c>ModuleDiscoveryService.FirstImport</c>, MeshWeaver#3845 hole 2).
     ///
-    /// <para><b>Why this is a separate decision and not <see cref="Decide"/>.</b> The gate answers
+    /// <para><b>Why this is a separate decision and not <see cref="Decide(RepoIdentity, string, string?, IReadOnlyList{SealedSource}, string)"/>.</b> The gate answers
     /// "may this source advance to the commit a build just proved?" — it needs that commit. A first
     /// import has neither: the Space was created seconds ago, its config carries no
     /// <c>LastSyncCommitSha</c>, and the trigger is a catalog scan, not a green build. So the two
@@ -221,6 +251,20 @@ public static class SealedSyncGate
         !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b)
         && (a.StartsWith(b, StringComparison.OrdinalIgnoreCase) || b.StartsWith(a, StringComparison.OrdinalIgnoreCase))
         && Math.Min(a.Length, b.Length) >= 7;
+
+    /// <summary>
+    /// Appends the direction to a hold reason when — and only when — the caller could establish it.
+    /// The clause names the REMEDY, because "sealed at an older commit" is what an operator sees and
+    /// "roll this instance" is what they have to do; leaving them to join a note on the sync config
+    /// to a directory listing under the published root is the step that did not happen twice.
+    /// </summary>
+    private static string WithLine(string reason, PublicationLine? newerLine)
+        => newerLine is null
+            ? reason
+            : reason
+              + $". The registry has since sealed {newerLine.Version} under framework identity "
+              + $"{newerLine.Identity}, which this instance does not run — so this source advances "
+              + "when this instance's IMAGE does (a roll), NOT when another publication lands";
 
     private static string Short(string sha) => sha.Length > 8 ? sha[..8] : sha;
 }

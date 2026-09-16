@@ -357,6 +357,12 @@ public sealed class GitHubWebhookProcessor
                 var publishedRoot = hub.ServiceProvider.GetService<IConfiguration>()
                     ?[ShippedPrebuiltBundles.PublishedRootConfigKey];
                 var sealedForThisIdentity = SealedPublicationIndex.ReadFor(publishedRoot, identity, logger);
+                // 🚨 The half a hold cannot state about itself (#4063): whether the registry has
+                // sealed a NEWER line that this instance does not run. Without it "not sealed for
+                // this instance" reads the same whether the lane stopped publishing or this image
+                // fell behind — opposite remedies, and the wrong one was chosen twice
+                // (MeshWeaver.Plugins#1823, #1798). Read once per delivery, beside the seals.
+                var newerLine = SealedPublicationIndex.NewerLineThan(publishedRoot, identity, logger);
                 var held = 0;
                 var gateEvaluated = 0;
                 string? heldReason = null;
@@ -371,7 +377,8 @@ public sealed class GitHubWebhookProcessor
                         continue;
                     }
                     gateEvaluated++;
-                    if (SealedSyncGate.Decide(repo, headSha, cfg?.LastSyncCommitSha, sealedForThisIdentity, identity)
+                    if (SealedSyncGate.Decide(
+                            repo, headSha, cfg?.LastSyncCommitSha, sealedForThisIdentity, identity, newerLine)
                         is { Proceed: false } hold)
                     {
                         held++;
