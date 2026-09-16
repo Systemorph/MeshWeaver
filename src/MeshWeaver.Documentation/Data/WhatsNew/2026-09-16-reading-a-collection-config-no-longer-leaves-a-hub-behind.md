@@ -1,7 +1,7 @@
 ---
 Name: Reading a collection config no longer leaves a hub behind
 Category: Fix
-Description: Every read of a content collection's configuration missed the stream cache and left a permanent sync/ hub on the node hub — one measured node hub on production had accumulated eighteen of them for a single collection name. The reference that identifies the read now has value equality, so the reads share one stream.
+Description: Every read of a content collection's configuration missed the stream cache and left a permanent sync/ hub on the node hub — one measured node hub on production had accumulated two dozen of them for a single collection name, still climbing while it was watched. The reference that identifies the read now has value equality, so the reads share one stream.
 Icon: Key
 Order: -20260916
 ---
