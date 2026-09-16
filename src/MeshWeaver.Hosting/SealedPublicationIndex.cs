@@ -31,6 +31,35 @@ public sealed record SealedSource(
 public sealed record PublicationLine(string Identity, string Version);
 
 /// <summary>
+/// Whether a reading of the sealed index is a STATEMENT ABOUT THE WORLD or a failure to look.
+///
+/// <para>🚨 Both used to be the empty list, and <c>SealedSyncGate</c> reads an empty list as
+/// "no seal is attributable to this repository, so this gate is not its business" — i.e. it lets
+/// the source ADVANCE. A total reader failure therefore passed every repository, which is the
+/// exact inversion of the rule the gate exists to enforce, with nothing red anywhere. The
+/// published root's own layout migration (#3461 phase 5, dropping the flat compatibility copy) is
+/// the documented trigger: this reader would find no sentinel, report every source unsealed, and
+/// silently switch the whole "advance only to the commit sealed for this instance" rule off at the
+/// moment it matters most.</para>
+/// </summary>
+public enum SealedReadOutcome
+{
+    /// <summary>No published root or no identity was configured — this instance seeds from
+    /// nothing, and the gate genuinely does not apply. An empty list here is an ANSWER.</summary>
+    NotConfigured,
+
+    /// <summary>The root was enumerated. The list is what is sealed for this identity, and an
+    /// empty one means exactly that — including a root that holds no directory for this identity
+    /// yet, which is an ordinary state for a freshly-built framework.</summary>
+    Read,
+
+    /// <summary>🚨 The root is configured and the enumeration FAILED. The empty list is the
+    /// absence of a measurement, never a clean one — "cannot tell" is never "clear to
+    /// proceed".</summary>
+    Unreadable,
+}
+
+/// <summary>
 /// Reads what the registry SEALED for one framework identity — the publication set the instance
 /// running that identity boots from (<see cref="ShippedPrebuiltBundles.SeedPublishedRoot"/>) —
 /// as data a decision can be made on, per source: producing repository, source commit, sealed or
@@ -191,26 +220,60 @@ public static class SealedPublicationIndex
     /// <returns>Each source's reading and the directory it came from.</returns>
     internal static IReadOnlyList<(SealedSource Source, string Directory)> ReadResolvedFor(
         string? publishedRoot, string? identity, ILogger? logger = null)
+        => ResolvedReadingFor(publishedRoot, identity, logger).Sources;
+
+    /// <summary>
+    /// <see cref="ReadResolvedFor"/> plus WHY the list is the length it is — so a caller can tell
+    /// "nothing is sealed for me" from "I could not look". See <see cref="SealedReadOutcome"/>
+    /// for why conflating those two silently disables the gate that consumes this (#3461).
+    /// </summary>
+    internal static (IReadOnlyList<(SealedSource Source, string Directory)> Sources,
+                     SealedReadOutcome Outcome) ResolvedReadingFor(
+        string? publishedRoot, string? identity, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(publishedRoot) || string.IsNullOrWhiteSpace(identity))
-            return [];
+            return ([], SealedReadOutcome.NotConfigured);
         var identityDirectory = Path.Combine(publishedRoot, identity);
         try
         {
             if (!Directory.Exists(identityDirectory))
-                return [];
-            return Directory.EnumerateDirectories(identityDirectory)
+                // 🚨 ABSENT and OCCUPIED-BY-SOMETHING-ELSE are different answers, and
+                // `Directory.Exists` returns false for both. Nothing at the path is the ordinary
+                // state of a framework identity that has not been published for yet — read it
+                // cleanly as empty, or every new platform line would hold every source. A FILE (or
+                // a broken link) at exactly that path is the opposite: something is there and it
+                // is not what this reader can enumerate, which is what a half-finished layout
+                // migration looks like from here (#3461 phase 5). Calling that "nothing sealed"
+                // is the very conflation this outcome exists to end.
+                return ([], File.Exists(identityDirectory)
+                    ? SealedReadOutcome.Unreadable
+                    : SealedReadOutcome.Read);
+            return (Directory.EnumerateDirectories(identityDirectory)
                 .OrderBy(d => d, StringComparer.Ordinal)
                 .Select(d => ReadSource(d, logger))
-                .ToList();
+                .ToList(), SealedReadOutcome.Read);
         }
         catch (Exception ex)
         {
+            // 🚨 The list is EMPTY and that is not a verdict. It used to be indistinguishable from
+            // "nothing sealed", and the gate read that as a licence to advance every repository.
             logger?.LogWarning(ex,
                 "SealedPublicationIndex: could not read the publications under {Directory} — "
-                + "treating the identity as having none sealed", identityDirectory);
-            return [];
+                + "this reading is UNREADABLE, not empty; a caller that gates on it must HOLD "
+                + "rather than proceed (#3461)", identityDirectory);
+            return ([], SealedReadOutcome.Unreadable);
         }
+    }
+
+    /// <summary>
+    /// What is sealed for this identity, and whether the reading is a statement or a failure.
+    /// The pair <see cref="ReadFor"/> should have returned from the start.
+    /// </summary>
+    public static (IReadOnlyList<SealedSource> Sources, SealedReadOutcome Outcome) ReadingFor(
+        string? publishedRoot, string? identity, ILogger? logger = null)
+    {
+        var (sources, outcome) = ResolvedReadingFor(publishedRoot, identity, logger);
+        return ([.. sources.Select(r => r.Source)], outcome);
     }
 
     private static (SealedSource Source, string Directory) ReadSource(
