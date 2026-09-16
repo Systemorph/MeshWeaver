@@ -753,14 +753,44 @@ def parse_members(path: str, text: str) -> FileSurface:
         # `import bisect` is not worth it for ~1500 files: locate the declaration's line linearly.
         line_no = next(i for i in range(len(lines) - 1, -1, -1) if line_starts[i] <= m.start())
         # The declaration STATEMENT runs to the body's `{` or to a `;` (positional record, delegate).
+        #
+        # 🚨 A body can OPEN AND CLOSE on the declaration line — `public interface IMarker { }`,
+        # four of them in `src/` — and testing only for a TRAILING `{` walked straight past one.
+        # The scan then kept reading forward and adopted the NEXT type's body, so every member of
+        # that type was attributed to the marker: `NodeValidationContext`'s members were reported
+        # as members of `IOwnerEnforcedNodeValidator`, where they are public-by-default and
+        # OBLIGE an implementer — so adding one to the record fired the interface-addition gate
+        # (#4449), while the record itself scanned as having no members at all, which is the same
+        # mistake pointing the other way. The brace BALANCE of the line is what tells the two
+        # apart: > 0 opens a body that stays open, == 0 with a brace present is a body that
+        # already closed.
         statement_lines: list[str] = []
         body_open: int | None = None
         for i in range(line_no, min(line_no + 60, len(lines))):
             statement_lines.append(lines[i])
             stripped = lines[i].strip()
-            if stripped.endswith("{") or stripped == "{":
+            if _brace_delta(stripped) > 0:
                 body_open = i
                 break
+            # 🚨 Only on the DECLARATION's own line. A balanced `{…}` on a CONTINUATION line is an
+            # interpolated string or an attribute, never a body — `NodeTypeParkedException`'s base
+            # call carries `$"NodeType '{path}' is PARKED …"` three lines below its declaration,
+            # and treating that as a body would refuse a perfectly ordinary type.
+            if i == line_no and "{" in stripped:
+                inner = stripped[stripped.index("{") + 1 : stripped.rindex("}")]
+                if inner.strip():
+                    # 🚨 A body written entirely on one line, WITH members. Nothing here reads it,
+                    # and reporting the type as memberless would spell "not checked" exactly like
+                    # "clean" — the one thing this file refuses to do. Measured 2026-09-16: zero
+                    # such types in core `src/`, so this refuses a shape nobody writes rather than
+                    # guessing at one.
+                    raise SystemExit(
+                        f"{path}:{i + 1}: a public type declares its whole body on one line with "
+                        f"members in it — `{stripped}`. The member scanner reads bodies line by "
+                        "line, so it can neither see those members nor honestly report none. Put "
+                        "the body on its own lines."
+                    )
+                break  # an EMPTY inline body: correctly scanned, and there is nothing to scan
             if stripped.endswith(";"):
                 break
         statement = " ".join(s.strip() for s in statement_lines)
@@ -2372,6 +2402,51 @@ def _index(files: dict[str, str]) -> Surface:
         _merge_members(protected_obligations, file_surface.protected_obligations)
     return Surface(decls, set(), assemblies, members, obligations, interfaces,
                    bases, protected_obligations)
+
+
+# ─────── #4449: a marker interface whose body is `{ }` must not adopt the next type's ───────
+#
+# 🚨 The shape that produced this: `parse_members` located a type's body by testing for a TRAILING
+# `{`, so `public interface IMarker { }` matched nothing and the scan kept reading forward until it
+# found the NEXT type's brace. Every member of that type was then indexed under the MARKER — where
+# members are public-by-default and oblige an implementer — so adding one property to
+# `NodeValidationContext` reported `IOwnerEnforcedNodeValidator.PartitionOwnership` as an
+# implementer-obliging addition and failed the gate on a member that is not on an interface at all.
+# Measured 2026-09-16: four such empty inline bodies in core `src/`, and zero with members in them.
+#
+# The case below fails against the pre-fix parser with an EXTRA `A:N.IMarker::Added`
+# (`implementer-obliging-added`) entry — a false positive that no author could have fixed on the
+# code side, which is the direction that makes a gate untrustworthy rather than merely noisy.
+MARKER_INLINE_BODY = (
+    "namespace N;\n"
+    "public interface IMarker { }\n"
+    "\n"
+    "public record Ctx\n"
+    "{\n"
+    "    public int Existing { get; init; }\n"
+    "}\n"
+)
+MARKER_INLINE_BODY_NEXT_TYPE_GROWS = (
+    "namespace N;\n"
+    "public interface IMarker { }\n"
+    "\n"
+    "public record Ctx\n"
+    "{\n"
+    "    public int Existing { get; init; }\n"
+    "    public int Added { get; init; }\n"
+    "}\n"
+)
+
+SURFACE_TESTS += [
+    (
+        "🚨 #4449: an EMPTY inline body (`interface IMarker { }`) does not adopt the next type's "
+        "members — the addition belongs to the record, and obliges nobody",
+        {"src/A/Ctx.cs": MARKER_INLINE_BODY, "src/A/Keep.cs": KEEP_A},
+        {"src/A/Ctx.cs": MARKER_INLINE_BODY_NEXT_TYPE_GROWS, "src/A/Keep.cs": KEEP_A},
+        {},
+        {"A:N.Ctx::Added": "member-added"},
+    ),
+]
 
 
 # ─────────────── #3489: the two shapes measured blind against the #3465 detector ───────────────

@@ -207,7 +207,7 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
                 // partition before the root write — so rule 2's existence probe below does not apply:
                 // the partition is being created by this very write (the same reason a Space is
                 // exempt from it).
-                return PartitionOwningTypes.OwnsPartition(_hub, context.Node.NodeType)
+                return PartitionOwningTypes.OwnsPartitionOnce(_hub, context)
                     .Select(owns => owns switch
                     {
                         true => NodeValidationResult.Valid(),

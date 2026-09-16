@@ -97,6 +97,37 @@ public static class PartitionOwningTypes
             .Catch<bool?, Exception>(_ => Observable.Return<bool?>(null));
     }
 
+    /// <summary>
+    /// <see cref="OwnsPartition"/> resolved ONCE for the whole operation
+    /// (<see cref="NodeValidationContext.PartitionOwnership"/>) — the form every VALIDATOR uses.
+    ///
+    /// <para>The three create-path validators (<see cref="RlsNodeValidator"/>,
+    /// <see cref="PartitionWriteGuardValidator"/>, <see cref="OwnsPartitionProvisioningValidator"/>)
+    /// run back to back on ONE context, so asking three times cost three resolutions — six reads for
+    /// an in-mesh type — of a fact that cannot meaningfully change between them. They now share one.
+    /// The answer is the same tri-state, <c>null</c> included, so every caller still fails closed via
+    /// <see cref="Undetermined"/>.</para>
+    ///
+    /// <para>🚨 <b><see cref="InMeshPartitionOwnerPostCreationHandler"/> deliberately does NOT use
+    /// this.</b> It runs after the row is written, and its job is to re-establish ownership
+    /// POSITIVELY before granting the creator Admin — across the one window in a create that is
+    /// actually wide. Sharing the pre-write view with it would remove the only disagreement check
+    /// worth keeping. See <c>Doc/Architecture/PartitionOwnershipResolution</c>.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose services resolve the declaration.</param>
+    /// <param name="context">The operation's validation context, which carries the memo.</param>
+    /// <returns>The tri-state: owns / does not own / could not be established.</returns>
+    public static IObservable<bool?> OwnsPartitionOnce(IMessageHub hub, NodeValidationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var nodeType = context.Node.NodeType;
+        // An empty type answers synchronously with no read — nothing to share, and nothing a later
+        // check could observe differently.
+        return string.IsNullOrEmpty(nodeType)
+            ? OwnsPartition(hub, nodeType)
+            : context.PartitionOwnership.Once(nodeType, () => OwnsPartition(hub, nodeType));
+    }
+
     /// <summary>A literal NodeType path: ASCII letters, digits, <c>. _ -</c> and single inner
     /// slashes — nothing a query parser could read as a wildcard, alternation or separator. Pure.</summary>
     public static bool IsLiteralTypePath(string path) =>
