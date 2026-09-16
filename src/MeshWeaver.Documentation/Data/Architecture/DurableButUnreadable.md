@@ -11,7 +11,7 @@ matters**: the caller gets an acknowledgement, a version row is created with the
 see the node again.
 
 It is the most expensive class of defect the platform has, because every gate on the write path is
-green. This page is how to recognise it, how to tell it from its lookalike, and what the two
+green. This page is how to recognise it, how to tell it from its lookalike, and what the three
 confirmed live instances have in common.
 
 ## The three-seam test
@@ -212,9 +212,18 @@ in.**
 > `ObjectPolymorphicConverter` catches the four deserialization exceptions and returns
 > `cleanedElement.Clone()` (`src/MeshWeaver.Messaging.Hub/Serialization/ObjectPolymorphicConverter.cs`),
 > and both `MeshNodeStreamCache` seams (`GetStream`, `GetQuery`) return the node. A degrade can make
-> content unusable; it cannot make a row absent. The only exception-to-absence conversion on the
-> exact-path read is `PipelineFaultOrStopped` in `StorageAdapterMeshQueryProvider`, which empties the
-> WHOLE per-query result rather than one row, and logs a Warning when it does.
+> content unusable; it cannot make a row absent.
+>
+> The exact-path read has **two** exception-to-absence conversions, and neither can drop a single row
+> while leaving the rest — both empty the WHOLE per-query result, and both log a Warning when they
+> do. In `StorageAdapterMeshQueryProvider.FindMatchingNodes`: the `try`/`catch` around
+> `persistence.ReadMany(...)`, which returns `Observable.Empty<MeshNode>()` when `ReadMany` throws
+> *synchronously* (logged `[StorageAdapterMeshQueryProvider.ExactRead] ReadMany threw synchronously`);
+> and `PipelineFaultOrStopped` on the composed sequence, for a fault that arrives *asynchronously*.
+> So "one row missing, the others fine" — the signature of all three instances — is not reachable
+> from an exception on this path at all. (A per-path scope WALK is the one place a single node is
+> dropped: `SwallowedReadOrStop` logs and returns null for that path alone. It is not the exact-path
+> read, and it too logs.)
 
 ## Open
 
