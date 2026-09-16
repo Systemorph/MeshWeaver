@@ -11,5 +11,7 @@ internal static class EmitPipelineAccess
     public static CSharpParseOptions ParseOptions() => EmitPipeline.CreateParseOptions();
     public static CSharpCompilationOptions CompilationOptions() => EmitPipeline.CreateCompilationOptions();
     public static IReadOnlyList<string> Warnings(IEnumerable<Diagnostic> d) => EmitPipeline.Warnings(d);
+    public static IReadOnlyList<CompileWarning> Collect(IEnumerable<Diagnostic> d) =>
+        EmitPipeline.Collect(d);
     public static int MaxReported => EmitPipeline.MaxReportedWarnings;
 }

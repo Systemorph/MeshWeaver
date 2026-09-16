@@ -1,0 +1,33 @@
+# The in-mesh WARNING debt the embedded Doc tree carries, for `mw-plugin-test compile
+# --warning-baseline`. Format: `<NodeType path> <diagnostic id>`, `#` comments, blanks ignored.
+#
+# 🚨 SHRINK-ONLY: an unlisted (type, code) pair FAILS the bake, and a listed pair whose type
+# compiled clean of that code is STALE and FAILS it until the line is deleted. A listed type that
+# did not compile this run is UNVERIFIABLE, never stale.
+#
+# The rules, the two ratchets and the three diagnostic codes that were fixed at the ROOT rather
+# than baselined are documented once, in Doc/Architecture/InMeshWarningStandard — and repeated in
+# .github/samples-gate-warnings.allow, which is the bigger of this repo's two baselines.
+#
+# Measured on this tree before/after those root-cause fixes: 143 raw occurrences over 4 of 4
+# compiled types → 66 over 4.
+
+# ── CS1591 · missing XML doc comment (the doc-comments ratchet) ────────────────────────────────
+# 62 occurrences over 60 distinct members in 3 NodeTypes. These are the executable examples the
+# documentation ships; their public members are illustrative rather than API, which is why the doc
+# debt is carried rather than paid down in this change.
+#
+# 🚨 Doc/DataMesh/PythonPandasNode/PandasExplorer is DELIBERATELY ABSENT: it compiles clean of
+# CS1591 and listing it would be a stale entry on the first run. Adding a line "to be safe" is the
+# one edit this file punishes — the ratchet reads an unearned entry as debt that was already paid.
+Doc/Architecture/BusinessRules/Cession  CS1591
+Doc/DataMesh/SocialMedia/Post           CS1591
+Doc/DataMesh/SocialMedia/Profile        CS1591
+
+# ── CS1701 · assembly-reference version skew (the warnings ratchet) ────────────────────────────
+# System.Reactive compiled against .NET 8's System.Linq.Expressions, running on .NET 10. A property
+# of the reference set, not of the content — see the long note in samples-gate-warnings.allow.
+Doc/Architecture/BusinessRules/Cession    CS1701
+Doc/DataMesh/PythonPandasNode/PandasExplorer  CS1701
+Doc/DataMesh/SocialMedia/Post             CS1701
+Doc/DataMesh/SocialMedia/Profile          CS1701

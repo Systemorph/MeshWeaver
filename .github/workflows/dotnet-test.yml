@@ -1875,8 +1875,12 @@ jobs:
         # be satisfied by bundles the run under judgement never installed.
         log="${RUNNER_TEMP:-/tmp}/doc-gate.log"
         status=0
+        # .github/doc-gate-warnings.allow is the in-mesh WARNING debt this tree carries — the
+        # two shrink-only ratchets (one over the real warnings, a separate one over CS1591).
+        # Doc/Architecture/InMeshWarningStandard.
         bash .github/scripts/bake-then-gate.sh "$TESTER" "$STAGE" "$BAKE/doc" \
-          .github/doc-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/doc-gate" || status=$?
+          .github/doc-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/doc-gate" \
+          .github/doc-gate-warnings.allow || status=$?
         verdict="$(grep -m1 -- '^GATE FAILED' "$log" || true)"
         # ── Second stage: the samples trees — the "12k lines of C# no build ever type-checks"
         # from AGENTS.md. Same tester, same mechanics; .github/samples-gate.allow is its own
@@ -1886,7 +1890,8 @@ jobs:
         slog="${RUNNER_TEMP:-/tmp}/samples-gate.log"
         sstatus=0
         bash .github/scripts/bake-then-gate.sh "$TESTER" "$SSTAGE" "$BAKE/samples" \
-          .github/samples-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/samples-gate" || sstatus=$?
+          .github/samples-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/samples-gate" \
+          .github/samples-gate-warnings.allow || sstatus=$?
         sverdict="$(grep -m1 -- '^GATE FAILED' "$slog" || true)"
         combined="$(printf '%s\n%s' "$verdict" "$sverdict" | grep . | head -1 || true)"
         {
@@ -1932,6 +1937,16 @@ jobs:
           echo
           echo '```'
           grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/doc-gate-bake.log" "${RUNNER_TEMP:-/tmp}/samples-gate-bake.log" || true
+          echo '```'
+          echo
+          # The in-mesh WARNING inventory, folded — totals, the per-code table and both ratchets'
+          # verdicts. Four lines per tree, standing in for what would otherwise be hundreds of raw
+          # occurrences. Doc/Architecture/InMeshWarningStandard.
+          echo "### ⚠️ In-mesh warnings"
+          echo
+          echo '```'
+          grep -hE '^warnings: (.*raw occurrence|by code|.* ratchet —)' \
+            "${RUNNER_TEMP:-/tmp}/doc-gate-bake.log" "${RUNNER_TEMP:-/tmp}/samples-gate-bake.log" || true
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
     # 🚨 NO artifact upload — deliberately, since #1725. These bundles are keyed to THIS job's
