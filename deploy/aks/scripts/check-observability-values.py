@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Assert the observability values produce a configuration the components actually read.
 
-Driven by check-observability-values.sh (see that file for why this exists). Two checks, because
-the two components fail in opposite directions and neither check alone is sufficient:
+Driven by check-observability-values.sh (see that file for why this exists). Configuration checks
+cover the components' different failure modes:
 
   RENDER   every `<component>.config.<KEY>` a values file sets must arrive, unaltered, in that
            component's rendered configuration. This is the check that matters for PROMTAIL, whose
@@ -15,12 +15,17 @@ the two components fail in opposite directions and neither check alone is suffic
            2026-09-09: the render check passes that typo, the binary rejects it with
            `field ingestor not found in type loki.ConfigWrapper`.
 
+  STORAGE  Prometheus's actual CLI retention flags must match the declared budget, and its TSDB
+           mount must resolve to a rendered PVC with at least 20% space outside that budget.
+
 Reports EVERY finding, never just the first, so one run tells you the whole story.
 
 Exit 0 = every leaf examined arrives unaltered AND the rendered Loki config is valid.
 Exit 1 = an orphaned/altered key, an invalid config, or too little examined to report a pass.
 """
 import base64
+from decimal import Decimal
+import re
 import subprocess
 import sys
 
@@ -44,6 +49,89 @@ COMPONENT_DOCS = {
 # compactor's retention switch and the retention period — so a run that examines fewer than five
 # leaves has lost sight of its subject and must say so rather than render a tick.
 MIN_LEAVES = 5
+
+
+def merged_values(current, overlay):
+    """Apply Helm's mapping overlays for the declared settings we compare."""
+    result = dict(current)
+    for key, value in overlay.items():
+        result[key] = (merged_values(result[key], value)
+                       if isinstance(value, dict) and isinstance(result.get(key), dict)
+                       else value)
+    return result
+
+
+def storage_bytes(value, *, prometheus=False):
+    """Prometheus Base2Bytes (GB) and Kubernetes storage quantities (Gi/G)."""
+    units = ({'B': 1, **{f'{unit}B': 1024 ** power
+                         for power, unit in enumerate('KMGTPE', 1)}} if prometheus else
+             {'': 1, **{f'{unit}i': 1024 ** power for power, unit in enumerate('KMGTPE', 1)},
+              **{unit: 1000 ** power for power, unit in enumerate('KMGTPE', 1)}})
+    match = re.fullmatch(r'(\d+(?:\.\d+)?)([A-Za-z]*)', str(value))
+    if not match or match[2] not in units:
+        raise ValueError(f'unsupported storage quantity {value!r}')
+    return Decimal(match[1]) * units[match[2]]
+
+
+def verify_prometheus_storage(documents, values):
+    """Follow the actual TSDB mount to its PVC and bound retained bytes below capacity.
+
+    Prometheus retention is a CLI flag, not a `.config` leaf. loki-stack accepts
+    `server.retentionSize` without rendering it, so inspect the real arguments.
+    """
+    findings = []
+    deployments = [d for d in documents if d.get('kind') == 'Deployment'
+                   and d.get('metadata', {}).get('name') == 'loki-prometheus-server']
+    if len(deployments) != 1:
+        return ['expected one Deployment/loki-prometheus-server; the metric storage was not checked']
+    pod = deployments[0].get('spec', {}).get('template', {}).get('spec', {})
+    containers = [c for c in pod.get('containers', []) if c.get('name') == 'prometheus-server']
+    if len(containers) != 1:
+        return ['the Prometheus workload has no unique prometheus-server container']
+    container = containers[0]
+    args = container.get('args', [])
+
+    def flag(name):
+        found = [arg.split('=', 1)[1] for arg in args if arg.startswith(f'--{name}=')]
+        if len(found) != 1:
+            findings.append(f'Prometheus must render exactly one --{name}= value')
+            return None
+        return found[0]
+
+    size = flag('storage.tsdb.retention.size')
+    duration = flag('storage.tsdb.retention.time')
+    path = flag('storage.tsdb.path')
+    declared = values.get('prometheus', {}).get('server', {})
+    expected_size = declared.get('extraArgs', {}).get('storage.tsdb.retention.size')
+    if expected_size is None:
+        findings.append('declare prometheus.server.extraArgs.storage.tsdb.retention.size explicitly')
+    elif size != str(expected_size):
+        findings.append('rendered Prometheus retention.size does not match the declared extraArgs value')
+    if duration != str(declared.get('retention', '')):
+        findings.append('rendered Prometheus retention.time does not match the declared retention')
+
+    mounts = [m for m in container.get('volumeMounts', []) if m.get('mountPath') == path]
+    volumes = [v for v in pod.get('volumes', [])
+               if len(mounts) == 1 and v.get('name') == mounts[0].get('name')]
+    claim = (volumes[0].get('persistentVolumeClaim', {}).get('claimName')
+             if len(volumes) == 1 else None)
+    pvcs = [d for d in documents if d.get('kind') == 'PersistentVolumeClaim'
+            and claim and d.get('metadata', {}).get('name') == claim]
+    if len(pvcs) != 1:
+        return findings + ['the Prometheus TSDB path must resolve to one rendered PVC with known capacity']
+    capacity = pvcs[0].get('spec', {}).get('resources', {}).get('requests', {}).get('storage')
+    if str(capacity) != str(declared.get('persistentVolume', {}).get('size', '')):
+        findings.append('rendered Prometheus PVC capacity does not match the declared persistentVolume.size')
+    try:
+        retained = storage_bytes(size, prometheus=True)
+        available = storage_bytes(capacity)
+        if retained <= 0 or available <= 0:
+            findings.append('Prometheus retention.size and PVC capacity must both be positive')
+        elif retained * 5 > available * 4:
+            findings.append('Prometheus retention.size must be at most 80% of PVC capacity; reserve compaction space')
+    except ValueError as error:
+        findings.append(str(error))
+    return findings
 
 
 def leaves(node, prefix=()):
@@ -158,10 +246,12 @@ def main():
 
     findings: list[str] = []
     examined = 0
+    effective_values = {}
 
     for path in values_paths:
         with open(path) as handle:
             values = yaml.safe_load(handle) or {}
+        effective_values = merged_values(effective_values, values)
         for component, section in values.items():
             if not isinstance(section, dict) or "config" not in section:
                 continue
@@ -192,6 +282,8 @@ def main():
                         f"{path}: `{component}.config.{dotted}` is set to {expected!r} but renders "
                         f"as {actual!r} — the chart overrode it.")
 
+    findings += verify_prometheus_storage(documents, effective_values)
+
     # The binary half. Unconditional: it does not ask whether anyone set `loki.config`, because the
     # defaults the chart supplies are just as capable of being invalid as anything we add.
     if "loki" not in rendered_text:
@@ -217,7 +309,8 @@ def main():
     print(f"Verified: {examined} config leaf/leaves reach the rendered configuration of "
           f"{', '.join(sorted(rendered))}, and the rendered Loki configuration is accepted by the "
           f"Loki binary itself (the check that carries {', '.join(verbatim)}, whose chart merges "
-          f"`config` through verbatim).")
+          f"`config` through verbatim). Prometheus retention matches its declared CLI settings "
+          f"and uses at most 80% of its rendered PVC capacity.")
     return 0
 
 
