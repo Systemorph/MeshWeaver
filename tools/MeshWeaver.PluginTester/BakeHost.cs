@@ -280,7 +280,7 @@ internal sealed class BakeHost
             // The host's own files, in the reference set's precedence (shared frameworks, then the
             // TPA — empty here — then /app, later wins in AssembliesByName): what a portal booted
             // from that /app binds a module to. Never this process's loaded assemblies.
-            Surface = () => ModulePlatformSurface.OfFiles(set.AssemblyPaths),
+            Surface = () => PublishedHostSurface.Read(app, set.AssemblyPaths),
             // Informational, not a refusal: with the toolchain verified equal, a process whose OTHER
             // canonical surfaces differ from the host's still emits bytes bound to the host's
             // assemblies (they are the references) and records the host's ids. The bake is valid
