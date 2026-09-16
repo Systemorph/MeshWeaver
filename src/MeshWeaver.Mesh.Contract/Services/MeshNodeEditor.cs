@@ -47,11 +47,16 @@ public interface IMeshNodeEditor : IDisposable
 }
 
 /// <summary>
-/// Default <see cref="IMeshNodeEditor"/>. Subscribes via
-/// <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace,string)"/>
-/// (auto-routes own/remote) and writes via
-/// <see cref="MeshNodeStreamExtensions.UpdateMeshNode"/>. No <c>await</c>, no
-/// <c>Task.FromResult</c>; pure observable composition.
+/// Default <see cref="IMeshNodeEditor"/>. Reads AND writes through the one handle —
+/// <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace,string)"/> (auto-routes
+/// own/remote), subscribing for the live value and calling <see cref="MeshNodeStreamHandle.Update"/>
+/// for the change. No <c>await</c>, no <c>Task.FromResult</c>; pure observable composition.
+///
+/// <para>The write used to be a bespoke <c>DataChangeRequest</c> posted at the node's hub, and this
+/// remark used to name the <c>[Obsolete]</c> <c>UpdateMeshNode</c> — whose own obsolete message
+/// points at the handle this class now uses. One path for both directions is the point: a second
+/// path to the same node is how the two drift, and it is why the router ever appeared on an end of
+/// an edit (<see href="https://github.com/Systemorph/MeshWeaver/issues/1140">#1140</see>).</para>
 /// </summary>
 public sealed class MeshNodeEditor : IMeshNodeEditor
 {
