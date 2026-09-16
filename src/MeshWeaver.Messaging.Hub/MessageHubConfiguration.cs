@@ -795,9 +795,35 @@ public record MessageHubConfiguration
     /// (<a href="https://github.com/Systemorph/MeshWeaver/issues/3712">#3712</a>). A path no test
     /// can reach is a path whose wording nobody checks.</para>
     /// </summary>
-    /// <param name="timeout">The per-message deferral budget for this hub.</param>
+    /// <param name="timeout">
+    /// The per-message deferral budget for this hub. Must be strictly positive and within the range
+    /// <see cref="Task.Delay(TimeSpan, CancellationToken)"/> accepts.
+    /// </param>
     /// <returns>Updated configuration.</returns>
-    public MessageHubConfiguration WithDeferralTimeout(TimeSpan timeout) => this with { DeferralTimeout = timeout };
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// 🚨 The refusal is HERE, at the line the caller wrote, and not at the timer thirty seconds
+    /// later. <c>ScheduleDeferralTimeout</c> arms its <c>Task.Delay</c> AFTER it has published the
+    /// tracker, so an out-of-range value throws with the delivery already registered as deferred and
+    /// no timer that can ever retire it — the caller then waits out its whole request budget on a
+    /// tracker nobody owns. And <see cref="Timeout.InfiniteTimeSpan"/> does not throw at all: it
+    /// arms a delay that never completes, which turns the one mechanism that exists to stop a silent
+    /// hang into a silent hang. Neither failure names this method, so both are refused by it.
+    /// </exception>
+    public MessageHubConfiguration WithDeferralTimeout(TimeSpan timeout)
+    {
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout), timeout,
+                "The deferral budget must be strictly positive. Zero fails every deferred delivery "
+                + "the instant it is parked, and a negative value (Timeout.InfiniteTimeSpan included) "
+                + "arms a timer that never fires — so nothing would ever answer a delivery held "
+                + "behind a gate that does not open, which is the hang this budget exists to end.");
+        if (timeout.TotalMilliseconds > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(timeout), timeout,
+                $"The deferral budget must be at most {int.MaxValue} ms — beyond that Task.Delay "
+                + "throws, and it would throw inside ScheduleDeferralTimeout with the delivery "
+                + "already published as deferred and no timer able to retire it.");
+        return this with { DeferralTimeout = timeout };
+    }
 
     /// <summary>
     /// The per-message deferral budget, or <c>null</c> for the framework default. See

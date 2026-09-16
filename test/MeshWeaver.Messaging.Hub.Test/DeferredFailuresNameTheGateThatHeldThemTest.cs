@@ -6,6 +6,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Microsoft.Extensions.DependencyInjection;
@@ -76,11 +77,20 @@ public class DeferredFailuresNameTheGateThatHeldThemTest : HubTestBase
     /// <para>🚨 Losing that race does not make a test pass vacuously: if the budget expired before
     /// the gate opened, the report would say the gates are STILL closed and both assertions below
     /// would go red. The bound can only produce an honest failure, never a false green.</para>
+    ///
+    /// <para>🚨 But an honest failure is still a flake, so the ordering has headroom BY
+    /// CONSTRUCTION rather than by hope: <see cref="Immediate"/> is a THIRD of this, so the setup
+    /// either finishes inside a third of the budget or the test fails at a named wait — and in
+    /// every case that reaches the assertions, two thirds of the budget is still unspent when the
+    /// gate opens. Equal bounds would have permitted a setup to consume the whole budget.</para>
     /// </summary>
-    private static TimeSpan FrameworkBudget => TestTimeouts.Quick / 3;
+    private static TimeSpan FrameworkBudget => TestTimeouts.Quick / 2;
 
-    /// <summary>Upper bound on a wait that should complete in milliseconds — a wedge, not a pace.</summary>
-    private static TimeSpan Immediate => TestTimeouts.Quick / 3;
+    /// <summary>
+    /// Upper bound on a setup wait that should complete in milliseconds — a wedge, not a pace. A
+    /// third of <see cref="FrameworkBudget"/>: see the headroom note there.
+    /// </summary>
+    private static TimeSpan Immediate => FrameworkBudget / 3;
 
     private const string LateGate = "gate-the-test-opens";
 
@@ -89,8 +99,18 @@ public class DeferredFailuresNameTheGateThatHeldThemTest : HubTestBase
     /// <summary>Fires once the blocker's turn has begun — proof the gate opened AND the loop is now held.</summary>
     private readonly AsyncSubject<Unit> loopParked = new();
 
-    /// <summary>Ends the blocker's turn. Completed in a <c>finally</c> so a failing assertion cannot strand the hub.</summary>
-    private readonly AsyncSubject<Unit> release = new();
+    /// <summary>
+    /// Ends the blocker's turn. Written in a <c>finally</c> so a failing assertion cannot strand the
+    /// hub, and read under a bounded <see cref="SpinWait.SpinUntil(Func{bool}, TimeSpan)"/> by the
+    /// parked handler.
+    ///
+    /// <para>🚨 A release INTO a worker the test deliberately parks is a volatile <c>int</c>, never
+    /// an awaited subject. <c>await release</c> resumes the parked handler INLINE on whichever
+    /// thread completed the subject — the test thread — so the remainder of the hub's turn would
+    /// run off the hub's own scheduler and the test would stop proving the actor ordering it is
+    /// about. The park is the subject here, so the park must be real.</para>
+    /// </summary>
+    private int released;
 
     /// <summary>
     /// THE SUBJECT. A delivery whose gates have all opened, whose turn has not run yet, and whose
@@ -123,11 +143,13 @@ public class DeferredFailuresNameTheGateThatHeldThemTest : HubTestBase
                     h.Post(new GatedResponse(), o => o.ResponseFor(d));
                     return d.Processed();
                 })
-                .WithHandler<Blocker>(async (_, d, _) =>
+                .WithHandler<Blocker>((_, d) =>
                 {
                     loopParked.OnNext(Unit.Default);
                     loopParked.OnCompleted();
-                    await release;
+                    // The park, on the hub's own turn thread — bounded, so a test that never
+                    // reaches its finally cannot hold the loop for the whole run.
+                    SpinWait.SpinUntil(() => Volatile.Read(ref released) == 1, TestTimeouts.Quick);
                     return d.Processed();
                 }));
         gated.Should().NotBeNull();
@@ -175,8 +197,7 @@ public class DeferredFailuresNameTheGateThatHeldThemTest : HubTestBase
         }
         finally
         {
-            release.OnNext(Unit.Default);
-            release.OnCompleted();
+            Volatile.Write(ref released, 1);
         }
 
         // READER 2 — the stranded sender, which is in another process as often as not and can see
@@ -259,6 +280,35 @@ public class DeferredFailuresNameTheGateThatHeldThemTest : HubTestBase
             + "pass on the unfixed code, having measured nothing");
     }
 
+    /// <summary>
+    /// The guard on the budget this change made configurable — and the reason it refuses AT THE
+    /// CONFIGURATION SURFACE rather than at the timer.
+    ///
+    /// <para><c>ScheduleDeferralTimeout</c> publishes the tracker and only THEN arms its
+    /// <c>Task.Delay</c>, so an out-of-range value throws with the delivery already registered as
+    /// deferred and no timer that can ever retire it — the sender waits out its entire request
+    /// budget on a tracker nobody owns. <see cref="Timeout.InfiniteTimeSpan"/> is worse because it
+    /// throws nothing at all: it arms a delay that never completes, turning the one mechanism that
+    /// exists to END a silent hang into a silent hang. Neither failure names the line the caller
+    /// wrote, so both are refused by it.</para>
+    /// </summary>
+    [Fact]
+    public void ADeferralBudgetThatWouldWedgeTheTimer_IsRefusedWhereItIsWritten()
+    {
+        var configuration = new MessageHubConfiguration(null, new Address("budget-guard", "1"));
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => configuration.WithDeferralTimeout(TimeSpan.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => configuration.WithDeferralTimeout(Timeout.InfiniteTimeSpan));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => configuration.WithDeferralTimeout(TimeSpan.FromMilliseconds((double)int.MaxValue + 1)));
+
+        // POSITIVE CONTROL — the guard refuses the values that would wedge the timer, not every
+        // value. Without this a guard of `throw` on every input would pass the three assertions.
+        configuration.WithDeferralTimeout(FrameworkBudget).Should().NotBeNull();
+    }
+
     /// <summary>The bracketed set the hub-level startup sentence reports as still shut.</summary>
     private static string StillClosedClause(string message)
     {
@@ -292,7 +342,7 @@ public class DeferredFailuresNameTheGateThatHeldThemTest : HubTestBase
     /// parked, so the posted <c>DeliveryFailure</c> cannot be routed until the test releases it.
     /// <c>TryReportFailure</c> logs the full text one line before it posts.
     /// </summary>
-    private async Task<string> WaitForDeferralTimeoutReport(System.Threading.CancellationToken ct)
+    private async Task<string> WaitForDeferralTimeoutReport(CancellationToken ct)
     {
         // 🚨 The needle is the part BOTH the old and the new wording share ("Hub <addr> deferred"),
         // never a phrase only the fix produces. A wait that matches the cure cannot distinguish
