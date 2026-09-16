@@ -22,7 +22,7 @@
 # the framework registers a lifecycle handler for). The seam is a property of the HUB, so a
 # message-keyed denominator can only ever see the lifecycle slice of any one receiver. #4463 proved
 # in production that MeshOperations' `hub` field IS the router; #4477 hopped the one DisposeRequest
-# on it; SEVEN sibling exchanges on the identical field kept posting as mesh/{id}, and those are
+# on it; FIVE live sibling exchanges on the identical field kept posting as mesh/{id}, and those are
 # what #1140's receiver-side lines have been reporting for a month. Same story one class over:
 # MeshNodeEditor.Move hopped, MeshNodeEditor.Update (ten lines up, same field) did not.
 #

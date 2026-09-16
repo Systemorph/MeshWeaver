@@ -31,14 +31,16 @@ namespace MeshWeaver.Documentation.Test;
 /// MeshWeaver.AI.MeshOperations+&lt;&gt;c__DisplayClass95_0.&lt;RecycleCore&gt;b__3</c>, 2026-09-16
 /// 01:10:13Z — which is a PROOF, not an inference, that that class's <c>hub</c> field is the router.
 /// #4477 hopped that one line, because <c>DisposeRequest</c> was the one message on that field the
-/// message-keyed ratchet could see. SEVEN sibling exchanges on the identical field — the node
-/// update, the patch, three content-collection reads, the UCR read and the script dispatch — kept
-/// leaving stamped <c>Sender = mesh/{id}</c> with their replies addressed straight back at
-/// <c>mesh/{id}</c>. That pair IS #1140's receiver-side line
-/// (<c>RawJson has the mesh hub as sender … target: &lt;node path&gt;</c>). The same happened one
-/// class over: <c>MeshNodeEditor.Move</c> hopped (a lifecycle verb) while the
-/// <c>DataChangeRequest</c> in <c>MeshNodeEditor.Update</c>, ten lines above it on the same field,
-/// did not.</para>
+/// message-keyed ratchet could see. FIVE live sibling exchanges on the identical field — three
+/// content-collection reads, the UCR read and the script dispatch — kept leaving stamped
+/// <c>Sender = mesh/{id}</c> with their replies addressed straight back at <c>mesh/{id}</c>, and
+/// that pair IS #1140's receiver-side line
+/// (<c>RawJson has the mesh hub as sender … target: &lt;node path&gt;</c>). Two more of the same
+/// shape sat in private methods the repo called from nowhere; they were DELETED rather than hopped,
+/// because a router-issuing shape in dead code is a loaded gun for whoever wires it up next rather
+/// than a site to correct. The same happened one class over: <c>MeshNodeEditor.Move</c> hopped (a
+/// lifecycle verb) while the <c>DataChangeRequest</c> in <c>MeshNodeEditor.Update</c>, ten lines
+/// above it on the same field, did not.</para>
 ///
 /// <para><b>THE DENOMINATOR IS DERIVED, from production, and it is not a list of anything.</b> A
 /// receiver is router-capable when the code ITSELF says so: <c>X.NodeOperationIssuingHub()</c> or
@@ -132,8 +134,9 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
         var declaring = sites.Select(s => s.File).Distinct(StringComparer.Ordinal).Count();
         var counted = sites.Where(InDenominator).ToList();
         output.WriteLine(
-            $"{sites.Count} targeted .Post/.Observe sites in the {declaring} files that declare a "
-            + $"router-capable receiver · {counted.Count} in the denominator, of which "
+            $"{sites.Count} targeted .Post/.Observe sites in the {declaring} files that BOTH declare "
+            + $"a router-capable receiver AND post with a target · {counted.Count} in the "
+            + "denominator, of which "
             + $"{counted.Count(s => s.OffRouter)} are issued through a seam · "
             + $"{sites.Count(s => s.InScope && s.SelfDirected)} self-directed and "
             + $"{sites.Count(s => !s.InScope)} on an unrelated receiver, both excluded.");
@@ -182,7 +185,7 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
             "A hub reference this file has ALREADY declared router-capable is still the origin of a "
             + "targeted delivery. That is #1140's remaining half: the message-keyed ratchet can only "
             + "see the LIFECYCLE slice of any one receiver, so #4477 hopped MeshOperations' "
-            + "DisposeRequest and left seven sibling exchanges on the same field posting as "
+            + "DisposeRequest and left five live sibling exchanges on the same field posting as "
             + "mesh/{id} — which is what #1140's receiver-side lines have been reporting all along.\n"
             + string.Join("\n", failures)
             + "\nOffending sites:\n"
@@ -395,15 +398,20 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
     /// masked first — <c>MessageHub</c>'s own ROUTER_TRAFFIC message names both seams inside a
     /// literal, and counting that would declare a receiver called <c>MeshExtensions</c>.
     /// </summary>
-    private static ImmutableHashSet<string> DeclaredIn(string text)
-    {
-        if (!RouterOriginScan.SeamCall.IsMatch(text))
-            return ImmutableHashSet<string>.Empty;
-        return RouterOriginScan.SeamCallOnReceiver
-            .Matches(SourceScan.MaskCommentsAndStrings(text))
+    private static ImmutableHashSet<string> DeclaredIn(string text) =>
+        RouterOriginScan.SeamCall.IsMatch(text)
+            ? DeclaredInMasked(SourceScan.MaskCommentsAndStrings(text))
+            : ImmutableHashSet<string>.Empty;
+
+    /// <summary>
+    /// <see cref="DeclaredIn"/> over ALREADY-masked code, so the per-file scan masks once rather
+    /// than once for the declaration pass and again for the call pass.
+    /// </summary>
+    private static ImmutableHashSet<string> DeclaredInMasked(string code) =>
+        RouterOriginScan.SeamCallOnReceiver
+            .Matches(code)
             .Select(m => m.Groups[1].Value)
             .ToImmutableHashSet(StringComparer.Ordinal);
-    }
 
     private static IReadOnlyList<Site> Scan(string root) =>
         SourceScan.SourceFiles(root, ScannedRoots)
@@ -419,11 +427,14 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
     /// </summary>
     private static IReadOnlyList<Site> SitesIn(string file, string text)
     {
-        var declared = DeclaredIn(text);
-        if (declared.IsEmpty)
+        if (!RouterOriginScan.SeamCall.IsMatch(text))
             return [];
 
         var code = SourceScan.MaskCommentsAndStrings(text);
+        var declared = DeclaredInMasked(code);
+        if (declared.IsEmpty)
+            return [];
+
         var aliases = RouterOriginScan.SeamAliasesIn(code);
         var sites = new List<Site>();
 
