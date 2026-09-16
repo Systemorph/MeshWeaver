@@ -113,6 +113,8 @@
   "menu.expandCollapse": "Menü ein-/ausklappen",
   "menu.showIndex": "Index einblenden",
   "menu.hideIndex": "Index ausblenden",
+  "menu.showSidebar": "Seitenleiste einblenden",
+  "menu.hideSidebar": "Seitenleiste ausblenden",
   "overview.unresolvedType": "Der Inhaltstyp „{0}“ ist hier noch nicht bekannt",
   "overview.untypedContent": "Dieser Inhalt hat keine Typangabe",
   "overview.untypedContentHint": "Er wurde als freies JSON gespeichert, daher kennt die Plattform keine deklarierte Eigenschaftsliste, aus der sie ein Formular bauen könnte. Öffnen Sie die Quelle des Nodes, um die Werte zu sehen.",
