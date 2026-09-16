@@ -608,6 +608,258 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
             + "this apart from a record that was never stamped");
     }
 
+    // ── #3659, the CONTENT half: the question a PATH cannot answer ───────────────────────────────
+
+    /// <summary>
+    /// 🚨 <b>THE second repro of #3659, end to end.</b> A package ships an ordinary config file
+    /// inside its own folder — <c>gui/rn/tsconfig.json</c>, exactly the shape <c>Chess</c>'s
+    /// React-Native folder has. Its extension IS claimed (<c>.json</c>), so the extension gate #3685
+    /// added lets it through; its CONTENT carries no <c>$type</c>/<c>id</c>/<c>nodeType</c>, so
+    /// <c>JsonFileParser</c> answers "no node here" and the installer writes nothing.
+    ///
+    /// <para><b>Before this change the sweep counted it anyway</b> and reported
+    /// <c>UnreadablePkg/gui/rn/tsconfig</c> ABSENT, at Error, on every boot of every pod — and no
+    /// reinstall could ever clear it, because the same bytes fail the same way. That is the issue's
+    /// own defect class one level down: an unhealable phantom spelled identically to the genuinely
+    /// lost node the sweep exists to find, sitting at the same log site.</para>
+    ///
+    /// <para><b>The fix is evidence, not another exclusion list.</b> The installer is the only side
+    /// that holds the bytes, so it RECORDS what it could not read
+    /// (<see cref="PackageManifest.UnreadableFiles"/>) and the sweep reads that. A list would have
+    /// needed a new case for <c>.tsx</c>, then for <c>package.json</c>, then for the next shape —
+    /// which is precisely how this issue was filed twice.</para>
+    ///
+    /// <para><b>Two controls, because an exclusion test that cannot fail proves nothing.</b> The
+    /// unreadable file must still be REPORTED (under its own sentence, at Error — it is a packaging
+    /// defect, not a clean bill of health), and a genuinely deleted node must still come back as
+    /// <c>Incomplete</c> naming exactly it.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AConfigFileInsideAPackage_IsRecordedUnreadable_AndIsNeverSpelledAbsent()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var logger = Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger<InstallCompletenessTest>();
+
+        await CatalogLayoutAreas
+            .InstallOrUpdate(Mesh, new FixedSource(UnreadableFiles()), "HEAD", UnreadableCandidate(), logger)
+            .Should().Within(180.Seconds())
+            .Emit("the install has to land before its completeness can be measured",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        (await WaitForNode($"{Unreadable}/Guide", present: true)).Should().BeTrue(
+            "the Guide node is what the control below deletes — if the install never wrote it, both "
+            + "halves of this test would pass for the wrong reason");
+        (await WaitForNode(UnreadableConfigNode, present: false)).Should().BeTrue(
+            "THE premise: no install ever writes a node for a file the parser cannot read. If this "
+            + "node existed the whole test would be about nothing");
+
+        var record = await ReadRecord(Unreadable);
+        record.Should().NotBeNull("the installer stamps an install record");
+
+        // ── The write side recorded what it could not read.
+        record!.UnreadableFiles.Should().NotBeNull(
+            "a node-repo install always answers this question now — null means UNKNOWN (a record "
+            + "stamped before the field existed) and must never be produced by an install that "
+            + "actually parsed the package");
+        record.UnreadableFiles.Should().ContainSingle().Which.Should().Be(UnreadableConfigFile,
+            "the installer parsed it, got no node, and that is the one fact a path-only reader can "
+            + "never derive");
+
+        // ── The declared side reads that instead of guessing.
+        var declared = InstallCompleteness.DeclaredNodePaths(record, Parsers());
+        declared.Should().Equal([Unreadable, $"{Unreadable}/Guide"],
+            "the declared population is what the install actually writes — index.json and Guide.md");
+        declared.Should().NotContain(UnreadableConfigNode,
+            "counting it is the defect: it was reported ABSENT at Error on every boot, forever, and "
+            + "no reinstall could clear it");
+
+        var verdict = await WaitForVerdict(record, InstallCompletenessKind.Complete, Unreadable);
+        verdict.Missing.Should().BeEmpty(
+            "nothing is absent — before this change the tsconfig was, on every boot of every pod");
+        verdict.DeclaredFiles.Should().Be(4, "the record declares the lock, index, Guide and tsconfig");
+        verdict.Declared.Should().Be(2, "leaving index.json and Guide.md as node paths");
+
+        // ── Control 1: excluded from the ABSENT count is not the same as unreported.
+        verdict.UnreadablePaths.Should().ContainSingle().Which.Should().Be(UnreadableConfigNode,
+            "a package that declares a node it can never deliver is still a fault — silently "
+            + "dropping it would trade a wrong Error for a missing one");
+        verdict.Population.Should().Contain("could NOT read as a node",
+            "and the population line states it, so a reader can tell 'excluded by design' from "
+            + "'the install met this file and failed on it'");
+        var landing = InstallCompleteness.DescribeLanding(verdict, UnreadableHash);
+        landing.Level.Should().Be(LogLevel.Error,
+            "it outranks the completeness verdict: the package is otherwise whole and still ships a "
+            + "declared node that does not exist");
+        landing.Message.Should().Contain(UnreadableConfigNode).And.Contain("PACKAGING defect",
+            "and it must NOT say 'reinstalling it now repairs it' — the one remedy that cannot work");
+
+        // ── Control 2: the sweep is not blinded to a REAL loss.
+        await meshService.DeleteNode($"{Unreadable}/Guide")
+            .Should().Within(60.Seconds())
+            .Emit("the deletion is the control's precondition",
+                cancellationToken: TestContext.Current.CancellationToken);
+        (await WaitForNode($"{Unreadable}/Guide", present: false)).Should().BeTrue(
+            "the node has to be gone before its absence can be the thing measured");
+
+        var afterLoss = await WaitForVerdict(record, InstallCompletenessKind.Incomplete, Unreadable);
+        afterLoss.Missing.Should().ContainSingle().Which.Should().Be($"{Unreadable}/Guide",
+            "a declared node that is genuinely absent is still a shortfall — this change narrows "
+            + "the population to what the installer writes, never what a shortfall means");
+        afterLoss.Missing.Should().NotContain(UnreadableConfigNode,
+            "and the unreadable file never joins the absences, whatever else is wrong");
+    }
+
+    /// <summary>
+    /// The pure arm, and the one that proves the answer comes from the RECORD rather than from a
+    /// new hard-coded exclusion: the same file map, compared twice, differing only in whether the
+    /// record carries <see cref="PackageManifest.UnreadableFiles"/>.
+    ///
+    /// <para>🚨 The <c>null</c> case must reproduce the PRE-fix behaviour exactly — an absent
+    /// answer is UNKNOWN, and upgrading it to "checked, none" would let a record stamped by an
+    /// older installer read as clean over a node that is genuinely gone.</para>
+    /// </summary>
+    [Fact]
+    public void WhetherAFileIsAnAbsence_ComesFromTheRecord_NotFromAHardCodedList()
+    {
+        var files = ImmutableSortedDictionary<string, string>.Empty
+            .Add($"{Package}/Guide.md", "bbb")
+            .Add($"{Package}/gui/rn/tsconfig.json", "ccc");
+        var present = ImmutableHashSet<string>.Empty
+            .WithComparer(StringComparer.Ordinal)
+            .Add(GuidePath);
+
+        // Unknown — no install has recorded the content answer.
+        var unrecorded = InstallCompleteness.Compare(
+            Package, Package,
+            new PackageManifest { Id = Package, TargetPartition = Package, InstalledFiles = files },
+            present, Parsers());
+
+        unrecorded.Kind.Should().Be(InstallCompletenessKind.Incomplete,
+            "with nothing recorded the sweep must behave exactly as it did before — a path-only "
+            + "reader cannot know the file is unreadable, and guessing either way would be the "
+            + "second derivation this whole change removes");
+        unrecorded.Missing.Should().ContainSingle().Which.Should().Be($"{Package}/gui/rn/tsconfig");
+        unrecorded.UnreadablePaths.Should().BeEmpty("nothing was recorded, so nothing is named");
+
+        // Recorded — the installer met the file and could not read it.
+        var recorded = InstallCompleteness.Compare(
+            Package, Package,
+            new PackageManifest
+            {
+                Id = Package,
+                TargetPartition = Package,
+                InstalledFiles = files,
+                UnreadableFiles = ImmutableSortedSet<string>.Empty
+                    .WithComparer(StringComparer.Ordinal)
+                    .Add($"{Package}/gui/rn/tsconfig.json"),
+            },
+            present, Parsers());
+
+        recorded.Kind.Should().Be(InstallCompletenessKind.Complete,
+            "the only thing that changed is the install's own answer about the bytes — which is the "
+            + "point: the declared side stopped re-deriving a question it cannot ask");
+        recorded.Missing.Should().BeEmpty();
+        recorded.UnreadablePaths.Should().ContainSingle().Which.Should().Be($"{Package}/gui/rn/tsconfig",
+            "still named, still reported — under the sentence that is true for it");
+        InstallCompleteness.DescribeLanding(recorded, "hash").Level.Should().Be(LogLevel.Error,
+            "'complete' plus a node that can never exist is not a clean landing");
+    }
+
+    /// <summary>
+    /// 🚨 An INCREMENTAL update examines only the files it fetched, so the record MERGES rather than
+    /// replaces. Replacing would forget every unreadable file outside the delta and the very next
+    /// boot sweep would start reporting them ABSENT again — this defect, recreated inside its own
+    /// bookkeeping.
+    ///
+    /// <para>Pure and total, so every arm is pinned with no hub and no mesh.</para>
+    /// </summary>
+    [Fact]
+    public void TheUnreadableSetMerges_KeepsWhatWasNotExamined_AndForgetsWhatLeftThePackage()
+    {
+        var previous = ImmutableSortedSet<string>.Empty
+            .WithComparer(StringComparer.Ordinal).Add("P/a.json").Add("P/b.json");
+        string[] declared = ["P/a.json", "P/b.json", "P/c.json"];
+
+        PackageInstaller.MergeUnreadableFiles(previous, ["P/a.json"], [], declared)
+            .Should().Equal(["P/b.json"],
+                "a file this update EXAMINED is decided by this update — a.json now parses, so it "
+                + "must stop being reported; b.json was not fetched and keeps its verdict");
+
+        PackageInstaller.MergeUnreadableFiles(previous, ["P/a.json", "P/c.json"], ["P/c.json"], declared)
+            .Should().Equal(["P/b.json", "P/c.json"],
+                "and a newly unreadable file joins without disturbing what was not examined");
+
+        PackageInstaller.MergeUnreadableFiles(previous, null, null, ["P/a.json"])
+            .Should().Equal(["P/a.json"],
+                "a write that parsed nothing learns nothing — but an entry for a file that has LEFT "
+                + "the package is dropped, or it could never be cleared again");
+
+        PackageInstaller.MergeUnreadableFiles(null, null, null, declared)
+            .Should().BeNull(
+                "🚨 unknown stays unknown: a record stamped by an older installer must not be "
+                + "upgraded to 'checked, none' by a write that checked nothing");
+
+        PackageInstaller.MergeUnreadableFiles(null, ["P/a.json"], [], declared)
+            .Should().BeEmpty(
+                "but an install that DID parse and found nothing unreadable records an EMPTY set — "
+                + "'checked, none' and 'never checked' are different answers");
+    }
+
+    // ── #3659 content-half fixture: a package carrying an ordinary config file ───────────────────
+
+    private const string Unreadable = "UnreadablePkg";
+    private const string UnreadableHash = "9876543210fedcba";
+    private const string UnreadableConfigFile = $"{Unreadable}/gui/rn/tsconfig.json";
+    private const string UnreadableConfigNode = $"{Unreadable}/gui/rn/tsconfig";
+
+    private static PackageManifest UnreadableCandidate() => new()
+    {
+        Id = Unreadable,
+        Name = Unreadable,
+        Kind = PackageKind.NodeRepo,
+        TargetPartition = Unreadable,
+        SourceFolder = Unreadable,
+        Version = "1.0.0",
+        ModuleVersion = UnreadableHash,
+    };
+
+    private static IReadOnlyList<PackageFile> UnreadableFiles() =>
+    [
+        new PackageFile($"{Unreadable}/{ModuleManifest.FileName}", $$"""
+            {
+              "module": "{{Unreadable}}",
+              "moduleVersion": "{{UnreadableHash}}",
+              "version": "1.0.0",
+              "files": {
+                "{{Unreadable}}/{{ModuleManifest.FileName}}": "000",
+                "{{Unreadable}}/index.json": "aaa",
+                "{{Unreadable}}/Guide.md": "bbb",
+                "{{UnreadableConfigFile}}": "ccc"
+              }
+            }
+            """),
+        new PackageFile($"{Unreadable}/index.json", $$"""
+            {
+              "id": "{{Unreadable}}",
+              "path": "{{Unreadable}}",
+              "nodeType": "Space",
+              "name": "Unreadable-file package",
+              "state": "Active"
+            }
+            """),
+        new PackageFile($"{Unreadable}/Guide.md", "# Guide\n\nA node, and the control's subject."),
+        // 🚨 The subject: a claimed extension whose content is not a node. No $type, no id, no
+        // nodeType — the shape of every tsconfig.json, package.json and app.json that has ever sat
+        // inside a package's gui/ folder.
+        new PackageFile(UnreadableConfigFile, """
+            {
+              "compilerOptions": { "strict": true, "jsx": "react-native" },
+              "include": ["src"]
+            }
+            """),
+    ];
+
     /// <summary>
     /// 🚨 A sweep that could not run must not produce the same ZERO as a sweep that found nothing.
     /// Copilot caught this on the first version of this PR: <c>ObserveUnaccountedRoots</c> folded

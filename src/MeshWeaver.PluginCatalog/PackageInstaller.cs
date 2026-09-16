@@ -2304,9 +2304,15 @@ public static class PackageInstaller
             : relativePath;
     }
 
+    /// <param name="examinedFiles">The files this install PARSED, or null when it parsed none —
+    /// see <see cref="MergeUnreadableFiles"/>.</param>
+    /// <param name="unreadableFiles">Those of <paramref name="examinedFiles"/> that did not become
+    /// a node (MeshWeaver#3659).</param>
     private static IObservable<MeshNode> WriteInstalledRecord(
         IMessageHub hub, PackageManifest manifest, string installedFromRef, int count,
-        ModuleManifest? moduleManifest = null, string? authorizingUserId = null)
+        ModuleManifest? moduleManifest = null, string? authorizingUserId = null,
+        IReadOnlyCollection<string>? examinedFiles = null,
+        IReadOnlyCollection<string>? unreadableFiles = null)
     {
         var recordPath = $"{InstalledPartition}/{manifest.Id}";
         var serializerOptions = hub.JsonSerializerOptions;
@@ -2341,6 +2347,12 @@ public static class PackageInstaller
                     // not import. Without it the portal cannot name the version a module shipped at.
                     ReleasedVersion = moduleManifest?.Version ?? manifest.ReleasedVersion,
                     InstalledFiles = moduleManifest?.Files ?? manifest.InstalledFiles,
+                    // 🚨 The content half of "is this file a node", recorded by the ONE side that
+                    // can answer it (MeshWeaver#3659). Merged, never replaced — an incremental
+                    // update only examined what it fetched. See MergeUnreadableFiles.
+                    UnreadableFiles = MergeUnreadableFiles(
+                        existingRecord?.UnreadableFiles, examinedFiles, unreadableFiles,
+                        (moduleManifest?.Files ?? manifest.InstalledFiles)?.Keys.ToArray()),
                     // Transport-only: the candidate-side map rides in on the CATALOG entry for the
                     // diff and must not be persisted — the record's baseline is InstalledFiles
                     // alone, exactly as ManifestFiles' own doc promises (Copilot catch: a full
@@ -2741,7 +2753,12 @@ public static class PackageInstaller
             .Where(f => ModuleManifest.IsManifestPath(f.RelativePath))
             .Select(f => ModuleManifest.TryParse(f.Content, logger))
             .FirstOrDefault(m => m is not null);
-        var nodes = ParseAll(parsers, files, manifest.Id, logger, hub.JsonSerializerOptions);
+        // 🚨 #3659 — what this install could NOT turn into a node, carried to the record. A FULL
+        // install parses every file the package ships, so `files` IS the examined population.
+        var unreadable = new List<string>();
+        var nodes = ParseAll(
+            parsers, files, manifest.Id, logger, hub.JsonSerializerOptions, unreadable);
+        var examined = files.Select(f => f.RelativePath).ToArray();
 
         if (nodes.Length == 0)
             return Observable.Throw<InstallResult>(new InvalidOperationException(
@@ -3334,7 +3351,8 @@ public static class PackageInstaller
                     // at the end (a retired Source/*.cs is exactly as stale-making for a foreign
                     // `shared=` consumer as a rewritten one).
                     .SelectMany(pruned => WriteInstalledRecord(
-                            hub, manifest, installedFromRef, nodes.Length, moduleManifest, authorizingUserId)
+                            hub, manifest, installedFromRef, nodes.Length, moduleManifest,
+                            authorizingUserId, examined, unreadable)
                         .Select(_ => pruned))
                     // Adoption first (it can settle a release without compiling at all), then the
                     // FIRST wave: the root's own in-package NodeType, whose rebuild is precisely
@@ -3602,7 +3620,12 @@ public static class PackageInstaller
     {
 
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
-        var nodes = ParseAll(parsers, changedFiles, manifest.Id, logger, hub.JsonSerializerOptions);
+        // 🚨 #3659 — an INCREMENTAL update examines only what it fetched, so its answer covers
+        // exactly `changedFiles` and the record MERGES rather than replaces (MergeUnreadableFiles).
+        var unreadable = new List<string>();
+        var nodes = ParseAll(
+            parsers, changedFiles, manifest.Id, logger, hub.JsonSerializerOptions, unreadable);
+        var examined = changedFiles.Select(f => f.RelativePath).ToArray();
 
         if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
             return shadowed;
@@ -3724,7 +3747,8 @@ public static class PackageInstaller
                     .SelectMany(_ => VerifyDeclaredAccess(
                         hub, manifest, manifest.TargetPartition ?? manifest.Id, logger))
                     .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
-                        newManifest.Files.Count, newManifest, authorizingUserId))
+                        newManifest.Files.Count, newManifest, authorizingUserId,
+                        examined, unreadable))
                     .SelectMany(_ => WarmInstalledRoots(hub, manifest, nodes, logger))
                     // A changed BINARY is a changed file like any other: manifest.lock hashes the
                     // `content/**` assets too, so a re-cut video is in `changedFiles` and an
@@ -3775,11 +3799,18 @@ public static class PackageInstaller
     /// nodes by design (README, manifest, `content/**` assets) are not skips and are not counted.
     /// </para>
     /// </summary>
+    /// <param name="unreadable">🚨 Filled with the relative path of every file that is a node
+    /// CANDIDATE (not excluded by design, extension claimed) and whose CONTENT did not become a
+    /// node — the one half of "is this file a node" no path-only caller can answer. Until
+    /// MeshWeaver#3659 this list existed only long enough to be counted into the log line below and
+    /// was then dropped, so the boot sweep re-derived a declared population that still contained
+    /// those files and reported them ABSENT, at Error, forever. Passing it out is what lets the
+    /// install RECORD what it actually wrote instead of the sweep guessing.</param>
     private static MeshNode[] ParseAll(
         FileFormatParserRegistry parsers, IReadOnlyList<PackageFile> files, string packageId,
-        ILogger? logger, JsonSerializerOptions? options = null)
+        ILogger? logger, JsonSerializerOptions? options = null, List<string>? unreadable = null)
     {
-        var unparsed = new List<string>();
+        var unparsed = unreadable ?? [];
         var nodes = files
             .Select(f => ParseCanonical(parsers, f, logger, options, unparsed))
             .Where(n => n is not null).Select(n => n!)
@@ -4128,6 +4159,66 @@ public static class PackageInstaller
             return null;
         var (id, ns) = NodeFileMapper.FromRelativePath(relativePath);
         return string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+    }
+
+    /// <summary>
+    /// The install record's <see cref="PackageManifest.UnreadableFiles"/> after THIS install — the
+    /// content half of "is this file a node", merged rather than replaced (MeshWeaver#3659).
+    ///
+    /// <para>🚨 <b>Why a merge and not an assignment.</b> A FULL install parses every file the
+    /// package ships, so its answer is complete and the merge degenerates to "this run's set". An
+    /// INCREMENTAL update parses only the files it fetched — so replacing would silently forget
+    /// every unreadable file outside the delta, and the very next boot sweep would start reporting
+    /// them ABSENT again. That is the same "a second derivation disagrees with the writer" defect
+    /// this field exists to close, recreated inside its own bookkeeping.</para>
+    ///
+    /// <para>Three rules, each of which is a case that actually happens:</para>
+    /// <list type="number">
+    ///   <item>a file this install EXAMINED is decided by this install — it either failed again
+    ///     (kept) or now parses (dropped), and a package that fixes its file must stop being
+    ///     reported;</item>
+    ///   <item>a file this install did NOT examine keeps the previous verdict — an update that
+    ///     fetched two files says nothing about the other two hundred;</item>
+    ///   <item>a file that has LEFT the package is dropped whatever it said — the record's own
+    ///     baseline no longer declares it, so an entry for it could never be cleared again.</item>
+    /// </list>
+    ///
+    /// <para>Pure and total, so every arm is pinnable with no hub and no mesh.</para>
+    /// </summary>
+    /// <param name="previous">The record's existing set, or <c>null</c> when no install has ever
+    /// recorded one. 🚨 <c>null</c> in and nothing examined yields <c>null</c> out: "unknown" must
+    /// never be upgraded to "checked, none" by a write that checked nothing.</param>
+    /// <param name="examined">The files this install actually parsed, or <c>null</c> when this
+    /// write parsed none (a module-only install, a record re-stamp).</param>
+    /// <param name="unreadableNow">Those of <paramref name="examined"/> that did not become a node.</param>
+    /// <param name="declaredNow">The file map the record is being stamped with; entries outside it
+    /// are dropped. <c>null</c> leaves the set unfiltered.</param>
+    internal static ImmutableSortedSet<string>? MergeUnreadableFiles(
+        ImmutableSortedSet<string>? previous,
+        IReadOnlyCollection<string>? examined,
+        IReadOnlyCollection<string>? unreadableNow,
+        IReadOnlyCollection<string>? declaredNow)
+    {
+        var declared = declaredNow is null
+            ? null
+            : declaredNow.ToImmutableHashSet(StringComparer.Ordinal);
+        ImmutableSortedSet<string> Restrict(ImmutableSortedSet<string> set) =>
+            declared is null
+                ? set
+                : set.Where(declared.Contains).ToImmutableSortedSet(StringComparer.Ordinal);
+
+        if (examined is null)
+            // Nothing was parsed here, so nothing was learned. Carry the previous answer forward —
+            // still pruned to what the record now declares, or an entry for a departed file would
+            // outlive every chance to clear it.
+            return previous is null ? null : Restrict(previous);
+
+        var seen = examined.ToImmutableHashSet(StringComparer.Ordinal);
+        var kept = (previous ?? ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal))
+            .Where(f => !seen.Contains(f));
+        return Restrict(kept
+            .Concat(unreadableNow ?? [])
+            .ToImmutableSortedSet(StringComparer.Ordinal));
     }
 
     /// <summary>

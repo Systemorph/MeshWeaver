@@ -342,6 +342,19 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                         verdict.Declared, string.Join(", ", verdict.Missing.Take(20)),
                         verdict.Population, verdict.Provenance);
 
+                // 🚨 #3659, the CONTENT half. These are NOT absences and must never be spelled as
+                // ones: the install parsed the file, could not make a node of it, and recorded that
+                // — so the count above excludes them and this line names them under the only remedy
+                // that can work. Independent of Kind, because a package whose ONLY fault is one of
+                // these is otherwise Complete and would report a clean bill of health over a node
+                // that does not exist.
+                foreach (var verdict in verdicts.Where(v => v.UnreadablePaths.Count > 0))
+                    logger?.LogError(
+                        "[InstallCompleteness] {Unreadable} Counted over: {Population}, taken over "
+                        + "{Record}.",
+                        InstallCompleteness.UnreadableSentence(verdict),
+                        verdict.Population, verdict.Provenance);
+
                 foreach (var verdict in verdicts.Where(v => v.Kind is InstallCompletenessKind.RootWithoutRecord))
                     logger?.LogError(
                         "[InstallCompleteness] '{Partition}' is a partition ROOT that no install "
