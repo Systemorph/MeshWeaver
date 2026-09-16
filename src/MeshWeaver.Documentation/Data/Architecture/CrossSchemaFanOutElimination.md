@@ -91,9 +91,11 @@ row-4 shape:
   namespace is memex-cloud, whose image (core `c84c6c05`) predates that change.
 
 None of the 75 lines the bot quoted in its 25 reopen comments since 2026-09-12 is `nodeType:*Post`
-either. Ten samples out of thousands cannot prove that one caller has gone quiet. But row 4 is also
-anchored in source and its package is delivered (see the table), so a #3545 reopen tells you about
-the log watcher's rollout and the Hosting module's delivery, not about row 4. Before acting on one:
+either. Ten samples out of thousands cannot prove that one caller has gone quiet, and a pod that
+never loaded the fixed module would still report under the same id. So a #3545 reopen is
+**inconclusive** about row 4 either way: every unanchored caller shares it, so it cannot show a
+regression, and it cannot show the absence of one. Only a sample names the caller. Before acting on
+one:
 
 1. Check whether the old id still advances. While it does, the per-caller incidents cannot exist.
 2. Read the query quoted in the newest sample on the incident node. Do not go by the issue title or
