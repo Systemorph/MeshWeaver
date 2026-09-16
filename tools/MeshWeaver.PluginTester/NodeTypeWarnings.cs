@@ -245,6 +245,13 @@ public sealed record WarningInventory(
         var pairs = ImmutableSortedSet.CreateBuilder<(string Scope, string Code)>();
         var types = ImmutableSortedSet<string>.Empty
             .WithComparer(StringComparer.OrdinalIgnoreCase).ToBuilder();
+        // 🚨 Counted HERE, off the same pass as the total — never re-derived from the folded sites.
+        // Summing each site's TYPE count would be the raw count only while no single type produces
+        // one (id, message) at two different LINES, which `EmitPipeline.Collect` does keep as two
+        // entries (two unused locals of the same name in two methods is the shape). The totals line
+        // and the per-code line are then two numbers for one quantity that can silently disagree,
+        // and a reader has no way to tell which is the measurement.
+        var byCode = new Dictionary<string, int>(StringComparer.Ordinal);
         var occurrences = 0;
         foreach (var (nodePath, warnings) in compiled)
         {
@@ -252,6 +259,7 @@ public sealed record WarningInventory(
             foreach (var warning in warnings)
             {
                 occurrences++;
+                byCode[warning.Id] = byCode.GetValueOrDefault(warning.Id) + 1;
                 pairs.Add((nodePath, warning.Id));
                 if (!sites.TryGetValue(warning.Site, out var hosts))
                     sites[warning.Site] = hosts = ImmutableSortedSet<string>.Empty
@@ -266,22 +274,38 @@ public sealed record WarningInventory(
                 .Select(s => new WarningSite(s.Key.Code, s.Key.Message, s.Value.ToImmutable()))],
             pairs.ToImmutable(),
             occurrences,
-            types.ToImmutable());
+            types.ToImmutable())
+        {
+            OccurrencesByCode = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal, byCode),
+        };
     }
+
+    /// <summary>
+    /// Raw occurrences per diagnostic id, counted on the SAME pass as <see cref="Occurrences"/> so
+    /// the totals line and the per-code table cannot disagree. Init-only property for the
+    /// record-signature rule.
+    /// </summary>
+    public ImmutableSortedDictionary<string, int> OccurrencesByCode { get; init; } =
+        ImmutableSortedDictionary<string, int>.Empty;
 
     /// <summary>The sites belonging to one ratchet.</summary>
     /// <param name="warningClass">Which ratchet.</param>
     public IEnumerable<WarningSite> For(WarningClass warningClass) =>
         Sites.Where(s => WarningClasses.Of(s.Code) == warningClass);
 
-    /// <summary>Distinct diagnostic ids, with their raw occurrence count, site count and type
-    /// count — the per-code table, ordered most-occurrences first so the shape reads at a glance.</summary>
+    /// <summary>
+    /// Distinct diagnostic ids, with their raw occurrence count, site count and type count — the
+    /// per-code table, ordered most-occurrences first so the shape reads at a glance.
+    ///
+    /// <para>The occurrence column comes from <see cref="OccurrencesByCode"/>, counted on the same
+    /// pass as <see cref="Occurrences"/>, so this table SUMS to the totals line by construction.</para>
+    /// </summary>
     public IReadOnlyList<(string Code, int Occurrences, int Sites, int Types)> ByCode() =>
         [.. Sites
             .GroupBy(s => s.Code, StringComparer.Ordinal)
             .Select(g => (
                 Code: g.Key,
-                Occurrences: g.Sum(s => s.Types.Count),
+                Occurrences: OccurrencesByCode.GetValueOrDefault(g.Key),
                 Sites: g.Count(),
                 Types: g.SelectMany(s => s.Types).Distinct(StringComparer.Ordinal).Count()))
             .OrderByDescending(x => x.Occurrences)

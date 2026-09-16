@@ -73,6 +73,19 @@ public class InMeshWarningRatchetTest(ITestOutputHelper output)
                 int neverUsed = 42;
                 return 1;
             }
+
+            /// <summary>
+            /// The SAME CS0219 message at a DIFFERENT line — one local, one name, two methods.
+            /// EmitPipeline.Collect dedupes on (id, message, LINE), so this is a second occurrence
+            /// that folds to ONE site, which is precisely the shape that makes a per-code count
+            /// derived from site×type disagree with the raw total.
+            /// </summary>
+            /// <returns>Two.</returns>
+            public int GoAgain()
+            {
+                int neverUsed = 43;
+                return 2;
+            }
         }
 
         public record Undocumented
@@ -224,6 +237,40 @@ public class InMeshWarningRatchetTest(ITestOutputHelper output)
         Assert.Equal(4, lines.Count);
         Assert.Contains(lines, l => l.Contains("raw occurrence(s) folded to", StringComparison.Ordinal));
         Assert.Contains(lines, l => l.Contains("by code — ", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 🚨 THE TWO PRINTED NUMBERS ARE ONE MEASUREMENT. The totals line says "N raw occurrence(s)"
+    /// and the per-code table says "CODE n×"; if those are counted on different passes they can
+    /// silently disagree, and a reader has no way to tell which one is the measurement.
+    ///
+    /// <para>They used to be: the table summed each SITE's type count, which equals the raw count
+    /// only while no single type produces one (id, message) at two different LINES — and
+    /// <c>EmitPipeline.Collect</c> keeps those as two entries (two unused locals of the same name
+    /// in two methods is the shape). It happened to hold on every tree measured, which is exactly
+    /// how a reporting defect survives. The per-code counts now come off the same pass as the
+    /// total, so this identity is true by construction and this case is what keeps it so.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public void ThePerCodeTable_SumsToTheTotal()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var bake = Bake(WarningBaseline.ObserveOnly);
+
+        var table = bake.Report.Warnings.ByCode();
+        Assert.NotEmpty(table);
+        Assert.Equal(bake.Report.Warnings.Occurrences, table.Sum(c => c.Occurrences));
+        // …and the fixture has more than one code, so the sum is not the trivial one-row case.
+        Assert.True(table.Count > 1, "the fixture must produce at least two distinct codes");
+
+        // 🚨 THE DISCRIMINATOR, asserted so this case cannot go vacuous. `Debt` carries the SAME
+        // CS0219 message in two methods, so that code has MORE occurrences than it has (site ×
+        // type) pairs — which is exactly the arithmetic the old derivation got wrong. Without this
+        // the identity above holds under both implementations and proves nothing.
+        var unusedLocal = Assert.Single(table, c => c.Code == "CS0219");
+        Assert.Equal(2, unusedLocal.Occurrences);
+        Assert.Equal(1, unusedLocal.Sites);
+        Assert.Equal(1, unusedLocal.Types);
     }
 
     // ── fixture ───────────────────────────────────────────────────────────────────────────────
