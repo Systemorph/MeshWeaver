@@ -365,6 +365,52 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
             + "month could not turn them into a call site");
     }
 
+    /// <summary>
+    /// 🚨 <b>The premise the whole rule rests on: adopting a seam is NEVER a behaviour change.</b>
+    ///
+    /// <para>"Hop every targeted post off a router-capable receiver" is a RULE rather than a
+    /// judgement call for exactly one reason — both seams are the IDENTITY FUNCTION for any hub
+    /// whose address type is not the mesh type, so a site already off the router is byte-for-byte
+    /// unaffected and only a site that is not is corrected. That premise is stated in
+    /// <c>RouterAsRouterCapableReceiverRatchetGuard</c>, in both allow files, in
+    /// Doc/Architecture/RouterTrafficDetection and at every call site that adopts a seam — and
+    /// until this test nothing measured it.</para>
+    ///
+    /// <para>It is what makes the swaps no runtime test reaches safe to make at all: several of the
+    /// exchanges this class covers (the script dispatch, the content-collection reads) have no
+    /// end-to-end suite, and every existing test of them runs through a session or client hub. If
+    /// the seams are the identity there, those swaps changed nothing for them; if they are not,
+    /// every one of those sites silently moved hub and the claim in the comments is false. Asserted
+    /// on REFERENCE identity, not on address equality: a second hub at the same address would still
+    /// be a different actor with a different action block.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void BothSeams_AreTheIdentityFunction_ForAHubThatIsNotTheRouter()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var client = GetClient();
+        client.Address.Type.Should().NotBe(Mesh.Address.Type,
+            "the premise is about a NON-router hub, so this fixture has to hand us one — if the "
+            + "client's address type ever became the mesh type, the assertions below would be "
+            + "measuring the router and passing for the wrong reason");
+
+        client.NodeOperationIssuingHub().Should().BeSameAs(client,
+            "NodeOperationIssuingHub must return the hub UNCHANGED off the router — otherwise every "
+            + "site that adopted it moved its deliveries to a different action block, and 'this is "
+            + "a no-op wherever the router is not reached' is false in every comment that says it");
+        client.ReadIssuingHub().Should().BeSameAs(client,
+            "and the same for ReadIssuingHub, which is the seam most of #1140's remaining sites "
+            + "adopted");
+
+        // …and the other half: ON the router both seams must hand back something ELSE, or the hop
+        // is a no-op there too and nothing was fixed.
+        Mesh.NodeOperationIssuingHub().Should().NotBeSameAs(Mesh,
+            "on the ROUTER the seam has to actually move the delivery's origin — a seam that is the "
+            + "identity function everywhere is decoration");
+        Mesh.ReadIssuingHub().Should().NotBeSameAs(Mesh,
+            "the read seam likewise");
+    }
+
     /// <summary>The receiver-side lines — <c>ROUTER_TRAFFIC:</c>, logged in <c>DeliverMessage</c>.</summary>
     private RouterTrafficRecord[] Reports() => _capture.Records.Where(r => !r.IsOrigin).ToArray();
 
