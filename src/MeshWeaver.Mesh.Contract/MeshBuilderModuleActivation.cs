@@ -30,6 +30,129 @@ public static class MeshBuilderModuleActivation
     public const string RequiredKey = "Modules:Required";
 
     /// <summary>
+    /// The key a deployment states with that its OWN <see cref="RequiredKey"/> entries are the
+    /// COMPLETE required set for this instance — the image's own list does not apply.
+    ///
+    /// <para>🚨 <b>Why a second key is needed at all.</b> <c>Modules:Required</c> is an ARRAY, and
+    /// configuration merges arrays BY INDEX: a later provider replaces the entries it names and
+    /// leaves every other index of the earlier one standing. An array can therefore express
+    /// "replace entry N" and can never express "these and only these" — so a deployment list
+    /// SHORTER than the image's requires the image's tail it never named, and an EMPTY list
+    /// requires the image's list in full. Emptying a record's <c>requiredModules</c> does not
+    /// relax the requirement, it restores it (#4476).</para>
+    ///
+    /// <para>The claim is read off provider ORDER, the same mechanism <see cref="ShadowedRequired"/>
+    /// uses: from the provider that states it onwards — the ConfigMap / container environment a
+    /// <c>Deployments/&lt;name&gt;</c> record renders, and anything layered after it — the entries
+    /// supplied THERE are the whole requirement. No count, no padding, and no knowledge of how long
+    /// the image's list is, which is the coupling the key exists to remove. A later provider may
+    /// withdraw the claim by setting it to <c>false</c>.</para>
+    ///
+    /// <para>🚨 <b>Opt-in, deliberately.</b> The image's list is the PLATFORM's floor — the AI
+    /// engine, the chat renderer and the collaboration pack are each named there because losing one
+    /// silently is a measured outage — and no fleet record states a complete set today (all three
+    /// name five against the image's nine). Taking a partial list as authoritative BY DEFAULT would
+    /// have un-required four modules on every instance the day it shipped. Where the claim is
+    /// absent, nothing changes and <see cref="UnstatedRequired"/> names what the deployment did not
+    /// state.</para>
+    /// </summary>
+    public const string RequiredIsAuthoritativeKey = "Modules:RequiredIsAuthoritative";
+
+    /// <summary>
+    /// The required-module entries this deployment ACTUALLY declares — the ONE reading the boot
+    /// path and the health check share, so a probe can never disagree with the log line that
+    /// preceded it.
+    ///
+    /// <para>Without <see cref="RequiredIsAuthoritativeKey"/> this is the merged
+    /// <see cref="RequiredKey"/> array, blanks dropped — exactly what every caller read before.
+    /// With it, the entries the authoritative provider (and anything layered after it) supplies,
+    /// and those only: the image's indices are not required here.</para>
+    /// </summary>
+    /// <param name="configuration">The host configuration. A non-root <see cref="IConfiguration"/>
+    /// carries no provider list, so no claim can be read off it and the merged array stands.</param>
+    public static string[] RequiredEntries(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        var stated = StatedIndices(configuration);
+        return [.. configuration.GetSection(RequiredKey).GetChildren()
+            .Where(child => stated is null || stated.Contains(child.Key))
+            .Select(child => child.Value)
+            .Where(entry => !string.IsNullOrWhiteSpace(entry))
+            .Select(entry => entry!)];
+    }
+
+    /// <summary>
+    /// The required modules this instance demands that its OWN overlay never named — the quiet half
+    /// of the by-index merge, and the half no other check can see.
+    ///
+    /// <para>🚨 <b>Not the same question as <see cref="ShadowedRequired"/>.</b> That one sees an
+    /// entry the deployment REPLACED. This one sees the entries the deployment never REACHED: a
+    /// list shorter than the image's leaves the image's tail standing, so the instance requires
+    /// modules its record does not name — and nothing is missing, nothing is shadowed, the deploy
+    /// succeeds and the record is simply not a description of what the instance requires. Measured
+    /// on pearl.meshweaver.cloud, 2026-09-16 (#4476): a record naming five, an image naming six,
+    /// and a missing-module report that named the sixth.</para>
+    ///
+    /// <para>Empty when the deployment states <see cref="RequiredIsAuthoritativeKey"/> (it stated
+    /// the whole set, so nothing is unstated) and empty when only ONE provider supplies entries at
+    /// all — a Monolith, a test mesh or the CLI layers nothing, and reporting the image's own list
+    /// back to it would be noise. The remedy the report names is the claim, never "pick a free
+    /// slot": a free slot is a property of an image the deployment cannot read, and the image's
+    /// list has already grown from seven entries to nine underneath one.</para>
+    /// </summary>
+    /// <param name="configuration">The host configuration. A non-root <see cref="IConfiguration"/>
+    /// carries no provider list and yields an empty result — the check does not apply.</param>
+    public static string[] UnstatedRequired(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        if (configuration is not IConfigurationRoot root || StatedIndices(configuration) is not null)
+            return [];
+
+        // The deployment's own overlay is the LAST provider supplying anything under the key — the
+        // ConfigMap / container environment, layered over the image's appsettings. Provider order
+        // carries it; no provider-type sniffing, so any layering (files, env, command line) works.
+        var providers = root.Providers.ToArray();
+        var overlay = -1;
+        for (var i = 0; i < providers.Length; i++)
+            if (providers[i].GetChildKeys([], RequiredKey).Any())
+                overlay = i;
+        if (overlay < 0)
+            return [];
+
+        var stated = providers[overlay].GetChildKeys([], RequiredKey).ToHashSet(StringComparer.Ordinal);
+        return [.. root.GetSection(RequiredKey).GetChildren()
+            .Where(child => !stated.Contains(child.Key))
+            .Select(child => child.Value)
+            .Where(entry => !string.IsNullOrWhiteSpace(entry))
+            .Select(entry => entry!)];
+    }
+
+    /// <summary>
+    /// The <see cref="RequiredKey"/> indices an AUTHORITATIVE deployment supplies, or null when no
+    /// provider claims <see cref="RequiredIsAuthoritativeKey"/> — in which case every index of the
+    /// merged array counts, which is what every caller read before the claim existed.
+    /// </summary>
+    private static HashSet<string>? StatedIndices(IConfiguration configuration)
+    {
+        if (configuration is not IConfigurationRoot root)
+            return null;
+
+        var providers = root.Providers.ToArray();
+        var authority = -1;
+        for (var i = 0; i < providers.Length; i++)
+            if (providers[i].TryGet(RequiredIsAuthoritativeKey, out var claim))
+                authority = bool.TryParse(claim, out var claimed) && claimed ? i : -1;
+        if (authority < 0)
+            return null;
+
+        var indices = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = authority; i < providers.Length; i++)
+            foreach (var index in providers[i].GetChildKeys([], RequiredKey))
+                indices.Add(index);
+        return indices;
+    }
+
+    /// <summary>
     /// Resolves each <c>Modules:Assemblies</c> entry through
     /// <see cref="MeshBuilder.ResolveModulePath(string)"/> — one resolver, shared, probing
     /// <c>modules/&lt;name&gt;/</c> before the app closure — and installs what is actually there.
@@ -87,7 +210,22 @@ public static class MeshBuilderModuleActivation
                 + "module is simply not required any more, so it is never missing, the deploy "
                 + "succeeds and the health check stays green with the guard gone. Move the new "
                 + "entry to the first index PAST the image's own list, or restate the entry you "
-                + "replaced at a free index.");
+                + $"replaced at a free index — or state {RequiredIsAuthoritativeKey}=true, after "
+                + "which this deployment's own entries ARE the complete set and no index of the "
+                + "image's list applies.");
+
+        // The QUIETEST half: a requirement the deployment never reached. Its own list is shorter
+        // than the image's, so the image's tail stands — this instance requires a module its record
+        // does not name, and nothing above can see it (nothing is missing, nothing was replaced).
+        foreach (var unstated in UnstatedRequired(configuration))
+            report($"REQUIRED module '{unstated}' comes from the IMAGE, at an index this "
+                + $"deployment's own {RequiredKey} list does not reach. {RequiredKey} is an ARRAY "
+                + "and an override binds BY INDEX, so a shorter list does not replace a longer one "
+                + "— it overwrites the leading entries and leaves the tail standing, and an EMPTY "
+                + "list leaves the image's list standing in full. This instance therefore requires "
+                + "a module its own declaration never names. State "
+                + $"{RequiredIsAuthoritativeKey}=true to make this deployment's entries the "
+                + "complete set (including when there are none), or restate this entry in it.");
 
         // Hand the configuration to the builder BEFORE anything is installed: an attribute's
         // BuilderConfigurations runs inside InstallAssemblies, so a module asking "what did this
@@ -108,11 +246,7 @@ public static class MeshBuilderModuleActivation
         IConfiguration configuration, Func<string, string> resolve, Func<string, bool> exists)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        var required = configuration.GetSection(RequiredKey).GetChildren().Select(child => child.Value);
-        return [.. required
-            .Where(entry => !string.IsNullOrWhiteSpace(entry))
-            .Where(entry => !exists(resolve(entry!)))
-            .Select(entry => entry!)];
+        return [.. RequiredEntries(configuration).Where(entry => !exists(resolve(entry)))];
     }
 
     /// <summary>
@@ -149,6 +283,12 @@ public static class MeshBuilderModuleActivation
     {
         ArgumentNullException.ThrowIfNull(configuration);
         if (configuration is not IConfigurationRoot root)
+            return [];
+
+        // A deployment that states the COMPLETE set has not shadowed anything: replacing the
+        // image's leading indices is the whole POINT of the claim, and the image's other indices
+        // are not required here at all. Reporting either would make the claim look like a mistake.
+        if (StatedIndices(configuration) is not null)
             return [];
 
         var effective = root.GetSection(RequiredKey).GetChildren()
