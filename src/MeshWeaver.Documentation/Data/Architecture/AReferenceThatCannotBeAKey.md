@@ -464,8 +464,14 @@ foreach (var h in syncHubs)
         continue;
     }
 
-    string refType, refStr, hostAddr, owner;
+    string refType, refTypeId, refStr, hostAddr, owner;
+    // 🚨 TWO names, on purpose. `Name` is for DISPLAY; it is NOT a type identity — two
+    // WorkspaceReference implementations in different namespaces or assemblies share it, and here
+    // that is routine rather than exotic (every NodeType recompile mints a same-named type in a new
+    // collectible assembly). The KEY below uses the assembly-qualified name, so same-named types
+    // from different assemblies stay different keys.
     try { refType = mine.Reference?.GetType().Name ?? "null"; } catch { refType = "?"; }
+    try { refTypeId = mine.Reference?.GetType().AssemblyQualifiedName ?? "null"; } catch { refTypeId = "?"; }
     try { refStr = mine.Reference?.ToString() ?? ""; } catch { refStr = "?"; }
     try { hostAddr = (Prop(mine, "Host") as IMessageHub)?.Address?.ToString() ?? "?"; } catch { hostAddr = "?"; }
     try { owner = mine.Owner?.ToString() ?? "?"; } catch { owner = "?"; }
@@ -477,13 +483,15 @@ foreach (var h in syncHubs)
     byRefAndHost[k] = byRefAndHost.TryGetValue(k, out var c3) ? c3 + 1 : 1;
     if (!examples.ContainsKey(k))
         examples[k] = $"host={hostAddr} owner={owner} ref={(refStr.Length > 160 ? refStr[..160] : refStr)}";
-    // 🚨 THE KEY CARRIES THE TYPE AND THE FULL RENDERING. Two mistakes here both manufacture
-    // false duplicates, in exactly the direction this reading is used to argue:
+    // 🚨 THE KEY CARRIES THE TYPE IDENTITY AND THE FULL RENDERING. Three mistakes here each
+    // manufacture false duplicates, in exactly the direction this reading is used to argue:
     //   · TRUNCATING merges two distinct long references sharing a host, owner and prefix;
-    //   · dropping the TYPE merges references of DIFFERENT types that happen to render alike
-    //     (`CollectionReference("x")` and a `JsonPointerReference` can both print `/x`).
+    //   · dropping the TYPE merges references of DIFFERENT types that render alike
+    //     (`CollectionReference("x")` and a `JsonPointerReference` can both print `/x`);
+    //   · using the type's SHORT NAME merges same-named types from different assemblies, which
+    //     this mesh mints routinely — one per NodeType recompile.
     // Truncate only what is DISPLAYED (`examples` above); never what is COMPARED.
-    var pairKey = $"host={hostAddr} owner={owner} type={refType} ref={refStr}";
+    var pairKey = $"host={hostAddr} owner={owner} type={refTypeId} ref={refStr}";
     pairs.Add(pairKey);
     if (!liveRefs.TryGetValue(pairKey, out var bucket)) { bucket = new List<object>(); liveRefs[pairKey] = bucket; }
     if (mine.Reference is not null) bucket.Add(mine.Reference);
