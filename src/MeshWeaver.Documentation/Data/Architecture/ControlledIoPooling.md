@@ -357,6 +357,35 @@ Earlier guidance carved storage and Postgres out of the pool and left them on pl
 
 > 🚨 **Read the pairing correctly.** Only a *dedicated* single-connection data source makes "the gate and the driver pool are the same size" literally true — `PostgreSqlChunkedContentVectorStore` is the one place that holds (`MaxPoolSize=1` alongside its cap-1 `pg:vector` pool). The **partitioned** provider deliberately does the opposite: every per-schema adapter shares ONE `NpgsqlDataSource` (`MaxPoolSize=50` in the portal), because minting a data source per (schema, table) leaked a pool per hub and exhausted the server. There the two caps are a *budget*, not an identity — 16 reads + 1 write = 17 concurrent connections, comfortably under 50. That budget only holds if **both** pools are actually wired and each operation is filed on the right one.
 
+### What the caps actually cost, measured
+
+The queue-wait distribution was read for the first time on **2026-09-16**, on memex.systemorph.com,
+after 828 minutes of uptime:
+
+| pool | cap | admissions | mean wait | max wait | ≥ 1 s | ≥ 10 s |
+|---|---:|---:|---:|---:|---:|---:|
+| `pg:Postgres` (write) | 1 | 2,786 | 6.5 ms | 205 ms | 0 | 0 |
+| `pg-read:Postgres` (read) | 16 | 31,897,169 | 342 ms | 1,661 ms | 48,122 | 0 |
+
+🚨 **The cap-1 write gate is not the constraint; the cap-16 read gate is the one that queues.** The
+write pool served 3.4 admissions a minute and never made anything wait a full second. The read pool
+served 38,500 a minute and puts **77% of them in the [100 ms, 1 s) bucket** — it queues routinely.
+That is the reverse of where a year of reasoning about these caps was aimed
+([the recursive-delete drain](/Doc/Architecture/RecursiveDeleteDrain)), and it is why the reading had to be taken
+rather than argued.
+
+**Neither number moves on this.** The write pool has no queueing to relieve. The read pool's
+queueing has no diagnosis: `InvokeStream` holds one slot for an entire enumeration, so a long-held
+slot and a too-small cap produce the same mean and are different problems — and the caps are a
+connection budget, so spending the headroom needs a cause, not a symptom. Denominator: ONE portal,
+ONE pod, ONE process lifetime, and not the portal where the delete timeouts were logged.
+
+**How to take the reading.** `IoPoolRegistry.Snapshot()` enumerates the pools that EXIST — name,
+cap, in-flight, queue depth, distribution — and mints none. 🚨 Never read a pool by resolving it:
+`Get` is a resolver and answers an unknown name by CREATING that pool, which then reports itself,
+brand new, as idle. `IoPoolQueueReport.Describe` is the formatter that keeps "not measured",
+"measured, nothing queued" and "these pools had work queued" as three different sentences.
+
 **Both halves have to be wired, and reads must not be filed on the write pool.** This is not a style point — it was issues #1310/#1312/#1313/#1316. The Postgres backend resolved its cap-1 `pg:Postgres` pool, used it for provisioning, and then never passed `ioPool:` to the adapters that perform every actual write, so each per-schema adapter fell back to `IoPool.Unbounded`. Compounding it, eight read-shaped operations (`Read`, `ReadMany`, `Exists`, `FindBestPrefixMatch`, `ResolvePath`, `GetPartitionObjects`, `GetPartitionMaxTimestamp`, `ListPartitionSubPaths`) were filed on that write pool rather than the read pool. Net effect: the hottest read path in the portal — per-node-hub activation seeds, URL resolution, write-guard probes, the per-path read fan-out inside `StorageAdapterMeshQueryProvider` — ran with **no bound at all** against a 50-connection data source, and memex-cloud duly reported *"the connection pool has been exhausted (currently 50)"*. Keeping reads off the cap-1 pool is also what makes that pool safe: a read issued from inside a write would otherwise be a same-pool re-entry on a cap-1 gate, the one documented way to deadlock an `IIoPool`. `PartitionAdapterIoPoolWiringTests` pins both the wiring and the read/write filing.
 
 The cost concern that originally justified the carve-out (a `SubscribeOn` hop on every hot read under a constrained CI ThreadPool) is real — the answer is to size the per-adapter pools correctly, **not** to fall back to bare `FromAsync`. The migration is finished: every query/storage leaf is pooled (see "The sweep is complete" below), and new code (e.g. `PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned`) is pooled from day one.
