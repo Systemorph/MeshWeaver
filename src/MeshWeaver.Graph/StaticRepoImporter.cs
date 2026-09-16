@@ -1646,6 +1646,12 @@ public static class StaticRepoImporter
                             // storm), and every other node in the partition is still evaluated, so a
                             // re-import can still repair, create and prune (no freeze). Force and
                             // Reconcile bypass it — re-applying regardless is their whole purpose.
+                            //
+                            // 🚨 The sentence says "the mesh does not hold this content", NOT "the node
+                            // is not in the mesh" — deliberately, because a refused write is not always
+                            // a refused CREATE. An UPDATE refused on a node that already exists leaves
+                            // that node PRESENT and STALE, and telling an operator it is absent would
+                            // send them looking for the wrong thing.
                             if (policy?.Force != true && policy?.Reconcile != true
                                 && manifest.TryGetValue(path, out var priorEntry)
                                 && IsRefusalOf(priorEntry, token))
@@ -1659,10 +1665,10 @@ public static class StaticRepoImporter
                                     FailedDeterministic: 1,
                                     Failure: new FailedImport(path, RememberedRefusalReason, true),
                                     Log: new LogMessage(
-                                        $"⚠ {path} was REFUSED at this exact content by an earlier import "
-                                        + "and is NOT in the mesh — the same bytes break the same rule, so "
-                                        + "no write was attempted. Fix the source file, or re-import with "
-                                        + "force to see the refusal again in full.",
+                                        $"⚠ {path} was REFUSED at this exact content by an earlier import, "
+                                        + "so the mesh does NOT hold it — the same bytes break the same "
+                                        + "rule, and no write was attempted. Fix the source file, or "
+                                        + "re-import with force to see the refusal again in full.",
                                         Microsoft.Extensions.Logging.LogLevel.Warning)
                                         .WithKey("activity.import.itemRefusedBefore", ("path", path))));
                                 continue;
@@ -2121,8 +2127,8 @@ public static class StaticRepoImporter
                             // Bounded exactly like blockedNote/refusedNote so a pathological source
                             // cannot write an unbounded log line.
                             var failedNote = count.Failures.Count > 0
-                                ? $" ⚠ {count.Failures.Count} node(s) that did NOT land — they are NOT in "
-                                  + "the mesh, so anything referencing them will not compile: "
+                                ? $" ⚠ {count.Failures.Count} node(s) did NOT land — the mesh does NOT hold "
+                                  + "this content, so anything referencing them will not compile: "
                                   + string.Join("; ", count.Failures.Take(BlockedPathsNamed)
                                       .Select(f => $"{f.NodePath} ({f.Reason})"))
                                   + (count.Failures.Count > BlockedPathsNamed

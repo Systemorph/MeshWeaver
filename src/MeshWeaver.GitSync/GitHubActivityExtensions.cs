@@ -502,8 +502,8 @@ public static class GitHubActivityExtensions
                 ? $", … (+{result.FailedPaths.Count - Named} more)"
                 : "");
         return new LogMessage(
-                $"⚠ {result.FailedPaths.Count} node(s) did NOT land and are NOT in the mesh — "
-                + $"anything referencing them will not compile: {paths}",
+                $"⚠ {result.FailedPaths.Count} node(s) did NOT land — the mesh does NOT hold this "
+                + $"content, so anything referencing them will not compile: {paths}",
                 LogLevel.Warning)
             .WithKey("activity.gitsync.failedNodes",
                 ("count", result.FailedPaths.Count), ("paths", paths));
