@@ -801,13 +801,15 @@ public sealed class IoPool : IIoPool, IDisposable
                 // `_disposing`, so the region above admits the subscribe. StartCanceller (#2394) moved the
                 // CALL to Cancel() off the caller; a callback registered LATE ran on the caller anyway.
                 //
-                // So the callback does nothing until `armed` is published, which happens only after
-                // Register has RETURNED. A callback that finds it unarmed ran either inline inside Register
-                // or on the canceller before Register returned — in both cases the cancel was requested
-                // BEFORE the setup leaf below exists. That leaf then cannot miss it: its linked token is
-                // created cancelled, its gate wait throws, and its error arm delivers the terminal from a
-                // pool thread. Both writes are full fences (the CTS's state CAS, the Exchange below), so a
-                // callback cannot read `armed == 0` while the leaf reads the token as uncancelled.
+                // So the callback does nothing until `armed` is published, and that publication is the
+                // synchronisation point: it comes after Register has returned and BEFORE the setup leaf
+                // below is started. A callback that finds it unarmed ran before the Exchange — inline
+                // inside Register, or on the canceller at any moment up to the Exchange (including after
+                // Register returned). In every such case the cancel was requested before the setup leaf
+                // exists, so that leaf cannot miss it: its linked token is created cancelled, its gate
+                // wait throws, and its error arm delivers the terminal from a pool thread. Both writes are
+                // full fences (the CTS's state CAS, the Exchange below), so a callback cannot read
+                // `armed == 0` while the leaf reads the token as uncancelled.
                 //
                 // And the ORDER is the other half of the fix. The setup leaf used to be started first, so
                 // it could subscribe the source before this registration existed; a cancel landing in that
@@ -822,8 +824,11 @@ public sealed class IoPool : IIoPool, IDisposable
                 {
                     if (Volatile.Read(ref armed) == 0) return;
                     if (Interlocked.Exchange(ref terminated, 1) != 0) return;
-                    inner.Dispose();
-                    observer.OnCompleted();
+                    // This producer now OWNS the terminal, so nothing may skip it: a throwing
+                    // source-subscription Dispose would otherwise leave the latch taken and the observer
+                    // unterminated. The exception still propagates to whoever runs the cancel.
+                    try { inner.Dispose(); }
+                    finally { observer.OnCompleted(); }
                 });
                 Interlocked.Exchange(ref armed, 1);
 

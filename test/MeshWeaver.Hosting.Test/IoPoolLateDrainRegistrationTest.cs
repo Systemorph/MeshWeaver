@@ -73,8 +73,15 @@ public class IoPoolLateDrainRegistrationTest
         // returns. Nothing was admitted yet, so it has nothing to report.
         pool.Drain().Should().Be(0, "precondition: nothing was in flight, so the drain reports no residual");
 
+        // Whether the seam let the setup leaf go on its BUDGET rather than on the test's release. A leaf
+        // released that way could deliver its terminal before Subscribe() returned, and the thread
+        // assertion below would then prove nothing — so it is asserted, not assumed.
+        var setupLeafReleasedByBudget = 0;
         pool.OnSubscribeSetupLeafStarting = () =>
-            SpinWait.SpinUntil(() => Volatile.Read(ref releaseSetupLeaf) == 1, TestTimeouts.Quick);
+        {
+            if (!SpinWait.SpinUntil(() => Volatile.Read(ref releaseSetupLeaf) == 1, TestTimeouts.Quick))
+                Volatile.Write(ref setupLeafReleasedByBudget, 1);
+        };
 
         try
         {
@@ -99,9 +106,14 @@ public class IoPoolLateDrainRegistrationTest
             Volatile.Write(ref releaseSetupLeaf, 1);
 
             await terminal.Should().Within(TestTimeouts.Quick).Emit(
-                "a leg the drain refused must still TERMINATE — its .Finally is what releases a route slot "
+                "a leg the drain cancelled must still TERMINATE — its .Finally is what releases a route slot "
                 + "and advances OrderedRouteDispatcher's FIFO (#1789)",
                 cancellationToken: TestContext.Current.CancellationToken);
+
+            Volatile.Read(ref setupLeafReleasedByBudget).Should().Be(0,
+                "precondition: the setup leaf was held by the seam until the test released it — one that "
+                + "left on its budget could have terminated the observer first, making the thread "
+                + "assertion below vacuous");
 
             Volatile.Read(ref terminalThread).Should().NotBe(Volatile.Read(ref subscriberThread),
                 "a pooled subscription's downstream teardown must never run on the thread that SUBSCRIBED — "

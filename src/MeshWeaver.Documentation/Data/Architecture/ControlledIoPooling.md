@@ -824,14 +824,16 @@ token, and runs its teardown on the subscriber. Two orderings reach it, and the 
 
 **The fix changes the order, not `Drain()`'s admission.** The registration is created **first** and
 **disarmed**; `armed` is published (with `Interlocked.Exchange`) once `Register` has returned; only then
-is the setup leaf started. A callback that finds itself unarmed ran either inline inside `Register` or on
-the canceller before `Register` returned — both mean the cancel was requested before the setup leaf
-exists, so that leaf cannot miss it: its linked token is created cancelled, its gate wait throws, and
+is the setup leaf started. That publication is the synchronisation point. A callback that finds itself
+unarmed ran before it — inline inside `Register`, or on the canceller at any moment up to the
+`Exchange`, including after `Register` returned — so the cancel was requested before the setup leaf
+exists, and that leaf cannot miss it: its linked token is created cancelled, its gate wait throws, and
 its error arm delivers `OnCompleted` from a pool thread. The CTS's state transition and the arm are
 both full fences, so a callback reading `armed == 0` and a leaf reading the token as uncancelled cannot
 both happen. Starting the leaf after the registration also removes the second row: the source is never
-opened without an armed registration covering it. The two producers share one exactly-once latch,
-because the hand-off between them depends on it.
+opened without an armed registration covering it. The two producers share one exactly-once latch, so
+the hand-off is explicit; the producer that takes it delivers the terminal in a `finally`, so a
+throwing source `Dispose()` cannot leave the latch taken and the observer unterminated.
 
 Neither shape the issue sketched closes the window. Refusing new regions in `Drain()` still admits a
 subscribe that was already past its region check when the grace expired and the cancel ran. Checking
