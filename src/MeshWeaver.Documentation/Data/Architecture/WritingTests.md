@@ -405,6 +405,62 @@ Alternatively, start the assertion first without awaiting it (`var assertion = o
 
 ---
 
+## An Overlap the Test ASSUMES Is an Overlap It Does Not Have
+
+**When the assertion is about two things COEXISTING — two subscribers sharing one connection, a
+leaf queued behind another, two writers contending — the coexistence is something the test must
+ESTABLISH. Subscribing back to back and hoping they coincide is a race, and the direction it fails
+in is the one that reads like a real defect.**
+
+`DeckSlidesCacheTest.GetOrderedSlides_ConcurrentSubscribers_ShareOneQuerySubscription` asserts that
+two overlapping subscribers share ONE underlying query. Both subscribers reduce with `FirstAsync()`,
+so each lets go the instant it has its value:
+
+```csharp
+// ❌ the overlap is a hope. If the snapshot reaches the first subscriber before the next line
+//    runs, Replay(1).RefCount() drops to zero subscribers, DISCONNECTS, and the second
+//    subscriber reconnects — the count is 2 and the test is red for the one thing it does not test.
+var first  = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).Await(ct);
+var second = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).Await(ct);
+```
+
+```csharp
+// ✅ the source cannot emit until both are attached. Await subscribes SYNCHRONOUSLY, so by the
+//    time the gate opens the overlap is a fact. What is asserted is unchanged.
+var bothAttached = new AsyncSubject<Unit>();
+var mesh = MakeCountingMesh(bothAttached);          // gates the SUBSCRIPTION, not the values
+var first  = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).Await(ct);
+var second = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).Await(ct);
+first.IsCompleted.Should().BeFalse("the query is still closed, so no value can have arrived");
+bothAttached.OnNext(Unit.Default);
+bothAttached.OnCompleted();
+```
+
+Two details carry the fix:
+
+- **Gate the SUBSCRIPTION, never the values.** A `SkipUntil` would DROP a change feed's one
+  `Initial` snapshot if it arrived before the gate opened, and the test would hang instead of
+  racing — a worse failure wearing a better colour. Compose the gate ahead of the source
+  (`gate.Take(1).SelectMany(_ => inner.Query<T>(request))`) so the source is not subscribed at all
+  until the test says so.
+- **Assert the not-yet.** `first.IsCompleted.Should().BeFalse(...)` is the assertion the racy
+  arrangement had no way to make: it states, at the moment it matters, that neither subscriber can
+  have let go.
+
+The same rule produced `IoPoolQueueWaitTest`'s shape from the other direction: a leaf must be proven
+to have REACHED the gate (`SpinWait.SpinUntil(() => pool.CurrentlyWaiting == 1, …)`) before the test
+holds the slot, because a fixed hold lets a slow ThreadPool hand the leaf its slot without it ever
+having waited — and the contended assertion then passes on scheduling luck.
+
+🚨 **Prove it with the widener, not with a green run.** Both arrangements pass on an idle machine,
+so a green run says nothing. Widen the window in place — a `Task.Delay` between the two
+subscriptions, deleted before committing — and require the OLD arrangement to fail every run with
+the CI's exact message, the NEW one to pass with the widener still in, and to pass again once it is
+removed. Measured 2026-09-16: the old shape failed with *"Expected value to be 1 … but found 2"*,
+byte for byte what CI reported on a pull request whose diff could not reach this code.
+
+---
+
 ## 🚨 Never `await` an Observable the Code Under Test Signals
 
 **`await someObservable` resumes its continuation INLINE on whatever thread called `OnNext`.** If
