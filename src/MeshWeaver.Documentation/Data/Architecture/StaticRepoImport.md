@@ -383,9 +383,21 @@ So the outcome now distinguishes **why** a pass failed:
 | outcome | lock status | next trigger at the SAME fingerprint |
 |---|---|---|
 | `Imported` | `Succeeded` | skips |
-| `ImportedWithContentErrors` | `Failed` | **skips**, logging the recorded verdict |
+| `ImportedWithContentErrors` | `Failed` | **re-imports** — but issues no write for the refused node |
 | `ImportedWithErrors` | `Warning` | re-imports |
 | `ImportedWithRefusedContent` / `ImportedWithBlockedCreates` | `Warning` | re-imports |
+
+🚨 **That `ImportedWithContentErrors` row changed, and the argument above is the reason it had to.**
+Until 2026-09-16 it read *"**skips**, logging the recorded verdict"* — the whole PARTITION skipped,
+on a marker written because a content verdict was earned. But a content verdict is earned by a
+**node**, and `ImportedWithContentErrors` means *"every failure was deterministic"*, not *"everything
+failed"*: forty files can land and one be refused. Recording that as a verdict about the partition is
+what froze `Hosting` out of `memex.systemorph.com` over a single unstorable byte, with the next
+import answering *"an earlier FULL import already recorded this exact content"* about content it had
+lost. The refusal is now remembered **per node**, in the import manifest, so the failing write is
+still never re-issued — #3146's measurement is unchanged — while the rest of the partition is
+evaluated again. Full account:
+[A Content Verdict Is Per Node](/Doc/Architecture/AContentVerdictIsPerNode).
 
 `ImportedWithContentErrors` is reached only when **every** failure in the pass was a content verdict
 (`StaticRepoImporter.IsContentVerdict`), and that is decided on the owner's **structured**
