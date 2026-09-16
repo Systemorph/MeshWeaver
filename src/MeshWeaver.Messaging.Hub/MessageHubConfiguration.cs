@@ -781,6 +781,31 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithRequestTimeout(TimeSpan timeout) => this with { RequestTimeout = timeout };
 
     /// <summary>
+    /// How long a delivery may sit parked behind this hub's initialization gates before it is
+    /// failed back to its sender instead of hanging — <see cref="MessageService"/>'s per-message
+    /// deferral budget. Unset means the framework default (30 s), which is what every production
+    /// hub uses.
+    ///
+    /// <para>🚨 This is NOT a tuning knob and moving it fixes nothing: a delivery that needs longer
+    /// than the default is parked behind a gate that is not opening, and the answer is to find why.
+    /// It exists because the report that budget produces — the <c>DeliveryFailure</c> a stranded
+    /// sender actually reads — was unreachable from any test while the bound was a hard-coded
+    /// constant, so the one site in the whole deferral mechanism that still re-derived its gate
+    /// list from live state went unnoticed
+    /// (<a href="https://github.com/Systemorph/MeshWeaver/issues/3712">#3712</a>). A path no test
+    /// can reach is a path whose wording nobody checks.</para>
+    /// </summary>
+    /// <param name="timeout">The per-message deferral budget for this hub.</param>
+    /// <returns>Updated configuration.</returns>
+    public MessageHubConfiguration WithDeferralTimeout(TimeSpan timeout) => this with { DeferralTimeout = timeout };
+
+    /// <summary>
+    /// The per-message deferral budget, or <c>null</c> for the framework default. See
+    /// <see cref="WithDeferralTimeout"/>.
+    /// </summary>
+    internal TimeSpan? DeferralTimeout { get; init; }
+
+    /// <summary>
     /// Enables deferred initialization. When enabled, the hub will not automatically post InitializeHubRequest
     /// during construction. Manual initialization is required by posting InitializeHubRequest to the hub.
     /// This is useful when the hub needs to be fully constructed before initialization can proceed.
