@@ -1998,13 +1998,24 @@ public class MessageService : IMessageService
                                 // Unavailable, never Failed or NotFound: a stuck gate is "NO
                                 // VERDICT WAS REACHED", the address is fine and the same request
                                 // is meaningful again once the gate opens.
-                                AnswerUnreleasableDelivery(
-                                    delivery,
-                                    $"Deferred backlog in hub {Address} is at the {MaxDeferredMessages} cap behind "
-                                    + $"gate(s) [{string.Join(",", gates.Keys)}] that are not opening, so this "
-                                    + "delivery was dropped to bound memory. No verdict was reached — retry once "
-                                    + "the gate opens.",
-                                    ErrorType.Unavailable);
+                                //
+                                // 🚨 The awaited-by-sender question is asked HERE, not only
+                                // inside. AnswerUnreleasableDelivery's own guards do decline for
+                                // traffic nobody awaits — but only AFTER TryReportFailure has
+                                // logged its Warning, and the moment this branch runs at all is a
+                                // hub being FLOODED. One Warning per dropped filler is exactly the
+                                // cost the once-per-episode Error above exists to avoid, and the
+                                // same cost #1485 measured at ~1k Loki lines on a single dying
+                                // pod. Asking first keeps the answer for the deliveries that need
+                                // one, and the silence for the rest.
+                                if (IsAwaitedBySender(delivery))
+                                    AnswerUnreleasableDelivery(
+                                        delivery,
+                                        $"Deferred backlog in hub {Address} is at the {MaxDeferredMessages} cap behind "
+                                        + $"gate(s) [{string.Join(",", gates.Keys)}] that are not opening, so this "
+                                        + "delivery was dropped to bound memory. No verdict was reached — retry once "
+                                        + "the gate opens.",
+                                        ErrorType.Unavailable);
                                 return Observable.Return(delivery.Ignored());
                             }
                             logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
