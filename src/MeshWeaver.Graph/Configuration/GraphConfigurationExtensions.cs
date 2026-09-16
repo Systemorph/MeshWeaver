@@ -359,6 +359,18 @@ public static class GraphConfigurationExtensions
                 // HERE, with AddGraph, because the notification model is what AddGraph brings.
                 services.AddSingleton<ICompileFailureNotifier, CompileFailureNotifier>();
 
+                // 🚨 #4469 — the same shape, for the OTHER direction of the compile's ignorance.
+                // A NodeType parked on CS0246 for a symbol whose source node an import could not
+                // write had nothing anywhere connecting the error to the import that produced the
+                // state (memex.systemorph.com, 2026-09-15: one NUL byte, five Hosting NodeTypes,
+                // no instance action on the control instance for an evening). The importer records
+                // the refusal per node; this seam is how the compile pipeline READS it without a
+                // reference to MeshWeaver.Graph, which references IT.
+                services.AddSingleton<IPartitionImportRefusals>(sp =>
+                    new StaticRepoImportRefusals(
+                        sp.GetRequiredService<IMessageHub>(),
+                        sp.GetService<ILogger<StaticRepoImportRefusals>>()));
+
                 // Register compilation cache options
                 services.AddOptions<CompilationCacheOptions>();
 

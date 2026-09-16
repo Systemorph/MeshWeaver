@@ -141,20 +141,21 @@ bare number.**
 
 ## What this does not cover
 
-🚨 **An operator who starts from the COMPILE ERROR still has nothing pointing at the import.** Both
-issues list this as their third item, and it is deliberately not fixed here — it is
-[#4469](https://github.com/Systemorph/MeshWeaver/issues/4469).
+**An operator who starts from the COMPILE ERROR** was the third item on both issues and is
+deliberately not fixed on this page. It is [#4469](https://github.com/Systemorph/MeshWeaver/issues/4469),
+and it is now done — see [A Parked Type Names the Import](/Doc/Architecture/AParkedTypeNamesTheImport).
 
 A partition left incomplete still hands the compiler source files that reference a symbol whose own
-file did not land, so the NodeType fails on `CS0246` / `CS0103` for a symbol that is plainly in git,
-and nothing in that message connects it to the import. What changed is the other direction: an
-operator reading the **sync activity** now learns which file is missing and why, and the activity is
-no longer green. The facts a fix needs are all recorded — the manifest's `!<token>` entries say which
-declared nodes the partition is missing — so #4469 is a wiring problem, not a measurement one.
+file did not land, so the NodeType fails on `CS0246` / `CS0103` for a symbol that is plainly in git.
+What this page changed is the other direction: an operator reading the **sync activity** learns which
+file is missing and why, and the activity is no longer green. Because the facts were all recorded
+here — the manifest's `!<token>|<reason>` entries say which declared nodes the partition is missing,
+and why — #4469 was a wiring problem rather than a measurement one, and the compile failure now leads
+with the refusal that explains it.
 
-Note the granularity trap in it: refusing to compile a whole partition because one unrelated node was
-refused would re-create exactly the over-broad reading this page is about, so any fix has to be
-scoped to the types that actually reference the missing node.
+Note the granularity trap #4469 had to avoid: accusing (or refusing to compile) a whole partition
+because one unrelated node was refused would re-create exactly the over-broad reading this page is
+about, so the join is scoped to the types that actually reference the missing node.
 
 🚨 **A manifest written BEFORE this change still carries the old lie, for one case.** Entries predate
 the `!` sigil, so a node whose *update* was refused back then sits under its plain token while the
@@ -181,6 +182,7 @@ present.
 
 ## Related
 
+- [A Parked Type Names the Import](/Doc/Architecture/AParkedTypeNamesTheImport) — the other direction: an operator who starts from the compile error
 - [The Import Marker Records Convergence](/Doc/Architecture/ImportMarkerRecordsConvergence) — what the content-addressed marker may claim, and why an absent verdict reads as UNKNOWN
 - [Static Repo Import](/Doc/Architecture/StaticRepoImport) — the pipeline the marker and the manifest sit in
 - [The Prune Requires a Complete Listing](/Doc/Architecture/PruneRequiresACompleteListing) — the other way a pass leaves the partition unequal to the source

@@ -141,6 +141,13 @@ public static class NodeTypeOperationalContent
         // a finding about a partition it was never taken on — and the empty list is the shape that
         // reads as "checked, all present".
         "failedSourceQueries",
+        // #4469 — the source nodes an IMPORT recorded as refused that explain the standing
+        // failure's unresolved names. Operational for exactly the reason failedSourceQueries is,
+        // and for a sharper one: it is a measurement taken against THIS mesh's own import
+        // bookkeeping, so an authored copy would accuse an import that never ran here — the
+        // unfounded accusation the whole mechanism exists to refuse. Stripped on export, preserved
+        // from the live node on import.
+        "compilationImportRefusals",
         // #4480 — the build-inputs token the IN-FLIGHT compile was dispatched for (#2544), cleared
         // by every terminal write-back. Operational for the same reason failedBuildInputs is, and
         // it is the member that proved a naming convention cannot be the guard: it is spelled
