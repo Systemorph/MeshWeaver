@@ -1,7 +1,7 @@
 ---
 Name: A Reference That Cannot Be a Key
 Category: Architecture
-Description: A live in-process census attributed every one of a production replica's 311 sync/ hubs to the stream that minted it, and split the duplicates into two named causes by comparing the reference objects already on the heap. Eighteen were one value-identical pair whose reference has REFERENCE equality - a record with a collection member - so it could never hit the stream cache. The census itself is committed here, because the last two versions of it were lost.
+Description: A live in-process census attributed every one of a production replica's 312 sync/ hubs to the stream that minted it, and split the duplicates into two named causes by comparing the reference objects already on the heap. Twenty-four were one value-identical pair whose reference has REFERENCE equality - a record with a collection member - so it could never hit the stream cache, and that group grew 18 to 24 while being watched. The census itself is committed here, because the last two versions of it were lost.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
 ---
 
@@ -18,7 +18,8 @@ a live in-process census on a running production replica, not a heap dump and no
 > reference can never hit `Workspace._localStreamCache`, and every read mints a permanent `sync/`
 > hub on the owning node hub.**
 
-Measured: **18 of them on one node hub, for one collection name.**
+Measured: **24 of them on one node hub, for one collection name — and still climbing, 18 → 24
+in the 34 minutes between two readings.**
 
 ## 1. The reading that this issue always turned on
 
@@ -28,7 +29,7 @@ running a build that carries the fixes, and the census re-run on it. That precon
 **memex.systemorph.com, pod `memex-portal-deployment-7cb6684584-ztqz8`, pid 1, image
 `afde4eabe0740ff658f3dae8a3073c33a2b3ea02`** — which carries `f41f8bda` (#3427),
 [#3952](../ReadPathStreamMinting), `#4300` and `dbdaaacc3` ([#4163](../AHubThatPinsItsOwnCacheEntry)).
-Four readings on the same pod and pid:
+Five readings on the same pod and pid:
 
 | UTC | uptime | hubs | `sync/` | working set | GC heap |
 |---|---:|---:|---:|---:|---:|
@@ -36,19 +37,20 @@ Four readings on the same pod and pid:
 | 14:34:08 | 827.8 min | 381 | 309 | 3 158 MiB | 841 MiB |
 | 14:36:57 | 830.6 min | 392 | 318 | 3 094 MiB | 945 MiB |
 | 14:41:35 | 835.2 min | 384 | 311 | 3 085 MiB | 920 MiB |
+| 15:15:57 | 869.6 min | 374 | 312 | 3 595 MiB | 1 139 MiB |
 
 🚨 **The census is not a passive observer of its own subject.** Each run is an activity, and an
-activity is a node with a hub: the fourth reading's own activity accounts for 6 of the `sync/`
-hubs, and `rbuergi/Script/HubCensus7` grew from 7 to 11 across the four runs. The population goes
-**up and then down again** across the four rows — 299 → 309 → 318 → 311 — which is what a bounded
-population under a self-inflicted transient looks like, and is the opposite of the monotone climb
-the pre-fix replicas showed (≈16 `sync/` hubs per minute, ≈985/h). **Do not read a slope off these
-four rows; read the boundedness.**
+activity is a node with a hub: each reading's own activity accounts for 6 of the `sync/` hubs it
+counts, and `rbuergi/Script/HubCensus7` grew from 7 to 11 across the runs. The population goes
+**up and then down again** — 299 → 309 → 318 → 311 → 312 — which is what a bounded population under
+a self-inflicted transient looks like, and is the opposite of the monotone climb the pre-fix
+replicas showed (≈16 `sync/` hubs per minute, ≈985/h). **Do not read a slope off these rows; read
+the boundedness — and then read §4, where ONE group inside this flat total is monotone.**
 
 For scale, and stated as the non-comparison it is: the pre-fix readings in #3432 were taken on
 **memex.meshweaver.cloud** — 8 420 `sync/` hubs at 26 h, 4 687 at 90 min, 8 595 at 55 min. This one
 is a different instance with different load and **cannot be differenced against them**. What it can
-establish, and does, is that on fixed code a replica 13.8 hours old holds 311.
+establish, and does, is that on fixed code a replica 14.5 hours old holds 312.
 
 ## 2. What the census does that v3 and v6 could not
 
@@ -68,32 +70,33 @@ hub's own `disposables` composite — where `SynchronizationStream`'s constructo
 when its `ClientId` equals this hub's `Address.Id`**. Anything else lands in its own printed bucket.
 
 ```
---- ATTRIBUTION: sync=318 attributed=318 noDisposablesField=0 emptyComposite=0
+--- ATTRIBUTION: sync=312 attributed=312 noDisposablesField=0 emptyComposite=0
                  notFound=0 budgetExhausted=0 ---
-   composite entry-count histogram: 4:288, 5:30
+   composite entry-count histogram: 4:280, 5:32
 ```
 
-**318 of 318**, with every other outcome reported at zero. That is the denominator the earlier
-`residual` numbers never had.
+**312 of 312** on the final reading (and 318 of 318 on the 14:36:57 one), with every other outcome
+reported at zero. That is the denominator the earlier `residual` numbers never had.
 
 The v7.1 → v7.2 step is worth recording because the first version of the walk read
 `attributed=35 noCandidate=156 noIdentityMatch=108` — it collected up to 32 streams per hub and
 then looked for a match, and on most hubs the budget was spent before the right one was reached.
 **35 of 299 attributed is an instrument failure, not a finding**, and it is only visible because
 those two buckets are printed. A targeted walk — stop at the first `ClientId` match, under an
-explicit visit budget whose exhaustion is its own bucket — reads 318 of 318.
+explicit visit budget whose exhaustion is its own bucket — reads every hub on every run since.
 
 ### What the whole population is made of
 
 ```
+(15:15:57 reading)
 --- by REFERENCE type (what was reduced) ---   --- by HOST hub type (whose lifetime pays) ---
-   122  MeshNodeReference                          76  rbuergi        18  Hosting
-    72  CollectionsReference                       31  portal         13  PartnerRe
-    54  CollectionReference                        28  cache          11  Essentials
-    27  EntityReference                            23  UWDeepfield     8  Store
-    18  ContentCollectionReference                 22  Doc             8  Crm
-    11  LayoutAreaReference                        21  DeepSign        5  Notus
-     6  JsonPointerReference                       21  Admin           5  Plugins
+   114  MeshNodeReference                          44  rbuergi             20  Admin
+    62  CollectionsReference                       39  portal              17  DeepSign
+    46  CollectionReference                        28  Doc                 16  Hosting
+    30  EntityReference                            28  cache               15  Edu
+    24  ContentCollectionReference                 24  CollaborationNotus  13  Approvals
+    23  LayoutAreaReference                        22  rsalzmann           13  PartnerRe
+    12  JsonPointerReference
      1  SchemaReference
 ```
 
@@ -109,10 +112,17 @@ A cached reduce yields exactly ONE stream per `(host, reference)`. A second stre
 distinct-pair count is the per-call minting, and it needs no reasoning about call sites:
 
 ```
---- DUPLICATE MINTS: streams=311 distinctPairs=248 excess=63 ---
+--- DUPLICATE MINTS: streams=312 distinctPairs=232 excess=80 ---
 ```
 
-63 of 311 — 20 % of the live population — are duplicate mints. Two different things can produce
+🚨 **The first version of this reading was computed with a TRUNCATED grouping key** — the pair key
+kept only the first 120 characters of the reference — and it read `streams=311 distinctPairs=248
+excess=63`. Truncation MERGES two distinct long references that share a host, owner and prefix into
+one bucket and reports them as a duplicate: a false positive in exactly the direction the reading is
+used to argue. The figures above are the re-run with the full reference as the key, and the script
+in §9 is the corrected one. **Truncate what is displayed, never what is compared.**
+
+80 of 312 — 26 % of the live population — are duplicate mints. Two different things can produce
 one, and **they call for opposite responses**:
 
 - the caller took the **deliberately uncached configured branch** (`Workspace.GetStream(reference,
@@ -126,29 +136,35 @@ compares the **live reference objects it already holds** — no new objects, no 
 workspace, no side effect of any kind:
 
 ```
-   x18   [ContentCollectionReference] refsEqual=NO  -> the reference CANNOT be a cache key (identity equality)
+   x24   [ContentCollectionReference] refsEqual=NO  -> the reference CANNOT be a cache key (identity equality)
           host=Doc/Architecture owner=Doc/Architecture ref=collection/content
-   x6    [MeshNodeReference]   refsEqual=YES hash=SAME -> cache BYPASSED (configured branch)
-   x5    [MeshNodeReference]   refsEqual=YES hash=SAME -> cache BYPASSED (configured branch)
-   x4    [MeshNodeReference]   refsEqual=YES hash=SAME -> cache BYPASSED (configured branch)
+   x5    [MeshNodeReference]     refsEqual=YES hash=SAME -> cache BYPASSED (configured branch)
+   x4    [MeshNodeReference]     refsEqual=YES hash=SAME -> cache BYPASSED (configured branch)
+   x3    [CollectionsReference]  refsEqual=YES hash=SAME -> cache BYPASSED (configured branch)
+   x3    [JsonPointerReference]  refsEqual=YES hash=SAME -> cache BYPASSED (configured branch)
    …
-   x2    [EntityReference]     refsEqual=YES hash=SAME -> cache BYPASSED (configured branch)
-   x2    [LayoutAreaReference] refsEqual=YES hash=SAME -> cache BYPASSED (configured branch)
+   x2    [EntityReference]       refsEqual=YES hash=SAME -> cache BYPASSED (configured branch)
+   x2    [LayoutAreaReference]   refsEqual=YES hash=SAME -> cache BYPASSED (configured branch)
 ```
 
-🚨 **This is the falsifying case, and it carries its own control.** Of the 22 duplicate groups,
-**21 read `refsEqual=YES`** — every reference type with value equality, including
-`LayoutAreaReference`, which overrides its own equality precisely so it can be compared. **One reads
-`NO`.** Had the equality hypothesis been wrong, `ContentCollectionReference` would have read `YES`
-with the rest; had the probe been vacuous — an `Equals` that is always false — every group would
-have read `NO`. Neither happened.
+🚨 **This is the falsifying case, and it carries its own control.** Every other duplicate group reads
+`refsEqual=YES` — `MeshNodeReference`, `CollectionsReference`, `JsonPointerReference`,
+`EntityReference` and `LayoutAreaReference`, the last of which overrides its own equality precisely
+so it can be compared. **Exactly one type reads `NO`.** Had the equality hypothesis been wrong,
+`ContentCollectionReference` would have read `YES` with the rest; had the probe been vacuous — an
+`Equals` that is always false — every group would have read `NO`. Neither happened.
 
-So the 63 split cleanly:
+So the 80 split cleanly:
 
 | | streams | excess | what it is |
 |---|---:|---:|---|
-| `ContentCollectionReference` on `Doc/Architecture` | 18 | **17** | **a defect** — the key is unhittable |
-| everything else | 293 | 46 | the configured branch, by contract, retires with its subscriber |
+| `ContentCollectionReference` on `Doc/Architecture` | 24 | **23** | **a defect** — the key is unhittable |
+| everything else | 288 | 57 | the configured branch, by contract, retires with its subscriber |
+
+🚨 **And that one group is MONOTONE, which the rest are not.** Across the two readings 34 minutes
+apart on the same pod and pid it went **18 → 24** for the same single reference on the same node hub,
+while the whole `sync/` population moved 311 → 312. The defect is not a high-water mark left over
+from a burst; it mints on every read, for ever, for as long as that node hub lives.
 
 ## 5. The defect
 
@@ -461,7 +477,11 @@ foreach (var h in syncHubs)
     byRefAndHost[k] = byRefAndHost.TryGetValue(k, out var c3) ? c3 + 1 : 1;
     if (!examples.ContainsKey(k))
         examples[k] = $"host={hostAddr} owner={owner} ref={(refStr.Length > 160 ? refStr[..160] : refStr)}";
-    var pairKey = $"host={hostAddr} owner={owner} ref={(refStr.Length > 120 ? refStr[..120] : refStr)}";
+    // 🚨 GROUP ON THE FULL REFERENCE. Truncating here would merge two DISTINCT long references
+    // that share a host, owner and prefix into one bucket and report them as a duplicate mint —
+    // a false positive in exactly the direction this reading is used to argue. Truncate only what
+    // is DISPLAYED (`examples` above); never what is COMPARED.
+    var pairKey = $"host={hostAddr} owner={owner} ref={refStr}";
     pairs.Add(pairKey);
     if (!liveRefs.TryGetValue(pairKey, out var bucket)) { bucket = new List<object>(); liveRefs[pairKey] = bucket; }
     if (mine.Reference is not null) bucket.Add(mine.Reference);

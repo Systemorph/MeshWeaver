@@ -24,12 +24,12 @@ is bounded by how many distinct collections a hub has instead of by how many tim
 Nothing about what a read returns has changed. The two sibling references with the same shape,
 `AggregateWorkspaceReference` and `CombinedStreamReference`, were given the same treatment.
 
-It was found on a running portal. A live in-process census attributed all 311 of a replica's `sync/`
-hubs to the stream that minted each one, found 63 duplicates of a value-identical
+It was found on a running portal. A live in-process census attributed all 312 of a replica's `sync/`
+hubs to the stream that minted each one, found 80 duplicates of a value-identical
 `(host, reference)` pair, and then separated the two possible causes by comparing the reference
-objects already on the heap: 21 of the 22 duplicate groups compared equal — those are caller-specific
-streams that retire with their caller — and one did not. That one was eighteen copies of
-`(Doc/Architecture, collection/content)`.
+objects already on the heap: every duplicate group but one compared equal — those are
+caller-specific streams that retire with their caller. The one that did not was twenty-four copies
+of `(Doc/Architecture, collection/content)`, up from eighteen half an hour earlier.
 
 A guard now refuses any workspace reference whose record equality would compare an array, a
 non-string sequence or a `Lazy<>` by reference without a hand-written `Equals`. The full
