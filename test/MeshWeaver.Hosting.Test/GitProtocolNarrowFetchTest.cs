@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.GitSync;
@@ -57,8 +59,13 @@ public class GitProtocolNarrowFetchTest
             snapshot.Files.Select(f => f.Path).OrderBy(p => p, StringComparer.Ordinal).ToArray());
         Assert.Equal(world.HeadSha, snapshot.CommitSha);
 
-        // WHICH path ran: 3 of the repo's 5 paths were selected BEFORE any blob moved.
+        // WHICH path ran: 3 of the repo's 5 paths were selected BEFORE any blob moved...
         Assert.Contains(world.Log, line => line.Contains("3 of 5 path(s) selected"));
+        // ...and the sparse-checkout actually RESTRICTED the worktree. This line is emitted only
+        // after `sparse-checkout set` succeeded, so it reports a command that ran — a path that
+        // selected 3 and then checked out the whole tree could not produce it.
+        Assert.Contains(world.Log,
+            line => line.Contains("sparse-checkout restricted the worktree to 3 path(s)"));
         // …and the remote served the partial clone, so nothing announced a lost saving.
         Assert.DoesNotContain(world.Log, line => line.Contains("does not serve partial clones"));
     }
@@ -222,12 +229,12 @@ public class GitProtocolNarrowFetchTest
     /// nothing static, so one test cannot read another's lines.</summary>
     private sealed class RecordingLogger : ILogger<GitProtocolRepoClient>
     {
-        private readonly List<string> lines = [];
+        // Immutable accumulation rather than a lock-backed list: the client logs from pool threads,
+        // so the shared state a concurrent logger keeps is the one place a mutable collection would
+        // actually be read while it is being written.
+        private ImmutableList<string> lines = ImmutableList<string>.Empty;
 
-        public IReadOnlyList<string> Lines
-        {
-            get { lock (lines) return lines.ToArray(); }
-        }
+        public IReadOnlyList<string> Lines => Volatile.Read(ref lines);
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
@@ -237,8 +244,8 @@ public class GitProtocolNarrowFetchTest
             LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            lock (lines)
-                lines.Add(formatter(state, exception));
+            var line = formatter(state, exception);
+            ImmutableInterlocked.Update(ref lines, (current, l) => current.Add(l), line);
         }
     }
 }

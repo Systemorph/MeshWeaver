@@ -145,6 +145,12 @@ public sealed class GitProtocolRepoClient(
         return IsShortSha(commitRef)
             ? wire.Catch((Exception ex) =>
             {
+                // 🚨 An UNSUBSCRIBE is not a failed fetch. The pool cancels its token when nobody is
+                // listening any more, and re-reading the repository over REST there would start a
+                // second read for an answer no one will receive — so cancellation propagates rather
+                // than selecting the fallback.
+                if (ex is OperationCanceledException)
+                    return Observable.Throw<RepoSnapshot>(ex);
                 logger?.LogInformation(
                     "Wire fetch of '{Commitish}' failed ({Error}); resolving the abbreviated SHA via REST.",
                     commitRef, ex.Message);
@@ -194,10 +200,11 @@ public sealed class GitProtocolRepoClient(
                 })
                 .Catch((Exception ex) =>
                 {
-                    // 🚨 An UNSUBSCRIBE is not a refusal. The pool cancels its token when nobody is
-                    // listening any more, and retrying there would start a SECOND — and this time
-                    // whole-repository — fetch for an answer no one will read.
-                    if (ex is OperationCanceledException)
+                    // 🚨 ONLY a refusal of the FILTER selects the fallback. Everything else — a bad
+                    // ref, an auth failure, a transport error, an unsubscribe — propagates, because
+                    // retrying those as a WHOLE-repository fetch would double page-facing work and
+                    // turn an ordinary failure into an expensive one before failing anyway.
+                    if (!IsPartialCloneRefusal(ex))
                         return Observable.Throw<bool>(ex);
                     // Capability negotiation, not fault suppression: the remote does not serve
                     // partial clones, so the ONLY thing lost is the byte saving. The retry below
@@ -246,6 +253,12 @@ public sealed class GitProtocolRepoClient(
                     // The filter matches nothing at this commit: no checkout, no blob, no bytes.
                     return Observable.Return(System.Reactive.Unit.Default);
                 return Expect(git.Run(tmp, ["sparse-checkout", "set", "--no-cone", "--", .. wanted]))
+                    // Emitted only AFTER the sparse set actually succeeded, so it reports the
+                    // command that ran rather than the intention to run it — which is what lets a
+                    // test tell a narrowed checkout from a whole one.
+                    .Do(_ => logger?.LogDebug(
+                        "Narrow fetch: sparse-checkout restricted the worktree to {Wanted} path(s).",
+                        wanted.Count))
                     .SelectMany(_ => CheckoutEverything(tmp, accessToken));
             });
 
@@ -276,10 +289,15 @@ public sealed class GitProtocolRepoClient(
     private static IReadOnlyList<string>? WantedPatterns(
         string treeOutput, string prefix, Func<string, bool> pathFilter)
     {
-        var wanted = new List<string>();
-        foreach (var raw in treeOutput.Split('\0'))
+        var wanted = ImmutableArray.CreateBuilder<string>();
+        var bytes = 0;
+        // 🚨 `-z` records are NUL-delimited and NOTHING else may be stripped: git permits '\n' and
+        // '\r' INSIDE a path, so trimming them would evaluate the filter against a name the
+        // worktree does not have — the file would then be selected under one name and read under
+        // another, and the filtered fetch would silently omit it. Only a genuinely empty record
+        // (the trailing one) is skipped.
+        foreach (var path in treeOutput.Split('\0'))
         {
-            var path = raw.Trim('\n', '\r');
             if (path.Length == 0)
                 continue;
             if (prefix.Length > 0 && !path.StartsWith(prefix, StringComparison.Ordinal))
@@ -293,10 +311,15 @@ public sealed class GitProtocolRepoClient(
             if (HasPatternMetacharacter(path))
                 return null;
             wanted.Add("/" + path);
-            if (wanted.Count > MaxNarrowPaths)
+            // 🚨 Bound the ARGV, not just the count: a few hundred very long paths reach the
+            // platform's argument limit long before 2,000 entries do, and `sparse-checkout set`
+            // would then fail the whole fetch instead of taking the whole-checkout fallback this
+            // returns. Both bounds are cheap and only one of them is about how MANY files there are.
+            bytes += path.Length + 2;
+            if (wanted.Count > MaxNarrowPaths || bytes > MaxNarrowArgumentBytes)
                 return null;
         }
-        return wanted;
+        return wanted.ToImmutable();
     }
 
     /// <summary>How many paths the tree carries — the denominator the narrowing is reported against,
@@ -312,6 +335,22 @@ public sealed class GitProtocolRepoClient(
     /// wide is close to the whole tree anyway, so the whole checkout is both simpler and safe
     /// against the platform's argument-length limit.</summary>
     private const int MaxNarrowPaths = 2000;
+
+    /// <summary>The other half of that bound, in BYTES — what the platform actually limits. 128 KiB
+    /// is far below the smallest `ARG_MAX` in use and leaves room for the rest of the command line.</summary>
+    private const int MaxNarrowArgumentBytes = 128 * 1024;
+
+    /// <summary>
+    /// Whether a failed fetch is the remote REFUSING the filter — the one condition the
+    /// whole-repository retry exists for. Matched on git's own wording for an unsupported or
+    /// malformed filter; anything else is a real failure and must propagate rather than be retried
+    /// as a far more expensive read.
+    /// </summary>
+    private static bool IsPartialCloneRefusal(Exception ex)
+        => ex is not OperationCanceledException
+           && ex.Message is { } m
+           && (m.Contains("filter", StringComparison.OrdinalIgnoreCase)
+               || m.Contains("partial clone", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The gitignore-pattern syntax a literal path must not contain to be usable as one.
     /// An immutable, never-written lookup — the one shape a <c>static readonly</c> may take
