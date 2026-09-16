@@ -240,6 +240,33 @@ class CheckerVerdictTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn('PVC', result.stdout)
 
+    def test_prometheus_trailing_slash_matches_mount(self):
+        result = self.run_checker(self.CLEAN, rendered=manifest(prometheus_args=[
+            '--storage.tsdb.path=/data/', '--storage.tsdb.retention.time=15d',
+            '--storage.tsdb.retention.size=6GB']))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_prometheus_fractional_and_binary_units_are_valid(self):
+        # The pinned Prometheus binary's alecthomas/units ParseUnit accepts fractional
+        # values and both GB and GiB as binary quantities; keep our guard aligned.
+        for size in ('5.5GB', '6GiB'):
+            with self.subTest(size=size):
+                values = json.loads(json.dumps(self.CLEAN))
+                values['prometheus']['server']['extraArgs']['storage.tsdb.retention.size'] = size
+                result = self.run_checker(values, rendered=manifest(prometheus_args=[
+                    '--storage.tsdb.path=/data', '--storage.tsdb.retention.time=15d',
+                    f'--storage.tsdb.retention.size={size}']))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_prometheus_unknown_unit_fails(self):
+        values = json.loads(json.dumps(self.CLEAN))
+        values['prometheus']['server']['extraArgs']['storage.tsdb.retention.size'] = '6G'
+        result = self.run_checker(values, rendered=manifest(prometheus_args=[
+            '--storage.tsdb.path=/data', '--storage.tsdb.retention.time=15d',
+            '--storage.tsdb.retention.size=6G']))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('unsupported storage quantity', result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

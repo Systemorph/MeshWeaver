@@ -62,9 +62,10 @@ def merged_values(current, overlay):
 
 
 def storage_bytes(value, *, prometheus=False):
-    """Prometheus Base2Bytes (GB) and Kubernetes storage quantities (Gi/G)."""
-    units = ({'B': 1, **{f'{unit}B': 1024 ** power
-                         for power, unit in enumerate('KMGTPE', 1)}} if prometheus else
+    """Prometheus Base2Bytes (GB/GiB) and Kubernetes storage quantities (Gi/G)."""
+    units = ({'B': 1, **{f'{unit}{suffix}': 1024 ** power
+                         for power, unit in enumerate('KMGTPE', 1)
+                         for suffix in ('B', 'iB')}} if prometheus else
              {'': 1, **{f'{unit}i': 1024 ** power for power, unit in enumerate('KMGTPE', 1)},
               **{unit: 1000 ** power for power, unit in enumerate('KMGTPE', 1)}})
     match = re.fullmatch(r'(\d+(?:\.\d+)?)([A-Za-z]*)', str(value))
@@ -110,7 +111,11 @@ def verify_prometheus_storage(documents, values):
     if duration != str(declared.get('retention', '')):
         findings.append('rendered Prometheus retention.time does not match the declared retention')
 
-    mounts = [m for m in container.get('volumeMounts', []) if m.get('mountPath') == path]
+    if not path or not path.startswith('/'):
+        findings.append('Prometheus storage.tsdb.path must be an absolute path')
+    mounts = [m for m in container.get('volumeMounts', [])
+              if path and path.startswith('/')
+              and str(m.get('mountPath', '')).rstrip('/') == path.rstrip('/')]
     volumes = [v for v in pod.get('volumes', [])
                if len(mounts) == 1 and v.get('name') == mounts[0].get('name')]
     claim = (volumes[0].get('persistentVolumeClaim', {}).get('claimName')
