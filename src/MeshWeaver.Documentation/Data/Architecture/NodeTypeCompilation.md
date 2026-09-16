@@ -2363,6 +2363,68 @@ stalled memex-cloud on 2026-08-02 with "7 NodeType(s) regressed" and not one `CS
 counting only *direct* timeouts leniently still let one timed-out shared source gate through its
 dependents, which reproduced the same stall one hop downstream.
 
+### 🚨 The same cascade with NOTHING edited — a store-delivered module that is landed but not loaded
+
+The cascade above starts from a framework API that was *deleted*. It has a second entry point that
+needs no edit to anything: a NodeType's in-mesh source `using`s a **store-delivered** module, and on
+this replica that module is **landed but not yet loaded**. The source is byte-identical to the one
+that compiled on the previous pod; the reference simply does not resolve in this process.
+
+Measured on memex.systemorph.com, 2026-09-16 (#4471), after its 00:43Z pod replacement:
+
+```
+/health  pending_module_activation: Degraded — 8 module(s) are landed but not yet loaded
+         in this process — a restart activates them: MeshWeaver.AI, …, MeshWeaver.Hosting.Instance, …
+
+Hosting/Deployment/Source/PlatformBuildInboxWatcher.cs   →  using MeshWeaver.AI;
+```
+
+#### A chained `configuration` lambda is ONE compile unit
+
+`Hosting/PlatformBuildInbox`'s `configuration` is a single expression:
+
+```csharp
+config => config.WithContentType<MarkdownContent>().AddMarkdownViews()
+    .AddPlatformBuildInboxWatcher().AddBuildQueue()
+    .AddOperationalSpaceProvisioning().AddFleetWatch()
+    .AddLayout(layout => layout.AddPlatformBuildInboxLayoutAreas())
+```
+
+There is no partial success available. `AddPlatformBuildInboxWatcher()` failing to resolve fails the
+whole lambda, so **every capability on the chain goes down together** — here the fleet watch, the
+build queue, operational-space provisioning and the inbox drain, on a hub that is meant to be
+activated for the life of the portal. The inbox kept accepting deliveries over HTTP while nothing
+consumed them: 125 `WebhookEvent` nodes, every one at `version: 1`, and `Ops/Status/*` frozen at the
+old pod's last write.
+
+**When you add a capability to an existing chain, you add its dependencies to every other capability
+on it.** A chain that mixes an image-delivered capability with one that needs a store-delivered
+module makes the first as fragile as the second.
+
+#### 🚨 Why nothing gates it: the failure is per-replica, the gate's baseline is not
+
+| instrument | reads | sees this? |
+|---|---|---|
+| the node's `compilationStatus` / the pre-prod sweep | ONE shared field over every replica's boot compile | **no** — still `Ok` |
+| `bake-report`'s `previouslybroken` | that same shared field | **no** — `baked=217 previouslybroken=1`, an unrelated type |
+| `DynamicTypePreWarmer` readiness gate | a type that REGRESSED against the shared baseline | **no** — nothing regressed in the record |
+| `/health` `content-types` | reads that degraded **on this replica** | **partly** — names `Hosting/*` types as "the module that declares the type is not loaded here", but only for types someone READ |
+| `/health` `pending_module_activation` | this process's module load state | **yes** — and it names its own remedy |
+
+So the replica passes readiness, serves traffic, and silently lacks everything on the chain. The one
+instrument that names the cause is `pending_module_activation` — and nothing consumes it: it
+reports `Degraded` on a public endpoint and no alert, gate or reconciler acts on that. A detector
+whose output nobody reads fails exactly like the frozen watcher it would have explained.
+
+🚨 **Measured versus inferred.** The module state, the `using`, and the single chain are each read
+off the live system. That the lambda fails to compile *on this replica* is inferred from those three:
+the instrument that would show it directly is the shared `compilationStatus`, which by construction
+cannot (#4320). Say so when you cite this.
+
+**Remedy for an instance:** a restart activates landed modules — the health entry says so, and the
+inbox's deliveries are durable nodes, so they drain rather than being lost. **What a restart does not
+fix:** the chain's shared fate, and the unconsumed detector.
+
 ### A sweep that ERRORED is not a sweep that passed
 
 The leniency above is about *individual types* the sweep could not evaluate. It does **not** extend
