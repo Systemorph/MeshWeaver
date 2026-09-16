@@ -418,6 +418,28 @@ public sealed class GitHubSyncService
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath,
                         SyncIgnore.For(config), progress, policy,
                         baseSha: force ? null : config.LastSyncCommitSha)
+                    // 🚨 A REFUSAL IS A CONCLUSION, AND EVERY CONCLUSION RECORDS ITSELF (#3581).
+                    // The empty-subdirectory refusal below was the one branch that escaped that
+                    // rule: it logged, it threw, and it wrote NOTHING to the config node — so from
+                    // outside, a source refusing on every single pass is indistinguishable from one
+                    // that is working. Measured on memex.systemorph.com (#4499): two Spaces refusing
+                    // ~32×/hour, for an unbounded duration, visible only as a log line, and by
+                    // design it can never resolve on its own — the subdirectory does not exist in
+                    // the repository and no amount of retrying will create it.
+                    //
+                    // Recorded and then RE-THROWN: the caller's error contract is unchanged, and
+                    // this is not a swallow — the fault still propagates exactly as it did.
+                    .Catch<(StaticRepoImportResult Result, string CommitSha), SyncSubdirectoryEmptyException>(
+                        refusal => RecordSyncResult(
+                                spacePath, RefusedOutcome,
+                                // Nothing was read and nothing landed: neither pointer may move, or
+                                // the next pass would skip the commit this refusal never imported.
+                                seenCommitSha: null, advanceHorizon: false, sourceId,
+                                note: refusal.Message,
+                                // No attempt ran — the refusal is BEFORE the import, so the attempt
+                                // pair is cleared rather than stamped (#3945).
+                                attemptedCommitSha: null)
+                            .SelectMany(_ => Observable.Throw<(StaticRepoImportResult, string)>(refusal)))
                     // 🚨 RECOMPILE WHAT THE SYNC CHANGED — part of the sync transaction, not a
                     // follow-up human step. Importing new Source/Code nodes and walking away leaves
                     // every affected NodeType serving its STALE assembly (the "assembly is the
@@ -637,8 +659,11 @@ public sealed class GitHubSyncService
                     + "capitalisation — git paths are case-sensitive) on the sync source.";
                 logger?.LogWarning("[GitSync] {Space}: {Message}", spaceId, message);
                 progress?.Invoke(message, LogLevel.Error);
+                // 🚨 TYPED so the caller can RECORD this conclusion without matching on the message
+                // text (#4499). It derives from InvalidOperationException, so anything that already
+                // catches that keeps behaving exactly as before.
                 return Observable.Throw<(StaticRepoImportResult, string)>(
-                    new InvalidOperationException(message));
+                    new SyncSubdirectoryEmptyException(message));
             }
             // Git-diff scope: when we know the last SUCCESSFULLY-synced commit (a routine
             // webhook/update — not a force, not a first import), ask GitHub what changed between it
@@ -1076,6 +1101,18 @@ public sealed class GitHubSyncService
     public const string HeldOutcome = "Held";
 
     /// <summary>
+    /// A source that REFUSED to import — the fetch succeeded and the import was declined, so the
+    /// Space is not merely behind, it is not being synced at all and will not recover on its own.
+    ///
+    /// <para>🚨 Distinct from <see cref="HeldOutcome"/>, which is a source waiting for a seal it
+    /// will eventually get. A refusal is a CONFIGURATION fault: it repeats identically on every
+    /// pass, forever, and the only thing that clears it is someone editing the source (#4499 —
+    /// measured at ~32 refusals/hour across two Spaces on memex.systemorph.com, for an unbounded
+    /// duration, with nothing but a log line to show for it).</para>
+    /// </summary>
+    public const string RefusedOutcome = "Refused";
+
+    /// <summary>
     /// Records that this source was HELD from advancing, and why — onto the config, so the reason
     /// is visible where the outcome is (2026-09-08: a source held for hours showed only
     /// <c>Skipped</c>). Moves nothing else: not the commit, not the horizon. Cold.
@@ -1126,3 +1163,18 @@ public sealed class GitHubSyncService
     private T? Extract<T>(MeshNode? node) where T : class
         => node.ContentAs<T>(hub.JsonSerializerOptions, logger);
 }
+
+/// <summary>
+/// A sync source whose configured subdirectory matches NOTHING in the named repository at the
+/// commit being synced. The fetch succeeded; the import is declined because an empty snapshot
+/// under <c>FullReplace</c> would mirror the whole Space away (#1326).
+///
+/// <para>🚨 It exists as a TYPE so the conclusion can be RECORDED on the sync config without
+/// matching on message text (#4499). Derived from <see cref="InvalidOperationException"/>, which
+/// is what this path threw before, so every existing catch behaves identically.</para>
+///
+/// <para>This is a CONFIGURATION fault, not a transient: it repeats identically on every pass and
+/// clears only when someone edits the source. That is precisely why it has to be visible on the
+/// node — a retry will never fix it, and a log line is not a state.</para>
+/// </summary>
+public sealed class SyncSubdirectoryEmptyException(string message) : InvalidOperationException(message);
