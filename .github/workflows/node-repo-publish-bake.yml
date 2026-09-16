@@ -298,6 +298,24 @@ on:
         required: false
         type: string
         default: 'plugin-gate.allow'
+      warning-baseline-file:
+        description: >-
+          The in-mesh WARNING debt this repo carries, passed as --warning-baseline
+          (repo-relative). It arms TWO shrink-only ratchets over the NodeType compiles: one over
+          the real warnings (CS0219, CS1574, …) and a separate one over CS1591, a missing XML doc
+          comment. Lines are `<NodeType path> <diagnostic id>`; an unlisted pair fails the bake and
+          a listed pair whose type compiled clean is stale and fails it too, so the debt can only
+          shrink. See Doc/Architecture/InMeshWarningStandard in the platform repo.
+
+          EMPTY (the default) is OBSERVE-ONLY and is the deliberate adoption path: the bake still
+          MEASURES every warning, prints the folded inventory and says by name that it enforced
+          nothing, so an unadopted repo is visibly unguarded rather than silently so — and none of
+          the satellites goes red on the day this lands. To adopt: run one bake with
+          `MW_LOG_LEVEL=Information`, paste the `warnings: baseline …` lines into a file, commit it
+          and name it here.
+        required: false
+        type: string
+        default: ''
       publication-layout:
         description: >-
           Where a publication is written under
@@ -1541,6 +1559,7 @@ jobs:
         env:
           STAGE_MODULES: ${{ inputs.stage-modules }}
           ALLOW_FILE: ${{ inputs.allow-file }}
+          WARNING_BASELINE_FILE: ${{ inputs.warning-baseline-file }}
           BAKE_SCOPE: ${{ steps.scope.outputs.scope || 'full' }}
           BAKE_MODULES: ${{ steps.scope.outputs.mount }}
           HOST_DIR: ${{ steps.host.outputs.dir }}
@@ -1581,6 +1600,15 @@ jobs:
               mkdir -p "$NARROW/$(dirname "$ALLOW_FILE")"
               cp "$GITHUB_WORKSPACE/$ALLOW_FILE" "$NARROW/$ALLOW_FILE"
             fi
+            # The warning baseline travels into a narrowed mount for the same reason the allow
+            # file does: the tester reads it from /repo, and a baseline the narrowed stage does
+            # not carry would make the bake refuse a path it was given (never silently proceed).
+            # 🚨 It is NOT narrowed in content — an entry naming a type this shard did not bake is
+            # reported UNVERIFIABLE, never stale, so the whole file is correct on every shard.
+            if [ -n "${WARNING_BASELINE_FILE:-}" ] && [ -f "$GITHUB_WORKSPACE/$WARNING_BASELINE_FILE" ]; then
+              mkdir -p "$NARROW/$(dirname "$WARNING_BASELINE_FILE")"
+              cp "$GITHUB_WORKSPACE/$WARNING_BASELINE_FILE" "$NARROW/$WARNING_BASELINE_FILE"
+            fi
             REPO_MOUNT="$NARROW"
             echo "narrowed bake: $BAKE_MODULES"
           else
@@ -1593,6 +1621,18 @@ jobs:
           chmod 777 "$BAKE"
           ALLOW_ARGS=()
           [ -n "${ALLOW_FILE:-}" ] && ALLOW_ARGS=(--allow "/repo/${ALLOW_FILE}")
+          # The in-mesh warning ratchets. Absent = OBSERVE-ONLY: the bake still measures and
+          # reports, and prints which mode it ran in, so an unadopted repo is visibly unguarded
+          # rather than indistinguishable from a clean one.
+          #
+          # 🚨 An `if`, not an `A && B` list: the default here is EMPTY, so the test FAILS on every
+          # unadopted caller — and this file already records that such a list aborts a step under
+          # `set -e` (see the STAGE_MODULES loop above). The neighbouring ALLOW_ARGS line survives
+          # only because its input defaults non-empty.
+          WARN_ARGS=()
+          if [ -n "${WARNING_BASELINE_FILE:-}" ]; then
+            WARN_ARGS=(--warning-baseline "/repo/${WARNING_BASELINE_FILE}")
+          fi
           # `--init` for the same reason as the gate's run (#1741): as a container's PID 1 the
           # tester cannot be killed by the SIGABRT its own runtime raises on a crash — the kernel
           # discards the signal (SIGNAL_UNKILLABLE) and the process spins at 100% CPU instead of
@@ -1620,7 +1660,7 @@ jobs:
             -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
             --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll compile /repo \
             --app /app --shared-frameworks /usr/share/dotnet/shared \
-            "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
+            "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
             --output /bake --source-sha "${{ steps.content.outputs.sha }}"
 
           # ══ 2. THE GATE — a mesh RUNNING AS THE PORTAL, CONSUMING the bake above ════════════

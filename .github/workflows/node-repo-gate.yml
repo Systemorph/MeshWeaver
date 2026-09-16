@@ -326,6 +326,23 @@ on:
         required: false
         type: string
         default: 'plugin-gate.allow'
+      warning-baseline-file:
+        description: >-
+          The in-mesh WARNING debt this repo carries, passed as --warning-baseline
+          (repo-relative). It arms TWO shrink-only ratchets over the NodeType compiles: one over
+          the real warnings (CS0219, CS1574, …) and a separate one over CS1591, a missing XML doc
+          comment. An unlisted (type, code) pair fails the run; a listed pair whose type compiled
+          clean is stale and fails it too, so the debt can only shrink. Pass the SAME file to
+          node-repo-publish-bake.yml, or a PR and its merge hold the repo to different standards.
+          See Doc/Architecture/InMeshWarningStandard in the platform repo.
+
+          EMPTY (the default) is OBSERVE-ONLY: the bake still MEASURES every warning, prints the
+          folded inventory and says by name that it enforced nothing — so a repo that has not
+          adopted is visibly unguarded rather than silently so, and nothing goes red on the day
+          this input lands.
+        required: false
+        type: string
+        default: ''
       affected-narrowing:
         description: >-
           On pull_request diffs, gate only the affected module closure computed by the caller's
@@ -1911,6 +1928,7 @@ jobs:
           TARGET_IDENTITY: ${{ steps.identity.outputs.identity }}
           STAGE_MODULES: ${{ inputs.stage-modules }}
           ALLOW_FILE: ${{ inputs.allow-file }}
+          WARNING_BASELINE_FILE: ${{ inputs.warning-baseline-file }}
           AFFECTED_MOUNT: ${{ needs.plan.outputs.mount }}
           AFFECTED_RUN_ALL: ${{ needs.plan.outputs.run_all }}
           # `<index>/<total>`, or empty for the unsharded lane — see the `shards` input.
@@ -1975,6 +1993,24 @@ jobs:
           fi
           ALLOW_ARGS=()
           [ -n "${ALLOW_PATH:-}" ] && ALLOW_ARGS=(--allow "$ALLOW_PATH")
+          # The in-mesh WARNING baseline, resolved exactly like the allow file above (a narrowed run
+          # copies it into the staged mount, because the tester reads it from inside the container).
+          # 🚨 It is never narrowed in CONTENT: an entry naming a type this run did not bake is
+          # reported UNVERIFIABLE, never stale, so the whole file is correct on a narrowed run and
+          # on a shard alike — the same rule the allow file follows, for the same reason.
+          #
+          # 🚨 `if`, not `A && B`: the default is EMPTY, so the test fails on every caller that has
+          # not adopted, and a failing `&&` list is what the STAGE_MODULES loop in the sibling lane
+          # documents as aborting a step under `set -e`.
+          WARN_ARGS=()
+          if [ -n "${WARNING_BASELINE_FILE:-}" ]; then
+            if [ "$AFFECTED_RUN_ALL" = "true" ]; then
+              WARN_ARGS=(--warning-baseline "$P_REPO/$WARNING_BASELINE_FILE")
+            else
+              cp "$GITHUB_WORKSPACE/$WARNING_BASELINE_FILE" "$REPO_MOUNT/"
+              WARN_ARGS=(--warning-baseline "$P_REPO/$(basename "$WARNING_BASELINE_FILE")")
+            fi
+          fi
           # 🚨 `--module` was written with the CONTAINER's /ext prefix by the external-modules step
           # (whose shell `test-module-asset-landing.py` extracts and executes verbatim, so it is
           # left byte-identical). In volume mode the same modules are the same files on this
@@ -2051,7 +2087,7 @@ jobs:
           # shellcheck disable=SC2086  # MODULE_ARGS is a flag list; word-splitting is the point
           run_tester compile "$P_REPO" \
             --app "$P_APP" --shared-frameworks "$P_SHARED" \
-            "${ALLOW_ARGS[@]}" ${MODULE_ARGS:-} --output "$P_BAKE" --source-sha "$GITHUB_SHA"
+            "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" ${MODULE_ARGS:-} --output "$P_BAKE" --source-sha "$GITHUB_SHA"
           [ -s "$OWN_BAKE/framework-mvid.txt" ] || { echo "::error::compile ran but wrote no bake identity — the bake stage regressed (or the image predates the compile verb; pin ≥ 77bc5f1)"; exit 1; }
           baked="$(tr -d '[:space:]' < "$OWN_BAKE/framework-mvid.txt")"
           [ "$baked" = "$TARGET_IDENTITY" ] || { echo "::error::the run's own bake is keyed to '$baked' but the portal's /app resolves '$TARGET_IDENTITY' — the compile did not run against the platform host (is --app set to the portal's /app?)"; exit 1; }

@@ -97,6 +97,21 @@ public static class TreeBake
         /// runtime lacks the ASP.NET Core framework a portal compiles against).
         /// </summary>
         public string? SharedFrameworksRoot { get; init; }
+
+        /// <summary>
+        /// The in-mesh WARNING debt this tree currently carries — the two shrink-only ratchets'
+        /// baseline. Default <see cref="WarningBaseline.ObserveOnly"/>: measure, report, enforce
+        /// nothing, and SAY SO in the log.
+        ///
+        /// <para>🚨 In-mesh C# is the only C# in the fleet that no <c>-warnaserror</c> build ever
+        /// sees, and until this existed the bake did not look at its warnings at all — the emit
+        /// collected them and <c>NodeSetCompiler</c> dropped the list on the floor. That is why the
+        /// missing XML doc comments accumulated behind a green verdict. The RUNTIME compile stays
+        /// lenient and always will: <c>EmitPipeline.CreateCompilationOptions</c> sets no
+        /// <c>GeneralDiagnosticOption</c>, so a missing doc comment can never park a NodeType, refuse
+        /// a pod's readiness and stall a rollout. The policy lives HERE, in the gate.</para>
+        /// </summary>
+        public WarningBaseline Warnings { get; init; } = WarningBaseline.ObserveOnly;
     }
 
     /// <summary>One NodeType's outcome.</summary>
@@ -120,6 +135,13 @@ public static class TreeBake
         /// </summary>
         public ImmutableArray<string> ResolvedIncludePaths { get; init; } = [];
 
+        /// <summary>
+        /// The warnings this type's compile produced — structured and uncapped, empty on failure
+        /// (a compile that threw produced no verdict about warnings either). The bake folds these
+        /// across every type into one <see cref="WarningInventory"/>.
+        /// </summary>
+        public ImmutableArray<CompileWarning> Warnings { get; init; } = [];
+
         /// <summary>True when the type produced bytes.</summary>
         public bool Success => Error is null;
     }
@@ -135,9 +157,32 @@ public static class TreeBake
         ImmutableArray<string> Bundles,
         string? FatalError = null)
     {
-        /// <summary>Process exit code: 0 only when nothing failed.</summary>
+        /// <summary>
+        /// What this bake measured about its NodeTypes' warnings, folded — the inventory the
+        /// report line is derived from and the ratchets are evaluated against.
+        ///
+        /// <para>🚨 An init-only PROPERTY, not a primary-constructor parameter: a defaulted
+        /// parameter changes a public record's ctor ARITY, which
+        /// <c>scripts/check-record-signatures.py</c> refuses as a binary break.</para>
+        /// </summary>
+        public WarningInventory Warnings { get; init; } = WarningInventory.Empty;
+
+        /// <summary>
+        /// The two warning ratchets' verdicts, in report order. Empty on a bake that stopped
+        /// before it compiled anything.
+        /// </summary>
+        public ImmutableArray<WarningRatchet> WarningRatchets { get; init; } = [];
+
+        /// <summary>
+        /// True when no ratchet carries a NEW or STALE entry — vacuously true in observe-only
+        /// mode, which is exactly why the report line says WHICH mode it ran in.
+        /// </summary>
+        public bool WarningsAccepted => WarningRatchets.All(r => r.Success);
+
+        /// <summary>Process exit code: 0 only when nothing failed. 🚨 A warning ratchet can turn a
+        /// green bake RED; it can never turn a red bake green.</summary>
         public int ExitCode =>
-            FatalError is null && Types.All(t => t.Success) ? 0 : 1;
+            FatalError is null && Types.All(t => t.Success) && WarningsAccepted ? 0 : 1;
     }
 
     /// <summary>The file beside the bundles naming the framework identity — same name and same
@@ -486,6 +531,10 @@ public static class TreeBake
                     compiled.NodePath, candidate.Package, null, compiled.Inputs.MatchedSourcePaths)
                 {
                     ResolvedIncludePaths = [.. compiled.Inputs.ResolvedIncludes.Keys],
+                    // 🚨 Carried, not printed. One line per warning per compile is what makes a
+                    // bake log unreadable — a shared source's one missing doc comment arrives once
+                    // per NodeType that includes it. They are folded across the whole bake below.
+                    Warnings = compiled.Warnings,
                 });
                 // One line per compiled type only under MW_LOG_LEVEL (GateVerbosity): a full bake
                 // is ~1,100 of them, and the verdict is the per-package `bake: … → N assembly(ies)`
@@ -530,7 +579,22 @@ public static class TreeBake
 
         var bundles = WriteBundles(
             options, packages, snapshot, frameworkIdentity, entriesByPackage, host.Surface);
-        return new Report(frameworkIdentity, results.ToImmutable(), bundles);
+
+        // 🚨 THE WARNING STANDARD, applied where it belongs — in the GATE, never in the compiler
+        // options. Every type that COMPILED contributes, including the ones that compiled clean:
+        // "compiled and produced no CS1591" is what makes a baseline entry stale, so a type with an
+        // empty list is a measurement, not an absence.
+        var inventory = WarningInventory.Of(results
+            .Where(t => t.Success)
+            .Select(t => (t.NodePath, t.Warnings)));
+        var ratchets = WarningReportWriter.Evaluate(inventory, options.Warnings);
+        WarningReportWriter.Write(options.Output, inventory, options.Warnings, ratchets);
+
+        return new Report(frameworkIdentity, results.ToImmutable(), bundles)
+        {
+            Warnings = inventory,
+            WarningRatchets = [.. ratchets],
+        };
     }
 
     /// <summary>
