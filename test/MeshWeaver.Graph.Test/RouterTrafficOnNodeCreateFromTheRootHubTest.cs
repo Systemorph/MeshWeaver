@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.AI;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -216,6 +217,72 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
             + "the #4463 shape, one call frame further out");
         TeardownReports().Should().BeEmpty(
             "and the receiving hub must not see the router at an end of the teardown either");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The RUNTIME pin for #1140's remaining half — a NON-lifecycle delivery on a field the
+    /// class itself has declared router-capable.</b>
+    ///
+    /// <para><b>Why this is a different test from the recycle ones above.</b> Those drive
+    /// <c>DisposeRequest</c>, the one message on their receiver that the message-keyed source
+    /// ratchet can see. <c>DataChangeRequest</c> is not a lifecycle message and never will be — no
+    /// framework handler registers it as one — so nothing in
+    /// <c>RouterAsNodeOperationOriginRatchetGuard</c>'s derived denominator covers it. It is
+    /// nevertheless posted from the SAME <c>hub</c> field that <c>MeshNodeEditor.Move</c> hops ten
+    /// lines below it, to a per-node address, and therefore produced exactly #1140's receiver-side
+    /// line: <c>RawJson has the mesh hub as sender (sender: mesh/…, target: &lt;node path&gt;)</c>.
+    /// One class, one field, two messages, and only one of them was hopped.</para>
+    ///
+    /// <para><b>And why the SOURCE ratchet is not enough on its own, again.</b> Every other test of
+    /// this editor drives it through a session or client hub, where both seams are the IDENTITY
+    /// FUNCTION — so reverting <c>MeshNodeEditor.Update</c> to <c>hub.Post</c> leaves them all
+    /// green. <c>new MeshNodeEditor(Mesh, path)</c> is the root-hub branch, and this reads what the
+    /// detector actually logged rather than what the source says.</para>
+    ///
+    /// <para><b>The positive anchor is not decoration.</b> <c>Update</c> RETURNS WITHOUT POSTING
+    /// when its <c>BehaviorSubject</c> has not yet seen the node (<c>if (current is null) return;</c>),
+    /// so "no router traffic" would be trivially true of an editor that never got its first
+    /// snapshot. Awaiting the node — and then the edited value coming back through the same live
+    /// subscription — is what makes the silence below mean something.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ANodeEditIssuedFromTheRootMeshHub_NeverPostsTheDataChangeAsTheRouter()
+    {
+        var path = await SeedNode("RouterTrafficEditorProbe");
+        const string edited = "Edited by the router-traffic probe";
+
+        using var editor = new MeshNodeEditor(Mesh, path);
+
+        // The editor posts nothing until its own subscription has delivered a snapshot, so wait for
+        // the condition rather than for a duration.
+        await editor.Node.FirstAsync().Await(TestContext.Current.CancellationToken);
+
+        editor.Update(n => n with { Name = edited });
+
+        var applied = await editor.Node
+            .Where(n => n.Name == edited)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        applied.Name.Should().Be(edited,
+            "the edit has to have LANDED — Update returns without posting anything at all when the "
+            + "editor has no snapshot yet, and 'no router traffic' is trivially true of a write "
+            + "that never happened");
+
+        DumpReports();
+        // Filtered on the exchange, exactly as the teardown filters are: the origin site always
+        // carries the real CLR type, and the receiver side reports a routed payload as RawJson, so
+        // the reply's own type is matched too. A blanket "no router traffic anywhere" assertion
+        // would red on any unrelated pre-existing line and teach the next reader to widen it.
+        Origins().Where(r => r.MessageType == nameof(DataChangeRequest)).Should().BeEmpty(
+            "#1140: a DataChangeRequest posted from the root mesh hub leaves stamped "
+            + "`Sender = mesh/{id}`. MeshNodeEditor must issue it from the same seam it already "
+            + "gives the MoveNodeRequest ten lines below");
+        Reports().Where(r => r.MessageType is nameof(DataChangeRequest) or nameof(DataChangeResponse))
+            .Should().BeEmpty(
+                "and neither end of the exchange may be the router at the receiving hub either — "
+                + "the reply addressed back at mesh/{id} is #1140's second production line");
     }
 
     /// <summary>The node the recycle targets has to exist before it can be torn down.</summary>

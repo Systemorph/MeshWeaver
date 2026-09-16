@@ -1,0 +1,40 @@
+# RouterCapableReceiverOriginSites.allow — the src-side router-capable-RECEIVER ratchet (#1140).
+#
+# 🚨 THIS FILE IS EMPTY, AND THAT IS THE POINT. Every site the guard's first run found was FIXED,
+# not listed. If you are here to add a line, read the whole header first.
+#
+# WHAT THE GUARD ASKS. Once a file has DECLARED a hub reference router-capable — by writing
+# `X.NodeOperationIssuingHub()` or `X.ReadIssuingHub()` on it anywhere in that file — no OTHER
+# targeted `.Post`/`.Observe` in the file may still be issued from the bare `X`:
+#
+#     hub.NodeOperationIssuingHub().Post(new DisposeRequest { … }, o => o.WithTarget(nodeAddress));
+#     hub.Observe(new PatchDataRequest(…),                         o => o.WithTarget(nodeAddress));
+#     ^^^ the second one is the violation: same field, same router, no seam.
+#
+# WHY THE DECLARATION IS THE DENOMINATOR. Both seams are the IDENTITY FUNCTION for every hub whose
+# address type is not the mesh type, so nobody writes one about a reference that cannot be the
+# router. The call is therefore the author's own statement, in production code, that this reference
+# reaches the ROUTER — and you cannot adopt the seam for one message on a hub without making it.
+# That is what makes this derived rather than listed: a marker attribute or a name in a test can be
+# forgotten; this cannot, because without the seam call the first fix does not exist either.
+#
+# WHY IT EXISTS BESIDE RouterNodeOperationOriginSites.allow. That ratchet keys on the MESSAGE (what
+# the framework registers a lifecycle handler for). The seam is a property of the HUB, so a
+# message-keyed denominator can only ever see the lifecycle slice of any one receiver. #4463 proved
+# in production that MeshOperations' `hub` field IS the router; #4477 hopped the one DisposeRequest
+# on it; SEVEN sibling exchanges on the identical field kept posting as mesh/{id}, and those are
+# what #1140's receiver-side lines have been reporting for a month. Same story one class over:
+# MeshNodeEditor.Move hopped, MeshNodeEditor.Update (ten lines up, same field) did not.
+#
+# THE ONE SHAPE THAT MUST NOT BE REPORTED IS EXCLUDED STRUCTURALLY, NOT ALLOWED: a post naming no
+# target, or naming only the RECEIVER's own address. The seam's whole effect is to issue the
+# delivery from a DIFFERENT hub, which for a self-directed message sends it somewhere else. Today
+# that covers exactly one site — the #981 self-targeted inner create in MeshExtensions, which
+# RouterNodeOperationOriginSites.allow documents as not-debt. Do not "fix" it here either.
+#
+# SO: adding a line here means writing down a router-issued delivery as acceptable, and the remedy
+# it refuses is a no-op wherever the router is not reached. Fix the site; do not list it. If a site
+# genuinely cannot hop (the target is conditionally this hub's own address — see
+# MeshOperations.ResolveUnifiedPath), express the condition in the CODE, where a reader sees it.
+#
+# Format: relative/path.cs<TAB>count   ('#' starts a comment)
