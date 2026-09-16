@@ -80,6 +80,61 @@ public static class LayoutDefinitionExtensions
 
 
     /// <summary>
+    /// Registers a view that WRAPS another one, while taking the area's catalog metadata from the
+    /// wrapped view rather than from the wrapper.
+    ///
+    /// <para>🚨 Why this exists. <see cref="CreateLayoutAreaDefinition"/> reads the area's
+    /// description, <c>[Display]</c> and <c>[Browsable]</c> off the GENERATOR DELEGATE's method. A
+    /// decorator passes a lambda, whose compiler-generated method carries neither XML docs nor
+    /// attributes — so decorating a view through the ordinary <c>WithView</c> silently drops
+    /// <c>[Browsable(false)]</c> and publishes an internal area into the layout-area catalog. That
+    /// is a regression nothing renders differently enough to notice, which is exactly the kind this
+    /// codebase pays for later. <c>MeshNodeLayoutAreas.WithNodePage</c> is the first caller
+    /// (Systemorph/MeshWeaver#4500).</para>
+    /// </summary>
+    /// <typeparam name="T">The UiControl subtype both generators return.</typeparam>
+    /// <param name="layout">The layout definition to extend.</param>
+    /// <param name="area">The area name to render into.</param>
+    /// <param name="decorated">The generator that actually renders — the wrapper.</param>
+    /// <param name="inner">The wrapped generator, used ONLY as the source of catalog metadata.</param>
+    /// <param name="areaDefinition">Optional further area-definition shaping.</param>
+    public static LayoutDefinition WithDecoratedView<T>(
+        this LayoutDefinition layout,
+        string area,
+        Func<LayoutAreaHost, RenderingContext, IObservable<T?>> decorated,
+        Func<LayoutAreaHost, RenderingContext, IObservable<T?>> inner,
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
+    ) where T : UiControl =>
+        // Register the INNER view first so the area definition is derived from its real method,
+        // then replace the renderer with the decorator. WithNamedRenderer touches only the renderer
+        // (and the node-page verdict it describes) — the area definition registered above survives.
+        layout
+            .WithView(area, inner, areaDefinition)
+            .WithNamedRenderer(area, (a, ctx, s) => a.RenderAreaObservable(ctx, decorated.Invoke(a, ctx), s));
+
+    /// <summary>
+    /// <see cref="WithDecoratedView{T}(LayoutDefinition, string, Func{LayoutAreaHost, RenderingContext, IObservable{T}}, Func{LayoutAreaHost, RenderingContext, IObservable{T}}, Func{LayoutAreaDefinition, LayoutAreaDefinition})"/>
+    /// for a wrapped view produced SYNCHRONOUSLY. Same reason, same shape: the area's catalog
+    /// metadata comes from <paramref name="inner"/>'s method, never from the decorator's lambda.
+    /// </summary>
+    /// <typeparam name="T">The UiControl subtype the wrapped factory returns.</typeparam>
+    /// <param name="layout">The layout definition to extend.</param>
+    /// <param name="area">The area name to render into.</param>
+    /// <param name="decorated">The generator that actually renders — the wrapper.</param>
+    /// <param name="inner">The wrapped factory, used ONLY as the source of catalog metadata.</param>
+    /// <param name="areaDefinition">Optional further area-definition shaping.</param>
+    public static LayoutDefinition WithDecoratedView<T>(
+        this LayoutDefinition layout,
+        string area,
+        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl?>> decorated,
+        Func<LayoutAreaHost, RenderingContext, T> inner,
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
+    ) where T : UiControl? =>
+        layout
+            .WithView(area, inner, areaDefinition)
+            .WithNamedRenderer(area, (a, ctx, s) => a.RenderAreaObservable(ctx, decorated.Invoke(a, ctx), s));
+
+    /// <summary>
     /// Adds a view to the layout definition with the specified context and observable generator.
     /// </summary>
     /// <param name="layout">The layout definition.</param>
