@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -184,7 +185,7 @@ public static class NodeTypeOperationalContent
     /// </list>
     /// </summary>
     public static readonly IReadOnlySet<string> StrippedButNotPreserved =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "pendingRetirement" };
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "pendingRetirement");
 
     /// <summary>
     /// Everything a repo FILE must not carry — <see cref="MemberNames"/> plus
@@ -193,7 +194,8 @@ public static class NodeTypeOperationalContent
     /// asymmetry IS the third bucket.
     /// </summary>
     private static readonly IReadOnlySet<string> FileExcludedMembers =
-        MemberNames.Concat(StrippedButNotPreserved).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase,
+            MemberNames.Concat(StrippedButNotPreserved).ToArray());
 
     /// <summary>
     /// The node with the operational members REMOVED from its content — the shape a repo file (and
@@ -247,9 +249,12 @@ public static class NodeTypeOperationalContent
     /// The typed half of <see cref="WithoutOperational"/>: a record clone with every operational
     /// property reset to its default (null, false, zero) and any extension-data entry of an
     /// operational name dropped. Reflection, because this assembly cannot name the definition type;
-    /// the member list is the same <see cref="MemberNames"/>, matched case-insensitively against
-    /// the property names. Content that is not a record (no <c>&lt;Clone&gt;$</c>) falls back to the
-    /// JSON shape.
+    /// the member list is the SAME UNION the JSON strip uses — <see cref="MemberNames"/> plus
+    /// <see cref="StrippedButNotPreserved"/> — matched case-insensitively against the property
+    /// names. 🚨 The union, not the mask: this is a STRIP, and narrowing it to
+    /// <see cref="MemberNames"/> would let a typed file keep a member the JSON path removes, which
+    /// is a difference no caller can see. Content that is not a record (no <c>&lt;Clone&gt;$</c>)
+    /// falls back to the JSON shape.
     /// </summary>
     private static MeshNode WithTypedMembersReset(MeshNode node, JsonSerializerOptions options)
     {
@@ -300,6 +305,13 @@ public static class NodeTypeOperationalContent
     /// as the mesh last wrote it: the live value when the live node has one, ABSENT when it does not
     /// (a stale value embedded in the file never survives, in either direction). Returns the same
     /// instance when nothing would change, so an authored-identical import stays a no-op upsert.
+    ///
+    /// <para>🚨 <b>Exception, by design: <see cref="StrippedButNotPreserved"/>.</b> Those members are
+    /// removed from the incoming node like every other mesh-owned one — a file may not forge one —
+    /// but they are NOT copied back from the live node, so they end up ABSENT whatever the live node
+    /// holds. That is what clears them: an upsert replaces the content wholesale, and nothing in
+    /// <c>src/</c> ever writes null back to a retirement stamp. Read the promise above as "every
+    /// member of <see cref="MemberNames"/>", never "every member the mesh writes".</para>
     ///
     /// <para>🚨 <b>A CREATE is an import too.</b> With no live node (<paramref name="live"/> null)
     /// the mesh has written nothing yet, so every operational member must be ABSENT — the file's

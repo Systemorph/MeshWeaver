@@ -45,6 +45,14 @@ public class NodeTypeOperationalContentTest
             Assert.True(properties.Contains(member),
                 $"'{member}' is listed as operational but is not a NodeTypeDefinition property — "
                 + "the list drifted from the record.");
+        // The third bucket is the same kind of list and needs the same pin: a typo there names no
+        // property, so the member it was meant to cover is silently never stripped — and the
+        // partition guard cannot see it, because that one iterates the RECORD's properties.
+        foreach (var member in NodeTypeOperationalContent.StrippedButNotPreserved)
+            Assert.True(properties.Contains(member),
+                $"'{member}' is listed as stripped-but-never-preserved but is not a "
+                + "NodeTypeDefinition property — the list drifted from the record, and whatever it "
+                + "was meant to strip is riding every export.");
     }
 
     [Fact]
@@ -105,6 +113,19 @@ public class NodeTypeOperationalContentTest
     public void EverySerializedMember_IsClassified_ExactlyOnce()
     {
         Assert.NotEmpty(NodeTypeMemberOwnership.SerializedProperties);
+        // 🚨 The DENOMINATOR cannot silently shrink. This guard only ever iterates the derived set,
+        // so a filter that drops a member drops the member's classification too — and the test
+        // still passes, having checked one thing fewer. IncludeGlobalTypes is the member that
+        // proved it: it carries [JsonIgnore(Condition = Never)], i.e. it is ALWAYS written, and an
+        // attribute-PRESENCE filter excluded it. Name it here so reverting that filter goes red.
+        Assert.Contains(nameof(NodeTypeDefinition.IncludeGlobalTypes),
+            NodeTypeMemberOwnership.SerializedProperties.Select(p => p.Name));
+        // …and the two that must stay OUT: a delegate ignored Always, and the extension-data bag.
+        Assert.DoesNotContain(nameof(NodeTypeDefinition.BuildCreate),
+            NodeTypeMemberOwnership.SerializedProperties.Select(p => p.Name));
+        Assert.DoesNotContain(nameof(NodeTypeDefinition.UnknownMembers),
+            NodeTypeMemberOwnership.SerializedProperties.Select(p => p.Name));
+
         // The buckets are real: a spot check in each, so a bucket emptied by a refactor cannot
         // make the partition below trivially satisfiable.
         Assert.Contains(nameof(NodeTypeDefinition.Configuration), NodeTypeMemberOwnership.Authored);
@@ -113,16 +134,7 @@ public class NodeTypeOperationalContentTest
         Assert.NotEmpty(NodeTypeMemberOwnership.MeshWrittenButNotPreserved);
 
         var classified = NodeTypeMemberOwnership.SerializedProperties
-            .Select(property => (
-                property.Name,
-                Buckets: ImmutableArray.CreateRange(new[]
-                    {
-                        NodeTypeOperationalContent.MemberNames.Contains(property.Name) ? "operational" : null,
-                        NodeTypeMemberOwnership.Authored.Contains(property.Name) ? "authored" : null,
-                        NodeTypeMemberOwnership.MeshWrittenButNotPreserved.Contains(property.Name)
-                            ? "mesh-written-but-not-preserved"
-                            : null,
-                    }.Where(bucket => bucket is not null)!)))
+            .Select(property => (property.Name, Buckets: BucketsOf(property.Name)))
             .ToImmutableArray();
         var unclassified = classified
             .Where(entry => entry.Buckets.Length == 0)
@@ -144,6 +156,18 @@ public class NodeTypeOperationalContentTest
         Assert.True(ambiguous.Length == 0,
             "These members are claimed by two owners: " + string.Join(", ", ambiguous));
     }
+
+    /// <summary>Which ownership buckets claim <paramref name="member"/> — none is the #4480 shape,
+    /// two is a contradiction, and the partition guard refuses both.</summary>
+    private static ImmutableArray<string> BucketsOf(string member) =>
+        ImmutableArray.Create(
+                (Claimed: NodeTypeOperationalContent.MemberNames.Contains(member), Bucket: "operational"),
+                (Claimed: NodeTypeMemberOwnership.Authored.Contains(member), Bucket: "authored"),
+                (Claimed: NodeTypeMemberOwnership.MeshWrittenButNotPreserved.Contains(member),
+                    Bucket: "stripped-but-never-preserved"))
+            .Where(entry => entry.Claimed)
+            .Select(entry => entry.Bucket)
+            .ToImmutableArray();
 
     /// <summary>
     /// 🚨 The THIRD bucket's two halves, which is the whole of what makes it a bucket rather than an
