@@ -134,5 +134,51 @@ public class DeferredBacklogBoundedTest(ITestOutputHelper output) : HubTestBase(
         failure.Message.Should().Contain("retry",
             "a stuck gate is 'no verdict was reached' — the same request is meaningful again once "
             + "the gate opens, so the answer must not read as a denial or an absence");
+        failure.Failure.ErrorType.Should().Be(ErrorType.Unavailable,
+            "a stuck gate says nothing about the caller's rights and nothing about whether the "
+            + "target exists; Forbidden or NotFound would be actionable-looking lies");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The classification must survive the PARENT-NACK route, not only the fallback</b>
+    /// (MeshWeaver#1174, Copilot review on #4468).
+    ///
+    /// <para><c>AnswerUnreleasableDelivery</c> tries <c>NackThroughParent</c> first and falls back
+    /// to <c>ReportFailure</c>. Only the fallback used the caller's <c>errorType</c>; the parent
+    /// route hard-coded <c>ShuttingDown</c> for every non-tombstoned address. So the honest
+    /// "no verdict was reached, retry" verdict was replaced by "this address is going away"
+    /// EXACTLY when the answer did get through — and the case above cannot catch it, because a
+    /// hub posting to ITSELF makes <c>NackThroughParent</c> decline at its <c>sender-is-self</c>
+    /// guard and take the fallback every time.</para>
+    ///
+    /// <para>So this one posts from a DIFFERENT hub: sender ≠ target, a live parent, the parent
+    /// route taken. The tombstone branch is untouched — a deleted address stays the authoritative
+    /// <c>NotFound</c> that #1029 exists for.</para>
+    /// </summary>
+    [Fact]
+    public async Task TheOverflowAnswer_KeepsItsClassification_WhenTheParentCarriesIt()
+    {
+        var host = GetHost();
+        var client = GetClient(c => c
+            .WithTypes(typeof(Awaited), typeof(Ack))
+            .WithPostingIdentity(PostingIdentity.System));
+
+        // Same deterministic fill as above, and it completes before the routed request below can
+        // reach the host's queue: every Post here enqueues synchronously on the host itself.
+        for (var i = 0; i < Cap + 50; i++)
+            host.Post(new Filler(i), o => o.WithTarget(host.Address));
+
+        var act = async () => await client
+            .Observe<Ack>(new Awaited(), o => o.WithTarget(CreateHostAddress()))
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        var failure = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
+
+        failure.Failure.ErrorType.Should().Be(ErrorType.Unavailable,
+            "the drop's own classification must reach the sender whichever carrier takes it — "
+            + "ShuttingDown here would tell the caller the address is going away, which is false, "
+            + "and is what the parent route substituted before the classification was threaded "
+            + "through it");
     }
 }

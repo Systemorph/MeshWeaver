@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Linq.Expressions;
@@ -114,8 +114,22 @@ public sealed class MessageHub : IMessageHub
     private readonly HostedHubsCollection hostedHubs;
     private readonly AccessService accessService;
 
-    /// <summary>Monotonic counter, incremented once per message processed; used for ordering and disposal sequencing.</summary>
-    public long Version { get; private set; }
+    /// <summary>
+    /// Monotonic counter, incremented once per message processed; used for ordering and disposal
+    /// sequencing.
+    ///
+    /// <para>🚨 <b>Interlocked, because this is now read OFF the turn (MeshWeaver#1174).</b> It is
+    /// written on the hub's own turn thread and was a plain auto-property, which is correct only
+    /// while every reader is that same thread. <see cref="BuildTimeoutMessage"/> reads it from the
+    /// Rx timeout scheduler to report how many messages this hub handled while a request was
+    /// outstanding, and a plain read there establishes no visibility with the writing turn — it
+    /// could observe a stale value and report a busy hub as idle, which is the exact
+    /// misdiagnosis that measurement exists to remove. <see cref="Interlocked"/> on the
+    /// increment, the registration snapshot and the read makes the number mean what it says,
+    /// for a counter already on a once-per-message path.</para>
+    /// </summary>
+    public long Version => Interlocked.Read(ref version);
+    private long version;
 
     /// <summary>
     /// 🚨 <b>Who asked for this teardown (#3510).</b> <c>null</c> until a routed
@@ -287,7 +301,7 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     public void SetInitialVersion(long version)
     {
-        Version = version;
+        Interlocked.Exchange(ref this.version, version);
     }
 
     /// <summary>The hub's current lifecycle phase; advances through start, quiescing, and the disposal phases.</summary>
@@ -1094,7 +1108,7 @@ public sealed class MessageHub : IMessageHub
         CancellationToken cancellationToken
     ) => Observable.Defer(() =>
     {
-        ++Version;
+        Interlocked.Increment(ref version);
         var dispatchStartTicks = Stopwatch.GetTimestamp();
 
         var traceEnabled = logger.IsEnabled(LogLevel.Trace);
@@ -3428,7 +3442,7 @@ public sealed class MessageHub : IMessageHub
             // (or Ignored from the storm breaker) instead of enqueueing. Claiming "delivered" on
             // that would suppress every remaining carrier for a callback that was never resolved.
             var accepted = requester.DeliverMessage(failure);
-            return accepted.State is not (MessageDeliveryState.Failed or MessageDeliveryState.Ignored);
+            return accepted.WasAcceptedForDelivery;
         }
         catch (ObjectDisposedException)
         {

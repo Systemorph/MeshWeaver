@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
@@ -564,7 +564,7 @@ public class MessageService : IMessageService
     /// </param>
     private void AnswerUnreleasableDelivery(IMessageDelivery delivery, string reason, ErrorType errorType)
     {
-        if (!NackThroughParent(delivery, reason))
+        if (!NackThroughParent(delivery, reason, errorType))
             ReportFailure(delivery.WithProperty("Error", reason),
                 errorType != ErrorType.Unknown
                     ? errorType
@@ -811,7 +811,22 @@ public class MessageService : IMessageService
     /// False when nothing could carry it (no live parent, or traffic nobody awaits), which is the
     /// caller's cue to fall back to <see cref="ReportFailure"/> if it can still post.
     /// </returns>
-    private bool NackThroughParent(IMessageDelivery delivery, string reason)
+    /// <param name="classification">
+    /// 🚨 The classification the CALLING SITE decided on, for the non-tombstone branch
+    /// (MeshWeaver#1174). <see cref="ErrorType.Unknown"/> means "not stated" and keeps the
+    /// historical <see cref="ErrorType.ShuttingDown"/>, which is right for every teardown caller.
+    /// It is WRONG for a caller whose condition is not a teardown — the stuck-gate overflow drop
+    /// is "no verdict was reached, retry", not "this address is going away" — and before this
+    /// parameter existed that caller's classification survived only on the
+    /// <see cref="ReportFailure"/> fallback and was silently replaced whenever a live parent took
+    /// the NACK, i.e. exactly when the answer did get through.
+    ///
+    /// <para>It NEVER overrides the tombstone branch: an address whose node was deleted is gone
+    /// for good, and <see cref="ErrorType.NotFound"/> plus <see cref="DeletedAddressMessage"/> is
+    /// the authoritative answer no caller may soften (#1029).</para>
+    /// </param>
+    private bool NackThroughParent(
+        IMessageDelivery delivery, string reason, ErrorType classification = ErrorType.Unknown)
     {
         // Every exit below is STAMPED on the request's trail (#4072). The dispose snapshot that
         // prints the trail is the one artefact a green run keeps, and until now it ended at the
@@ -884,7 +899,7 @@ public class MessageService : IMessageService
         // can catch it.
         var (errorType, message) = IsAddressDeleted()
             ? (ErrorType.NotFound, DeletedAddressMessage)
-            : (ErrorType.ShuttingDown, reason);
+            : (classification is ErrorType.Unknown ? ErrorType.ShuttingDown : classification, reason);
         try
         {
             // 🚨 A refused post does not throw — the parent's own teardown guard hands back a
@@ -1082,7 +1097,7 @@ public class MessageService : IMessageService
                 // this test could not see them, and a dropped NACK would have been reported to the
                 // intake gate as "carried" — the one reading that leaves the sender with nothing
                 // and nobody owing it an answer.
-                return posted is { State: not (MessageDeliveryState.Failed or MessageDeliveryState.Ignored) };
+                return posted is { WasAcceptedForDelivery: true };
             }
             catch (Exception ex)
             {
