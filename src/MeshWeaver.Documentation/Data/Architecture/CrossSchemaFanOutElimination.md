@@ -60,7 +60,7 @@ schema(s)".
 | 1 | **Notification bell + panel** — `NotificationCenter.razor` / `NotificationCenterPanel.razor` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Portal`) | was `nodeType:Notification sort:CreatedAt-desc` — unanchored, unbounded, LIVE | `notifications` | **DONE** — [Addressed Notifications](/Doc/Architecture/AddressedNotifications) (#3156/#3216/#3238). Two pinned legs, `namespace:{viewer}/_Notification` and (global admins only) `namespace:Admin/_Notification`; the grace-list line is deleted |
 | 2 | **Security fold globals** — `SecurityQueries.Roles` / `.Memberships` / `.GatedNodes(type)` (per gated type!) via `PermissionEvaluator` | `nodeType:Role scope:subtree … complete`, `nodeType:GroupMembership …`, `nodeType:{gated} …` | `mesh_nodes` | **To eliminate** — see plan 2 |
 | 3 | **Root-scope grants/policies** — `SecurityQueries.RootAssignments` / `.RootPolicy` | `namespace:_Access nodeType:AccessAssignment …` / `path:_Policy nodeType:PartitionAccessPolicy …` | `system_access.access` / — | **Done** 2026-09-02 (#2194) — the grants leg never fanned out (the router pins `_Access` to its registered schema); the policy leg was `namespace: id:_Policy`, path-less, and DID fan out 179×/5 min for a row that cannot exist on Postgres — now read by path, see below |
-| 4 | `node_type ILIKE $1` wildcard — **named**: MeshWeaver.SocialMedia's `ScheduledPostWatcher` (the scheduled-post watch, not the `PostStatsRefresher`/`PastPostIngestJob` the incident guessed) | was `nodeType:*Post select:…content,lastModifiedBy`, path-less | `mesh_nodes` | **Anchored** 2026-09-07 (`MeshWeaver.SocialMedia@e11bd39`, #3545) — `ScheduledPostWatcher.PostsQuery(partition)` reads `namespace:{partition} scope:descendants nodeType:*Post …`, one query per publishing partition, and its armed-timer listing is path-anchored too |
+| 4 | `node_type ILIKE $1` wildcard — **named**: MeshWeaver.SocialMedia's `ScheduledPostWatcher` (the scheduled-post watch, not the `PostStatsRefresher`/`PastPostIngestJob` the incident guessed) | was `nodeType:*Post select:…content,lastModifiedBy`, path-less | `mesh_nodes` | **Anchored** 2026-09-07 (`MeshWeaver.SocialMedia@e11bd39`, #3545) — `ScheduledPostWatcher.PostsQuery(partition)` reads `namespace:{partition} scope:descendants nodeType:*Post …`, one query per publishing partition, and its armed-timer listing is path-anchored too. **Package delivered** (measured 2026-09-16): memex-cloud's `Plugins/SocialMedia` package reads `1.1.13` / `moduleVersion 74a3ad3c14fa15da` — the lock at `MeshWeaver.SocialMedia@5d0be6e` (2026-09-12), a descendant of the anchoring commit, whose own lock was `1.1.8` / `18e38b37eb61779d`. Whether every pod LOADED that module build is a `[ModuleLoad]` log read, not taken here |
 | 5 | `Admin/Menu/{X}` per-render route misses | point probes | `mesh_nodes` | **Fixed** 2026-08-29 (`83b1892be`, anchored existence query) |
 | 6 | **Hosting fleet pages + build broadcaster** (MeshWeaver.Plugins) — `HostingAdminLayoutAreas.Snapshot` (nine call sites on the Fleet and Fleet Console pages), `FleetConsoleLogic.*Query`, `PlatformBuildInboxWatcher.DeploymentsQuery` | was `nodeType:Hosting/Deployment[ scope:subtree]` and four siblings, bare | `mesh_nodes` | **Declared** 2026-09-15 (MeshWeaver.Plugins#1918, #3545) — a deployment record lives wherever its owner lives, so the set of partitions IS the answer: `MeshWideQuery.Declare`/`OfType`. On a refusing host the bare form faulted and the snapshot rendered an EMPTY fleet |
 | 7 | **Portal search box** (MeshWeaver.Plugins) — Blazor `MeshSearch`, the unbound `SearchBoxView`, portal-next `SearchBar` | was `source:accessed scope:descendants … context:search limit:N` and `*{text}* scope:descendants context:search is:main limit:50`, bare, per debounced keystroke | `mesh_nodes` + `user_activities` | **Declared** 2026-09-15 (MeshWeaver.Plugins#1918, #3545) — it searches everything the viewer can read; RLS still narrows the union. Cheaper still: narrow the accessed leg to the partitions the viewer's UserActivity rows name |
@@ -76,6 +76,30 @@ its `*Post` title whatever anybody fixed. The identity now keeps `nodeType:` ter
 (MeshWeaver.Plugins `8944f145e`, 2026-09-13); a caller with no `nodeType:` term, like the search
 box, still shares one fingerprint with every other such caller. Read an unanchored incident's
 **samples**, never its title.
+
+🚨 **Merged and published is not running — measured 2026-09-16, and it is why #3545 still
+reopens.** `Admin/_LogIncident/d4c8f6f74ecfa422` is the pre-change identity (category + event id +
+exception type; its `normalizedDetail` is empty), and it was still advancing at 21:21Z with 5 723
+occurrences. So the running log watcher still computes the old fingerprint, and every unanchored
+query from every caller still lands on #3545. None of its ten retained samples (20:49–21:21Z) is the
+row-4 shape:
+
+- 7 are the `FleetWatch` roster from before MeshWeaver.Plugins#1766
+  (`nodeType:Hosting/Deployment scope:subtree -status:Decommissioned select:path,id limit:500`).
+- 2 are a bare `nodeType:Hosting/Deployment`.
+- 1 is an operator `search` (`name:*Social* …`). #4274 refuses that shape, but the incident's
+  namespace is memex-cloud, whose image (core `c84c6c05`) predates that change.
+
+None of the 75 lines the bot quoted in its 25 reopen comments since 2026-09-12 is `nodeType:*Post`
+either. Ten samples out of thousands cannot prove that one caller has gone quiet, and a pod that
+never loaded the fixed module would still report under the same id. So a #3545 reopen is
+**inconclusive** about row 4 either way: every unanchored caller shares it, so it cannot show a
+regression, and it cannot show the absence of one. Only a sample names the caller. Before acting on
+one:
+
+1. Check whether the old id still advances. While it does, the per-caller incidents cannot exist.
+2. Read the query quoted in the newest sample on the incident node. Do not go by the issue title or
+   the lines in a reopen comment. Name the caller that sends that query.
 
 Each of these small sets is **tiny and rarely changing** — the fold's global reads return under
 ~50 rows; the bell's thousands of rows are its own defect — fetched the most expensive way the
