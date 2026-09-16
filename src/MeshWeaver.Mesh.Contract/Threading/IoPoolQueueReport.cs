@@ -70,9 +70,26 @@ public static class IoPoolQueueReport
     public const string NotMeasured =
         "I/O pool queueing was not measured (no pool registry on this hub)";
 
-    /// <summary>A reading WAS taken and every pool was empty — so nothing was waiting for a slot.</summary>
+    /// <summary>
+    /// A reading WAS taken over the whole window: nothing queued at the end, and nothing admitted
+    /// during it waited a second for a slot.
+    /// </summary>
     public const string NothingQueued =
-        "no I/O pool had work queued at that moment, so nothing was waiting for a pool slot";
+        "no I/O pool had work queued at that moment, and no admission during this stage waited a "
+        + "second for a slot";
+
+    /// <summary>
+    /// 🚨 The WEAKER reading, used when no baseline was captured: an instant, not a window.
+    ///
+    /// <para>A queue DEPTH sampled once cannot exonerate a cap, and saying otherwise was this
+    /// change's own first mistake: a leaf can wait most of the budget for a slot, be granted it, and
+    /// only then stall — by which time the depth is zero and an instant-only reading would report
+    /// the pools as innocent. That is why <see cref="Describe"/> takes a baseline and compares
+    /// admissions over the window; without one it says only what it actually saw.</para>
+    /// </summary>
+    public const string NothingQueuedNow =
+        "no I/O pool had work queued at that instant (no baseline was captured, so this says "
+        + "nothing about waits earlier in the stage)";
 
     /// <summary>
     /// What a reading that DID find queued work begins with. Named because it is the only marker
@@ -102,26 +119,41 @@ public static class IoPoolQueueReport
     /// <see cref="IoPoolRegistry.Snapshot"/>.</para>
     /// </summary>
     /// <param name="registry">The mesh-scoped registry, or <c>null</c> when this hub has none.</param>
-    public static string Describe(IoPoolRegistry? registry)
+    /// <param name="baseline">
+    /// A <see cref="IoPoolRegistry.Snapshot"/> taken when the window OPENED, so the reading can
+    /// cover the window rather than an instant. 🚨 Pass it whenever the caller has one: without it
+    /// the answer degrades to <see cref="NothingQueuedNow"/>, which cannot exonerate a cap.
+    /// </param>
+    public static string Describe(
+        IoPoolRegistry? registry,
+        IReadOnlyList<IoPoolReading>? baseline = null)
     {
         if (registry is null)
             return NotMeasured;
 
-        var queued = registry.Snapshot()
-            .Where(r => r.Waiting > 0)
-            .OrderByDescending(r => r.Waiting)
-            .ThenBy(r => r.Name, StringComparer.Ordinal)
+        var before = baseline?.ToDictionary(r => r.Name, StringComparer.Ordinal);
+
+        // A pool is worth naming if it is queueing work NOW, or if anything it admitted DURING the
+        // window had to wait a second or more for its slot. The second half is what makes the
+        // negative answer mean something: a leaf that waited and was then granted has left the
+        // depth at zero but has moved these buckets.
+        var implicated = registry.Snapshot()
+            .Select(r => (Reading: r, SlowAdmissions: SlowAdmissionsSince(r, before)))
+            .Where(x => x.Reading.Waiting > 0 || x.SlowAdmissions > 0)
+            .OrderByDescending(x => x.Reading.Waiting)
+            .ThenByDescending(x => x.SlowAdmissions)
+            .ThenBy(x => x.Reading.Name, StringComparer.Ordinal)
             .ToArray();
 
-        if (queued.Length == 0)
-            return NothingQueued;
+        if (implicated.Length == 0)
+            return before is null ? NothingQueuedNow : NothingQueued;
 
         var text = new StringBuilder(QueuedPrefix);
-        for (var i = 0; i < queued.Length && i < MaxNamed; i++)
+        for (var i = 0; i < implicated.Length && i < MaxNamed; i++)
         {
             if (i > 0)
                 text.Append("; ");
-            var reading = queued[i];
+            var (reading, slow) = implicated[i];
             text.Append(reading.Name)
                 .Append("(cap ")
                 .Append(reading.MaxConcurrency.ToString(CultureInfo.InvariantCulture))
@@ -129,16 +161,46 @@ public static class IoPoolQueueReport
                 .Append(reading.Waiting.ToString(CultureInfo.InvariantCulture))
                 .Append(" waiting, ")
                 .Append(reading.InFlight.ToString(CultureInfo.InvariantCulture))
-                .Append(" in flight, longest wait so far ")
+                .Append(" in flight");
+            if (before is not null)
+                text.Append(", ")
+                    .Append(slow.ToString(CultureInfo.InvariantCulture))
+                    .Append(" admission(s) waited >= 1 s during this stage");
+            text.Append(", longest wait on this pool ever ")
                 .Append(reading.QueueWait.Max.TotalMilliseconds.ToString("0.###", CultureInfo.InvariantCulture))
                 .Append(" ms");
         }
 
-        if (queued.Length > MaxNamed)
+        if (implicated.Length > MaxNamed)
             text.Append(" (+")
-                .Append((queued.Length - MaxNamed).ToString(CultureInfo.InvariantCulture))
-                .Append(" more pool(s) with work queued)");
+                .Append((implicated.Length - MaxNamed).ToString(CultureInfo.InvariantCulture))
+                .Append(" more pool(s))");
 
         return text.ToString();
+    }
+
+    /// <summary>
+    /// How many admissions on this pool waited a second or more SINCE the baseline — the two tail
+    /// buckets, differenced.
+    ///
+    /// <para>Zero when there is no baseline for that pool, which covers both "no baseline at all"
+    /// and "this pool did not exist when the window opened". The latter is right: a pool created
+    /// mid-window has admitted nothing that predates the window, and its whole history is the
+    /// window, so its own counters already are the difference — which is what subtracting an
+    /// absent (all-zero) baseline computes.</para>
+    /// </summary>
+    private static long SlowAdmissionsSince(
+        IoPoolReading now,
+        IReadOnlyDictionary<string, IoPoolReading>? before)
+    {
+        if (before is null)
+            return 0;
+        var slowNow = now.QueueWait.UnderTenSeconds + now.QueueWait.TenSecondsOrMore;
+        if (!before.TryGetValue(now.Name, out var was))
+            return slowNow;
+        var slowThen = was.QueueWait.UnderTenSeconds + was.QueueWait.TenSecondsOrMore;
+        // Never negative: the counters only climb, but a lock-free read of one pool against a
+        // lock-free read of the same pool a moment earlier is not a transaction.
+        return Math.Max(0, slowNow - slowThen);
     }
 }

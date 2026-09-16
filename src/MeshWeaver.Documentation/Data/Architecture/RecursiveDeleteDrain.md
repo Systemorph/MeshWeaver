@@ -238,14 +238,23 @@ mesh-scoped and every counter is lock-free — so the commit stage takes it and 
 ```text
 [DeleteNode:commit] the bottom-up delete of 'Hosting/TriageStatus' made no progress for 30s —
 3 of 9 planned path(s) removed from storage so far; still owed by the plan: … . At the timeout:
-no I/O pool had work queued at that moment, so nothing was waiting for a pool slot
+no I/O pool had work queued at that moment, and no admission during this stage waited a second
+for a slot
 ```
 
-🚨 **The two answers are not symmetric, and the sentence is worded so they do not read as if they
-were.** *Nothing was queued* is CONCLUSIVE: work that is not waiting for a slot was not starved by
-a cap, so the drain was stuck somewhere no cap can explain. *These pools had work queued* is a
-LEAD — a busy pool at the moment of a failure is a coincidence until something ties this operation's
-own leaf to it — which is why the report says **had work queued** and never *caused*.
+🚨 **It is a WINDOW, not an instant, and that distinction is the whole reading.** A queue depth
+sampled once at the timeout cannot exonerate a cap: a leaf can wait most of the budget for a slot,
+be granted it, and only *then* stall — by which time the depth is zero and an instant-only reading
+would report the pools as innocent. So the stage snapshots the pools as it OPENS and the timeout
+differences the wait buckets against that baseline. "Nothing queued now" is half the sentence; "and
+nothing admitted during this stage waited a second" is the half that makes it mean anything.
+
+🚨 **The two answers are still not symmetric, and the wording keeps them apart.** The clean reading
+rules out **the pool gates** — no cap held this drain up — and says nothing about where the drain
+*was* stuck; storage is the likeliest remaining candidate, not a proven one. *These pools had work
+queued* is a LEAD in the other direction: the buckets are process-wide, so a slow admission during
+the window may belong to an unrelated caller, and it stays a coincidence until something ties this
+operation's own leaf to it. Which is why the report says **had work queued** and never *caused*.
 
 A third sentence exists on purpose. `IoPoolQueueReport` distinguishes "no registry on this hub — the
 reading was not taken" from "taken, and nothing was queued", because collapsing those is how an

@@ -3149,6 +3149,16 @@ public static class MeshExtensions
                                         // NO-PROGRESS watchdog. A drain that keeps removing rows keeps
                                         // resetting the clock; one that stops removing for `budget`
                                         // still fails, and MaxDeleteDrainPasses still bounds the passes.
+                                        // 🚨 The baseline for the queue reading below, taken as the
+                                        // stage OPENS. A depth sampled once at the timeout cannot
+                                        // exonerate a cap: a leaf can wait most of the budget for a
+                                        // slot, be granted it, and only then stall — by which time
+                                        // the depth is zero. Differencing the wait buckets against
+                                        // this makes the reading cover the WINDOW, which is the
+                                        // only thing the watchdog's verdict is about.
+                                        var ioPools = hub.ServiceProvider.GetService<IoPoolRegistry>();
+                                        var poolsAtStageStart = ioPools?.Snapshot();
+
                                         var drainProgress = new Subject<string>();
                                         return drainProgress
                                             .Select(_ => (IReadOnlyList<string>?)null)
@@ -3202,13 +3212,15 @@ public static class MeshExtensions
                                                 //
                                                 // The reading is free here — IoPoolRegistry is
                                                 // mesh-scoped and every counter is lock-free — and
-                                                // ONE of its two answers is conclusive: nothing
-                                                // queued means nothing was waiting for a slot, so
-                                                // the drain was stuck somewhere a cap cannot
-                                                // explain. The other is a lead, and the sentence
-                                                // says "had work queued", never "caused".
+                                                // its two answers are not symmetric. Nothing queued
+                                                // at the end AND nothing admitted during the stage
+                                                // waiting a second rules out THE POOL GATES: no cap
+                                                // held this drain up. It does not say where the
+                                                // drain WAS stuck, only where it was not. The other
+                                                // answer is a lead, so the sentence says "had work
+                                                // queued", never "caused".
                                                 var queueing = IoPoolQueueReport.Describe(
-                                                    hub.ServiceProvider.GetService<IoPoolRegistry>());
+                                                    ioPools, poolsAtStageStart);
                                                 var ex = DeleteStageTimeout(
                                                     DeleteStage.Commit,
                                                     $"the bottom-up delete of '{path}' made no progress for "
