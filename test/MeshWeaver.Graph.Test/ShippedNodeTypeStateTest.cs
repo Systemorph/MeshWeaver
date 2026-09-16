@@ -72,10 +72,10 @@ public class ShippedNodeTypeStateTest
     ///     which is wider than the convention: <c>adoptedSourceFingerprint</c>,
     ///     <c>buildProvenance</c>, <c>requestedSourceStampAt</c> and the module-version pair are
     ///     all mesh-owned and none of them is spelled like it;</item>
-    ///   <item>the members deliberately left UNMASKED
-    ///     (<see cref="NodeTypeMemberOwnership.MeshWrittenButUnmasked"/>) — still runtime-written,
-    ///     and the mask is not there to stop a file carrying one, so this guard is the only thing
-    ///     that does.</item>
+    ///   <item>the members the import deliberately does NOT preserve
+    ///     (<see cref="NodeTypeMemberOwnership.MeshWrittenButNotPreserved"/>) — still
+    ///     runtime-written, and the STRIP covers them, but the mask does not, so naming them here
+    ///     keeps this guard honest independently of that asymmetry.</item>
     /// </list>
     /// 🚨 The prefix list lives in <see cref="NodeTypeMemberOwnership"/>, not here: it is read by
     /// the mask's reverse guard as well, and two copies of it drifting is the same failure this
@@ -83,7 +83,7 @@ public class ShippedNodeTypeStateTest
     /// </summary>
     private static readonly IReadOnlySet<string> BannedMembers =
         NodeTypeMemberOwnership.RuntimeStateNamed
-            .Concat(NodeTypeMemberOwnership.MeshWrittenButUnmasked)
+            .Concat(NodeTypeMemberOwnership.MeshWrittenButNotPreserved)
             .Select(NodeTypeMemberOwnership.CamelCase)
             .Concat(Mesh.NodeTypeOperationalContent.MemberNames)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -137,8 +137,9 @@ public class ShippedNodeTypeStateTest
         // A member the sync seams mask but the convention does not name — an authored value here
         // forges the very claim the field exists to expose.
         Assert.Contains("adoptedSourceFingerprint", BannedMembers);
-        // Runtime-written and deliberately UNMASKED, so this guard is the only thing stopping a
-        // file from authoring it — and the bake gate reads it as "do not hold the rollout".
+        // Runtime-written and deliberately NOT preserved on import — the mask is not what keeps a
+        // file from authoring it, so this guard names it explicitly. The bake gate reads a stamped
+        // type's compile failure as "do not hold the rollout", which is what a forgery would buy.
         Assert.Contains("pendingRetirement", BannedMembers);
         // Compile-pipeline state spelled outside the convention (#2544).
         Assert.Contains("dispatchedBuildInputs", BannedMembers);
