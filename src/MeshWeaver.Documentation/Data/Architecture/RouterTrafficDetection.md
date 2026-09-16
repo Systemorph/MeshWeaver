@@ -2,7 +2,7 @@
 nodeType: Markdown
 name: Router Traffic Detection
 category: Architecture
-description: The ROUTER_TRAFFIC detector has two sites — the receiving hub, which names the two addresses, and the origin, which names the call site. Why the receiver-side line alone could not close an issue in four re-filings and 41,087 lines, what each site can and cannot see, the seam a violating caller hops onto, and why the ratchet that holds that seam derives its denominator from the framework's own handler registrations instead of listing message types.
+description: The ROUTER_TRAFFIC detector has two sites — the receiving hub, which names the two addresses, and the origin, which names the call site. Why the receiver-side line alone could not close an issue in four re-filings and 41,087 lines, what each site can and cannot see, the seam a violating caller hops onto, and why the two ratchets that hold that seam derive their denominators — one from the framework's own handler registrations, one from the receivers the code has already declared router-capable — instead of listing anything.
 icon: /static/NodeTypeIcons/box.svg
 ---
 
@@ -231,11 +231,16 @@ question rather than a month-long one.
 > `RawJson has the mesh hub as sender (sender: mesh/…, target: TestData/RouterTrafficEditorProbe)`
 > followed by `DataChangeResponse … target: mesh/…`.
 >
-> **One named residue stays open and is deliberately not fixed here.** `JsonSynchronizationStream`
-> posts `new UnsubscribeRequest(reduced.StreamId)` on its own `hub`. That file declares no
-> router-capable receiver, so it is outside this denominator — and hopping it would not be a no-op:
-> it would change which hub the unsubscribe ORIGINATES from, which the owner's per-subscriber
-> bookkeeping reads. That is a correlation question, not a routing one, and it needs its own design.
+> **One named residue stays open and is deliberately not fixed here —
+> [#4489](https://github.com/Systemorph/MeshWeaver/issues/4489).** `JsonSynchronizationStream` posts
+> `new UnsubscribeRequest(reduced.StreamId)` on its own `hub`. That file declares no router-capable
+> receiver (it calls no seam), so it is outside this denominator, and `UnsubscribeRequest` is not a
+> lifecycle message, so it is outside the other one — **neither ratchet sees it**, and the
+> instrument that names it is the runtime origin line. Hopping it would not be a no-op either: it
+> would change which hub the unsubscribe ORIGINATES from, which the owner's per-subscriber
+> bookkeeping reads, while the SUBSCRIBE that pairs with it came from the same hub. That is a
+> correlation question, not a routing one, and it needs its own design — #4489 says what "done"
+> would look like.
 
 The one seeded `src/` entry is not debt: it is the #981 self-targeted inner create inside the
 `CreateOrUpdateNodeRequest` **handler**, posted on and handled by the hub whose turn loop already

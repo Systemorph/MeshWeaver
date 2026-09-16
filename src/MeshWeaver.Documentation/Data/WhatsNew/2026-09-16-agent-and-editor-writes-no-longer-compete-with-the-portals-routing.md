@@ -41,5 +41,6 @@ first hop *is* the declaration, and it cannot be written without meaning it.
 What this still does not cover, and is written down rather than implied: a component that has never
 moved anything off the router declares nothing, so it stays invisible to both guards until its first
 sighting. One such strand — a stream unsubscribe whose origin hub is a correlation question rather
-than a routing one — remains open on purpose. See
+than a routing one — remains open on purpose, tracked as
+[#4489](https://github.com/Systemorph/MeshWeaver/issues/4489). See
 [Router Traffic Detection](/Doc/Architecture/RouterTrafficDetection).
