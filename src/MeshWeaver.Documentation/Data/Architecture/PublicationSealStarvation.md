@@ -342,3 +342,43 @@ hold every source on every new platform line. A **file** (or a broken link) at e
 the opposite — something is there and it is not enumerable, which is what a half-finished layout
 migration looks like from this reader. Absent reads as `Read`; occupied-by-something-else reads as
 `Unreadable`.
+
+---
+
+## 9. A refusal is a conclusion, and it records itself too
+
+A sync source can fail to import for a reason that is **not** a hold and never resolves on its own:
+its configured **subdirectory matches nothing** in the named repository. The refusal is correct and
+protective — an empty snapshot under `FullReplace` would mirror the whole Space away (#1326) — but
+until #4499 it logged, threw, and wrote **nothing** to the config node. From outside, a source
+refusing on *every single pass* was indistinguishable from one that is working.
+
+**Measured on memex.systemorph.com, 2026-09-16.** Two Spaces — `DeepSign` and `UWDeepfield` —
+refusing at **~32 passes/hour**, one every two minutes, on both replicas, for an unbounded duration.
+`DeepSign` was verified absent rather than merely reported absent: `061976bc` is a valid commit in
+MeshWeaver.Plugins and no `DeepSign` path exists in that tree nor anywhere on its `main`. The sync
+was following the publication seal correctly — the **subdirectory** was the wrong half.
+
+```
+lastSyncOutcome: Refused
+lastSyncNote:    "No files found under subdirectory 'DeepSign' at 061976bc in …
+                  Refusing to import an empty snapshot — it would prune the whole Space.
+                  Check the subdirectory (including its exact capitalisation …)"
+```
+
+🚨 **`Refused` is deliberately not `Held`.** A hold is a source waiting for a seal it will
+eventually get; a refusal is a **configuration fault** that repeats identically forever and clears
+only when someone edits the source. Reading one as the other sends an operator to wait for a
+publication that would change nothing.
+
+Three details carry it:
+
+- **It is #3581's rule, not a new one.** *"EVERY conclusion records when it happened and what it
+  was"* — including branches that advance nothing. This refusal was the one branch that escaped it.
+- **Recorded, then RE-THROWN.** The error contract is unchanged:
+  `SyncSubdirectoryEmptyException` derives from `InvalidOperationException`, which is what this path
+  threw before, so every existing catch behaves identically. It exists as a *type* only so the
+  caller can record the conclusion without matching on message text.
+- **Neither pointer moves.** Nothing was read and nothing landed, so the SEEN commit stays put and
+  the `#3945` attempt pair is *cleared* rather than stamped — a refusal that left an "already
+  attempted at this commit" marker would licence a later pass to skip the import it never made.
