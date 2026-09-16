@@ -47,6 +47,17 @@ public static class NodeTypeOperationalContent
     /// <c>NodeTypeOperationalContentTest</c> in the Graph test suite, so the list cannot silently
     /// drift from the record.
     ///
+    /// <para>🚨 In BOTH directions since #4480, and the reverse one is the direction that loses
+    /// data. <c>MemberNames ⊆ the record</c> catches an entry naming no property; it is
+    /// structurally blind to a runtime-state PROPERTY missing from here, which is what leaks the
+    /// mesh's own measurements into a repo file and lets a file overwrite them on the way back —
+    /// four were missing that way. So the guard is now three: that inclusion, the reverse one over
+    /// the control plane's naming convention, and a PARTITION that classifies every serialised
+    /// member of the record as repo-authored, mesh-owned-and-masked, or (with its reason)
+    /// mesh-written-but-deliberately-unmasked. Only the partition sees a member spelled outside the
+    /// convention — <c>dispatchedBuildInputs</c> was exactly that. See
+    /// <c>Doc/Architecture/NodeTypeMemberOwnership</c>.</para>
+    ///
     /// <para>🚨 The case-insensitive comparer is load-bearing TWICE: for the JSON paths above, and
     /// for <see cref="WithTypedMembersReset"/>, which matches CLR PascalCase property names against
     /// these camelCase entries. Tightened to <c>StringComparer.Ordinal</c>, every JSON-shaped test
@@ -70,7 +81,29 @@ public static class NodeTypeOperationalContent
         "releaseNotes",
         "latestAssemblyCollection",
         "latestAssemblyPath",
+        // #4480 — the third member of the assembly triple, and the only one that is an IDENTITY:
+        // the MVID of the bytes the last successful build PRODUCED (#2471). Operational for the
+        // same reason the collection/path pair is, and for one sharper one: bind time compares it
+        // against the MVID of the bytes actually served, so an authored value forges a MATCH and
+        // turns off the stale-build detector that exists to catch a portal serving stale compiled
+        // code while reporting Ok — or forges a MISMATCH and refuses a correct bind. Export leaving
+        // it behind was incoherent on its own terms: the file then named bytes by an identity that
+        // exists nowhere on the importing mesh, while carrying no path to them.
+        "latestAssemblyMvid",
         "compiledSources",
+        // #4480 — the deployment's installed-MODULE fingerprint the assembly was compiled under
+        // (#1644/#1664). Operational for the same reason compiledFrameworkVersion is, and it
+        // DECIDES: HasUsableBuild invalidates a build stamped with a different non-null hash than
+        // the live set, so an authored hash that happens to match the importing deployment declares
+        // a FOREIGN build usable and suppresses the recompile a module update requires. The same
+        // class of forgery the adoptedSourceFingerprint entry names.
+        "compiledModulesHash",
+        // #4480 — the per-type DEPENDENCY RECORD the assembly was compiled with (#1707 slice 2).
+        // Operational for the same reason compiledModulesHash is, and it decides in one more place:
+        // PrebuiltAssemblySeeder.IsAlreadyAdopted compares the LIVE stamp against the BUNDLE's
+        // record, so an authored record matching the bundle makes a FRESH install read as
+        // already-adopted — the bytes are never seeded and the type parks on a stamp nobody earned.
+        "compiledDependencies",
         "currentSourceVersions",
         // #1834 — the adopter's REQUEST that the owner stamp compiledSources from its own
         // currentSourceVersions. Operational for the same reason both of those are, and for one
@@ -108,6 +141,14 @@ public static class NodeTypeOperationalContent
         // a finding about a partition it was never taken on — and the empty list is the shape that
         // reads as "checked, all present".
         "failedSourceQueries",
+        // #4480 — the build-inputs token the IN-FLIGHT compile was dispatched for (#2544), cleared
+        // by every terminal write-back. Operational for the same reason failedBuildInputs is, and
+        // it is the member that proved a naming convention cannot be the guard: it is spelled
+        // outside the compile/release control plane's prefixes, so nothing ever named it as runtime
+        // state and nothing noticed it was missing from here. An authored token matching what a
+        // live request resolves to makes that request read as ALREADY IN FLIGHT and be CONSUMED —
+        // absorbed against a compile nobody dispatched, so the release it asked for is simply lost.
+        "dispatchedBuildInputs",
     };
 
     /// <summary>
