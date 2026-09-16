@@ -89,13 +89,33 @@ public sealed class StaticRepoImportRefusals(IMessageHub hub, ILogger<StaticRepo
     /// <summary>
     /// The refusal entries of a manifest node, as the seam's vocabulary. Pure apart from the
     /// serializer options it borrows from the hub.
+    ///
+    /// <para>🚨 <b>A manifest node that EXISTS but cannot be READ answers <see langword="null"/>,
+    /// never empty</b> (Copilot review). The importer's own parse deliberately degrades every
+    /// failure to an empty map — for IT, "unreadable" and "nothing recorded" both correctly mean
+    /// "do a full pass". Here they are opposite answers: reporting a corrupt manifest as the
+    /// determined-empty set would claim this partition's import lost nothing on the evidence of a
+    /// parse failure, and would suppress the attribution at exactly the moment the bookkeeping is
+    /// broken — the null-versus-empty contract this seam is built on, violated by the one caller
+    /// that cares most.</para>
     /// </summary>
-    private ImmutableList<ImportRefusal> Parse(MeshNode? manifestNode) =>
-        StaticRepoImporter.ParseManifest(manifestNode, hub.JsonSerializerOptions)
+    private ImmutableList<ImportRefusal>? Parse(MeshNode? manifestNode)
+    {
+        var manifest = StaticRepoImporter.TryParseManifest(manifestNode, hub.JsonSerializerOptions);
+        if (manifest is null)
+        {
+            logger?.LogDebug(
+                "[ImportRefusals] the import manifest node exists but could not be read; reporting "
+                + "NOT DETERMINED rather than 'no refusals'.");
+            return null;
+        }
+
+        return manifest
             .Where(kvp => StaticRepoImporter.IsRefusal(kvp.Value))
             .Select(kvp => new ImportRefusal(kvp.Key, StaticRepoImporter.RefusalReasonOf(kvp.Value)))
             // Ordered so two readings of an unchanged manifest produce the same sentence — a
             // diagnosis that reshuffles itself between compiles reads as new information.
             .OrderBy(r => r.NodePath, StringComparer.OrdinalIgnoreCase)
             .ToImmutableList();
+    }
 }

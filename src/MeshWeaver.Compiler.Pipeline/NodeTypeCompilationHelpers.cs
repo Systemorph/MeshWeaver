@@ -1524,6 +1524,8 @@ internal static class NodeTypeCompilationHelpers
                     DispatchedBuildInputs = null,
                     CompilationStatus = CompilationStatus.Ok,
                     CompilationError = null,
+                    // #4469 — cleared wherever the error text is (Copilot review).
+                    CompilationImportRefusals = null,
                 };
         }
 
@@ -3579,14 +3581,29 @@ internal static class NodeTypeCompilationHelpers
             // CompilationError with it would drop the one sentence that says the unresolved names
             // are missing FILES, precisely when the reader arrives. The finding itself survives on
             // CompilationImportRefusals (this is a `with` over the persisted definition), so it is
-            // re-composed rather than remembered as prose. Only when `reason` REPLACES the text:
-            // the null branch keeps the recorded string, which already leads with it.
+            // re-composed rather than remembered as prose. The null branch keeps the recorded
+            // string, which already leads with it.
+            //
+            // 🚨 …but ONLY FOR THE VERDICT THAT EARNED IT (Copilot review). `formedUnderLiveInputs`
+            // already separates the two call sites exactly: FALSE is the parked short-circuit
+            // RE-SERVING the remembered compile failure — the same verdict the finding belongs to —
+            // while TRUE is a NEW gate verdict formed here and now (a delivery hold, an
+            // incompatible adopted build), which the finding says nothing about. A source change
+            // un-parks a type WITHOUT clearing the field, so prepending it to a later bundle or
+            // availability reason would attach an import diagnosis to a failure that has nothing to
+            // do with an import — the unfounded accusation this whole change set refuses to make.
             CompilationError = reason is null
                 ? parkedDef.CompilationError
                     ?? "Compilation is parked after a terminal failure; request a release (Compile) to retry."
-                : ImportRefusalDiagnosis.Describe(parkedDef.CompilationImportRefusals) is { } lead
-                    ? $"{lead}\n{reason}"
-                    : reason,
+                : !formedUnderLiveInputs
+                    && ImportRefusalDiagnosis.Describe(parkedDef.CompilationImportRefusals) is { } lead
+                        ? $"{lead}\n{reason}"
+                        : reason,
+            // A NEW verdict formed here owns the record: a finding about the PREVIOUS one must not
+            // be left standing behind it, where a later settle could pick it up again.
+            CompilationImportRefusals = formedUnderLiveInputs
+                ? null
+                : parkedDef.CompilationImportRefusals,
             FailedBuildInputs = formedUnderLiveInputs
                 ? BuildInputsToken(modulesHash, parkedDef.CurrentSourceVersions)
                 : parkedDef.FailedBuildInputs,

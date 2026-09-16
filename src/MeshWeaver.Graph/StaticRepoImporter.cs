@@ -1666,21 +1666,44 @@ public static class StaticRepoImporter
                                 // refusal can ever say: an operator who re-syncs and reads "the
                                 // manifest says so, re-import with force to find out why" has been
                                 // handed the shape of an answer instead of the answer.
-                                var rememberedReason =
-                                    RefusalReasonOf(priorEntry) ?? RememberedRefusalReason;
+                                // 🚨 #4469 — REPORT THE ORIGINAL REASON when the ledger kept one,
+                                // under its OWN catalog key.
+                                //
+                                // 🚨 The existing key's TEMPLATE is left exactly as it was
+                                // (Copilot review). Activity log messages are PERSISTED with their
+                                // arguments, and pre-#4469 rows stored only `path`; adding
+                                // `{reason}` to that template would make every historical import
+                                // activity render a literal "{reason}" for ever, because
+                                // LocalizationCatalog.GetNamed deliberately leaves an unknown
+                                // placeholder visible. A second key is the only shape that can
+                                // carry a new argument without rewriting the past — and it doubles
+                                // as the correct wording for a ledger entry written before reasons
+                                // were recorded, which genuinely has none to report.
+                                var recordedReason = RefusalReasonOf(priorEntry);
+                                var rememberedReason = recordedReason ?? RememberedRefusalReason;
+                                var refusedBefore = recordedReason is null
+                                    ? new LogMessage(
+                                            $"⚠ {path} was REFUSED at this exact content by an earlier "
+                                            + "import, so the mesh does NOT hold it — the same bytes "
+                                            + "break the same rule, and no write was attempted. Fix the "
+                                            + "source file, or re-import with force to see the refusal "
+                                            + "again in full.",
+                                            Microsoft.Extensions.Logging.LogLevel.Warning)
+                                        .WithKey("activity.import.itemRefusedBefore", ("path", path))
+                                    : new LogMessage(
+                                            $"⚠ {path} was REFUSED at this exact content by an earlier "
+                                            + "import, so the mesh does NOT hold it — the same bytes "
+                                            + $"break the same rule, and no write was attempted "
+                                            + $"({recordedReason}). Fix the source file in the "
+                                            + "repository and re-import.",
+                                            Microsoft.Extensions.Logging.LogLevel.Warning)
+                                        .WithKey("activity.import.itemRefusedBeforeWithReason",
+                                            ("path", path), ("reason", recordedReason));
                                 settled.Add(new ImportItem(
                                     Failed: 1,
                                     FailedDeterministic: 1,
                                     Failure: new FailedImport(path, rememberedReason, true),
-                                    Log: new LogMessage(
-                                        $"⚠ {path} was REFUSED at this exact content by an earlier import, "
-                                        + "so the mesh does NOT hold it — the same bytes break the same "
-                                        + $"rule, and no write was attempted ({rememberedReason}). Fix the "
-                                        + "source file, or re-import with force to see the refusal again "
-                                        + "in full.",
-                                        Microsoft.Extensions.Logging.LogLevel.Warning)
-                                        .WithKey("activity.import.itemRefusedBefore",
-                                            ("path", path), ("reason", rememberedReason))));
+                                    Log: refusedBefore));
                                 continue;
                             }
 
@@ -3227,20 +3250,42 @@ public static class StaticRepoImporter
     /// full (non-incremental) import, never a wrong one.
     /// </summary>
     internal static ImmutableDictionary<string, string> ParseManifest(MeshNode? manifestNode, JsonSerializerOptions opts)
+        => TryParseManifest(manifestNode, opts) ?? ImmutableDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// 🚨 <b>The same parse, with the FAILURE kept (#4469, Copilot review).</b> Returns
+    /// <see langword="null"/> when the node exists but its manifest could not be read — corrupt
+    /// content, an unreadable <c>ReturnValue</c>, a materialization fault — and an (possibly empty)
+    /// map when it genuinely was read.
+    ///
+    /// <para><see cref="ParseManifest"/> collapses the two on purpose: for the IMPORT, "could not
+    /// read" and "nothing recorded" both mean the same thing — do a full, non-incremental pass,
+    /// which is conservative in the right direction. For a READER of the refusal ledger they are
+    /// opposite answers: an unreadable manifest reported as the determined-empty set would claim
+    /// "this partition's import lost nothing" on the evidence of a parse failure, and would
+    /// suppress the attribution at exactly the moment the bookkeeping is broken. Same parse, one
+    /// implementation, so the two can never drift about what a manifest SAYS — only about what an
+    /// unreadable one MEANS.</para>
+    /// </summary>
+    internal static ImmutableDictionary<string, string>? TryParseManifest(
+        MeshNode? manifestNode, JsonSerializerOptions opts)
     {
         if (manifestNode is null) return ImmutableDictionary<string, string>.Empty;
         try
         {
             var log = manifestNode.ContentAs<ActivityLog>(opts);
-            if (log?.ReturnValue is not { } rv) return ImmutableDictionary<string, string>.Empty;
+            // 🚨 Content that would not materialize as an ActivityLog at all is a node we could NOT
+            // READ, not one recording nothing — the degrade path ObjectAsExtensions exists for.
+            if (log is null) return null;
+            if (log.ReturnValue is not { } rv) return ImmutableDictionary<string, string>.Empty;
             var map = rv.Deserialize<Dictionary<string, string>>(opts);
             return map is null
-                ? ImmutableDictionary<string, string>.Empty
+                ? null
                 : map.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
         }
         catch
         {
-            return ImmutableDictionary<string, string>.Empty;
+            return null;
         }
     }
 

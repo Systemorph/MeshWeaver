@@ -161,6 +161,30 @@ public class ImportRefusalDiagnosisTest
     }
 
     /// <summary>
+    /// 🚨 The fallback turns on the FILTERED set, never on the raw count (Copilot review).
+    /// <c>BuildFailureDiagnostics</c> re-derives its rows from a SECOND, LSP-shaped compilation, so
+    /// it can come back carrying only warnings while the flat transcript still holds the
+    /// authoritative <c>CS0246</c> from the compile that actually failed. Deciding on
+    /// <c>diagnostics.Count</c> returned an empty evidence list for exactly that case and the
+    /// diagnosis went silently missing on a shape it is written for.
+    /// </summary>
+    [Fact]
+    public void StructuredDiagnosticsWithNoERRORS_FallBackToTheFlatTranscript()
+    {
+        var evidence = ImportRefusalDiagnosis.EvidenceOf(
+        [
+            new Lsp.DiagnosticInfo("CS1591", Lsp.DiagnosticSeverity.Warning, "missing XML comment", null),
+        ],
+            failureText: "CS0246 Error (line 3): The type or namespace name 'SelfUpdateRouting' could not be found");
+
+        evidence.Select(e => e.Id).Should().Equal(["CS0246"],
+            "a re-derivation that produced no ERROR row is not evidence that the compile had none — "
+            + "the transcript is still there and still authoritative");
+        ImportRefusalDiagnosis.Explaining(Recorded(), evidence).Should().NotBeEmpty(
+            "…and the diagnosis must actually reach the operator on that path");
+    }
+
+    /// <summary>
     /// The emit path throws a <c>CompilationException</c> whose message is
     /// <c>CompileDiagnostics.FormatCompileFailure</c>'s rendering, so the flat text has to be read
     /// too — PER LINE, so an unrelated <c>CS0246</c> elsewhere in the transcript cannot lend its ID

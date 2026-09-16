@@ -117,6 +117,15 @@ The read keeps the distinction at the instrument: it uses `GetMeshNodeOutcome`, 
 so `Absent` (a partition whose import recorded no refusal — a real answer) and `Unavailable` (a
 budget that elapsed, a fault, a denial — nothing established) cannot collapse into one another.
 
+🚨 And the **parse** keeps it too, which is the easier half to lose. The importer's own manifest
+parse degrades every failure to an empty map on purpose — for *it*, "unreadable" and "nothing
+recorded" both correctly mean *do a full, non-incremental pass*. For a reader of the refusal ledger
+they are opposite answers: a manifest node that exists but is corrupt, reported as the
+determined-empty set, would claim the partition's import lost nothing **on the evidence of a parse
+failure**, and would suppress the attribution at exactly the moment the bookkeeping is broken. Both
+callers share one parse (`TryParseManifest`), so they can never drift about what a manifest *says* —
+only about what an unreadable one *means*.
+
 ## Where it surfaces
 
 - **`NodeTypeDefinition.CompilationError`** — the sentence LEADS the recorded error, ahead of the
@@ -133,8 +142,23 @@ budget that elapsed, a fault, a denial — nothing established) cannot collapse 
 compile that formed the verdict ran once, minutes or hours ago, and every later access is
 short-circuited through the park gate with the registry's remembered error — the bare Roslyn text.
 `ApplyGateSettle` therefore **re-composes** the sentence from `CompilationImportRefusals` (which
-survives the settle by construction) whenever it replaces `CompilationError`, rather than
-remembering it as prose.
+survives the settle by construction) rather than remembering it as prose.
+
+🚨 **…but only for the verdict that earned it.** `formedUnderLiveInputs` separates the two gate call
+sites exactly: `false` is the parked short-circuit *re-serving the remembered compile failure* — the
+same verdict the finding belongs to — while `true` is a **new** verdict formed then and there (a
+delivery hold, an incompatible adopted build), which the finding says nothing about. A source change
+un-parks a type *without* clearing the field, so prepending the finding to a later bundle or
+availability reason would attach an import diagnosis to a failure that has nothing to do with an
+import. A new verdict therefore clears the field as well as declining to quote it. And the field is
+cleared in **every** path that clears `CompilationError`/`CompilationDiagnostics` — compile success,
+the delivery hold's serving state, prebuilt adoption, the hydrate short-circuit — so a type can never
+go `Ok` while retaining a finding for a later settle to pick up.
+
+The member is registered as operational (`NodeTypeOperationalContent.MemberNames`) and mirrored on
+the compile-state satellite (`NodeTypeCompileState`), like every other runtime compile field: it is a
+measurement taken against *this* mesh's import bookkeeping, so an authored copy would accuse an
+import that never ran here, and an export/re-import would otherwise lose the finding.
 
 The `CompilationError` string itself is deliberately **not localized**, consistently with its
 neighbour: it is baked into the node at write time and read back later by tools and by `search`, so
@@ -145,7 +169,12 @@ language* is the activity's.
 
 - **A refusal recorded before reasons were kept** reports the path and says *"the refusal predates
   reason recording"* — a different sentence from "no reason", and said as such. Any edit to the file
-  moves its token and the next import records the reason.
+  moves its token and the next import records the reason. The import activity has a **separate
+  catalog key** for the with-reason wording rather than a new argument on the old one: activity log
+  messages are persisted *with their arguments*, and adding a placeholder to an existing template
+  makes every historical row render a literal `{reason}` for ever, because the catalog deliberately
+  leaves an unknown placeholder visible. A second key is the only shape that can carry a new
+  argument without rewriting the past.
 - **The install path.** MeshWeaver#4259 is the same *shape* on a package install — declared source
   nodes that never landed, with nothing logged. Whether this reporting should be mirrored there is
   open.

@@ -101,11 +101,22 @@ public static class ImportRefusalDiagnosis
     public static ImmutableList<DiagnosticEvidence> EvidenceOf(
         IReadOnlyList<Lsp.DiagnosticInfo>? diagnostics, string? failureText)
     {
+        // 🚨 The fallback turns on the FILTERED set, never on `diagnostics.Count` (Copilot review).
+        // BuildFailureDiagnostics re-derives the rows from a second, LSP-shaped compilation, and
+        // that re-derivation can come back carrying only warnings while `failureText` still holds
+        // the authoritative CS0246/CS0103 line from the compile that actually failed. Deciding on
+        // the unfiltered count returned an empty evidence list for exactly that case — no error
+        // rows, and the flat transcript never read — so the diagnosis went silently missing on a
+        // shape it is written for.
         if (diagnostics is { Count: > 0 })
-            return diagnostics
+        {
+            var errors = diagnostics
                 .Where(d => d.Severity == Lsp.DiagnosticSeverity.Error)
                 .Select(d => new DiagnosticEvidence(d.Id ?? string.Empty, d.Message ?? string.Empty))
                 .ToImmutableList();
+            if (errors.Count > 0)
+                return errors;
+        }
 
         if (string.IsNullOrWhiteSpace(failureText))
             return ImmutableList<DiagnosticEvidence>.Empty;
