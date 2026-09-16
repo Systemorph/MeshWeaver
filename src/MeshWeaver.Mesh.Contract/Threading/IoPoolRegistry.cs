@@ -64,7 +64,18 @@ public sealed class IoPoolRegistry : IDisposable
         if (Volatile.Read(ref _disposing) != 0)
             return _refused.Value;
 
-        var pool = _pools.GetOrAdd(name, n => new IoPool(_options.MaxConcurrencyFor(n), _options.DrainTimeout, _options.DrainGrace));
+        // 🚨 A LOSING CANDIDATE MUST BE DISPOSED. ConcurrentDictionary.GetOrAdd does NOT promise the
+        // value factory runs once: on concurrent first use of a name two pools are built and only
+        // one is kept. The discarded one used to be garbage — a SemaphoreSlim and a scheduler nobody
+        // referenced — so nothing noticed. It no longer is: a pool owns a started `IoPool-cancel`
+        // thread from its constructor (#4448), and a thread is a GC ROOT that parks for the process's
+        // life unless someone disposes the pool that owns it. So the factory records what it built
+        // and anything that did not win the race is disposed, which wakes its canceller and lets it
+        // exit. Same reason the refusal path below disposes `raced`.
+        IoPool? candidate = null;
+        var pool = _pools.GetOrAdd(name, n => candidate = new IoPool(_options.MaxConcurrencyFor(n), _options.DrainTimeout, _options.DrainGrace));
+        if (candidate is not null && !ReferenceEquals(pool, candidate))
+            candidate.Dispose();
 
         // Re-check: disposal may have begun between the check above and the add, in which case our
         // pool went in after the snapshot was taken. Pull it back out and refuse — losing a pool
