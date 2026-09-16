@@ -301,3 +301,44 @@ Three properties are deliberate:
 - **Both hold shapes.** The clause rides on the sealed-at-another-commit hold and on the
   publication-not-sealed hold alike; an operator reads them in the same place and is misled by them
   in the same direction.
+
+---
+
+## 8. A reading that FAILED is not a reading that found nothing
+
+`SealedSyncGate.Decide` answers `Go` when no sealed source is attributable to the repository —
+correctly: an instance that runs no publication of it is not this gate's business. That verdict is
+taken from an **empty list**, and until #3461 an empty list had two meanings:
+
+| why the list is empty | what it means | what the gate did |
+|---|---|---|
+| no published root / no identity configured | this instance seeds from nothing | `Go` — right |
+| the identity has no directory under the root yet | an ordinary new platform line | `Go` — right |
+| **the root is configured and the enumeration FAILED** | **nothing was measured** | `Go` — **the rule, off** |
+
+The third row is the whole rule switching itself off, for **every repository at once**, with a
+single Warning in a log nothing gates on. `SealedPublicationIndex`'s own comment named the trigger
+before there was a guard for it: under phase 5 (dropping the flat compatibility copy) this reader
+*"would find no sentinel at all, report every source unsealed, and SealedSyncGate would then see an
+EMPTY `mine` and return Go for every repository — silently removing the whole rule at the moment it
+matters most."*
+
+**The reading now states which it is** (`SealedPublicationIndex.ReadingFor` → `SealedReadOutcome`),
+and the caller asks **once per delivery, before any verdict**:
+
+```csharp
+var (sealedForThisIdentity, readOutcome) = SealedPublicationIndex.ReadingFor(root, identity, logger);
+var indexRefusal = SealedSyncGate.RefusedForUnreadableIndex(readOutcome, identity);
+// … if it answers, EVERY source is held, not just this repository's
+```
+
+🚨 It is deliberately **not** a parameter of `Decide`. The question is not per repository: if the
+index could not be read, no per-repository answer is trustworthy, so one refusal holds them all.
+
+🚨 **`Directory.Exists` returns false for two different worlds, and the first version of this fix
+got it wrong** — caught by its own test before it shipped. *Nothing* at the identity path is the
+ordinary state of a framework identity nobody has published for; reporting that as a failure would
+hold every source on every new platform line. A **file** (or a broken link) at exactly that path is
+the opposite — something is there and it is not enumerable, which is what a half-finished layout
+migration looks like from this reader. Absent reads as `Read`; occupied-by-something-else reads as
+`Unreadable`.
