@@ -2864,12 +2864,63 @@ public static class StaticRepoImporter
     /// </summary>
     private static string RefusedEntry(string token, string? reason)
     {
-        var trimmed = reason?.Trim().Replace('\r', ' ').Replace('\n', ' ');
-        if (string.IsNullOrEmpty(trimmed))
-            return RefusedTokenPrefix + token;
-        if (trimmed.Length > LedgerReasonMaxChars)
-            trimmed = trimmed[..LedgerReasonMaxChars] + "…";
-        return RefusedTokenPrefix + token + RefusedReasonSeparator + trimmed;
+        var sanitized = SanitizeLedgerReason(reason);
+        return sanitized.Length == 0
+            ? RefusedTokenPrefix + token
+            : RefusedTokenPrefix + token + RefusedReasonSeparator + sanitized;
+    }
+
+    /// <summary>
+    /// 🚨 <b>The ledger must not become unstorable because of what it records about something
+    /// unstorable.</b> The reason is a message from the WRITE PATH — the very layer that refused
+    /// these bytes — so it can carry whatever the refusal was about, and this entry is then written
+    /// back into a Postgres text column as part of the manifest. A refusal reason echoing a literal
+    /// NUL would make the manifest write fail for exactly the reason the node's did, which is the
+    /// incident this whole change set is about, one level of irony down. (The manifest write is
+    /// best-effort, so the consequence would be a silently non-incremental next import rather than
+    /// an outage — still a defect, and a cheap one to refuse.)
+    ///
+    /// <para>Every control character becomes a space (newlines included — an entry is one line),
+    /// runs are collapsed, and the result is capped. The cap never splits a surrogate PAIR: cutting
+    /// one in half leaves a lone surrogate, which is not valid text and is replaced downstream by
+    /// U+FFFD — a second way to write something nobody can read. Pure.</para>
+    /// </summary>
+    private static string SanitizeLedgerReason(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            return string.Empty;
+
+        var builder = new System.Text.StringBuilder(
+            Math.Min(reason.Length, LedgerReasonMaxChars + 1));
+        var lastWasSpace = false;
+        foreach (var ch in reason)
+        {
+            var c = char.IsControl(ch) || ch == ' ' ? ' ' : ch;
+            if (c == ' ')
+            {
+                if (lastWasSpace || builder.Length == 0)
+                    continue;
+                lastWasSpace = true;
+            }
+            else
+            {
+                lastWasSpace = false;
+            }
+            if (builder.Length >= LedgerReasonMaxChars)
+            {
+                // Never end on a HIGH surrogate: its partner is what we are about to drop.
+                if (char.IsHighSurrogate(builder[^1]))
+                    builder.Length--;
+                builder.Append('…');
+                break;
+            }
+            builder.Append(c);
+        }
+
+        // A trailing separator space carries nothing.
+        while (builder.Length > 0 && builder[^1] == ' ')
+            builder.Length--;
+        return builder.ToString();
     }
 
     /// <summary>How much of a refusal reason the per-node manifest keeps. See

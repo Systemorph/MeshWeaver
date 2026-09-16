@@ -62,6 +62,10 @@ public class AParkedNodeTypeNamesTheImportThatLostItsSourceTest(ITestOutputHelpe
     /// byte.</summary>
     private string? _refusePath;
 
+    /// <summary>Overrides the refusing validator's message; <see langword="null"/> keeps the
+    /// default. The NUL-byte case below sets it.</summary>
+    private string? _refusalMessage;
+
     /// <summary>The symbol the lost file would have defined — the test's <c>SelfUpdateRouting</c>.
     /// The node is named for it, exactly as a C# source node is.</summary>
     private const string LostSymbol = "Ir4469Routing";
@@ -79,7 +83,7 @@ public class AParkedNodeTypeNamesTheImportThatLostItsSourceTest(ITestOutputHelpe
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .ConfigureServices(services => services.AddSingleton<INodeValidator>(
-                new RefuseOnePathValidator(() => _refusePath)));
+                new RefuseOnePathValidator(() => _refusePath, () => _refusalMessage)));
 
     /// <summary>
     /// 🚨 <b>THE PIN FOR #4469.</b> An import loses one shared source node; a NodeType that
@@ -205,6 +209,59 @@ public class AParkedNodeTypeNamesTheImportThatLostItsSourceTest(ITestOutputHelpe
         def.CompilationImportRefusals!.Should().BeEmpty(
             "read, and it explains nothing about THESE names — which is what sends the reader to "
             + "the other two causes rather than to the repository");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The ledger must not become unstorable because of what it records about something
+    /// unstorable.</b>
+    ///
+    /// <para>The reason now travels in the partition's import manifest, and it is a message from
+    /// the WRITE PATH — the very layer that refused these bytes. So it can carry whatever the
+    /// refusal was about, including the literal NUL that started all of this, and the manifest is
+    /// then written back into the same kind of Postgres text column that could not take it. A
+    /// refusal reason echoing a NUL would make the manifest write fail for exactly the reason the
+    /// node's write did, one level of irony down.</para>
+    ///
+    /// <para>The recorded reason must therefore be readable text: no control characters, still
+    /// carrying what the refusal said, and round-tripping through the seam the compile diagnosis
+    /// reads. The assertion is falsifiable without needing a store that refuses a byte — an
+    /// unsanitized reason carries the NUL and the newlines straight through.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ARefusalReasonCarryingAControlCharacter_IsRecordedAsReadableText()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        _refusalMessage =
+            "Postgres refused the row:  a literal NUL\r\nat line 12  of the file.";
+
+        await ImportTheLibraryWithOneRefusedFile(ct);
+
+        // The seam the compile diagnosis reads — asked directly, so this pins the import →
+        // manifest → seam round trip without a compile in the way.
+        var refusals = await Mesh.ServiceProvider.GetRequiredService<IPartitionImportRefusals>()
+            .Refusals(_partition)
+            .FirstAsync().Timeout(60.Seconds()).Await(ct);
+
+        refusals.Should().NotBeNull(
+            "the manifest was just written by a completed import, so this read is ANSWERED — null "
+            + "would mean the ledger could not be read, which is the one thing a NUL in the reason "
+            + "could actually have caused");
+        var recorded = refusals!.Single(r => r.NodePath == _refusePath);
+
+        recorded.Reason.Should().NotBeNullOrWhiteSpace();
+        recorded.Reason!.Should().NotContain(" ",
+            "a NUL recorded INTO the ledger is the same defect the ledger exists to report, and it "
+            + "would make the manifest write fail on a real Postgres store");
+        recorded.Reason.Should().NotContain("\r",
+            "an entry is one line — a reason that spans lines is a ledger nobody can parse back");
+        recorded.Reason.Should().NotContain("\n",
+            "an entry is one line — a reason that spans lines is a ledger nobody can parse back");
+        recorded.Reason.Should().Contain("Postgres refused the row",
+            "…and sanitizing must not throw the message away: what the write path said is the "
+            + "whole value of carrying a reason at all");
+        recorded.Reason.Should().Contain("at line 12",
+            "including the part AFTER the control characters — a sanitizer that truncated at the "
+            + "first bad byte would silently drop the locator");
     }
 
     // ---- fixture ------------------------------------------------------------------------------
@@ -338,7 +395,8 @@ public class AParkedNodeTypeNamesTheImportThatLostItsSourceTest(ITestOutputHelpe
     /// singular create runs, so the refusal reaches the importer as
     /// <c>NodeUpsertRejectionReason.ValidationFailed</c> — a verdict about the bytes.
     /// </summary>
-    private sealed class RefuseOnePathValidator(Func<string?> path) : INodeValidator
+    private sealed class RefuseOnePathValidator(Func<string?> path, Func<string?> message)
+        : INodeValidator
     {
         public IReadOnlyCollection<NodeOperation> SupportedOperations { get; } = [NodeOperation.Create];
 
@@ -346,7 +404,7 @@ public class AParkedNodeTypeNamesTheImportThatLostItsSourceTest(ITestOutputHelpe
             => Observable.Return(
                 string.Equals(context.Node.Path, path(), StringComparison.Ordinal)
                     ? NodeValidationResult.Invalid(
-                        $"'{context.Node.Path}' is refused by the test validator")
+                        message() ?? $"'{context.Node.Path}' is refused by the test validator")
                     : NodeValidationResult.Valid());
     }
 }
