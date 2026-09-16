@@ -150,6 +150,8 @@ cleared by the next attempt that actually runs.
    the state this page is about — the note says which commit the instance IS sealed at.
 2. Compare `/health`'s `framework=…` with the `identity` on `Hosting/PlatformBuilds/<source>`. If they
    differ, the instance is not being published for, and no publication will release the hold.
+   **Since #4063 the note states this itself** — see section 7; this step is the manual form, and the
+   one to fall back on for a hold recorded before that shipped.
 3. `search 'namespace:<Space>/_Activity scope:descendants sort:lastModified-desc'`. A green-build
    import appears as `Update <Space> to the built commit <sha>`; the boot reconciler's appears as
    `Reconcile <Space> with the sealed commit <sha>`. An empty tail is a Space nothing has touched,
@@ -250,3 +252,52 @@ Related: [Module Publication Gate](/Doc/Architecture/ModulePublicationGate),
 [Sealed Publication Reads](/Doc/Architecture/SealedPublicationReads),
 [Bake Identity Mismatch](/Doc/Architecture/BakeIdentityMismatch),
 [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost).
+
+## 7. The hold now names its own direction
+
+**A hold's sentence was true and ambiguous, and the ambiguity was acted on the wrong way twice.**
+
+```
+lastSyncOutcome: Held
+lastSyncNote: "built at e2ef5679, not sealed for this instance
+               (identity sd608997…: 'plugins' is sealed at 627fb3cd)"
+```
+
+That is consistent with two situations whose remedies are opposite:
+
+| | what it means | what to do |
+|---|---|---|
+| **A** | nothing has sealed recently — the publishing lane is broken | fix the lane; another publication is exactly what is needed |
+| **B** | seals are advancing under a **newer framework identity** this instance does not run | **roll the instance**; no further publication will ever release the hold |
+
+Measured on memex.meshweaver.cloud, 2026-09-16: held at `627fb3cd` under identity `sd608997…`,
+while `get @Hosting/PlatformBuilds/*` showed the live publication sealed under `s799247a…`. **Case
+B.** Two issues were open reading the same note as case A — MeshWeaver.Plugins#1823 (*"no publication
+has sealed since 2026-09-12"*) and #1798 (*"9 events queued, nothing dispatched"*) — against a lane
+that was green (77 jobs, 0 failures, `Register the publication with memex` success) and an inbox that
+returned `[]`. Both were closed on measurement; neither was ever a lane defect.
+
+**The fact that separates them was on the instance the whole time.** The release markers under the
+published root (`_releases/`, one file per platform version naming its framework identity) name
+*every* line, not only this instance's. `SealedPublicationIndex.NewerLineThan` reads them and
+answers "the newest line strictly above mine, or nothing", and `SealedSyncGate` appends it:
+
+```
+… 'plugins' is sealed at 627fb3cd. The registry has since sealed 3.0.0-ci.8600 under framework
+identity s799247a…, which this instance does not run — so this source advances when this
+instance's IMAGE does (a roll), NOT when another publication lands
+```
+
+Three properties are deliberate:
+
+- **Silence over a guess.** Null — and the note reads exactly as it did before — when the root
+  carries no markers, when this identity is on no line the markers place, and when this instance
+  already *is* the newest. Inventing a direction for an instance nobody can place would be the same
+  defect pointing the other way: telling an operator to roll on no evidence.
+- **Lineage, never SemVer.** Ordering is `PlatformReleaseOrder.Newest`, the same total order
+  `ReleasesOf` documents. Under SemVer §11.4 the retired `3.0.0-rc9.ci.7824` sorts *above* the later
+  `3.0.0-ci.8600`, which would report a current instance as behind a three-day-old line and send an
+  operator to roll **backwards** (#3542).
+- **Both hold shapes.** The clause rides on the sealed-at-another-commit hold and on the
+  publication-not-sealed hold alike; an operator reads them in the same place and is misled by them
+  in the same direction.

@@ -21,6 +21,16 @@ public sealed record SealedSource(
     string Source, string? Repository, string? SourceCommit, bool IsSealed, string? Refusal);
 
 /// <summary>
+/// A platform publication LINE: the framework identity a set of bundles was sealed under, and the
+/// newest platform version published on it. The unit <see cref="SealedPublicationIndex.ReleasesOf"/>
+/// answers in, named so a hold can state one.
+/// </summary>
+/// <param name="Identity">The framework identity the publication was sealed under.</param>
+/// <param name="Version">The newest platform version published under it, by sealed-publication
+/// lineage — never SemVer (see <see cref="SealedPublicationIndex.ReleasesOf"/>).</param>
+public sealed record PublicationLine(string Identity, string Version);
+
+/// <summary>
 /// Reads what the registry SEALED for one framework identity — the publication set the instance
 /// running that identity boots from (<see cref="ShippedPrebuiltBundles.SeedPublishedRoot"/>) —
 /// as data a decision can be made on, per source: producing repository, source commit, sealed or
@@ -102,6 +112,56 @@ public static class SealedPublicationIndex
                 + "no identity can be placed on a platform line", markers);
         }
         return byIdentity;
+    }
+
+    /// <summary>
+    /// The newest publication LINE strictly above <paramref name="identity"/>'s, or null when
+    /// there is none — the half a hold cannot otherwise state.
+    ///
+    /// <para>🚨 <b>Why a hold needs this.</b> <c>SealedSyncGate</c> holds a source with "built at
+    /// S, not sealed for this instance (identity I: 'plugins' is sealed at C)". That sentence is
+    /// true and it is consistent with two OPPOSITE situations, which is why it has twice been read
+    /// as the wrong one: either <b>nothing has sealed recently</b> (the publishing lane is broken —
+    /// act on the lane), or <b>seals are advancing under a NEWER identity</b> that this instance
+    /// does not run (the instance's IMAGE is behind — act with a roll). Measured 2026-09-16 on
+    /// memex.meshweaver.cloud: held at <c>627fb3cd</c> for identity <c>sd608997…</c> while the live
+    /// publication was sealed under <c>s799247a…</c>; two issues were open reading that same note as
+    /// a stalled publication path while the lane was green and the inbox empty
+    /// (MeshWeaver.Plugins#1823, #1798). This is the fact that separates them, and the instance can
+    /// read it without asking anything: the release markers under the published root name every
+    /// line, not only its own.</para>
+    ///
+    /// <para>Null — say nothing rather than guess — when the root carries no markers, when THIS
+    /// identity is on no line the markers place (a hold cannot be compared against an unknown), and
+    /// when this identity is already the newest. Ordering is
+    /// <see cref="Plugin.Packaging.PlatformReleaseOrder.Newest"/>, the sealed-publication lineage
+    /// <see cref="ReleasesOf"/> documents — never SemVer.</para>
+    /// </summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="identity">This instance's framework identity.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <returns>The newest line above this identity's, or null.</returns>
+    public static PublicationLine? NewerLineThan(
+        string? publishedRoot, string? identity, ILogger? logger = null)
+    {
+        if (string.IsNullOrWhiteSpace(identity))
+            return null;
+        var releases = ReleasesOf(publishedRoot, logger);
+        if (!releases.TryGetValue(identity, out var mine))
+            return null;
+
+        PublicationLine? newest = null;
+        foreach (var (otherIdentity, version) in releases)
+        {
+            if (string.Equals(otherIdentity, identity, StringComparison.Ordinal))
+                continue;
+            if (Plugin.Packaging.PlatformReleaseOrder.Newest.Compare(version, mine) <= 0)
+                continue;
+            if (newest is null
+                || Plugin.Packaging.PlatformReleaseOrder.Newest.Compare(version, newest.Version) > 0)
+                newest = new PublicationLine(otherIdentity, version);
+        }
+        return newest;
     }
 
     /// <summary>
