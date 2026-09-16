@@ -99,6 +99,74 @@ per-request source factory cannot hold.
 remembering. A mesh without the plugin catalog registered — a bare test mesh, the CLI — resolves no
 cache and gets the source unchanged.
 
+## The other half — what ONE read costs
+
+A cache changes **how often** the repository is read. It does not change what a read costs, and the
+first request after every eviction or window expiry still pays it in full, on a page-facing request.
+So the same issue has a second half, and it is the one the 2026-08-26 comment did not name.
+
+**The listing was transferring the whole repository to read its manifests.** `ListPackages` asked
+for an unfiltered snapshot — `IGitHubRepoClient.Fetch(url, ref, subdir, token)` — which
+`GitProtocolRepoClient` served as `git fetch --depth 1` plus a full checkout, and then it kept the
+two files per plugin it parses and discarded everything else.
+
+Measured against `MeshWeaver.Plugins` at `25dc26d7` on 2026-09-16:
+
+| | files | bytes | wall clock |
+|---|---|---|---|
+| what the transfer moved | 4,995 | 47.8 MB compressed | **13.0 s** |
+| what `ListPackages` reads (`<Plugin>/index.json` + `<Plugin>/manifest.lock`) | 143 | 0.8 MB | — |
+| the narrow read, same commit, same answer | 143 | 1.3 MB | **3.3 s** |
+
+Two readings matter in that table. The first is that **13 s lands exactly in the 12–19 s the
+production portals measured**, which is what identifies the transfer as the dominant term rather
+than anything the endpoint computes per request. The second is that the parse was never the problem:
+reading all 4,995 files off a warm local disk takes **83 ms**, so a filter applied while reading the
+worktree — which is what the client used to do — saves nothing a caller can feel.
+
+**Nor was it entitlement.** The same comment blamed "entitlement per package and a mesh query on
+every request". That is true of the sibling BUNDLE index, which really does run
+`InstalledPackages` and `HeldPartitions` mesh queries per request — and false of this endpoint:
+`IsGranted` is `caller.Allows(...)`, pure in-memory over a grant the authenticator already resolved,
+and `Artifacts(hub)` is `NoPublicationArtifacts` on every deployment in the fleet, i.e.
+`Observable.Return([])`. A measurement taken on one endpoint had been carried to another.
+
+### How the narrow read works
+
+`IGitHubRepoClient`'s filtered `Fetch` overload has always *stated* this contract — *"downloads ONLY
+the blobs whose path satisfies `pathFilter` … without pulling the rest of the repo"* — and
+`OctokitGitHubRepoClient` honoured it. `GitProtocolRepoClient` did not: it fetched everything and
+filtered at read time, on the reasoning that the git protocol costs the same number of REST calls
+(zero) either way. **True of calls, false of bytes.** And nothing called the overload, so the
+listing never even asked.
+
+The git-protocol client now selects before it transfers:
+
+1. `git fetch --depth 1 --filter=blob:none` — a **blobless partial clone**. Commits and trees only,
+   so the whole path list is known before one file's bytes move (1.5 s / 372 KB for the repo above).
+2. `git ls-tree -r --name-only -z FETCH_HEAD` — that list, for free. `-z` because `ls-tree` quotes
+   unusual paths otherwise, and a quoted path would be selected and read under a name the worktree
+   does not have.
+3. The caller's predicate selects from it, and the survivors become `--no-cone` **sparse-checkout**
+   patterns, so the checkout materialises exactly those in **one** batched lazy fetch.
+
+A filter that matches nothing skips the checkout entirely and moves no blobs at all. The worktree
+read still applies the same predicate, so the ANSWER is identical however the transfer went.
+
+🚨 **A remote that cannot serve partial clones does not fail — it warns and sends everything.**
+`uploadpack.allowFilter` is a server capability; when it is off, git prints *"filtering not
+recognized by server, ignoring"* and **exits 0** having transferred the whole pack. The answer stays
+correct, but the saving is gone, and an unannounced loss of it is exactly how this latency would
+return unnoticed. The client detects that line and says so in its log. Only a hard fetch failure
+takes the fallback branch, and a failure of the fallback propagates — nothing is swallowed.
+
+🚨 **Only the LISTING is narrowed.** `FetchPackageFiles` — the install path — still reads the whole
+package folder; narrowing that one would install an empty package. The unfiltered `Fetch` is
+untouched and still transfers everything, which is what a content sync wants.
+`GitProtocolNarrowFetchTest` pins both halves, and pins **which** path ran rather than only what it
+answered: a narrow fetch that silently regressed to a whole checkout still returns the right files,
+so asserting the files alone would pass over the defect the test exists to prevent.
+
 ## Why not simply raise the client budget
 
 The comment that already sits in `ServiceDefaults` says it, from 2026-08-26: *"a registry this slow
