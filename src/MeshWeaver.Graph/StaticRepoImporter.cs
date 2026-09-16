@@ -1660,17 +1660,27 @@ public static class StaticRepoImporter
                                     "[StaticRepoImport] {Partition}: {Path} was REFUSED at this exact "
                                     + "content by an earlier pass — reported, not re-attempted.",
                                     source.Partition, path);
+                                // 🚨 #4469 — REPORT THE ORIGINAL REASON when the ledger kept one.
+                                // The generic sentence is now the fallback for an entry written
+                                // before reasons were recorded, not the only thing a remembered
+                                // refusal can ever say: an operator who re-syncs and reads "the
+                                // manifest says so, re-import with force to find out why" has been
+                                // handed the shape of an answer instead of the answer.
+                                var rememberedReason =
+                                    RefusalReasonOf(priorEntry) ?? RememberedRefusalReason;
                                 settled.Add(new ImportItem(
                                     Failed: 1,
                                     FailedDeterministic: 1,
-                                    Failure: new FailedImport(path, RememberedRefusalReason, true),
+                                    Failure: new FailedImport(path, rememberedReason, true),
                                     Log: new LogMessage(
                                         $"⚠ {path} was REFUSED at this exact content by an earlier import, "
                                         + "so the mesh does NOT hold it — the same bytes break the same "
-                                        + "rule, and no write was attempted. Fix the source file, or "
-                                        + "re-import with force to see the refusal again in full.",
+                                        + $"rule, and no write was attempted ({rememberedReason}). Fix the "
+                                        + "source file, or re-import with force to see the refusal again "
+                                        + "in full.",
                                         Microsoft.Extensions.Logging.LogLevel.Warning)
-                                        .WithKey("activity.import.itemRefusedBefore", ("path", path))));
+                                        .WithKey("activity.import.itemRefusedBefore",
+                                            ("path", path), ("reason", rememberedReason))));
                                 continue;
                             }
 
@@ -2811,11 +2821,30 @@ public static class StaticRepoImporter
     /// token: <see cref="PartitionSourceFingerprint.ComputeNodeToken"/> ends in
     /// <c>Convert.ToHexString</c>, so every token is <c>0-9A-F</c> and nothing else.</para>
     /// </summary>
-    private const string RefusedTokenPrefix = "!";
+    internal const string RefusedTokenPrefix = "!";
+
+    /// <summary>
+    /// 🚨 <b>Issue #4469 — the separator that puts the WHY next to the WHAT.</b> A refusal entry is
+    /// <c>!{token}</c> or <c>!{token}|{reason}</c>, and the second form is what lets a NodeType's
+    /// compile failure say <i>which</i> import lost <i>which</i> file for <i>what</i> reason instead
+    /// of leaving an operator with a <c>CS0246</c> on a symbol whose file is in git.
+    ///
+    /// <para>Unambiguous by construction, in the same way the prefix is: a token is the output of
+    /// <c>Convert.ToHexString</c> (<see cref="PartitionSourceFingerprint.ComputeNodeToken"/>), so it
+    /// is <c>0-9A-F</c> and nothing else — the FIRST <c>'|'</c> therefore always ends the token, and
+    /// a reason that itself contains one loses nothing. Both directions of compatibility hold, for
+    /// the same reasons the prefix has: a reader that does not know the separator compares the whole
+    /// value to the token it computes, sees a mismatch and re-evaluates the node (the safe
+    /// direction); a reader that does know it, on an entry written before this, finds no separator
+    /// and reports the refusal with <b>no reason recorded</b> — which is a different sentence from
+    /// "no reason", and is said as such.</para>
+    /// </summary>
+    internal const string RefusedReasonSeparator = "|";
 
     /// <summary>
     /// The reason carried by a failure the run did not re-derive because a previous pass already
-    /// recorded it (see the refusal-memory skip in the stage loop). It is a statement about the
+    /// recorded it (see the refusal-memory skip in the stage loop), for a ledger entry that predates
+    /// <see cref="RefusedReasonSeparator"/> and therefore records none. It is a statement about the
     /// LEDGER, not about the bytes — the original message is on the attempt that first measured it —
     /// so it says which instrument answered rather than pretending to a diagnosis it did not run.
     /// </summary>
@@ -2824,10 +2853,39 @@ public static class StaticRepoImporter
         + "manifest); no write was attempted. Re-import with force to re-derive the original reason.";
 
     /// <summary>
-    /// The manifest value that records "<paramref name="token"/> was REFUSED here" — see
-    /// <see cref="RefusedTokenPrefix"/>. Pure.
+    /// The manifest value that records "<paramref name="token"/> was REFUSED here, for
+    /// <paramref name="reason"/>" — see <see cref="RefusedTokenPrefix"/> and
+    /// <see cref="RefusedReasonSeparator"/>. Pure.
+    ///
+    /// <para>The reason is bounded far more tightly than the one an activity line carries
+    /// (<see cref="RefusalReasonMaxChars"/>): this is a LEDGER with one entry per node in the
+    /// partition, and a pathological message repeated across a hundred of them would bloat a
+    /// document every later import has to read before it can do anything.</para>
     /// </summary>
-    private static string RefusedEntry(string token) => RefusedTokenPrefix + token;
+    private static string RefusedEntry(string token, string? reason)
+    {
+        var trimmed = reason?.Trim().Replace('\r', ' ').Replace('\n', ' ');
+        if (string.IsNullOrEmpty(trimmed))
+            return RefusedTokenPrefix + token;
+        if (trimmed.Length > LedgerReasonMaxChars)
+            trimmed = trimmed[..LedgerReasonMaxChars] + "…";
+        return RefusedTokenPrefix + token + RefusedReasonSeparator + trimmed;
+    }
+
+    /// <summary>How much of a refusal reason the per-node manifest keeps. See
+    /// <see cref="RefusedEntry"/> for why it is shorter than the activity line's budget.</summary>
+    private const int LedgerReasonMaxChars = 300;
+
+    /// <summary>
+    /// The token half of a manifest <paramref name="entry"/> — everything after the refusal sigil and
+    /// before <see cref="RefusedReasonSeparator"/>. Pure; the entry itself for a non-refusal.
+    /// </summary>
+    private static string RefusedTokenPart(string entry)
+    {
+        var body = entry[RefusedTokenPrefix.Length..];
+        var sep = body.IndexOf(RefusedReasonSeparator, StringComparison.Ordinal);
+        return sep < 0 ? body : body[..sep];
+    }
 
     /// <summary>
     /// True when <paramref name="entry"/> is a recorded refusal of exactly <paramref name="token"/> —
@@ -2835,14 +2893,41 @@ public static class StaticRepoImporter
     /// reason that is a verdict about the bytes. Any other token re-opens the question. Pure.
     /// </summary>
     private static bool IsRefusalOf(string entry, string token) =>
+        IsRefusal(entry) && string.Equals(RefusedTokenPart(entry), token, StringComparison.Ordinal);
+
+    /// <summary>
+    /// True when <paramref name="entry"/> records a refusal at all, whatever the token. Pure —
+    /// this is the question <see cref="StaticRepoImportRefusals"/> asks, because the compile side
+    /// wants "is this declared node missing from the mesh", not "is it missing at THIS content".
+    /// </summary>
+    internal static bool IsRefusal(string entry) =>
         entry.Length > RefusedTokenPrefix.Length
-        && entry.StartsWith(RefusedTokenPrefix, StringComparison.Ordinal)
-        && string.Equals(entry[RefusedTokenPrefix.Length..], token, StringComparison.Ordinal);
+        && entry.StartsWith(RefusedTokenPrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The reason recorded alongside a refusal <paramref name="entry"/>, or <see langword="null"/>
+    /// when the entry is not a refusal or was written before reasons were kept. Pure.
+    ///
+    /// <para>🚨 <c>null</c> here means NOT RECORDED, never "no reason" — the caller says so rather
+    /// than inventing a diagnosis, for the same reason the whole seam distinguishes
+    /// could-not-answer from answered-and-empty.</para>
+    /// </summary>
+    internal static string? RefusalReasonOf(string entry)
+    {
+        if (!IsRefusal(entry))
+            return null;
+        var body = entry[RefusedTokenPrefix.Length..];
+        var sep = body.IndexOf(RefusedReasonSeparator, StringComparison.Ordinal);
+        if (sep < 0 || sep + 1 >= body.Length)
+            return null;
+        var reason = body[(sep + 1)..].Trim();
+        return reason.Length == 0 ? null : reason;
+    }
 
     private const string ManifestId = "import-manifest";
 
     /// <summary>Path of a partition's per-node import manifest (an <c>_Activity</c> node; survives prune).</summary>
-    private static string ManifestPath(string partition) => $"{partition}/_Activity/{ManifestId}";
+    internal static string ManifestPath(string partition) => $"{partition}/_Activity/{ManifestId}";
 
     private const string ContentManifestId = "content-manifest";
 
@@ -3090,7 +3175,7 @@ public static class StaticRepoImporter
     /// <see cref="ActivityLog.ReturnValue"/>. Empty on absence / any parse failure → the next import is a
     /// full (non-incremental) import, never a wrong one.
     /// </summary>
-    private static ImmutableDictionary<string, string> ParseManifest(MeshNode? manifestNode, JsonSerializerOptions opts)
+    internal static ImmutableDictionary<string, string> ParseManifest(MeshNode? manifestNode, JsonSerializerOptions opts)
     {
         if (manifestNode is null) return ImmutableDictionary<string, string>.Empty;
         try
@@ -3231,7 +3316,14 @@ public static class StaticRepoImporter
                     // These bytes break a rule, and they break it again at the same token. Recorded
                     // so the next pass reports the refusal WITHOUT re-attempting the write (#3146's
                     // storm) while still evaluating every other node (#4459's freeze).
-                    builder[failure.NodePath] = RefusedEntry(token);
+                    //
+                    // 🚨 WITH THE REASON (#4469). The refusal is what a later NodeType compile has
+                    // to be able to read to say "the mesh does not hold the file that defines this
+                    // symbol, because an import refused it for THIS". Recording the path alone would
+                    // leave that reader with the same half-answer the bare `Failed` count left the
+                    // operator: 'refused' cannot separate a byte Postgres will not store from a
+                    // validator rule from an RLS denial, and those have three different fixes.
+                    builder[failure.NodePath] = RefusedEntry(token, failure.Reason);
                 else
                     // A store blip, an owner that did not answer. Unknown means retryable: leave no
                     // entry at all, which is exactly the state that makes the next pass look again.
