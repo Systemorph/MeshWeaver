@@ -49,8 +49,17 @@ public record ContentCollectionReference(params IReadOnlyCollection<string>? Col
     // for both. An equality that keeps them distinct leaves the very defect this type was fixed for
     // alive on the alternating caller: `new ContentCollectionReference()` and
     // `new ContentCollectionReference([])` would be two cache keys for one logical read, hence two
-    // streams and two permanent `sync/` hubs. Normalising in ONE place (`Names`) keeps `Equals`,
-    // `GetHashCode` and the reducer's own predicate from drifting apart.
+    // streams and two permanent `sync/` hubs. `Names` normalises it in one place FOR EQUALITY AND
+    // HASHING — the reducer still spells the same predicate itself
+    // (`ContentCollectionsExtensions.HandleCollectionConfigRequest`), so this helper makes the two
+    // halves of the KEY agree, not the key and the reducer.
+    //
+    // The names are read live rather than snapshotted: a caller that mutates the collection it
+    // passed in after the reference is already a cache key would change this hash underneath the
+    // dictionary. That is a property this type shares with `CollectionsReference`, which has
+    // compared its member the same way all along, and it is not what #3432 measured — a snapshot
+    // field would also go stale under a `with` expression, which copies fields and does not re-run
+    // initialisers. Callers construct these from a freshly built array.
     private IEnumerable<string> Names() => CollectionNames ?? [];
 
     /// <summary>Determines equality by collection-name sequence, treating an absent and an empty
