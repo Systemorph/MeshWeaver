@@ -48,9 +48,11 @@ grows.
 It has grown. The list was **seven** entries when the shadow check was written and is **nine** today
 (`Social`, `Blazor.Chat`, `Markdown.Collaboration` and `AI` were each added because losing one
 silently is a measured outage). `Deployments/memex-cloud` still names slot 7 for
-`MeshWeaver.Mcp.dll` — and index 7 of today's image is `MeshWeaver.Markdown.Collaboration.dll`. A
-free slot is not a property of the deployment; it is a property of an image the deployment cannot
-see, and an answer that expires silently is not an answer.
+`MeshWeaver.Mcp.dll` — and index 7 of today's image is `MeshWeaver.Markdown.Collaboration.dll`, so
+Memex#131 has silently recurred on the public instance (measured on the control instance, record
+v85, 2026-09-16; tracked as Systemorph/Memex#378). A free slot is not a property of the deployment;
+it is a property of an image the deployment cannot see, and an answer that expires silently is not
+an answer.
 
 ## The claim
 
@@ -149,7 +151,13 @@ The `/health` `required_modules` check lives in `Memex.Portal.Distributed` (Mesh
 still reads the raw `Modules:Required` array. Until it adopts `RequiredEntries`, a record that makes
 the claim would have the probe and the boot path disagree; for a record that does not make it — every
 record today — the two readings are identical. The core half lands first because the satellite
-compiles against a pinned core.
+compiles against a pinned core. Tracked as MeshWeaver.Plugins#1963, to be done with the pin bump
+that carries this change.
+
+And no fleet record states a complete set yet: `memex`, `memex-cloud` and `pearl` each name five
+against the image's nine, and `memex-cloud` additionally shadows one. Restating them is an operator
+change on the records in `Systemorph/Memex`, tracked as Systemorph/Memex#378 — the claim makes it
+expressible; it does not make it happen.
 
 ## See also
 
