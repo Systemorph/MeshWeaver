@@ -3338,6 +3338,16 @@ public static class MeshExtensions
                                         // NO-PROGRESS watchdog. A drain that keeps removing rows keeps
                                         // resetting the clock; one that stops removing for `budget`
                                         // still fails, and MaxDeleteDrainPasses still bounds the passes.
+                                        // 🚨 The baseline for the queue reading below, taken as the
+                                        // stage OPENS. A depth sampled once at the timeout cannot
+                                        // exonerate a cap: a leaf can wait most of the budget for a
+                                        // slot, be granted it, and only then stall — by which time
+                                        // the depth is zero. Differencing the wait buckets against
+                                        // this makes the reading cover the WINDOW, which is the
+                                        // only thing the watchdog's verdict is about.
+                                        var ioPools = hub.ServiceProvider.GetService<IoPoolRegistry>();
+                                        var poolsAtStageStart = ioPools?.Snapshot();
+
                                         var drainProgress = new Subject<string>();
                                         return drainProgress
                                             .Select(_ => (IReadOnlyList<string>?)null)
@@ -3374,6 +3384,32 @@ public static class MeshExtensions
                                                     .Except(done, StringComparer.OrdinalIgnoreCase)
                                                     .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                                                     .ToArray();
+                                                // 🚨 WAS THE DRAIN STUCK, OR WAS IT NEVER ADMITTED?
+                                                // (#1198, the last item this issue stayed open on.)
+                                                // "Made no progress" has two causes that the
+                                                // watchdog cannot tell apart on its own: the store
+                                                // took the call and went silent, or the next leaf
+                                                // removal never got an I/O pool slot because
+                                                // unrelated writes from every other partition were
+                                                // ahead of it — the cap-1 `pg:{provider}` write
+                                                // pool is ONE process-wide gate, not one per
+                                                // partition. Those call for opposite responses and
+                                                // the line named neither, which is why the
+                                                // 2026-09-06 `0 of 1 planned` and 2026-09-14
+                                                // `3 of 9 planned` occurrences were both
+                                                // undecidable from the report they produced.
+                                                //
+                                                // The reading is free here — IoPoolRegistry is
+                                                // mesh-scoped and every counter is lock-free — and
+                                                // its two answers are not symmetric. Nothing queued
+                                                // at the end AND nothing admitted during the stage
+                                                // waiting a second rules out THE POOL GATES: no cap
+                                                // held this drain up. It does not say where the
+                                                // drain WAS stuck, only where it was not. The other
+                                                // answer is a lead, so the sentence says "had work
+                                                // queued", never "caused".
+                                                var queueing = IoPoolQueueReport.Describe(
+                                                    ioPools, poolsAtStageStart);
                                                 var ex = DeleteStageTimeout(
                                                     DeleteStage.Commit,
                                                     $"the bottom-up delete of '{path}' made no progress for "
@@ -3385,7 +3421,8 @@ public static class MeshExtensions
                                                         : $"; still owed by the plan: {string.Join(", ", stuck.Take(10))}"
                                                           + (stuck.Length > 10
                                                               ? $" (+{stuck.Length - 10} more)"
-                                                              : string.Empty)));
+                                                              : string.Empty))
+                                                    + $". At the timeout: {queueing}");
                                                 // Carry the REAL progress: the timeout discards the fan-out's
                                                 // own bookkeeping, and reporting 0 here is what made #1198 look
                                                 // like a pre-commit failure.

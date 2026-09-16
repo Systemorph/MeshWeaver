@@ -132,6 +132,13 @@ public interface IIoPool
     /// <para>Defaulted to <see cref="IoPoolWaitStats.Empty"/> so an implementation that does not
     /// instrument is not obliged to — an empty reading is honest ("this pool reports nothing"),
     /// and the caller can tell it from a busy pool by <see cref="IoPoolWaitStats.Samples"/>.</para>
+    ///
+    /// <para>🚨 <b>Read a pool through <see cref="IoPoolRegistry.Snapshot"/>, never by resolving it
+    /// by name.</b> <see cref="IoPoolRegistry.Get"/> is a RESOLVER: handed a name no pool carries it
+    /// MINTS one, which then honestly reports nothing — so a readout built on it answers a typo or
+    /// an unwired backend with a clean, empty distribution that cannot be told from a real idle
+    /// pool. <see cref="IoPoolQueueReport"/> is the formatter that keeps those two apart, and a
+    /// third state ("no registry — nothing was asked") with them.</para>
     /// </summary>
     IoPoolWaitStats QueueWait => IoPoolWaitStats.Empty;
 
