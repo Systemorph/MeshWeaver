@@ -30,12 +30,14 @@ namespace MeshWeaver.ContentCollections.Test;
 /// here it is UNHITTABLE.</para>
 ///
 /// <para><b>Measured on production</b> (memex.systemorph.com, pod <c>…-ztqz8</c>, pid 1, uptime
-/// 831 min, image <c>afde4eabe0</c>, 2026-09-16): 311 live <c>sync/</c> hubs, every one of them
-/// attributed to the stream that minted it, of which 63 were duplicate mints of a value-identical
-/// <c>(host, reference)</c> pair. EIGHTEEN of those were ONE pair —
+/// 870 min, image <c>afde4eabe0</c>, 2026-09-16): 312 live <c>sync/</c> hubs, every one of them
+/// attributed to the stream that minted it, of which 80 were duplicate mints of a value-identical
+/// <c>(host, reference)</c> pair. TWENTY-FOUR of those were ONE pair —
 /// <c>(Doc/Architecture, ContentCollectionReference["content"])</c> — and comparing the LIVE
-/// reference objects on the heap said <c>refsEqual=NO</c> for that group while all 21 other
-/// duplicate groups, every one a reference type with value equality, said <c>refsEqual=YES</c>.
+/// reference objects on the heap said <c>refsEqual=NO</c> for that group while EVERY other
+/// duplicate group, each a reference type with value equality, said <c>refsEqual=YES</c>. That one
+/// group also went 18 → 24 across two readings 34 minutes apart on the same pod and pid, while the
+/// whole population moved 311 → 312: it mints on every read, for ever.
 /// See <c>Doc/Architecture/AReferenceThatCannotBeAKey</c>.</para>
 ///
 /// <para>🚨 <b>Both directions are asserted.</b>
@@ -92,6 +94,67 @@ public class ReferenceAsCacheKeyTest(ITestOutputHelper output) : HubTestBase(out
         new ContentCollectionReference([]).Should().Be(new ContentCollectionReference([]));
         new ContentCollectionReference(["content"]).Should().NotBe(new ContentCollectionReference(["other"]),
             "different collection names are genuinely different keys — the fix must not collapse them");
+
+        // 🚨 NULL and EMPTY are ONE reference. `ToString()` answers `collection` for both, and the
+        // reducer branches on `collectionNames is null || collectionNames.Count == 0` and returns
+        // GetAllCollectionConfigs() for both. An equality that separated them would leave the whole
+        // defect alive for a caller that alternates the two spellings — two keys, two streams, two
+        // permanent hubs, for one read.
+        //
+        // 🚨 The NULL arm must be spelled with an explicit cast. `new ContentCollectionReference()`
+        // does NOT produce a null member: a params-collection parameter called with no arguments is
+        // handed an EMPTY collection, so both arms would be empty and the assertion could not fail.
+        // The null IS reachable in production — ContentCollectionsExtensions.CreateCollectionConfigStream
+        // declares `string[]? collectionNames = null`, leaves it null when the path carries no names,
+        // and passes it straight in.
+        var nullNames = new ContentCollectionReference((IReadOnlyCollection<string>?)null);
+        var empty = new ContentCollectionReference([]);
+        nullNames.CollectionNames.Should().BeNull(
+            "the precondition of this arm: one side really does carry a null member");
+        empty.CollectionNames.Should().NotBeNull("and the other really does carry an empty one");
+        nullNames.ToString().Should().Be(empty.ToString(),
+            "the precondition: these two already render as the same reference");
+        nullNames.Should().Be(empty,
+            "null and empty both mean ALL collections, so they are one cache key");
+        nullNames.GetHashCode().Should().Be(empty.GetHashCode(),
+            "equal keys must share a hash or the dictionary never reaches Equals");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The other two references fixed alongside it, asserted by BEHAVIOUR.</b> The reflection
+    /// guard below checks that a hand-written <c>Equals</c>/<c>GetHashCode</c> EXISTS; it cannot
+    /// check that it is right. A wrong sequence comparison or a hash that disagrees with it would
+    /// sail through the guard and still break the cache — silently, and in the direction that costs
+    /// a permanent hub per call. So each one is exercised with independently allocated instances.
+    /// </summary>
+    [Fact]
+    public void TheSiblingReferencesWithArrayMembers_CompareByValue()
+    {
+        // AggregateWorkspaceReference — a WorkspaceReference<EntityStore>[] member.
+        var aggA = new AggregateWorkspaceReference(new CollectionsReference("A"), new CollectionsReference("B"));
+        var aggB = new AggregateWorkspaceReference(new CollectionsReference("A"), new CollectionsReference("B"));
+        aggA.Should().NotBeSameAs(aggB, "distinct instances, or the assertion is vacuous");
+        aggA.Should().Be(aggB, "equal reference sequences are one cache key");
+        aggA.GetHashCode().Should().Be(aggB.GetHashCode(), "equal keys must share a hash");
+        aggA.Should().NotBe(new AggregateWorkspaceReference(new CollectionsReference("A")),
+            "a DIFFERENT sequence must stay a different key — the fix must not collapse everything to equal");
+        aggA.Should().NotBe(new AggregateWorkspaceReference(new CollectionsReference("B"), new CollectionsReference("A")),
+            "the sequence is ordered, so a permutation is a different reference");
+        new AggregateWorkspaceReference().Should().Be(new AggregateWorkspaceReference(),
+            "the empty aggregate is a stable key too");
+
+        // CombinedStreamReference — a StreamIdentity[] member.
+        var one = new Address("test", "one");
+        var two = new Address("test", "two");
+        var comA = new CombinedStreamReference(new StreamIdentity(one, null), new StreamIdentity(two, "p"));
+        var comB = new CombinedStreamReference(new StreamIdentity(one, null), new StreamIdentity(two, "p"));
+        comA.Should().NotBeSameAs(comB, "distinct instances, or the assertion is vacuous");
+        comA.Should().Be(comB, "equal identity sequences are one cache key");
+        comA.GetHashCode().Should().Be(comB.GetHashCode(), "equal keys must share a hash");
+        comA.Should().NotBe(new CombinedStreamReference(new StreamIdentity(one, null)),
+            "a different identity sequence stays a different key");
+        comA.Should().NotBe(new CombinedStreamReference(new StreamIdentity(one, "p"), new StreamIdentity(two, "p")),
+            "the partition is part of the identity, so changing it changes the reference");
     }
 
     /// <summary>
@@ -111,20 +174,27 @@ public class ReferenceAsCacheKeyTest(ITestOutputHelper output) : HubTestBase(out
         var first = workspace.GetStream(new ContentCollectionReference(["content"]), null);
         (first is not null).Should().BeTrue("the collection-config reduction must be registered on this hub");
 
-        var baseline = LiveSyncHubs(host);
+        // 🚨 SCOPED TO WHAT THESE CALLS MINTED, never to the host's total. A global before/after
+        // delta is the shape that produced #4300's false +6: an unrelated stream created between
+        // the two samples lands inside the measurement. The reads' OWN hub addresses cannot be
+        // polluted by anything else on the host.
+        var minted = new List<Address>();
         for (var i = 0; i < Reads; i++)
         {
             var again = workspace.GetStream(new ContentCollectionReference(["content"]), null);
             ReferenceEquals(again, first).Should().BeTrue(
                 "a plain reduce of an equal reference is SHARED — a second instance is a second "
                 + "SynchronizationStream and a second permanent sync/ hub on this node hub");
+            minted.Add(again!.Hub.Address);
         }
 
-        var grown = LiveSyncHubs(host) - baseline;
-        Output.WriteLine($"DIAG shared: reads={Reads} ownerSyncHubs=+{grown}");
-        grown.Should().Be(0,
-            "the population is bounded by distinct references, not by reads — measured on "
-            + "memex.systemorph.com 2026-09-16, ONE such reference had minted 18 hubs on one node hub");
+        var distinct = minted.Distinct().Count();
+        Output.WriteLine($"DIAG shared: reads={Reads} distinctSyncHubs={distinct}");
+        distinct.Should().Be(1,
+            "all five reads must resolve to the SAME sync/ hub — the population is bounded by "
+            + "distinct references, not by reads. Measured on memex.systemorph.com 2026-09-16, ONE "
+            + "such reference had minted 24 hubs on one node hub, up from 18 half an hour earlier");
+        minted[0].Should().Be(first!.Hub.Address, "and it is the hub the first read built");
     }
 
     /// <summary>
@@ -139,17 +209,34 @@ public class ReferenceAsCacheKeyTest(ITestOutputHelper output) : HubTestBase(out
         await host.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
         var workspace = host.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        _ = workspace.GetStream(new ContentCollectionReference(["content"]), null);
-        var baseline = LiveSyncHubs(host);
+        var shared = workspace.GetStream(new ContentCollectionReference(["content"]), null);
 
+        // 🚨 SCOPED, for the same reason as the arm above: assert the identity of the hubs THESE
+        // calls minted, not the host's total. `Be(Reads)` on a global delta can fail when every
+        // call behaved correctly, and relaxing it to `>=` would make a missing mint invisible —
+        // both readings are wrong, which is what #4300 cost.
+        var minted = new List<Address>();
         for (var i = 0; i < Reads; i++)
-            _ = workspace.GetStream(new ContentCollectionReference(["content"]), x => x.WithClientId($"caller-{i}"));
+        {
+            var configured = workspace.GetStream(
+                new ContentCollectionReference(["content"]), x => x.WithClientId($"caller-{i}"));
+            minted.Add(configured!.Hub.Address);
+        }
 
-        var grown = LiveSyncHubs(host) - baseline;
-        Output.WriteLine($"DIAG configured: calls={Reads} ownerSyncHubs=+{grown}");
-        grown.Should().Be(Reads,
-            "a CONFIGURED reduce is caller-specific and therefore uncached BY CONTRACT — this is "
-            + "the metric proving the shared arm's flat reading is a real cache hit, not a blind counter");
+        Output.WriteLine($"DIAG configured: calls={Reads} distinctSyncHubs={minted.Distinct().Count()}");
+        minted.Distinct().Should().HaveCount(Reads,
+            "a CONFIGURED reduce is caller-specific and therefore uncached BY CONTRACT — each call "
+            + "builds its own SynchronizationStream and its own sync/ hub. This is what proves the "
+            + "shared arm's single-hub reading is a real cache hit and not a blind assertion");
+        minted.Should().NotContain(shared!.Hub.Address,
+            "and none of them may be the SHARED stream's hub — otherwise the two arms are measuring "
+            + "the same thing and neither discriminates");
+
+        var live = host.ServiceProvider.GetRequiredService<HostedHubsCollection>()
+            .Hubs.Select(h => h.Address).ToHashSet();
+        minted.Should().OnlyContain(a => live.Contains(a),
+            "every hub these calls minted must actually be hosted — a counted address that is not "
+            + "in the collection would mean the count is not measuring the population");
     }
 
     /// <summary>
@@ -161,7 +248,7 @@ public class ReferenceAsCacheKeyTest(ITestOutputHelper output) : HubTestBase(out
     /// <para>Three types in <c>src/</c> already do, each written that way deliberately
     /// (<c>CollectionsReference</c>, <c>LayoutAreaReference</c> — *"exclude the parameters
     /// field"* — and <c>Address</c>); three were written without it and #3432 measured one of
-    /// them costing 18 permanent hubs on a single node hub.</para>
+    /// them costing 24 permanent hubs on a single node hub.</para>
     ///
     /// <para>The denominator is asserted so the guard cannot pass having scanned nothing: a
     /// reference type moving assembly, or the scan failing to load one, reds here instead of
