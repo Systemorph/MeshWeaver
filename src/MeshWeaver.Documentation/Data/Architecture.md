@@ -316,6 +316,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Module Set Convergence](ModuleSetConvergence)
 - [Module Versioning](ModuleVersioning)
 - [Modules](Modules)
+- [Required Module Authority](RequiredModuleAuthority) — `Modules:Required` is an array and configuration merges arrays BY INDEX, so a record's list is an overlay and not a statement: a shorter list leaves the image's tail required and an EMPTY list requires MORE; the scalar claim that lets a record say "these and only these", why it is opt-in, and the two instruments that make the gap visible
 - [Package Mark Inheritance](PackageMarkInheritance)
 - [Pin-Boundary Contracts](PinBoundaryContracts)
 - [Platform and content — two layers, two cadences](PlatformAndContent)
