@@ -380,15 +380,16 @@ public static class PublishedBundleCatalogue
         var producedBy = new Dictionary<string, SealedCopy>(StringComparer.Ordinal);
         var conflicts = ImmutableArray.CreateBuilder<string>();
         var refusals = new List<string>();
-        // 🚨 #3651 — the identity's PLATFORM SURFACE, from the first sealed source that carries one.
-        // Every source under one identity was baked inside the same image, so their documents
-        // describe the same platform; the first readable one is the surface. The reasons a source
-        // has none are collected so a gate that measured nothing can say why.
+        // Core CD measures the promoted portal image and publishes that canonical host surface
+        // with meshweaver-content. Equal framework identities do not imply equal host closures:
+        // satellite bakes can describe smaller hosts. Prefer the portal measurement; retain the
+        // first-readable-source fallback for publications predating the canonical measurement.
         ModulePlatformSurface? surface = null;
         var surfaceNotes = new List<string>();
 
         foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory)
-                     .OrderBy(d => d, StringComparer.Ordinal))
+                     .OrderBy(d => string.Equals(Path.GetFileName(d), "meshweaver-content", StringComparison.Ordinal) ? 0 : 1)
+                     .ThenBy(d => d, StringComparer.Ordinal))
         {
             // 🚨 #3461: `publication` is where the bytes ARE (the pointed-to generation, or the
             // source directory in the flat layout); `sourceDirectory` only names the SOURCE.

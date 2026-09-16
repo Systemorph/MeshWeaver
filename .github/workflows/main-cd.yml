@@ -2124,6 +2124,17 @@ jobs:
           docker run --rm --init --platform ${{ matrix.docker_platform }} -v "$STAGE/app:/portal:ro" \
             --entrypoint /app/mw-plugin-test "$BAKE_IMAGE" \
             framework-identity /portal --expect "$BAKED"
+          # Equal framework identities do NOT imply equal host closures. The tester carries
+          # fewer assemblies than the portal, and the release gate reads this source first.
+          # Publish the measured PORTAL surface, including its seeded module entry assemblies,
+          # using the same image and architecture whose identity was just verified above.
+          docker cp "$cid:/usr/share/dotnet/shared" "$STAGE/shared"
+          docker run --rm --init --platform ${{ matrix.docker_platform }} \
+            -v "$STAGE:/portal:ro" -v "$BAKE_DIR:/bake" \
+            --entrypoint /app/mw-plugin-test "$BAKE_IMAGE" \
+            platform-surface /portal/app --shared-frameworks /portal/shared \
+            --output /bake/platform-surface.json
+          test -s "$BAKE_DIR/platform-surface.json"
           {
             echo "### 🔑 Bake address verified"
             echo "- \`$BAKED\` — resolved by BOTH the bake host and the promoted \`memex-portal-ai\` image (linux/amd64)"

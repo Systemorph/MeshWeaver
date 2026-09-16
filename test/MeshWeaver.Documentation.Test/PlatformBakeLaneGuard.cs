@@ -40,6 +40,21 @@ public class PlatformBakeLaneGuard
     private const string Workflow = ".github/workflows/main-cd.yml";
     private const string JobName = "publish-bake";
 
+    [Fact]
+    public void PlatformBake_PublishesThePortalSurface_NotTheSmallerTesterClosure()
+    {
+        var job = ExecutableLinesOf(ReadJobBlock());
+        var measure = job.IndexOf("platform-surface /portal/app --shared-frameworks /portal/shared", StringComparison.Ordinal);
+        Assert.True(measure >= 0, "The release gate needs the promoted portal's surface, not the tester's.");
+        Assert.Contains("docker cp \"$cid:/usr/share/dotnet/shared\" \"$STAGE/shared\"", job, StringComparison.Ordinal);
+        Assert.Contains("-v \"$STAGE:/portal:ro\" -v \"$BAKE_DIR:/bake\"", job, StringComparison.Ordinal);
+        Assert.Contains("--output /bake/platform-surface.json", job, StringComparison.Ordinal);
+        var verify = job.IndexOf("framework-identity /portal --expect \"$BAKED\"", StringComparison.Ordinal);
+        var publish = job.IndexOf(".github/scripts/publish-bake-bundles.sh \"$BAKE_DIR\"", StringComparison.Ordinal);
+        Assert.True(verify >= 0 && verify < measure && measure < publish,
+            "Verify the portal's identity, measure its surface, then publish that measurement.");
+    }
+
     /// <summary>
     /// <b>A bake-only reconcile must still know WHICH release it is making available.</b>
     ///
