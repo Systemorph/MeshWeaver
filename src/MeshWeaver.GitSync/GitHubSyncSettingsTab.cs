@@ -597,8 +597,10 @@ public static class GitHubSyncSettingsTab
             // 🚨 #3945 — a SETTLED source stops attempting, so without this line its recency stamp
             // simply freezes and the reader has no way to tell "the webhook stopped arriving" from
             // "the webhook arrives and is deliberately skipped". Rendered only in the settled state,
-            // which is exactly when the frozen dates need explaining.
-            cfg.LastAttemptWasFinal && cfg.LastAttemptedCommitSha is { Length: > 0 }
+            // which is exactly when the frozen dates need explaining. 🚨 #4499 — asked through the
+            // triggers' own predicate, so a source whose settings were edited since that verdict
+            // (and will therefore be re-attempted) is not labelled settled.
+            GitHubSyncService.HasFinalVerdictAt(cfg, cfg.LastAttemptedCommitSha)
                 ? Esc(LocalizationCatalog.Get("ui.gitSync.settled", locale))
                 : null,
         };

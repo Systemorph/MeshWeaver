@@ -216,6 +216,29 @@ public record GitHubSyncConfig
     public bool LastAttemptWasFinal { get; init; }
 
     /// <summary>
+    /// 🚨 <b>The CONFIGURATION the attempt at <see cref="LastAttemptedCommitSha"/> read under</b>
+    /// (<c>GitHubSyncService.SourceFingerprint</c>) — the third member of the attempt pair, and the
+    /// one that makes "final" mean what it says (issue #4499).
+    ///
+    /// <para>A verdict is final for the BYTES AS THIS SOURCE READS THEM, not for the commit alone:
+    /// the same commit read under a different <see cref="Subdirectory"/>, <see cref="Ignore"/> set,
+    /// <see cref="Direction"/> or <see cref="TwoWay"/> setting is a different import and may reach a
+    /// different verdict. Without this field the skip keyed on the commit only, so correcting a
+    /// misconfigured source changed nothing until the repository happened to produce a new commit —
+    /// which is exactly the case a refusal needs most: a subdirectory that matches nothing is fixed
+    /// by editing the source, at the same commit. So a final verdict licenses a skip only while this
+    /// fingerprint still equals the CURRENT configuration's; an edit re-attempts at once.</para>
+    ///
+    /// <para>Written in the same patch as the other two and cleared with them. Absent on a source
+    /// whose last attempt predates this field — which never licenses a skip, so such a source
+    /// attempts once more and records it (the safe direction).</para>
+    ///
+    /// <para>Set by the sync operation; not user-editable.</para>
+    /// </summary>
+    [Browsable(false)]
+    public string? LastAttemptedConfigFingerprint { get; init; }
+
+    /// <summary>
     /// WHY the last attempt did not move the source — the hold reason of the sealed-publication
     /// gate ("built at X, not sealed for this instance …"), or the reconciler's finding — so an
     /// operator reading the config sees the cause rather than only the outcome. Cleared by the

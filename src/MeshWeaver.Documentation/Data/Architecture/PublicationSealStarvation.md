@@ -379,6 +379,25 @@ Three details carry it:
   `SyncSubdirectoryEmptyException` derives from `InvalidOperationException`, which is what this path
   threw before, so every existing catch behaves identically. It exists as a *type* only so the
   caller can record the conclusion without matching on message text.
-- **Neither pointer moves.** Nothing was read and nothing landed, so the SEEN commit stays put and
-  the `#3945` attempt pair is *cleared* rather than stamped — a refusal that left an "already
-  attempted at this commit" marker would licence a later pass to skip the import it never made.
+- **The SEEN commit does not move; the attempt pair DOES.** Nothing landed, so `lastSyncCommitSha`
+  and the horizon stay put. The first version of this fix also *cleared* the `#3945` attempt pair,
+  reasoning that an "already attempted" marker would licence skipping an import that never ran — and
+  that kept the refusal RETRYABLE, so the seal reconciler went on refusing on every publication
+  announcement at the same commit. A refusal is an attempt with a final verdict (the same commit
+  under the same subdirectory lists the same nothing), so it is now stamped `(commit, final)` with
+  the fingerprint of the configuration it read under; both unattended triggers skip it, and an edit
+  of the source re-attempts at once. See
+  [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost), §7.
+
+**What the two measured sources actually were** (read 2026-09-16 from the repositories' own history,
+not inferred from the message's "check the capitalisation"): neither is a typo, and neither has a
+"correct" subdirectory to point at.
+
+| Space | Repository | What happened to the folder | The source is |
+|---|---|---|---|
+| `DeepSign` | MeshWeaver.Plugins | **renamed** to `Signature` by `c3262d1e9` (2026-09-12, *"provider-neutral Electronic Signature package (renames DeepSign)"*); `DeepSign/_GitSync` last imported at `933a002f`, before the rename | **orphaned** — `Signature/_GitSync` already syncs `Signature` on the same instance, so repointing this one would import the same package into a second Space |
+| `UWDeepfield` | MeshWeaver.Reinsurance | **deleted** by `896ed23` (2026-09-04, *"retire the Deepfield workstations"*), whose message already says *"their Spaces on memex and systemorph still GitSync from folders that no longer exist; retiring those is a mesh-side action"* | **retired** — superseded by `Underwriting` |
+
+So the data remedy for both is to retire the source (delete the `_GitSync` node, or clear its
+`repositoryUrl`), never to rewrite `subdirectory`. That is why the settings tab's refused line offers
+both checking the subdirectory and removing the source.
