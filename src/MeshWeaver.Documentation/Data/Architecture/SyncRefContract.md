@@ -327,6 +327,32 @@ the commit they claim" was a true statement. The drift was the other writer.
 restores a declared node that is absent — and on its own that would have turned this into an
 every-boot flap: sync prunes, install restores, bake declines, sync prunes.
 
+🚨 **That flap is not hypothetical — it ran for eleven boots on a second partition, and it read as a
+self-heal.** Measured on memex.meshweaver.cloud 2026-09-16 (core `c84c6c05`, which predates this
+section's fix): `Feedback/_GitSync` (MeshWeaver.Plugins, `subdirectory: Feedback`) imports at
+`627fb3cd`, whose `Feedback/` tree has no `Source/FeedbackHandover.cs`; `Plugins/Feedback` 1.0.16
+(module `caffd87567c65b4f`, `installedFromRef: main`) declares it. The package's module hash never
+moved, so every boot took the hash-EQUAL exit, whose completeness check (MeshWeaver#3485) named the
+node ABSENT and re-installed it:
+
+```
+2026-09-16
+21:31:58Z  Feedback/_GitSync  Imported @ 627fb3cd          (v501; again 21:32:01Z, v502)
+21:33:16Z  boot install: "Package Feedback … 1 of 14 declared node(s) are ABSENT:
+           [Feedback/Feedback/Source/FeedbackHandover] … being REPAIRED"
+21:33:24Z  Plugins/Feedback record v28, installedFromRef: main   — the node is written back
+21:54:40Z  Feedback/_GitSync  Imported @ 627fb3cd          (v503) — and pruned again
+22:05Z     get Feedback/Feedback/Source/FeedbackHandover → Not found
+```
+
+The same line fired on eleven boots from 2026-09-13T22:02Z on — each one matched one-to-one by a
+`Plugins/Feedback` record version (v18…v28) stamped seconds later, and no record version without
+it — and each one re-opened or re-counted MeshWeaver#2387 through the log watcher's category fold. On 2026-09-14 the eight seconds between "named ABSENT" and the node's `lastModified` were read
+as a repair that WORKED, and the detection was demoted to a Warning on that basis (#4257): a
+read-back right after the write proves the write landed, never that it held. The control instance,
+whose `Feedback` listing carries no `_GitSync`, has one writer and holds the node. See
+[Log watch triage](../LogWatchTriage) → "A REOPEN is not a recurrence".
+
 **The fix is the rule, applied to the lane that had missed it.** The boot install now asks
 `SealedSyncGate.DecideFirstImport` per configured git source — the very decision the first import
 takes — and lists *and* installs at its answer:
