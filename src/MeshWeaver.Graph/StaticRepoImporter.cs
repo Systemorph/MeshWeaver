@@ -2808,7 +2808,8 @@ public static class StaticRepoImporter
     /// <c>"!abc"</c> to the token it computes (<c>"abc"</c>), sees a mismatch, and re-evaluates the
     /// node — the safe direction, and exactly what it did before this field existed. A NEWER reader
     /// on an older manifest sees no sigils and behaves as it always did. <c>'!'</c> cannot occur in a
-    /// token (<see cref="PartitionSourceFingerprint.ComputeNodeToken"/> returns lowercase hex).</para>
+    /// token: <see cref="PartitionSourceFingerprint.ComputeNodeToken"/> ends in
+    /// <c>Convert.ToHexString</c>, so every token is <c>0-9A-F</c> and nothing else.</para>
     /// </summary>
     private const string RefusedTokenPrefix = "!";
 
