@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Graph.Configuration;
@@ -78,23 +79,23 @@ public class NodeTypeOperationalContentTest
 
         var missing = NodeTypeMemberOwnership.RuntimeStateNamed
             .Where(name => !NodeTypeOperationalContent.MemberNames.Contains(name))
-            .Where(name => !NodeTypeMemberOwnership.MeshWrittenButUnmasked.Contains(name))
+            .Where(name => !NodeTypeMemberOwnership.MeshWrittenButNotPreserved.Contains(name))
             .OrderBy(name => name, StringComparer.Ordinal)
-            .ToList();
-        Assert.True(missing.Count == 0,
+            .ToImmutableArray();
+        Assert.True(missing.Length == 0,
             "These NodeTypeDefinition properties are named as runtime compile state but are NOT "
             + "masked by the sync seams, so export leaks them into the repo file and into the "
             + "change token, and import lets a file overwrite a measurement taken on this mesh: "
             + string.Join(", ", missing)
             + ". Add each to NodeTypeOperationalContent.MemberNames (with the reason, as the "
-            + "entries there do), or — if it must stay unmasked — to "
-            + "NodeTypeMemberOwnership.MeshWrittenButUnmasked, with the reason why dropping it on "
+            + "entries there do), or — if the import must NOT preserve it — to "
+            + "NodeTypeOperationalContent.StrippedButNotPreserved, with the reason why dropping it on "
             + "re-import is the point.");
     }
 
     /// <summary>
     /// 🚨 The guard the naming convention CANNOT be: every serialised member of the record is
-    /// classified — repo-authored, mesh-owned-and-masked, or mesh-written-but-deliberately-unmasked
+    /// classified — repo-authored, mesh-owned-and-masked, or stripped-but-never-preserved
     /// — so a new member cannot be silently missed whatever it is called. <c>DispatchedBuildInputs</c>
     /// is why this exists and the prefix check above is not enough: it is compile-pipeline state
     /// (the token the in-flight compile was dispatched for), it is spelled outside the convention,
@@ -109,34 +110,112 @@ public class NodeTypeOperationalContentTest
         Assert.Contains(nameof(NodeTypeDefinition.Configuration), NodeTypeMemberOwnership.Authored);
         Assert.True(NodeTypeOperationalContent.MemberNames.Contains(
             nameof(NodeTypeDefinition.CompilationStatus)));
-        Assert.NotEmpty(NodeTypeMemberOwnership.MeshWrittenButUnmasked);
+        Assert.NotEmpty(NodeTypeMemberOwnership.MeshWrittenButNotPreserved);
 
-        var unclassified = new List<string>();
-        var ambiguous = new List<string>();
-        foreach (var property in NodeTypeMemberOwnership.SerializedProperties)
-        {
-            var buckets = new List<string>();
-            if (NodeTypeOperationalContent.MemberNames.Contains(property.Name))
-                buckets.Add("operational");
-            if (NodeTypeMemberOwnership.Authored.Contains(property.Name))
-                buckets.Add("authored");
-            if (NodeTypeMemberOwnership.MeshWrittenButUnmasked.Contains(property.Name))
-                buckets.Add("mesh-written-but-unmasked");
-            if (buckets.Count == 0)
-                unclassified.Add(property.Name);
-            else if (buckets.Count > 1)
-                ambiguous.Add($"{property.Name} ({string.Join(" + ", buckets)})");
-        }
+        var classified = NodeTypeMemberOwnership.SerializedProperties
+            .Select(property => (
+                property.Name,
+                Buckets: ImmutableArray.CreateRange(new[]
+                    {
+                        NodeTypeOperationalContent.MemberNames.Contains(property.Name) ? "operational" : null,
+                        NodeTypeMemberOwnership.Authored.Contains(property.Name) ? "authored" : null,
+                        NodeTypeMemberOwnership.MeshWrittenButNotPreserved.Contains(property.Name)
+                            ? "mesh-written-but-not-preserved"
+                            : null,
+                    }.Where(bucket => bucket is not null)!)))
+            .ToImmutableArray();
+        var unclassified = classified
+            .Where(entry => entry.Buckets.Length == 0)
+            .Select(entry => entry.Name)
+            .ToImmutableArray();
+        var ambiguous = classified
+            .Where(entry => entry.Buckets.Length > 1)
+            .Select(entry => $"{entry.Name} ({string.Join(" + ", entry.Buckets)})")
+            .ToImmutableArray();
 
-        Assert.True(unclassified.Count == 0,
+        Assert.True(unclassified.Length == 0,
             "These NodeTypeDefinition members belong to nobody: " + string.Join(", ", unclassified)
             + ". Every serialised member is owned by the REPO (add it to "
             + "NodeTypeMemberOwnership.Authored) or by the MESH — masked at every sync seam "
-            + "(NodeTypeOperationalContent.MemberNames) or, with a reason, deliberately unmasked "
-            + "(NodeTypeMemberOwnership.MeshWrittenButUnmasked). An unclassified member is the "
+            + "(NodeTypeOperationalContent.MemberNames) or, with a reason, stripped from every file "
+            + "but never preserved on import "
+            + "(NodeTypeOperationalContent.StrippedButNotPreserved). An unclassified member is the "
             + "#4480 shape: nothing fails, and the seams silently do the wrong thing with it.");
-        Assert.True(ambiguous.Count == 0,
+        Assert.True(ambiguous.Length == 0,
             "These members are claimed by two owners: " + string.Join(", ", ambiguous));
+    }
+
+    /// <summary>
+    /// 🚨 The THIRD bucket's two halves, which is the whole of what makes it a bucket rather than an
+    /// omission (#4480): a member in <c>StrippedButNotPreserved</c> is removed wherever a node
+    /// becomes a FILE — <c>GitHubSyncService.SerializeOne</c> exports through
+    /// <see cref="NodeTypeOperationalContent.StripOperational"/>, and the change token uses the same
+    /// call — and is deliberately NOT restored from the live node on import, because an upsert
+    /// replacing the content wholesale is the ONLY thing that clears it.
+    ///
+    /// <para><c>PendingRetirement</c> is the member and the reason: nothing in <c>src/</c> ever
+    /// writes null back to it, so masking it would leave a re-shipped type marked retired forever —
+    /// and the bake gate reads a stamped type's compile failure as a verdict that must not hold a
+    /// rollout. Leaving it out of the strip instead let the live stamp ride an export back into the
+    /// repository, where <c>ShippedNodeTypeStateTest</c> bans it.</para>
+    /// </summary>
+    [Fact]
+    public void StrippedButNotPreserved_LeavesTheFile_AndIsNeverRestoredFromLive()
+    {
+        Assert.NotEmpty(NodeTypeOperationalContent.StrippedButNotPreserved);
+        Assert.Contains(nameof(NodeTypeDefinition.PendingRetirement),
+            NodeTypeOperationalContent.StrippedButNotPreserved);
+        // It is NOT masked — the preserve half must keep letting the incoming node win.
+        Assert.False(NodeTypeOperationalContent.MemberNames.Contains(
+            nameof(NodeTypeDefinition.PendingRetirement)));
+
+        // EXPORT strips it: the live stamp never reaches a repo file.
+        var held = TypeNode(Parse(
+            """
+            {"$type":"NodeTypeDefinition","configuration":"c",
+             "pendingRetirement":"Retired by Crm import abc at 2026-09-08T20:29:14Z; held for 1 instance(s)."}
+            """));
+        var stripped = NodeTypeOperationalContent.StripOperational(held, CamelCase);
+        Assert.False(ReferenceEquals(held, stripped),
+            "the strip removed NOTHING from a node carrying a live pendingRetirement — the stamp "
+            + "rides every export into the repository, where ShippedNodeTypeStateTest bans it");
+        var exported = Assert.IsType<JsonObject>(stripped.Content);
+        Assert.False(exported.ContainsKey("pendingRetirement"));
+        Assert.Equal("c", (string?)exported["configuration"]);
+
+        // The TYPED strip agrees — an import seam handed a typed definition resets it too, so an
+        // authored value can never land.
+        var typed = Assert.IsType<NodeTypeDefinition>(
+            NodeTypeOperationalContent.WithoutOperational(
+                TypeNode(new NodeTypeDefinition { Configuration = "c", PendingRetirement = "forged" }),
+                CamelCase).Content);
+        Assert.Null(typed.PendingRetirement);
+
+        // The change token ignores it: a node differing only in a retirement stamp has not changed.
+        var clean = TypeNode(Parse("""{"$type":"NodeTypeDefinition","configuration":"c"}"""));
+        Assert.Equal(
+            PartitionSourceFingerprint.ComputeNodeToken(clean, CamelCase),
+            PartitionSourceFingerprint.ComputeNodeToken(held, CamelCase));
+
+        // IMPORT does NOT preserve it, and does not let the file forge one either. An incoming file
+        // carrying its own value against a live node carrying the real stamp must come back with
+        // NEITHER: the forgery is stripped, and the live stamp is not restored — which is exactly
+        // how a retirement completes when the repository ships the type again. Masking it would
+        // return the live "…held…" text here; not stripping it would return "forged".
+        var forged = TypeNode(Parse(
+            """{"$type":"NodeTypeDefinition","configuration":"c","pendingRetirement":"forged"}"""));
+        var merged = Assert.IsType<JsonObject>(
+            NodeTypeOperationalContent.PreserveLiveOperational(forged, live: held, CamelCase).Content);
+        Assert.False(merged.ContainsKey("pendingRetirement"));
+        Assert.Equal("c", (string?)merged["configuration"]);
+
+        // And a file that never carried one is still a structural no-op upsert: the SAME instance
+        // comes back (no reshaping, no version bump) and the live stamp is simply not carried over.
+        var reshipped = NodeTypeOperationalContent.PreserveLiveOperational(clean, live: held, CamelCase);
+        Assert.Same(clean, reshipped);
+        Assert.DoesNotContain(
+            Assert.IsType<JsonElement>(reshipped.Content).EnumerateObject().Select(p => p.Name),
+            name => string.Equals(name, "pendingRetirement", StringComparison.OrdinalIgnoreCase));
     }
 
     // ── Strip (the export / token shape) ────────────────────────────────────────────────────

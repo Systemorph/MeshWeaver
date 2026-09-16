@@ -19,8 +19,10 @@ three seams where a node crosses between them:
 | **Import / upsert** | preserves the LIVE node's values, absent when live has none | `PreserveLiveOperational`, applied by the owner inside the upsert merge |
 | **Change detection** | ignores them — a node differing only in bookkeeping has not changed | `PartitionSourceFingerprint` |
 
-All three read one list: `NodeTypeOperationalContent.MemberNames`. Getting a member into that list
-is the whole of the ownership decision; leaving one out is silent in every direction.
+All three read `NodeTypeOperationalContent.MemberNames` — the two strip rules over the union with
+`StrippedButNotPreserved` (see below), the preserve rule over `MemberNames` alone. Getting a member
+into the right list is the whole of the ownership decision; leaving one out is silent in every
+direction.
 
 Why it matters is on [Node Type Compilation](../NodeTypeCompilation) and in `ShippedNodeTypeStateTest`:
 a node that adopts a compile verdict it did not earn on THIS deployment is unreachable by every
@@ -68,31 +70,39 @@ So the guards are three, and each covers what the others cannot:
 1. **`MemberNames ⊆ the record`** — a mask entry that names no property.
 2. **convention ⊆ `MemberNames`** — a member SPELLED as runtime state that nobody masked.
 3. **the partition** — every serialised member of the record is classified as repo-authored,
-   mesh-owned-and-masked, or mesh-written-but-deliberately-unmasked. Exactly one bucket, no member
+   mesh-owned-and-masked, or stripped-but-not-preserved. Exactly one bucket, no member
    unclassified. This one does not depend on what a member is called, so a new property cannot be
-   missed however it is spelled.
+   missed however it is spelled — and its denominator is the `JsonIgnoreCondition`, never the
+   presence of a `[JsonIgnore]` attribute: `IncludeGlobalTypes` carries one with
+   `Condition = Never`, which means it is ALWAYS written.
 
 The convention lives in **one** place (`NodeTypeMemberOwnership` in the Graph test suite) and every
 guard reads it from there. Two lists that both approximate the same set drift pairwise; that is the
 failure this page describes, one layer up.
 
-## The third bucket: mesh-written and deliberately NOT masked
+## The third bucket: stripped from every file, never preserved on import
 
-Masking is not a synonym for "the runtime writes it". `PendingRetirement` is written by a
-repository-driven import when the repo retired a type that still has live instances — and it is
-deliberately outside `MemberNames`:
+The three seam rules are not one switch. A member can belong to the mesh at the *export* and
+*change-token* seams and still have to lose at the *import* seam — and `PendingRetirement` is
+exactly that, so it lives in `NodeTypeOperationalContent.StrippedButNotPreserved` rather than in
+`MemberNames`:
 
-- it is stamped through the probe's own `stream.Update`, never through an upsert, so masking would
+- it is stamped by a repository-driven import when the repo retired a type that still has live
+  instances, through the probe's own `stream.Update` — never through an upsert, so masking would
   not protect the write;
 - **nothing in `src/` ever writes null back to it.** The one thing that clears it is the repo
-  shipping the type AGAIN: an upsert replaces the node's content wholesale, so an unmasked member
-  present in the live node and absent from the file simply goes away.
+  shipping the type AGAIN: an upsert replaces the node's content wholesale, so a member the live
+  node holds and the file does not simply goes away.
 
 Mask it and a re-shipped type stays marked retired forever — and the bake gate reads a stamped type's
-compile failure as `Retired`, i.e. as a verdict that must *not* hold a rollout. So the entry carries
-its reason, and the committed-file ban covers it instead: a file must still never author it.
+compile failure as `Retired`, i.e. as a verdict that must *not* hold a rollout.
 
-That is what the third bucket is for, and why an exclusion is a reasoned line rather than a deletion.
+**But it is still runtime state, so a file must never carry it either.** Leaving it out of the
+*strip* as well would let the live stamp ride an export straight into the repository — GitSync's
+`SerializeOne` exports through `StripOperational` — and a file that carries it can then forge a
+retirement the mesh never measured. So the strip paths (export, the typed import reset, and the
+change token) use the **union** of the two sets, and only the preserve path uses `MemberNames`
+alone. That asymmetry *is* the third bucket, and it is what the entry's reason has to justify.
 
 ## What to do when you add a member to `NodeTypeDefinition`
 
@@ -104,8 +114,10 @@ Decide the owner, and write the reason down next to the entry:
   what an authored value would forge — every entry there carries one. It must also be added to
   `NodeTypeCompileState`, which carries exactly the masked set (pinned by
   `NodeTypeCompileStateTest`), or the compile-state satellite silently drops it.
-- **The mesh writes it but it must stay unmasked** → `NodeTypeMemberOwnership.MeshWrittenButUnmasked`,
-  with the reason why dropping it on re-import is the point.
+- **The mesh writes it but the import must NOT preserve it** →
+  `NodeTypeOperationalContent.StrippedButNotPreserved`, with the reason why dropping it on re-import
+  is the point. It is still stripped from every file shape, so nothing extra is needed to keep it
+  out of the repository.
 
 The partition guard fails until one of the three is true, and names the member.
 
