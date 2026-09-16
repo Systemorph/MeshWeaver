@@ -221,7 +221,7 @@ in.**
 > |---|---|---|---|
 > | `FindMatchingNodes`, the `try`/`catch` around `persistence.ReadMany(...)` | `ReadMany` throws **synchronously** | the whole exact-path arm (`Observable.Empty`) | `Warning`, with the paths — no teardown special case |
 > | `PipelineFaultOrStopped` on the composed sequence | a fault arrives **asynchronously** | only the REMAINDER — the default `ReadMany` is a `Merge` over per-path reads, so rows already emitted stand, and the arm is `Concat`-ed with the scope arm, which keeps emitting | `Warning` with the query — **except** a teardown cancellation, which is `Debug` |
-> | `SwallowedReadOrStop`, on the per-path scope WALK | exactly that node, `null` in its place | | `Warning` with the path — **except** a teardown cancellation, which it RETHROWS rather than converting, so the walk ends and the line above records it at `Debug` |
+> | `SwallowedReadOrStop`, on any PER-PATH read (the scope walk, `SourceActivity.ReadMain`, `NextLevel.Read`) | one path's read faults | exactly that node, `null` in its place | `Warning` with that path — **except** a teardown cancellation, which it RETHROWS rather than converting, so the walk ends and the line above records it at `Debug` |
 >
 > So do not reason from the shape of the loss to "not an exception" — a one-path `path:X` read has no
 > "rest" to leave behind, and a scope walk drops single nodes by design. **Reason from the log**, and
@@ -229,8 +229,11 @@ in.**
 > down) is `Debug`, not `Warning`. That exemption cannot explain any instance on this page anyway —
 > it is scoped to a process on its way out, and the next process reads the row afresh, whereas these
 > rows are absent on every read since. For every OTHER read fault the replica said so at `Warning`,
-> once per failing read, naming the path — which for a permanently absent row is a line that should
-> be everywhere.
+> once per failing read — though **what** it names differs, so grep for the site and not for the
+> node: only `SwallowedReadOrStop` carries the single failing path; the synchronous batch catch
+> carries the list of paths it was given, and `PipelineFaultOrStopped` carries the query and
+> `basePath`, not a node. For a permanently absent row, a line from any of the three is one that
+> should be everywhere.
 > 🚨 That question has NOT been put to any of the three: the Loki window taken for the third instance
 > was searched for *delete* and *prune*, not for these three Warnings. It is the cheapest unasked
 > question on this page — ask it before inspecting a schema.
