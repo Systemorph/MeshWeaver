@@ -15,7 +15,7 @@ namespace MeshWeaver.Hosting;
 /// is silenced by the very pool starvation it exists to name, so its silence would mean two
 /// different things with different owners. A thread of its own is silenced only when every managed
 /// thread is — which is the reading. Same argument, and the same precedent, as
-/// <c>IoPool.StartCancelOffCallerThread</c>.</para>
+/// <c>IoPool.StartCanceller</c>.</para>
 ///
 /// <para>🚨 <b>A fault must not retire the instrument.</b> If a tick throws, the fault is reported
 /// and the loop CONTINUES: a heartbeat that dies on one bad read goes silent forever, and its
