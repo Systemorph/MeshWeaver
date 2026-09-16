@@ -10,8 +10,13 @@ lets the hub start processing real traffic.
 If a BuildupAction **throws**, the naive composition propagates the error out of the
 `Observable.Concat`, so the step that calls `OpenGate(Initialize)` **never runs**. The gate stays
 closed *forever*. Every subsequent message then sits in the deferred queue until the
-**30-second deferral timeout** (`MessageService.DeferralTimeout`) fires a generic
-`DeliveryFailure` ("deferred >30s without opening init gates …").
+**30-second deferral timeout** (`MessageService.deferralTimeout`, per hub off
+`WithDeferralTimeout`, defaulting to 30 s) fires a generic `DeliveryFailure` —
+*"deferred >30s; initialization gates closed at deferral: […] — gate(s) […] are STILL closed"*.
+That answer names the gates **recorded when the delivery was parked**, and states separately which
+of them are still shut: the two readings are different diagnoses, and re-deriving the first from
+the live gate set is the defect in
+[A Failure Report Answers Its Own Instruction](../AFailureReportAnswersItsOwnInstruction).
 
 To a user this is an **unrecoverable wedge**: the node is reachable (HTTP 200) but every interaction
 times out at 30s, and the GUI shows a useless "Area unavailable — did not become addressable after N
