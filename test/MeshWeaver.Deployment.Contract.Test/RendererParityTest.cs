@@ -161,7 +161,7 @@ public class RendererParityTest
             .WithUpdatePolicy("stable").WithModuleUpdatePolicy("Notify").WithMinRollInterval("00:30:00").WithAutoRecycleOnStaleBuild(true)
             .WithPluginRepo("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", gitRef: "main")
             .PreInstall("MeshWeaver.Plugins/Hosting")
-            .WithRequiredModule("MeshWeaver.Hosting.Postgres")
+            .WithRequiredModule("MeshWeaver.Hosting.Postgres").WithRequiredModulesAuthoritative(true)
             .WithReplicas(2).WithOrleansClustering("AdoNet").WithHttpPort(8080)
             .WithResources("500m", "2Gi", "2", "8Gi")
             .WithAutoscaling(true, 1, 4, 70, 80)
