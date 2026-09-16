@@ -1076,7 +1076,13 @@ public class MessageService : IMessageService
                 // in-process route would take it (every branch stamps the request's trail).
                 var posted = Post(new DeliveryFailure(delivery, message) { ErrorType = errorType },
                     new PostOptions(Address).ResponseFor(delivery));
-                return posted is { State: not MessageDeliveryState.Failed };
+                // 🚨 Ignored belongs with Failed, exactly as MeshExtensions.WasCarried says
+                // (MeshWeaver#1174). The storm breaker and the aggregate shedder refuse a post
+                // WITHOUT enqueueing anything and now say so in the returned envelope; before that
+                // this test could not see them, and a dropped NACK would have been reported to the
+                // intake gate as "carried" — the one reading that leaves the sender with nothing
+                // and nobody owing it an answer.
+                return posted is { State: not (MessageDeliveryState.Failed or MessageDeliveryState.Ignored) };
             }
             catch (Exception ex)
             {
@@ -1954,6 +1960,36 @@ public class MessageService : IMessageService
                                         Address, deferredDepth, string.Join(",", gates.Keys), MaxDeferredMessages);
                                 MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} DROPPED_GATE_STUCK depth={deferredDepth}");
                                 fate?.Add($"DROPPED_GATE_STUCK depth={deferredDepth}", Address);
+                                // 🚨 ANSWER A SENDER THAT IS WAITING (MeshWeaver#1174). Bounding
+                                // memory is right; doing it SILENTLY to a request/response caller
+                                // is not. The justification written above — "a fire-and-forget
+                                // writer's retry isn't fed; a client re-syncs a fresh Full on
+                                // reconnect" — holds for the traffic it was written about and is
+                                // simply false for an awaited IRequest: nothing re-syncs a
+                                // CreateNodeRequest, so its caller burns its ENTIRE RequestTimeout
+                                // on a drop this hub had already decided. That is the silent-drop
+                                // half of MeshWeaver#1174 (`portal/nodeops-*` carries a
+                                // DataContextInit gate whose only bypass predicate is PingRequest,
+                                // so node CRUD IS deferrable here).
+                                //
+                                // Same primitive, same classification rules and the same
+                                // answer-once guards as the GATE_FAILED branch twenty lines above
+                                // — `AnswerUnreleasableDelivery` declines for anything nobody is
+                                // awaiting (`IsAwaitedBySender` inside `NackThroughParent`, and
+                                // `MayAnswer()` inside `ReportFailure`), so fire-and-forget
+                                // traffic keeps the historical silent drop and the
+                                // DeliveryFailure ping-pong cannot start.
+                                //
+                                // Unavailable, never Failed or NotFound: a stuck gate is "NO
+                                // VERDICT WAS REACHED", the address is fine and the same request
+                                // is meaningful again once the gate opens.
+                                AnswerUnreleasableDelivery(
+                                    delivery,
+                                    $"Deferred backlog in hub {Address} is at the {MaxDeferredMessages} cap behind "
+                                    + $"gate(s) [{string.Join(",", gates.Keys)}] that are not opening, so this "
+                                    + "delivery was dropped to bound memory. No verdict was reached — retry once "
+                                    + "the gate opens.",
+                                    ErrorType.Unavailable);
                                 return Observable.Return(delivery.Ignored());
                             }
                             logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
@@ -2889,8 +2925,32 @@ public class MessageService : IMessageService
             return ReportFailure(posted);
         }
 
-        ScheduleNotify(posted, default);
-        return delivery;
+        // 🚨 THE INTAKE VERDICT IS RETURNED, NOT DISCARDED (MeshWeaver#1174).
+        //
+        // `ScheduleNotify` is where a post is REFUSED without being enqueued: the per-key storm
+        // breaker and the aggregate shedder both `return delivery.Ignored()` having queued
+        // nothing, and the teardown intake gate returns `Failed`/`FailedAndNacked`. Those are new
+        // records — `MessageDelivery.ChangeState` is `this with { State = state }` — so returning
+        // the pre-pipeline `delivery` below threw every one of those verdicts on the floor and
+        // handed the poster a `Submitted` delivery that had, in fact, been dropped.
+        //
+        // That made a shipped guard INERT rather than wrong-looking, which is worse.
+        // `MeshExtensions.WasCarried` — the claim-then-verify on both create-verdict posts —
+        // says in its own doc that `Ignored` "is the one that reads like a success: the storm
+        // breaker and the aggregate shedder return it WITHOUT enqueueing anything, so treating it
+        // as carried would claim the once-only gate, skip the parent fallback, and leave the
+        // caller waiting out its budget for a verdict that was dropped on the floor." It could
+        // never see one: every post — local or routed — passes through THIS ScheduleNotify, and
+        // its result never reached the caller. A verification step that cannot fail is not a
+        // verification step.
+        //
+        // Only a DROP is surfaced. The success path still hands back the same `Submitted`
+        // delivery it always did (`ScheduleNotify` returns `Forwarded()` there), so nothing that
+        // reads the returned envelope on the happy path changes.
+        var notified = ScheduleNotify(posted, default);
+        return notified.State is MessageDeliveryState.Ignored or MessageDeliveryState.Failed
+            ? notified
+            : delivery;
     }
     private readonly Lock locker = new();
 

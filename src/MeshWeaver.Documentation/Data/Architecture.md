@@ -93,6 +93,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Executive Assistant Credential Reads](ExecutiveAssistantCredentialReads) — a turn that waits for a mesh read holds the queue that read's reply must travel through, and the timeout was rendered as "you never connected"
 - [Bounds Must Be Ordered](BoundsMustBeOrdered)
 - [Message-Based Communication](MessageBasedCommunication)
+- [A Request a Hub Sends to Itself](SelfAddressedRequests) — node CRUD is issued on the hub that executes it, so routing and the reply leg cannot lose it; what that leaves, and why an empty queue at the timeout proves nothing when the handler answers from a detached observable
 - [Router Traffic Detection](RouterTrafficDetection) — the detector has two sites; the receiver names the two addresses, the origin names the call site, and a ratchet per tree keeps the seams adopted
 - [No Static State](NoStaticState)
 - [Observable Hub Pipeline (migration design)](ObservableHubPipeline)
