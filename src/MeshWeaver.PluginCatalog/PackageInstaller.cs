@@ -2912,7 +2912,10 @@ public static class PackageInstaller
                 return Observable.Return((IList<(string, bool)>)new List<(string, bool)>());
             if (persistence is null)
                 return WriteAll(batch, ImmutableDictionary<string, MeshNode>.Empty);
-            var now = DateTimeOffset.UtcNow;
+            // 🚨 Storage-stable, like both create verbs (#4506): this path writes to persistence
+            // directly, so the node the installer goes on holding must carry a stamp its own row
+            // can hold exactly — see MeshNode.StorageStable.
+            var now = MeshNode.StorageStableNow();
             // This path writes to persistence DIRECTLY — no owner merge runs — so the create-time
             // ownership rule has to be applied here by hand: a NodeType file's embedded compile
             // bookkeeping (compilationStatus, compiledFrameworkVersion, latestAssemblyPath,
@@ -2925,7 +2928,7 @@ public static class PackageInstaller
                 .Select(n => MeshWeaver.Mesh.NodeTypeOperationalContent.WithoutOperational(n, options) with
                 {
                     State = MeshNodeState.Active,
-                    CreatedDate = n.CreatedDate == default ? now : n.CreatedDate,
+                    CreatedDate = n.CreatedDate == default ? now : MeshNode.StorageStable(n.CreatedDate),
                     LastModified = now,
                 })
                 .ToArray();

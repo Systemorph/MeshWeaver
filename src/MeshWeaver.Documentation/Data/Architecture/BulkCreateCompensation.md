@@ -54,7 +54,9 @@ before children — so removing back-to-front takes a child out before its paren
    pre-existing path out into `existingPaths`, which is reported and never touched.
 2. `CompensateFailedCreate` **re-reads the row and compares `CreatedDate`** before deleting. A path a
    concurrent writer has re-created in the meantime is left alone and SAID SO — *"the stored row is
-   no longer the one this request wrote. Remove it manually before retrying."*
+   no longer the one this request wrote. Remove it manually before retrying."* That comparison is
+   only meaningful because the stamp is minted at a resolution the row can hold — read *"The check
+   first has to RUN"* below before treating "it compares `CreatedDate`" as a guarantee.
 
 Partition artifacts are deliberately **not** dropped, for the same reason the singular path does not
 drop them: provisioning is idempotent, so leaving an empty schema costs the retry nothing, whereas
@@ -118,31 +120,100 @@ things nothing established. So `CompensateFailedCreate` returns a `RollbackDispo
 | `Removed` | this rollback deleted the row this create wrote | counted as rolled back |
 | `NothingToRemove` | no row of ours was there to remove | reported separately, never as a removal |
 | `LeftInPlace` | a row was READ and is no longer ours, so it was deliberately kept | quoted verbatim — a human decides |
-| `Undetermined` | the read or the delete failed; whether a row remains is UNKNOWN | quoted verbatim — never reported as present or absent |
+| `Undetermined` | the read or the delete failed, **or the row came back with no creation stamp to compare**; whether a row remains ours is UNKNOWN | quoted verbatim — never reported as present or absent |
 
 `Undetermined` is the one that used to be wrong in both directions: the old text asserted *"the
 partially-created node is still present"* from a branch that may have been entered **because the read
 failed** — the same distinction [Undetermined Is Not No](../UndeterminedIsNotNo) draws for a gate.
 
+## The check first has to RUN — the stamp must survive its own row
+
+The comparison is exact, and it compares an **in-memory** value against the **same value after a
+round trip through a column**. So before asking what it excludes, ask whether it recognises its own
+row at all — and until #4506 it usually did not.
+
+A `DateTimeOffset` tick is 100 ns. PostgreSQL `timestamptz` — where `created_date` and
+`last_modified` live — holds **microseconds**. A stamp taken straight from `DateTimeOffset.UtcNow`
+therefore comes back from its own row *different*, the lineage check reads that as "somebody else's
+node", and the rollback stands down on the row it had just written. The caller is then told the
+partially-created node is still present and must be removed by hand — the exact unrecoverable ghost
+#638 exists to prevent, now wearing the costume of a safety feature.
+
+**Measured, not reasoned.** On memex.meshweaver.cloud (2026-09-16), one node —
+`Doc/_Activity/import-f7f86c9f5020ab36` — carries both halves of the proof in a single payload:
+
+| where the timestamp lives | value | precision |
+|---|---|---|
+| `content` (JSON — lossless) | `…T12:59:47.9123072Z`, `…9123038Z`, `…9123109Z` | 7 digits, **all three** ending in a non-zero sub-microsecond digit |
+| `createdDate` / `lastModified` (column) | `…T12:51:02.077625+00:00`, `…T12:59:47.914802+00:00` | exactly 6 digits |
+
+Same process, same instant, two different values. Fifteen further column timestamps sampled across
+`Doc` were 6 digits without exception.
+
+**The fix is at the mint, not at the comparison.** Both create paths (and the installer's direct
+write) stamp through `MeshNode.StorageStableNow()`, and a caller-supplied stamp is floored the same
+way by `MeshNode.StorageStable(...)` — so the node a create emits carries a timestamp its own row can
+hold exactly, and the check compares one value to itself. Teaching the comparison a tolerance instead
+would have left every other reader of a freshly-created node comparing a value against a truncation
+of itself.
+
+> A value that is minted at one precision and stored at another is not "nearly the same value". Every
+> exact comparison across that boundary is wrong, and it is wrong silently.
+
+**Why no existing test could see it.** All of them run on `InMemoryStorageAdapter`, which holds the
+CLR instance and hands the same object back — so the lineage check compared a `DateTimeOffset`
+against *itself* and no round trip happened. `RollbackLineageSurvivesTheStoresTimestampResolutionTest`
+closes that by modelling a microsecond-resolution column over the real store, and it drives the
+sub-microsecond tick in as a caller-supplied `CreatedDate` rather than sampling the clock —
+`DateTimeOffset.UtcNow`'s resolution is a property of the OS (measured 2026-09-16: this macOS host
+mints whole microseconds, 200 of 200; the Linux portal above plainly does not), so a repro resting on
+the ambient clock would be real on CI and **vacuous** on a developer's machine.
+
+### A row the store returns with NO stamp establishes nothing
+
+On Postgres the authorship columns exist only on `mesh_nodes`; every satellite table (`_Access`,
+`_Thread`, `_Activity`, `_Comment`, `Source`, …) is read with `NULL::timestamptz AS created_date`. A
+rollback aimed at a satellite path therefore reads `default` for **every** row, its own included.
+
+Measured on memex.meshweaver.cloud (2026-09-16): `Store/_Activity/4ad7e757`, a real satellite-table
+row, comes back carrying `lastModified` — that column does exist there — and **no `createdDate` and
+no `createdBy` at all**. It is only the authorship trio that is missing, and it is missing for every
+row of every satellite table, so there is nothing for the lineage check to compare.
+That is not a mismatch — nothing was compared — so it is now reported `Undetermined` rather than
+`LeftInPlace`, which used to tell the operator a specific and false thing ("the stored row is no
+longer the one this request wrote") about a row nobody had looked at. **It still deletes nothing:** an
+unestablished lineage must never widen what a rollback removes. Giving those tables a real
+`created_date` is a storage-side change and is not this page's.
+
 ## What the lineage check does NOT guarantee
 
-The `CreatedDate` comparison makes the rollback refuse to delete a node it did not create, and that
-is worth having. It is not a transactional guarantee, and two limits are worth stating plainly rather
-than discovering later (both raised in review on #4503, both **pre-existing and identical on the
-singular path since #638** — neither is introduced by the batch rollback):
+With the stamp round-trip-stable, the check does what it claims: it refuses to delete a row whose
+`CreatedDate` differs from the one this request wrote. It is still **not** a transactional guarantee,
+and the limits are worth stating plainly rather than discovering later (both raised in review on
+#4503, both **pre-existing and identical on the singular path since #638** — neither is introduced by
+the batch rollback):
 
-1. **The read and the delete are not atomic.** A concurrent create that replaces the row between the
-   lineage check and `DeleteAndPublish` would have its replacement deleted. Closing it needs a
-   conditional delete against a server-owned token in the `IStorageAdapter` contract — every backend —
-   not a change in this caller.
-2. **`CreatedDate` is caller-supplied when the caller supplies one.** Both create paths stamp
-   `CreatedDate = n.CreatedDate == default ? now : n.CreatedDate`, so it is a lineage *hint*, not a
-   server-owned identity token.
+1. **The read and the delete are not atomic, and the window is REACHABLE.** A delete-then-recreate
+   that lands between the lineage read and `DeleteAndPublish` has its *replacement* deleted. Nothing
+   narrows it structurally: the create handler returns `Processed()` immediately and the chain runs
+   on the IO pool rather than inside a hub turn, so no actor serialises the path; the read and the
+   delete are two separate storage turns with nothing holding the row between them. What makes it
+   *unlikely* is arithmetic, not design — a few milliseconds, and a concurrent actor that must delete
+   and re-create the very same path inside it. On the canonical #638 case it is close to unreachable
+   for a second reason: the row is a partition root whose ownership grant is exactly what failed, so
+   RLS denies everybody the delete that would have to come first. The bulk rollback is the wider
+   exposure, because nodes *k+1…n* are ordinary nodes in an existing partition where others do hold
+   rights. Closing it needs a conditional delete in the `IStorageAdapter` contract — the DELETE-side
+   twin of `WriteIfVersion` — implemented by every backend, which is the cost #4506 weighs.
+2. **`CreatedDate` is caller-supplied when the caller supplies one.** Both create paths preserve an
+   authored stamp, so it is a lineage *hint*, not a server-owned identity token. Concretely, it
+   admits two interleavings with **no race at all**: two imports carrying the same authored
+   `CreatedDate` for the same path, and two creates of the same path within one microsecond. Note
+   what the round-trip fix did *not* change here — the stamp never had more than microsecond entropy
+   once it reached the row, so flooring the mint costs the key nothing it actually had.
 
-The window is narrow (the rollback follows the write by milliseconds, on a path that by construction
-did not exist when the batch began), and the alternative — leaving the ghosts — is the defect this
-page exists for. But "safe because it compares `CreatedDate`" should be read as *"it will not delete
-a row it can see is not ours"*, never as *"it cannot delete someone else's row"*.
+What the check therefore means is *"it will not delete a row it can SEE is not ours"* — never *"it
+cannot delete someone else's row"*.
 
 ## What is asserted
 
@@ -156,6 +227,12 @@ through the real bulk verb with a critical handler that faults on index 2, and a
 - the handler ran for `N0`, `N1`, `N2` **and never for `N3`/`N4`** — which is what pins the stop, and
   what would go red if the `Take(1)` shape above ever came back;
 - a control batch with nothing faulting lands in full, with nothing rolled back.
+
+`RollbackLineageSurvivesTheStoresTimestampResolutionTest` (same project) asserts the half above —
+that the rollback recognises its OWN rows through a microsecond-resolution column, that every stamp
+a create mints is one its column can hold, that a row returned without a creation stamp is
+`Undetermined` **and is not deleted**, and — the control that keeps the rest honest — that a clean
+batch still lands in full through the same modelled column.
 
 Related: [Copy Completeness](../CopyCompleteness) — the same question asked of a copy, where the answer
 is deliberately different (it stops rather than rolling back, and says what it could not read).
