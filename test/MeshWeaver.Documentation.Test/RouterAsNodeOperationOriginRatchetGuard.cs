@@ -106,10 +106,11 @@ namespace MeshWeaver.Documentation.Test;
 /// </list></para>
 ///
 /// <para><b>The tolerances were measured, not guessed.</b> Over <c>src/</c> at the time of writing
-/// this finds 29 lifecycle post sites, 4 of them self-directed hub lifecycle. A scan that required
-/// the request to be constructed INSIDE the call's argument list misses every verb of
-/// <c>MeshService</c>, the reference implementation. A seam test that accepted only the literal
-/// <c>NodeOperationIssuingHub()</c> text misclassifies the sites that hoist it once per operation
+/// this matches 33 lifecycle post sites, 4 of them self-directed hub lifecycle, leaving 29 in the
+/// denominator. A scan that required the request to be constructed INSIDE the call's argument list
+/// would miss 7 of the 33 — every verb of <c>MeshService</c>, the reference implementation, plus the
+/// copy helper's hoisted request. A seam test that accepted only the literal
+/// <c>NodeOperationIssuingHub()</c> text would misclassify the 11 that hoist it once per operation
 /// (<c>var issuingHub = hub.NodeOperationIssuingHub();</c>,
 /// <c>private IMessageHub IssuingHub =&gt; _issuingHub ??= hub.NodeOperationIssuingHub();</c>).
 /// Hence the alias pass. Its known approximation: an identifier is treated as a seam alias for the

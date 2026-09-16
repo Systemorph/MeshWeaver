@@ -120,9 +120,11 @@ a **ratchet that may only shrink**, one per tree:
 
 The `src/` guard matches an `.Observe(…)`/`.Post(…)` whose first argument is a **lifecycle message**,
 built inline **or** hoisted into a local first, and reads the receiver as an expression rather than
-as preceding text. Both tolerances were measured: a construction-anchored scan misses the five sites
-that are `MeshService`'s own verbs, and a literal `NodeOperationIssuingHub()` receiver test
-misclassifies the six that hoist the seam into a local or a cached property.
+as preceding text. Both tolerances were measured over the tree, not guessed: of the 33 sites it
+matches, a construction-anchored scan would miss **7** (every verb of `MeshService`, the reference
+implementation, plus the copy helper's hoisted request), and a receiver test that accepted only the
+literal `NodeOperationIssuingHub()` text would misclassify the **11** that hoist the seam into a
+local or a cached property.
 
 #### The denominator is DERIVED, and that is the point (#4463)
 
