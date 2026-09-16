@@ -1280,25 +1280,30 @@ internal static class NodeTypeEnrichmentHelpers
                                     reason: $"pinned release '{requestedReleasePath}' bytes missing from store (collection={release.AssemblyCollection}, version={releaseVersion})",
                                     staleVersion: typeNode.Version);
                             }
+                            var pinnedBytes = $"pinned release '{requestedReleasePath}', "
+                                + $"collection={release.AssemblyCollection}, version={releaseVersion}";
                             return compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType)
                                 .Take(1)
-                                .Select(result =>
+                                .Select(result => (Result: result, Fault: (string?)null))
+                                .Catch<(NodeCompilationResult? Result, string? Fault), Exception>(ex =>
+                                    Observable.Return(((NodeCompilationResult?)null,
+                                        (string?)$"{ex.GetType().Name}: {ex.Message}")))
+                                .SelectMany(extraction =>
                                 {
-                                    var matching = result?.NodeTypeConfigurations
+                                    // 🚨 #4471 — the same refusal as the hot path: a pinned
+                                    // release whose bytes do not load is a diagnosis, never the
+                                    // default configuration bound for the grain's life.
+                                    if ((extraction.Fault ?? UnloadableBuildDetail(extraction.Result)) is { } unloadable)
+                                        return RefuseUnloadableBind(
+                                            node, nodeType, typeNode, def, meshConfiguration,
+                                            compilationService, meshHub, logger, recompileAttempts,
+                                            pinnedBytes, unloadable);
+                                    var matching = extraction.Result!.NodeTypeConfigurations
                                         .FirstOrDefault(c =>
                                             string.Equals(c.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
-                                        ?? result?.NodeTypeConfigurations.FirstOrDefault();
-                                    return ApplyEntry(
-                                        node, localPath, matching?.HubConfiguration,
-                                        nodeType, meshConfiguration);
-                                })
-                                .Catch<MeshNode, Exception>(ex =>
-                                {
-                                    logger?.LogWarning(ex,
-                                        "EnrichWithNodeType: failed to load pinned release '{ReleasePath}' for {NodeType} — instance '{InstancePath}' falls back to default config",
-                                        requestedReleasePath, nodeType, node.Path);
+                                        ?? extraction.Result.NodeTypeConfigurations.FirstOrDefault();
                                     return Observable.Return(ApplyEntry(
-                                        node, localPath, hubConfig: null,
+                                        node, localPath, matching?.HubConfiguration,
                                         nodeType, meshConfiguration));
                                 });
                         });
@@ -1435,32 +1440,32 @@ internal static class NodeTypeEnrichmentHelpers
                             meshHub, nodeType, boundAssembly, meshConfiguration, logger,
                             def.LatestAssemblyMvid, boundMvid));
 
+                    var latestBytes = $"collection={def.LatestAssemblyCollection}, "
+                        + $"version={compileVersion}, path={boundAssembly}";
                     return compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType)
                         .Take(1)
-                        .Select(result =>
+                        // A fault of the extraction itself is the same verdict as a result that
+                        // records no location: the recorded build gave this process nothing to bind.
+                        .Select(result => (Result: result, Fault: (string?)null))
+                        .Catch<(NodeCompilationResult? Result, string? Fault), Exception>(ex =>
+                            Observable.Return(((NodeCompilationResult?)null,
+                                (string?)$"{ex.GetType().Name}: {ex.Message}")))
+                        .SelectMany(extraction =>
                         {
-                            var matching = result?.NodeTypeConfigurations
+                            // 🚨 #4471 — never the silent default: see RefuseUnloadableBind.
+                            if ((extraction.Fault ?? UnloadableBuildDetail(extraction.Result)) is { } unloadable)
+                                return RefuseUnloadableBind(
+                                    node, nodeType, typeNode, def, meshConfiguration,
+                                    compilationService, meshHub, logger, recompileAttempts,
+                                    latestBytes, unloadable);
+                            var matching = extraction.Result!.NodeTypeConfigurations
                                 .FirstOrDefault(c =>
                                     string.Equals(c.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
-                                ?? result?.NodeTypeConfigurations.FirstOrDefault();
-                            return WithStaleAssemblySelfHeal(
+                                ?? extraction.Result.NodeTypeConfigurations.FirstOrDefault();
+                            return Observable.Return(WithStaleAssemblySelfHeal(
                                 ApplyEntry(
                                     node, localPath, matching?.HubConfiguration,
                                     nodeType, meshConfiguration),
-                                meshHub, nodeType, boundAssembly, meshConfiguration, logger,
-                                def.LatestAssemblyMvid, boundMvid);
-                        })
-                        .Catch<MeshNode, Exception>(ex =>
-                        {
-                            // Reflection over the compiled assembly failing
-                            // means HubConfiguration extraction gave up — the
-                            // per-instance hub will activate without the
-                            // dynamic config.
-                            logger?.LogWarning(ex,
-                                "EnrichWithNodeType: HubConfiguration reflection for '{NodeType}' faulted ({ExceptionType}) — instance '{InstancePath}' falls back to default config",
-                                nodeType, ex.GetType().Name, node.Path);
-                            return Observable.Return(WithStaleAssemblySelfHeal(
-                                ApplyEntry(node, localPath, hubConfig: null, nodeType, meshConfiguration),
                                 meshHub, nodeType, boundAssembly, meshConfiguration, logger,
                                 def.LatestAssemblyMvid, boundMvid));
                         });
@@ -1851,6 +1856,105 @@ internal static class NodeTypeEnrichmentHelpers
         string? publishedMvid, string? boundMvid, string nodeType, int recompileAttempts)
         => recompileAttempts < MaxRecompileAttempts
            && ServedBuildIdentity.Mismatch(publishedMvid, boundMvid, nodeType) is not null;
+
+    /// <summary>
+    /// Why the configuration extraction over a RECORDED build gave this process nothing it can
+    /// bind — or null when the build loaded. The discriminator is
+    /// <see cref="NodeCompilationResult.AssemblyLocation"/>: <c>CompileResultFromAssembly</c>
+    /// records a location ONLY when the assembly loaded and its provider attributes were read, and
+    /// returns a null location (with the loader's reason appended to the log as an Error) on every
+    /// failure branch — the file absent, deleted as older than the framework, a
+    /// <see cref="BadImageFormatException"/>, a context closed to loads, or types that could not be
+    /// realised.
+    ///
+    /// <para>🚨 A loaded build with NO configuration is not a failure and returns null: a NodeType
+    /// may legitimately declare no <c>configuration</c> expression, and the default chain is then
+    /// the right binding. Only "the recorded bytes did not load here" is refused.</para>
+    ///
+    /// <para>Pure — pinned by <c>AnUnloadableBuildIsNeverASilentDefaultTest</c> (#4471).</para>
+    /// </summary>
+    internal static string? UnloadableBuildDetail(NodeCompilationResult? extraction)
+    {
+        if (extraction is null)
+            return "the configuration extraction produced no result";
+        if (!string.IsNullOrEmpty(extraction.AssemblyLocation))
+            return null;
+        return extraction.Log?.Messages
+                   .LastOrDefault(m => m.LogLevel >= LogLevel.Error)?.Message
+               ?? "the recorded build did not load in this process";
+    }
+
+    /// <summary>
+    /// 🚨 <b>#4471 — a recorded build that does not LOAD in this process is refused, never bound as
+    /// the silent default configuration.</b> The two extraction sites (the hot path and the pinned
+    /// release) used to hand an empty extraction straight to <c>ApplyEntry</c> with
+    /// <c>hubConfig: null</c>: the instance activated on the mesh default chain alone — none of
+    /// its type's handlers, layout areas or <c>WithInitialization</c> watchers — and, because a hub
+    /// resolves its configuration exactly once and the stale-assembly watcher fires only when the
+    /// PUBLISHED build changes, it stayed that way for the grain's whole life. Nothing logged it at
+    /// the bind.
+    ///
+    /// <para><b>Measured on memex.systemorph.com, 2026-09-16.</b> At 00:49:15Z, ~2 minutes after a
+    /// pod started, <c>Failed to load assembly for Hosting/PlatformBuildInbox</c> was logged for six
+    /// NodeTypes within four seconds. <c>Hosting/PlatformBuilds</c> — the single instance the Hosting
+    /// module's <c>InboxHubAnchor</c> holds activated for the life of the process — then served reads
+    /// for twenty hours while none of its type's initialisers ran: 125+ webhook deliveries sat
+    /// unconsumed, the fleet watch wrote nothing, and the build queue, triage intake and self-update
+    /// routing were dead with it. The NodeType's own record read <c>Ok</c> throughout. A restart
+    /// (21:17Z) re-activated the hub on a loadable build and it drained 303 deliveries at once.
+    /// Instances that were re-activated later healed on their own; the anchored one never
+    /// re-activated, which is why it was the one that stayed dark.</para>
+    ///
+    /// <para><b>What it does instead</b> is exactly what the bytes-MISSING sibling
+    /// (#3934 clause 4) and the stale-bind refusal (#2471) already do, because the state is the
+    /// same one — a build is recorded and this process cannot use it: within the retry budget,
+    /// <see cref="TriggerRecompileAndRetry"/> mints fresh bytes and re-enriches against them; once
+    /// the budget is spent, the assembly-unavailable DIAGNOSIS overlay (which names the loader's
+    /// reason, Nacks typed requests instead of ignoring them, and self-heals on the next NodeType
+    /// write).</para>
+    /// </summary>
+    private static IObservable<MeshNode> RefuseUnloadableBind(
+        MeshNode node,
+        string nodeType,
+        MeshNode typeNode,
+        NodeTypeDefinition def,
+        MeshConfiguration meshConfiguration,
+        IMeshNodeCompilationService compilationService,
+        IMessageHub meshHub,
+        ILogger? logger,
+        int recompileAttempts,
+        string bytes,
+        string detail)
+    {
+        if (recompileAttempts >= MaxRecompileAttempts)
+        {
+            logger?.LogWarning(
+                "EnrichWithNodeType: the recorded build of {NodeType} ({Bytes}) still does not load in "
+                + "this process after {Attempts} recompile attempt(s) — instance '{InstancePath}' serves "
+                + "the assembly-unavailable diagnosis, NOT the default configuration: {Detail}",
+                nodeType, bytes, recompileAttempts, node.Path, detail);
+            // The explanation is the shared AssemblyUnavailable copy (intro/guidance). The error
+            // slot carries only identifiers and the loader's VERBATIM reason — upstream text, like
+            // a Roslyn diagnostic — so this branch adds no platform prose baked in one language
+            // at enrichment time.
+            var (intro, callToAction, guidance) = OverlayCopy(OverlayCause.AssemblyUnavailable);
+            return Observable.Return(
+                WithOverlaySelfHeal(
+                    WithCompilationErrorOverlay(node, nodeType,
+                        $"'{nodeType}' ({bytes}): {detail}",
+                        guidance: guidance,
+                        intro: intro,
+                        callToAction: callToAction,
+                        activityPath: def.LastCompilationActivityPath),
+                    meshHub, nodeType, typeNode.Version, logger));
+        }
+        return TriggerRecompileAndRetry(
+            node, nodeType, meshConfiguration, compilationService, meshHub,
+            logger, recompileAttempts,
+            reason: $"the recorded build of '{nodeType}' ({bytes}) did not load in this process "
+                + $"({detail}) — refusing the silent default bind (#4471)",
+            staleVersion: typeNode.Version);
+    }
 
     private static IObservable<string?> ResolveAssembly(
         IMessageHub meshHub, string? collection, string nodeTypePath, long version)
