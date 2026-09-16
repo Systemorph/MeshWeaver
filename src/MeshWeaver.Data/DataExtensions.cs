@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
@@ -1249,7 +1249,11 @@ public static class DataExtensions
         Func<string, PatchDataResponse, bool>? dispatchLate)
     {
         var delivery = post(response);
-        if (delivery is not null && delivery.State != MessageDeliveryState.Failed)
+        // 🚨 WasAcceptedForDelivery, not `!= Failed` (MeshWeaver#1174). A verdict the storm
+        // breaker or the aggregate shedder DROPPED comes back Ignored having been enqueued
+        // nowhere; reading that as delivered skips the late-dispatch fallback below and leaves
+        // the requester waiting out its whole bound for an answer nobody carried.
+        if (delivery is { WasAcceptedForDelivery: true })
             return true;
         return dispatchLate is not null && dispatchLate(requestId, response);
     }
