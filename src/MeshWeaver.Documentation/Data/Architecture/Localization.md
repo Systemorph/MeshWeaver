@@ -596,9 +596,19 @@ The `Describe*` family is the canonical diagnostic shape — `MessageSizeGuard.D
 `DescribeGrainDispatch` / `DescribeRouterDispatch`, `CancellationClassifier.Describe`,
 `QueryIdentity.DescribeUnresolved`, `StoreReachability.DescribeNotAttempted` /
 `DescribeMayHavePartiallyLanded`, `RequiredModuleStatus.Describe`,
-`ModuleActivationStatus.DescribeUnresolvable`. None is localized, and
-`MeshWeaver.Mesh.Contract` — which holds several of them — contains six `Localize(` calls in total,
-none on a `Describe*`.
+`ModuleActivationStatus.DescribeUnresolvable`. None of them localizes, and
+`MeshWeaver.Mesh.Contract` — which holds several of them — calls `Localize(` on none of them.
+
+🚨 **A `Describe*` sentence that a viewer surface DOES reach gets a keyed CARRIER beside it, never a
+`Localize` inside it.** `StoreReachability` now also exposes `NodeCreationNotAttempted(path)` /
+`BulkCreationNotAttempted(count)` / `BulkCreationMayHavePartiallyLanded(count)`, each returning a
+`LocalizableText` whose **English is composed by the `Describe*` method itself** and whose key is
+declared next to it. That keeps the class's whole reason for existing — *"so a user, an agent and a
+test all read the same words"* — true across the localization seam: rewording the sentence moves the
+diagnostic, the wire value and the fallback together, and only the catalog templates follow. A
+second English literal in the carrier would have been exactly the drift the class was created to
+prevent, which is why `CreateRefusalCatalogTest` asserts the catalog's English still reproduces the
+composed sentence.
 
 **Three reasons this is a decision and not a backlog item:**
 
@@ -625,6 +635,48 @@ unlocalized user-visible string is applying the right rule at the wrong layer. P
 section. The rule genuinely bites the moment the string reaches a `Controls.*` literal, an
 `aria-label`, or anything a `LayoutArea` renders.
 
+#### A node-operation response carries BOTH — an English wire field and a keyed transcript
+
+This is the shape every `*Response.Error` on a node operation settles into, decided on the UPSERT leg
+(#3917) and extended to the CREATE and BULK-CREATE legs (#4507).
+
+- **`Error` stays ENGLISH.** It is a wire field, and every consumer of it in `src/` is a service that
+  folds it into a log line or an exception message — `PackageInstaller`, `ModuleDiscoveryService`,
+  `GitHubSyncService`, `IssueService`, `StaticRepoImporter`, `NodeCopyHelper`,
+  `NodeCreationFailure.ToException`. Reason 3 above is the whole argument: a value that may have been
+  emitted in any of N languages is materially harder to trace, and these are the strings that get
+  pasted into issues.
+- **The `ActivityLog` on the same response is the LOCALIZED surface.** The refusal travels as a
+  `LocalizableText` from the frame that composes it (`AccessAssignmentGuard.ScopeRefusal`,
+  `ActivityNodeGuard.OwnerlessRefusal`, `CreateNodesRequest.BulkRefusalText`, `NodeTypeResolution`)
+  to the handler, which writes `Error = refusal.English` and appends `refusal.ToLogMessage(Error)` to
+  the transcript. One `LocalizableText` fills both halves, so the fallback and the wire value cannot
+  drift.
+
+🚨 **The create leg has one hop the upsert leg does not, and it is the hop that decides whether any
+of this reaches a person.** `IMeshService.CreateNode` reports failure by THROWING, so a
+response-only conversion leaves the Create form's error dialog — the one screen a human reads a
+create refusal on — showing `ex.Message`, i.e. the English `Error`, forever.
+`NodeCreationFailure.ToException` therefore stamps the keyed `LogMessage` onto `Exception.Data`
+(`NodeCreationFailure.RefusalKey`, read back with `ex.RefusalText()`) alongside the typed rejection
+reason and the `MeshNodeError` it already carried, and `CreateLayoutArea` renders
+`ex.RefusalText()?.Localize(host.ViewerLocale()) ?? ex.Message`. **A conversion that stops at the
+response is not a fix; it is a keyed surface with no reader.**
+
+**What stays English inside the converted surface**, each for a reason the `Verbatim` name makes
+visible at the call site: a validator's own refusal (`INodeValidator` hands back a `string`, and its
+implementers are RLS, the app-integrity validators and plugin-contributed ones outside this repo — so
+the composing frame knows the sentence but never the key); the static/durable serve-collision
+diagnostic, which is an inventory of the claiming providers; an upstream `ex.Message`; and the bulk
+rollback report, whose SHAPE changes per occurrence (four counts, two conditional clauses and a
+variable-length tail), so a template could only hold it in one `{detail}` placeholder and translate
+nothing.
+
+**Convert a leg all at once.** Keying half a refusal surface is worse than keying none: two refusals
+from the same screen, one German and one English, reads as a broken translation rather than as work
+that has not arrived — the argument `UpsertRefusalsAreLocalizedTest` and
+`CreateRefusalsAreLocalizedTest` both open with.
+
 ## Tests
 
 - `LocalizationTest` (MeshWeaver.Messaging.Hub.Test) — catalog loads, fallback chain, plurals,
@@ -640,6 +692,17 @@ section. The rule genuinely bites the moment the string reaches a `Controls.*` l
   over `test/UnkeyedActivityLogMessages.allow`: no NEW unkeyed `new LogMessage("…")` site, every
   `activity.*` key named in `src/` exists in the English catalog and vice versa, and no target-typed
   `Messages = [new(…)]` that would hide from the census.
+- `UpsertRefusalsAreLocalizedTest` / `CreateRefusalsAreLocalizedTest` (MeshWeaver.Graph.Test) — the
+  node-operation legs end to end: the refusal a handler composes and the refusal a shared guard
+  composes both reach the transcript keyed, render German for a German viewer and English for an
+  English one, and the wire `Error` is asserted to STAY English so neither half can move silently.
+  The create test adds the exception hop (`ex.RefusalText()`), which is the only path the Create
+  dialog can see, and a positive control that a create which should land still lands.
+- `CreateRefusalCatalogTest` (MeshWeaver.Hosting.Test) — the two drift directions no catalog test can
+  see: a catalog entry whose English no longer reproduces the sentence the code composes (asserted
+  over all nine refusals that are pure functions, including the three `StoreReachability` carriers
+  whose English is derived), and a German entry that is a copy of the English rather than a
+  translation — which `LocalizationTest` structurally cannot detect, because the key IS present.
 - `LocalePreferenceTest` (MeshWeaver.Hosting.Monolith.Test) — the write-once decision.
 - 🚨 **`AnonymousCircuitLocaleSeedTest` does NOT exist** — it is named here only so nobody reads it
   as cover. It drove the anonymous seed over a **real SignalR WebSocket into Blazor's real
