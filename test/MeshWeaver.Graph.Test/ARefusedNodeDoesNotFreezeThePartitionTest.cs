@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
@@ -108,11 +109,20 @@ public class ARefusedNodeDoesNotFreezeThePartitionTest(ITestOutputHelper output)
         first.WrittenPaths.Should().Contain($"{_partition}/Good",
             "the refusal is per file: every other node still lands");
 
+        // 🚨 THE WAIT BELOW MUST BE ABLE TO FAIL. It waits for `Good` to LEAVE the parent listing, so
+        // a listing that never contained `Good` in the first place would satisfy it instantly and the
+        // test would pass having deleted nothing and repaired nothing. Assert the positive case first:
+        // if the query shape ever stops seeing the node, this goes red here rather than passing
+        // vacuously three lines later.
+        (await ChildPaths(_partition, ct)).Should().Contain($"{_partition}/Good",
+            "the listing this test waits on must actually see the node, or waiting for it to "
+            + "disappear proves nothing");
+
         // The partition now drifts from what the marker claims — the state an operator re-imports to
         // repair. Waited on through the QUERY the importer itself reads, not merely posted: a stale
         // snapshot would let the incremental skip pass over the node and prove nothing.
         await Delete($"{_partition}/Good", ct);
-        await WaitUntilAbsentFromTheIndex($"{_partition}/Good", ct);
+        await WaitUntilAbsentFromTheIndex(_partition, "Good", ct);
 
         var second = await Import(source, ct);
 
@@ -225,22 +235,41 @@ public class ARefusedNodeDoesNotFreezeThePartitionTest(ITestOutputHelper output)
             .FirstAsync().Timeout(60.Seconds()).Await(ct);
 
     /// <summary>
-    /// Waits until the eventually-consistent index the importer's own snapshot reads no longer
-    /// returns the node — the re-query shape the house rules prescribe for a request/response source,
-    /// never a <c>Task.Delay</c>. Without it the next import could read a stale "present" and skip the
-    /// node on its token, and the test would pass having measured nothing.
+    /// Waits until the eventually-consistent index the importer's own snapshot reads no longer lists
+    /// the node — the re-query shape the house rules prescribe for a request/response source, never a
+    /// <c>Task.Delay</c>. Without it the next import could read a stale "present", skip the node on
+    /// its token, and the test would pass having measured nothing.
+    ///
+    /// <para>🚨 A <c>scope:children</c> LISTING of the parent, never a <c>path:</c> point query.
+    /// Existence of a specific path is not a valid query use — a point read of an absent node is a
+    /// routing NotFound that terminates the stream and opens the storm-breaker on that path — so the
+    /// existence half of the question is asked the way the CQRS rules say to ask it: list the parent
+    /// and look for the child. (Copilot review.)</para>
     /// </summary>
-    private async Task WaitUntilAbsentFromTheIndex(string path, CancellationToken ct)
+    private async Task WaitUntilAbsentFromTheIndex(string partition, string id, CancellationToken ct)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var path = $"{partition}/{id}";
         await Observable.Interval(50.Milliseconds()).StartWith(0L)
-            .SelectMany(_ => meshService
-                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
-                .Take(1))
-            .Where(change => !change.Items.Any(n =>
-                string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)))
+            .SelectMany(_ => ChildPathsOnce(meshService, partition))
+            .Where(paths => !paths.Contains(path, StringComparer.OrdinalIgnoreCase))
             .FirstAsync().Timeout(60.Seconds()).Await(ct);
     }
+
+    /// <summary>One reading of the parent's child listing — the same listing the wait above polls, so
+    /// the pre-delete assertion and the wait can never disagree about what they are looking at.</summary>
+    private async Task<IReadOnlyList<string>> ChildPaths(string partition, CancellationToken ct) =>
+        await ChildPathsOnce(Mesh.ServiceProvider.GetRequiredService<IMeshService>(), partition)
+            .FirstAsync().Timeout(60.Seconds()).Await(ct);
+
+    private static IObservable<IReadOnlyList<string>> ChildPathsOnce(
+        IMeshService meshService, string partition) =>
+        meshService
+            // .Complete() — this is an ENUMERATION used as an existence gate, so it must never be
+            // silently served as a page.
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{partition} scope:children").Complete())
+            .Take(1)
+            .Select(change => (IReadOnlyList<string>)change.Items.Select(n => n.Path).ToArray());
 
     private async Task<string> Body(string path, CancellationToken ct)
     {
@@ -266,7 +295,13 @@ public class ARefusedNodeDoesNotFreezeThePartitionTest(ITestOutputHelper output)
     {
         public string Partition => partition;
         public bool Versioned => false;
-        public List<MeshNode> Nodes { get; init; } = [];
+
+        /// <summary>
+        /// Immutable, per the repository's collections policy — the fixture only ever initializes it,
+        /// so nothing is lost by refusing a mutable one here. (Copilot review.)
+        /// </summary>
+        public ImmutableList<MeshNode> Nodes { get; init; } = ImmutableList<MeshNode>.Empty;
+
         public MeshNode? Root { get; init; }
 
         public IReadOnlyList<MeshNode> EnumerateSourceNodes() => Nodes;

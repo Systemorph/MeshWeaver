@@ -156,6 +156,16 @@ Note the granularity trap in it: refusing to compile a whole partition because o
 refused would re-create exactly the over-broad reading this page is about, so any fix has to be
 scoped to the types that actually reference the missing node.
 
+🚨 **A manifest written BEFORE this change still carries the old lie, for one case.** Entries predate
+the `!` sigil, so a node whose *update* was refused back then sits under its plain token while the
+mesh holds the older content; the incremental skip matches that token and passes over it. That is
+not new — it is precisely the behaviour this change removes going forward — and it is self-limiting
+in the same way the marker's absent-verdict residue is: any edit to that file moves its token and the
+node is evaluated again. It is named here rather than migrated because a migration would have to
+decide, for every pre-existing entry, a fact no pre-existing entry records. The *create* case needs
+nothing: a refused create leaves no node, and the incremental skip already requires the node to be
+present.
+
 ## What this does not change
 
 - **`MayAdvanceBaseline` is untouched.** It already requires `Failed == 0`, so a partial import never

@@ -2045,7 +2045,7 @@ public static class StaticRepoImporter
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
                         return WriteContentSyncLedgers(hub, source.Partition, content, logger)
                             .SelectMany(_ => WriteManifest(hub, source.Partition, nodes.Append(root).ToArray(), manifest, changedNodePaths,
-                            heldPaths, count.Failures, hub.JsonSerializerOptions, logger)).Select(_ =>
+                            heldPaths, count.Failures, count.Written, hub.JsonSerializerOptions, logger)).Select(_ =>
                         {
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
                             // Warning (the ⚠ lines above pinpoint which files), all-clear →
@@ -3133,10 +3133,13 @@ public static class StaticRepoImporter
     /// way a node can fail to land. A DETERMINISTIC refusal is recorded as a refusal
     /// (<see cref="RefusedEntry"/>) so the next pass skips the write instead of re-deriving it; a
     /// retryable one is dropped from the map entirely, which is what makes the next pass look again.</param>
+    /// <param name="writtenPaths">The paths that DID land. A source may carry duplicate entries for
+    /// one path, so a path can appear in both lists; what landed wins (see the failures clause).</param>
     private static IObservable<int> WriteManifest(
         IMessageHub hub, string partition, IReadOnlyList<MeshNode> nodes,
         IReadOnlyDictionary<string, string> previous, IReadOnlySet<string>? evaluatedPaths,
         IReadOnlyCollection<string> heldNodeTypePaths, IReadOnlyCollection<FailedImport> failures,
+        IReadOnlyCollection<string> writtenPaths,
         JsonSerializerOptions opts, ILogger? logger)
     {
         var map = nodes
@@ -3203,6 +3206,7 @@ public static class StaticRepoImporter
         // refused.
         if (failures.Count > 0)
         {
+            var written = writtenPaths.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
             var sourceTokens = nodes
                 .Where(n => !string.IsNullOrEmpty(n.Path))
                 .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
@@ -3214,6 +3218,14 @@ public static class StaticRepoImporter
             foreach (var failure in failures)
             {
                 if (!sourceTokens.TryGetValue(failure.NodePath, out var token))
+                    continue;
+                // 🚨 A path that ALSO landed is not a refused path (Copilot review). A source may
+                // carry two entries at one path — ImportWriteOrder deliberately preserves duplicates
+                // — so one attempt can fail while another succeeds. Recording a refusal for a node
+                // that IS in the mesh would make every later pass re-report a refusal that no longer
+                // describes anything, and `map`'s own token comes from `g.First()`, which need not be
+                // the entry that won. The written set is the authority on what landed.
+                if (written.Contains(failure.NodePath))
                     continue;
                 if (failure.Deterministic)
                     // These bytes break a rule, and they break it again at the same token. Recorded
