@@ -92,7 +92,17 @@ public static class HubRecycleExtensions
         => hub.WhenNoInstallHoldsRoot(path)
             .SelectMany(_ => Observable.Defer(() =>
             {
-                hub.Post(
+                // 🚨 OFF-ROUTER ISSUING (#4463). Every DOCUMENTED caller already holds a surviving
+                // non-router hub — that is this class's own rule — but this is a PUBLIC extension
+                // on `IMessageHub`, so nothing stops a mesh-singleton service from calling it with
+                // the DI-injected hub, which in the mesh's root container IS the ROUTER. The seam
+                // is the identity function for every hub whose address type is not the mesh type,
+                // so the documented callers are byte-for-byte unaffected and the undocumented one
+                // cannot make the router an end of a teardown delivery. The `hub.Address` in the
+                // fallback reason below is deliberately the CALLER's address, not the issuing
+                // hub's: it answers "who asked", which a reader of the target's [QUIESCE-START]
+                // needs, and `portal/nodeops-{meshId}` would answer nothing.
+                hub.NodeOperationIssuingHub().Post(
                     new DisposeRequest
                     {
                         Reason = reason

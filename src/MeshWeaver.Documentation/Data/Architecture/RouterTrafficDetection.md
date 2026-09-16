@@ -2,7 +2,7 @@
 nodeType: Markdown
 name: Router Traffic Detection
 category: Architecture
-description: The ROUTER_TRAFFIC detector has two sites — the receiving hub, which names the two addresses, and the origin, which names the call site. Why the receiver-side line alone could not close an issue in four re-filings and 41,087 lines, what each site can and cannot see, and the seam a violating caller hops onto.
+description: The ROUTER_TRAFFIC detector has two sites — the receiving hub, which names the two addresses, and the origin, which names the call site. Why the receiver-side line alone could not close an issue in four re-filings and 41,087 lines, what each site can and cannot see, the seam a violating caller hops onto, and why the ratchet that holds that seam derives its denominator from the framework's own handler registrations instead of listing message types.
 icon: /static/NodeTypeIcons/box.svg
 ---
 
@@ -118,30 +118,97 @@ a **ratchet that may only shrink**, one per tree:
 | `src/` | `RouterAsNodeOperationOriginRatchetGuard` | `test/RouterNodeOperationOriginSites.allow` | 1 |
 | `test/` | `RouterAsTestRequestOriginRatchetGuard` | `test/RouterRequestOriginSites.allow` | 3 |
 
-The `src/` guard matches an `.Observe(…)`/`.Post(…)` whose first argument is a node-lifecycle
-request — `CreateNodeRequest`, `CreateNodesRequest`, `CreateOrUpdateNodeRequest`,
-`DeleteNodeRequest`, `MoveNodeRequest`, `CopyNodeRequest` — built inline **or** hoisted into a local
-first, and reads the receiver as an expression rather than as preceding text. Both tolerances were
-measured: over `src/` the shape occurs at 23 sites, of which a construction-anchored scan misses the
-five that are `MeshService`'s own verbs, and a literal `NodeOperationIssuingHub()` receiver test
+The `src/` guard matches an `.Observe(…)`/`.Post(…)` whose first argument is a **lifecycle message**,
+built inline **or** hoisted into a local first, and reads the receiver as an expression rather than
+as preceding text. Both tolerances were measured: a construction-anchored scan misses the five sites
+that are `MeshService`'s own verbs, and a literal `NodeOperationIssuingHub()` receiver test
 misclassifies the six that hoist the seam into a local or a cached property.
+
+#### The denominator is DERIVED, and that is the point (#4463)
+
+> 🚨 **A list of message types is the same trap one level along.** The guard's first version carried
+> a literal list of six node-CRUD names. `DisposeRequest` — a teardown, the most router-hostile
+> lifecycle message there is — was not on it, so when `MeshOperations.RecycleCore` posted one
+> straight off the DI-injected hub, **only the runtime ORIGIN detector saw it**
+> ([#4463](https://github.com/Systemorph/MeshWeaver/issues/4463), measured on `memex`
+> 2026-09-16 01:10:13Z). Adding one more name would have bought exactly one more message.
+
+So the guard now **reads its denominator out of production** instead of restating it. A message is
+lifecycle when the framework itself registers a lifecycle handler for it, and there are exactly two
+such registrations:
+
+| family | read from | today |
+|---|---|---|
+| hub lifecycle | every `Register<T>(…)` in **`MessageHub`'s constructor** — what a hub answers *because it is a hub* | `DisposeRequest`, `ShutdownRequest`, `PingRequest`, `InitializeHubRequest` |
+| node lifecycle | every `.WithHandler<T>(…)` in **`MeshExtensions.WithNodeOperationHandlers`** — what the off-router node-CRUD execution hub answers | `CreateNodeRequest`, `CreateNodesRequest`, `CreateOrUpdateNodeRequest`, `DeleteNodeRequest`, `ValidateDeleteRequest`, `MoveNodeRequest`, `CopyNodeRequest` |
+
+This is a *rule* rather than a *list* because **you cannot add a lifecycle message without passing
+through one of those two registrations** — a handler is what makes a message lifecycle in the first
+place. A marker attribute, or a name in a test, can be forgotten; a handler cannot, because without
+one the message does nothing. On its first run the derivation picked up `ValidateDeleteRequest`,
+which the hand-written list had already missed.
+
+The exclusions are sourced the same way: the derived verbs are filtered through **`RouterTrafficRule`
+itself**, the pure predicate both runtime sites evaluate, so `HeartBeatEvent` — which
+`WithNodeOperationHandlers` also registers, and which the rule calls routing's own liveness — leaves
+the denominator automatically, and a future exclusion added there is inherited rather than copied.
+Every derived name must also resolve to a real type, so a rename or a move **reddens the guard
+instead of silently shrinking what it measures**. That half is a separate test, and it fails on its
+own: when the derivation was deliberately broken in rehearsal the ratchet went *green* over 25 sites
+with `DisposeRequest` unguarded, and only the derivation test went red.
+
+**One structural exclusion: a self-directed hub-lifecycle post** — no target, or
+`o.WithTarget(thatHub.Address)` — is out of the denominator, and not because the detector is quiet
+about it. It is because **the remedy does not apply**: the seam's whole effect is to issue the
+delivery from a *different* hub, which for a self-directed teardown would send it to the wrong hub
+and change what is torn down. `NodeTypeRebindWatcher`, the stale-build convergence, the overlay
+self-heal and `LayoutAreaHost`'s own `InitializeHubRequest` are the four sites this covers. The NODE
+family is deliberately *not* excluded this way: a target-less `CreateNodeRequest` on the router is
+the literal prod 2026-06-11 wedge, and the seam does fix it by moving execution onto the
+node-operation hub's block.
+
+Over `src/` this yields **29 lifecycle post sites in the denominator**, 4 self-directed ones
+excluded, and one allowed violation (the `#981` entry below).
 
 **Adopting the seam is never a behaviour change**, which is what lets this be a rule rather than a
 judgement call: `NodeOperationIssuingHub` returns the hub unchanged unless its address type is the
 mesh type. A site already off the router is byte-for-byte unaffected; a site that is not is
 corrected.
 
-> 🚨 **What the ratchets still do not see.** They key on node-CRUD request TYPES, so the read seam
-> (`ReadIssuingHub`, which has no request type of its own) is recognised where it is used but its
-> absence is not reported — and the other message families in #1140's evidence (`ClickedEvent`,
-> `UnsubscribeRequest`, `PatchDataChangeRequest`) have no single seam to hop onto at all. For those
+> 🚨 **What the ratchets still do not see, and why #1140 is NOT closed by this.** They key on
+> messages the framework registers a LIFECYCLE handler for, so the read seam (`ReadIssuingHub`,
+> which has no request type of its own) is recognised where it is used but its absence is not
+> reported — and the other message families in
+> [#1140](https://github.com/Systemorph/MeshWeaver/issues/1140)'s evidence have no single seam to
+> hop onto at all. Measured 2026-09-16, one of them is still live in `src/`:
+> `JsonSynchronizationStream` posts `new UnsubscribeRequest(reduced.StreamId)` on its own `hub`,
+> and hopping *that* is not a no-op — it would change which hub the unsubscribe originates from,
+> which is a correlation question, not a routing one.
+>
+> #1140 is therefore the same defect **family** as #4463 and not the same **defect**. Its evidence
+> is receiver-side, where a routed payload arrives packed, so its type list is mostly the honest but
+> useless `RawJson`; its stated hypothesis (portal hubs not assigning their own address) was wrong;
+> and the bulk of its 1,386 lines was the HOP mis-keying, fixed by keying the rule on the delivery's
+> own ends. What is left of it is this residue plus whatever the origin line names next. For those
 > the origin line remains the instrument, and it is what makes a new one a five-minute question
 > instead of a month-long one.
 
 The one seeded `src/` entry is not debt: it is the #981 self-targeted inner create inside the
 `CreateOrUpdateNodeRequest` **handler**, posted on and handled by the hub whose turn loop already
 owns the upsert. A self-post is deliberately reported by neither detector site (above), so hopping
-it would move the inner create off the hub that is mid-upsert and buy nothing.
+it would move the inner create off the hub that is mid-upsert and buy nothing. It stays an explicit
+allowance rather than joining the self-directed exclusion, because that exclusion is for HUB
+lifecycle only — a target-less node CRUD post on the router is the wedge, not a benign self-post.
+
+### The two callers this rule was written from
+
+`MeshOperations.RecycleCore` (the Recycle tool / Compile button) and
+`HubRecycleExtensions.RecycleNode` (the framework's one recycle surface) both post their
+`DisposeRequest` through `hub.NodeOperationIssuingHub()`. The second had no production sighting; it
+is hopped because it is a **public extension on `IMessageHub`**, so its documented rule — "the caller
+holds a hub that outlives the target" — constrains who *should* call it, not who *can*. The seam is
+the identity function for every documented caller, so adopting it costs them nothing and removes the
+undocumented one.
 
 ## Reading a report
 
@@ -160,6 +227,11 @@ another process.
 - `RouterTrafficOnNodeCreateFromTheRootHubTest` — the create seam (`IMeshService.CreateNode` issued
   from the root hub keeps the router off both ends) plus the origin site's call-site attribution,
   each with its own positive control in the same fixture.
+- `RouterAsNodeOperationOriginRatchetGuard` — the `src/` ratchet, in two tests that fail
+  independently: one asserts no new router-issued lifecycle site, the other asserts that the
+  denominator was actually DERIVED (both families non-empty, every derived name resolving to a real
+  type, `HeartBeatEvent` dropped by `RouterTrafficRule` rather than by a literal). The second exists
+  because a broken derivation makes the first go green over an unguarded tree.
 
 ## See also
 
