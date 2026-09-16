@@ -1324,14 +1324,20 @@ public static class CatalogLayoutAreas
         if (verdict.Kind is InstallCompletenessKind.Incomplete)
         {
             // 🚨 WARNING, NOT ERROR — and the trade-off is deliberate (MeshWeaver#2387). This line
-            // describes a DETECTION followed immediately by a repair, and the repair usually works:
-            // measured on memex.meshweaver.cloud 2026-09-13, Feedback/Feedback/Source/
-            // FeedbackHandover was named here at 22:02:37Z and was present at 22:02:45Z. Logged at
-            // Error it shipped a SUCCESS to Loki, where the watcher minted an incident from it and
-            // — incident identity folding per log CATEGORY — re-opened #2387, an issue about the
-            // [DefaultInstall] summary line in this same class. The Error now sits on the OUTCOME
-            // (VerifyLanded → InstallCompleteness.DescribeLanding), where it can only fire when the
-            // repair did NOT restore the nodes, which is the fact worth waking someone for.
+            // describes a DETECTION followed immediately by a repair. Logged at Error it re-opened
+            // #2387 — an issue about the [DefaultInstall] summary line in this same class — through
+            // the watcher's per-CATEGORY incident fold, on every boot. The Error now sits on the
+            // OUTCOME (VerifyLanded → InstallCompleteness.DescribeLanding), which fires when the
+            // repair did NOT restore the nodes.
+            //
+            // 🚨 But that outcome is read right after the write, so it proves the write LANDED,
+            // never that it HELD. Measured on memex.meshweaver.cloud 2026-09-16:
+            // Feedback/Feedback/Source/FeedbackHandover was named here on ELEVEN boots at one module
+            // version — written back each time (22:02:45Z on 09-13 was the first), pruned each time
+            // by Feedback/_GitSync importing the sealed commit whose tree lacks it (#4259's two
+            // writers; that image predated #4292). A detection that REPEATS at an unchanged module
+            // version is a repair that did not hold, and on this path no line above Warning says so
+            // — Doc/Architecture/LogWatchTriage, "A REOPEN is not a recurrence".
             logger?.LogWarning(
                 "Package {Id} records module {ModuleVersion} as installed, but {Missing} of "
                 + "{Declared} declared node(s) are ABSENT from the mesh: [{Paths}]. Counted over: "
