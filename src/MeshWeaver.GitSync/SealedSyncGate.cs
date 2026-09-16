@@ -61,6 +61,34 @@ public static class SealedSyncGate
     private static FirstImportPlan Hold(string reason) => new(null, reason, reason);
 
     /// <summary>
+    /// 🚨 The PRECONDITION on every verdict below: a reading that FAILED holds everything.
+    ///
+    /// <para><see cref="Decide(RepoIdentity, string, string?, IReadOnlyList{SealedSource}, string)"/>
+    /// answers <see cref="Verdict.Go"/> when no sealed source is attributable to the repository —
+    /// correctly, because an instance that runs no publication of it is not this gate's business.
+    /// An UNREADABLE index produces the same empty list, so a total reader failure used to pass
+    /// EVERY repository: the exact inversion of the rule, with nothing red anywhere.</para>
+    ///
+    /// <para>This is deliberately NOT a parameter of <c>Decide</c>. The question is not per
+    /// repository — if the index could not be read, no per-repository answer is trustworthy — so
+    /// the caller asks ONCE per delivery, before any verdict, and holds every source when it
+    /// answers. #3461 phase 5 (dropping the flat compatibility copy) is the documented trigger:
+    /// this reader would find no sentinel at all and silently switch the whole rule off at the
+    /// moment it matters most.</para>
+    /// </summary>
+    /// <param name="outcome">What <see cref="SealedPublicationIndex.ReadingFor"/> reported.</param>
+    /// <param name="identity">This instance's framework identity — log copy only.</param>
+    /// <returns>A holding <see cref="Verdict"/>, or null when the reading is usable.</returns>
+    public static Verdict? RefusedForUnreadableIndex(SealedReadOutcome outcome, string identity)
+        => outcome is SealedReadOutcome.Unreadable
+            ? new Verdict(false,
+                $"the publication index for this instance's framework identity {identity} could "
+                + "not be READ (see the SealedPublicationIndex warning above it) — that is an "
+                + "absence of measurement, not an empty index, so every source is held rather "
+                + "than advanced. 'Cannot tell' is never 'clear to proceed' (#3461)")
+            : null;
+
+    /// <summary>
     /// Decides whether a sync source of <paramref name="repo"/> may import the green build at
     /// <paramref name="headSha"/>, given what this instance's identity has sealed.
     /// </summary>

@@ -356,7 +356,12 @@ public sealed class GitHubWebhookProcessor
                 var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
                 var publishedRoot = hub.ServiceProvider.GetService<IConfiguration>()
                     ?[ShippedPrebuiltBundles.PublishedRootConfigKey];
-                var sealedForThisIdentity = SealedPublicationIndex.ReadFor(publishedRoot, identity, logger);
+                var (sealedForThisIdentity, readOutcome) =
+                    SealedPublicationIndex.ReadingFor(publishedRoot, identity, logger);
+                // 🚨 ONE question, asked before any per-repository verdict (#3461): if the index
+                // could not be READ, its empty list is an absence of measurement and every verdict
+                // taken from it would be `Go` — the rule switched off, silently, fleet-wide.
+                var indexRefusal = SealedSyncGate.RefusedForUnreadableIndex(readOutcome, identity);
                 // 🚨 The half a hold cannot state about itself (#4063): whether the registry has
                 // sealed a NEWER line that this instance does not run. Without it "not sealed for
                 // this instance" reads the same whether the lane stopped publishing or this image
@@ -377,6 +382,14 @@ public sealed class GitHubWebhookProcessor
                         continue;
                     }
                     gateEvaluated++;
+                    if (indexRefusal is { } unreadable)
+                    {
+                        held++;
+                        heldReason ??= unreadable.HoldReason;
+                        skipped.Add($"{node.Path} ({unreadable.HoldReason})");
+                        RecordSealHold(node, cfg, unreadable.HoldReason);
+                        continue;
+                    }
                     if (SealedSyncGate.Decide(
                             repo, headSha, cfg?.LastSyncCommitSha, sealedForThisIdentity, identity, newerLine)
                         is { Proceed: false } hold)
