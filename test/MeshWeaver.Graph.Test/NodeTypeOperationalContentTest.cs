@@ -51,18 +51,92 @@ public class NodeTypeOperationalContentTest
     {
         // The authored surface — what the repo owns. If one of these ever lands in MemberNames,
         // imports would stop honouring the repo for it (silently).
-        string[] authored =
-        [
-            nameof(NodeTypeDefinition.Description), nameof(NodeTypeDefinition.Configuration),
-            nameof(NodeTypeDefinition.HubConfiguration), nameof(NodeTypeDefinition.Sources),
-            nameof(NodeTypeDefinition.Tests), nameof(NodeTypeDefinition.IncludeGlobalTypes),
-            nameof(NodeTypeDefinition.Dependencies), nameof(NodeTypeDefinition.DefaultNamespace),
-            nameof(NodeTypeDefinition.RestrictedToNamespaces), nameof(NodeTypeDefinition.CreatableTypes),
-            nameof(NodeTypeDefinition.InstanceLocations),
-        ];
-        foreach (var member in authored)
+        Assert.NotEmpty(NodeTypeMemberOwnership.Authored);
+        foreach (var member in NodeTypeMemberOwnership.Authored)
             Assert.False(NodeTypeOperationalContent.MemberNames.Contains(member),
                 $"'{member}' is authored content and must never be masked as operational.");
+    }
+
+    /// <summary>
+    /// 🚨 THE REVERSE of <see cref="EveryOperationalMember_IsARealNodeTypeDefinitionProperty"/>, and
+    /// the direction that LOSES DATA (#4480). The forward assertion sees a mask entry that is not a
+    /// property; it is structurally blind to a runtime-state PROPERTY that is not in the mask — so
+    /// export leaves that member in the repo file (and in the change token, which then moves when
+    /// only the runtime state changed) and import overwrites a measurement taken on THIS mesh with
+    /// whatever the file happens to carry. Three members had been missing for months, and the
+    /// forward assertion was green throughout.
+    /// </summary>
+    [Fact]
+    public void EveryRuntimeStateNamedProperty_IsListedAsOperational()
+    {
+        // Non-vacuity FIRST: the set is derived from a naming convention, so a rename that stops
+        // the convention matching would leave this test checking an empty set and passing.
+        Assert.Contains(nameof(NodeTypeDefinition.CompilationStatus), NodeTypeMemberOwnership.RuntimeStateNamed);
+        Assert.Contains(nameof(NodeTypeDefinition.CompiledSources), NodeTypeMemberOwnership.RuntimeStateNamed);
+        Assert.Contains(nameof(NodeTypeDefinition.LatestAssemblyPath), NodeTypeMemberOwnership.RuntimeStateNamed);
+        Assert.DoesNotContain(nameof(NodeTypeDefinition.Configuration), NodeTypeMemberOwnership.RuntimeStateNamed);
+
+        var missing = NodeTypeMemberOwnership.RuntimeStateNamed
+            .Where(name => !NodeTypeOperationalContent.MemberNames.Contains(name))
+            .Where(name => !NodeTypeMemberOwnership.MeshWrittenButUnmasked.Contains(name))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+        Assert.True(missing.Count == 0,
+            "These NodeTypeDefinition properties are named as runtime compile state but are NOT "
+            + "masked by the sync seams, so export leaks them into the repo file and into the "
+            + "change token, and import lets a file overwrite a measurement taken on this mesh: "
+            + string.Join(", ", missing)
+            + ". Add each to NodeTypeOperationalContent.MemberNames (with the reason, as the "
+            + "entries there do), or — if it must stay unmasked — to "
+            + "NodeTypeMemberOwnership.MeshWrittenButUnmasked, with the reason why dropping it on "
+            + "re-import is the point.");
+    }
+
+    /// <summary>
+    /// 🚨 The guard the naming convention CANNOT be: every serialised member of the record is
+    /// classified — repo-authored, mesh-owned-and-masked, or mesh-written-but-deliberately-unmasked
+    /// — so a new member cannot be silently missed whatever it is called. <c>DispatchedBuildInputs</c>
+    /// is why this exists and the prefix check above is not enough: it is compile-pipeline state
+    /// (the token the in-flight compile was dispatched for), it is spelled outside the convention,
+    /// and it was invisible to every guard in the file.
+    /// </summary>
+    [Fact]
+    public void EverySerializedMember_IsClassified_ExactlyOnce()
+    {
+        Assert.NotEmpty(NodeTypeMemberOwnership.SerializedProperties);
+        // The buckets are real: a spot check in each, so a bucket emptied by a refactor cannot
+        // make the partition below trivially satisfiable.
+        Assert.Contains(nameof(NodeTypeDefinition.Configuration), NodeTypeMemberOwnership.Authored);
+        Assert.True(NodeTypeOperationalContent.MemberNames.Contains(
+            nameof(NodeTypeDefinition.CompilationStatus)));
+        Assert.NotEmpty(NodeTypeMemberOwnership.MeshWrittenButUnmasked);
+
+        var unclassified = new List<string>();
+        var ambiguous = new List<string>();
+        foreach (var property in NodeTypeMemberOwnership.SerializedProperties)
+        {
+            var buckets = new List<string>();
+            if (NodeTypeOperationalContent.MemberNames.Contains(property.Name))
+                buckets.Add("operational");
+            if (NodeTypeMemberOwnership.Authored.Contains(property.Name))
+                buckets.Add("authored");
+            if (NodeTypeMemberOwnership.MeshWrittenButUnmasked.Contains(property.Name))
+                buckets.Add("mesh-written-but-unmasked");
+            if (buckets.Count == 0)
+                unclassified.Add(property.Name);
+            else if (buckets.Count > 1)
+                ambiguous.Add($"{property.Name} ({string.Join(" + ", buckets)})");
+        }
+
+        Assert.True(unclassified.Count == 0,
+            "These NodeTypeDefinition members belong to nobody: " + string.Join(", ", unclassified)
+            + ". Every serialised member is owned by the REPO (add it to "
+            + "NodeTypeMemberOwnership.Authored) or by the MESH — masked at every sync seam "
+            + "(NodeTypeOperationalContent.MemberNames) or, with a reason, deliberately unmasked "
+            + "(NodeTypeMemberOwnership.MeshWrittenButUnmasked). An unclassified member is the "
+            + "#4480 shape: nothing fails, and the seams silently do the wrong thing with it.");
+        Assert.True(ambiguous.Count == 0,
+            "These members are claimed by two owners: " + string.Join(", ", ambiguous));
     }
 
     // ── Strip (the export / token shape) ────────────────────────────────────────────────────

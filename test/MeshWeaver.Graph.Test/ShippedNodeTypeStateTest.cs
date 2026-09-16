@@ -48,7 +48,11 @@ namespace MeshWeaver.Graph.Test;
 /// <para><b>Why the check is fail-closed by NAME.</b> The banned set is derived from
 /// <see cref="NodeTypeDefinition"/> by reflection over the control plane's naming convention
 /// rather than hard-coded, so a compile-state member added later is banned the day it is added
-/// — a hand-maintained list would silently stop covering the thing it exists to cover.</para>
+/// — a hand-maintained list would silently stop covering the thing it exists to cover. 🚨 Since
+/// #4480 the convention is only ONE of the three sources the banned set unions (see
+/// <see cref="BannedMembers"/>): a runtime-written member spelled OUTSIDE it —
+/// <c>DispatchedBuildInputs</c>, <c>BuildProvenance</c>, <c>PendingRetirement</c>, the
+/// <c>Adopted*</c> family — was banned by nothing at all.</para>
 ///
 /// <para>The correct authored shape is the one <c>src/MeshWeaver.Documentation/Data/**</c>
 /// already uses: configuration, sources, description, display metadata — and nothing the
@@ -58,31 +62,30 @@ namespace MeshWeaver.Graph.Test;
 public class ShippedNodeTypeStateTest
 {
     /// <summary>
-    /// The prefixes the compile/release control plane names its state with. Every
-    /// <see cref="NodeTypeDefinition"/> member matching one is written by the runtime and must
-    /// never be authored into a file. Nothing authored starts with any of them
-    /// (<c>Configuration</c>, <c>ContentCollections</c>, <c>CreatableTypes</c> are the near
-    /// misses, and none of them match).
+    /// The banned members as they appear in JSON (camelCase) — the UNION of the three ways a member
+    /// is known to be runtime-written, because no one of them is the whole set (#4480):
+    /// <list type="bullet">
+    ///   <item>the control plane's NAMING CONVENTION
+    ///     (<see cref="NodeTypeMemberOwnership.RuntimeStatePrefixes"/>) — fail-closed by name, so a
+    ///     compile-state member added later is banned the day it is added;</item>
+    ///   <item>every member the sync seams MASK (<c>NodeTypeOperationalContent.MemberNames</c>) —
+    ///     which is wider than the convention: <c>adoptedSourceFingerprint</c>,
+    ///     <c>buildProvenance</c>, <c>requestedSourceStampAt</c> and the module-version pair are
+    ///     all mesh-owned and none of them is spelled like it;</item>
+    ///   <item>the members deliberately left UNMASKED
+    ///     (<see cref="NodeTypeMemberOwnership.MeshWrittenButUnmasked"/>) — still runtime-written,
+    ///     and the mask is not there to stop a file carrying one, so this guard is the only thing
+    ///     that does.</item>
+    /// </list>
+    /// 🚨 The prefix list lives in <see cref="NodeTypeMemberOwnership"/>, not here: it is read by
+    /// the mask's reverse guard as well, and two copies of it drifting is the same failure this
+    /// test exists to prevent, one layer up.
     /// </summary>
-    private static readonly string[] RuntimeStatePrefixes =
-    [
-        "Compilation",       // Status, Error, Diagnostics
-        "Compiled",          // Sources, FrameworkVersion, ModulesHash, Dependencies
-        "LastCompil",        // LastCompileStartedAt/SucceededAt, LastCompiledVersion, LastCompilationActivityPath
-        "LastRelease",       // LastReleaseRequestHandledAt
-        "LatestAssembly",    // Collection, Path
-        "LatestRelease",     // LatestReleasePath
-        "RequestedRelease",  // Path, At, Force, By
-        "CurrentSource",     // CurrentSourceVersions
-        "Failed",            // FailedBuildInputs (#1793) — the standing failure verdict's inputs
-    ];
-
-    /// <summary>The banned members as they appear in JSON (camelCase), derived from the type.</summary>
     private static readonly IReadOnlySet<string> BannedMembers =
-        typeof(NodeTypeDefinition).GetProperties()
-            .Select(p => p.Name)
-            .Where(name => RuntimeStatePrefixes.Any(p => name.StartsWith(p, StringComparison.Ordinal)))
-            .Select(JsonNamingPolicy.CamelCase.ConvertName)
+        NodeTypeMemberOwnership.RuntimeStateNamed
+            .Concat(NodeTypeMemberOwnership.MeshWrittenButUnmasked)
+            .Select(NodeTypeMemberOwnership.CamelCase)
+            .Concat(Mesh.NodeTypeOperationalContent.MemberNames)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>🚨 THE #1786 INVARIANT. Fails on the tree as it shipped before the fix.</summary>
@@ -130,6 +133,15 @@ public class ShippedNodeTypeStateTest
         // #1793: an authored token matching this deployment's live inputs would suppress the one
         // automatic retry a never-compiled failure gets — the exact shape this guard exists for.
         Assert.Contains("failedBuildInputs", BannedMembers);
+        // #4480: the three sources the set unions, one spot check each beyond the convention.
+        // A member the sync seams mask but the convention does not name — an authored value here
+        // forges the very claim the field exists to expose.
+        Assert.Contains("adoptedSourceFingerprint", BannedMembers);
+        // Runtime-written and deliberately UNMASKED, so this guard is the only thing stopping a
+        // file from authoring it — and the bake gate reads it as "do not hold the rollout".
+        Assert.Contains("pendingRetirement", BannedMembers);
+        // Compile-pipeline state spelled outside the convention (#2544).
+        Assert.Contains("dispatchedBuildInputs", BannedMembers);
 
         // Authored members must NOT be swept up — the guard has to leave real content alone.
         Assert.DoesNotContain("configuration", BannedMembers);
