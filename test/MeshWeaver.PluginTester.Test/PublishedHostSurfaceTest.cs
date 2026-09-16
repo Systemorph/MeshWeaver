@@ -41,19 +41,20 @@ public sealed class PublishedHostSurfaceTest : IDisposable
     }
 
     [Fact]
-    public void TheApplicationClosureWinsOverASeededCopy()
+    public void TheSeededEntryWinsOverTheAppCopy_ExactlyLikeTheRuntimeResolver()
     {
         var root = Emit(app, "MeshWeaver.Shared", "CurrentType");
-        Emit(Path.Combine(app, "modules", "MeshWeaver.Shared"), "MeshWeaver.Shared", "OldType");
+        var seed = Emit(Path.Combine(app, "modules", "MeshWeaver.Shared"), "MeshWeaver.Shared", "SeedType");
+        Assert.Equal(seed, MeshBuilder.ResolveModulePath("MeshWeaver.Shared.dll", app));
         var surface = PublishedHostSurface.Read(app, [root]);
-        Assert.Contains("CurrentType", surface.TypesOf("MeshWeaver.Shared")!);
-        Assert.DoesNotContain("OldType", surface.TypesOf("MeshWeaver.Shared")!);
+        Assert.Contains("SeedType", surface.TypesOf("MeshWeaver.Shared")!);
+        Assert.DoesNotContain("CurrentType", surface.TypesOf("MeshWeaver.Shared")!);
     }
 
     [Fact]
     public void UnreadableSeededAssemblyIsAnError_NotAnOmission()
     {
-        var root = Emit(app, "MeshWeaver.PortalOnly", "PortalType");
+        var root = Emit(app, "MeshWeaver.Broken", "PortalType");
         var directory = Path.Combine(app, "modules", "MeshWeaver.Broken");
         Directory.CreateDirectory(directory);
         File.WriteAllText(Path.Combine(directory, "MeshWeaver.Broken.dll"), "not an assembly");

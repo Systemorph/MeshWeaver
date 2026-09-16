@@ -356,10 +356,14 @@ names it exports, exactly the set `TypesOf` answers on a running process.
 gate read a 111-assembly tester surface from `meshweaver-content` although the portal publication
 carried 531 assemblies under the same identity. It therefore reported Blazor as absent. Core CD
 now replaces the tester's surface with a measurement of the exact promoted portal image, after
-verifying its identity and before publishing the seal. Directory-host measurements also include
+verifying its identity and before publishing the seal. The reader prefers that canonical core
+publication over a satellite's host description, regardless of source-name sort order. The
+`platform-surface` command's directory-host measurements include
 image-seeded module entries through `PlatformShippedAssemblies`, using the runtime's
 `modules/<name>/<name>.dll` witness. Private siblings are not promoted into the shared surface,
 and an unreadable seeded entry fails publication rather than disappearing from the measurement.
+Seeded entries precede same-named app-root copies, matching the module path resolver. Ordinary
+`--module` bake composition and its existing duplicate-producer checks are unchanged.
 
 The serialized shape is:
 

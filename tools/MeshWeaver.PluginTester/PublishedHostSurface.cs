@@ -14,13 +14,16 @@ internal static class PublishedHostSurface
 
         // Reuse the loader's shipped-assembly witness. A private DLL riding beside an entry is
         // NOT another module's probe location; only <modules>/<name>/<name>.dll belongs here.
-        // The app/framework closure wins duplicate names, as it does in the runtime binder.
-        var seeded = shipped.Values
-            .Where(assembly => assembly.How == PlatformShipping.SeededModule)
-            .OrderBy(assembly => assembly.Name, StringComparer.Ordinal)
+        // The witness classifies ownership (root before seed); resolve the entry paths with
+        // MeshBuilder.ResolveModulePath's image-before-app order, including double-shipped names.
+        var seeded = shipped.Keys
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .Select(name => new PlatformShippedAssembly(name, PlatformShipping.SeededModule,
+                Path.Combine(appDirectory, PlatformShippedAssemblies.SeededModulesFolder, name, name + ".dll")))
+            .Where(assembly => File.Exists(assembly.Evidence))
             .ToArray();
         var surface = ModulePlatformSurface.OfFiles(
-            platformFiles.Concat(seeded.Select(assembly => assembly.Evidence)));
+            seeded.Select(assembly => assembly.Evidence).Concat(platformFiles));
         foreach (var assembly in seeded)
             if (surface.TypesOf(assembly.Name) is null)
                 throw new InvalidDataException(
