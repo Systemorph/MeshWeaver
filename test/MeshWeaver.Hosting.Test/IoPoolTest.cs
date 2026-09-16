@@ -917,6 +917,82 @@ public class IoPoolTest
             + "Drain joins or reports");
     }
 
+    /// <summary>
+    /// 🚨 A SUBSCRIBE THAT LANDS ON AN ALREADY-CANCELLED POOL ISSUES NOTHING — issue #4524.
+    ///
+    /// <para><c>CancellationToken.Register</c> on a token that is ALREADY CANCELLED runs the callback
+    /// SYNCHRONOUSLY on the registering thread, and the callback
+    /// <see cref="IoPool.SubscribeThroughPool{T}"/> registers is that subscription's whole downstream
+    /// teardown. So a subscribe that reaches the registration after the cancel has landed runs
+    /// teardown on WHOEVER SUBSCRIBED — a hub action block or a grain turn — which is the one thing
+    /// the dedicated canceller thread exists to prevent (#2394). The window is real on both teardown
+    /// paths: <see cref="IoPool.Drain"/> never sets <c>_disposing</c>, so admission stays open
+    /// throughout it, and <see cref="IoPool.Dispose"/> runs no grace at all.</para>
+    ///
+    /// <para><b>The fix is an ORDER, so this test pins the one thing the order makes visible.</b> The
+    /// registration is established BEFORE the setup leaf is issued, so an inline run can only ever
+    /// find an unassigned <c>inner</c> and a <c>source</c> that was never subscribed — a refusal, not
+    /// a live pipeline's teardown. The outward sign is that NO leaf is issued: if the registration did
+    /// not precede the leaf, the leaf would already have been issued by the time it fired. A check of
+    /// <c>IsCancellationRequested</c> before registering could not have produced this, because the
+    /// cancel can land between the check and the Register — which is exactly why the order is the
+    /// fix.</para>
+    ///
+    /// <para>Deterministic with no widened window: every entry point on this pool is a COLD
+    /// observable, so building one while the pool is alive and subscribing it after
+    /// <see cref="IoPool.Drain"/> reaches the registration with the token already cancelled — on the
+    /// caller's own thread, by construction. <c>Drain</c>, not <c>Dispose</c>: Dispose publishes
+    /// <c>_disposing</c>, which makes <c>TryEnterGateRegion</c> refuse before the registration is ever
+    /// reached, so that path would test nothing here.</para>
+    /// </summary>
+    /// <remarks>
+    /// A plain <c>[Fact]</c> deliberately: this case is bounded by its own <c>Timeout5</c> wait and
+    /// runs in well under a second, so <c>test/xunit.runner.json</c>'s <c>methodTimeout</c> is the
+    /// outer bound. Writing <c>Timeout = 30_000</c> here would add a hand-written literal to a tree
+    /// whose count may only go down (<c>TestTimeoutLiteralRatchetGuard</c>) and buy nothing.
+    /// </remarks>
+    [Fact]
+    public async Task ASubscribeThatLandsOnAnAlreadyCancelledPool_IssuesNoLeaf()
+    {
+        using var pool = new IoPool(2);
+        var sourceSubscribed = 0;
+        var source = Observable.Create<int>(_ =>
+        {
+            Interlocked.Increment(ref sourceSubscribed);
+            return System.Reactive.Disposables.Disposable.Empty;
+        });
+
+        // BUILT while the pool is alive — so this is the pooled path and not the front door's
+        // `_draining` refusal — and SUBSCRIBED after the pool is gone.
+        var pooled = pool.SubscribeThroughPool(source);
+
+        pool.Drain().Should().Be(0, "an idle pool drains clean — the subject here is what comes after");
+
+        var terminated = new AsyncSubject<Unit>();
+        using var sub = pooled
+            .Finally(() =>
+            {
+                terminated.OnNext(Unit.Default);
+                terminated.OnCompleted();
+            })
+            .Subscribe(_ => { }, _ => { });
+
+        // Asserted FIRST: a subscription that issues no work must still TERMINATE, or the counter
+        // below would pass for a pool that simply swallowed the subscribe (#1789's leak shape).
+        await terminated.Should().Within(Timeout5).Emit(
+            "a subscribe that lands on a cancelled pool must terminate the observer, so every "
+            + ".Finally hung off it still runs",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        pool.PooledSubscribeSetupsIssued.Should().Be(0,
+            "the drain registration must be in place BEFORE the setup leaf is issued — it fired on "
+            + "this thread during Register(), and the only reason that is a refusal instead of a live "
+            + "subscription's teardown is that there was nothing to tear down yet (#4524)");
+        Volatile.Read(ref sourceSubscribed).Should().Be(0,
+            "and nothing was opened: no provider subscribe, no hub created, for a subscription that "
+            + "was over before it started");
+    }
+
     [Fact]
     public async Task Unbounded_fallback_runs_the_leaf_on_the_threadpool()
     {

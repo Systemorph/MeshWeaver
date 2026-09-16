@@ -802,6 +802,73 @@ teardown, not evidence of parallel load. The test's own precondition also passed
 ThreadPool leg out directly: `source.HasObservers` is only true once `source.Subscribe(observer)` has
 run, so the subscribe had already landed before `Dispose()` was called.
 
+### 🚨 The registration is established BEFORE the subscription it tears down
+
+Moving the *cancel* off the caller (#2394, above) closes the path where `Cancel()` is **called**. It
+does not close the path where a callback runs because it was **registered late** — and that path is
+the same defect one layer over: `CancellationToken.Register` on a token that is **already cancelled**
+invokes the callback **synchronously on the registering thread**. The callback
+`SubscribeThroughPool` registers is not bookkeeping; it is that subscription's whole downstream
+teardown (`inner.Dispose()` then `observer.OnCompleted()`). So a subscribe that reached the
+registration after the cancel had landed ran teardown on **whoever was subscribing** — a hub action
+block or a grain turn, where arbitrary teardown is unbounded by construction (#4524).
+
+Nothing kept a subscribe out of that state. The front door's `_draining` check is read when the
+**cold** observable is BUILT, and `TryEnterGateRegion` refuses only on `_disposing` — so a caller
+already inside the region when the canceller cancels reached the registration either way:
+
+| teardown path | why a subscribe can still be inside the region when the cancel lands |
+|---|---|
+| **`Dispose()`** — the reachable one | It runs **no grace**: it publishes `_disposing`, requests the cancel and returns. `TryEnterGateRegion` turns away callers who have not yet entered; one already inside is not affected by it. |
+| **`Drain()`** — the narrow one | Its grace is progress-based on `_gateUsers`, and this subscribe **holds a region**, so a drain WAITS for an in-flight subscribe — up to one grace. That is a bound, not a guarantee: a subscribe descheduled past the grace is cancelled and then registers late. |
+
+That asymmetry is worth stating because it decides how the defect is reproduced: the first attempt
+aimed the widened window at `Drain()` and **passed**, for exactly the reason in the second row.
+
+#### The fix is an ORDER, and the order is the whole of it
+
+**The registration is now made before the setup leaf is issued.** An inline run can then only ever
+find `inner` unassigned and `source` never subscribed — which makes what reaches the subscriber's
+thread a **refusal**: the same kind of answer the front door's `_draining` check and the
+`TryEnterGateRegion` arm already deliver there, and the one thing a cold observable cannot avoid
+delivering on its subscriber. Never a live pipeline's teardown. (The terminal stays `OnCompleted`
+rather than the front door's `OperationCanceledException` — a drain is expected teardown, and it is
+what this window already delivered.) Every teardown of a subscription that
+actually *started* is still run by the canceller, because the registration that runs it was in place
+before the subscription was. When the callback has already fired by the time `Register` returns, the
+subscribe returns `Disposable.Empty` without issuing the leaf at all: the observer has its terminal,
+and opening providers / creating hubs for a subscription that is already over is the same thing the
+leaf's own `ct.ThrowIfCancellationRequested()` refuses one level down.
+
+🚨 **A `_poolCts.IsCancellationRequested` check before registering is NOT this fix** — it is a
+narrower window wearing a fix's clothes, because the cancel lands between the check and the
+`Register`. Nor is closing `Drain()`'s admission the way `Dispose()` does (the issue's other
+candidate): a caller *already admitted* still reaches the registration, so that changes `Drain()`'s
+grace reasoning without closing anything.
+
+#### What the widened window proves
+
+| widener (6 s, in place — the subscriber parked between the setup leaf and the registration) | before | after |
+|---|---|---|
+| a live pooled subscription, `Dispose()` while the subscriber is parked | **FAILS**: `Did not expect value to be 16` — thread 16 *is* the subscriber, and it ran the live source's disposal | **PASSES** — the disposal runs on `IoPool-cancel` |
+
+And the ordering itself is pinned without any widener, because the fix has exactly one outward sign:
+`IoPoolTest.ASubscribeThatLandsOnAnAlreadyCancelledPool_IssuesNoLeaf` builds a pooled observable
+while the pool is alive, drains the pool, and subscribes — which reaches the registration with the
+token already cancelled, on the caller's own thread, by construction. If the registration did not
+precede the leaf, the leaf would already have been issued when it fired, so
+`PooledSubscribeSetupsIssued` is the assertion. Restoring the original order with that counter in
+place reds it (`Expected value to be 0 … but found 1`), which is what makes it a test rather than a
+green line. It uses `Drain()` and not `Dispose()` deliberately: Dispose publishes `_disposing`, which
+makes `TryEnterGateRegion` refuse before the registration is ever reached.
+
+**Scope.** `SubscribeThroughPool` is the only entry point that registers a callback on `_poolCts`.
+`Invoke` / `InvokeStream` / `InvokeBlocking` reach the token through
+`CancellationTokenSource.CreateLinkedTokenSource`, whose own registration runs framework bookkeeping
+(it cancels the linked source) rather than application teardown, and does so on the pool thread
+running the leaf — not on the subscriber.
+
+
 ---
 
 ## Applied to (current scope)
