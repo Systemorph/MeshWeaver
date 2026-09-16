@@ -247,10 +247,13 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     public IReadOnlyDictionary<string, string> Retired => retired;
 
     /// <summary>
-    /// Types that failed with NO working build to regress from — a type that was already broken on
-    /// the way in, or any failure during the FIRST bake of an instance that has never built
-    /// anything (<c>DynamicTypePreWarmer.RegressionBaseline</c> empties the baseline there, because
-    /// no previous image is serving and refusing readiness would protect nobody).
+    /// Types that failed with NO working build to regress from — either of two independent facts:
+    /// the type was already broken on the way in
+    /// (<see cref="PreWarmOutcome.WasHealthyBeforeBake"/> is <c>false</c>), or this instance has
+    /// never built anything, so any failure during that FIRST bake lands here
+    /// (<see cref="PreWarmOutcome.HasRegressionBaseline"/> is <c>false</c>, from
+    /// <c>DynamicTypePreWarmer.IsFirstBake</c> — no previous image is serving, so refusing readiness
+    /// would protect nobody).
     ///
     /// <para>Holds exactly what WOULD have gated had there been something to regress from: the
     /// no-baseline question is asked after the timeout, content and retirement classifications, so

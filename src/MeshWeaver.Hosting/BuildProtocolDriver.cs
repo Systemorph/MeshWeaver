@@ -766,21 +766,26 @@ public static class BuildProtocolDriver
     /// <see cref="IsGatingFailure"/> — because a probe is not a compile and this process has no
     /// verdict about that type, which is different from a verdict against it.
     /// </summary>
-    private static IEnumerable<PreWarmOutcome> OutcomesOf(
+    /// <remarks>
+    /// 🚨 <c>internal</c> rather than <c>private</c> so the STAMP itself is testable. Both gating
+    /// fields are set here, and a test that hand-builds a <see cref="PreWarmOutcome"/> cannot tell
+    /// whether this projection still sets them — both default to the strict value, so deleting an
+    /// assignment here reverts the first-bake leniency while every such test stays green. That is
+    /// the shape #4496 arrived by, one field earlier.
+    /// </remarks>
+    internal static IEnumerable<PreWarmOutcome> OutcomesOf(
         NodeTypeBakeReport fresh, string bakedDetail, string pendingDetail)
     {
-        // Both halves of the gating question, off the SAME report the pre-warmer reads — this
-        // projection used to carry only the per-entry fact, so an outcome minted here disagreed
-        // with one minted by the sweep about a never-built type (#4496).
-        var hasBaseline = !DynamicTypePreWarmer.IsFirstBake(fresh);
-        return fresh.Entries.Select(e => new PreWarmOutcome(
+        // Both gating facts, off the SAME report and through the SAME projection the sweep uses.
+        // This used to derive WasHealthyBeforeBake itself, straight off the entry, while the sweep
+        // derived it from a set — two copies of one rule, which is how they came to disagree about
+        // a never-built type (#4496). Deriving it here again, however faithfully, would rebuild the
+        // fork; the stamp is shared on purpose.
+        var stampBaseline = DynamicTypePreWarmer.BaselineStamp(fresh);
+        return fresh.Entries.Select(e => stampBaseline(new PreWarmOutcome(
             e.TypePath,
             e.NeedsBake ? PreWarmStatus.TimedOut : PreWarmStatus.AlreadyBaked,
-            e.NeedsBake ? pendingDetail : bakedDetail)
-        {
-            WasHealthyBeforeBake = e.WasHealthy,
-            HasRegressionBaseline = hasBaseline,
-        });
+            e.NeedsBake ? pendingDetail : bakedDetail)));
     }
 
     // ── shared ──────────────────────────────────────────────────────────────────────────────────

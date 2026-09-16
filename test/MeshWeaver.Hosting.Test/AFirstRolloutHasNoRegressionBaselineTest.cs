@@ -219,6 +219,66 @@ public class AFirstRolloutHasNoRegressionBaselineTest(ITestOutputHelper output) 
     }
 
     [Fact(Timeout = 60000)]
+    public void TheStampItself_MarksAFirstBakeHealthyAndUnprotected()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        // 🚨 The PRODUCTION stamp, not a hand-built outcome. Every test above supplies the two
+        // fields itself, so none of them can tell whether the sweep still writes them — both
+        // default to the strict value, so a deleted assignment reverts first-bake leniency with
+        // every such test still green. That is exactly how #4496 arrived, one field earlier.
+        var firstBake = Report(("GoogleMaps/Gallery", BakeState.NeverBuilt), ("MyAi/Panel", BakeState.NeverBuilt));
+        var stamped = DynamicTypePreWarmer.BaselineStamp(firstBake)(
+            new PreWarmOutcome("GoogleMaps/Gallery", PreWarmStatus.CompileError, "CS0246"));
+
+        stamped.WasHealthyBeforeBake.Should().BeTrue("a never-built type is not damaged goods");
+        stamped.HasRegressionBaseline.Should().BeFalse("nothing has ever been built on this instance");
+
+        // The control: one baked type and the SAME outcome is fully strict again.
+        var established = Report(("GoogleMaps/Gallery", BakeState.Baked), ("MyAi/Panel", BakeState.NeverBuilt));
+        var strict = DynamicTypePreWarmer.BaselineStamp(established)(
+            new PreWarmOutcome("GoogleMaps/Gallery", PreWarmStatus.CompileError, "CS0246"));
+
+        strict.WasHealthyBeforeBake.Should().BeTrue();
+        strict.HasRegressionBaseline.Should().BeTrue("this instance has a previous build to regress from");
+
+        // And a type that really was broken on the way in keeps the other fact false.
+        var broken = Report(("Crm/Contact", BakeState.Baked), ("Kmu/Abandoned", BakeState.PreviouslyBroken));
+        DynamicTypePreWarmer.BaselineStamp(broken)(
+                new PreWarmOutcome("Kmu/Abandoned", PreWarmStatus.CompileError, "CS0246"))
+            .WasHealthyBeforeBake.Should().BeFalse();
+    }
+
+    [Fact(Timeout = 60000)]
+    public void TheGosOwnProjection_UsesTheSameStamp()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        // The OTHER production stamper. BuildProtocolDriver.OutcomesOf mints outcomes for the same
+        // gate off the same report, and it deriving the facts its own way is what diverged in
+        // #4496 — so it is asserted here against the same first-bake report, by the same rule.
+        var firstBake = Report(("GoogleMaps/Gallery", BakeState.NeverBuilt), ("MyAi/Panel", BakeState.NeverBuilt));
+
+        var outcomes = BuildProtocolDriver
+            .OutcomesOf(firstBake, bakedDetail: "on the share", pendingDetail: "still pending")
+            .ToList();
+
+        outcomes.Should().HaveCount(2);
+        outcomes.Should().OnlyContain(o => o.WasHealthyBeforeBake,
+            "a never-built type is not damaged goods, whichever projection minted the outcome");
+        outcomes.Should().OnlyContain(o => !o.HasRegressionBaseline,
+            "and neither projection may claim a baseline this instance does not have");
+
+        // Control: an established report, same projection, full strictness.
+        var established = Report(("Crm/Contact", BakeState.Baked), ("Kmu/Abandoned", BakeState.PreviouslyBroken));
+        var strict = BuildProtocolDriver
+            .OutcomesOf(established, bakedDetail: "on the share", pendingDetail: "still pending")
+            .ToList();
+
+        strict.Should().OnlyContain(o => o.HasRegressionBaseline);
+        strict.Single(o => o.TypePath == "Kmu/Abandoned").WasHealthyBeforeBake.Should().BeFalse();
+        strict.Single(o => o.TypePath == "Crm/Contact").WasHealthyBeforeBake.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 60000)]
     public void OnAFirstBake_TheGoAndTheGateReachTheSameVerdict()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();

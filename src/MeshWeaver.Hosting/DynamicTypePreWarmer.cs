@@ -859,6 +859,34 @@ public static class DynamicTypePreWarmer
             .Select(e => e.TypePath)
             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// 🚨 <b>THE stamp — the ONLY place either gating fact is written onto an outcome.</b> Reads a
+    /// report once and returns the projection that sets both
+    /// <see cref="PreWarmOutcome.WasHealthyBeforeBake"/> and
+    /// <see cref="PreWarmOutcome.HasRegressionBaseline"/>.
+    ///
+    /// <para>It exists because the alternative has already failed once. The sweep and
+    /// <c>BuildProtocolDriver.OutcomesOf</c> both mint outcomes for the same gate, and each used to
+    /// derive the fields its own way — one from a set, one from the entry. #4472 changed one of
+    /// those derivations and the two silently disagreed about a never-built type for the whole of
+    /// #4496: the GO held where the gate did not, with nothing red, because a duplicated rule does
+    /// not announce that its copies have diverged.</para>
+    ///
+    /// <para>So there is one derivation and two call sites, not two derivations. Both facts come
+    /// off the SAME report, computed once per sweep rather than per outcome.</para>
+    /// </summary>
+    /// <param name="report">The bake report read before anything is rebuilt.</param>
+    public static Func<PreWarmOutcome, PreWarmOutcome> BaselineStamp(NodeTypeBakeReport report)
+    {
+        var healthyBefore = RegressionBaseline(report);
+        var hasBaseline = !IsFirstBake(report);
+        return outcome => outcome with
+        {
+            WasHealthyBeforeBake = healthyBefore.Contains(outcome.TypePath),
+            HasRegressionBaseline = hasBaseline,
+        };
+    }
+
     private static IObservable<PreWarmOutcome> WarmPending(
         IMessageHub mesh,
         IWorkspace workspace,
@@ -883,13 +911,10 @@ public static class DynamicTypePreWarmer
         // The regression baseline, captured BEFORE anything is rebuilt: which types were working on
         // the way in. A type missing from this set was already broken, so its failure is pre-existing
         // damage rather than something this image caused — see PreWarmOutcome.WasHealthyBeforeBake.
-        var healthyBefore = RegressionBaseline(report);
-
-        // …and, separately, whether there is anything here to protect at all. Stamped per outcome
-        // rather than folded into the set above: a never-built type is healthy AND unprotectable,
-        // and a single field cannot say both (#4496).
-        var hasBaseline = !IsFirstBake(report);
-        if (!hasBaseline)
+        // ONE stamp, shared with BuildProtocolDriver.OutcomesOf so the two cannot derive the
+        // gating facts differently — see BaselineStamp for why that is not a hypothetical.
+        var stampBaseline = BaselineStamp(report);
+        if (IsFirstBake(report))
             logger?.LogWarning(
                 "DynamicTypePreWarmer: FIRST BAKE — all {Count} NodeType(s) are NeverBuilt on this "
                 + "instance, so there is no previous image to protect. A compile failure is reported "
@@ -1118,11 +1143,7 @@ public static class DynamicTypePreWarmer
                 // tell a NEW failure from one that was already broken on the way in, without having
                 // to re-read the report — and, beside it, whether this instance has any previous
                 // build to regress FROM.
-                .Select(o => o with
-                {
-                    WasHealthyBeforeBake = healthyBefore.Contains(o.TypePath),
-                    HasRegressionBaseline = hasBaseline,
-                });
+                .Select(stampBaseline);
 
         if (order.Count == 0)
             return Observable.Empty<PreWarmOutcome>();
