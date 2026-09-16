@@ -15,6 +15,14 @@
          reason as above: a guard that restates a key instead of referencing it goes green through
          the rename it exists to catch. -->
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
+    <!-- RouterAsNodeOperationOriginRatchetGuard DERIVES its denominator from these two assemblies'
+         own lifecycle registrations (MessageHub's constructor; MeshExtensions.WithNodeOperationHandlers)
+         and filters it through RouterTrafficRule, the same predicate the runtime detector evaluates.
+         Both arrive transitively already; naming them is the point — the guard resolves every derived
+         name to a real Type, so a rename must red the guard rather than shrink what it measures, and
+         that only holds while these references cannot quietly go away. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
   </ItemGroup>
 
   <ItemGroup>

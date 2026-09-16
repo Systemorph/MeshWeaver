@@ -25,7 +25,9 @@ public class DefaultNodeNavigationTest
     private static MeshNode Node(string path, string? name = null, int? order = null)
     {
         var i = path.LastIndexOf('/');
-        return new MeshNode(path[(i + 1)..], path[..i]) { Name = name ?? path[(i + 1)..], Order = order };
+        var id = i < 0 ? path : path[(i + 1)..];
+        var ns = i < 0 ? "" : path[..i];
+        return new MeshNode(id, ns) { Name = name ?? id, Order = order };
     }
 
     /// <summary>The Inference tree: the root, three sub-pages, one of them with a sub-page of its own.</summary>
@@ -41,13 +43,55 @@ public class DefaultNodeNavigationTest
     ];
 
     [Fact]
-    public void TheIndexRootIsTheSecondSegment()
+    public void TheIndexRootIsTheSpace()
     {
-        DefaultNodeNavigation.IndexRoot("Infrastructure/Inference/Consumption").Should().Be(Root);
-        DefaultNodeNavigation.IndexRoot("Infrastructure/Inference/HardwareOptions/Gpus").Should().Be(Root);
-        DefaultNodeNavigation.IndexRoot(Root).Should().Be(Root, "a page one level below the partition is its own root");
+        DefaultNodeNavigation.IndexRoot("Infrastructure/Inference/Consumption").Should().Be("Infrastructure");
+        DefaultNodeNavigation.IndexRoot("Infrastructure/Inference/HardwareOptions/Gpus").Should().Be("Infrastructure");
+        DefaultNodeNavigation.IndexRoot("Infrastructure/Options").Should().Be("Infrastructure",
+            "a page directly under the space is a chapter of the space's document, not a document of its own (2026-09-15)");
         DefaultNodeNavigation.IndexRoot("Infrastructure").Should().Be("Infrastructure",
-            "a partition root has nothing above it to index from");
+            "the space's own root page shows the same index");
+    }
+
+    /// <summary>The Infrastructure space: chapters at the top, one of them with sub-pages.</summary>
+    private static IReadOnlyCollection<MeshNode> Space() =>
+    [
+        Node("Infrastructure", "Infrastructure"),
+        Node("Infrastructure/Options", "Options & Decisions", 1),
+        Node("Infrastructure/Inference", "AI Inference", 2),
+        Node("Infrastructure/Inference/Inceptron", "Inceptron"),
+        Node("Infrastructure/Inference/Consumption", "Consumption"),
+        Node("Infrastructure/Platform", "Platform", 3),
+        Node("Infrastructure/Platform/Providers", "Providers"),
+    ];
+
+    [Fact]
+    public void APageDirectlyUnderTheSpaceShowsTheSpaceIndexWithItselfMarked()
+    {
+        var nav = DefaultNodeNavigation.Build("Infrastructure", Space(), "Infrastructure/Options")!;
+
+        nav.Title.Should().Be("Infrastructure");
+        nav.TitlePath.Should().Be("Infrastructure");
+        nav.Entries.Select(e => e.Path).Should().Equal(
+            "Infrastructure/Options", "Infrastructure/Inference", "Infrastructure/Platform");
+        nav.Entries.Single(e => e.Path == "Infrastructure/Options").IsCurrent.Should().BeTrue();
+        nav.Entries.Where(e => e.Path != "Infrastructure/Options").Should().OnlyContain(e => !e.IsCurrent);
+        nav.Entries.Single(e => e.Path == "Infrastructure/Inference").Children.Should().HaveCount(2,
+            "a chapter's sub-pages travel with the index; whether the group is open is the rail's decision (SuppliedNavigationRail.Plan)");
+    }
+
+    [Fact]
+    public void ADeepPageShowsTheSpaceIndexWithItsChapterOpenAndItselfMarked()
+    {
+        var nav = DefaultNodeNavigation.Build("Infrastructure", Space(), "Infrastructure/Inference/Inceptron")!;
+
+        var inference = nav.Entries.Single(e => e.Path == "Infrastructure/Inference");
+        inference.IsCurrent.Should().BeFalse("the reader is on a page inside the chapter, not on the chapter");
+        inference.Children.Select(c => c.Path).Should().Equal(
+            "Infrastructure/Inference/Consumption", "Infrastructure/Inference/Inceptron");
+        inference.Children.Single(c => c.Path == "Infrastructure/Inference/Inceptron").IsCurrent.Should().BeTrue();
+        nav.Entries.Single(e => e.Path == "Infrastructure/Options").IsCurrent.Should().BeFalse();
+        nav.Entries.Single(e => e.Path == "Infrastructure/Platform").Children.Should().ContainSingle(c => c.Path == "Infrastructure/Platform/Providers");
     }
 
     [Fact]

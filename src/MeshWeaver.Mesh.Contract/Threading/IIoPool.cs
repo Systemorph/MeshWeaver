@@ -120,4 +120,31 @@ public interface IIoPool
 
     /// <summary>Operations currently in flight through this pool. Diagnostics / tests only.</summary>
     int CurrentInFlight { get; }
+
+    /// <summary>
+    /// How long granted work WAITED for a slot on this pool, as a distribution.
+    ///
+    /// <para>The companion to <see cref="CurrentInFlight"/>, and the one that answers a different
+    /// question: in-flight says how much is running NOW, this says what it COST to get there. A
+    /// cap is too small when the tail buckets fill, not when the mean rises — see
+    /// <see cref="IoPoolWaitStats"/> for why that distinction is the whole point (MeshWeaver#1198).</para>
+    ///
+    /// <para>Defaulted to <see cref="IoPoolWaitStats.Empty"/> so an implementation that does not
+    /// instrument is not obliged to — an empty reading is honest ("this pool reports nothing"),
+    /// and the caller can tell it from a busy pool by <see cref="IoPoolWaitStats.Samples"/>.</para>
+    /// </summary>
+    IoPoolWaitStats QueueWait => IoPoolWaitStats.Empty;
+
+    /// <summary>
+    /// Work that has REACHED an admission point and is queued for a slot right now — the live
+    /// gauge to <see cref="QueueWait"/>'s history, and the other half of the picture
+    /// <see cref="CurrentInFlight"/> starts: running, waiting, and what the waiting has cost.
+    ///
+    /// <para>Counted from the moment a leaf arrives at the gate (or, for blocking work, is handed
+    /// to the scheduler) until it is granted or cancelled — so a depth that stays high while
+    /// <see cref="CurrentInFlight"/> sits at the cap is a pool whose cap is the constraint.</para>
+    ///
+    /// <para>Defaulted to 0 so an implementation that does not instrument is not obliged to.</para>
+    /// </summary>
+    int CurrentlyWaiting => 0;
 }

@@ -724,13 +724,14 @@ the module-relative path PRESERVED. It could not be either of the other two: eve
 rather than laid out; and `meshweaver/moduleassets/` means static WEB assets, where conflating a
 loadable binary with a served file would make every future rule about one apply to the other.
 
-Three things are still DROPPED, and each is now NAMED rather than silent:
+Three things are still not carried BY DERIVATION. The two that something loads now **refuse the
+pack** unless something the caller named carries them (#4367 — see *Warning → REFUSAL* below):
 
 | declaration | what happens | why |
 |---|---|---|
 | `assetType: "native"` at `runtimes/<rid>/native/<file>` | **carried** | the exact layout `ModuleNativeAssets` probes |
-| `assetType: "native"` at any other shape | warned | bytes at a path nothing looks at read as shipped and behave as absent |
-| `assetType: "runtime"` (a RID-specific MANAGED assembly) | warned | the flat closure has one slot per assembly name and no way to choose a RID at pack time |
+| `assetType: "native"` at any other shape | **refused** unless `--with-native runtimes/<rid>/native/<file>` or `--with <file>` carries it | bytes at a path nothing looks at read as shipped and behave as absent |
+| `assetType: "runtime"` (a RID-specific MANAGED assembly) | **refused** unless `--with <file>` names the copy that takes the slot | the flat closure has one slot per assembly name and no way to choose a RID at pack time |
 | `.a` / `.lib` | excluded silently | link-time inputs, never loaded — the same exclusion the in-image lane applies |
 
 🚨 **"The exact layout" means EXACTLY FOUR SEGMENTS** — `runtimes` / `<rid>` / `native` / `<file>` —
@@ -747,10 +748,90 @@ Assembly binding is case-insensitive; a filesystem on Linux is not, so `libFoo.s
 are two distinct loadable libraries and a case-insensitive de-duplication would silently drop one —
 the exact failure this section exists to end.
 
-And the guidance in a drop warning names a step the reader can actually take: `--with` accepts a
+And the guidance in each finding names a step the reader can actually take: `--with` accepts a
 plain file name inside the module folder and REFUSES a path component, so a `runtimes/<rid>/…` value
 has to be flattened into the module folder root first — the loader's LAST probe is that flat folder.
-Saying only "name it with `--with`" would send the reader to an error.
+Saying only "name it with `--with`" would send the reader to an error. Since #4367 that guidance is
+also the exact value that LIFTS the refusal, so it names the value (`--with RidPicky.dll`,
+`--with-native runtimes/linux-x64/native/libodd.so`), never a placeholder.
+
+#### Warning → REFUSAL, armed on a measurement (#4367, the last stage of #4126)
+
+**What is refused.** `module-pack --deps-closure` exits 2, writes nothing, and prints one `error:`
+line per finding — naming the package, the declared path and the value that carries it — for each
+asset the module's own closure DECLARES and the derivation cannot carry: a native at a layout the
+loader does not probe, or a RID-specific MANAGED assembly. Both used to print `warning:` and pack,
+leaving the module on the "the host happens to supply it" fallback.
+
+**What satisfies it — the rule, and why it is this rule.** 🚨 A refusal keyed on the derivation's
+findings alone would be UNSATISFIABLE: deps.json keeps declaring the asset after the author follows
+the advice, so the fix would be refused as well and a legitimate module blocked forever. So a finding
+is refused only when NOTHING the caller named carries it (`ModulePackCommand.CarrierOf`):
+
+| finding | carried by |
+|---|---|
+| RID-specific managed `runtimes/<rid>/lib/<tfm>/<file>` | `--with <file>`, in the bundle as written. **Named**, not merely present: the RID-agnostic copy that rides by derivation is exactly the silent "which RID's copy" choice the refusal stops, so it does not count — naming it is how an author says it is the right one |
+| native at an unprobed layout, for `<rid>` | `--with <file>` (flattened — the loader's last probe), **or** a payload at exactly `runtimes/<rid>/native/<file>` — from `--with-native` or from the derivation itself, since that is the slot the loader probes for that RID and that name whoever filled it |
+
+**In the shared lane**, which composes the pack arguments itself, a module cannot pass `--with`. It
+states the carrier in its OWN csproj, and `node-repo-module-pack.yml`'s sdk path reads it with
+MSBuild's own evaluation (`dotnet msbuild <csproj> -getItem:MeshWeaverPackWith
+-getItem:MeshWeaverPackWithNative`, JSON on SDK ≥ 8; the lane runs 10.0.x) under the build's
+properties, appending one flag per item:
+
+| csproj item | pack flag |
+|---|---|
+| `<MeshWeaverPackWith Include="<file name>" />` | `--with <file name>` |
+| `<MeshWeaverPackWithNative Include="runtimes/<rid>/native/<file>" />` | `--with-native runtimes/<rid>/native/<file>` |
+
+The refusal prints the lines to paste, per finding — a `Copy` after `Publish` plus the item. A
+PORTABLE publish (what the lane packs) lays every `runtimeTargets` asset out at its declared key, so
+the copy needs no package-cache path:
+
+```xml
+<Target Name="MeshWeaverPackCarry_System_IO_Ports_unix_System_IO_Ports_dll" AfterTargets="Publish"><Copy SourceFiles="$(PublishDir)runtimes/unix/lib/net9.0/System.IO.Ports.dll" DestinationFolder="$(PublishDir)" /></Target><ItemGroup><MeshWeaverPackWith Include="System.IO.Ports.dll" /></ItemGroup>
+```
+
+A failed evaluation, an answer that is not the `-getItem` JSON shape, a value of the wrong shape and a
+file the publish does not hold are all RED — never read as "declares none".
+`.github/scripts/test-module-pack-with.py` EXECUTES the lane's block (extracted between its markers,
+`dotnet` stubbed to the measured JSON shape, the real jq), with a falsification arm that deletes the
+append. **Measured end to end on the real SDK (10.0.400), 2026-09-15:** a module referencing
+`System.IO.Ports` 9.0.9 (a real RID-specific managed asset, `runtimes/unix|win/lib/net9.0/`) and a
+local package declaring `runtimes/linux-x64/nativeassets/net10.0/libodd.so` was REFUSED with three
+findings; the csproj lines pasted verbatim from two of them, a republish, the lane's own block run
+with real `dotnet msbuild -getItem`, and the pack exited 0 — the bundle's `System.IO.Ports.dll`
+byte-identical to the unix copy, `libodd.so` at `runtimes/linux-x64/native/`.
+
+The native comparisons are ORDINAL and the managed one ignores case — the split this whole section
+draws. Naming something that is NOT the declared asset does not lift it: the right file in another
+RID's slot is another RID's library, and `libOdd.so` is not `libodd.so`. A native whose RID cannot
+form the probed layout (none stated, or a traversal segment) is offered `--with` alone — the finding
+never invents a slot no host probes. `DepsClosure.Result.Uncarried` carries the findings as data so
+the packer can ask that question; `Result.Warnings` is the same findings in words.
+
+**Pinned** in `ModulePackCommandTest` against the command's own entry point, per shape: a refusal
+(exit 2, nothing written, the message naming package, path and carrier) and the SAME deps.json with
+each prescribed remedy applied, packing — plus a control that a carrier which is not the declared
+asset does not lift it, and a test that reads the shared lane's csproj lines off the refusal
+verbatim, applies what they do, and packs. Negative controls, each run by rebuilding the test
+project: with the arming reverted the refusal tests go red; with a naive refusal (nothing ever counts
+as carrying) the remedy tests go red; with the csproj lines stripped from the refusal the shared-lane
+test goes red; with the lane's read deleted (or only its append) `test-module-pack-with.py` goes red;
+with the container lane's naming reverted its four `NativeClosureTest` cases go red.
+
+**The measurement it was armed on** — the #3240 shape, a measurement and not a judgement: a full
+`node-repo-module-pack` wave from both repos that publish modules printed **zero** of either finding.
+
+| repo | run | bundles | on the `--deps-closure` path — the refusal's whole population | occurrences |
+|---|---|---|---|---|
+| `MeshWeaver.Plugins` | 34939850754 (2026-09-15, `main`) | 41 (the whole module set; the scheduled full wave packs the same 41) | 3 — the other 38 are container-built | 0 |
+| `MeshWeaver.SocialMedia` | 34941532528 (2026-09-15, `main`) | 1 | 1 | 0 |
+
+So the refusal had no live victim when armed. 🚨 State the denominator with the zero: 38 of 41
+Plugins bundles print `container path: 0 native payload(s) declared`, and the container lane never
+runs this derivation at all — the zero speaks for the four `--deps-closure` packs, which are exactly
+the packs the refusal can fire on.
 
 #### LANDED, RE-SERVED, and derived by BOTH lanes (#4126, stages 2–4)
 
@@ -817,12 +898,17 @@ the depth, with a falsification arm per half.
 
 **What is NOT done:**
 
-1. **Warning → refusal** — the last stage of #4126, and still gated on evidence rather than on the
-   other stages: the pack log's "declares a RID-specific MANAGED asset the bundle does not carry" and
-   "declares a native asset at … which is NOT the layout the module loader probes" remain WARNINGS.
-   A module tripping either still has the host-supplies-it fallback, and arming the refusal before a
-   full publish wave has been measured clean takes the fleet's publishes down instead of the drops —
-   the #3240 shape, and the reason that refusal was armed on two measurements rather than on faith.
+1. **The container lane NAMES both shapes, and does not refuse — #4445.** Its derivation used to
+   drop them WITHOUT A LINE: `NativeContributions.DeclaredBy` filtered an unprobed native out (from
+   the image's `native` section and from the shelf's `runtimeTargets`) and reported it nowhere, and
+   the module-libraries shelf — a portable publish — had its RID-specific managed assets read past
+   (only `runtime` is read). `NativeContributions.UncarriedBy` now names both, `PrivateClosure`
+   carries them (`Result.Uncarried`) and the builder prints one `warning:` line each, in the SAME
+   finding wording as the SDK refusal (`UncarriedAssetFindings`, one spelling in
+   `MeshWeaver.Plugin.Packaging`), so one grep measures both lanes. The IMAGE cannot drop a
+   RID-specific managed asset — it is a RID-specific publish, so its RID's copy is already resolved
+   into `runtime` and rides. Arming a refusal here is #4445, on the same criterion #4367 was armed
+   on: a full container wave with zero occurrences, and no live victim.
 2. **The container lane carries ONE RID's engine**, because it resolves against ONE image. A host on
    another RID falls back to the runtime's own probing — strictly better than the nothing it carried
    before, and stated in the builder's log rather than left to be deduced. The SDK lane, deriving
@@ -1009,8 +1095,8 @@ warehouses modules for newer platforms. The older upload competes for the head's
 slot instead, and the index lists head and retained fallback at their own versions, each download
 resolving its own generation. A head whose entry assembly is missing is healed by the next valid
 upload, and unknown versions keep the legacy behaviour. The full rule, the fallback choice, what a
-deliberate rollback now means, and the unresolved cross-replica case (#4026) are in
-[Module Adoption Policy](../ModuleAdoptionPolicy).
+deliberate rollback now means, and how the cross-replica case is closed (#4026 — a record per
+landing, the head derived from them) are in [Module Adoption Policy](../ModuleAdoptionPolicy).
 
 The remaining blind spot (a registry that states no identity) is closed **where it is created**, not
 by churning consumers: a bundle that cannot say what it was built against must not be publishable.

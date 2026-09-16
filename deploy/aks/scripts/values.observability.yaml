@@ -118,9 +118,20 @@ grafana:
       memory: 512Mi
 
 prometheus:
+  enabled: true
   server:
     nodeSelector:
       agentpool: system
+    # Bound the TSDB before the 8 GiB volume fills. Time retention alone can stall:
+    # its cutoff advances with the newest compacted block, and compaction needs
+    # free disk. Keep 25% available for WAL/head growth and temporary compaction
+    # files. Prometheus removes the oldest complete blocks when either bound wins.
+    retention: 15d
+    persistentVolume:
+      enabled: true
+      size: 8Gi
+    extraArgs:
+      storage.tsdb.retention.size: 6GB
   alertmanager:
     nodeSelector:
       agentpool: system

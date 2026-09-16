@@ -241,8 +241,8 @@ on:
       platform-set:
         description: >-
           The promoted set the gate ran against (`3.0.0-ci.<n>`), when the lane RESOLVED the
-          platform itself (both digest inputs empty — see the header); EMPTY when the caller
-          pinned the digests, because then the caller already knows. A shard that took a NEWER set
+          platform itself (both digest inputs empty — see the header); the caller's own
+          `platform-set` input when it pinned the digests and named their set; EMPTY otherwise. A shard that took a NEWER set
           on a re-run says so in its own log and summary; this is `plan`'s baseline.
         value: ${{ jobs.plan.outputs.platform-set }}
     inputs:
@@ -291,6 +291,19 @@ on:
         required: false
         type: string
         default: ''
+      platform-set:
+        description: >-
+          The set name (`3.0.0-ci.<n>`, the resolver's `set` output) that the PINNED digests belong
+          to. Optional, and meaningful only beside a pinned pair. It is what lets a shard on a
+          volume runner tell a set the volume has not REACHED yet (waited out, bounded) from one it
+          has moved PAST (red at once, #4281): without it both are red at once, so a caller that
+          resolved a set sealed minutes earlier went red on every run until ci-platform-refresh's
+          next tick (measured 2026-09-15, MeshWeaver.Crm#108: 3.0.0-ci.8687 sealed 17:43:27Z, shard
+          17:50Z, "carries no set for tester digest … passed no --set"). Refused unless it has the
+          set shape, and refused without a pin (the lane then resolves, and names, its own set).
+        required: false
+        type: string
+        default: ''
       stage-repo:
         description: Repository to stage cross-repo modules from. Empty = no staging.
         required: false
@@ -313,6 +326,23 @@ on:
         required: false
         type: string
         default: 'plugin-gate.allow'
+      warning-baseline-file:
+        description: >-
+          The in-mesh WARNING debt this repo carries, passed as --warning-baseline
+          (repo-relative). It arms TWO shrink-only ratchets over the NodeType compiles: one over
+          the real warnings (CS0219, CS1574, …) and a separate one over CS1591, a missing XML doc
+          comment. An unlisted (type, code) pair fails the run; a listed pair whose type compiled
+          clean is stale and fails it too, so the debt can only shrink. Pass the SAME file to
+          node-repo-publish-bake.yml, or a PR and its merge hold the repo to different standards.
+          See Doc/Architecture/InMeshWarningStandard in the platform repo.
+
+          EMPTY (the default) is OBSERVE-ONLY: the bake still MEASURES every warning, prints the
+          folded inventory and says by name that it enforced nothing — so a repo that has not
+          adopted is visibly unguarded rather than silently so, and nothing goes red on the day
+          this input lands.
+        required: false
+        type: string
+        default: ''
       affected-narrowing:
         description: >-
           On pull_request diffs, gate only the affected module closure computed by the caller's
@@ -681,6 +711,7 @@ jobs:
         env:
           IMAGE_DIGEST: ${{ inputs.image-digest }}
           PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
+          PINNED_SET: ${{ inputs.platform-set }}
           ALLOW_UNPINNED: ${{ inputs.allow-unpinned }}
           TEST_IMAGE: ${{ inputs.test-image }}
           PLATFORM_IMAGE: ${{ inputs.platform-image }}
@@ -696,15 +727,31 @@ jobs:
           FREEZE: ${{ vars.MW_PLATFORM_REF }}
         run: |
           set -euo pipefail
+          if [ -n "${PINNED_SET:-}" ]; then
+            # resolve-platform.py's SET_NAME, segment for segment: a prerelease is dot-separated
+            # NON-EMPTY identifiers, so `3.0.0-rc..ci.1` is refused here exactly as the resolver
+            # would refuse it — this input may never name a set the resolver cannot.
+            [[ "$PINNED_SET" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?[.-]ci\.[0-9]+$ ]] \
+              || { echo "::error::platform-set '${PINNED_SET}' is not a set name (X.Y.Z[-prerelease]-ci.N) — pass the resolver's \`set\` output, or nothing"; exit 1; }
+            # Only when NEITHER digest is pinned; a half-pin falls through to its own, more
+            # specific refusal below rather than being misdescribed as "none".
+            if [ -z "${IMAGE_DIGEST:-}" ] && [ -z "${PLATFORM_DIGEST:-}" ]; then
+              echo "::error::platform-set '${PINNED_SET}' names the set of PINNED digests, and none are pinned — with no pin this lane resolves (and names) its own set; drop the input or pin both digests"
+              exit 1
+            fi
+          fi
           if [ -n "${IMAGE_DIGEST:-}" ] && [ -n "${PLATFORM_DIGEST:-}" ]; then
             {
               echo "resolved=false"
               echo "image-digest=${IMAGE_DIGEST}"
               echo "platform-image-digest=${PLATFORM_DIGEST}"
-              echo "platform-set="
+              # 🚨 The caller's set NAME rides with its pins (empty if it named none): the shard's
+              # volume lookup needs it to wait out a set the refresh has not installed YET instead
+              # of refusing it at once — the one case a pin that was just resolved always hits.
+              echo "platform-set=${PINNED_SET:-}"
               echo "baseline="
             } >> "$GITHUB_OUTPUT"
-            echo "platform: the caller's pins — tester ${IMAGE_DIGEST}, portal ${PLATFORM_DIGEST} — taken verbatim; nothing resolved"
+            echo "platform: the caller's pins — tester ${IMAGE_DIGEST}, portal ${PLATFORM_DIGEST}, set '${PINNED_SET:-<not named>}' — taken verbatim; nothing resolved"
             exit 0
           fi
           if [ -n "${IMAGE_DIGEST:-}" ] || [ -n "${PLATFORM_DIGEST:-}" ]; then
@@ -909,6 +956,7 @@ jobs:
           RESOLVED: ${{ needs.plan.outputs.resolved }}
           IMAGE_DIGEST: ${{ needs.plan.outputs.image-digest }}
           PLATFORM_DIGEST: ${{ needs.plan.outputs.platform-image-digest }}
+          PLAN_SET: ${{ needs.plan.outputs.platform-set }}
           PLATFORM_BASELINE: ${{ needs.plan.outputs.baseline }}
           TEST_IMAGE: ${{ inputs.test-image }}
           PLATFORM_IMAGE: ${{ inputs.platform-image }}
@@ -923,8 +971,11 @@ jobs:
             {
               echo "image-digest=${IMAGE_DIGEST}"
               echo "platform-image-digest=${PLATFORM_DIGEST}"
+              # The caller's set name, when it named one — see plan. `Where this shard takes the
+              # platform from` reads `platform-set` and passes it as --set.
+              echo "platform-set=${PLAN_SET:-}"
             } >> "$GITHUB_OUTPUT"
-            echo "platform: as called (tester '${IMAGE_DIGEST:-<tag>}', portal '${PLATFORM_DIGEST:-<tag>}') — nothing was resolved in plan, nothing is refreshed here"
+            echo "platform: as called (tester '${IMAGE_DIGEST:-<tag>}', portal '${PLATFORM_DIGEST:-<tag>}', set '${PLAN_SET:-<not named>}') — nothing was resolved in plan, nothing is refreshed here"
             exit 0
           fi
           [ -n "${PLATFORM_BASELINE:-}" ] || { echo "::error::plan reports resolved=true but handed this shard no baseline row — the plan step and this one disagree about their contract"; exit 1; }
@@ -1877,6 +1928,7 @@ jobs:
           TARGET_IDENTITY: ${{ steps.identity.outputs.identity }}
           STAGE_MODULES: ${{ inputs.stage-modules }}
           ALLOW_FILE: ${{ inputs.allow-file }}
+          WARNING_BASELINE_FILE: ${{ inputs.warning-baseline-file }}
           AFFECTED_MOUNT: ${{ needs.plan.outputs.mount }}
           AFFECTED_RUN_ALL: ${{ needs.plan.outputs.run_all }}
           # `<index>/<total>`, or empty for the unsharded lane — see the `shards` input.
@@ -1941,6 +1993,24 @@ jobs:
           fi
           ALLOW_ARGS=()
           [ -n "${ALLOW_PATH:-}" ] && ALLOW_ARGS=(--allow "$ALLOW_PATH")
+          # The in-mesh WARNING baseline, resolved exactly like the allow file above (a narrowed run
+          # copies it into the staged mount, because the tester reads it from inside the container).
+          # 🚨 It is never narrowed in CONTENT: an entry naming a type this run did not bake is
+          # reported UNVERIFIABLE, never stale, so the whole file is correct on a narrowed run and
+          # on a shard alike — the same rule the allow file follows, for the same reason.
+          #
+          # 🚨 `if`, not `A && B`: the default is EMPTY, so the test fails on every caller that has
+          # not adopted, and a failing `&&` list is what the STAGE_MODULES loop in the sibling lane
+          # documents as aborting a step under `set -e`.
+          WARN_ARGS=()
+          if [ -n "${WARNING_BASELINE_FILE:-}" ]; then
+            if [ "$AFFECTED_RUN_ALL" = "true" ]; then
+              WARN_ARGS=(--warning-baseline "$P_REPO/$WARNING_BASELINE_FILE")
+            else
+              cp "$GITHUB_WORKSPACE/$WARNING_BASELINE_FILE" "$REPO_MOUNT/"
+              WARN_ARGS=(--warning-baseline "$P_REPO/$(basename "$WARNING_BASELINE_FILE")")
+            fi
+          fi
           # 🚨 `--module` was written with the CONTAINER's /ext prefix by the external-modules step
           # (whose shell `test-module-asset-landing.py` extracts and executes verbatim, so it is
           # left byte-identical). In volume mode the same modules are the same files on this
@@ -2017,7 +2087,7 @@ jobs:
           # shellcheck disable=SC2086  # MODULE_ARGS is a flag list; word-splitting is the point
           run_tester compile "$P_REPO" \
             --app "$P_APP" --shared-frameworks "$P_SHARED" \
-            "${ALLOW_ARGS[@]}" ${MODULE_ARGS:-} --output "$P_BAKE" --source-sha "$GITHUB_SHA"
+            "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" ${MODULE_ARGS:-} --output "$P_BAKE" --source-sha "$GITHUB_SHA"
           [ -s "$OWN_BAKE/framework-mvid.txt" ] || { echo "::error::compile ran but wrote no bake identity — the bake stage regressed (or the image predates the compile verb; pin ≥ 77bc5f1)"; exit 1; }
           baked="$(tr -d '[:space:]' < "$OWN_BAKE/framework-mvid.txt")"
           [ "$baked" = "$TARGET_IDENTITY" ] || { echo "::error::the run's own bake is keyed to '$baked' but the portal's /app resolves '$TARGET_IDENTITY' — the compile did not run against the platform host (is --app set to the portal's /app?)"; exit 1; }

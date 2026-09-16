@@ -277,6 +277,15 @@ public static class GraphConfigurationExtensions
                 // enumerated, so a regression to per-type keying reds at boot instead of after
                 // the next space deletion. See PartitionTeardownCoverageGate.
                 services.AddHostedService<PartitionTeardownCoverageGate>();
+                // …and its CREATION-side twin: a top-level instance of a partition-owning type
+                // declared in mesh CONTENT (Crm/Client) gets what a Space's creator gets — the
+                // Admin grant and its Admin/Partition definition. Structural for the same reason:
+                // no src/ registration can name a type a package declares.
+                services.AddSingleton<INodePostCreationHandler>(sp =>
+                    new InMeshPartitionOwnerPostCreationHandler(
+                        sp.GetRequiredService<IMessageHub>(),
+                        sp.GetService<ILoggerFactory>()
+                            ?.CreateLogger<InMeshPartitionOwnerPostCreationHandler>()));
 
                 // Write-boundary guard for the OTHER collision class in the same family
                 // (#2160/#2161/#2162, #2245, #2358): a NodeType declaration (Content IS a

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -348,7 +349,13 @@ public sealed class IoPool : IIoPool, IDisposable
                 // before the slot is granted throws here, before the increment, so
                 // no slot is ever leaked. The ThreadPool thread is released during
                 // the inner await, so the gate caps in-flight ops, not threads.
-                await _gate.WaitAsync(ct).ConfigureAwait(false);
+                var queuedAt = Stopwatch.GetTimestamp();
+                // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
+                // what lets a test synchronise on arrival instead of guessing with a duration.
+                Interlocked.Increment(ref _waiting);
+                try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
+                finally { Interlocked.Decrement(ref _waiting); }
+                RecordWait(queuedAt);
                 Interlocked.Increment(ref _inFlight);
                 var leaf = EnterLeaf(io);
                 try
@@ -358,17 +365,8 @@ public sealed class IoPool : IIoPool, IDisposable
                 finally
                 {
                     LeaveLeaf(leaf);
-                    // 🚨 RELEASE THE PERMIT FIRST. TryFinishDisposal disposes _gate the moment the
-                    // last leaf's decrement takes _inFlight to zero — so with the decrement first,
-                    // THIS leaf disposed the gate and then called Release() on it, throwing
-                    // ObjectDisposedException out of its own finally. Not a cross-thread race: the
-                    // last leaf to unwind during a dispose does it to itself, every time (issue
-                    // #2135, seen in prod as a failed `Comments` area render on memex-cloud).
-                    //
-                    // Releasing first is safe for the drain guarantee: Drain joins by re-acquiring
-                    // every permit, and once Release has run the only work left in this finally is
-                    // two interlocked ops — no user code, no ALC code — so "no pool thread is still
-                    // running the leaf" remains true at the moment Drain observes the permit.
+                    // The permit is the LAST thing this leaf publishes — see ReleaseGate, where the
+                    // ordering and the reason it inverted since #2135 are written down once.
                     ReleaseGate();
                 }
             }
@@ -379,19 +377,107 @@ public sealed class IoPool : IIoPool, IDisposable
         }).SubscribeOn(TaskPoolScheduler.Default);
 
     /// <summary>
-    /// The exit path every gated leaf shares: hand the permit back while the gate is still alive,
-    /// then account for the leaf. Disposal is completed by <see cref="LeaveGateRegion"/>, which runs
-    /// once the leaf can no longer touch <see cref="_gate"/> at all.
+    /// The exit path every gated leaf shares: settle the accounting, THEN hand the permit back.
+    /// Disposal is completed by <see cref="LeaveGateRegion"/>, which runs once the leaf can no
+    /// longer touch <see cref="_gate"/> at all.
     ///
     /// <para>Extracted so the ordering exists in ONE place. It was duplicated at three call sites
     /// and wrong at all three, which is what made <see cref="Dispose"/>'s careful "release the
     /// resources on the last leaf's way out" design throw on that very last leaf.</para>
+    ///
+    /// <para>🚨 THE PERMIT IS THE SIGNAL <see cref="Drain"/> JOINS ON, SO IT IS PUBLISHED LAST.
+    /// Drain's join re-acquires every permit and then reports <c>0</c> — "no pool thread is still
+    /// running" — and <see cref="CurrentInFlight"/> is the pool's own statement of the same fact.
+    /// With <c>Release()</c> first, those two contradict each other: the releasing leaf is one
+    /// <c>Interlocked</c> op short of done when the permit becomes visible, and it does NOT own that
+    /// moment — measured on #4448, the unwind of a cancelled leaf runs on a <c>.NET TP Worker</c>
+    /// while Drain waits on the gate from the teardown thread, so the two genuinely race. Lose that
+    /// sprint and <c>Drain()</c> returns 0 with <c>CurrentInFlight == 1</c>
+    /// (<c>IoPoolTest.Drain_cancels_in_flight_leaves_and_joins_synchronously</c>, core #4417,
+    /// run 34970182190, shard 3, 2026-09-15). Decrementing first makes the permit a real happens-before edge: the decrement is
+    /// a full fence, <c>Release()</c> publishes under the semaphore's lock and Drain's <c>Wait()</c>
+    /// acquires it, so a permit Drain holds proves the accounting behind it is already settled.</para>
+    ///
+    /// <para>🚨 AND THE REASON IT USED TO BE THE OTHER WAY ROUND IS GONE. #2135 released first
+    /// because the exit path itself called <c>TryFinishDisposal()</c>, which disposed <c>_gate</c>
+    /// the instant this leaf's decrement took <c>_inFlight</c> to zero — so the leaf disposed the
+    /// semaphore and then released it. #2146 moved that decision onto the ADMISSION counter:
+    /// <see cref="TryFinishDisposal"/> now runs only from <see cref="LeaveGateRegion"/> and returns
+    /// at once unless <c>_gateUsers</c> is zero. All three callers of this method sit inside their
+    /// own region, whose <c>finally</c> runs strictly AFTER this returns, so <c>_gateUsers</c> is at
+    /// least one throughout and the gate provably cannot be disposed here in either order. Pinned by
+    /// <c>IoPoolDisposeReleaseOrderTest</c>, which still asserts the #2135 outcome.</para>
     /// </summary>
     private void ReleaseGate()
     {
-        _gate.Release();
         Interlocked.Decrement(ref _inFlight);
+        _gate.Release();
     }
+
+    // ───────────────────────── queue-wait instrument (MeshWeaver#1198) ─────────────────────────
+    // Lock-free counters, instance fields on a mesh-scoped pool — never static, and not a
+    // collection. Six buckets rather than a mean, because the question a cap has to answer is
+    // about the TAIL; see IoPoolWaitStats for why #1198 could not be decided without this.
+    private int _waiting;
+    private long _waitTicks;
+    private long _waitMaxTicks;
+    private long _waitUnderMillisecond;
+    private long _waitUnderTenMilliseconds;
+    private long _waitUnderHundredMilliseconds;
+    private long _waitUnderSecond;
+    private long _waitUnderTenSeconds;
+    private long _waitTenSecondsOrMore;
+
+
+    /// <summary>
+    /// Folds one granted admission into the distribution. Hot path: interlocked, no lock, and
+    /// deliberately NOT wrapped in an `async` helper around the gate wait — that would allocate a
+    /// Task per admission on the busiest path in the system. The three async-gate sites and the
+    /// blocking scheduler's grant point all funnel here instead, so the distribution still has ONE
+    /// definition even though the timestamp is taken at each site.
+    /// </summary>
+    private void RecordWait(long queuedAt)
+    {
+        var elapsed = Stopwatch.GetTimestamp() - queuedAt;
+        // A clock that appears to run backwards is not a negative wait.
+        if (elapsed < 0)
+            elapsed = 0;
+
+        Interlocked.Add(ref _waitTicks, elapsed);
+        for (var observed = Volatile.Read(ref _waitMaxTicks); elapsed > observed;)
+        {
+            var prior = Interlocked.CompareExchange(ref _waitMaxTicks, elapsed, observed);
+            if (prior == observed)
+                break;
+            observed = prior;
+        }
+
+        var milliseconds = elapsed * 1000d / Stopwatch.Frequency;
+        if (milliseconds < 1) Interlocked.Increment(ref _waitUnderMillisecond);
+        else if (milliseconds < 10) Interlocked.Increment(ref _waitUnderTenMilliseconds);
+        else if (milliseconds < 100) Interlocked.Increment(ref _waitUnderHundredMilliseconds);
+        else if (milliseconds < 1_000) Interlocked.Increment(ref _waitUnderSecond);
+        else if (milliseconds < 10_000) Interlocked.Increment(ref _waitUnderTenSeconds);
+        else Interlocked.Increment(ref _waitTenSecondsOrMore);
+    }
+
+    /// <inheritdoc />
+    public int CurrentlyWaiting => Volatile.Read(ref _waiting);
+
+    /// <inheritdoc />
+    public IoPoolWaitStats QueueWait => new(
+        StopwatchElapsed(Volatile.Read(ref _waitTicks)),
+        StopwatchElapsed(Volatile.Read(ref _waitMaxTicks)),
+        Volatile.Read(ref _waitUnderMillisecond),
+        Volatile.Read(ref _waitUnderTenMilliseconds),
+        Volatile.Read(ref _waitUnderHundredMilliseconds),
+        Volatile.Read(ref _waitUnderSecond),
+        Volatile.Read(ref _waitUnderTenSeconds),
+        Volatile.Read(ref _waitTenSecondsOrMore));
+
+    /// <summary>Stopwatch ticks are NOT <see cref="TimeSpan"/> ticks — the frequency is platform-dependent.</summary>
+    private static TimeSpan StopwatchElapsed(long stopwatchTicks) =>
+        TimeSpan.FromTicks((long)(stopwatchTicks * ((double)TimeSpan.TicksPerSecond / Stopwatch.Frequency)));
 
     /// <summary>
     /// Streams an async-enumerable I/O leaf off the calling scheduler under the pool's concurrency gate.
@@ -411,7 +497,13 @@ public sealed class IoPool : IIoPool, IDisposable
             {
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
                 var ct = linked.Token;
-                await _gate.WaitAsync(ct).ConfigureAwait(false);
+                var queuedAt = Stopwatch.GetTimestamp();
+                // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
+                // what lets a test synchronise on arrival instead of guessing with a duration.
+                Interlocked.Increment(ref _waiting);
+                try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
+                finally { Interlocked.Decrement(ref _waiting); }
+                RecordWait(queuedAt);
                 Interlocked.Increment(ref _inFlight);
                 var leaf = EnterLeaf(source);
                 try
@@ -470,8 +562,15 @@ public sealed class IoPool : IIoPool, IDisposable
             {
                 // Linked to the pool token so Drain()/Dispose() cancels blocking work too.
                 var cts = CancellationTokenSource.CreateLinkedTokenSource(_poolCts.Token);
+                // 🚨 Blocking work does NOT pass through _gate — it queues on the limited-concurrency
+                // scheduler instead — so its wait is timed at THAT grant point. Instrumenting only the
+                // async gate would have left a whole admission path out of a reading that looks total.
+                var queuedAt = Stopwatch.GetTimestamp();
+                Interlocked.Increment(ref _waiting);
                 _blockingFactory.StartNew(() =>
                     {
+                        Interlocked.Decrement(ref _waiting);
+                        RecordWait(queuedAt);
                         // _inFlight increments only once the scheduler grants a slot —
                         // so CurrentInFlight reflects actually-running blocking work,
                         // capped at the scheduler's MaximumConcurrencyLevel.
@@ -586,7 +685,13 @@ public sealed class IoPool : IIoPool, IDisposable
                         {
                             using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
                             var ct = linked.Token;
-                            await _gate.WaitAsync(ct).ConfigureAwait(false);
+                            var queuedAt = Stopwatch.GetTimestamp();
+                            // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
+                            // what lets a test synchronise on arrival instead of guessing with a duration.
+                            Interlocked.Increment(ref _waiting);
+                            try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
+                            finally { Interlocked.Decrement(ref _waiting); }
+                            RecordWait(queuedAt);
                             Interlocked.Increment(ref _inFlight);
                             var subLeaf = EnterLeaf(source);
                             try

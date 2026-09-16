@@ -230,8 +230,11 @@ public class CrashedHostIsNeverAPassGuard
         // exit code so the trx quietly keeps saying "passed". Two of the three call sites shipped
         // in the first revision of this change doing exactly that, which is why the assertion
         // counts invocations rather than finding one.
+        // `--self-test` is excluded by name, and only it: that step proves the recorder offline
+        // (no directory, a streamed trx, a truncated trx) and records no host's death, so there
+        // is no crash for its exit code to lose — a failing self-test fails its own step.
         var invocations = Regex.Matches(body,
-            @"(?<guarded>if ! )?python3 \.github/scripts/record-host-crash\.py[^\n]*\n(?<body>(?:.*\n)*?)\s*fi\n");
+            @"(?<guarded>if ! )?python3 \.github/scripts/record-host-crash\.py(?! --self-test)[^\n]*\n(?<body>(?:.*\n)*?)\s*fi\n");
 
         Assert.True(invocations.Count >= 3,
             $"{Workflow} should invoke {Recorder} on every path that produces no verdict — the "

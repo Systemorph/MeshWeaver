@@ -54,7 +54,7 @@ meshHub.GetHostedHub(
 
 1. **Resolve the Space root** — `source.PartitionRoot` or a synthesized generic `Space` — and fold it into the source node set.
 2. **Provision the partition schema** (`IPartitionStorageProvider.EnsurePartitionProvisioned`, lowercased, idempotent/promise-cached) **before** anything is written — the marker node in step 4 lives at `{P}/_Activity/…`, *inside* the partition schema, so a fresh partition would otherwise fault (42P01 — there is no lazy schema create; see [GhostSchemaInvariantTests]).
-3. **Fingerprint + short-circuit** — `PartitionSourceFingerprint.Compute(nodes + root)`. A converged `Succeeded` activity at `{P}/_Activity/import-{fingerprint}` may skip only when the current authoritative import manifest matches the source, including its root (the common case on every boot).
+3. **Fingerprint + short-circuit** — `PartitionSourceFingerprint.Compute(nodes + root + inline content files)`. A converged `Succeeded` activity at `{P}/_Activity/import-{fingerprint}` may skip only when the current authoritative import manifest matches the source, including its root (the common case on every boot).
 4. **Stamp the marker, then open a fresh attempt** — upsert `{P}/_Activity/import-{fingerprint}` to `Running`. That deterministic node is the durable "version vN imported at T" record — nothing else. It is **not** a lock: a marker left `Running` is deliberately *reclaimed* rather than obeyed, so two replicas booting together can both import. That is safe because every write on the path is an upsert. The run's own log goes to a **fresh** `{P}/_Activity/import-{fingerprint}-{timestamp}-{rand}` node, one per attempt. See *Content-addressed Activity — the marker + the short-circuit* below for why the two roles are split.
 5. **Ensure the Space root** (standard step) via the canonical upsert — creating a `Space` triggers eager schema provisioning + the `Admin/Partition/{P}` routing prime + the admin grant; an existing root is updated. This makes the partition routable, listed in `public.top_level_index`, and gives it a landing page. **Exception — a *claimed* root is left untouched:** if the existing root carries `SyncBehavior != Include` (i.e. an admin set `ExcludeThisAndChildren` = "sync: none"), `EnsureRoot` does **not** re-materialise it. Re-materialising would reset the root's `SyncBehavior` back to `Include` and silently re-enable sync — see *Decoupling a partition (sync: none)* below.
 6. **Upsert every source node** through **`CreateOrUpdateNodeRequest`** — the single canonical verb (the same one `NodeCopyHelper` uses). It **creates** absent nodes and **updates** existing ones (the owner **re-stamps Version**), running the full pipeline: prerender (`MarkdownContent.Parse`), embedding, satellites, access. **Claimed subtrees are skipped** — both a **child** claimed in the snapshot (`SyncBehavior != Include`) and an **entire partition whose root is claimed** (`ExcludeThisAndChildren`). The partition-root claim is read **authoritatively** (`GetMeshNodeStream`), NOT from the eventually-consistent query snapshot, so a *just-set* decouple is honoured before the read-model catches up (the snapshot lags writes — reading the claim from it re-synced the partition and clobbered the admin's edits: a production `Provider/Anthropic` key reset, 2026-06-25). **Each upsert is independently guarded** (per-file `try/catch`): a single node faulting (bad content, a validator reject, a transient owner timeout) logs a `⚠ Failed to import {path}` line **into the import activity** and the import **continues** — the first failure never aborts the rest of the partition. Failures are tallied. 🚨 The writes are **ORDERED, not a flat fan-out**: a NodeType node lands before every instance that names it, and a type's `Source`/`Test` nodes land before the type — see [Import Write Ordering](../ImportWriteOrdering), which also settles what happens to a type that arrives from another partition or repo, and the cycle policy. Without it a repo shipping an instance of a type it introduces was refused `NodeType 'X' is not registered` and the retry re-ran the identical ordering forever (issue #2556: 6,902 refusals in 90 minutes on memex-cloud).
@@ -218,15 +218,20 @@ The prune does not chunk: it rides the **first** delivery and carries `SyncConte
 
 ### 1. Source fingerprint — the content-version
 
-A deterministic, order-independent hash over the source node set (children **+ the Space root**):
+A deterministic, order-independent hash over the source node set (children **+ the Space root**) **and the inline content files** the same import mirrors:
 
 ```
-for each source node:  line = path + "\0" + (Versioned ? version : sha256(content))
-sort lines by path                     // order MUST NOT affect the hash
-fingerprint = sha256( join(lines, "\n") )[..16]
+for each source node:          entry = (path, Versioned ? version : sha256(stable content fields))
+for each inline content file:  entry = ("@content:" + node + NUL + collection + NUL + targetPath + NUL + file,
+                                        sha256(bytes))
+sort entries by path                   // order MUST NOT affect the hash
+framed(v)   = utf8ByteCount(v) + ":" + v          // injective, so no separator is needed
+fingerprint = sha256( concat over entries of framed(path) + framed(token) )[..16]
 ```
 
-Changes iff a node is added, removed, or modified — including an edited welcome (the root is in the set). Helper: `PartitionSourceFingerprint.Compute`.
+Changes iff a node or an inline content file is added, removed, or modified — including an edited welcome (the root is in the set). Helper: `PartitionSourceFingerprint.Compute`.
+
+🚨 **The content files are in the set on purpose.** Until 2026-09-15 the fingerprint hashed nodes only, so a commit that only added, edited or removed a content file matched the previous import's marker. The import short-circuited as "already imported": the new file never landed and the removed one was never pruned. The gap stayed hidden while the synthesized Space root stamped `CreatedAt = UtcNow`, which changed the root's token on every import. MeshWeaver#4394 made the root stable and exposed it, and the GitSync prune tests in MeshWeaver.Plugins caught it. A partition with no inline content keeps its fingerprint unchanged. One with content re-imports once after the upgrade.
 
 ### 2. Content-addressed Activity — the marker + the short-circuit
 
@@ -378,9 +383,21 @@ So the outcome now distinguishes **why** a pass failed:
 | outcome | lock status | next trigger at the SAME fingerprint |
 |---|---|---|
 | `Imported` | `Succeeded` | skips |
-| `ImportedWithContentErrors` | `Failed` | **skips**, logging the recorded verdict |
+| `ImportedWithContentErrors` | `Failed` | **re-imports** — but issues no write for the refused node |
 | `ImportedWithErrors` | `Warning` | re-imports |
 | `ImportedWithRefusedContent` / `ImportedWithBlockedCreates` | `Warning` | re-imports |
+
+🚨 **That `ImportedWithContentErrors` row changed, and the argument above is the reason it had to.**
+Until 2026-09-16 it read *"**skips**, logging the recorded verdict"* — the whole PARTITION skipped,
+on a marker written because a content verdict was earned. But a content verdict is earned by a
+**node**, and `ImportedWithContentErrors` means *"every failure was deterministic"*, not *"everything
+failed"*: forty files can land and one be refused. Recording that as a verdict about the partition is
+what froze `Hosting` out of `memex.systemorph.com` over a single unstorable byte, with the next
+import answering *"an earlier FULL import already recorded this exact content"* about content it had
+lost. The refusal is now remembered **per node**, in the import manifest, so the failing write is
+still never re-issued — #3146's measurement is unchanged — while the rest of the partition is
+evaluated again. Full account:
+[A Content Verdict Is Per Node](/Doc/Architecture/AContentVerdictIsPerNode).
 
 `ImportedWithContentErrors` is reached only when **every** failure in the pass was a content verdict
 (`StaticRepoImporter.IsContentVerdict`), and that is decided on the owner's **structured**

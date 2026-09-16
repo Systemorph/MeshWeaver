@@ -319,18 +319,9 @@ public static class SpaceNodeType
             }
 
             logger?.LogInformation("Granting Admin role to {User} on Space {Path}", createdBy, createdNode.Path);
-            var assignmentNode = new MeshNode($"{createdBy}_Access", $"{createdNode.Id}/_Access")
-            {
-                NodeType = "AccessAssignment",
-                Name = $"{createdBy} Access",
-                MainNode = createdNode.Id,
-                Content = new AccessAssignment
-                {
-                    AccessObject = createdBy,
-                    DisplayName = createdBy,
-                    Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
-                }
-            };
+            // The ONE definition of the creator grant, shared with the in-mesh owning types'
+            // handler (PartitionOwnership) so the two cannot drift.
+            var assignmentNode = PartitionOwnership.CreatorAdminGrant(createdNode, createdBy);
             // Grant under System impersonation so the write authorises (creator can't already
             // hold Create on a brand-new partition root). Return the observable directly — the
             // caller subscribes; a failure propagates through OnError so RunPostCreationHandlers
@@ -375,20 +366,8 @@ public static class SpaceNodeType
         /// </summary>
         public IEnumerable<MeshNode> GetAdditionalNodes(MeshNode createdNode)
         {
-            yield return new MeshNode(createdNode.Id, PartitionNodeType.Namespace)
-            {
-                NodeType = PartitionNodeType.NodeType,
-                Name = createdNode.Name ?? createdNode.Id,
-                State = MeshNodeState.Active,
-                Content = new PartitionDefinition
-                {
-                    Namespace = createdNode.Id,
-                    DataSource = "default",
-                    Schema = createdNode.Id.ToLowerInvariant(),
-                    TableMappings = PartitionDefinition.DefaultSegmentTableMappings(), NodeTypeTableMappings = PartitionDefinition.DefaultNodeTypeTableMappings(),
-                    Description = $"Partition for space {createdNode.Name ?? createdNode.Id}"
-                }
-            };
+            yield return PartitionOwnership.PartitionDefinitionNode(
+                createdNode, $"Partition for space {createdNode.Name ?? createdNode.Id}");
         }
     }
 

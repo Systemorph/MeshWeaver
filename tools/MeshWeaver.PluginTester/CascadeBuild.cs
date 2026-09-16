@@ -99,6 +99,10 @@ public static class CascadeBuild
         /// <summary>The source commit recorded in the bundles; defaults to the snapshot's.</summary>
         public string? SourceSha { get; init; }
 
+        /// <summary>The in-mesh warning debt this tree carries — see
+        /// <see cref="TreeBake.Options.Warnings"/>. Default: measure, report, enforce nothing.</summary>
+        public WarningBaseline Warnings { get; init; } = WarningBaseline.ObserveOnly;
+
         /// <summary>Where progress lines go.</summary>
         public TextWriter Output { get; init; } = Console.Out;
 
@@ -120,6 +124,14 @@ public static class CascadeBuild
         StaticTestRunner.Run? Tests,
         ImmutableArray<string> BindsDependencyAssemblies)
     {
+        /// <summary>
+        /// The warnings this type's compile produced — structured and uncapped, empty on failure.
+        /// Folded across every package into the build's <see cref="Report.Warnings"/>; never
+        /// printed per type, because a source shared by eight NodeTypes would report its one defect
+        /// eight times. An init-only PROPERTY for the record-signature rule.
+        /// </summary>
+        public ImmutableArray<CompileWarning> Warnings { get; init; } = [];
+
         /// <summary>Compiled and every test that ran passed.</summary>
         public bool IsGreen => CompileError is null && (Tests is null || Tests.IsGreen);
     }
@@ -162,10 +174,22 @@ public static class CascadeBuild
         ImmutableArray<string> Bundles,
         string? FatalError = null)
     {
-        /// <summary>0 green, 1 any red or blocked, 70 fatal.</summary>
+        /// <summary>What this build measured about its NodeTypes' warnings, folded across every
+        /// package. Init-only PROPERTY for the record-signature rule.</summary>
+        public WarningInventory Warnings { get; init; } = WarningInventory.Empty;
+
+        /// <summary>The two warning ratchets' verdicts, in report order.</summary>
+        public ImmutableArray<WarningRatchet> WarningRatchets { get; init; } = [];
+
+        /// <summary>True when no ratchet carries a NEW or STALE entry — vacuously true in
+        /// observe-only mode, which the report line names.</summary>
+        public bool WarningsAccepted => WarningRatchets.All(r => r.Success);
+
+        /// <summary>0 green, 1 any red or blocked or a warning ratchet refusing, 70 fatal. 🚨 A
+        /// ratchet can turn a green build RED; it can never turn a red build green.</summary>
         public int ExitCode =>
             FatalError is not null ? 70
-            : Packages.All(p => p.IsGreen) ? 0
+            : Packages.All(p => p.IsGreen) && WarningsAccepted ? 0
             : 1;
     }
 
@@ -360,8 +384,25 @@ public static class CascadeBuild
         {
         }
 
+        // 🚨 The SAME warning fold and the SAME two ratchets the `compile` bake applies, through the
+        // one writer — the two producers must report a measurement identically or a known-debt
+        // entry means different things depending on which verb looked. Folded from the finished
+        // per-package results, so the packages' parallelism never reaches the accounting.
+        var inventory = WarningInventory.Of(results
+            .Where(p => p.Result is not null)
+            .SelectMany(p => p.Result!.Types)
+            .Where(t => t.CompileError is null)
+            .Select(t => (t.NodePath, t.Warnings)));
+        var ratchets = WarningReportWriter.Evaluate(inventory, options.Warnings);
+        WarningReportWriter.Write(options.Output, inventory, options.Warnings, ratchets);
+
         var report = new Report(
-            frameworkIdentity, results, Cascade.CriticalPath(results, DependenciesOf), wall.Elapsed, bundles);
+            frameworkIdentity, results, Cascade.CriticalPath(results, DependenciesOf), wall.Elapsed,
+            bundles)
+        {
+            Warnings = inventory,
+            WarningRatchets = [.. ratchets],
+        };
         Print(options.Output, report, DependenciesOf);
         if (options.ReportPath is { } reportPath)
             WriteJson(reportPath, report);
@@ -536,7 +577,10 @@ public static class CascadeBuild
 
             built.Add(new TypeBuild(
                 compiled.NodePath, id, null, typeClock.Elapsed, compiled.Inputs.MatchedSourcePaths.Length,
-                compiled.DllPath, tests, binds));
+                compiled.DllPath, tests, binds)
+            {
+                Warnings = compiled.Warnings,
+            });
             options.Output.WriteLine(
                 $"{Stamp()} [{id}]   ok  {compiled.NodePath} ({typeClock.Elapsed.TotalMilliseconds:F0} ms, "
                 + $"{compiled.Inputs.MatchedSourcePaths.Length} source(s))"

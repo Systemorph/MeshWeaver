@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -784,6 +784,46 @@ public static class DynamicTypePreWarmer
     /// first, one at a time. Types the share already holds are reported
     /// <see cref="PreWarmStatus.AlreadyBaked"/> and never activated.
     /// </summary>
+    /// <summary>
+    /// 🚨 <b>The FIRST bake of a brand-new instance has NO baseline at all</b> — every type in the
+    /// report has never been built here.
+    ///
+    /// <para>Measured on <c>pearl.meshweaver.cloud</c> (2026-09-15/16): a freshly provisioned portal
+    /// served <c>503</c> at the edge for nine hours with a RUNNING pod, because two types the
+    /// registry pre-installs (<c>GoogleMaps/Gallery</c>, <c>MyAi/Panel</c>) could not compile —
+    /// their store-delivered modules had not arrived. Every entry was
+    /// <see cref="BakeState.NeverBuilt"/>, <see cref="NodeTypeBakeEntry.WasHealthy"/> counts
+    /// NeverBuilt as healthy, so a first-ever compile failure was filed as a REGRESSION and the pod
+    /// gated itself forever.</para>
+    ///
+    /// <para>The gate's own sentence is the argument: it refuses readiness <i>"so the rollout stalls
+    /// with the previous image still serving"</i>. On a first rollout there is no previous image and
+    /// no previous pod, so refusing protects nobody.</para>
+    /// </summary>
+    /// <param name="report">The bake report read before anything is rebuilt.</param>
+    /// <returns><c>true</c> only when the report has entries and EVERY one is NeverBuilt.</returns>
+    public static bool IsFirstBake(NodeTypeBakeReport report) =>
+        report.Entries.Count > 0
+        && report.Entries.All(e => e.State is BakeState.NeverBuilt);
+
+    /// <summary>
+    /// The regression baseline for <paramref name="report"/>: the types that were working on the way
+    /// in, so a downstream gate can tell a NEW failure from one that was already broken (see
+    /// <see cref="PreWarmOutcome.WasHealthyBeforeBake"/>).
+    ///
+    /// <para>EMPTY on a first bake (<see cref="IsFirstBake"/>) — nothing was working, so nothing can
+    /// regress. Narrow on purpose: ONE baked type means a working instance, and there the gate keeps
+    /// its full strictness, because a newly failing type CAN be this image's doing.</para>
+    /// </summary>
+    /// <param name="report">The bake report read before anything is rebuilt.</param>
+    public static ImmutableHashSet<string> RegressionBaseline(NodeTypeBakeReport report) =>
+        IsFirstBake(report)
+            ? ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase)
+            : report.Entries
+                .Where(e => e.WasHealthy)
+                .Select(e => e.TypePath)
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
     private static IObservable<PreWarmOutcome> WarmPending(
         IMessageHub mesh,
         IWorkspace workspace,
@@ -808,10 +848,14 @@ public static class DynamicTypePreWarmer
         // The regression baseline, captured BEFORE anything is rebuilt: which types were working on
         // the way in. A type missing from this set was already broken, so its failure is pre-existing
         // damage rather than something this image caused — see PreWarmOutcome.WasHealthyBeforeBake.
-        var healthyBefore = report.Entries
-            .Where(e => e.WasHealthy)
-            .Select(e => e.TypePath)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var healthyBefore = RegressionBaseline(report);
+        if (IsFirstBake(report))
+            logger?.LogWarning(
+                "DynamicTypePreWarmer: FIRST BAKE — all {Count} NodeType(s) are NeverBuilt on this "
+                + "instance, so there is no previous image to protect. A compile failure is reported "
+                + "but does NOT gate readiness; the gate resumes its full strictness once anything "
+                + "has been built here.",
+                report.Entries.Count);
 
         // Say it out loud when the SHARE changed rather than the code: a record that claims a
         // live-framework build with no bytes behind it means the cache was cleared, remounted or
