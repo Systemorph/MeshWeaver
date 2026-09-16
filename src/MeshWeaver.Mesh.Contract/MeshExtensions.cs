@@ -653,7 +653,7 @@ public static class MeshExtensions
 
         if (meshConfig == null)
         {
-            Respond(CreateNodeResponse.Fail(
+            Respond(CreateNodeResponse.FailWith(
                 LocalizableText.Keyed("MeshConfiguration not available", NoMeshConfigurationKey),
                 NodeCreationRejectionReason.Unknown));
             return request.Processed();
@@ -671,7 +671,7 @@ public static class MeshExtensions
                 "[CreateNode] REFUSED {Path}: no IStorageAdapter on hub {Hub} — the create would be acked but never persisted. " +
                 "Register persistence (AddPartitioned*Persistence / AddInMemoryPersistence) on this hub's service provider.",
                 request.Message.Node.Path, hub.Address);
-            Respond(CreateNodeResponse.Fail(
+            Respond(CreateNodeResponse.FailWith(
                 LocalizableText.Keyed(
                     $"No storage adapter on hub '{hub.Address}' — refusing to create '{request.Message.Node.Path}' because it could not be persisted.",
                     "activity.node.create.noStorageAdapter",
@@ -704,7 +704,7 @@ public static class MeshExtensions
         // 0. Path validation (sync — fail-fast).
         if (string.IsNullOrWhiteSpace(node.Id) || string.IsNullOrWhiteSpace(node.Path))
         {
-            Respond(CreateNodeResponse.Fail(
+            Respond(CreateNodeResponse.FailWith(
                 LocalizableText.Keyed("Node path and Id must not be empty",
                     CreateNodesRequest.EmptyPathOrIdKey),
                 NodeCreationRejectionReason.ValidationFailed));
@@ -716,7 +716,7 @@ public static class MeshExtensions
         // means no AddMeshDataSource / GetDataRequest handler), so it's always a caller bug.
         if (string.IsNullOrWhiteSpace(node.NodeType) && node.Content == null)
         {
-            Respond(CreateNodeResponse.Fail(
+            Respond(CreateNodeResponse.FailWith(
                 LocalizableText.Keyed(
                     "Node must have a NodeType or Content set; bare nodes are not allowed.",
                     "activity.node.create.bareNode"),
@@ -738,7 +738,7 @@ public static class MeshExtensions
         {
             logger.LogError("[CreateNode] REFUSED ownerless Activity {Path}: {Reason}",
                 node.Path, ownerlessRefusal.English);
-            Respond(CreateNodeResponse.Fail(ownerlessRefusal, NodeCreationRejectionReason.InvalidPath));
+            Respond(CreateNodeResponse.FailWith(ownerlessRefusal, NodeCreationRejectionReason.InvalidPath));
             return request.Processed();
         }
 
@@ -764,7 +764,7 @@ public static class MeshExtensions
         {
             logger.LogError("[CreateNode] REFUSED mis-scoped AccessAssignment {Path}: {Reason}",
                 node.Path, scopeRefusal.English);
-            Respond(CreateNodeResponse.Fail(scopeRefusal, NodeCreationRejectionReason.InvalidPath));
+            Respond(CreateNodeResponse.FailWith(scopeRefusal, NodeCreationRejectionReason.InvalidPath));
             return request.Processed();
         }
 
@@ -845,7 +845,7 @@ public static class MeshExtensions
                         logger.LogWarning(
                             "[CreateNode] REFUSED {Path}: static/durable claim collision. {Detail}",
                             node.Path, collision);
-                    Respond(CreateNodeResponse.Fail(
+                    Respond(CreateNodeResponse.FailWith(
                         collision is not null
                             // Verbatim on purpose: DescribeStaticServeCollision composes an
                             // inventory of the claiming providers and the cure, which no catalog
@@ -920,7 +920,7 @@ public static class MeshExtensions
                             logger.LogWarning(
                                 "Validator rejected node creation at {Path}: {Error}",
                                 node.Path, validationError.Value.Refusal?.English);
-                            Respond(CreateNodeResponse.Fail(
+                            Respond(CreateNodeResponse.FailWith(
                                 validationError.Value.Refusal
                                 ?? LocalizableText.Keyed("Validation failed", ValidationFailedKey),
                                 validationError.Value.Reason));
@@ -943,7 +943,7 @@ public static class MeshExtensions
                         {
                             if (!typeExists)
                             {
-                                Respond(CreateNodeResponse.Fail(
+                                Respond(CreateNodeResponse.FailWith(
                                     LocalizableText.Keyed(
                                         $"NodeType '{node.NodeType}' is not registered",
                                         NodeTypeNotRegisteredKey, ("nodeType", node.NodeType ?? "")),
@@ -1105,7 +1105,7 @@ public static class MeshExtensions
                                         // sentence cannot resolve in the reader's language through
                                         // it — the shape activity.node.upsert.addressRecycling
                                         // already uses for its "Underlying report: {error}" clause.
-                                        outcome => Respond(CreateNodeResponse.Fail(
+                                        outcome => Respond(CreateNodeResponse.FailWith(
                                             LocalizableText.Keyed(
                                                 $"Create failed in a post-creation step: {ex.Message} {outcome.Message}",
                                                 "activity.node.create.postCreationFailed",
@@ -1115,7 +1115,7 @@ public static class MeshExtensions
                                         // an outcome string; this branch exists so a response goes out
                                         // even if it faults on a path we did not foresee — never a
                                         // silent swallow, never a caller left waiting.
-                                        compensationEx => Respond(CreateNodeResponse.Fail(
+                                        compensationEx => Respond(CreateNodeResponse.FailWith(
                                             LocalizableText.Keyed(
                                                 $"Create failed in a post-creation step: {ex.Message} "
                                                 + $"Rolling back '{resultNode.Path}' FAILED ({compensationEx.Message}) — "
@@ -1172,7 +1172,7 @@ public static class MeshExtensions
                             + "store, not this create; the caller is answered Unavailable, so a retry with "
                             + "the same node id is meaningful.",
                             node.Path, ex.GetType().Name, ex.Message);
-                        Respond(CreateNodeResponse.Fail(
+                        Respond(CreateNodeResponse.FailWith(
                             StoreReachability.NodeCreationNotAttempted(node.Path),
                             NodeCreationRejectionReason.Unavailable));
                     }
@@ -1182,7 +1182,7 @@ public static class MeshExtensions
                         // Verbatim: the sentence is the faulting component's own — a storage
                         // adapter's "no writable storage provider accepted the node", a validator's
                         // throw. No catalog can carry text this process did not author.
-                        Respond(CreateNodeResponse.Fail(
+                        Respond(CreateNodeResponse.FailWith(
                             LocalizableText.Verbatim(ex.Message),
                             NodeCreationRejectionReason.ValidationFailed));
                     }
@@ -1206,7 +1206,7 @@ public static class MeshExtensions
                             "[CreateNode] cancelled path={Path} — {Cancellation}. The create was cut "
                             + "short before it completed; nothing was written and nothing failed.",
                             node.Path, CancellationClassifier.Describe(ex));
-                        Respond(CreateNodeResponse.Fail(
+                        Respond(CreateNodeResponse.FailWith(
                             LocalizableText.Keyed(
                                 $"Node creation at '{node.Path}' was cancelled before it completed.",
                                 "activity.node.create.cancelled", ("path", node.Path)),
@@ -1223,7 +1223,7 @@ public static class MeshExtensions
                         logger.LogError(ex,
                             "Unexpected error during node creation at {Path}: {ExceptionType}: {ExceptionMessage}",
                             node.Path, ex.GetType().Name, ex.Message);
-                        Respond(CreateNodeResponse.Fail(
+                        Respond(CreateNodeResponse.FailWith(
                             LocalizableText.Keyed($"Unexpected error: {ex.Message}",
                                 UnexpectedErrorKey, ("error", ex.Message)),
                             NodeCreationRejectionReason.Unknown));
@@ -1265,7 +1265,7 @@ public static class MeshExtensions
                         + "completed empty (a Where that dropped the only element, an Observable.Empty branch, or "
                         + "a storage leaf that completed without emitting).",
                         node.Path);
-                    Respond(CreateNodeResponse.Fail(
+                    Respond(CreateNodeResponse.FailWith(
                         LocalizableText.Keyed(
                             $"Could not create '{node.Path}': the create pipeline terminated without producing a node "
                             + "and without reporting a reason. This is a defect in the create chain, not a rejection of "
@@ -1463,7 +1463,7 @@ public static class MeshExtensions
                 "activity.node.create.ownerDisposing", ("hub", hubPath));
             var nodeErr = new MeshNodeError(
                 MeshNodeErrorCode.OwnerDisposing, hubPath, disposalRefusal.English);
-            var resp = CreateNodeResponse.Fail(disposalRefusal, NodeCreationRejectionReason.Unavailable)
+            var resp = CreateNodeResponse.FailWith(disposalRefusal, NodeCreationRejectionReason.Unavailable)
                 with { NodeError = nodeErr };
             hub.NoteRequestStage(request.Id, "CREATE_OWNER_DISPOSING_NACK");
             // 🚨 This hub's OWN Post is gated closed in the ShutDown phase, so the NACK travels
@@ -1500,7 +1500,8 @@ public static class MeshExtensions
     ///
     /// <para>The fault is an <see cref="InvalidOperationException"/> for the same reason: that is what
     /// <c>PersistenceService</c> throws, so both paths now produce a byte-identically-shaped
-    /// <c>CreateNodeResponse.Fail(…, ValidationFailed)</c> from the one <c>onError</c> arm.</para>
+    /// <c>CreateNodeResponse.FailWith(Verbatim(ex.Message), ValidationFailed)</c> from the one
+    /// <c>onError</c> arm.</para>
     /// </summary>
     /// <param name="save">The adapter write (already composed with its change-feed publish).</param>
     /// <param name="hub">The hub handling the request — used to record the ledger stage.</param>
@@ -1697,7 +1698,7 @@ public static class MeshExtensions
         // not author reaches it as LocalizableText.Verbatim, and that name is the review signal.
         void PostFail(LocalizableText refusal, NodeCreationRejectionReason reason, string? failedPath = null,
             ImmutableList<MeshNode>? created = null)
-            => hub.Post(CreateNodesResponse.Fail(refusal, reason, failedPath, created),
+            => hub.Post(CreateNodesResponse.FailWith(refusal, reason, failedPath, created),
                 o => o.ResponseFor(request));
 
         if (meshConfig == null)

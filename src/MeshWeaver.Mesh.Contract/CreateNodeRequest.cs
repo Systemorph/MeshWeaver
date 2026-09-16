@@ -53,6 +53,14 @@ public record CreateNodeResponse(MeshNode? Node)
     /// Inline <see cref="Data.ActivityLog"/> — creation is synchronous, so by the
     /// time the response lands the activity is complete. Carries validator
     /// decisions, persist outcome, access-control messages.
+    ///
+    /// <para>🚨 <b>Non-null does NOT mean localizable</b> (#4507). <see cref="FailWith"/> attaches a
+    /// transcript for every refusal it is given, INCLUDING a <see cref="LocalizableText.Verbatim"/>
+    /// one — upstream words this process did not author, which are just as worth showing and simply
+    /// render the same in every language. The localizable ones are those whose
+    /// <see cref="LogMessage.MessageKey"/> is set, which is exactly the test
+    /// <c>NodeCreationFailure.ToException</c> applies before stamping the refusal on the exception.
+    /// A reader that needs the distinction asks the message, never the presence of this log.</para>
     /// </summary>
     public ActivityLog? Log { get; init; }
 
@@ -105,19 +113,19 @@ public record CreateNodeResponse(MeshNode? Node)
     /// <summary>
     /// Creates a failed response with an error message.
     ///
-    /// <para>🚨 The refusal it carries is UNKEYED, so <see cref="Log"/> stays null and no viewer can
-    /// read it in their own language. Reach for the <see cref="Fail(LocalizableText,NodeCreationRejectionReason)"/>
-    /// overload for any sentence this process AUTHORED; this one is for text no catalog can carry —
-    /// an exception message, a storage adapter's own words — and for callers outside the create
-    /// handler that only need a failed response shape.</para>
+    /// <para>🚨 The refusal it carries is UNKEYED and travels on no transcript, so <see cref="Log"/>
+    /// stays null and no viewer can read it in their own language. Reach for <see cref="FailWith"/>
+    /// for any sentence composed inside the create legs; this one remains for callers outside them
+    /// that only need a failed response shape.</para>
     /// </summary>
     public static CreateNodeResponse Fail(string error, NodeCreationRejectionReason reason = NodeCreationRejectionReason.Unknown)
         => new((MeshNode?)null) { Error = error, RejectionReason = reason };
 
     /// <summary>
     /// The refusal a viewer can actually READ (#4507): <see cref="Error"/> keeps the English wire
-    /// value byte-for-byte, and <see cref="Log"/> carries the same sentence as a KEYED
-    /// <c>LogMessage</c> that resolves in the reader's language at render time.
+    /// value byte-for-byte, and <see cref="Log"/> carries the same sentence as a
+    /// <c>LogMessage</c> which — when <paramref name="refusal"/> is keyed — resolves in the
+    /// reader's language at render time.
     ///
     /// <para><b>Why the two halves, rather than localizing <see cref="Error"/> in place.</b>
     /// <see cref="Error"/> is a wire field: every consumer in <c>src/</c> is a service that folds it
@@ -127,11 +135,18 @@ public record CreateNodeResponse(MeshNode? Node)
     /// reader greps in English — the identical decision the UPSERT leg records on
     /// <c>CreateOrUpdateNodeResponse.Error</c>, and the reason that leg's localized surface is its
     /// ActivityLog too. This gives the CREATE leg the transcript that note named as the follow-up.</para>
+    ///
+    /// <para>🚨 <b>A distinct NAME, not an overload of <see cref="Fail(string,NodeCreationRejectionReason)"/>.</b>
+    /// A same-arity sibling would make <c>Fail(null, …)</c> ambiguous at every existing call site
+    /// that spells the message as an untyped <c>null</c> — a SOURCE break in code this repo's
+    /// compiler never sees, which is precisely the overload-ambiguity shape AGENTS.md lists among
+    /// the break shapes no gate detects (raised in review on #4512).</para>
     /// </summary>
-    /// <param name="refusal">The refusal, English plus catalog key.</param>
+    /// <param name="refusal">The refusal — English plus, where this process authored the sentence,
+    /// its catalog key.</param>
     /// <param name="reason">The typed rejection reason.</param>
-    /// <returns>The failed response, with the keyed transcript attached.</returns>
-    public static CreateNodeResponse Fail(
+    /// <returns>The failed response, with the refusal's transcript attached.</returns>
+    public static CreateNodeResponse FailWith(
         LocalizableText refusal,
         NodeCreationRejectionReason reason = NodeCreationRejectionReason.Unknown)
         => new((MeshNode?)null)
@@ -140,6 +155,7 @@ public record CreateNodeResponse(MeshNode? Node)
             RejectionReason = reason,
             Log = NodeCreationFailure.Transcript("NodeCreation", refusal),
         };
+
 }
 
 /// <summary>
@@ -306,14 +322,18 @@ public record CreateNodesResponse(ImmutableList<MeshNode> Created, ImmutableList
     ///
     /// <para>ENGLISH, always — it is the wire value services fold into exception messages and logs.
     /// The reader-facing copy of the same sentence is on <see cref="Log"/>. See
-    /// <see cref="CreateNodeResponse.Fail(LocalizableText,NodeCreationRejectionReason)"/>.</para></summary>
+    /// <see cref="CreateNodeResponse.FailWith"/>.</para></summary>
     public string? Error { get; init; }
 
     /// <summary>
     /// Inline <see cref="Data.ActivityLog"/> — the singular create's <see cref="CreateNodeResponse.Log"/>
-    /// on the BULK verb, and for the same reason (#4507): it is where a refusal travels KEYED, so a
-    /// viewer reads it in their own language while <see cref="Error"/> stays the English wire value.
-    /// <c>null</c> on success and on any refusal composed without a catalog key.
+    /// on the BULK verb, and for the same reason (#4507): it is where a refusal travels with its
+    /// catalog key, so a viewer reads it in their own language while <see cref="Error"/> stays the
+    /// English wire value.
+    ///
+    /// <para><c>null</c> on success and on a refusal built through <see cref="Fail(string,NodeCreationRejectionReason,string,ImmutableList{MeshNode})"/>,
+    /// which carries no transcript at all. Non-null does NOT imply localizable — see the note on
+    /// <see cref="CreateNodeResponse.Log"/>.</para>
     /// </summary>
     public ActivityLog? Log { get; init; }
 
@@ -332,7 +352,8 @@ public record CreateNodesResponse(ImmutableList<MeshNode> Created, ImmutableList
 
     /// <summary>Creates a failed response from UNKEYED text — see the note on
     /// <see cref="CreateNodeResponse.Fail(string,NodeCreationRejectionReason)"/>: no
-    /// <see cref="Log"/> is attached, so no viewer can read it in their own language.</summary>
+    /// <see cref="Log"/> is attached at all, so there is nothing for a viewer to read in their own
+    /// language.</summary>
     public static CreateNodesResponse Fail(
         string error,
         NodeCreationRejectionReason reason = NodeCreationRejectionReason.Unknown,
@@ -345,14 +366,17 @@ public record CreateNodesResponse(ImmutableList<MeshNode> Created, ImmutableList
             FailedPath = failedPath,
         };
 
-    /// <summary>Creates a failed response carrying the refusal KEYED on <see cref="Log"/> — the
-    /// bulk twin of <see cref="CreateNodeResponse.Fail(LocalizableText,NodeCreationRejectionReason)"/>.</summary>
-    /// <param name="refusal">The refusal, English plus catalog key.</param>
+    /// <summary>Creates a failed response carrying the refusal on <see cref="Log"/> — the bulk twin
+    /// of <see cref="CreateNodeResponse.FailWith"/>, and named apart from
+    /// <see cref="Fail(string,NodeCreationRejectionReason,string,ImmutableList{MeshNode})"/> for the
+    /// overload-ambiguity reason stated there.</summary>
+    /// <param name="refusal">The refusal — English plus, where this process authored the sentence,
+    /// its catalog key.</param>
     /// <param name="reason">The typed rejection reason.</param>
     /// <param name="failedPath">The node the failure was detected on, when attributable.</param>
     /// <param name="created">What had already landed, for a mid-batch storage failure.</param>
-    /// <returns>The failed response, with the keyed transcript attached.</returns>
-    public static CreateNodesResponse Fail(
+    /// <returns>The failed response, with the refusal's transcript attached.</returns>
+    public static CreateNodesResponse FailWith(
         LocalizableText refusal,
         NodeCreationRejectionReason reason = NodeCreationRejectionReason.Unknown,
         string? failedPath = null,
@@ -1097,8 +1121,38 @@ public static class NodeCreationFailure
     }
 
     /// <summary>
-    /// The keyed refusal <see cref="ToException"/> stamped, or <c>null</c> when the failure carried
-    /// none. Render it with <c>message.Localize(host.ViewerLocale())</c>; fall back to
+    /// The BULK twin (#4507, raised in review on #4512). <c>IMeshService.CreateNodes</c> reports
+    /// failure by throwing exactly as the singular surface does, and it used to hand-roll its own
+    /// <see cref="NodeCreationRejectionReason"/> switch — so a bulk caller lost BOTH the localizable
+    /// refusal this change introduced AND the typed reason the singular leg has carried since #3407.
+    /// Routing both verbs through one helper is what keeps them from drifting again.
+    ///
+    /// <para>There is no <c>path</c> parameter and no <c>NodeAlreadyExists</c> arm: a batch has no
+    /// single offending path (the response names it in <see cref="CreateNodesResponse.FailedPath"/>
+    /// when it is attributable), and an existing path is SKIPPED by this verb and reported in
+    /// <see cref="CreateNodesResponse.Existing"/> rather than refused.</para>
+    /// </summary>
+    /// <param name="response">The failed bulk response.</param>
+    /// <returns>The exception, with the typed reason and any keyed refusal attached.</returns>
+    public static Exception ToException(this CreateNodesResponse response)
+    {
+        Exception ex = response.RejectionReason switch
+        {
+            NodeCreationRejectionReason.ValidationFailed =>
+                new UnauthorizedAccessException(response.Error ?? "Access denied"),
+            _ => new InvalidOperationException(response.Error ?? "Bulk node creation failed"),
+        };
+        ex.Data[RejectionReasonKey] = response.RejectionReason;
+        if (response.Log?.Messages is [.., var refusal] && !string.IsNullOrEmpty(refusal.MessageKey))
+            ex.Data[RefusalKey] = refusal;
+        return ex;
+    }
+
+    /// <summary>
+    /// The keyed refusal <see cref="ToException(CreateNodeResponse,string)"/> and
+    /// <see cref="ToException(CreateNodesResponse)"/> stamp, or <c>null</c> when the failure carried
+    /// none — which is the honest answer for an upstream sentence nobody here authored. Render it
+    /// with <c>message.Localize(host.ViewerLocale())</c>; fall back to
     /// <see cref="Exception.Message"/>, which is the same sentence in English.
     /// </summary>
     /// <param name="ex">The exception a create surface threw.</param>

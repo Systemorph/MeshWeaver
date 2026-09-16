@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
@@ -175,12 +175,12 @@ internal sealed class MeshService(
                     var r = d.Message;
                     if (r.Success)
                         return Observable.Return(r);
-                    return Observable.Throw<CreateNodesResponse>(r.RejectionReason switch
-                    {
-                        NodeCreationRejectionReason.ValidationFailed =>
-                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
-                        _ => new InvalidOperationException(r.Error ?? "Bulk node creation failed"),
-                    });
+                    // ONE mapping for both create verbs — see NodeCreationFailure. The copy that
+                    // used to live here dropped the typed reason AND (once #4507 gave the bulk leg
+                    // a transcript) the localizable refusal, so a bulk caller on the sanctioned
+                    // surface could neither classify the failure nor show it in the viewer's
+                    // language, unlike the singular one.
+                    return Observable.Throw<CreateNodesResponse>(r.ToException());
                 });
         }).CarryAccessContext(hub.ServiceProvider);
     }

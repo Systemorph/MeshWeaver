@@ -1,5 +1,6 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -30,8 +31,13 @@ namespace MeshWeaver.Hosting.Test;
 /// </summary>
 public class CreateRefusalCatalogTest
 {
-    /// <summary>The refusal namespaces #4507 introduced, as the catalog prefixes they live under.</summary>
-    private static readonly string[] Prefixes =
+    /// <summary>
+    /// The refusal namespaces #4507 introduced, as the catalog prefixes they live under.
+    /// <see cref="ImmutableArray{T}"/> rather than <c>string[]</c>: <c>static readonly</c> protects
+    /// only the REFERENCE, so an array would still be a process-wide mutable collection — the
+    /// sanctioned exception is an IMMUTABLE constant lookup, which this is.
+    /// </summary>
+    private static readonly ImmutableArray<string> Prefixes =
         ["activity.node.create.", "activity.node.bulkCreate.", "activity.satellite."];
 
     /// <summary>
@@ -166,23 +172,34 @@ public class CreateRefusalCatalogTest
     {
         var refusal = LocalizableText.Keyed("Validation failed", "activity.node.create.validationFailed");
 
-        var keyed = CreateNodeResponse.Fail(refusal, NodeCreationRejectionReason.ValidationFailed);
+        var keyed = CreateNodeResponse.FailWith(refusal, NodeCreationRejectionReason.ValidationFailed);
         keyed.Error.Should().Be("Validation failed", "Error is the ENGLISH wire value");
         keyed.Log.Should().NotBeNull();
         keyed.Log!.Messages.Should().ContainSingle().Which.MessageKey
             .Should().Be("activity.node.create.validationFailed");
         keyed.Log.Status.Should().Be(ActivityStatus.Failed);
 
-        var bulk = CreateNodesResponse.Fail(refusal, NodeCreationRejectionReason.ValidationFailed, "P/x");
+        var bulk = CreateNodesResponse.FailWith(refusal, NodeCreationRejectionReason.ValidationFailed, "P/x");
         bulk.Error.Should().Be("Validation failed");
         bulk.Log!.Messages.Should().ContainSingle().Which.MessageKey
             .Should().Be("activity.node.create.validationFailed");
         bulk.FailedPath.Should().Be("P/x");
 
-        // The string overload stays, and stays honest: no key, so no transcript to render.
+        // The string factory stays, and stays honest: it carries no transcript at all.
         CreateNodeResponse.Fail("raw", NodeCreationRejectionReason.Unknown).Log.Should().BeNull(
-            "attaching a transcript with no key would advertise a localized surface that renders "
-            + "English for every viewer — the pretence the Verbatim/Keyed split exists to prevent");
+            "the string factory is for callers outside the create legs that only need a failed "
+            + "response shape — inventing a transcript for them would advertise a surface nobody "
+            + "composed");
+
+        // 🚨 And the contract a reader must NOT infer: a transcript is attached for a VERBATIM
+        // refusal too. Upstream words are worth showing; they simply render the same in every
+        // language. Localizable is a property of the MESSAGE (its key), never of the log's presence
+        // — which is exactly the test ToException applies before stamping (raised in review on
+        // #4512, where the doc claimed the opposite).
+        var verbatim = CreateNodeResponse.FailWith(
+            LocalizableText.Verbatim("Npgsql said no"), NodeCreationRejectionReason.Unknown);
+        verbatim.Log.Should().NotBeNull();
+        verbatim.Log!.Messages.Should().ContainSingle().Which.MessageKey.Should().BeNullOrEmpty();
     }
 
     /// <summary>
@@ -193,10 +210,11 @@ public class CreateRefusalCatalogTest
     [Fact]
     public void OnlyAKeyedRefusalCrossesTheExceptionBoundary()
     {
+        var refusal = LocalizableText.Keyed("Node path and Id must not be empty",
+            CreateNodesRequest.EmptyPathOrIdKey);
+
         var keyed = CreateNodeResponse
-            .Fail(LocalizableText.Keyed("Node path and Id must not be empty",
-                    CreateNodesRequest.EmptyPathOrIdKey),
-                NodeCreationRejectionReason.ValidationFailed)
+            .FailWith(refusal, NodeCreationRejectionReason.ValidationFailed)
             .ToException("P/x");
 
         keyed.RefusalText().Should().NotBeNull();
@@ -204,10 +222,26 @@ public class CreateRefusalCatalogTest
         keyed.RefusalText()!.Localize("en").Should().Be(keyed.Message);
 
         var verbatim = CreateNodeResponse
-            .Fail(LocalizableText.Verbatim("Npgsql said no"), NodeCreationRejectionReason.Unknown)
+            .FailWith(LocalizableText.Verbatim("Npgsql said no"), NodeCreationRejectionReason.Unknown)
             .ToException("P/x");
         verbatim.RefusalText().Should().BeNull(
             "upstream words carry no key, and offering them as a localizable refusal would tell "
             + "the dialog it can translate text nobody here wrote");
+
+        // 🚨 THE BULK VERB, and it is not symmetry for its own sake: IMeshService.CreateNodes
+        // reports failure by throwing exactly as CreateNode does, and its own copy of the mapping
+        // dropped BOTH of these (raised in review on #4512).
+        var bulk = CreateNodesResponse
+            .FailWith(refusal, NodeCreationRejectionReason.ValidationFailed, "P/x")
+            .ToException();
+
+        bulk.Should().BeOfType<UnauthorizedAccessException>(
+            "ValidationFailed stays an authorization error on this verb too");
+        bulk.Data[NodeCreationFailure.RejectionReasonKey].Should()
+            .Be(NodeCreationRejectionReason.ValidationFailed,
+                "the typed reason must survive the bulk exception boundary, which the hand-rolled "
+                + "switch in MeshService never stamped");
+        bulk.RefusalText().Should().NotBeNull();
+        bulk.RefusalText()!.Localize("de").Should().NotBe(bulk.Message);
     }
 }

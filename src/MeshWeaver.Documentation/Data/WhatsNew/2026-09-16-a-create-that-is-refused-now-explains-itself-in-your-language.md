@@ -1,7 +1,7 @@
 ---
 Name: A create that is refused now explains itself in your language
 Category: Fix
-Description: Every reason a new node could be refused — an unregistered type, a name already taken, a batch with a duplicate path, a store that could not be reached — was written in English, whatever language you read the portal in. All of them are now translated, and the Create dialog shows the translated sentence.
+Description: The reasons a new node could be refused — an unregistered type, a name already taken, a batch with a duplicate path, a store that could not be reached — were written in English, whatever language you read the portal in. Every sentence the portal itself writes is now translated, and the Create dialog shows you the translated one; text that came from somewhere else, such as a database driver's own words, is still shown exactly as it arrived.
 Icon: Translate
 Order: -20260916
 ---
@@ -25,8 +25,10 @@ actionable message rather than an internal error that had leaked out.
 
 ## What changed
 
-Every sentence the create path writes about a refusal is now translated — the whole surface at once,
-not one message at a time. That includes:
+Every sentence the create path **writes itself** about a refusal is now translated — the whole
+surface at once, not one message at a time. (Text that reaches you from somewhere else is a separate
+case, and the last section says which cases those are and why they stay as they arrived.) That
+includes:
 
 - a type that is not registered, and a path that is already taken;
 - a name or an identifier left empty, and a page with neither a type nor any content;
