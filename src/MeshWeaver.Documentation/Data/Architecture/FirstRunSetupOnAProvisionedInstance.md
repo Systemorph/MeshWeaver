@@ -192,6 +192,34 @@ fills.
   the only path, and it is **unavailable on enterprise tier**, whose estate is the client's own
   subscription.
 
+## Considered and deferred: the instance asks for its own database
+
+Maintainer, 2026-09-16: *"ok. leave it as is for now."* The database stays **platform-provided at
+both tiers** — provisioned by the Provision plan, named on the record, connected through the vault
+object the operator writes — and the wizard never asks about it. The alternative was weighed and
+parked; the reasons are recorded here so the next person does not re-derive them.
+
+The alternative was: ship an instance with no database and let the wizard ask for one — "create a
+Postgres and paste the connection string". Three things stop it:
+
+1. **The instance cannot serve that page.** Its pod waits for a database before it starts: the
+   chart's `wait-for-postgres` init container gates the portal, and the migration job runs before it
+   too. A wizard that asks for the database is a wizard the database has to exist for — the page
+   would have to be served by something else, which is a second surface, not this one.
+2. **The answer is not one string.** The database must be in the right region, carry pgvector, and
+   be reachable from the cluster's network — on a private cluster that means a private endpoint and
+   a DNS zone link, not a host name. Asking for a connection string invites answers that are
+   syntactically fine and unreachable, and the failure lands at the next pod start, after the
+   wizard is gone.
+3. **It would move only half of anything.** An instance's attachments, file shares and logs stay in
+   our estate on the SME tier by design. A client-owned database beside Systemorph-owned attachments
+   is not "their data in their subscription"; it is the same commingling with an extra moving part.
+
+When it *is* revisited, the honest form is the enterprise tier's, where the estate is already the
+client's: the resource exists in their subscription, the guidance and the values are theirs, and the
+wizard's job is to collect and validate rather than to conjure a database an instance needs in order
+to run at all.
+
 ## The vault, and what a prefix is not
 
 Each client instance gets **its own Key Vault**, the one its record already names — not a shared
