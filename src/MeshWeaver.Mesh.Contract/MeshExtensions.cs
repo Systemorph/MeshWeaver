@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
@@ -5581,14 +5581,32 @@ public static class MeshExtensions
                             }
                             if (outcome.Error is { } ex)
                             {
+                                var reason = NodeUpsertRejection.Classify(ex);
                                 logger.LogWarning(ex,
-                                    "[CreateOrUpdate] inner UpdateNode faulted for {Path}", node.Path);
+                                    "[CreateOrUpdate] inner UpdateNode faulted for {Path} ({Reason})",
+                                    node.Path, reason);
+                                // 🚨 A RECYCLE IS NOT A VERDICT ABOUT THE WRITE (MeshWeaver#4484).
+                                // The owner refusing an intake because it is restarting says nothing
+                                // about the node, the payload or the caller — and flattening it to
+                                // Unknown told a caller who had done everything right that something
+                                // unnameable had gone wrong. It matters most for the one route that
+                                // CAUSES the recycle: retyping a stranded node is the sanctioned
+                                // repair (#2993), the retype makes the rebind watcher recycle the
+                                // owner, and a second repair moments later races the first. The
+                                // caller is told which condition it hit and that the address comes
+                                // back, so "retry" is a decision rather than a guess.
                                 PostFail(
-                                    LocalizableText.Keyed($"Inner UpdateNode faulted: {ex.Message}",
-                                        "activity.node.upsert.innerUpdateFaulted", ("error", ex.Message)),
-                                    ex is UnauthorizedAccessException
-                                        ? NodeUpsertRejectionReason.Unauthorized
-                                        : NodeUpsertRejectionReason.Unknown);
+                                    reason == NodeUpsertRejectionReason.AddressRecycling
+                                        ? LocalizableText.Keyed(
+                                            $"The owner of '{node.Path}' is recycling, so the write "
+                                            + "was refused on arrival and NOTHING was written — the "
+                                            + "address reactivates, so this is worth retrying. "
+                                            + $"Underlying report: {ex.Message}",
+                                            "activity.node.upsert.addressRecycling",
+                                            ("path", node.Path), ("error", ex.Message))
+                                        : LocalizableText.Keyed($"Inner UpdateNode faulted: {ex.Message}",
+                                            "activity.node.upsert.innerUpdateFaulted", ("error", ex.Message)),
+                                    reason);
                                 return;
                             }
                             hub.NoteRequestStage(request.Id, "UPSERT_UPDATE_COMPLETED_EMPTY");

@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -561,6 +561,47 @@ public enum NodeUpsertRejectionReason
     Unauthorized,
     /// <summary>The JSON Patch on an existing node failed to apply (e.g. test operation mismatch).</summary>
     PatchFailed,
+
+    /// <summary>
+    /// 🚨 <b>TRANSIENT — nothing was written, and the caller may retry.</b> The owning hub was
+    /// recycling when the write arrived, so the intake gate refused it by its own contract ("the
+    /// address may reactivate"). This is NOT a verdict about the node, the payload or the caller's
+    /// permissions.
+    ///
+    /// <para>It exists because the honest answer was previously flattened to
+    /// <see cref="Unknown"/> (MeshWeaver#4484). The sanctioned repair for a stranded node is an
+    /// upsert that retypes it (#2993 — <c>patch</c> cannot write <c>nodeType</c>), and that retype
+    /// makes the owner's rebind watcher recycle the owner. A human doing exactly the right thing
+    /// twice in a row therefore raced their own first write, and got back
+    /// <c>success=false reason=Unknown</c> — a sentence naming neither the recycle nor the retry
+    /// that would have worked. A refusal a caller cannot act on is the defect; the race is the
+    /// framework's to close separately.</para>
+    /// </summary>
+    AddressRecycling,
+}
+
+/// <summary>
+/// How an upsert's inner failure becomes a <see cref="NodeUpsertRejectionReason"/> — pure, so the
+/// classification is asserted without a mesh, a hub or a race.
+/// </summary>
+public static class NodeUpsertRejection
+{
+    /// <summary>
+    /// The reason that describes <paramref name="error"/>.
+    ///
+    /// <para>Reads the messaging layer's OWN classification rather than the exception's
+    /// user-facing text: <see cref="DeliveryFailure.ErrorType"/> is what
+    /// <see cref="DeliveryFailureException"/> carries for exactly this purpose, and matching on a
+    /// message would break the first time someone rewords it.</para>
+    /// </summary>
+    /// <param name="error">The fault the inner write produced, or <c>null</c>.</param>
+    public static NodeUpsertRejectionReason Classify(Exception? error) => error switch
+    {
+        UnauthorizedAccessException => NodeUpsertRejectionReason.Unauthorized,
+        DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown } =>
+            NodeUpsertRejectionReason.AddressRecycling,
+        _ => NodeUpsertRejectionReason.Unknown,
+    };
 }
 
 /// <summary>
