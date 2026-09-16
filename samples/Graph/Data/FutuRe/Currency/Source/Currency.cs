@@ -19,7 +19,7 @@ public record Currency : INamed
     public string Name { get; init; } = string.Empty;
 
     /// <summary>
-    /// Currency symbol for display (e.g. $, &euro;).
+    /// Currency symbol for display (e.g. $, &#8364;).
     /// </summary>
     public string? Symbol { get; init; }
 

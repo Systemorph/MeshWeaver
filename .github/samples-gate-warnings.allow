@@ -1,0 +1,73 @@
+# The in-mesh WARNING debt the samples trees carry, for `mw-plugin-test compile
+# --warning-baseline`. Format: `<NodeType path> <diagnostic id>`, `#` comments, blanks ignored.
+#
+# 🚨 SHRINK-ONLY, and the gate holds you to it in BOTH directions:
+#   * a (type, code) pair that is NOT listed FAILS the bake — the debt cannot grow back;
+#   * a listed pair whose type compiled CLEAN of that code is STALE and FAILS the bake until the
+#     line is deleted — so paying a debt down is not optional bookkeeping.
+# A listed type that did NOT compile this run is UNVERIFIABLE, never stale: it produced no
+# warnings at all, and reading that silence as "the debt is paid" would delete a real record on a
+# measurement nobody took.
+#
+# 🚨 TWO RATCHETS, one file, split by the code — see Doc/Architecture/InMeshWarningStandard.
+#   * CS1591 is documentation debt and has its own verdict, so a missing doc comment can never be
+#     the reason an unrelated change cannot merge.
+#   * everything else is a latent bug or a doc comment that is actively WRONG.
+#
+# 🚨 THIS IS NOT A PLACE TO PUT A DIAGNOSTIC YOU DID NOT WANT TO FIX. Three whole codes that this
+# file would otherwise have carried were fixed at the ROOT instead, because the platform — not the
+# content — emitted them, and baselining them would have recorded the generator's debt under the
+# content's name in every repo of the fleet:
+#   * CS0105 (119 occurrences / 23 types) — the skeleton generator concatenated every source
+#     file's `using` lines without de-duplicating them, so correct authored source earned "the
+#     using directive … appeared previously". Fixed in DynamicMeshNodeAttributeGenerator.
+#   * CS1591 × 2 per type (54 sites) — the generated `…MeshNodeProviderAttribute` and its `Nodes`
+#     property are public and were undocumented. No author could ever have fixed those. Fixed by
+#     generating the doc comments.
+#   * CS8632 (21 types) — authored `string?` in a tree with no `#nullable` directive. Fixed with
+#     NullableContextOptions.Annotations (the annotation context only — no nullable analysis).
+# Measured before/after on this tree: 850 raw occurrences over 27 of 27 types → 375 over 18.
+
+# ── CS1591 · missing XML doc comment (the doc-comments ratchet) ────────────────────────────────
+# 362 occurrences over 271 distinct members in 17 NodeTypes, all of it authored sample content.
+# Every line here is one NodeType's worth of undocumented public API; delete the line the day that
+# type is fully documented — the gate will tell you, by failing on the stale entry.
+ACME/Article                CS1591
+ACME/Project                CS1591
+ACME/Project/Todo           CS1591
+FutuRe/BusinessUnit         CS1591
+FutuRe/ExchangeRate         CS1591
+FutuRe/GroupAnalysis        CS1591
+FutuRe/LineOfBusiness       CS1591
+FutuRe/LocalAnalysis        CS1591
+MathDemo/Matrix             CS1591
+Northwind/AnalyticsCatalog  CS1591
+Northwind/Article           CS1591
+Northwind/Customer          CS1591
+Northwind/Employee          CS1591
+Northwind/Product           CS1591
+Northwind/Supplier          CS1591
+PensionFund/Position        CS1591
+PythonDemo/PrimeReport      CS1591
+
+# ── CS1701 · assembly-reference version skew (the warnings ratchet) ────────────────────────────
+# 🚨 The ONE class of entry here whose owner is the REFERENCE SET rather than the content:
+#   "Assuming assembly reference 'System.Linq.Expressions, Version=8.0.0.0' used by
+#    'System.Reactive' matches identity '…, Version=10.0.0.0' … you may need to supply runtime policy"
+# System.Reactive is compiled against .NET 8's System.Linq.Expressions and runs on the .NET 10
+# shared framework. No content author can fix it and no `#pragma` belongs in their source; the
+# honest outcome is that the bake RECORDS it. It lands on exactly the types whose compile binds Rx,
+# so a line goes stale when a type stops using it — which is the ratchet working, not churn.
+ACME/Article                CS1701
+ACME/Project                CS1701
+ACME/Project/Todo           CS1701
+FutuRe/GroupAnalysis        CS1701
+FutuRe/LocalAnalysis        CS1701
+Northwind/AnalyticsCatalog  CS1701
+Northwind/Article           CS1701
+Northwind/Customer          CS1701
+Northwind/Employee          CS1701
+Northwind/Product           CS1701
+Northwind/ReportsCatalog    CS1701
+Northwind/Supplier          CS1701
+PythonDemo/PrimeReport      CS1701
