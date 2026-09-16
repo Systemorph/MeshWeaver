@@ -1361,6 +1361,7 @@
   "activity.node.upsert.createNoVerdict": "The create for '{path}' produced no response within {seconds}s. The outcome is unknown; the node may already have been persisted. Check its state before retrying.",
   "activity.node.upsert.innerCreateFaulted": "Inner CreateNode faulted: {error}",
   "activity.node.upsert.createCompletedEmpty": "The create for '{path}' completed without producing a response. It was NOT applied; retry against the fresh activation.",
+  "activity.node.upsert.addressRecycling": "The owner of '{path}' is recycling, so the write was refused on arrival and NOTHING was written \u2014 the address reactivates, so this is worth retrying. Underlying report: {error}",
   "activity.node.upsert.innerUpdateFaulted": "Inner UpdateNode faulted: {error}",
   "activity.node.upsert.updateCompletedEmpty": "The update of '{path}' completed without producing a result or a fault, so the write is NOT confirmed. The outcome is unknown: the owner may have committed it without acknowledging. Check the node's state before retrying.",
   "activity.nodeType.notRegistered": "NodeType '{nodeType}' is not registered — refusing to set it on '{path}'. A node whose NodeType resolves to nothing has no per-node hub: it reads as Unavailable, renders empty, and never reaches a verdict. Import or create the NodeType first, or name a type that exists. (Updating this node WITHOUT changing its NodeType is always allowed, so an already-mistyped node can still be repaired by naming a type that resolves.)",
