@@ -22,6 +22,16 @@ public static class DeploymentPortalConfig
     /// <summary>The configuration key prefix the portal reads its module policy from.</summary>
     public const string ModulesSection = "Modules";
 
+    /// <summary>
+    /// The key a record states with that its own <c>Modules:Required</c> entries are the COMPLETE
+    /// required set for the instance — see <see cref="DeploymentContent.RequiredModulesAuthoritative"/>.
+    /// The reader is <c>MeshWeaver.Mesh.MeshBuilderModuleActivation.RequiredIsAuthoritativeKey</c>;
+    /// the string is repeated rather than shared because this assembly deliberately carries ZERO
+    /// MeshWeaver references (it ships inside the published Aspire package), and
+    /// <c>RequiredModuleAuthorityTest</c> holds the two spellings together.
+    /// </summary>
+    public const string RequiredIsAuthoritativeKey = $"{ModulesSection}:RequiredIsAuthoritative";
+
     /// <summary>Conventional suffix of the vault secret holding the main DB connection string.</summary>
     public const string DatabaseSecretSuffix = "db-connection";
 
@@ -139,8 +149,22 @@ public static class DeploymentPortalConfig
     /// <summary>
     /// The <c>Modules:Required:N</c> entries for a record's boot modules — trimmed, <c>.dll</c>
     /// appended when the author wrote the bare assembly name, deduplicated case-insensitively,
-    /// order preserved. 🚨 These entries override the image's own list BY INDEX (an array key never
-    /// appends), so a non-empty list is the COMPLETE required set.
+    /// order preserved.
+    ///
+    /// <para>🚨 <b>These entries override the image's own list BY INDEX, and an indexed override
+    /// replaces only the entries it NAMES.</b> The tail of a longer list stays exactly where it
+    /// was, so this list is NOT the complete required set on its own (#4476): a list shorter than
+    /// the image's leaves the image's remaining entries required, and an EMPTY list renders nothing
+    /// at all, so the image's list stands in full — emptying a record's
+    /// <see cref="DeploymentContent.RequiredModules"/> does not relax the requirement, it restores
+    /// it. Neither this renderer nor the record can know how long the image's list is; the image
+    /// ships from another repository and has already grown from seven entries to nine underneath a
+    /// record that picked "the first free slot".</para>
+    ///
+    /// <para>A record says "these and only these" with
+    /// <see cref="DeploymentContent.RequiredModulesAuthoritative"/>, which renders
+    /// <see cref="RequiredIsAuthoritativeKey"/> beside the entries. That is a SCALAR key, so it
+    /// cannot be index-merged away, and it is what makes the empty list mean "require nothing".</para>
     /// </summary>
     public static ImmutableList<string> ModuleEntries(IEnumerable<string>? requiredModules)
     {
@@ -280,9 +304,16 @@ public static class DeploymentPortalConfig
     /// module policy — one deterministic list, so "what will this instance boot with" is
     /// answerable from the record alone.
     /// </summary>
-    public static ImmutableList<string> BootConfigurationEntries(DeploymentContent? record) =>
-        ConfigurationEntries(record?.PluginRepos, record?.PreInstall)
+    public static ImmutableList<string> BootConfigurationEntries(DeploymentContent? record)
+    {
+        var entries = ConfigurationEntries(record?.PluginRepos, record?.PreInstall)
             .AddRange(ModuleEntries(record?.RequiredModules));
+        // The authority claim rides with the entries it qualifies, on BOTH routes — an entry list
+        // delivered without it reads as a by-index overlay, which is what it was before #4476.
+        return record?.RequiredModulesAuthoritative == true
+            ? entries.Add($"{RequiredIsAuthoritativeKey}=true")
+            : entries;
+    }
 
     /// <summary>
     /// Why the instance spec cannot bring an instance up, or an empty list when it can — the
@@ -354,6 +385,12 @@ public static class DeploymentPortalConfig
         SetBool("Modules__AutoRecycleOnStaleBuild", d.AutoRecycleOnStaleBuild);
         foreach (var (slot, assembly) in ModuleSlots(d))
             Set($"Modules__Required__{slot}", assembly);
+        // 🚨 Rendered only when the record CLAIMS it, and never as "false": the reader takes an
+        // explicit false as a withdrawal, and a record that says nothing must leave the merged
+        // reading exactly as it was. The key is a scalar, so it survives the by-index merge that
+        // the entries above cannot — which is the whole reason the empty list can mean "none".
+        if (d.RequiredModulesAuthoritative)
+            Set(RequiredIsAuthoritativeKey.Replace(":", "__"), "true");
 
         // The catalog wiring rides with the record on BOTH routes, but the chart delivers it through
         // the operator's catalog config file (BootConfigurationEntries → HOSTING_CATALOG_CONFIG)

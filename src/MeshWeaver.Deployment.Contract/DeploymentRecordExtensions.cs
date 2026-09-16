@@ -166,7 +166,9 @@ public static class DeploymentRecordExtensions
 
     /// <summary>
     /// Boot modules the image MUST load (assembly file names; <c>.dll</c> appended when omitted).
-    /// 🚨 A non-empty list overrides the image's own list BY INDEX — it is the complete set.
+    /// 🚨 A non-empty list overrides the image's own list BY INDEX, entry for entry — it is NOT the
+    /// complete set on its own, and the image's tail past it stays required. Say "these and only
+    /// these" with <see cref="WithRequiredModulesAuthoritative"/>.
     /// </summary>
     public static DeploymentContent WithRequiredModules(this DeploymentContent d, params string[] assemblies) =>
         d with { RequiredModules = d.RequiredModules.AddRange(assemblies) };
@@ -181,6 +183,14 @@ public static class DeploymentRecordExtensions
     /// <summary>A boot module at an explicit slot (a by-index override of the image's list).</summary>
     public static DeploymentContent WithRequiredModuleSlot(this DeploymentContent d, int slot, string assembly) =>
         d with { RequiredModuleSlots = d.RequiredModuleSlots.SetItem(slot, assembly) };
+
+    /// <summary>
+    /// States that this record's required modules are the COMPLETE set — the image's own
+    /// <c>Modules:Required</c> list does not apply, including when the record names none. Renders
+    /// <c>Modules:RequiredIsAuthoritative=true</c>, the one thing an index-merged array cannot say.
+    /// </summary>
+    public static DeploymentContent WithRequiredModulesAuthoritative(this DeploymentContent d, bool authoritative = true) =>
+        d with { RequiredModulesAuthoritative = authoritative };
 
     // ── shape ───────────────────────────────────────────────────────────────────────────────────
 

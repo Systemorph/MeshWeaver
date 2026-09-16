@@ -173,6 +173,7 @@ configures no container.
 | `WithRequiredModule(assembly)` | `RequiredModules` | `config.memex_portal.Modules__Required__N` | `Modules__Required__0` |
 | `ClearRequiredModules()` | `RequiredModules`, `RequiredModuleSlots` | `config.memex_portal.Modules__Required__N` | — |
 | `WithRequiredModuleSlot(slot, assembly)` | `RequiredModuleSlots` | `config.memex_portal.Modules__Required__N` | `Modules__Required__*` |
+| `WithRequiredModulesAuthoritative(authoritative)` | `RequiredModulesAuthoritative` | `config.memex_portal.Modules__RequiredIsAuthoritative` | `Modules__RequiredIsAuthoritative` |
 | `WithReplicas(replicas)` | `Replicas` | `replicas` | — |
 | `WithOrleansClustering(clustering)` | `OrleansClustering` | `config.memex_portal.Deployment__Orleans__Clustering` | `Deployment__Orleans__Clustering` |
 | `WithHttpPort(port)` | `HttpPort` | `config.memex_portal.ASPNETCORE_HTTP_PORTS` | `ASPNETCORE_HTTP_PORTS` |
@@ -299,6 +300,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `MinRollInterval` | Minimum interval between self-update rolls | Mindestabstand zwischen Selbst-Update-Rollouts |
 | `DeploymentContent` | `AutoRecycleOnStaleBuild` | Auto-recycle on a stale NodeType build | Bei veraltetem NodeType-Build automatisch neu laden |
 | `DeploymentContent` | `RequiredModuleSlots` | Boot modules at explicit slots (by-index override) | Boot-Module an expliziten Slots (Überschreiben nach Index) |
+| `DeploymentContent` | `RequiredModulesAuthoritative` | The required-module list is the complete set (the image's own list does not apply) | Die Liste der erforderlichen Module ist der vollständige Satz (die Liste des Images gilt nicht) |
 | `DeploymentContent` | `WebhookInboxTargets` | Webhook inbox targets, by slot (legacy — prefer the typed slots) | Webhook-Eingangsziele, nach Slot (veraltet — die typisierten Slots bevorzugen) |
 | `DeploymentContent` | `WebhookInbox` | Webhook inbox slots: target + the config key holding its HMAC secret | Webhook-Eingangs-Slots: Ziel + Konfigurationsschlüssel des HMAC-Geheimnisses |
 | `DeploymentContent` | `SocialLinkedInClientId` | Social LinkedIn client id | LinkedIn-Client-ID des Social-Plugins |
