@@ -80,6 +80,39 @@ not also being the target is the undeliverable-mail NACK (`RoutingServiceBase.Po
 `NackRouteFailure` post their `DeliveryFailure` from the mesh hub via `ResponseFor`, so its sender is
 honestly `mesh/{id}`). Both are excluded by the shared predicate, at both sites.
 
+**A delivery the receiver correlates BY ITS SENDER.** A message implementing
+`ICorrelatedBySender` is excluded at both sites. The claim it carries is about the RECEIVER: some
+earlier delivery already told that receiver to remember this sender, and this one is only meaningful
+against that memory — so re-posting it from an off-router hub, the one change that would silence the
+report, is precisely what breaks the pairing.
+
+There is exactly one implementer, and it is the residue #4487 deliberately left behind (#4489, split
+from #1140): the `UnsubscribeRequest` posted by `JsonSynchronizationStream.CreateExternalClient`'s
+release disposable. Every other site in that class could adopt an issuing seam, because the seams are
+the identity function for a non-router caller and the sender there is incidental. Here it is not:
+
+- the release and the `SubscribeRequest` it pairs with are posted from the **same** `workspace.Hub`
+  (the subscribe at `postSubscribeRequest`, the release in the disposable), and the owner's
+  per-subscriber stream is keyed on the subscriber that opened it — so hopping **only** the
+  unsubscribe leaves the owner holding a subscription opened by one hub and released by another;
+- hopping **both** changes `SubscribeRequest.Identity`, which is what the owner's access check reads.
+  That path's failure mode is documented at the call site: a wiped `AccessContext` fails closed, the
+  owner denies the subscribe, the consumer re-opens, and the result is a denied-subscribe flood.
+
+So the recorded decision is that a `mesh/{id}` sender on this release is **correct**, not a violation
+awaiting a fix, and the detector should stop demanding a change nobody may make. Reporting it is the
+shape that trains people to mute the channel.
+
+🚨 **Why a marker on the message rather than an allow-file line.** The exclusion travels with the
+contract, so a rename cannot silently detach it, and it is visible where the decision applies rather
+than in a file nobody reads at the call site. The cost is that a marker on the *wrong* message would
+silence a real violation with no report to notice — so it is pinned from both ends:
+`RouterTrafficRuleTest.AnOrdinaryMessageInTheSamePositions_IsStillReported` keeps the predicate
+narrow, and `AnUnsubscribeIsCorrelatedByItsSenderTest` pins which message carries the claim **and**
+that `SubscribeRequest` deliberately does not. Silencing both halves of the pair would remove the
+detector's view of subscription traffic entirely; if that is ever wanted it is a second decision with
+its own argument, not a side effect of this one.
+
 **A routing HOP.** `HierarchicalRouting` sends every hosted hub's non-local delivery UP via
 `parentHub.DeliverMessage(delivery)`, and for essentially every hub in the process that parent is the
 root mesh hub. Keying the rule on the RECEIVING hub's address rather than the delivery's own ends
