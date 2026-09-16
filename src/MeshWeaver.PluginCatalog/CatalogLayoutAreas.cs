@@ -1497,8 +1497,15 @@ public static class CatalogLayoutAreas
                         hub.JsonSerializerOptions, declaredNodePaths)
                     .SelectMany(present =>
                     {
+                        // 🚨 #3659 — a file the install itself could not read as a node is
+                        // PERMANENTLY node-less, so widening the fetch for it would re-fetch,
+                        // re-parse and re-skip it on every update forever, under a line that calls
+                        // it an absent node being restored. A file whose hash MOVED is in
+                        // `changedContent` and travels regardless, so a fixed one is still
+                        // re-examined and drops out of the record.
                         var restore = InstallCompleteness.FilesToRestore(
-                            newManifest.Files, changedContent, present, parsers);
+                            newManifest.Files, changedContent, present, parsers,
+                            record.UnreadableFiles);
 
                         // 🚨 The SAME rule the changed-file guard above applies, and for the same
                         // reason: a package's shared Source/Test are compile inputs for EVERY type

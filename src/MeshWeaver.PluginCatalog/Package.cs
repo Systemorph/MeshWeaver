@@ -395,14 +395,19 @@ public record PackageManifest
     /// and deliberately NOT another exclusion list: a list would have to grow a case for every new
     /// carry-along shape, which is what let a <c>.tsx</c> and then a <c>package.json</c> through.</para>
     ///
-    /// <para>🚨 <b><c>null</c> and empty are different answers.</b> <c>null</c> means no install has
-    /// recorded it (a record stamped before this field existed) — unknown, and the sweep must behave
-    /// exactly as it did before rather than read it as a clean zero. An EMPTY set is a real
-    /// observation: this install parsed every node candidate and all of them became nodes.</para>
+    /// <para>🚨 <b><c>null</c> and empty are different answers, and only a WHOLE-PACKAGE look may
+    /// produce the empty one.</b> <c>null</c> means no install has recorded an answer — a record
+    /// stamped before this field existed, or one whose only writes since were partial — so the sweep
+    /// behaves exactly as it did before rather than reading it as a clean zero. An EMPTY set is the
+    /// positive claim that every declared node candidate has been parsed and all of them became
+    /// nodes.</para>
     ///
-    /// <para>An UPDATE merges rather than replaces: it only examined the files it fetched, so entries
-    /// for files it did not fetch are carried forward and entries for files that have left the
-    /// package are dropped (<c>PackageInstaller.MergeUnreadableFiles</c>).</para>
+    /// <para>🚨 An UPDATE examines only the files it fetched, so it may not make that claim on its
+    /// own: <c>PackageInstaller.MergeUnreadableFiles</c> merges its findings onto an existing answer
+    /// (carrying forward the files it did not look at, dropping those that have left the package),
+    /// and where there is no existing answer to build on it returns <c>null</c> rather than an empty
+    /// set. Two fetched files out of two hundred cannot certify the other one hundred and
+    /// ninety-eight (Copilot review).</para>
     /// </summary>
     public ImmutableSortedSet<string>? UnreadableFiles { get; init; }
 

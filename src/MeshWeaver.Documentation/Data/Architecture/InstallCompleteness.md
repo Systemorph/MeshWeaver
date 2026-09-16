@@ -166,17 +166,44 @@ reads it:
 | declared | `DeclaredNodePaths` subtracts exactly those files — no list, no heuristic, no second derivation |
 | report | they are named on their **own** line, at Error, as a PACKAGING defect that no reinstall can fix |
 
-🚨 **`null` and empty are different answers.** `null` means no install has recorded it — a record
-stamped before the field existed — and subtracts **nothing**, so such a record behaves exactly as it
-did before rather than reading as a clean zero. An empty set is a real observation: this install
-parsed every node candidate and all of them became nodes.
+🚨 **The report names the FILE, never the node path it would have produced.** The remedy is applied
+to `gui/rn/tsconfig.json`; a line naming `gui/rn/tsconfig` points at nothing on disk, and two files
+can fold onto one node path so the node form can also name fewer things than there are. A report
+whose purpose is to be acted on has to name the thing the operator acts on.
 
-🚨 **An update MERGES rather than replaces.** An incremental install examines only the files it
-fetched, so replacing would forget every unreadable file outside the delta and the next boot sweep
-would start reporting them ABSENT again — this defect, recreated inside its own bookkeeping.
-`PackageInstaller.MergeUnreadableFiles` keeps three rules: a file this install examined is decided
-by this install (a package that fixes its file stops being reported), a file it did not examine
-keeps the previous verdict, and a file that has left the package is dropped whatever it said.
+🚨 **`null` and empty are different answers, and only a WHOLE-PACKAGE look may produce the empty
+one.** `null` means no install has recorded an answer — a record stamped before the field existed, or
+one whose only writes since were partial — and subtracts **nothing**, so such a record behaves exactly
+as it did before rather than reading as a clean zero. An empty set is the positive claim that every
+declared node candidate was parsed and all of them became nodes.
+
+🚨 **An update MERGES rather than replaces — and may not certify what it did not read.** An
+incremental install examines only the files it fetched, so replacing would forget every unreadable
+file outside the delta and the next boot sweep would start reporting them ABSENT again — this defect,
+recreated inside its own bookkeeping. `PackageInstaller.MergeUnreadableFiles` keeps four rules: a file
+this install examined is decided by this install (a package that fixes its file stops being reported),
+a file it did not examine keeps the previous verdict, a file that has left the package is dropped
+whatever it said, and — with no previous answer to build on — a pass that did not look at every
+declared file returns `null` rather than an empty set. Two fetched files out of two hundred cannot
+certify the other one hundred and ninety-eight.
+
+That last rule also settles an ambiguity at the call site: the install record read there degrades a
+FAULT to `null`, indistinguishable from "no record". A full install after such a fault re-derives the
+whole answer and is correct regardless; an incremental one now yields `null` — honestly unknown —
+instead of dropping every carried-forward entry.
+
+🚨 **The buckets must ADD UP, and the order they are asked in decides whether they do.** The recorded
+set is an install-time observation; the registry serving *this* boot may differ, because a module
+contributes parsers. So the CURRENT rule is asked first — a file `NodePathForFile` maps to null today
+is a non-node file today — and the record only classifies files that are still node candidates.
+Asking the record first made such a file neither a non-node nor an unreadable one, and `DeclaredFiles`
+silently stopped accounting for it.
+
+🚨 **The incremental restore set excludes them too.** A file the install could not read as a node is
+permanently node-less, so widening the fetch for it would re-fetch, re-parse and re-skip it on every
+update forever, under a line calling it an absent node being restored — a second place where the
+unhealable case wears the actionable one's words. A file whose hash *moved* is in the delta and
+travels regardless, so a package that fixes its file is still re-examined and drops out of the record.
 
 **Excluding it from the ABSENT count is only half the fix.** A file a package ships that cannot
 become a node IS a fault — the package declares a node that will never exist — so silently dropping

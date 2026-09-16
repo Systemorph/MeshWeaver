@@ -348,7 +348,7 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                 // that can work. Independent of Kind, because a package whose ONLY fault is one of
                 // these is otherwise Complete and would report a clean bill of health over a node
                 // that does not exist.
-                foreach (var verdict in verdicts.Where(v => v.UnreadablePaths.Count > 0))
+                foreach (var verdict in verdicts.Where(v => v.UnreadableFilePaths.Count > 0))
                     logger?.LogError(
                         "[InstallCompleteness] {Unreadable} Counted over: {Population}, taken over "
                         + "{Record}.",

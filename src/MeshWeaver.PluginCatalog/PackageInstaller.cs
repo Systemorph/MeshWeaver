@@ -2755,9 +2755,9 @@ public static class PackageInstaller
             .FirstOrDefault(m => m is not null);
         // 🚨 #3659 — what this install could NOT turn into a node, carried to the record. A FULL
         // install parses every file the package ships, so `files` IS the examined population.
-        var unreadable = new List<string>();
-        var nodes = ParseAll(
-            parsers, files, manifest.Id, logger, hub.JsonSerializerOptions, unreadable);
+        var parsed = ParseAll(parsers, files, manifest.Id, logger, hub.JsonSerializerOptions);
+        var nodes = parsed.Nodes;
+        var unreadable = parsed.Unreadable;
         var examined = files.Select(f => f.RelativePath).ToArray();
 
         if (nodes.Length == 0)
@@ -3621,10 +3621,11 @@ public static class PackageInstaller
 
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
         // 🚨 #3659 — an INCREMENTAL update examines only what it fetched, so its answer covers
-        // exactly `changedFiles` and the record MERGES rather than replaces (MergeUnreadableFiles).
-        var unreadable = new List<string>();
-        var nodes = ParseAll(
-            parsers, changedFiles, manifest.Id, logger, hub.JsonSerializerOptions, unreadable);
+        // exactly `changedFiles` and the record MERGES rather than replaces (MergeUnreadableFiles),
+        // which also refuses to turn an UNKNOWN record into a clean one off a partial look.
+        var parsed = ParseAll(parsers, changedFiles, manifest.Id, logger, hub.JsonSerializerOptions);
+        var nodes = parsed.Nodes;
+        var unreadable = parsed.Unreadable;
         var examined = changedFiles.Select(f => f.RelativePath).ToArray();
 
         if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
@@ -3799,18 +3800,26 @@ public static class PackageInstaller
     /// nodes by design (README, manifest, `content/**` assets) are not skips and are not counted.
     /// </para>
     /// </summary>
-    /// <param name="unreadable">🚨 Filled with the relative path of every file that is a node
-    /// CANDIDATE (not excluded by design, extension claimed) and whose CONTENT did not become a
-    /// node — the one half of "is this file a node" no path-only caller can answer. Until
-    /// MeshWeaver#3659 this list existed only long enough to be counted into the log line below and
-    /// was then dropped, so the boot sweep re-derived a declared population that still contained
-    /// those files and reported them ABSENT, at Error, forever. Passing it out is what lets the
-    /// install RECORD what it actually wrote instead of the sweep guessing.</param>
-    private static MeshNode[] ParseAll(
+    /// <summary>
+    /// What one parse pass produced: the nodes, and 🚨 the relative path of every file that is a
+    /// node CANDIDATE (not excluded by design, extension claimed) whose CONTENT did not become a
+    /// node — the one half of "is this file a node" no path-only caller can answer (#3659).
+    ///
+    /// <para>A VALUE, not a mutable accumulator threaded through the parse pipeline: the
+    /// collections policy forbids sharing a <c>List&lt;T&gt;</c> across a boundary, and a result
+    /// that can be handed on by reference is a result a later caller can quietly append to
+    /// (Copilot review).</para>
+    /// </summary>
+    /// <param name="Nodes">The parsed nodes, in file order.</param>
+    /// <param name="Unreadable">The node candidates whose content did not parse, ordinal-sorted.</param>
+    private readonly record struct ParsedPackageFiles(
+        MeshNode[] Nodes, ImmutableSortedSet<string> Unreadable);
+
+    private static ParsedPackageFiles ParseAll(
         FileFormatParserRegistry parsers, IReadOnlyList<PackageFile> files, string packageId,
-        ILogger? logger, JsonSerializerOptions? options = null, List<string>? unreadable = null)
+        ILogger? logger, JsonSerializerOptions? options = null)
     {
-        var unparsed = unreadable ?? [];
+        var unparsed = new List<string>();
         var nodes = files
             .Select(f => ParseCanonical(parsers, f, logger, options, unparsed))
             .Where(n => n is not null).Select(n => n!)
@@ -3831,7 +3840,8 @@ public static class PackageInstaller
                 packageId, unparsed.Count, candidates, nodes.Length, files.Count,
                 files.Count - candidates, string.Join(", ", unparsed.Take(5)));
 
-        return nodes;
+        return new ParsedPackageFiles(
+            nodes, unparsed.ToImmutableSortedSet(StringComparer.Ordinal));
     }
 
     /// <summary>
@@ -4184,15 +4194,34 @@ public static class PackageInstaller
     /// </list>
     ///
     /// <para>Pure and total, so every arm is pinnable with no hub and no mesh.</para>
+    ///
+    /// <para>🚨 <b>And a FOURTH rule, which the first version got wrong</b> (Copilot review): an
+    /// empty set is a claim about the WHOLE package — "every declared node candidate was parsed and
+    /// all of them became nodes". An incremental update that examined two files of two hundred
+    /// cannot make that claim, so when there is no previous answer to build on it returns
+    /// <c>null</c> (still unknown) rather than an empty set. Otherwise a legacy record plus one
+    /// small delta would have silently read as a clean full-package parse — the "not checked reads
+    /// as clean" failure the whole sweep exists to remove, recreated in its own bookkeeping. Once a
+    /// FULL install has recorded a real answer, later deltas merge onto it and the carried-forward
+    /// entries cover everything they did not look at.</para>
+    ///
+    /// <para>That rule also settles the <c>existingRecord is null</c> ambiguity at the call site:
+    /// the record read there degrades a FAULT to <c>null</c>, indistinguishable from "no record".
+    /// A full install after such a fault re-derives the whole answer and is correct regardless; an
+    /// incremental one now yields <c>null</c> — honestly unknown — instead of dropping every
+    /// carried-forward entry and reporting those files ABSENT again on the next boot.</para>
     /// </summary>
     /// <param name="previous">The record's existing set, or <c>null</c> when no install has ever
     /// recorded one. 🚨 <c>null</c> in and nothing examined yields <c>null</c> out: "unknown" must
-    /// never be upgraded to "checked, none" by a write that checked nothing.</param>
+    /// never be upgraded to "checked, none" by a write that checked nothing — nor by one that
+    /// checked only part.</param>
     /// <param name="examined">The files this install actually parsed, or <c>null</c> when this
     /// write parsed none (a module-only install, a record re-stamp).</param>
     /// <param name="unreadableNow">Those of <paramref name="examined"/> that did not become a node.</param>
     /// <param name="declaredNow">The file map the record is being stamped with; entries outside it
-    /// are dropped. <c>null</c> leaves the set unfiltered.</param>
+    /// are dropped, and it is also what <paramref name="examined"/> is measured against for
+    /// coverage. <c>null</c> leaves the set unfiltered and, with no previous answer, is not enough
+    /// to claim one.</param>
     internal static ImmutableSortedSet<string>? MergeUnreadableFiles(
         ImmutableSortedSet<string>? previous,
         IReadOnlyCollection<string>? examined,
@@ -4214,6 +4243,10 @@ public static class PackageInstaller
             return previous is null ? null : Restrict(previous);
 
         var seen = examined.ToImmutableHashSet(StringComparer.Ordinal);
+        // 🚨 With no previous answer, only a pass that looked at EVERY declared file may claim one.
+        if (previous is null && (declared is null || !declared.All(seen.Contains)))
+            return null;
+
         var kept = (previous ?? ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal))
             .Where(f => !seen.Contains(f));
         return Restrict(kept
