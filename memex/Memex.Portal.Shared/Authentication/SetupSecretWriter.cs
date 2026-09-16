@@ -25,14 +25,26 @@ public interface ISetupSecretWriter
 /// and <c>Azure.Security.KeyVault.Secrets</c> is not: one PUT is not worth a package, an audit
 /// entry and a version to keep.</para>
 ///
-/// <para>🚨 <b>This needs a role assignment the control instance does not have by default.</b>
-/// Measured in the estates' own infrastructure code: the portal identity holds <i>Key Vault Secrets
-/// User</i> (read) and the operator holds <i>Secrets Officer</i> (write). So until
-/// memex.systemorph.com is granted Secrets Officer on the vault it is writing to, every call here
-/// refuses with the vault's own 403 — which is the correct behaviour, and is reported as a refusal
-/// the maintainer can act on rather than as a mysterious failure. The alternative designs are worse:
-/// handing the values to the operator lane would put them in workflow inputs, and writing them from
-/// the instance would require giving every client portal write access to its own secrets.</para>
+/// <para>🚨 <b>This needs a write grant the control instance does not have — and the obvious way to
+/// give it is wrong.</b> Measured 2026-09-16 on <c>memexaks-portal-mi</c> (subscription 7ecc5974,
+/// resource group memex-aks-rg): that ONE managed identity carries five federated credentials —
+/// <c>system:serviceaccount:{atioz,memex,memex-cloud,build,pearl}:memex-portal-sa</c>. It is not the
+/// control instance's identity; it is every portal's identity on that cluster. Granting it
+/// <i>Secrets Officer</i> on the <c>Systemorph</c> vault would give WRITE over every object in that
+/// vault to every instance on the cluster, a CLIENT instance included — the exact opposite of why
+/// the hand-off goes through the control instance at all.</para>
+///
+/// <para><b>What to grant instead.</b> A DEDICATED identity for the control instance, federated only
+/// to <c>system:serviceaccount:memex:memex-portal-sa</c>, holding Secrets Officer, while the shared
+/// identity keeps read. That is the smaller change and the recommended one. Scoping the grant per
+/// SECRET OBJECT instead is supported by Key Vault RBAC, but it does not scale past a handful of
+/// names and still lands on the shared identity.</para>
+///
+/// <para>Until one of those exists, every call here refuses with the vault's own 403 — correct
+/// behaviour, reported as a refusal the maintainer can act on rather than as a mysterious failure.
+/// The alternative designs are worse: handing the values to the operator lane would put them in
+/// workflow inputs, and writing them from the instance would give every client portal write access
+/// to its own secrets.</para>
 /// </summary>
 /// <param name="httpClient">The client used for the PUT.</param>
 /// <param name="credential">

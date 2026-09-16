@@ -225,12 +225,27 @@ wrongly signed 401. A secret whose vault object name could not be derived is **r
 written under a guessed name**, because a secret the instance will never read is a secret nobody can
 find and an instance that still does not work.
 
-🚨 **The prerequisite is a role assignment.** The control instance writes with its own identity,
-which holds *Key Vault Secrets User* — read. Until it is granted **Secrets Officer** on the vault it
-writes to, every value refuses with the vault's own 403, reported as an actionable refusal rather
-than a mysterious failure. The alternatives are worse: handing the values to the operator lane would
-put them in workflow inputs, and letting the instance write its own would give every client portal
-write access to its secrets.
+🚨 **The prerequisite is a write grant — and the obvious way to give it is wrong.** The control
+instance writes with the identity its pod runs as, and that identity is *not* the control
+instance's. Measured 2026-09-16 on `memexaks-portal-mi` (subscription 7ecc5974, resource group
+memex-aks-rg): one managed identity carries **five** federated credentials —
+`system:serviceaccount:{atioz,memex,memex-cloud,build,pearl}:memex-portal-sa`. It is every portal's
+identity on that cluster. Granting it *Secrets Officer* on the `Systemorph` vault would give **write
+over every object in that vault to every instance on the cluster, a client instance included** —
+the exact opposite of why the hand-off goes through the control instance at all.
+
+Two ways out:
+
+1. **A dedicated identity for the control instance** — federated only to
+   `system:serviceaccount:memex:memex-portal-sa`, holding *Secrets Officer*, with the shared identity
+   keeping read. The smaller change, and the recommended one.
+2. **Or scope the grant per secret OBJECT** rather than per vault. Key Vault RBAC supports it, but it
+   does not scale past a handful of names and still lands on the shared identity.
+
+Until one of those exists, every value refuses with the vault's own 403 — reported as an actionable
+refusal rather than a mysterious failure. The alternatives are worse still: handing the values to the
+operator lane would put them in workflow inputs, and letting the instance write its own would give
+every client portal write access to its secrets.
 
 **The plain half is reported, not applied.** The record values, the selected plugins and the
 administrator grant are writes to a deployment record and to another instance's mesh, which belong
@@ -276,6 +291,14 @@ convention, not a boundary** — every instance's pod can read every other insta
 instance needs **its own identity, federated only to its own namespace**, before a separate vault is
 a separate trust domain. Until that lands, a per-instance vault is better bookkeeping and the same
 blast radius — worth saying plainly rather than implying a boundary that is not there.
+
+**This is the same decision as the write grant above, seen from the other side.** The maintainer
+asked on 2026-09-16 whether client values should go to a dedicated vault per client or to one vault
+with per-instance prefixes, and the answer was per-client vaults *because of* that shared identity: a
+prefix is a naming convention, a vault plus its own identity is a boundary. The hand-off already
+writes to **the vault the record names**, which is that shape — so nothing in this design has to
+change when each client gets its own vault, and the dedicated control-instance identity is the same
+piece of work read from the writing end.
 
 ## Sequence
 
