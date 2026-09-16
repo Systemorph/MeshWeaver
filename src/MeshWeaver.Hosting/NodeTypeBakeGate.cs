@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -249,8 +249,13 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// <summary>
     /// Types that failed with NO working build to regress from — a type that was already broken on
     /// the way in, or any failure during the FIRST bake of an instance that has never built
-    /// anything (<c>DynamicTypePreWarmer</c> empties the baseline there, because no previous image
-    /// is serving and refusing readiness would protect nobody).
+    /// anything (<c>DynamicTypePreWarmer.RegressionBaseline</c> empties the baseline there, because
+    /// no previous image is serving and refusing readiness would protect nobody).
+    ///
+    /// <para>Holds exactly what WOULD have gated had there been something to regress from: the
+    /// no-baseline question is asked after the timeout, content and retirement classifications, so
+    /// an outcome that means "no answer" or "the repository dropped it" keeps its own bucket rather
+    /// than being reported here as a failure.</para>
     ///
     /// <para>🚨 Exposed because these outcomes used to be dropped on the floor: the gate returned
     /// early and the health payload said nothing, so an instance that could not compile its content
@@ -300,15 +305,6 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     {
         if (outcome.ReachedUsableBuild)
             return false;
-
-        // No working build to regress FROM: pre-existing breakage, or the first bake of an instance
-        // that has never built anything. Never gates — but it is recorded, because a failure nobody
-        // can see is how a fresh portal ends up serving 503 with an empty health payload.
-        if (!outcome.WasHealthyBeforeBake)
-        {
-            withoutBaseline[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
-            return false;
-        }
 
         // 🚨 A TIMEOUT IS NOT A VERDICT. The per-type budget elapsing means the sweep never got an
         // answer — it says nothing about whether the type builds. During a roll the baking pod and
@@ -364,6 +360,25 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
         if (outcome.Status is PreWarmStatus.Retired or PreWarmStatus.Removed)
         {
             retired[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
+            return false;
+        }
+
+        // No working build to regress FROM: pre-existing breakage, or the first bake of an instance
+        // that has never built anything (DynamicTypePreWarmer.RegressionBaseline empties the
+        // baseline there, because no previous image is serving and refusing readiness would protect
+        // nobody). Never gates — but it is RECORDED rather than dropped, because a failure nobody
+        // can see is how a fresh portal ends up serving 503 with an empty health payload.
+        //
+        // 🚨 Classified LAST, after the three "not a verdict" buckets above, and the order is the
+        // whole point: on a first bake EVERY outcome arrives with no baseline, so testing this
+        // first would file each timeout, content deletion and retirement as "failed" — the one
+        // reading that is never true of them. A timeout still means the sweep got no answer and a
+        // retirement still means the repository dropped the type, whether or not anything was built
+        // here before. This bucket therefore holds exactly what WOULD have gated had there been
+        // something to regress from.
+        if (!outcome.WasHealthyBeforeBake)
+        {
+            withoutBaseline[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
             return false;
         }
 

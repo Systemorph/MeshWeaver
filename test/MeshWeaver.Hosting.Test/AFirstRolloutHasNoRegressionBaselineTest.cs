@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -41,14 +41,42 @@ public class AFirstRolloutHasNoRegressionBaselineTest(ITestOutputHelper output) 
         new(entries.Select(e => new NodeTypeBakeEntry(e.Path, e.State)).ToImmutableList(), "framework-1");
 
     [Fact(Timeout = 60000)]
-    public void EveryTypeNeverBuilt_IsAFirstBake_SoNothingHasABaseline()
+    public void EveryTypeNeverBuilt_IsAFirstBake_SoTheBaselineIsEmpty()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var report = Report(("GoogleMaps/Gallery", BakeState.NeverBuilt), ("MyAi/Panel", BakeState.NeverBuilt));
 
-        report.Entries.Should().OnlyContain(e => e.State == BakeState.NeverBuilt);
         report.Entries.Should().OnlyContain(e => e.WasHealthy,
             "the ENTRY's own meaning is unchanged — the baseline is emptied by the sweep, not by redefining NeverBuilt");
+
+        DynamicTypePreWarmer.IsFirstBake(report).Should().BeTrue();
+        DynamicTypePreWarmer.RegressionBaseline(report).Should().BeEmpty(
+            "nothing was ever built here, so nothing can regress — this is the rule that keeps a fresh "
+            + "portal from gating itself out of rotation forever");
+    }
+
+    [Fact(Timeout = 60000)]
+    public void OneBakedType_MeansAnEstablishedInstance_SoTheBaselineStands()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        // The negative control for the rule itself: change "every entry is NeverBuilt" to anything
+        // wider and this baseline empties too, which would silently disarm the gate on every
+        // established instance — the exact protection the gate exists to provide.
+        var report = Report(("Crm/Contact", BakeState.Baked), ("Crm/Mail", BakeState.NeverBuilt));
+
+        DynamicTypePreWarmer.IsFirstBake(report).Should().BeFalse("one type has been built here");
+        DynamicTypePreWarmer.RegressionBaseline(report).Should().Contain("Crm/Mail",
+            "a healthy entry keeps its place in the baseline whenever the instance has built anything");
+    }
+
+    [Fact(Timeout = 60000)]
+    public void AnEmptyReport_IsNotAFirstBake()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        // Nothing to bake is not the same claim as "this instance has never built anything", and
+        // only the second one may empty a baseline. Without the Count guard, "all entries are
+        // NeverBuilt" is vacuously true here and the log would announce a first bake of 0 types.
+        DynamicTypePreWarmer.IsFirstBake(Report()).Should().BeFalse();
     }
 
     [Fact(Timeout = 60000)]
@@ -74,6 +102,47 @@ public class AFirstRolloutHasNoRegressionBaselineTest(ITestOutputHelper output) 
         gate.ReadinessGranted.Should().BeTrue("a fresh instance must be able to serve its own content");
         gate.Detail.Should().Contain("GoogleMaps/Gallery").And.Contain("no working build to regress from",
             "non-blocking must not mean invisible — this is the line that explains a Degraded new portal");
+    }
+
+    [Fact(Timeout = 60000)]
+    public void OnAFirstBake_ATimeoutIsStillNotAVerdict()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        // 🚨 On a first bake EVERY outcome arrives with no baseline, so "no baseline" must be the
+        // LAST question asked, not the first. A timeout means the sweep never got an answer — that
+        // is true whether or not anything was built here before — and filing it as "failed with no
+        // working build to regress from" would report a failure that was never measured.
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        gate.MarkRunning("enumerating dynamic NodeTypes");
+
+        var watch = gate.MarkOutcome(new PreWarmOutcome(
+            "Crm/Contact", PreWarmStatus.TimedOut, "SubscribeRequest timed out")
+        {
+            WasHealthyBeforeBake = false,
+        });
+
+        watch.Should().BeFalse();
+        gate.Unevaluated.Keys.Should().Contain("Crm/Contact", "the sweep got no answer about this type");
+        gate.WithoutBaseline.Should().BeEmpty("a timeout is not a failure to report as one");
+        gate.Regressions.Should().BeEmpty();
+    }
+
+    [Fact(Timeout = 60000)]
+    public void OnAFirstBake_ARetirementIsStillNotAFailure()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        gate.MarkRunning("enumerating dynamic NodeTypes");
+
+        gate.MarkOutcome(new PreWarmOutcome("Kmu/Basics", PreWarmStatus.Retired, "held for un-retyped instances")
+        {
+            WasHealthyBeforeBake = false,
+        }).Should().BeFalse();
+
+        gate.Retired.Keys.Should().Contain("Kmu/Basics",
+            "the repository that owns the type stopped carrying it — no image did that, on a fresh "
+            + "instance or an old one");
+        gate.WithoutBaseline.Should().BeEmpty();
     }
 
     [Fact(Timeout = 60000)]
