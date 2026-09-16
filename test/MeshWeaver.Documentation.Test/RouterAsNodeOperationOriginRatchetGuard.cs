@@ -68,12 +68,22 @@ namespace MeshWeaver.Documentation.Test;
 /// Every derived name must also RESOLVE to a real type, so a rename or a move reddens this guard
 /// instead of silently shrinking what it measures.</para>
 ///
-/// <para><b>What is matched.</b> A <c>.Observe(…)</c> / <c>.Post(…)</c> call whose FIRST argument is
-/// a lifecycle message — either constructed inline (<c>new CreateNodeRequest(node)</c>) or hoisted
-/// into a local earlier in the file (<c>var request = new DeleteNodeRequest(path); …
-/// IssuingHub.Observe(request, …)</c>, which is <c>MeshService</c>'s own shape and which a
-/// constructor-anchored scan would have classified on the wrong statement). The receiver is then
-/// read as a primary expression and compared against the seam.</para>
+/// <para><b>What is matched.</b> A <c>.Observe(…)</c> / <c>.Post(…)</c> call that names a lifecycle
+/// message, in any of the spellings C# offers — because a matcher a SYNTAX-ONLY refactor can slip
+/// past is a matcher that reports an un-hopped post as clean:
+/// <list type="bullet">
+///   <item>constructed inline, qualified or not — <c>new CreateNodeRequest(node)</c>,
+///     <c>new MeshWeaver.Messaging.DisposeRequest { … }</c>;</item>
+///   <item>hoisted into a local earlier in the file — <c>var request = new DeleteNodeRequest(path);
+///     … IssuingHub.Observe(request, …)</c>, which is <c>MeshService</c>'s own shape and which a
+///     constructor-anchored scan would have classified on the wrong statement;</item>
+///   <item>DECLARED with the type and target-typed — <c>DisposeRequest request = new();</c> — or
+///     arriving as a parameter or field, where the type never appears next to a <c>new</c> at all;</item>
+///   <item>named on the CALL — <c>hub.Post&lt;DisposeRequest&gt;(new() { … })</c>, whose argument
+///     mentions no type. Only for <c>Post</c>: <c>Observe</c>'s type argument is the RESPONSE.</item>
+/// </list>
+/// Each has its own planted case, so a regression names the spelling rather than moving a count.
+/// The receiver is then read as a primary expression and compared against the seam.</para>
 ///
 /// <para>🚨 <b>One structural exclusion: a SELF-DIRECTED hub-lifecycle post.</b> A hub telling
 /// ITSELF to dispose, initialise or shut down — no target, or <c>o.WithTarget(thatHub.Address)</c> —
@@ -151,12 +161,18 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
     private const string AllowFileName = "RouterNodeOperationOriginSites.allow";
 
     /// <summary>
-    /// The request/response and fire-and-forget entry points, tolerant of an explicit response type
-    /// argument (<c>Observe&lt;CreateNodeResponse&gt;(</c>) and of the line break C# style puts
-    /// between the receiver and the call.
+    /// The request/response and fire-and-forget entry points, tolerant of an explicit type argument
+    /// and of the line break C# style puts between the receiver and the call.
+    ///
+    /// <para>Group 1 is set only for <c>Post</c>, and group 2 carries the explicit type argument,
+    /// because the two entry points mean OPPOSITE things by it: <c>Post&lt;TMessage&gt;</c> names the
+    /// message — so <c>hub.Post&lt;DisposeRequest&gt;(new() { … })</c> is a lifecycle post whose
+    /// argument mentions no type at all — whereas <c>Observe&lt;TResponse&gt;</c> names the RESPONSE
+    /// (<c>Observe&lt;CreateNodeResponse&gt;(new CreateNodeRequest(…))</c>), and keying on that would
+    /// classify on the wrong half of the exchange.</para>
     /// </summary>
     private static readonly Regex CallMarker =
-        new(@"\.\s*(?:Observe|Post)\s*(?:<[^<>()]*>\s*)?\(", RegexOptions.Compiled);
+        new(@"\.\s*(?:(Post)|Observe)\s*(?:<([^<>()]*)>\s*)?\(", RegexOptions.Compiled);
 
     /// <summary>A call to either seam. Both count: a site that hops for reads is off the router.</summary>
     private static readonly Regex SeamCall =
@@ -208,9 +224,19 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
             Node = node;
             All = hub.Union(node);
             var alternation = string.Join("|", All.Order(StringComparer.Ordinal));
-            NewRequest = new Regex(@"\bnew\s+(" + alternation + @")\b");
+            // `new Foo(…)` and `new A.B.Foo(…)` alike: a namespace-qualified construction is the
+            // same site, and a matcher that only saw the unqualified spelling could be evaded by a
+            // pure syntax refactor (Copilot, #4477).
+            const string Qualifier = @"(?:[A-Za-z_][A-Za-z0-9_]*\s*\.\s*)*";
+            NewRequest = new Regex(@"\bnew\s+" + Qualifier + "(" + alternation + @")\b");
             RequestLocal = new Regex(
-                @"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+(" + alternation + @")\b");
+                @"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+" + Qualifier + "(" + alternation + @")\b");
+            // An identifier DECLARED with a lifecycle type, whatever it is later assigned:
+            // `DisposeRequest request = new();` (target-typed, so the type appears only on the
+            // left), a parameter `void Send(DisposeRequest request)`, a field, a `case Foo f:`
+            // pattern. Without this, target-typed `new()` is a hole the guard cannot see.
+            DeclaredLocal = new Regex(
+                @"\b(" + alternation + @")\s+([A-Za-z_][A-Za-z0-9_]*)\b");
         }
 
         public ImmutableHashSet<string> Hub { get; }
@@ -224,6 +250,9 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
 
         /// <summary>A local or field bound to a freshly constructed lifecycle message.</summary>
         public Regex RequestLocal { get; }
+
+        /// <summary>An identifier DECLARED with a lifecycle type — group 1 the type, group 2 the name.</summary>
+        public Regex DeclaredLocal { get; }
     }
 
     /// <summary>One matched call: where it is, which verb, and how it is addressed.</summary>
@@ -401,6 +430,41 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
             verbs);
         Assert.True(InDenominator(Assert.Single(plantedNodeSelfPost), verbs));
 
+        // 🚨 THE SPELLINGS A SYNTAX-ONLY REFACTOR COULD HIDE BEHIND (Copilot on #4477). Each of
+        // these is legal C# that constructs the SAME lifecycle message without the unqualified
+        // `new Foo(` the first matcher keyed on, so each was a way to introduce an un-hopped
+        // teardown that both ratchet tests would report as clean. One case per spelling, so a
+        // regression names WHICH one broke rather than moving a count by one.
+        AssertOneViolatingSite(
+            "qualified construction",
+            "class P { void M(IMessageHub hub) => hub.Post(new MeshWeaver.Messaging.DisposeRequest "
+            + "{ Reason = r }, o => o.WithTarget(new Address(p))); }",
+            verbs);
+        AssertOneViolatingSite(
+            "target-typed new() through a declared local",
+            "class P { void M(IMessageHub hub) { DisposeRequest request = new() { Reason = r }; "
+            + "hub.Post(request, o => o.WithTarget(new Address(p))); } }",
+            verbs);
+        AssertOneViolatingSite(
+            "the message type on the call: Post<DisposeRequest>(new())",
+            "class P { void M(IMessageHub hub) => hub.Post<DisposeRequest>(new() { Reason = r }, "
+            + "o => o.WithTarget(new Address(p))); }",
+            verbs);
+        AssertOneViolatingSite(
+            "a lifecycle message arriving as a PARAMETER",
+            "class P { void M(IMessageHub hub, DeleteNodeRequest request) => "
+            + "hub.Observe(request, o => o.WithTarget(new Address(p))); }",
+            verbs);
+
+        // 🚨 …and the other half of that: Observe's type argument is the RESPONSE, so it must NOT
+        // be read as the message. Without this, `Observe<CreateNodeResponse>(somethingElse)` would
+        // be classified as a node-lifecycle post on whatever receiver it happened to have.
+        Assert.Empty(SitesIn(
+            "planted-response-type-arg.cs",
+            "class P { void M(IMessageHub hub) => hub.Observe<CreateNodeResponse>(somethingElse, "
+            + "o => o.WithTarget(t)); }",
+            verbs));
+
         // Comment masking, both sides. The same line is a site when it is code and nothing when it
         // is prose — which is the difference between measuring the tree and measuring the remarks
         // that describe it. This repo's remarks quote these shapes verbatim.
@@ -426,6 +490,24 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
             + "PingRequest, …). src/ posts both — PackageInstaller.SettleRetypedRoot alone posts a "
             + "DisposeRequest and a PingRequest through the seam — so the half of the denominator "
             + "#4463 added is measuring nothing.");
+    }
+
+    /// <summary>
+    /// One planted snippet must yield exactly one site, counted, and NOT off-router — i.e. the
+    /// spelling is seen AND reported. Named, so a regression says which construction broke.
+    /// </summary>
+    private static void AssertOneViolatingSite(string spelling, string snippet, LifecycleVerbs verbs)
+    {
+        var sites = SitesIn("planted-" + spelling + ".cs", snippet, verbs);
+        Assert.True(sites.Count == 1,
+            $"the {spelling} spelling produced {sites.Count} sites, not 1 — a lifecycle message the "
+            + "matcher cannot SEE is a way to introduce an un-hopped post that this whole guard "
+            + $"reports as clean. Snippet: {snippet}");
+        var site = sites[0];
+        Assert.True(InDenominator(site, verbs),
+            $"the {spelling} spelling was matched but fell OUT of the denominator — {snippet}");
+        Assert.False(site.OffRouter,
+            $"the {spelling} spelling was matched but read as already off-router — {snippet}");
     }
 
     /// <summary>
@@ -566,9 +648,16 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
 
         var code = SourceScan.MaskCommentsAndStrings(text);
 
+        // Both ways a name comes to hold a lifecycle message: assigned from a construction
+        // (`var request = new DeleteNodeRequest(path)`) and DECLARED with the type
+        // (`DisposeRequest request = new();`, a parameter, a field). The earliest binding wins, so a
+        // call is attributed only to a binding that precedes it.
         var requestLocals = new Dictionary<string, (int At, string Verb)>(StringComparer.Ordinal);
+        foreach (Match m in verbs.DeclaredLocal.Matches(code))
+            if (!requestLocals.ContainsKey(m.Groups[2].Value))
+                requestLocals[m.Groups[2].Value] = (m.Index, m.Groups[1].Value);
         foreach (Match m in verbs.RequestLocal.Matches(code))
-            if (!requestLocals.ContainsKey(m.Groups[1].Value))
+            if (!requestLocals.TryGetValue(m.Groups[1].Value, out var already) || m.Index < already.At)
                 requestLocals[m.Groups[1].Value] = (m.Index, m.Groups[2].Value);
 
         var seamAliases = SeamAlias.Matches(code)
@@ -583,13 +672,22 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
 
             string verb;
             var constructed = verbs.NewRequest.Match(argument);
+            var typeArgument = call.Groups[2].Value.Trim();
             if (constructed.Success)
             {
                 verb = constructed.Groups[1].Value;
             }
+            else if (call.Groups[1].Success && verbs.All.Contains(typeArgument))
+            {
+                // `hub.Post<DisposeRequest>(new() { … })` — the message type is on the CALL, and the
+                // argument names no type at all. Only for Post: Observe's type argument is the
+                // RESPONSE (see CallMarker's remarks).
+                verb = typeArgument;
+            }
             else
             {
-                // The hoisted spelling: the request was built into a local a few lines up.
+                // The hoisted spelling: the request was built into, or declared as, a local a few
+                // lines up.
                 var head = argument.Split('.')[0].Trim();
                 if (!BareIdentifier.IsMatch(head)
                     || !requestLocals.TryGetValue(head, out var bound)

@@ -115,6 +115,24 @@ public static class HubRecycleExtensions
                 // and is answered by the reactivated hub (or NACKed ShuttingDown and re-probed until it
                 // is). Deliberately NOT ReadTimeoutBehavior.EmitNull: "I could not tell" must reach the
                 // caller as an error, because the caller's next act is to send a user somewhere.
+                //
+                // 🚨 THE PRECONDITION OF THAT ORDERING, stated rather than assumed. It holds because
+                // BOTH deliveries leave the SAME hub: for every caller this class documents — one
+                // holding a surviving non-router hub — `NodeOperationIssuingHub()` above and the
+                // `ReadIssuingHub()` inside `GetMeshNode` are each the identity function, so the
+                // dispose and the read are posted by the caller's own action block in that order.
+                // A ROOT-HUB caller is the exception, and it is the caller this class's own rule
+                // already excludes: there the two hop to DIFFERENT off-router hubs
+                // (`portal/nodeops-{meshId}` and `portal/reads-{meshId}`), whose action blocks are
+                // independent, so the read can in principle reach the target first and be answered
+                // by the still-live hub — whereupon this method emits before a fresh activation.
+                // 🚨 That is NOT introduced by the seam adoption above and must not be read as its
+                // cost: before it, a root-hub caller posted the dispose from `mesh/{id}` and the
+                // read from `portal/reads-{meshId}` — two hubs then as well, and with the router on
+                // an end of the teardown besides. Closing it properly means an explicit
+                // disposal-completion barrier rather than relying on queue order, which is a
+                // different change with its own design; it is named here, in the same register as
+                // the two-installs-one-root residual on this class, rather than papered over.
                 return hub.GetMeshNode(path, budget ?? DefaultRecycleBudget);
             }));
 

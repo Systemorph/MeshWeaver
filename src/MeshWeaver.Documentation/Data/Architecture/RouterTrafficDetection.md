@@ -212,6 +212,18 @@ holds a hub that outlives the target" — constrains who *should* call it, not w
 the identity function for every documented caller, so adopting it costs them nothing and removes the
 undocumented one.
 
+> 🚨 **A known residual on `RecycleNode`, stated rather than assumed.** Its wait works by queue
+> order: the read is issued after the dispose, so it lands behind it *at the target*. That holds
+> because both deliveries leave the **same** hub — for every documented caller both seams are the
+> identity function. A **root-hub** caller, the one this class's rule already excludes, hops to two
+> different off-router hubs (`portal/nodeops-{meshId}` and `portal/reads-{meshId}`) whose action
+> blocks are independent, so the read can in principle be answered by the still-live hub and
+> `RecycleNode` emits before a fresh activation. That is **not** a cost of adopting the seam: before
+> it, a root-hub caller posted the dispose from `mesh/{id}` and the read from `portal/reads-{meshId}`
+> — two hubs then as well, with the router on an end of the teardown besides. Closing it properly
+> means an explicit disposal-completion barrier instead of relying on queue order, which is a
+> different change with its own design.
+
 ## Reading a report
 
 `ROUTER_TRAFFIC ORIGIN:` prints up to twelve frames, with `MessageHub`'s own plumbing dropped off the
@@ -228,7 +240,15 @@ another process.
   and both genuine end roles must still fire.
 - `RouterTrafficOnNodeCreateFromTheRootHubTest` — the create seam (`IMeshService.CreateNode` issued
   from the root hub keeps the router off both ends) plus the origin site's call-site attribution,
-  each with its own positive control in the same fixture.
+  each with its own positive control in the same fixture. It also carries the two RECYCLE surfaces
+  driven from the ROOT hub — `MeshOperations.Recycle` and `HubRecycleExtensions.RecycleNode`. Those
+  exist because **every other test of both verbs drives them through a session or client hub, where
+  the seam is the identity function**, so a revert to `hub.Post` would leave the whole existing
+  recycle suite green. Reverted in rehearsal, they reproduce #4463's production line byte for byte,
+  down to the frame: `at MeshWeaver.AI.MeshOperations+<>c__DisplayClass95_0.<RecycleCore>b__3`.
+  Each asserts a positive anchor first (`status=Recycled`; the node coming back), because the verb
+  answers a refusal *without posting anything*, and "no router traffic" is trivially true of an
+  operation that never ran.
 - `RouterAsNodeOperationOriginRatchetGuard` — the `src/` ratchet, in two tests that fail
   independently: one asserts no new router-issued lifecycle site, the other asserts that the
   denominator was actually DERIVED (both families non-empty, every derived name resolving to a real

@@ -3,7 +3,9 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
+using MeshWeaver.AI;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -137,6 +139,111 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
             "the ORIGIN detector must be silent too — it fires where the delivery is created, so it "
             + "sees a violating post even when the receiving hub's own report is muted");
     }
+
+    /// <summary>
+    /// 🚨 <b>The RUNTIME pin for <see href="https://github.com/Systemorph/MeshWeaver/issues/4463">#4463</see>
+    /// — the operator recycle (the Recycle tool / Compile button).</b>
+    ///
+    /// <para><b>Why the source ratchet is not enough on its own.</b> Every other test of this verb
+    /// drives it through a <c>SessionHubFactory</c> hub, whose non-mesh address makes
+    /// <c>NodeOperationIssuingHub()</c> the IDENTITY FUNCTION — so none of them executes the branch
+    /// #4463 is about, and reverting <c>RecycleCore</c> to <c>hub.Post</c> would leave them all
+    /// green. <c>RouterAsNodeOperationOriginRatchetGuard</c> would catch the revert, but it reads
+    /// SOURCE; this reads what the detector actually logged, which is the artefact production
+    /// produced.</para>
+    ///
+    /// <para><b>The shape is production's.</b> #4463's line was posted from
+    /// <c>MeshWeaver.AI.MeshOperations+&lt;&gt;c__DisplayClass95_0.&lt;RecycleCore&gt;b__3</c> with
+    /// <c>sender: mesh/…</c> — an agent-surface <c>MeshOperations</c> built over the DI-injected
+    /// hub, which in the mesh's root container IS the router. <c>new MeshOperations(Mesh)</c> is
+    /// that, verbatim.</para>
+    ///
+    /// <para><b>The positive anchor is not decoration.</b> The verb REFUSES rather than posting when
+    /// the release-request stamp is denied, and a refusal emits no <c>DisposeRequest</c> at all — so
+    /// "no router traffic" would be trivially true of a recycle that never ran. Asserting
+    /// <c>status=Recycled</c> first is what makes the silence below mean something.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnOperatorRecycleIssuedFromTheRootMeshHub_NeverPostsTheTeardownAsTheRouter()
+    {
+        var path = await SeedNode("RouterTrafficOperatorRecycleProbe");
+
+        var answer = await new MeshOperations(Mesh).Recycle(path)
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        using var envelope = JsonDocument.Parse(answer);
+        envelope.RootElement.GetProperty("status").GetString().Should().Be("Recycled",
+            "the verb has to have RUN — it answers a refusal without posting any DisposeRequest at "
+            + "all, and 'no router traffic' is trivially true of an operation that never happened");
+
+        DumpReports();
+        TeardownOrigins().Should().BeEmpty(
+            "#4463: the teardown was POSTED with the mesh hub as sender, from this exact frame. "
+            + "RecycleCore must issue it on NodeOperationIssuingHub(), which is the identity "
+            + "function for every non-router caller and the off-router execution hub for this one");
+        TeardownReports().Should().BeEmpty(
+            "and the receiving hub must not see the router at an end of the teardown either");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The same runtime pin for the framework's ONE recycle surface,
+    /// <c>HubRecycleExtensions.RecycleNode</c>.</b> Its own tests deliberately drive it through
+    /// <c>RequestHub</c> — again a non-mesh address, again the seam as identity — so a regression to
+    /// <c>hub.Post</c> would keep them green. This is the root-hub branch, with the router-traffic
+    /// capture as the instrument.
+    ///
+    /// <para>The positive anchor here is the emission itself: <c>RecycleNode</c> answers only once
+    /// the address has served a read again, so a node coming back proves the teardown was posted,
+    /// executed, and the hub re-activated.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARecycleNodeIssuedFromTheRootMeshHub_NeverPostsTheTeardownAsTheRouter()
+    {
+        var path = await SeedNode("RouterTrafficRecycleNodeProbe");
+
+        var node = await Mesh.RecycleNode(path)
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        node.Should().NotBeNull(
+            "RecycleNode answers only once the recycled address serves a read again, so this "
+            + "emission is the proof that the teardown was actually posted and executed");
+
+        DumpReports();
+        TeardownOrigins().Should().BeEmpty(
+            "a teardown issued from the root hub makes the ROUTER the sender of a work delivery — "
+            + "the #4463 shape, one call frame further out");
+        TeardownReports().Should().BeEmpty(
+            "and the receiving hub must not see the router at an end of the teardown either");
+    }
+
+    /// <summary>The node the recycle targets has to exist before it can be torn down.</summary>
+    private async Task<string> SeedNode(string id)
+    {
+        var created = await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateNode(new MeshNode(id, TestPartition) { Name = id, NodeType = "Markdown" })
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+        created.Path.Should().Be($"{TestPartition}/{id}",
+            "a recycle of a node that was never created would tear nothing down and emit no "
+            + "traffic, making the assertions that follow vacuous");
+        return created.Path;
+    }
+
+    /// <summary>
+    /// 🚨 Filtered on the TEARDOWN specifically, not on "any record". The origin site always carries
+    /// the real CLR type, so this is exact there; the receiver side reports a routed payload as
+    /// <c>RawJson</c>, so the companion filter below also counts a record whose ends match the
+    /// teardown's. Keeping the filter narrow is deliberate: these two tests pin ONE defect, and a
+    /// blanket "no router traffic anywhere" assertion would red on any unrelated pre-existing line
+    /// and teach the next reader to widen it rather than read it.
+    /// </summary>
+    private RouterTrafficRecord[] TeardownOrigins() =>
+        Origins().Where(r => r.MessageType == nameof(DisposeRequest)).ToArray();
+
+    private RouterTrafficRecord[] TeardownReports() =>
+        Reports().Where(r => r.MessageType == nameof(DisposeRequest)).ToArray();
 
     /// <summary>
     /// 🚨 THE NEGATIVE CONTROL, and it is not optional. The measurement above reads "no records" as
