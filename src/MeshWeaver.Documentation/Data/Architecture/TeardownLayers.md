@@ -209,7 +209,7 @@ The gate is now two tiers, and the new one is deliberately NARROWER than the old
 |---|---|---|
 | `ShutdownRequest` / `DisposeRequest` | passes | passes |
 | a reply carrying `PostOptions.RequestId` | **passes** — this is what the drain is waiting for | refused |
-| third-party transit to another hub | **passes** — transit is not new work owned by the draining hub | refused |
+| third-party transit to another hub | **passes** — transit is not new work owned by the draining hub | refused — **except** a request a hosted hub of this one accepted before its own teardown, carried until `ShutDown` (see below) |
 | fire-and-forget nobody awaits | **passes** — no promise to break, and answering it is the storm shape `AnswerPolicy` prevents | refused (silently) |
 | a NEW request addressed to or originating from this hub | **refused**, `ErrorType.ShuttingDown` | refused, `ErrorType.ShuttingDown` |
 
@@ -217,6 +217,17 @@ A new outgoing request owned by the draining hub is also refused: an external ta
 not turn it into third-party transit. Otherwise a background pipeline can register new callbacks
 after the drain begins. The refusal identifies the originating hub, not the destination; requests
 forwarded on behalf of other hubs still pass. The same test fixture pins both cases.
+
+🚨 **Tier 2's transit refusal has one carve-out, because "the children are going down with it" is
+true only AFTER they have gone** (#3986). `DisposeHostedHubs` is the phase in which a parent ASKS its
+hosted hubs to go down, and each one's `ShutdownRequest` queues behind the work it already accepted.
+A request a hosted hub accepted before its own teardown and is sending out now is therefore carried —
+in the child's route-up and at the parent's intake, by the one predicate
+`MessageHub.CarriesAcceptedWorkOfAHostedHub` — while the parent is IN `DisposeHostedHubs`, only for an
+awaited request, only transit, only from a hosted hub still below `Quiescing`, and only while the
+parent's own parent still routes. Measured: without it, a person's click queued on a busy
+`sync/{id}` hub was refused at the per-circuit portal hub's door on circuit close and never ran. See
+[Refusing a Lost User Action](../RefusingALostUserAction) for the measurement and its falsifications.
 
 The refusal is the same transient, owner-minted NACK tier 2 already posted — `ShutdownNack.RejectingNow`,
 activation identity and all — so a caller reads "ask again at the fresh activation", never "gone",
