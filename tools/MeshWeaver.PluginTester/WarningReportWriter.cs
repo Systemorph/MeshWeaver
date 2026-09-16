@@ -26,18 +26,22 @@ public static class WarningReportWriter
     public const string Prefix = "warnings:";
 
     /// <summary>
-    /// Writes the inventory and both verdicts, and answers whether the bake may stay green.
+    /// Writes the inventory and both verdicts.
     ///
-    /// <para>The return value is the RATCHET's verdict only. A bake still fails on a failed
-    /// compile independently — a warning verdict can turn a green bake red, never a red one
-    /// green.</para>
+    /// <para>🚨 It REPORTS and returns nothing. The verdict is
+    /// <c>WarningRatchet.Success</c>, folded once on the report the caller already carries
+    /// (<c>TreeBake.Report.WarningsAccepted</c> / <c>CascadeBuild.Report.WarningsAccepted</c>) and
+    /// read from there by the exit code. Handing back a second "is it green" from the RENDERER
+    /// would give the run two ways to answer one question — and a gate whose two halves can
+    /// disagree about what failed is worse than one that names the wrong cause (#1077, the same
+    /// lesson <c>NodeTypeResult.Success</c> and <c>GateVerdict.Headline</c> learned when they were
+    /// allowed to disagree).</para>
     /// </summary>
     /// <param name="output">Where the lines go.</param>
     /// <param name="inventory">What this bake measured.</param>
     /// <param name="baseline">The debt this repo carries, or <see cref="WarningBaseline.ObserveOnly"/>.</param>
     /// <param name="ratchets">The evaluated ratchets, in report order.</param>
-    /// <returns>True when no ratchet has a new or stale entry.</returns>
-    public static bool Write(
+    public static void Write(
         TextWriter output,
         WarningInventory inventory,
         WarningBaseline baseline,
@@ -49,13 +53,8 @@ public static class WarningReportWriter
         ArgumentNullException.ThrowIfNull(ratchets);
 
         WriteInventory(output, inventory);
-        var green = true;
         foreach (var ratchet in ratchets)
-        {
             WriteRatchet(output, inventory, baseline, ratchet);
-            green &= ratchet.Success;
-        }
-        return green;
     }
 
     /// <summary>Evaluates both ratchets, in report order: latent bugs first, doc debt second.</summary>

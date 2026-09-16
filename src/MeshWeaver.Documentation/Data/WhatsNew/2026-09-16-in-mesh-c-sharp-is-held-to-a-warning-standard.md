@@ -6,7 +6,7 @@ Description: >-
   build ever checked — the compiler produced the warnings and the build threw them away. It now
   reports them, and two shrink-only baselines keep the debt going down. Three whole classes of
   warning turned out to be the platform's own and are simply gone.
-Icon: ExclamationTriangle
+Icon: Warning
 Order: -20260916
 ---
 
