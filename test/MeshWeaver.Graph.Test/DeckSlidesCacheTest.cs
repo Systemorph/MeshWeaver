@@ -2,7 +2,9 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
@@ -58,15 +60,25 @@ public class DeckSlidesCacheTest(ITestOutputHelper output) : MonolithMeshTestBas
     /// per query string, mirroring the counting idiom the substitute-based version of this test
     /// used, but over the real query pipeline instead of a stubbed one.
     /// </summary>
-    private sealed class CountingMeshService(IMeshService inner) : IMeshService
+    private sealed class CountingMeshService(IMeshService inner, IObservable<Unit>? admit = null)
+        : IMeshService
     {
         public ConcurrentDictionary<string, int> Subscriptions { get; } = new();
+
+        /// <summary>
+        /// Opens the underlying query. Defaults to "already open", so every test that does not care
+        /// sees the real pipeline unchanged; a test that needs two subscribers to provably OVERLAP
+        /// holds it shut until both have attached. 🚨 It gates the SUBSCRIPTION, never the values —
+        /// a <c>SkipUntil</c> here would DROP the change feed's one <c>Initial</c> snapshot if it
+        /// happened to arrive first, and the test would hang instead of racing.
+        /// </summary>
+        private readonly IObservable<Unit> gate = admit ?? Observable.Return(Unit.Default);
 
         public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request) =>
             Observable.Defer(() =>
             {
                 Subscriptions.AddOrUpdate(request.Query, 1, (_, n) => n + 1);
-                return inner.Query<T>(request);
+                return gate.Take(1).SelectMany(_ => inner.Query<T>(request));
             });
 
         public IObservable<MeshNode> CreateNode(MeshNode node) => inner.CreateNode(node);
@@ -86,7 +98,8 @@ public class DeckSlidesCacheTest(ITestOutputHelper output) : MonolithMeshTestBas
         public IObservable<string?> GetPreRenderedHtml(string path) => inner.GetPreRenderedHtml(path);
     }
 
-    private CountingMeshService MakeCountingMesh() => new(RealMeshService);
+    private CountingMeshService MakeCountingMesh(IObservable<Unit>? admit = null) =>
+        new(RealMeshService, admit);
 
     /// <summary>
     /// Waits for the sibling query to actually see the deck's slides — the real query pipeline is
@@ -104,16 +117,42 @@ public class DeckSlidesCacheTest(ITestOutputHelper output) : MonolithMeshTestBas
             _ => Observable.Never<MeshNode?>(),
             () => JsonOptions);
 
+    /// <summary>
+    /// 🚨 <b>The overlap is ESTABLISHED, never assumed.</b> Both subscribers reduce with
+    /// <c>FirstAsync()</c>, so each one unsubscribes the instant it has its value. Subscribing them
+    /// back to back and hoping they coincide is a race against the real query pipeline: if the
+    /// snapshot reaches the first subscriber before the second line runs, the shared
+    /// <c>Replay(1).RefCount()</c> drops to zero subscribers and DISCONNECTS, the second subscriber
+    /// reconnects, and the count is 2 — the cache behaving exactly as
+    /// <see cref="GetOrderedSlides_AfterLastUnsubscribe_DisconnectsWithNoLingeringTimer"/> requires
+    /// it to. The test was then red for the one thing it does not test, and it measured sharing
+    /// only on runs where the machine happened to be slow enough (observed on
+    /// Systemorph/MeshWeaver#4478, on a diff that cannot reach this code).
+    ///
+    /// <para>So the underlying query is held CLOSED until both subscribers have attached —
+    /// <c>Await</c> subscribes synchronously, so that is a fact by the time the gate opens, not a
+    /// hope. What is asserted is unchanged: two overlapping subscribers, ONE query.</para>
+    /// </summary>
     [Fact(Timeout = 30000)]
     public async Task GetOrderedSlides_ConcurrentSubscribers_ShareOneQuerySubscription()
     {
         await WaitForSiblingQueryToSee(RealMeshService, "DeckA", 1);
 
-        var mesh = MakeCountingMesh();
+        var bothAttached = new AsyncSubject<Unit>();
+        var mesh = MakeCountingMesh(bothAttached);
         var cache = MakeCache(mesh);
 
         var firstTask = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
         var secondTask = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        // Nothing can have completed yet, so neither subscriber can have let go of the shared
+        // pipeline. This is the assertion the old arrangement had no way to make.
+        firstTask.IsCompleted.Should().BeFalse("the query is still closed, so no value can have arrived");
+        secondTask.IsCompleted.Should().BeFalse("the query is still closed, so no value can have arrived");
+
+        bothAttached.OnNext(Unit.Default);
+        bothAttached.OnCompleted();
+
         var results = await Task.WhenAll(firstTask, secondTask);
 
         mesh.Subscriptions.Values.Sum().Should().Be(1,
