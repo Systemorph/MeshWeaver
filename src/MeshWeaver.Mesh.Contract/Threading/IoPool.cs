@@ -365,17 +365,8 @@ public sealed class IoPool : IIoPool, IDisposable
                 finally
                 {
                     LeaveLeaf(leaf);
-                    // 🚨 RELEASE THE PERMIT FIRST. TryFinishDisposal disposes _gate the moment the
-                    // last leaf's decrement takes _inFlight to zero — so with the decrement first,
-                    // THIS leaf disposed the gate and then called Release() on it, throwing
-                    // ObjectDisposedException out of its own finally. Not a cross-thread race: the
-                    // last leaf to unwind during a dispose does it to itself, every time (issue
-                    // #2135, seen in prod as a failed `Comments` area render on memex-cloud).
-                    //
-                    // Releasing first is safe for the drain guarantee: Drain joins by re-acquiring
-                    // every permit, and once Release has run the only work left in this finally is
-                    // two interlocked ops — no user code, no ALC code — so "no pool thread is still
-                    // running the leaf" remains true at the moment Drain observes the permit.
+                    // The permit is the LAST thing this leaf publishes — see ReleaseGate, where the
+                    // ordering and the reason it inverted since #2135 are written down once.
                     ReleaseGate();
                 }
             }
@@ -386,18 +377,41 @@ public sealed class IoPool : IIoPool, IDisposable
         }).SubscribeOn(TaskPoolScheduler.Default);
 
     /// <summary>
-    /// The exit path every gated leaf shares: hand the permit back while the gate is still alive,
-    /// then account for the leaf. Disposal is completed by <see cref="LeaveGateRegion"/>, which runs
-    /// once the leaf can no longer touch <see cref="_gate"/> at all.
+    /// The exit path every gated leaf shares: settle the accounting, THEN hand the permit back.
+    /// Disposal is completed by <see cref="LeaveGateRegion"/>, which runs once the leaf can no
+    /// longer touch <see cref="_gate"/> at all.
     ///
     /// <para>Extracted so the ordering exists in ONE place. It was duplicated at three call sites
     /// and wrong at all three, which is what made <see cref="Dispose"/>'s careful "release the
     /// resources on the last leaf's way out" design throw on that very last leaf.</para>
+    ///
+    /// <para>🚨 THE PERMIT IS THE SIGNAL <see cref="Drain"/> JOINS ON, SO IT IS PUBLISHED LAST.
+    /// Drain's join re-acquires every permit and then reports <c>0</c> — "no pool thread is still
+    /// running" — and <see cref="CurrentInFlight"/> is the pool's own statement of the same fact.
+    /// With <c>Release()</c> first, those two contradict each other: the releasing leaf is one
+    /// <c>Interlocked</c> op short of done when the permit becomes visible, and it does NOT own that
+    /// moment — measured on #4448, the unwind of a cancelled leaf runs on a <c>.NET TP Worker</c>
+    /// while Drain waits on the gate from the teardown thread, so the two genuinely race. Lose that
+    /// sprint and <c>Drain()</c> returns 0 with <c>CurrentInFlight == 1</c>
+    /// (<c>IoPoolTest.Drain_cancels_in_flight_leaves_and_joins_synchronously</c>, core #4417,
+    /// run 34970182190, shard 3, 2026-09-15). Decrementing first makes the permit a real happens-before edge: the decrement is
+    /// a full fence, <c>Release()</c> publishes under the semaphore's lock and Drain's <c>Wait()</c>
+    /// acquires it, so a permit Drain holds proves the accounting behind it is already settled.</para>
+    ///
+    /// <para>🚨 AND THE REASON IT USED TO BE THE OTHER WAY ROUND IS GONE. #2135 released first
+    /// because the exit path itself called <c>TryFinishDisposal()</c>, which disposed <c>_gate</c>
+    /// the instant this leaf's decrement took <c>_inFlight</c> to zero — so the leaf disposed the
+    /// semaphore and then released it. #2146 moved that decision onto the ADMISSION counter:
+    /// <see cref="TryFinishDisposal"/> now runs only from <see cref="LeaveGateRegion"/> and returns
+    /// at once unless <c>_gateUsers</c> is zero. All three callers of this method sit inside their
+    /// own region, whose <c>finally</c> runs strictly AFTER this returns, so <c>_gateUsers</c> is at
+    /// least one throughout and the gate provably cannot be disposed here in either order. Pinned by
+    /// <c>IoPoolDisposeReleaseOrderTest</c>, which still asserts the #2135 outcome.</para>
     /// </summary>
     private void ReleaseGate()
     {
-        _gate.Release();
         Interlocked.Decrement(ref _inFlight);
+        _gate.Release();
     }
 
     // ───────────────────────── queue-wait instrument (MeshWeaver#1198) ─────────────────────────

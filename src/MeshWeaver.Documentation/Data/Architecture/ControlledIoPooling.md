@@ -607,6 +607,94 @@ the pool will not run is a CANCELLATION, never an `ObjectDisposedException`** �
 the region exists to keep, and it is why there is no `catch (ObjectDisposedException)` anywhere in the
 file. Adding one would hide a region that was never entered.
 
+### 🚨 The gate permit is the DRAIN'S SIGNAL — so a leaf publishes it LAST
+
+`Drain()` joins by re-acquiring every permit and then reports `0`, which the contract spells as *"no
+pool thread is still running"*. `CurrentInFlight` is the pool's own statement of the same fact. Those
+two must never be able to contradict each other, and with the old ordering they could: the shared exit path
+released the permit **before** it decremented `_inFlight`.
+
+```csharp
+// before — the permit is visible one Interlocked op too early
+_gate.Release();
+Interlocked.Decrement(ref _inFlight);
+```
+
+The defence written beside it was that the leaf is "two interlocked ops from done, no user code", so
+nothing dangerous can still be running at the moment Drain observes the permit. That is true about ALC
+safety and beside the point about accounting — and it quietly assumed the releasing leaf owns the
+instant after `Release()`. It does not. Measured on #4448, the unwind of a cancelled leaf runs on a
+`.NET TP Worker` while `Drain()` sits in `_gate.Wait()` on the mesh-teardown thread: the cancel
+resumes the leaf's continuation on the ThreadPool, not inline on the `IoPool-cancel` thread, so the
+two race on every drain that cancels a leaf. The leaf normally wins by a mile — one `lock xadd`
+against Drain's remaining loop — which is why it surfaces about once per fleet-week, and why
+`IoPoolTest.Drain_cancels_in_flight_leaves_and_joins_synchronously` failed on core #4417 (run
+34970182190, shard 3, 2026-09-15) with **`Expected value to be 0 … but found 1`**, on a diff that
+cannot reach `IoPool`. That is the ONE failure this explains: the sibling
+`Dispose_doesNotBlockOnASlowPooledSubscriptionTeardown` in #4448 is a terminal that did not arrive,
+takes a path that never calls `Drain()`, and stays open.
+
+Decrementing first turns the permit into a real happens-before edge: the decrement is a full fence,
+`Release()` publishes under the semaphore's lock, and Drain's `Wait()` acquires that same lock — so a
+permit Drain holds **proves** the accounting behind it is already settled. No spin, no re-read, no
+second signal.
+
+```csharp
+// after — the accounting is settled before the signal is published
+Interlocked.Decrement(ref _inFlight);
+_gate.Release();
+```
+
+**The ordering inverted because its original reason was removed elsewhere.** #2135 released first
+because the exit path itself called `TryFinishDisposal()`, which disposed `_gate` the instant that
+decrement took `_inFlight` to zero — the last leaf out disposed the semaphore and then released it
+(seen in prod as a failed `Comments` render on memex-cloud). #2146 then moved that decision onto the
+**admission** counter, and `TryFinishDisposal` now runs only from `LeaveGateRegion()` and returns
+immediately unless `_gateUsers` is zero. All three callers of the exit path sit inside their own
+region whose `finally` runs strictly after it, so `_gateUsers ≥ 1` throughout and the gate cannot be
+disposed there in either order. The hazard was gone; the ordering it forced was not. This is the
+general shape worth remembering: **an ordering justified by an invariant somewhere else becomes a
+defect the moment that invariant is enforced by something better, and nothing points at it.**
+
+#### Reproducing it
+
+The window is two instructions wide and cannot be forced from outside the class — a sweep of 3,840
+cancelled-leaf unwinds on an idle 18-core box reproduced it **zero** times, as did 26 class runs
+under `DOTNET_PROCESSOR_COUNT=2` and full CPU saturation (#4448). The mechanism is instead proven by
+*widening* the window in place: insert `Thread.Sleep(50)` between the two statements and
+
+- with `Release()` first, `Drain_cancels_in_flight_leaves_and_joins_synchronously` fails **every
+  run** with the exact merge-queue message, `but found 1`;
+- with the decrement first, the same test passes with the same 50 ms delay still in place.
+
+That is also why this page carries the analysis rather than a sweep-style guard test: a probabilistic
+test that reproduces nothing on the hardware it runs on is a verification step that cannot fail.
+
+#### The sibling failure is NOT this, and the difference is the thread
+
+`IoPoolTest.Dispose_doesNotBlockOnASlowPooledSubscriptionTeardown` — a terminal that did not arrive
+within 5 s, #4448's original subject — takes a path that never calls `Drain()` and is not explained
+by the ordering above. Probing which thread delivers that terminal settles what it *cannot* be:
+
+```
+[run 0: terminal on 'IoPool-cancel', Dispose took 0 ms]   … 5 of 5 runs identical
+```
+
+`Dispose()` → `Thread.Start()` → `_poolCts.Cancel()` → the `SubscribeThroughPool` drain registration
+→ `inner.Dispose(); observer.OnCompleted()` → the subscriber's handler is **entirely on the dedicated
+`IoPool-cancel` OS thread**. No ThreadPool work item appears anywhere in it, and the subject the test
+awaits is an `AsyncSubject` that has already latched, so the `await` replays without needing a
+scheduled continuation either.
+
+So **.NET ThreadPool starvation is ruled out for that assertion by construction**, not merely by
+experiment — which also explains why a `DOTNET_PROCESSOR_COUNT=2` run could never have reproduced it,
+while the very same regime *is* the right instrument for the `Drain` failure above, whose leaf
+demonstrably unwinds on a `.NET TP Worker`. Two sibling tests in one class, and the thread is what
+tells them apart. What is left standing for the open one is OS-level: `Drain()`/`Dispose()` start a
+**brand-new OS thread per call**, and a thread creation the kernel delays past 5 s under a full
+shard's contention would miss the bound while every in-process instrument reads healthy. That is the
+next experiment, not a wider bound — 0 ms against 5 s is a ~5000× margin, so nothing there is slow.
+
 ---
 
 ## Applied to (current scope)
