@@ -768,13 +768,20 @@ public static class BuildProtocolDriver
     /// </summary>
     private static IEnumerable<PreWarmOutcome> OutcomesOf(
         NodeTypeBakeReport fresh, string bakedDetail, string pendingDetail)
-        => fresh.Entries.Select(e => new PreWarmOutcome(
+    {
+        // Both halves of the gating question, off the SAME report the pre-warmer reads — this
+        // projection used to carry only the per-entry fact, so an outcome minted here disagreed
+        // with one minted by the sweep about a never-built type (#4496).
+        var hasBaseline = !DynamicTypePreWarmer.IsFirstBake(fresh);
+        return fresh.Entries.Select(e => new PreWarmOutcome(
             e.TypePath,
             e.NeedsBake ? PreWarmStatus.TimedOut : PreWarmStatus.AlreadyBaked,
             e.NeedsBake ? pendingDetail : bakedDetail)
         {
             WasHealthyBeforeBake = e.WasHealthy,
+            HasRegressionBaseline = hasBaseline,
         });
+    }
 
     // ── shared ──────────────────────────────────────────────────────────────────────────────────
 
@@ -902,6 +909,10 @@ public static class BuildProtocolDriver
     internal static bool IsGatingFailure(PreWarmOutcome outcome) =>
         !outcome.ReachedUsableBuild
         && outcome.WasHealthyBeforeBake
+        // The first bake of a brand-new instance has nothing to regress from, so nothing here may
+        // hold the GO — the same rule NodeTypeBakeGateState.MarkOutcome applies, read from the same
+        // pair of fields so the two cannot drift apart again (#4496).
+        && outcome.HasRegressionBaseline
         && outcome.Status is not (PreWarmStatus.TimedOut
             or PreWarmStatus.UpstreamUnevaluated
             or PreWarmStatus.NoSources
