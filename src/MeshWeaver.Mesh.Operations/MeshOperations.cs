@@ -4088,15 +4088,28 @@ public class MeshOperations
                 // call site as an ungated disposer for the same reason: it is the one teardown
                 // that comes from OUTSIDE the framework's own lifecycle, so it is the one whose
                 // attribution a log cannot reconstruct.
-                hub.Post(
-                    new DisposeRequest
-                    {
-                        Reason = $"MeshOperations.Recycle: an operator asked for '{resolvedPath}' "
-                                 + "to be recycled (the Recycle tool / Compile button), which "
-                                 + "stamps a release request and then tears the hub down so the "
-                                 + "next access reactivates it",
-                    },
-                    o => o.WithTarget(new Address(resolvedPath)));
+                // 🚨 OFF-ROUTER ISSUING (#4463), exactly as PackageInstaller.SettleRetypedRoot and
+                // the MoveNodeRequest above already do. `hub` here is whatever hub constructed this
+                // facade, and for the AI/agent surface that is the DI-injected IMessageHub — which
+                // in the mesh's ROOT container IS the ROUTER. Posting there stamps the teardown
+                // `Sender = mesh/{id}` and makes the router an END of a work delivery: measured in
+                // production 2026-09-16 01:10:13Z as `ROUTER_TRAFFIC ORIGIN: DisposeRequest was
+                // POSTED with the mesh hub as sender … target: Hosting/Triage/ci-failure/…`, with
+                // this exact frame on top. Node-hub lifecycle then competes with routing on the
+                // router's single-threaded action block, which is the 2026-06-11 portal wedge's
+                // shape. NodeOperationIssuingHub is the IDENTITY FUNCTION for every hub whose
+                // address type is not the mesh type, so the MCP/session/portal callers that
+                // dominate this surface are byte-for-byte unaffected.
+                hub.NodeOperationIssuingHub()
+                    .Post(
+                        new DisposeRequest
+                        {
+                            Reason = $"MeshOperations.Recycle: an operator asked for '{resolvedPath}' "
+                                     + "to be recycled (the Recycle tool / Compile button), which "
+                                     + "stamps a release request and then tears the hub down so the "
+                                     + "next access reactivates it",
+                        },
+                        o => o.WithTarget(new Address(resolvedPath)));
                 return JsonSerializer.Serialize(
                     new
                     {
