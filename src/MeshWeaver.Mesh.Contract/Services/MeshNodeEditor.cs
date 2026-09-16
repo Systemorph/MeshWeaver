@@ -3,6 +3,8 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -45,11 +47,16 @@ public interface IMeshNodeEditor : IDisposable
 }
 
 /// <summary>
-/// Default <see cref="IMeshNodeEditor"/>. Subscribes via
-/// <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace,string)"/>
-/// (auto-routes own/remote) and writes via
-/// <see cref="MeshNodeStreamExtensions.UpdateMeshNode"/>. No <c>await</c>, no
-/// <c>Task.FromResult</c>; pure observable composition.
+/// Default <see cref="IMeshNodeEditor"/>. Reads AND writes through the one handle —
+/// <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace,string)"/> (auto-routes
+/// own/remote), subscribing for the live value and calling <see cref="MeshNodeStreamHandle.Update"/>
+/// for the change. No <c>await</c>, no <c>Task.FromResult</c>; pure observable composition.
+///
+/// <para>The write used to be a bespoke <c>DataChangeRequest</c> posted at the node's hub, and this
+/// remark used to name the <c>[Obsolete]</c> <c>UpdateMeshNode</c> — whose own obsolete message
+/// points at the handle this class now uses. One path for both directions is the point: a second
+/// path to the same node is how the two drift, and it is why the router ever appeared on an end of
+/// an edit (<see href="https://github.com/Systemorph/MeshWeaver/issues/1140">#1140</see>).</para>
 /// </summary>
 public sealed class MeshNodeEditor : IMeshNodeEditor
 {
@@ -81,16 +88,37 @@ public sealed class MeshNodeEditor : IMeshNodeEditor
     public void Update(Func<MeshNode, MeshNode> transform)
     {
         ArgumentNullException.ThrowIfNull(transform);
-        // Long-standing stream: this editor is already subscribed to the node via
-        // GetMeshNodeStream. Apply the transform to the latest snapshot held by the
-        // BehaviorSubject and post a DataChangeRequest to the owning hub. The owning
-        // hub's data layer applies the patch and the same subscription receives the
-        // echo (so the editor's UI re-renders without an extra read).
+        // 🚨 WRITES GO BACK THROUGH THE SAME STREAM THIS EDITOR READS (#1140, Copilot on #4487).
+        //
+        // This used to post a bespoke `DataChangeRequest` at the node's own hub, which was the one
+        // place in this class that did NOT use the stream it is built on: the read half has always
+        // gone through `workspace.GetMeshNodeStream(CurrentPath)`, so the write was a second path to
+        // the same node — the shape the framework's mutation rule exists to remove, and the reason
+        // the router ever appeared on an end here at all. `MeshNodeStreamHandle.Update` routes the
+        // change through `IMeshNodeStreamCache`, whose own `cache/{meshId}` hub is off the router by
+        // construction, so this is a stronger fix than stamping a different sender on the same
+        // bespoke post: the exchange stops existing rather than moving.
+        //
+        // Hopping it onto NodeOperationIssuingHub() was the first fix, and it left the bespoke post
+        // in place. `Move` below still uses that seam, correctly — MoveNodeRequest is node LIFECYCLE
+        // and has no stream equivalent.
+        //
+        // The snapshot guard stays: with no value yet this editor has nothing to transform, which is
+        // the documented contract ("no callback needed for happy-path UI updates" presumes a
+        // snapshot). The write itself still resolves its own base from the stream.
         var current = node.Value;
         if (current is null) return;
-        var updated = transform(current);
-        hub.Post(new DataChangeRequest { Updates = [updated] },
-            o => o.WithTarget(new Address(CurrentPath)));
+
+        // 🚨 COLD — the side effect runs on Subscribe, so an unsubscribed Update silently does
+        // nothing (and `Update` returns void, so the caller cannot subscribe for us). Errors are
+        // LOGGED rather than pushed into `node`: OnError would terminate the editor's own live
+        // subscription permanently, turning one refused write into a dead editor.
+        workspace.GetMeshNodeStream(CurrentPath)
+            .Update(transform)
+            .Subscribe(
+                _ => { },
+                ex => hub.ServiceProvider.GetService<ILogger<MeshNodeEditor>>()?.LogWarning(
+                    ex, "MeshNodeEditor update failed for {Path}", CurrentPath));
     }
 
     /// <inheritdoc />

@@ -985,7 +985,14 @@ public static class MeshExtensions
                     {
                         // Workspace fan-out for transient confirmation (fire-and-forget — same
                         // semantics as the previous code).
-                        hub.Post(DataChangeRequest.Update([resultNode]),
+                        // 🚨 ISSUED OFF THE ROUTER (#1140). `hub` here is whichever hub is HANDLING
+                        // the CreateNodeRequest, and the mesh hub registers these handlers too
+                        // (MeshBuilder.AddMesh → WithNodeOperationHandlers), so a create addressed
+                        // at the mesh runs this line on the ROUTER and the fan-out leaves stamped
+                        // `Sender = mesh/{id}`. NodeOperationIssuingHub is the identity function
+                        // for the node-operation hub that normally handles this, so the ordinary
+                        // path is byte-for-byte unchanged.
+                        hub.NodeOperationIssuingHub().Post(DataChangeRequest.Update([resultNode]),
                             o => o.WithTarget(new Address(resultNode.Path)));
                     }
 
@@ -1006,7 +1013,12 @@ public static class MeshExtensions
                             "[ArgFwd] Forwarding {ArgType} to {NodePath} (accessCtx={AccessCtx})",
                             arg.GetType().Name, resultNode.Path,
                             request.AccessContext?.ObjectId ?? "(null)");
-                        var argDelivery = hub.Post(arg, o =>
+                        // 🚨 ISSUED OFF THE ROUTER (#1140) — same reason as the confirm fan-out
+                        // above. The forwarded Argument keeps carrying the ORIGINAL requester's
+                        // AccessContext as a stamped VALUE, so the target hub's permission check is
+                        // unaffected by which hub the delivery leaves from.
+                        var argIssuingHub = hub.NodeOperationIssuingHub();
+                        var argDelivery = argIssuingHub.Post(arg, o =>
                         {
                             o = o.WithTarget(nodeAddress);
                             return request.AccessContext is { } accessCtx
@@ -4673,7 +4685,11 @@ public static class MeshExtensions
                             // the caller nothing: the row is already written either way, and the
                             // additional nodes come from an INodePostCreationHandler registered in
                             // src/, never from the request.
-                            hub.Post(DataChangeRequest.Update([saved]),
+                            // 🚨 ISSUED OFF THE ROUTER (#1140). The identity above is carried as a
+                            // stamped VALUE and is therefore independent of the issuing hub — which
+                            // is exactly why the hop is safe here: it moves where the delivery comes
+                            // FROM, never whose permissions decide it.
+                            hub.NodeOperationIssuingHub().Post(DataChangeRequest.Update([saved]),
                                 o => o.WithTarget(new Address(saved.Path))
                                     .WithAccessContext(WellKnownUsers.SystemContext));
                             logger.LogInformation(
