@@ -187,18 +187,80 @@ the fan-out as a whole stopped progressing, and it says so rather than blaming a
 written it is **falsified** by §3 above: since the bound became a no-progress watchdog, serializing
 the drain's own N writes cannot time it out — every removal resets the clock.
 
-What is measurable and remains open is a different mechanism. The cap-1 `pg:{provider}` write pool
-is **one process-wide gate**, not one per partition: every per-schema adapter is handed the same
-pool and the same shared `NpgsqlDataSource`. So a delete's next leaf removal queues behind
-*unrelated* writes from every other partition, and those do not tick this delete's progress — a
-portal under sustained write load can starve one drain for a whole budget with zero removals, which
-is the `made no progress for 30s` shape logged on 2026-09-14. Whether that is what happened is not
-decidable from the line.
+The mechanism that replaced it: the cap-1 `pg:{provider}` write pool is **one process-wide gate**,
+not one per partition — every per-schema adapter is handed the same pool and the same shared
+`NpgsqlDataSource`. So a delete's next leaf removal queues behind *unrelated* writes from every
+other partition, and those do not tick this delete's progress. A portal under sustained write load
+could therefore starve one drain for a whole budget with zero removals, which is the
+`made no progress for 30s` shape logged on 2026-09-14.
 
-🚨 **Raising the cap is not the fix.** It is half a connection budget (16 reads + 1 write under the
-shared source's `MaxPoolSize=50`, see [Controlled I/O Pooling](../ControlledIoPooling)), and the
-measurement that would justify a different number — the queue-wait distribution on `pg:{provider}`
-under load — is not instrumented.
+### The reading, 2026-09-16 — and it does not support that
+
+`IIoPool.QueueWait` made the queue readable; the first reading was taken on
+**memex.systemorph.com**, pod `memex-portal-deployment-7cb6684584-jdw7v`, image
+`3.0.0+afde4eab` — the first image to carry the instrument — after **828 minutes** of uptime:
+
+| pool | cap | admissions | mean wait | max wait | ≥ 1 s | ≥ 10 s |
+|---|---:|---:|---:|---:|---:|---:|
+| `pg:Postgres` (write) | 1 | 2,786 | 6.5 ms | **205 ms** | **0** | **0** |
+| `pg-read:Postgres` (read) | 16 | 31,897,169 | **342 ms** | 1,661 ms | 48,122 | 0 |
+
+**The write pool's worst single queue wait in 13.8 hours was 205 ms, against a 30 s budget** — 0.7%
+of it — with both tail buckets at zero. Nothing waited even one second. The starvation mechanism
+above did not occur on that portal, and not within two orders of magnitude of the magnitude it would
+need. The cap-1 write gate is **not** the constraint there.
+
+🚨 **The contended pool is the READ pool, and nothing in this issue's history was looking at it.**
+It carries 11,450× the traffic at 53× the mean wait, and 77% of its admissions land in the
+[100 ms, 1 s) bucket — it queues *routinely*, not occasionally. That matters here because a
+commit's per-leaf work is mostly READS: every cascade leg re-enters the handler and pays a root
+read, a permission fold, a descendant enumeration and an existence probe before it writes anything.
+If pool queueing delays a drain, this is where it comes from.
+
+**What the reading does not settle.** Its denominator is ONE portal, ONE pod, ONE process lifetime —
+and it is not the portal that produced any logged occurrence. memex-cloud, where all of them
+happened, runs an image from 2026-09-12 that predates the instrument, so the question cannot yet be
+asked there. And a high mean on `pg-read` is not by itself a cap that is too small: `InvokeStream`
+holds one slot for a whole enumeration, so long-held slots and too-few slots produce the same mean
+and are different problems.
+
+🚨 **Raising either cap is still not the fix, and now there is a measurement saying so rather than
+an absence of one.** The write pool has no queueing to relieve. The read pool's queueing has no
+diagnosis yet — and the caps are half a connection budget (16 reads + 1 write under the shared
+source's `MaxPoolSize=50`, see [Controlled I/O Pooling](../ControlledIoPooling)), so spending the
+headroom needs a reason, not a symptom.
+
+### What the commit timeout now says
+
+The reading that decides this is free at the moment the watchdog fires — `IoPoolRegistry` is
+mesh-scoped and every counter is lock-free — so the commit stage takes it and puts it on the line:
+
+```text
+[DeleteNode:commit] the bottom-up delete of 'Hosting/TriageStatus' made no progress for 30s —
+3 of 9 planned path(s) removed from storage so far; still owed by the plan: … . At the timeout:
+no I/O pool had work queued at that moment, and no admission during this stage waited a second
+for a slot
+```
+
+🚨 **It is a WINDOW, not an instant, and that distinction is the whole reading.** A queue depth
+sampled once at the timeout cannot exonerate a cap: a leaf can wait most of the budget for a slot,
+be granted it, and only *then* stall — by which time the depth is zero and an instant-only reading
+would report the pools as innocent. So the stage snapshots the pools as it OPENS and the timeout
+differences the wait buckets against that baseline. "Nothing queued now" is half the sentence; "and
+nothing admitted during this stage waited a second" is the half that makes it mean anything.
+
+🚨 **The two answers are still not symmetric, and the wording keeps them apart.** The clean reading
+rules out **the pool gates** — no cap held this drain up — and says nothing about where the drain
+*was* stuck; storage is the likeliest remaining candidate, not a proven one. *These pools had work
+queued* is a LEAD in the other direction: the buckets are process-wide, so a slow admission during
+the window may belong to an unrelated caller, and it stays a coincidence until something ties this
+operation's own leaf to it. Which is why the report says **had work queued** and never *caused*.
+
+A third sentence exists on purpose. `IoPoolQueueReport` distinguishes "no registry on this hub — the
+reading was not taken" from "taken, and nothing was queued", because collapsing those is how an
+unmeasured pool comes to look like an idle one. `IoPoolRegistry.Snapshot()` enumerates the pools
+that EXIST and mints none, for the same reason: `Get` is a resolver, and a readout built on it
+answers a wrong name by creating that pool and reporting it, brand new, as idle.
 
 ## Where this is pinned
 

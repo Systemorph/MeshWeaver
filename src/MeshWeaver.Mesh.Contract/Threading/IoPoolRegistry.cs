@@ -97,6 +97,38 @@ public sealed class IoPoolRegistry : IDisposable
     public int TotalInFlight => _pools.Values.Sum(p => p.CurrentInFlight);
 
     /// <summary>
+    /// A reading of every pool that EXISTS right now — name, cap, in-flight, queue depth and the
+    /// wait distribution — creating none.
+    ///
+    /// <para>🚨 <b>This is the only honest way to read a pool, and <see cref="Get"/> is not one.</b>
+    /// <see cref="Get"/> is a resolver: handed a name no pool carries it MINTS one and hands it
+    /// back, brand new and therefore reporting nothing. So a readout built on <see cref="Get"/>
+    /// answers a typo, a renamed provider or a backend that is not wired at all with
+    /// <c>Samples = 0</c> — indistinguishable from a real, idle pool, and it leaves a phantom in the
+    /// registry besides. MeshWeaver#1198's whole history is instruments that answer confidently
+    /// wrong; the reading that decides a cap must not be one of them, so it enumerates rather than
+    /// asks.</para>
+    ///
+    /// <para>A point-in-time copy, ordered by name: the underlying dictionary is live and every
+    /// counter is lock-free, so the readings are individually consistent and the set is not a
+    /// transaction. That is the right trade for a diagnostic — a snapshot that took a lock would
+    /// make reading the pools a way to stall them.</para>
+    ///
+    /// <para>Empty once disposal has begun (<see cref="Dispose"/> clears the pools), which reads
+    /// correctly: a torn-down mesh has no pool queueing anybody.</para>
+    /// </summary>
+    public IReadOnlyList<IoPoolReading> Snapshot() =>
+        _pools
+            .Select(kv => new IoPoolReading(
+                kv.Key,
+                kv.Value.MaxConcurrency,
+                kv.Value.CurrentInFlight,
+                kv.Value.CurrentlyWaiting,
+                kv.Value.QueueWait))
+            .OrderBy(r => r.Name, StringComparer.Ordinal)
+            .ToArray();
+
+    /// <summary>
     /// Completes once <see cref="TotalInFlight"/> reaches zero (polled), or after
     /// <paramref name="timeout"/> elapses — whichever comes first. This is the
     /// "wait for the I/O queue" half of mesh teardown: hub <c>DisposalCompleted</c>

@@ -216,6 +216,17 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <summary>Number of operations currently executing through this pool.</summary>
     public int CurrentInFlight => Volatile.Read(ref _inFlight);
 
+    /// <summary>
+    /// The cap this pool was created with — how many operations it will run at once.
+    ///
+    /// <para>🚨 A queue depth is meaningless without it. "41 waiting" says nothing until you know
+    /// whether the pool runs 1 at a time or 256; the pair <c>(cap, waiting)</c> is what says
+    /// whether the cap is the constraint, and it is the reading MeshWeaver#1198 asks the
+    /// <c>pg:{provider}</c> write pool for. Diagnostics / readouts only — nothing may branch on it
+    /// to decide how much work to issue.</para>
+    /// </summary>
+    public int MaxConcurrency => _maxConcurrency;
+
     // 🚨 WHICH leaf, not just how many. The residual a dirty teardown reports has been an
     // anonymous "AgentStore=1" — enough to know a pool did not drain, never enough to fix it.
     // #2480 added the POOL NAME for exactly this reason and stopped one level short: measured
@@ -558,18 +569,53 @@ public sealed class IoPool : IIoPool, IDisposable
                     LeaveGateRegion();
             }
 
+            // 🚨 Blocking work does NOT pass through _gate — it queues on the limited-concurrency
+            // scheduler instead — so its wait is timed at THAT grant point. Instrumenting only the
+            // async gate would have left a whole admission path out of a reading that looks total.
+            //
+            // Both of these sit OUTSIDE the try, for the same reason regionLeft does: the catch
+            // below has to be able to undo them, and a helper declared inside the try is not in
+            // scope there. The increment is paired with LeaveWaitOnce on every exit — the delegate,
+            // the continuation, and the scheduling-threw path.
+            var queuedAt = Stopwatch.GetTimestamp();
+            Interlocked.Increment(ref _waiting);
+
+            // 🚨 EXACTLY-ONCE EXIT FROM THE WAITING GAUGE, and it cannot live only in the
+                // delegate. The task below is created WITH cts.Token, so a subscription disposed
+                // while it is still queued on the limited-concurrency scheduler — which is what
+                // every unsubscribe and every lapsed bound does — transitions the task straight to
+                // Canceled and the delegate NEVER RUNS. With the decrement inside it, each such
+                // admission leaked a permanent +1 on CurrentlyWaiting, so a pool that had long
+                // since gone idle kept reporting a queue that did not exist. That is not a cosmetic
+                // drift: CurrentlyWaiting is read as EVIDENCE (the commit stage's timeout asks it
+                // whether a delete was starved), and a gauge that only ever climbs would answer
+                // "something was queued" forever after one cancelled leaf — a confidently wrong
+                // instrument of exactly the kind MeshWeaver#1198 exists to stamp out.
+                //
+                // Idempotent, so the ContinueWith below can call it unconditionally and the two
+                // paths can also race: a delegate that DID start and then threw an
+                // OperationCanceledException for this token completes the task as Canceled, so both
+                // arms fire. A negative count is a wedge, not a warning — the same reason
+                // LeaveRegionOnce above is shaped this way.
+            var waitLeft = 0;
+            void LeaveWaitOnce()
+            {
+                if (Interlocked.Exchange(ref waitLeft, 1) == 0)
+                    Interlocked.Decrement(ref _waiting);
+            }
+
             try
             {
                 // Linked to the pool token so Drain()/Dispose() cancels blocking work too.
                 var cts = CancellationTokenSource.CreateLinkedTokenSource(_poolCts.Token);
-                // 🚨 Blocking work does NOT pass through _gate — it queues on the limited-concurrency
-                // scheduler instead — so its wait is timed at THAT grant point. Instrumenting only the
-                // async gate would have left a whole admission path out of a reading that looks total.
-                var queuedAt = Stopwatch.GetTimestamp();
-                Interlocked.Increment(ref _waiting);
+
                 _blockingFactory.StartNew(() =>
                     {
-                        Interlocked.Decrement(ref _waiting);
+                        LeaveWaitOnce();
+                        // 🚨 Only an admission that actually RAN records a wait. A cancelled one
+                        // never became an admission, and folding it in would blend "how long work
+                        // waited to run" with "how long a teardown took to unwind" — which is why
+                        // this stays here and not beside the gauge exit in the ContinueWith.
                         RecordWait(queuedAt);
                         // _inFlight increments only once the scheduler grants a slot —
                         // so CurrentInFlight reflects actually-running blocking work,
@@ -622,6 +668,11 @@ public sealed class IoPool : IIoPool, IDisposable
                         }
                         finally
                         {
+                            // Unconditional and idempotent: this continuation is the ONE place
+                            // reached whether the delegate ran, faulted, or was cancelled before the
+                            // scheduler ever granted it a slot — and that last case is the one that
+                            // used to leak the gauge (see LeaveWaitOnce above).
+                            LeaveWaitOnce();
                             // The leaf can no longer touch _blockingIdle / _poolCts — release the region
                             // so a pending disposal can complete.
                             LeaveRegionOnce();
@@ -644,6 +695,9 @@ public sealed class IoPool : IIoPool, IDisposable
             }
             catch
             {
+                // The scheduling threw, so neither the delegate nor the continuation will ever run:
+                // this is the third exit path, and it has to undo the gauge as well as the region.
+                LeaveWaitOnce();
                 LeaveRegionOnce();
                 throw;
             }
