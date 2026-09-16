@@ -214,16 +214,23 @@ in.**
 > and both `MeshNodeStreamCache` seams (`GetStream`, `GetQuery`) return the node. A degrade can make
 > content unusable; it cannot make a row absent.
 >
-> The exact-path read has **two** exception-to-absence conversions, and neither can drop a single row
-> while leaving the rest — both empty the WHOLE per-query result, and both log a Warning when they
-> do. In `StorageAdapterMeshQueryProvider.FindMatchingNodes`: the `try`/`catch` around
-> `persistence.ReadMany(...)`, which returns `Observable.Empty<MeshNode>()` when `ReadMany` throws
-> *synchronously* (logged `[StorageAdapterMeshQueryProvider.ExactRead] ReadMany threw synchronously`);
-> and `PipelineFaultOrStopped` on the composed sequence, for a fault that arrives *asynchronously*.
-> So "one row missing, the others fine" — the signature of all three instances — is not reachable
-> from an exception on this path at all. (A per-path scope WALK is the one place a single node is
-> dropped: `SwallowedReadOrStop` logs and returns null for that path alone. It is not the exact-path
-> read, and it too logs.)
+> An exception CAN still produce a missing row — what it cannot do is produce one **silently**, and
+> that is the property to use. Three conversions turn a read fault into absence, and every one of
+> them logs a Warning naming the path or paths:
+>
+> | Where | When | What is lost |
+> |---|---|---|
+> | `FindMatchingNodes`, the `try`/`catch` around `persistence.ReadMany(...)` | `ReadMany` throws **synchronously** | the whole exact-path arm (`Observable.Empty`); logged `[StorageAdapterMeshQueryProvider.ExactRead] ReadMany threw synchronously` with the paths |
+> | `PipelineFaultOrStopped` on the composed sequence | a fault arrives **asynchronously** | only the REMAINDER — the default `ReadMany` is a `Merge` over per-path reads, so rows already emitted stand, and the arm is `Concat`-ed with the scope arm, which keeps emitting |
+> | `SwallowedReadOrStop`, on the per-path scope WALK | one path's read faults | exactly that node, `null` in its place |
+>
+> So do not reason from the shape of the loss to "not an exception" — a one-path `path:X` read has no
+> "rest" to leave behind, and a scope walk drops single nodes by design. **Reason from the log.** If
+> an exception made these rows absent, the replica said so at `Warning`, once per failing read,
+> naming the path — which for a row absent on every read since is a line that should be everywhere.
+> 🚨 That question has NOT been put to any of the three: the Loki window taken for the third instance
+> was searched for *delete* and *prune*, not for these three Warnings. It is the cheapest unasked
+> question on this page — ask it before inspecting a schema.
 
 ## Open
 
