@@ -71,7 +71,10 @@ def storage_bytes(value, *, prometheus=False):
     match = re.fullmatch(r'(\d+(?:\.\d+)?)([A-Za-z]*)', str(value))
     if not match or match[2] not in units:
         raise ValueError(f'unsupported storage quantity {value!r}')
-    return Decimal(match[1]) * units[match[2]]
+    parsed = Decimal(match[1]) * units[match[2]]
+    # Base2Bytes truncates its parsed value to an integer byte count. In particular,
+    # 0.5B becomes 0 (unlimited), not a positive storage budget.
+    return int(parsed) if prometheus else parsed
 
 
 def verify_prometheus_storage(documents, values):

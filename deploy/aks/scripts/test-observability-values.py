@@ -267,6 +267,15 @@ class CheckerVerdictTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn('unsupported storage quantity', result.stdout)
 
+    def test_prometheus_fractional_byte_truncating_to_zero_fails(self):
+        values = json.loads(json.dumps(self.CLEAN))
+        values['prometheus']['server']['extraArgs']['storage.tsdb.retention.size'] = '0.5B'
+        result = self.run_checker(values, rendered=manifest(prometheus_args=[
+            '--storage.tsdb.path=/data', '--storage.tsdb.retention.time=15d',
+            '--storage.tsdb.retention.size=0.5B']))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('positive', result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()
