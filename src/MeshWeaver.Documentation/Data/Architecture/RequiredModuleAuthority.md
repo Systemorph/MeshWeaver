@@ -95,10 +95,16 @@ module is not required at all.)
 
 🚨 **The chart's block has a ceiling, and under the claim an unrendered slot means NOT REQUIRED.**
 The portal ConfigMap names every `Modules__Required__N` key literally — a Helm `range` renders
-correctly and is invisible to the key-literal guards — so the list stops somewhere;
-`DeploymentPortalConfig.MaxRenderedRequiredModuleSlot` states where, a test reads the number back
-out of the template so the two cannot drift, and `RequiredModuleProblems` (folded into
-`SpecProblems`) *names* a slot above it instead of letting the render drop it.
+correctly and is invisible to the key-literal guards — so the list stops somewhere.
+`DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot` states where, a test reads the number
+back out of the template so the two cannot drift, and `ChartModuleSlotProblems` *names* a slot above
+it instead of letting the render drop it.
+
+That check is **scoped to the chart and deliberately not folded into `SpecProblems`**: the Aspire
+route injects whatever `PortalConfig` emits, ceiling and all, so it delivers such a slot correctly,
+and a route-neutral "why the spec cannot bring an instance up" answer that named it would be false
+for an Aspire run. It is also the nastiest shape here — a slot above the ceiling **works on a laptop
+and disappears in the cluster** — so a Helm renderer asks it alongside the spec problems.
 
 The boot path and the `/health` `required_modules` check must ask this question the *same* way — a
 probe that disagreed with the log line before it would be worse than no probe — so both go through
@@ -151,7 +157,7 @@ Fluent: `record.WithRequiredModules(…).WithRequiredModulesAuthoritative()`.
 | Test | Holds |
 |---|---|
 | `ConfiguredModuleActivationTest` (`test/MeshWeaver.Compiler.Pipeline.Test`) | the reading, over a real two-provider configuration — the short list, the empty claim, the explicit slot, blanking, the no-claim default, the non-root section |
-| `RequiredModuleAuthorityTest` (`test/MeshWeaver.Deployment.Contract.Test`) | the rendering — both routes agreeing slot for slot, never-`false`, the JSON round-trip, the ceiling read back out of the chart, and a slot above it reported rather than dropped |
+| `RequiredModuleAuthorityTest` (`test/MeshWeaver.Deployment.Contract.Test`) | the rendering — both routes agreeing slot for slot, never-`false`, the JSON round-trip, the ceiling read back out of the chart, and a slot above it reported rather than dropped — scoped to the chart, since the Aspire route delivers it |
 
 🚨 **The cross-assembly key assertion is in the FIRST of those, not the second, and deliberately.**
 The record renders from `MeshWeaver.Deployment.Contract` (zero MeshWeaver references by design — it

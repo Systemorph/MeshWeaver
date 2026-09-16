@@ -45,10 +45,11 @@ public class RequiredModuleAuthorityTest
 
     /// <summary>
     /// 🚨 The chart's <c>Modules__Required__N</c> block names every key LITERALLY, so it has a
-    /// hand-written ceiling; a slot above it reaches no container. That was merely wrong while the
-    /// entries were a by-index overlay (the image's entry stood); under the authority claim it
-    /// means the module is NOT REQUIRED AT ALL. So the number the contract reports problems against
-    /// has to be the number the template actually renders — read from the template, not restated.
+    /// hand-written ceiling; a slot above it reaches no container in Kubernetes. That was merely
+    /// wrong while the entries were a by-index overlay (the image's entry stood); under the
+    /// authority claim it means the module is NOT REQUIRED AT ALL. So the number the contract
+    /// reports problems against has to be the number the template actually renders — read from the
+    /// template, not restated.
     /// </summary>
     [Fact]
     public void TheDeclaredCeilingIsTheOneTheChartRenders()
@@ -67,28 +68,45 @@ public class RequiredModuleAuthorityTest
         Assert.True(rendered.Length > 0, "the chart renders no Modules__Required__N key at all");
         Assert.Equal(0, rendered[0]);
         Assert.Equal(Enumerable.Range(0, rendered[^1] + 1), rendered);
-        Assert.Equal(DeploymentPortalConfig.MaxRenderedRequiredModuleSlot, rendered[^1]);
+        Assert.Equal(DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot, rendered[^1]);
     }
 
     [Fact]
-    public void ASlotAboveTheCeiling_IsREPORTED_NotSilentlyDropped()
+    public void ASlotAboveTheChartsCeiling_IsREPORTED_NotSilentlyDropped()
     {
-        var over = DeploymentPortalConfig.MaxRenderedRequiredModuleSlot + 1;
+        var over = DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot + 1;
         var record = new DeploymentContent()
             .WithRequiredModuleSlot(over, "MeshWeaver.Mcp")
             .WithRequiredModulesAuthoritative();
 
-        var problem = Assert.Single(DeploymentPortalConfig.RequiredModuleProblems(record));
+        var problem = Assert.Single(DeploymentPortalConfig.ChartModuleSlotProblems(record));
         Assert.Contains("MeshWeaver.Mcp.dll", problem, StringComparison.Ordinal);
         Assert.Contains(over.ToString(), problem, StringComparison.Ordinal);
 
-        // And it rides the one surface a renderer already asks before bringing an instance up.
-        Assert.Contains(DeploymentPortalConfig.SpecProblems(record), p => p == problem);
-
         // A deliverable slot is not a problem — the check is about the ceiling, not about slots.
-        Assert.Empty(DeploymentPortalConfig.RequiredModuleProblems(
-            new DeploymentContent().WithRequiredModuleSlot(DeploymentPortalConfig.MaxRenderedRequiredModuleSlot, "MeshWeaver.Mcp")));
-        Assert.Empty(DeploymentPortalConfig.RequiredModuleProblems(null));
+        Assert.Empty(DeploymentPortalConfig.ChartModuleSlotProblems(
+            new DeploymentContent().WithRequiredModuleSlot(DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot, "MeshWeaver.Mcp")));
+        Assert.Empty(DeploymentPortalConfig.ChartModuleSlotProblems(null));
+    }
+
+    [Fact]
+    public void TheCeilingIsTheCHARTS_SoTheRouteNeutralSpecProblemsDoesNotCarryIt()
+    {
+        // 🚨 The Aspire route injects whatever PortalConfig emits, ceiling and all, so it delivers
+        // slot 20 correctly. A route-neutral "why the spec cannot bring an instance up" answer that
+        // named it would be FALSE for an Aspire run — which is why the check is its own, chart-named
+        // surface a Helm renderer asks alongside SpecProblems rather than something folded into it.
+        var over = DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot + 1;
+        var record = new DeploymentContent()
+            .WithRequiredModuleSlot(over, "MeshWeaver.Mcp")
+            .WithRequiredModulesAuthoritative();
+
+        Assert.Empty(DeploymentPortalConfig.SpecProblems(record.PluginRepos, record.PreInstall));
+
+        // And the emitted key is really there on both routes — the slot is delivered, it is the
+        // CHART that would not carry it.
+        Assert.Equal("MeshWeaver.Mcp.dll", DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Aspire(null))[$"Modules__Required__{over}"]);
+        Assert.Equal("MeshWeaver.Mcp.dll", DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Helm)[$"Modules__Required__{over}"]);
     }
 
     private static string? RepoRoot()
