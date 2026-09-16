@@ -134,5 +134,11 @@ The failure path now walks `IDataSource.OpenStreams` — presence only — and e
 - `DataContextInitTimeoutAttributionTest` — one type source settles and one never does; the
   recorded message must name the data source and the outstanding leg, must not name the settled
   leg, and must not offer a candidate cause.
+- `DataContextInitTimeoutAttributionTest.TimedOutInit_ErrorsEveryStreamTheDataSourceHolds_NotOnlyThePrimary`
+  — a second stream on the same source must receive the failure.
+- `DataContextInitTimeoutPartitionedSourceTest` — a `PartitionedHubDataSource` whose remote owner
+  never answers: its partition stream must receive the host's failure, and afterwards the source must
+  hold exactly one stream and the host exactly one `sync` sub-hub. Calling
+  `GetStreamForPartition(null)` on the failure path measured `streams=2 hostSyncHubs=2` there.
 - `DataSourceOpenStreamsIsPresenceOnlyTest` — `GetStreamForPartition` creates a stream and its
   `sync` sub-hub while `OpenStreams` only reports; the property the failure path depends on.

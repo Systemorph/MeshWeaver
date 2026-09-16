@@ -86,7 +86,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Silent Completion](SilentCompletion) — an empty completion is invisible to every timeout
 - [AsyncLocal Across Scheduler Hops](AsyncLocalAcrossHops)
 - [Initialization Gates](InitializationGates)
-- [What the DataContext Init Time-Box Bounds](DataContextInitializationTimeout) — the 120 s box is nested three deep (data source → stream → type-source leg), a per-node hub's is in practice ONE unbounded storage read, and the timeout now names the leg instead of guessing "a stuck NodeType compile", which cannot reach it
+- [What the DataContext Init Time-Box Bounds](DataContextInitializationTimeout) — the 120 s box is nested three deep (data source → stream → type-source leg), a per-node hub's initialization is in practice ONE unbounded storage read, and the timeout now names the leg instead of guessing "a stuck NodeType compile", which cannot reach it
 - [Retiring an Activation](RetiringAnActivation) — a transient init fault retires instead of latching; the gate is failed BEFORE the dispose, because two drains cannot be ordered by a comment
 - [Aggregating Providers](AggregatingProviders)
 - [Hub Disposal Model](HubDisposalModel)

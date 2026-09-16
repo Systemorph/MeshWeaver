@@ -705,8 +705,8 @@ public sealed record DataContext : IDisposable
     /// <returns>A sentence naming the pending data sources, streams and type sources.</returns>
     private string DescribePendingInitialization()
     {
-        var pending = new List<string>();
-        var settled = new List<string>();
+        var pending = ImmutableList<string>.Empty;
+        var settled = ImmutableList<string>.Empty;
         foreach (var dataSource in DataSourcesById.Values)
         {
             var streams = dataSource.OpenStreams;
@@ -715,12 +715,12 @@ public sealed record DataContext : IDisposable
                 .ToArray();
             if (waiting.Length == 0)
             {
-                settled.Add(Describe(dataSource));
+                settled = settled.Add(Describe(dataSource));
                 continue;
             }
 
             var legs = dataSource.PendingTypeSources;
-            pending.Add(
+            pending = pending.Add(
                 $"'{Describe(dataSource)}' — {waiting.Length} of {streams.Count} stream(s) never "
                 + $"produced a first frame ({string.Join("; ", waiting.Select(DescribeStream))})"
                 + (legs.Count == 0

@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Data.Test;
@@ -48,7 +49,7 @@ public class DataContextInitTimeoutAttributionTest(ITestOutputHelper output) : H
     /// well inside the attribute's 120 s so a regression fails on a NAMED assertion, never
     /// anonymously on the test timeout (the first negative control of this file did exactly that).
     /// </summary>
-    private static TimeSpan AnswerBound => TestTimeouts.Quick;
+    private static TimeSpan AnswerBound => TestTimeouts.Quick / 2;
 
     /// <summary>The leg that never emits — the one the diagnostic has to name.</summary>
     private record HangingItem(string Id);
@@ -104,8 +105,7 @@ public class DataContextInitTimeoutAttributionTest(ITestOutputHelper output) : H
             .Observe(new ProbeRequest(), o => o.WithTarget(host.Address))
             .FirstAsync().Timeout(AnswerBound).Await(TestContext.Current.CancellationToken);
 
-        await act.Should().ThrowAsync<Exception>(
-            "a hub whose data-source init hung must answer requests with an error, not hang");
+        await ProbeIsRejectedByTheFailedState(act);
 
         var initError = host.GetWorkspace().DataContext.InitializationError;
         initError.Should().BeOfType<TimeoutException>(
@@ -164,8 +164,7 @@ public class DataContextInitTimeoutAttributionTest(ITestOutputHelper output) : H
         var act = () => client
             .Observe(new ProbeRequest(), o => o.WithTarget(host.Address))
             .FirstAsync().Timeout(AnswerBound).Await(TestContext.Current.CancellationToken);
-        await act.Should().ThrowAsync<Exception>(
-            "a hub whose data-source init hung must answer requests with an error, not hang");
+        await ProbeIsRejectedByTheFailedState(act);
 
         // The probe is answered only after SettleInitializationGate opened the gate, and that body
         // errors the streams BEFORE it opens the gate — so by now the terminal is either already
@@ -180,6 +179,22 @@ public class DataContextInitTimeoutAttributionTest(ITestOutputHelper output) : H
             + "not only the one GetStreamForPartition(null) happens to return");
         terminal.Exception.Should().BeOfType<TimeoutException>(
             "the stream carries the SAME attributed time-box failure the hub recorded");
+    }
+
+    /// <summary>
+    /// The probe must be answered by the FAILED-state rejection — never merely time out. The probe's
+    /// own wait is bounded, so a bare "it threw" would also pass when the gate stayed SHUT and the
+    /// request simply expired: exactly the wedge the time-box exists to prevent.
+    /// </summary>
+    private static async Task ProbeIsRejectedByTheFailedState(Func<Task> probe)
+    {
+        var ex = (await probe.Should().ThrowAsync<Exception>(
+            "a hub whose data-source init hung must answer requests with an error, not hang")).Which;
+        ex.Should().NotBeOfType<TimeoutException>(
+            "a TimeoutException here is the probe's OWN wait expiring behind a gate that never got "
+            + "its answer — the wedge, not the failed state");
+        ex.ToString().Should().Contain("initialization failed",
+            "the answer must be the FAILED-state rejection, which says why the hub refuses");
     }
 }
 
@@ -247,4 +262,93 @@ public class DataSourceOpenStreamsIsPresenceOnlyTest(ITestOutputHelper output) :
         subHub!.Address.Type.Should().Be(SynchronizationAddress.AddressType,
             "the hub a stream creates is a sync/ sub-hub");
     }
+}
+
+/// <summary>
+/// Pins the MINT half of #1122 on the source where it was reachable: a
+/// <see cref="Persistence.PartitionedHubDataSource{TPartition}"/> opens only its declared partitions,
+/// so it holds no null-partition stream.
+///
+/// <para>The failure used to be propagated with <c>GetStreamForPartition(null).OnError</c>. On this
+/// source that key misses, so the failure path CREATED the combined null-partition stream — and a
+/// stream always builds a <c>sync</c> sub-hub — while the partition stream that was actually hung was
+/// never errored. This test measures both halves on the real shape: the partition stream must receive
+/// the host's attributed time-box failure, and afterwards the source must hold exactly that one stream
+/// and the host exactly one <c>sync</c> sub-hub.</para>
+///
+/// <para>The owner is a hub whose OWN data init never finishes, so the host's subscribe parks behind
+/// its <c>DataContextInit</c> gate — the production shape of a remote owner that never answers.</para>
+/// </summary>
+public class DataContextInitTimeoutPartitionedSourceTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    private record Item(string Id);
+
+    /// <summary>See <see cref="DataContextInitTimeoutAttributionTest"/>: the bound under test, short.</summary>
+    private static TimeSpan InitBound => TestTimeouts.Quick / 8;
+
+    /// <summary>Dominates <see cref="InitBound"/>, and stays inside a 30 s runner cap even on CI.</summary>
+    private static TimeSpan AnswerBound => TestTimeouts.Quick / 2;
+
+    /// <summary>The remote owner the host's partition stream mirrors, built on demand by the router.</summary>
+    private readonly Address owner = CreateClientAddress("hanging-owner");
+
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+        => base.ConfigureHost(configuration)
+            .AddData(data => data
+                .WithInitializationTimeout(InitBound)
+                .AddPartitionedHubSource<Address>(ds => ds
+                    .WithType<Item>(_ => owner)
+                    .InitializingPartitions(new object[] { owner })));
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration)
+            .AddData(data => data
+                // Long on purpose: the owner must still be PARKED when the host's short box expires,
+                // so the host's failure is the only thing that can terminate the partition stream.
+                .WithInitializationTimeout(TestTimeouts.Convergence)
+                .AddSource(src => src.WithType<Item>(t => t
+                    .WithKey(i => i.Id)
+                    .WithInitialData(() => Observable.Never<IEnumerable<Item>>()))));
+
+    // 120_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a constant.
+    [Fact(Timeout = 120_000)]
+    public async Task TimedOutInit_OnAPartitionedHubSource_ErrorsItsPartitionStream_AndMintsNothing()
+    {
+        var host = GetHost();
+        var dataSource = host.GetWorkspace().DataContext.DataSources.Single();
+
+        // Get-or-create keyed by the partition: this is the SAME stream the init turn opens, whichever
+        // of the two gets there first. Subscribe before the failure so its arrival cannot be missed.
+        var partitionStream = dataSource.GetStreamForPartition(owner)!;
+        var partitionTerminal = partitionStream.IgnoreElements().Materialize().FirstAsync().Replay(1);
+        using var connection = partitionTerminal.Connect();
+
+        var terminal = await partitionTerminal.Should().Within(AnswerBound).Emit(
+            "the partition stream that was actually hung must be told the initialization failed",
+            TestContext.Current.CancellationToken);
+
+        terminal.Kind.Should().Be(NotificationKind.OnError,
+            "the failed initialization terminates the hung partition stream");
+        terminal.Exception.Should().BeOfType<TimeoutException>(
+            "the terminal is the host's time-box failure");
+        terminal.Exception!.Message.Should().Contain("DataContext initialization did not complete",
+            "the stream must carry the host's failure, not a fault of its own");
+
+        var streams = dataSource.OpenStreams;
+        var syncHubs = LiveSyncHubs(host);
+        Output.WriteLine($"DIAG partitioned-failure: streams={streams.Count} hostSyncHubs={syncHubs}");
+
+        streams.Count.Should().Be(1,
+            "the failure path must not CREATE the null-partition stream this source never opened");
+        ((object)streams.Single()).Should().BeSameAs(partitionStream,
+            "the one stream held is the declared partition's");
+        syncHubs.Should().Be(1,
+            "creating a stream builds a sync sub-hub, so a minted stream shows up here as a second one");
+    }
+
+    /// <summary>One hosted <c>sync</c> hub per stream a hub keeps alive — the metric
+    /// <c>DataSourceStartMintingTest</c> uses.</summary>
+    private static int LiveSyncHubs(IMessageHub hub) =>
+        hub.ServiceProvider.GetRequiredService<HostedHubsCollection>()
+            .Hubs.Count(h => h.Address.Type == SynchronizationAddress.AddressType);
 }
