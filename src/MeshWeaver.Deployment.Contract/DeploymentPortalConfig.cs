@@ -32,6 +32,21 @@ public static class DeploymentPortalConfig
     /// </summary>
     public const string RequiredIsAuthoritativeKey = $"{ModulesSection}:RequiredIsAuthoritative";
 
+    /// <summary>
+    /// The HIGHEST <c>Modules:Required:N</c> index the Helm chart renders — it names every key
+    /// literally (no <c>range</c>, which the key-literal guards cannot see), so the list has a
+    /// hand-written ceiling and a slot above it reaches NO container.
+    ///
+    /// <para>🚨 Silent in both directions before, and worse now: an unrendered slot used to mean
+    /// "the image's entry at that index stands", which is merely wrong; under
+    /// <see cref="RequiredIsAuthoritativeKey"/> it means the module is NOT REQUIRED AT ALL, because
+    /// the claim excludes the image's list. <see cref="RequiredModuleProblems"/> names it instead of
+    /// letting the render drop it, and <c>RequiredModuleAuthorityTest</c> holds this number to the
+    /// chart's actual block — a constant that drifts from the template is the Memex#128/#131 shape
+    /// wearing a different hat.</para>
+    /// </summary>
+    public const int MaxRenderedRequiredModuleSlot = 19;
+
     /// <summary>Conventional suffix of the vault secret holding the main DB connection string.</summary>
     public const string DatabaseSecretSuffix = "db-connection";
 
@@ -306,14 +321,60 @@ public static class DeploymentPortalConfig
     /// </summary>
     public static ImmutableList<string> BootConfigurationEntries(DeploymentContent? record)
     {
-        var entries = ConfigurationEntries(record?.PluginRepos, record?.PreInstall)
-            .AddRange(ModuleEntries(record?.RequiredModules));
+        var entries = ConfigurationEntries(record?.PluginRepos, record?.PreInstall);
+        if (record is null)
+            return entries;
+
+        // 🚨 ModuleSlots, NOT ModuleEntries: the same slots PortalConfig emits. This route used to
+        // render the contiguous list alone and drop every explicit RequiredModuleSlots entry, so
+        // the two renderers of ONE record described different required sets — the drift this type
+        // exists to make impossible. Harmless while both were read as a by-index OVERLAY; with the
+        // claim beside them the two routes would state two different COMPLETE sets, and the one
+        // that dropped a slot would say a module is not required at all.
+        foreach (var (slot, assembly) in ModuleSlots(record))
+            entries = entries.Add($"{ModulesSection}:Required:{slot}={assembly}");
+
         // The authority claim rides with the entries it qualifies, on BOTH routes — an entry list
         // delivered without it reads as a by-index overlay, which is what it was before #4476.
-        return record?.RequiredModulesAuthoritative == true
+        return record.RequiredModulesAuthoritative
             ? entries.Add($"{RequiredIsAuthoritativeKey}=true")
             : entries;
     }
+
+    /// <summary>
+    /// The required-module slots this record declares that NO renderer can deliver — a slot above
+    /// <see cref="MaxRenderedRequiredModuleSlot"/>, which the chart's literal-key block does not
+    /// carry. Empty when every slot is deliverable.
+    ///
+    /// <para>🚨 Reported rather than dropped, for the same reason <see cref="Validate"/> reports a
+    /// half-configured mount: a slot that reaches no container is invisible at deploy time — helm
+    /// succeeds, the ConfigMap is well-formed, and the module is quietly not required. Pure.</para>
+    /// </summary>
+    public static ImmutableList<string> RequiredModuleProblems(DeploymentContent? record)
+    {
+        if (record is null)
+            return ImmutableList<string>.Empty;
+        var problems = ImmutableList.CreateBuilder<string>();
+        foreach (var (slot, assembly) in ModuleSlots(record))
+            if (slot > MaxRenderedRequiredModuleSlot)
+                problems.Add(
+                    $"required module '{assembly}' is declared at slot {slot}, above the highest "
+                    + $"slot any renderer delivers ({MaxRenderedRequiredModuleSlot}) — it would "
+                    + "reach no container, so the module would not be required at all. Raise the "
+                    + "chart's Modules__Required__N block (one hasKey entry per index) and this "
+                    + "constant together, or move the entry into the contiguous requiredModules "
+                    + "list.");
+        return problems.ToImmutable();
+    }
+
+    /// <summary>
+    /// Why the instance spec cannot bring an instance up, or an empty list when it can — the
+    /// per-mount problems, "packages declared for pre-install with nowhere to install from", and
+    /// any required-module slot no renderer delivers (<see cref="RequiredModuleProblems"/>).
+    /// </summary>
+    public static ImmutableList<string> SpecProblems(DeploymentContent? record) =>
+        SpecProblems(record?.PluginRepos, record?.PreInstall)
+            .AddRange(RequiredModuleProblems(record));
 
     /// <summary>
     /// Why the instance spec cannot bring an instance up, or an empty list when it can — the

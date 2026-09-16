@@ -90,8 +90,10 @@ public static class MeshBuilderModuleActivation
     /// list shorter than the image's leaves the image's tail standing, so the instance requires
     /// modules its record does not name — and nothing is missing, nothing is shadowed, the deploy
     /// succeeds and the record is simply not a description of what the instance requires. Measured
-    /// on pearl.meshweaver.cloud, 2026-09-16 (#4476): a record naming five, an image naming six,
-    /// and a missing-module report that named the sixth.</para>
+    /// on pearl.meshweaver.cloud, 2026-09-16 (#4476): a record naming FIVE modules and never naming
+    /// <c>Social</c>, and a missing-module report that demanded <c>Social</c> anyway — the image's
+    /// index 5, which the record's five entries never reached. The image's list is NINE entries
+    /// today, so that record inherits four.</para>
     ///
     /// <para>Empty when the deployment states <see cref="RequiredIsAuthoritativeKey"/> (it stated
     /// the whole set, so nothing is unstated) and empty when only ONE provider supplies entries at
