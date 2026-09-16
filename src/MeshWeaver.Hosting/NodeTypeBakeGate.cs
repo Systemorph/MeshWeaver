@@ -60,6 +60,7 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     private readonly ConcurrentDictionary<string, string> contentBroken = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> retired = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> retracted = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> withoutBaseline = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// For each DERIVED regression (an <c>Upstream*</c> outcome), the upstream that blocked it —
@@ -246,6 +247,20 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     public IReadOnlyDictionary<string, string> Retired => retired;
 
     /// <summary>
+    /// Types that failed with NO working build to regress from — a type that was already broken on
+    /// the way in, or any failure during the FIRST bake of an instance that has never built
+    /// anything (<c>DynamicTypePreWarmer</c> empties the baseline there, because no previous image
+    /// is serving and refusing readiness would protect nobody).
+    ///
+    /// <para>🚨 Exposed because these outcomes used to be dropped on the floor: the gate returned
+    /// early and the health payload said nothing, so an instance that could not compile its content
+    /// looked indistinguishable from one with nothing to report. They never gate — they are named
+    /// so an operator can see WHY a fresh portal is Degraded rather than guessing at the edge's
+    /// 503 (pearl.meshweaver.cloud, 2026-09-15).</para>
+    /// </summary>
+    public IReadOnlyDictionary<string, string> WithoutBaseline => withoutBaseline;
+
+    /// <summary>
     /// Regressions that were RETRACTED because the type has since been observed reaching a usable
     /// build on this image — see <see cref="RetractRegression"/>. Kept (rather than simply
     /// forgotten) so a rollout that recovered by itself still says so in the health payload: a
@@ -283,8 +298,17 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// </returns>
     public bool MarkOutcome(PreWarmOutcome outcome)
     {
-        if (outcome.ReachedUsableBuild || !outcome.WasHealthyBeforeBake)
+        if (outcome.ReachedUsableBuild)
             return false;
+
+        // No working build to regress FROM: pre-existing breakage, or the first bake of an instance
+        // that has never built anything. Never gates — but it is recorded, because a failure nobody
+        // can see is how a fresh portal ends up serving 503 with an empty health payload.
+        if (!outcome.WasHealthyBeforeBake)
+        {
+            withoutBaseline[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
+            return false;
+        }
 
         // 🚨 A TIMEOUT IS NOT A VERDICT. The per-type budget elapsing means the sweep never got an
         // answer — it says nothing about whether the type builds. During a roll the baking pod and
@@ -559,7 +583,7 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     {
         var head = $"{regressions.Count} NodeType(s) regressed on this image: "
             + string.Join(", ", regressions.Keys.OrderBy(k => k, StringComparer.Ordinal));
-        var addenda = new List<string>(2);
+        var addenda = new List<string>(3);
         if (!retracted.IsEmpty)
             addenda.Add($"{retracted.Count} further regression(s) retracted after the type rebuilt "
                 + "on this image — "
@@ -567,6 +591,10 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
         if (!retired.IsEmpty)
             addenda.Add($"{retired.Count} retired by their repository (not a regression) — "
                 + string.Join(", ", retired.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        if (!withoutBaseline.IsEmpty)
+            addenda.Add($"{withoutBaseline.Count} failed with no working build to regress from "
+                + "(already broken, or the first bake of this instance) — "
+                + string.Join(", ", withoutBaseline.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         return addenda.Count == 0
             ? head
             : $"{head} ({string.Join("; ", addenda)})";
@@ -581,7 +609,7 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     private string FaultedDetail(string message)
     {
         var head = $"bake NOT PROVEN — the sweep errored before it could verify this image: {message}";
-        var addenda = new List<string>(4);
+        var addenda = new List<string>(5);
         if (!unevaluated.IsEmpty)
             addenda.Add($"{unevaluated.Count} not evaluated — "
                 + string.Join(", ", unevaluated.Keys.OrderBy(k => k, StringComparer.Ordinal)));
@@ -592,6 +620,10 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
             addenda.Add($"{retired.Count} retired by their repository (a pending or completed "
                 + "retirement, not a regression) — "
                 + string.Join(", ", retired.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        if (!withoutBaseline.IsEmpty)
+            addenda.Add($"{withoutBaseline.Count} failed with no working build to regress from "
+                + "(already broken, or the first bake of this instance) — "
+                + string.Join(", ", withoutBaseline.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!retracted.IsEmpty)
             addenda.Add($"{retracted.Count} regression(s) retracted after the type rebuilt on this "
                 + "image — "
@@ -611,7 +643,7 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// </summary>
     private string CompleteDetail(string message)
     {
-        var addenda = new List<string>(4);
+        var addenda = new List<string>(5);
         if (!unevaluated.IsEmpty)
             addenda.Add($"{unevaluated.Count} not evaluated — "
                 + string.Join(", ", unevaluated.Keys.OrderBy(k => k, StringComparer.Ordinal)));
@@ -622,6 +654,10 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
             addenda.Add($"{retired.Count} retired by their repository (a pending or completed "
                 + "retirement, not a regression) — "
                 + string.Join(", ", retired.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        if (!withoutBaseline.IsEmpty)
+            addenda.Add($"{withoutBaseline.Count} failed with no working build to regress from "
+                + "(already broken, or the first bake of this instance) — "
+                + string.Join(", ", withoutBaseline.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!retracted.IsEmpty)
             addenda.Add($"{retracted.Count} regression(s) retracted after the type rebuilt on this "
                 + "image — "

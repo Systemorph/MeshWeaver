@@ -805,13 +805,38 @@ public static class DynamicTypePreWarmer
             .Select(e => e.TypePath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        // 🚨 THE FIRST BAKE OF A BRAND-NEW INSTANCE HAS NO BASELINE AT ALL. The gate's whole premise
+        // is "refuse readiness so the rollout stalls with the PREVIOUS IMAGE still serving" — on an
+        // instance where nothing was ever built there is no previous image and no previous pod, so
+        // refusing readiness protects nobody and simply produces an instance that can never become
+        // ready. Measured on pearl.meshweaver.cloud (2026-09-15/16): a fresh portal served 503 at the
+        // edge for hours because two types the REGISTRY pre-installs (GoogleMaps/Gallery, MyAi/Panel)
+        // could not compile — their store-delivered modules had not arrived — and every entry in the
+        // report was NeverBuilt, so each counted as "healthy before" and the pod gated itself forever.
+        //
+        // Narrow on purpose: the baseline is emptied ONLY when the report says this mesh has never
+        // built anything at all. One baked type is enough to mean a working instance, and there the
+        // gate keeps its full strictness — a newly added type that fails on an established instance
+        // still gates exactly as before, because that failure CAN be the image's doing.
+        var firstBake = report.Entries.Count > 0
+                        && report.Entries.All(e => e.State is BakeState.NeverBuilt);
+        if (firstBake)
+            logger?.LogWarning(
+                "DynamicTypePreWarmer: FIRST BAKE — all {Count} NodeType(s) are NeverBuilt on this "
+                + "instance, so there is no previous image to protect. A compile failure is reported "
+                + "but does NOT gate readiness; the gate resumes its full strictness once anything "
+                + "has been built here.",
+                report.Entries.Count);
+
         // The regression baseline, captured BEFORE anything is rebuilt: which types were working on
         // the way in. A type missing from this set was already broken, so its failure is pre-existing
         // damage rather than something this image caused — see PreWarmOutcome.WasHealthyBeforeBake.
-        var healthyBefore = report.Entries
-            .Where(e => e.WasHealthy)
-            .Select(e => e.TypePath)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var healthyBefore = firstBake
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : report.Entries
+                .Where(e => e.WasHealthy)
+                .Select(e => e.TypePath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         // Say it out loud when the SHARE changed rather than the code: a record that claims a
         // live-framework build with no bytes behind it means the cache was cleared, remounted or
