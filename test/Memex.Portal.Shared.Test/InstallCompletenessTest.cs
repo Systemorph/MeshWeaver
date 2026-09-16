@@ -845,6 +845,28 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
             .Should().BeNull(
                 "an incremental update over a record that never had an answer still has none");
 
+        // 🚨 The two shapes that reach here with a NON-NULL but uninformative `examined`: a
+        // source-only delta (every changed file is a src/** module source, which never travels) and
+        // a delta of nothing but carry-along assets. Both parsed ZERO node candidates, so both must
+        // leave an unknown record unknown — turning either into an empty set would manufacture a
+        // clean answer out of a measurement that never happened, which is this issue's own defect
+        // class pointed the other way.
+        PackageInstaller.MergeUnreadableFiles(null, [], [], declared)
+            .Should().BeNull(
+                "a delta that fetched NOTHING examined nothing — 'observed, and all clean' is a "
+                + "claim it has no standing to make");
+
+        PackageInstaller.MergeUnreadableFiles(null, ["P/logo.png"], [], declared)
+            .Should().BeNull(
+                "and neither does a delta carrying only files that were never node candidates");
+
+        // The control that keeps the two above from passing vacuously: the SAME uninformative
+        // deltas over a record that DOES have an answer must preserve it — not null it, not empty
+        // it. If the rule were "always null", this would fail.
+        PackageInstaller.MergeUnreadableFiles(previous, ["P/logo.png"], [], declared)
+            .Should().Equal(["P/a.json", "P/b.json"],
+                "an existing answer survives a delta that says nothing about it");
+
         PackageInstaller.MergeUnreadableFiles(null, declared, [], declared)
             .Should().BeEmpty(
                 "but a pass that looked at EVERY declared file records an EMPTY set — 'checked, "
