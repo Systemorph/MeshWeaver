@@ -178,7 +178,8 @@ public sealed class IoPool : IIoPool, IDisposable
             TaskContinuationOptions.None,
             new LimitedConcurrencyLevelTaskScheduler(maxConcurrency));
         // 🚨 STARTED HERE, NOT AT TEARDOWN — see StartCanceller. Every field the thread touches is
-        // assigned above; it parks on _cancelSignal and does nothing until Drain()/Dispose() raises it.
+        // assigned above; it parks on _cancelRequestedLatch and does nothing until Drain()/Dispose()
+        // raises it.
         _canceller = StartCanceller();
     }
 
@@ -1115,7 +1116,17 @@ public sealed class IoPool : IIoPool, IDisposable
             IsBackground = true,
             Name = "IoPool-cancel",
         };
-        canceller.Start();
+        // 🚨 UnsafeStart, NOT Start — the canceller must inherit NO ExecutionContext.
+        //
+        // `Thread.Start()` captures the starting thread's ExecutionContext and flows it for the
+        // thread's whole life, and this thread is now started from wherever a pool is first resolved
+        // (IoPoolRegistry.Get is lazy, so that can be any caller — a hub turn serving a viewer). The
+        // cancel it later runs executes every pooled subscription's downstream teardown, so a
+        // captured context would run ALL of it under whichever user happened to touch that resource
+        // class first, and pin that user's AsyncLocal identity — AccessService.Context included —
+        // until the pool dies. Identity-neutral is both correct and what the previous shape gave:
+        // the thread used to be created on the mesh-teardown thread, which carries none.
+        canceller.UnsafeStart();
         return canceller;
     }
 

@@ -750,6 +750,19 @@ handing that region back, because handing it back can complete disposal and disp
 `IoPoolRegistry` creates pools lazily by name, so the cost is one parked stack per resource class
 actually in use, for as long as it is in use.
 
+**Two consequences of owning a thread from the constructor, both of which had to be paid.** A thread
+is a **GC root**, so a pool that nobody disposes no longer merely leaks a semaphore that the
+collector reclaims — it parks a thread for the process's life. `ConcurrentDictionary.GetOrAdd` does
+not promise its value factory runs once, so `IoPoolRegistry.Get` now records what it built and
+disposes any candidate that lost the race, which wakes that canceller and lets it exit. And the
+thread is started with `Thread.UnsafeStart()`, never `Start()`: `Start` captures the starting
+thread's `ExecutionContext` and flows it for the thread's whole life, and a lazily-resolved pool is
+started from *whatever* caller first touched that resource class — a hub turn serving a viewer,
+say. A captured context would run every pooled subscription's downstream teardown under that user's
+`AsyncLocal` identity, `AccessService.Context` included, and pin it until the pool died. Identity-
+neutral is both correct and what the old shape gave for free, since it created the thread on the
+mesh-teardown thread, which carries none.
+
 #### What the widened window proves — and what it does not
 
 The race is two thread-state transitions wide and 26 class runs across three load regimes reproduced
