@@ -232,7 +232,7 @@ public class AParkedNodeTypeNamesTheImportThatLostItsSourceTest(ITestOutputHelpe
     {
         var ct = TestContext.Current.CancellationToken;
         _refusalMessage =
-            "Postgres refused the row:  a literal NUL\r\nat line 12  of the file.";
+            "Postgres refused the row:\0 a literal NUL\r\nat line 12\0 of the file.";
 
         await ImportTheLibraryWithOneRefusedFile(ct);
 
@@ -249,7 +249,7 @@ public class AParkedNodeTypeNamesTheImportThatLostItsSourceTest(ITestOutputHelpe
         var recorded = refusals!.Single(r => r.NodePath == _refusePath);
 
         recorded.Reason.Should().NotBeNullOrWhiteSpace();
-        recorded.Reason!.Should().NotContain(" ",
+        recorded.Reason!.Should().NotContain("\0",
             "a NUL recorded INTO the ledger is the same defect the ledger exists to report, and it "
             + "would make the manifest write fail on a real Postgres store");
         recorded.Reason.Should().NotContain("\r",

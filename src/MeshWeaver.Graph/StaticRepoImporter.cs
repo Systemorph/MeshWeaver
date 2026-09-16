@@ -2918,7 +2918,7 @@ public static class StaticRepoImporter
         var lastWasSpace = false;
         foreach (var ch in reason)
         {
-            var c = char.IsControl(ch) || ch == ' ' ? ' ' : ch;
+            var c = char.IsControl(ch) || ch == '\0' ? ' ' : ch;
             if (c == ' ')
             {
                 if (lastWasSpace || builder.Length == 0)
