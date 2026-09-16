@@ -66,11 +66,16 @@ public class BulkCreateCompensatesAFailedCriticalHandlerTest(ITestOutputHelper o
     /// the test before it issues the batch.</summary>
     private string? _faultPath;
 
+    /// <summary>The one path whose handler throws from <c>Matches</c> — i.e. SYNCHRONOUSLY, while
+    /// the runner is still deciding which handlers apply — or null.</summary>
+    private string? _matchThrowPath;
+
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .ConfigureServices(services => services.AddSingleton<INodePostCreationHandler>(
-                new FaultsOnOneNodeHandler(_partition, () => _faultPath, _handlerRan.Enqueue)));
+                new FaultsOnOneNodeHandler(
+                    _partition, () => _faultPath, () => _matchThrowPath, _handlerRan.Enqueue)));
 
     private string NodePath(int index) => $"{_partition}/N{index}";
 
@@ -96,8 +101,9 @@ public class BulkCreateCompensatesAFailedCriticalHandlerTest(ITestOutputHelper o
         response.Error.Should().Contain(FaultMessage,
             "the ORIGINAL cause survives the rollback report — a caller told only 'rolled back' "
             + "cannot tell a refused node from a store that went away");
-        response.Error.Should().Contain("rolled back",
-            "the rollback OUTCOME is reported beside the cause, as the singular path reports it");
+        response.Error.Should().Contain("Rolled back 3 of the 3",
+            "the rollback OUTCOME is reported beside the cause, and the count says what was actually "
+            + "REMOVED — never 'removed, or anything else'");
 
         response.Created.Select(n => n.Path).Should().Equal(
             [NodePath(0), NodePath(1)],
@@ -146,6 +152,36 @@ public class BulkCreateCompensatesAFailedCriticalHandlerTest(ITestOutputHelper o
         _handlerRan.Should().Equal(
             Enumerable.Range(0, NodeCount).Select(NodePath).ToArray(),
             "every node's handlers run, in caller order");
+    }
+
+    /// <summary>
+    /// 🚨 A handler that throws while it is being MATCHED takes the same rollback path. The runner
+    /// resolves handlers and asks each one's <c>Matches</c> on the way to RETURNING its observable,
+    /// i.e. while the sequential chain is being enumerated — outside the observable a per-index
+    /// <c>Catch</c> is attached to. Without the <c>Defer</c> that moves that work inside the
+    /// subscription, such a throw reaches the outer error arm untagged and the batch reports a
+    /// partial landing having compensated NOTHING. (Copilot review, PR #4503.)
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AHandlerThatThrowsWhileMatching_IsCompensatedLikeAnyOtherCriticalFailure()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await SeedPartitionRoot();
+        _matchThrowPath = NodePath(FailAt);
+
+        var response = await CreateBatch(cancellationToken);
+
+        response.Success.Should().BeFalse(
+            "a batch that could not even decide which handlers apply to a node has not met its "
+            + "contract for that node");
+        response.FailedPath.Should().Be(NodePath(FailAt),
+            "a synchronous throw is attributed to the same node a reactive fault would be — if it "
+            + "reaches the outer error arm instead, nothing is attributed and nothing is rolled back");
+
+        var remaining = await RemainingPaths(cancellationToken);
+        remaining.Should().Equal(
+            [NodePath(0), NodePath(1)],
+            "the rollback does not depend on WHERE in the handler chain the failure surfaced");
     }
 
     /// <summary>
@@ -220,7 +256,11 @@ public class BulkCreateCompensatesAFailedCriticalHandlerTest(ITestOutputHelper o
     /// <para>It matches STRUCTURALLY (this partition, ids <c>N…</c>) rather than by NodeType, so it
     /// is invisible to the partition bootstrap's own writes and to every other test.</para>
     /// </summary>
-    private sealed class FaultsOnOneNodeHandler(string partition, Func<string?> faultPath, Action<string> record)
+    private sealed class FaultsOnOneNodeHandler(
+        string partition,
+        Func<string?> faultPath,
+        Func<string?> matchThrowPath,
+        Action<string> record)
         : INodePostCreationHandler
     {
         /// <summary>Diagnostic label only — <see cref="Matches"/> decides.</summary>
@@ -228,8 +268,15 @@ public class BulkCreateCompensatesAFailedCriticalHandlerTest(ITestOutputHelper o
 
         /// <inheritdoc />
         public bool Matches(MeshNode createdNode)
-            => string.Equals(createdNode.Namespace, partition, StringComparison.Ordinal)
-               && createdNode.Id.StartsWith('N');
+        {
+            var mine = string.Equals(createdNode.Namespace, partition, StringComparison.Ordinal)
+                       && createdNode.Id.StartsWith('N');
+            // The SYNCHRONOUS failure shape: the runner asks this on its way to returning an
+            // observable, so the throw happens outside any subscription.
+            if (mine && string.Equals(createdNode.Path, matchThrowPath(), StringComparison.Ordinal))
+                throw new InvalidOperationException(FaultMessage);
+            return mine;
+        }
 
         /// <inheritdoc />
         public bool FailsCreateOnError => true;

@@ -1499,12 +1499,12 @@ public static class MeshExtensions
         IMessageHub hub, MeshNode created, string mode, ILogger logger)
     {
         if (!string.Equals(mode, "create", StringComparison.Ordinal))
-            return Observable.Return(new RollbackOutcome(true,
+            return Observable.Return(new RollbackOutcome(RollbackDisposition.NothingToRemove,
                 $"The node at '{created.Path}' existed before this request, so nothing was rolled back."));
 
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence is null)
-            return Observable.Return(new RollbackOutcome(true,
+            return Observable.Return(new RollbackOutcome(RollbackDisposition.NothingToRemove,
                 "Nothing was persisted (no storage adapter), so there was nothing to roll back."));
 
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
@@ -1516,7 +1516,7 @@ public static class MeshExtensions
             .SelectMany(stored =>
             {
                 if (stored is null)
-                    return Observable.Return(new RollbackOutcome(true,
+                    return Observable.Return(new RollbackOutcome(RollbackDisposition.NothingToRemove,
                         $"No row remains at '{created.Path}' — nothing to roll back."));
 
                 if (stored.CreatedDate != created.CreatedDate)
@@ -1525,7 +1525,7 @@ public static class MeshExtensions
                         "[CreateNode] rollback STOOD DOWN at {Path}: the stored row (created {StoredCreated:O}) is not "
                         + "the one this create wrote (created {OurCreated:O}) — refusing to delete a node we did not create",
                         created.Path, stored.CreatedDate, created.CreatedDate);
-                    return Observable.Return(new RollbackOutcome(false,
+                    return Observable.Return(new RollbackOutcome(RollbackDisposition.LeftInPlace,
                         $"The node at '{created.Path}' was NOT rolled back: the stored row is no longer the one this "
                         + "request wrote. Remove it manually before retrying."));
                 }
@@ -1538,38 +1538,65 @@ public static class MeshExtensions
                     .Do(_ => logger.LogWarning(
                         "[CreateNode] rolled back partially-created node at {Path} — the create is all-or-nothing (#638)",
                         created.Path))
-                    .Select(_ => new RollbackOutcome(true,
+                    .Select(_ => new RollbackOutcome(RollbackDisposition.Removed,
                         $"The partially-created node at '{created.Path}' was rolled back; the create can be retried."));
             })
             .Catch<RollbackOutcome, Exception>(ex =>
             {
+                // 🚨 UNDETERMINED, not "still present". The fault may be the READ that would have
+                // established presence, so asserting a row is there is a claim this branch never
+                // made — and on a batch it would be counted as a surviving row.
                 logger.LogError(ex,
-                    "[CreateNode] ROLLBACK FAILED at {Path} — the partially-created node is still present",
+                    "[CreateNode] ROLLBACK FAILED at {Path} — whether the partially-created node remains is undetermined",
                     created.Path);
-                return Observable.Return(new RollbackOutcome(false,
-                    $"Rolling back '{created.Path}' FAILED ({ex.Message}) — the partially-created node is still "
-                    + "present and must be removed manually."));
+                return Observable.Return(new RollbackOutcome(RollbackDisposition.Undetermined,
+                    $"Rolling back '{created.Path}' FAILED ({ex.Message}) — whether a row remains there could NOT be "
+                    + "established; check it manually before retrying."));
             })
             .Take(1);
     }
 
     /// <summary>
-    /// The outcome of ONE <see cref="CompensateFailedCreate"/>: the sentence the caller appends to
-    /// the original cause, and whether a row is still sitting there.
+    /// What ONE <see cref="CompensateFailedCreate"/> established about the path it was pointed at.
+    ///
+    /// <para>🚨 FOUR states, not a boolean. A batch rollback reports a COUNT, and a count built from
+    /// "removed, or anything else" says things that were never established: an already-absent row is
+    /// not one this rollback removed, and a rollback whose READ failed has not established that a
+    /// row is still there. Those are three different sentences and two different consequences —
+    /// which is <see cref="Undetermined"/>'s whole reason for existing, the same distinction
+    /// <c>Doc/Architecture/UndeterminedIsNotNo</c> draws for a gate.</para>
+    /// </summary>
+    private enum RollbackDisposition
+    {
+        /// <summary>This rollback deleted the row this create wrote. It is gone, by our hand.</summary>
+        Removed,
+
+        /// <summary>There was no row of ours to remove — none was written (the confirm path, or no
+        /// storage adapter), or none remained. Nothing is left behind, and nobody did it here.</summary>
+        NothingToRemove,
+
+        /// <summary>A row was READ and deliberately NOT removed, because it is no longer the one
+        /// this request wrote. Something IS there, and only a human can decide about it.</summary>
+        LeftInPlace,
+
+        /// <summary>Neither was established: the read or the delete failed. Whether a row remains is
+        /// UNKNOWN — never report it as either.</summary>
+        Undetermined,
+    }
+
+    /// <summary>
+    /// The outcome of ONE <see cref="CompensateFailedCreate"/>: what it established, plus the
+    /// sentence the caller appends to the original cause.
     ///
     /// <para>The singular create rolls back exactly one node and can simply quote the sentence. A
     /// BULK create rolls back the failed node plus every node whose post-creation handlers never
-    /// ran (#4449), so "did it work" has to be readable WITHOUT parsing prose: the batch reports how
-    /// many rows it removed and quotes verbatim only the ones it could not.</para>
+    /// ran (#4449), so the outcome has to be readable WITHOUT parsing prose: the batch counts what
+    /// it actually removed, says separately how many had nothing left to remove, and quotes verbatim
+    /// every path a human has to look at.</para>
     /// </summary>
-    /// <param name="Removed">
-    /// <c>true</c> when no row from this create remains at the path — it was deleted, or there was
-    /// none to delete. <c>false</c> when one is still present: the rollback stood down (the stored
-    /// row is no longer the one this request wrote) or the delete itself failed. Only a
-    /// <c>false</c> needs a human.
-    /// </param>
+    /// <param name="Disposition">What this rollback established about the path.</param>
     /// <param name="Message">The human-readable outcome sentence.</param>
-    private readonly record struct RollbackOutcome(bool Removed, string Message);
+    private readonly record struct RollbackOutcome(RollbackDisposition Disposition, string Message);
 
     /// <summary>
     /// Handles <see cref="CreateNodesRequest"/> — the BULK sibling of
@@ -1970,7 +1997,15 @@ public static class MeshExtensions
     {
         // The FIRST critical failure with the index it happened at, or null when all completed.
         var firstFailure = created
-            .Select((node, index) => RunPostCreationHandlersObs(hub, node, createdBy, logger)
+            // 🚨 Defer FIRST. RunPostCreationHandlersObs does real work on the way to returning its
+            // observable — it resolves the handlers and asks each one's Matches — and that runs
+            // while the Concat ENUMERATES, which is outside the observable the Catch below is
+            // attached to. A handler whose Matches throws would therefore reach the outer error arm
+            // UNTAGGED, and the batch would report a partial landing having compensated nothing.
+            // Deferring moves the call inside the subscription, so a synchronous throw and a
+            // reactive fault take the SAME rollback path.
+            .Select((node, index) => Observable
+                .Defer(() => RunPostCreationHandlersObs(hub, node, createdBy, logger))
                 // TAG AND RE-THROW — never swallow into an element here (see the remarks): the
                 // fault is what stops the Concat before the next node's handlers run.
                 .Catch<System.Reactive.Unit, Exception>(
@@ -2012,13 +2047,23 @@ public static class MeshExtensions
                 .ToList()
                 .SelectMany(outcomes =>
                 {
-                    var stillPresent = outcomes.Where(o => !o.Removed).Select(o => o.Message).ToImmutableList();
+                    // 🚨 Each number says ONLY what was established (see RollbackDisposition): rows
+                    // this rollback deleted, rows that had nothing left to delete, and the paths a
+                    // human has to look at — a row deliberately left in place, or one whose state
+                    // could not be determined. Never one count standing for all four.
+                    var removed = outcomes.Count(o => o.Disposition == RollbackDisposition.Removed);
+                    var nothingToRemove = outcomes.Count(o => o.Disposition == RollbackDisposition.NothingToRemove);
+                    var needsAHuman = outcomes
+                        .Where(o => o.Disposition is RollbackDisposition.LeftInPlace or RollbackDisposition.Undetermined)
+                        .Select(o => o.Message)
+                        .ToImmutableList();
                     postFail(
                         $"Create failed in a post-creation step for '{failedPath}': {f.Cause.Message} "
-                        + $"{outcomes.Count - stillPresent.Count} of {ghosts.Count} node(s) this batch wrote were "
-                        + $"rolled back (that node, and the {ghosts.Count - 1} whose post-creation handlers never "
-                        + $"ran); the {survivors.Count} node(s) created before it completed and were kept."
-                        + (stillPresent.IsEmpty ? string.Empty : " " + string.Join(" ", stillPresent)),
+                        + $"Rolled back {removed} of the {ghosts.Count} node(s) this batch wrote — that node, and the "
+                        + $"{ghosts.Count - 1} whose post-creation handlers never ran"
+                        + (nothingToRemove > 0 ? $" ({nothingToRemove} had no row left to remove)" : string.Empty)
+                        + $"; the {survivors.Count} node(s) created before it completed and were kept."
+                        + (needsAHuman.IsEmpty ? string.Empty : " " + string.Join(" ", needsAHuman)),
                         NodeCreationRejectionReason.Unknown,
                         failedPath,
                         survivors);

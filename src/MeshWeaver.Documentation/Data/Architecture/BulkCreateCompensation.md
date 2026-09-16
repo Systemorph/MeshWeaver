@@ -95,6 +95,55 @@ most once per batch.
 > fault too. Attribution has to be attached upstream, per element; the decision may be taken
 > downstream only when the first fault has already ended the sequence.
 
+### …and the tag only covers what is INSIDE the observable
+
+`RunPostCreationHandlersObs` does real work on the way to *returning* its observable: it resolves the
+registered handlers and asks each one's `Matches`. That runs while the `Concat` is ENUMERATING —
+outside the observable the per-index `Catch` is attached to — so a handler whose `Matches` throws
+reached the outer error arm **untagged**, and the batch reported a partial landing having compensated
+nothing. Measured, as the negative control for the fix: *"failed AFTER 5 node(s) were persisted —
+reporting the partial landing"*, all five rows left, no path attributed.
+
+`Observable.Defer` around the call moves it inside the subscription, so a synchronous throw and a
+reactive fault take the **same** rollback path. Pinned by
+`AHandlerThatThrowsWhileMatching_IsCompensatedLikeAnyOtherCriticalFailure`.
+
+## A rollback reports FOUR states, because a boolean lies
+
+A batch rollback reports a **count**, and a count built from "removed, or anything else" asserts
+things nothing established. So `CompensateFailedCreate` returns a `RollbackDisposition`:
+
+| state | what it means | what the batch does with it |
+|---|---|---|
+| `Removed` | this rollback deleted the row this create wrote | counted as rolled back |
+| `NothingToRemove` | no row of ours was there to remove | reported separately, never as a removal |
+| `LeftInPlace` | a row was READ and is no longer ours, so it was deliberately kept | quoted verbatim — a human decides |
+| `Undetermined` | the read or the delete failed; whether a row remains is UNKNOWN | quoted verbatim — never reported as present or absent |
+
+`Undetermined` is the one that used to be wrong in both directions: the old text asserted *"the
+partially-created node is still present"* from a branch that may have been entered **because the read
+failed** — the same distinction [Undetermined Is Not No](../UndeterminedIsNotNo) draws for a gate.
+
+## What the lineage check does NOT guarantee
+
+The `CreatedDate` comparison makes the rollback refuse to delete a node it did not create, and that
+is worth having. It is not a transactional guarantee, and two limits are worth stating plainly rather
+than discovering later (both raised in review on #4503, both **pre-existing and identical on the
+singular path since #638** — neither is introduced by the batch rollback):
+
+1. **The read and the delete are not atomic.** A concurrent create that replaces the row between the
+   lineage check and `DeleteAndPublish` would have its replacement deleted. Closing it needs a
+   conditional delete against a server-owned token in the `IStorageAdapter` contract — every backend —
+   not a change in this caller.
+2. **`CreatedDate` is caller-supplied when the caller supplies one.** Both create paths stamp
+   `CreatedDate = n.CreatedDate == default ? now : n.CreatedDate`, so it is a lineage *hint*, not a
+   server-owned identity token.
+
+The window is narrow (the rollback follows the write by milliseconds, on a path that by construction
+did not exist when the batch began), and the alternative — leaving the ghosts — is the defect this
+page exists for. But "safe because it compares `CreatedDate`" should be read as *"it will not delete
+a row it can see is not ours"*, never as *"it cannot delete someone else's row"*.
+
 ## What is asserted
 
 `BulkCreateCompensatesAFailedCriticalHandlerTest` (MeshWeaver.Graph.Test) drives a five-node batch
