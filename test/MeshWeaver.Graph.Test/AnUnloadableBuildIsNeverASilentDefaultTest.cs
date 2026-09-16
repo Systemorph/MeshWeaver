@@ -109,14 +109,13 @@ public class AnUnloadableBuildIsNeverASilentDefaultTest(ITestOutputHelper output
     {
         var ct = TestContext.Current.CancellationToken;
         var typePath = $"{TestPartition}/{TypeName}";
-        var store = Mesh.ServiceProvider.GetService<IAssemblyStore>();
-        Assert.NotNull(store);
+        var store = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
 
         // Bytes the store serves and the loader rejects — the observable shape of every
         // LoadNodeAssembly failure branch (absent, older than the framework, a bad image).
         const long storeVersion = 1;
         var unloadable = Encoding.UTF8.GetBytes("this is not a PE image");
-        var location = await store!.PutWithLocation(typePath, storeVersion, unloadable, null)
+        var location = await store.PutWithLocation(typePath, storeVersion, unloadable, null)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 
         var usable = new NodeTypeDefinition
@@ -153,9 +152,88 @@ public class AnUnloadableBuildIsNeverASilentDefaultTest(ITestOutputHelper output
 
         var applied = verdict.HubConfiguration!(
             new MessageHubConfiguration(null, new Address("probe", TypeName)));
-        applied.Get<UnhandledMessageNack>().Should().NotBeNull(
+        var nack = applied.Get<UnhandledMessageNack>();
+        nack.Should().NotBeNull(
             "the diagnosis overlay Nacks a typed request the missing configuration would have "
             + "handled, instead of the default chain silently ignoring it");
+        // Discriminating: the store-miss and unresolved-pin overlays Nack too — only THIS branch
+        // carries the loader's own verdict.
+        nack!.Reason.Should().Contain("Failed to load",
+            "the diagnosis must name the LOAD failure, the one fact the old branch dropped");
+    }
+
+    /// <summary>
+    /// 🚨 The PINNED-RELEASE twin of the regression: a NodeType whose
+    /// <see cref="NodeTypeDefinition.RequestedReleasePath"/> pins a release whose bytes the store
+    /// serves and the loader rejects. That branch has its own extraction site, and it bound the same
+    /// silent default — without even the stale-assembly watcher around it.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task APinnedReleaseWhoseBytesDoNotLoad_ServesTheDiagnosis_NeverTheDefaultConfiguration()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string pinnedTypeName = TypeName + "Pinned";
+        var typePath = $"{TestPartition}/{pinnedTypeName}";
+        var releasePath = $"{typePath}/{ReleaseNodeType.ReleaseSegment}/r1";
+        var store = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
+
+        const long storeVersion = 1;
+        var location = await store.PutWithLocation(
+                typePath, storeVersion, Encoding.UTF8.GetBytes("this is not a PE image either"), null)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var pinned = new NodeTypeDefinition
+        {
+            Configuration = "config => config",
+            CompilationStatus = CompilationStatus.Ok,
+            RequestedReleasePath = releasePath,
+        };
+        var typeNode = await CreateAsSystem(new MeshNode(pinnedTypeName, TestPartition)
+        {
+            NodeType = MeshNode.NodeTypePath,
+            Content = pinned,
+        });
+        // No artifact links: admitted UNVERIFIED by the adopt-time identity gate, so the bytes —
+        // not the identity — decide the verdict.
+        await CreateAsSystem(new MeshNode("r1", $"{typePath}/{ReleaseNodeType.ReleaseSegment}")
+        {
+            NodeType = ReleaseNodeType.NodeType,
+            Content = new NodeTypeRelease
+            {
+                Path = releasePath,
+                NodeTypePath = typePath,
+                Release = "r1",
+                FrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
+                CreatedAt = DateTimeOffset.UtcNow,
+                AssemblyStoreVersion = storeVersion,
+                AssemblyCollection = location.Collection,
+                AssemblyPath = location.ContentPath,
+            },
+        });
+        var instance = new MeshNode("pinned-unloadable-instance", TestPartition) { NodeType = typePath };
+
+        var verdict = await NodeTypeEnrichmentHelpers
+            .ApplyStreamResult(
+                typeNode, instance, typePath, EmptyMeshConfiguration(), Compiler, Mesh,
+                logger: null, recompileAttempts: 1)
+            .Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit("the activation must reach a verdict",
+                cancellationToken: ct);
+
+        verdict.HubConfiguration.Should().NotBeNull(
+            "the pinned release's bytes did not load in this process, so the instance must serve a "
+            + "DIAGNOSIS rather than be handed to the factory with no node configuration (#4471)");
+        var nack = verdict.HubConfiguration!(
+                new MessageHubConfiguration(null, new Address("probe", pinnedTypeName)))
+            .Get<UnhandledMessageNack>();
+        nack.Should().NotBeNull(
+            "the diagnosis overlay Nacks typed requests instead of silently ignoring them");
+        // Discriminating: an unresolvable pin overlays and Nacks too; only a pin that RESOLVED and
+        // then failed to load carries the loader's verdict and names the pinned release.
+        nack!.Reason.Should().Contain("Failed to load",
+            "the pin resolved and its bytes were handed to the loader, which refused them");
+        nack.Reason.Should().Contain(releasePath,
+            "the diagnosis names which pinned release did not load");
     }
 
     /// <summary>
@@ -167,13 +245,12 @@ public class AnUnloadableBuildIsNeverASilentDefaultTest(ITestOutputHelper output
     {
         var ct = TestContext.Current.CancellationToken;
         var typePath = $"{TestPartition}/{TypeName}Loadable";
-        var store = Mesh.ServiceProvider.GetService<IAssemblyStore>();
-        Assert.NotNull(store);
+        var store = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
 
         const long storeVersion = 1;
         var bytes = await System.IO.File.ReadAllBytesAsync(
             typeof(ModuleVersionCompatibility).Assembly.Location, ct);
-        var location = await store!.PutWithLocation(typePath, storeVersion, bytes, null)
+        var location = await store.PutWithLocation(typePath, storeVersion, bytes, null)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 
         var typeNode = await CreateAsSystem(new MeshNode($"{TypeName}Loadable", TestPartition)
@@ -209,7 +286,7 @@ public class AnUnloadableBuildIsNeverASilentDefaultTest(ITestOutputHelper output
     private Task<MeshNode> CreateAsSystem(MeshNode node)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var access = Mesh.ServiceProvider.GetService<AccessService>();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         return access.RunAsSystem(() => meshService.CreateNode(node))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
     }

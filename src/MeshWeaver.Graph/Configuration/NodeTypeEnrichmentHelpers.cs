@@ -1933,12 +1933,15 @@ internal static class NodeTypeEnrichmentHelpers
                 + "this process after {Attempts} recompile attempt(s) — instance '{InstancePath}' serves "
                 + "the assembly-unavailable diagnosis, NOT the default configuration: {Detail}",
                 nodeType, bytes, recompileAttempts, node.Path, detail);
+            // The explanation is the shared AssemblyUnavailable copy (intro/guidance). The error
+            // slot carries only identifiers and the loader's VERBATIM reason — upstream text, like
+            // a Roslyn diagnostic — so this branch adds no platform prose baked in one language
+            // at enrichment time.
             var (intro, callToAction, guidance) = OverlayCopy(OverlayCause.AssemblyUnavailable);
             return Observable.Return(
                 WithOverlaySelfHeal(
                     WithCompilationErrorOverlay(node, nodeType,
-                        $"The compiled assembly for '{nodeType}' ({bytes}) could not be loaded in "
-                        + $"this process: {detail}",
+                        $"'{nodeType}' ({bytes}): {detail}",
                         guidance: guidance,
                         intro: intro,
                         callToAction: callToAction,
