@@ -871,7 +871,7 @@ static int RunPlatformSurface(string[] args)
             }
             identity = resolved;
         }
-        surface = MeshWeaver.Mesh.ModulePlatformSurface.OfFiles(set.AssemblyPaths);
+        surface = PublishedHostSurface.Read(full, set.AssemblyPaths);
     }
 
     var json = surface.ToJson(identity);
