@@ -373,6 +373,40 @@ public record PackageManifest
     public ImmutableSortedDictionary<string, string>? InstalledFiles { get; init; }
 
     /// <summary>
+    /// 🚨 The declared files this install PARSED and could NOT turn into a node — the half of "is
+    /// this file a node" that only the writer can answer (MeshWeaver#3659).
+    ///
+    /// <para><b>Why the record has to carry it.</b> The install-completeness sweep derives what a
+    /// package owes the mesh from <see cref="InstalledFiles"/> through
+    /// <see cref="PackageInstaller.NodePathForFile(string, MeshWeaver.Hosting.Persistence.Parsers.FileFormatParserRegistry)"/>,
+    /// which holds PATHS and no bytes. That answers the by-design exclusions and the claimed-extension
+    /// question — and it structurally cannot answer the third: a file whose extension IS claimed can
+    /// still fail to become a node on its CONTENT. A well-formed <c>package.json</c> or
+    /// <c>tsconfig.json</c> sitting inside a package folder carries no <c>$type</c>/<c>id</c>/
+    /// <c>nodeType</c>, so <c>JsonFileParser</c> answers "no node here" and the installer writes
+    /// nothing — while the sweep counts <c>{Pkg}/tsconfig</c> as a node the install owed the mesh and
+    /// reports it ABSENT, at Error, on every boot of every pod, FOREVER. No reinstall can heal it: the
+    /// same bytes fail the same way, so the line's own remedy ("reinstalling it now repairs it") is
+    /// false for exactly this class, and it is spelled identically to the genuinely lost node the
+    /// sweep exists to find.</para>
+    ///
+    /// <para><b>So the writer records it instead of the reader re-deriving it.</b> This is the same
+    /// shape #3685 used for the extension half — ONE predicate, asked by the side that can answer —
+    /// and deliberately NOT another exclusion list: a list would have to grow a case for every new
+    /// carry-along shape, which is what let a <c>.tsx</c> and then a <c>package.json</c> through.</para>
+    ///
+    /// <para>🚨 <b><c>null</c> and empty are different answers.</b> <c>null</c> means no install has
+    /// recorded it (a record stamped before this field existed) — unknown, and the sweep must behave
+    /// exactly as it did before rather than read it as a clean zero. An EMPTY set is a real
+    /// observation: this install parsed every node candidate and all of them became nodes.</para>
+    ///
+    /// <para>An UPDATE merges rather than replaces: it only examined the files it fetched, so entries
+    /// for files it did not fetch are carried forward and entries for files that have left the
+    /// package are dropped (<c>PackageInstaller.MergeUnreadableFiles</c>).</para>
+    /// </summary>
+    public ImmutableSortedSet<string>? UnreadableFiles { get; init; }
+
+    /// <summary>
     /// Opt IN to unattended updates for this installed package: when the source repo's CI goes
     /// green and this module's content hash actually moved, install the delta without waiting for
     /// a human to click Update. Unset — the platform default — the record stays on the reminder
