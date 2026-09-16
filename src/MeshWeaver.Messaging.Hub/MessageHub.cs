@@ -56,6 +56,13 @@ public sealed class MessageHub : IMessageHub
         string RequestType,
         Address? Target,
         long RegisteredAtTicks,
+        // 🚨 This hub's <see cref="Version"/> — its processed-message counter — at the moment the
+        // wait began. It is what turns the timeout's idleness claim from an INSTANTANEOUS SAMPLE
+        // into an INTERVAL FACT: `Version - RegisteredAtVersion` is exactly how many messages this
+        // hub handled while the request was outstanding. A hub that handled thousands cannot claim
+        // it "was idle while waiting" however empty its queue happens to be at the moment it gives
+        // up. See BuildTimeoutMessage.
+        long RegisteredAtVersion,
         // Opt-in sub-key from the request itself (IDiagnosticKeyed) — what makes N identical-looking
         // pending callbacks legible: N distinct keys is a fan-out, one key repeated is a retry loop.
         string? DiagnosticKey = null);
@@ -1569,6 +1576,38 @@ public sealed class MessageHub : IMessageHub
     /// an explicit unknown. A diagnostic that offers two buckets when there are three teaches the
     /// reader to pick the nearer one; naming what this hub could and could not observe is what makes
     /// it a measurement rather than a guess.</para>
+    ///
+    /// <para>🚨 <b>Three corrections, all measured on MeshWeaver#1174 (424 occurrences over a
+    /// month, and two triages sent to the wrong place by this very sentence).</b></para>
+    ///
+    /// <para><b>(1) The idleness claim was an INSTANTANEOUS SAMPLE asserted over an INTERVAL.</b>
+    /// The queue snapshot is read at the moment the wait gives up, and the sentence generalised it
+    /// across the whole <see cref="MessageHubConfiguration.RequestTimeout"/>: a hub saturated for
+    /// 59 seconds that drained in the 60th printed <i>"This hub was idle while waiting, so it
+    /// processed everything delivered to it"</i> — a claim the sample cannot support, and exactly
+    /// the class of answer that reads like a pass. <see cref="Version"/> is incremented once per
+    /// message handled, so the difference against the value captured at registration
+    /// (<c>PendingCallback.RegisteredAtVersion</c>) is the interval fact the sample is not: how
+    /// many messages this hub handled while the request was outstanding.</para>
+    ///
+    /// <para><b>(2) On a SELF-ADDRESSED request, all three candidates and the discriminator are
+    /// inapplicable.</b> The mesh's node CRUD runs on <c>portal/nodeops-{meshId}</c>, and
+    /// <c>MeshService</c> ISSUES those requests on that same hub — so sender and target are one
+    /// hub and the delivery never leaves it. There is then no routing leg to lose it and no reply
+    /// leg to lose the answer; "the target's own RunLevel and queue" are the numbers already
+    /// printed in this very sentence. Production read it literally and concluded the request
+    /// "never reached the queue" — which an empty queue at the give-up instant does not imply,
+    /// because the canonical mesh handlers return <c>Processed()</c> in a millisecond and owe
+    /// their reply from a DETACHED observable, leaving the queue empty while the reply is still
+    /// owed.</para>
+    ///
+    /// <para><b>(3) It said "this message cannot distinguish them" while the answer was one call
+    /// away.</b> <see cref="RequestFateLedger"/> is per hub TREE and records every stage this
+    /// delivery passed through — intake, gate, routing, handler entry, the handler's own detached
+    /// stages, the reply's journey — ending in a verdict that names which shape this is. The hub
+    /// building this message owns that ledger. Printing it costs one lookup and removes the whole
+    /// "go and measure the other end" step for every request whose target is in this tree (and for
+    /// a target outside it, the ledger says so in as many words).</para>
     /// </summary>
     private string BuildTimeoutMessage(string requestType, Address? target, string messageId)
     {
@@ -1586,28 +1625,61 @@ public sealed class MessageHub : IMessageHub
                          || snapshot.OpenGates > 0
                          || snapshot.CurrentMessage is not null;
 
+        // (1) The interval the sample cannot see. `null` only when the entry is already gone —
+        // then say "unknown" rather than print a number derived from nothing.
+        long? handledWhileWaiting = null;
+        lock (responseSubjects)
+        {
+            if (responseSubjects.TryGetValue(messageId, out var pending))
+                handledWhileWaiting = Version - pending.RegisteredAtVersion;
+        }
+        var handled = handledWhileWaiting is { } n
+            ? $"handledWhileWaiting={n}"
+            : "handledWhileWaiting=unknown";
+
         var state =
             $"This hub: RunLevel={RunLevel} Queue(buffer={snapshot.Buffer},deferred={snapshot.Deferred}," +
             $"openGates={snapshot.OpenGates},drainsInFlight={snapshot.DrainsInFlight}," +
-            $"draining={snapshot.Draining})" +
+            $"draining={snapshot.Draining},{handled})" +
             (snapshot.CurrentMessage is not null
                 ? $" Executing({snapshot.CurrentMessage}, {snapshot.CurrentMessageElapsedMs}ms)"
                 : string.Empty);
 
-        var verdict = callerBusy
-            ? "🚨 THIS HUB WAS NOT IDLE while waiting, so it cannot attribute the silence upstream: " +
-              "a response may have arrived and be queued behind the work above. Investigate THIS hub " +
-              "before the target."
-            : "This hub was idle while waiting, so it processed everything delivered to it and the " +
-              "silence is upstream of here. Cause is UNKNOWN between: the target never received the " +
-              "request (routing), the target received it and is wedged (a per-node hub that stops " +
-              "answering — MeshWeaver#2896), or the target answered and the reply was lost. This " +
-              "message cannot distinguish them; the target's own RunLevel and queue can.";
+        // (2) Sender and target are the same hub — the delivery never left, so two of the three
+        // candidates below cannot happen and the third's discriminator is already printed.
+        var selfAddressed = target is not null && (target with { Host = null }).Equals(Address);
+
+        var verdict = selfAddressed
+            ? "🚨 THIS HUB IS ALSO THE TARGET, so the request never left it: there is no routing leg "
+              + "that could have lost it and no reply leg that could have lost the answer, and "
+              + "\"the target's own RunLevel and queue\" are the numbers printed above. An empty "
+              + "queue here does NOT mean the request was never handled — the canonical mesh "
+              + "handlers return Processed() at once and owe their reply from a DETACHED "
+              + "observable, so a handler that ran and has not yet produced a terminal looks "
+              + "exactly like one that never ran. What is left is: the delivery was refused at "
+              + "this hub's own intake, or a handler took it and the work that owes the reply "
+              + "produced no terminal. The trail below says which."
+            : callerBusy
+                ? "🚨 THIS HUB WAS NOT IDLE while waiting, so it cannot attribute the silence upstream: " +
+                  "a response may have arrived and be queued behind the work above. Investigate THIS hub " +
+                  "before the target."
+                : "This hub is idle AT THE MOMENT IT GAVE UP — an instantaneous sample, which is why " +
+                  "handledWhileWaiting above is printed beside it: that is the interval fact, and a hub " +
+                  "that handled many messages was not idle throughout however empty its queue is now. " +
+                  "Cause is UNKNOWN between: the target never received the " +
+                  "request (routing), the target received it and is wedged (a per-node hub that stops " +
+                  "answering — MeshWeaver#2896), or the target answered and the reply was lost. Queue " +
+                  "state alone cannot distinguish them; the trail below can, and so can the target's " +
+                  "own RunLevel and queue.";
+
+        // (3) The stage trail this hub tree already recorded for THIS request, ending in its own
+        // verdict. Never throws; names its own absence when the target lives outside this tree.
+        var trail = this.DescribeRequestFate(messageId);
 
         return
             $"No response received in hub {Address} within {Configuration.RequestTimeout} " +
             $"for request {requestType} (id={messageId}) → target {target?.ToString() ?? "<unset>"}. " +
-            $"{state}. {verdict}";
+            $"{state}. {verdict} Trail: {trail}";
     }
 
     private System.Reactive.Subjects.AsyncSubject<IMessageDelivery> GetOrAddResponseSubject(
@@ -1632,6 +1704,7 @@ public sealed class MessageHub : IMessageHub
                     requestType,
                     target,
                     Stopwatch.GetTimestamp(),
+                    Version,
                     diagnosticKey);
                 responseSubjects[messageId] = entry;
                 // THE one place a hub starts awaiting a reply — so it is also the one place the
