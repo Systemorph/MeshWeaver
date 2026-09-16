@@ -689,9 +689,21 @@ public static class CreateLayoutArea
                             },
                             ex =>
                             {
+                                // 🚨 THE refusal surface a person actually reads, and until #4507 the
+                                // only English left on it. `ex.Message` is CreateNodeResponse.Error,
+                                // which stays English BY CONTRACT — every other consumer is a service
+                                // that folds it into a log line or an exception message. The create
+                                // leg therefore keys every sentence it authors and
+                                // NodeCreationFailure stamps that keyed LogMessage onto the
+                                // exception, which is what lets this dialog render the SAME sentence
+                                // in the viewer's language. A refusal that carried no key (an
+                                // upstream fault's own words, a validator's throw) falls back to the
+                                // English message — the honest outcome for text we did not author.
+                                var locale = actx.Host.ViewerLocale();
                                 var errorMsg = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
-                                    ? "You do not have permission to create nodes in this namespace."
-                                    : $"Failed to create node: {ex.Message}";
+                                    ? LocalizationCatalog.Get("dialog.createDenied", locale)
+                                    : LocalizationCatalog.Get("dialog.createFailed", locale,
+                                        ex.RefusalText()?.Localize(locale) ?? ex.Message);
                                 ShowErrorDialog(actx, actx.Host.Localize("dialog.creationFailed"), errorMsg);
                             });
                     });
