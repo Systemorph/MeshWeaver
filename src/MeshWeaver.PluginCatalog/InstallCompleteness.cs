@@ -679,13 +679,18 @@ public static class InstallCompleteness
     /// <para><b>The line that lies by being early.</b> Until this existed, the only completeness
     /// line an install ever wrote was emitted BEFORE the repair ran — at
     /// <see cref="LogLevel.Error"/>, saying the install "is being REPAIRED rather than skipped" —
-    /// and nothing anywhere ever said whether the repair worked. Measured on
-    /// <c>memex.meshweaver.cloud</c> 2026-09-13: <c>Feedback/Feedback/Source/FeedbackHandover</c>
-    /// was named ABSENT at 22:02:37Z and was present at 22:02:45Z, eight seconds later. That Error
-    /// reports a SUCCESS. It ships to Loki, the log watcher mints an incident from it, and because
-    /// incident identity folds per log CATEGORY it lands on MeshWeaver#2387 — an issue about a
-    /// different call site in the same class — which is why that issue re-opens no matter what
-    /// anyone fixes.</para>
+    /// and nothing anywhere ever said whether the repair worked. That Error ships to Loki, the log
+    /// watcher mints an incident from it, and because incident identity folds per log CATEGORY it
+    /// lands on MeshWeaver#2387 — an issue about a different call site in the same class.</para>
+    ///
+    /// <para>🚨 <b>Landed is not HELD.</b> The verdict this method describes is taken right after
+    /// the write, so a writer that undoes the repair LATER is invisible to it. Measured on
+    /// <c>memex.meshweaver.cloud</c>: <c>Feedback/Feedback/Source/FeedbackHandover</c> was named
+    /// ABSENT at 22:02:37Z on 2026-09-13 and present at 22:02:45Z — read at the time as a repair
+    /// that worked — and was named ABSENT again on ten further boots through 2026-09-16 at the same
+    /// module version, pruned after each repair by <c>Feedback/_GitSync</c> importing the sealed
+    /// commit whose tree lacks it (MeshWeaver#4259). The signature of a repair that did not hold is
+    /// the pre-install detection REPEATING at an unchanged module version.</para>
     ///
     /// <para>🚨 <b>And the case that deserved the Error had no line at all.</b> A completeness
     /// verdict was only ever taken on the SKIP path, where the module hash was unchanged; an
