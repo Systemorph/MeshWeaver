@@ -1059,7 +1059,7 @@ public static class MeshExtensions
                                 CompensateFailedCreate(hub, resultNode, mode, logger)
                                     .Subscribe(
                                         outcome => Respond(CreateNodeResponse.Fail(
-                                            $"Create failed in a post-creation step: {ex.Message} {outcome}",
+                                            $"Create failed in a post-creation step: {ex.Message} {outcome.Message}",
                                             NodeCreationRejectionReason.Unknown)),
                                         // The compensation itself already converts its own faults into
                                         // an outcome string; this branch exists so a response goes out
@@ -1491,19 +1491,21 @@ public static class MeshExtensions
     /// AFTER its <c>Handle</c> succeeded (the <c>Concat</c> in the runner), so a failed critical
     /// handler leaves none behind.</para>
     ///
-    /// <para>Emits exactly one human-readable outcome sentence, which the caller appends to the
-    /// original failure — a rollback that could not run is REPORTED, never swallowed.</para>
+    /// <para>Emits exactly one <see cref="RollbackOutcome"/> — a human-readable sentence, which the
+    /// caller appends to the original failure, plus whether a row is still there. A rollback that
+    /// could not run is REPORTED, never swallowed.</para>
     /// </summary>
-    private static IObservable<string> CompensateFailedCreate(
+    private static IObservable<RollbackOutcome> CompensateFailedCreate(
         IMessageHub hub, MeshNode created, string mode, ILogger logger)
     {
         if (!string.Equals(mode, "create", StringComparison.Ordinal))
-            return Observable.Return(
-                $"The node at '{created.Path}' existed before this request, so nothing was rolled back.");
+            return Observable.Return(new RollbackOutcome(true,
+                $"The node at '{created.Path}' existed before this request, so nothing was rolled back."));
 
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence is null)
-            return Observable.Return("Nothing was persisted (no storage adapter), so there was nothing to roll back.");
+            return Observable.Return(new RollbackOutcome(true,
+                "Nothing was persisted (no storage adapter), so there was nothing to roll back."));
 
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -1514,7 +1516,8 @@ public static class MeshExtensions
             .SelectMany(stored =>
             {
                 if (stored is null)
-                    return Observable.Return($"No row remains at '{created.Path}' — nothing to roll back.");
+                    return Observable.Return(new RollbackOutcome(true,
+                        $"No row remains at '{created.Path}' — nothing to roll back."));
 
                 if (stored.CreatedDate != created.CreatedDate)
                 {
@@ -1522,9 +1525,9 @@ public static class MeshExtensions
                         "[CreateNode] rollback STOOD DOWN at {Path}: the stored row (created {StoredCreated:O}) is not "
                         + "the one this create wrote (created {OurCreated:O}) — refusing to delete a node we did not create",
                         created.Path, stored.CreatedDate, created.CreatedDate);
-                    return Observable.Return(
+                    return Observable.Return(new RollbackOutcome(false,
                         $"The node at '{created.Path}' was NOT rolled back: the stored row is no longer the one this "
-                        + "request wrote. Remove it manually before retrying.");
+                        + "request wrote. Remove it manually before retrying."));
                 }
 
                 // The rollback is infrastructure repairing its OWN half-finished write, on a node
@@ -1535,19 +1538,38 @@ public static class MeshExtensions
                     .Do(_ => logger.LogWarning(
                         "[CreateNode] rolled back partially-created node at {Path} — the create is all-or-nothing (#638)",
                         created.Path))
-                    .Select(_ => $"The partially-created node at '{created.Path}' was rolled back; the create can be retried.");
+                    .Select(_ => new RollbackOutcome(true,
+                        $"The partially-created node at '{created.Path}' was rolled back; the create can be retried."));
             })
-            .Catch<string, Exception>(ex =>
+            .Catch<RollbackOutcome, Exception>(ex =>
             {
                 logger.LogError(ex,
                     "[CreateNode] ROLLBACK FAILED at {Path} — the partially-created node is still present",
                     created.Path);
-                return Observable.Return(
+                return Observable.Return(new RollbackOutcome(false,
                     $"Rolling back '{created.Path}' FAILED ({ex.Message}) — the partially-created node is still "
-                    + "present and must be removed manually.");
+                    + "present and must be removed manually."));
             })
             .Take(1);
     }
+
+    /// <summary>
+    /// The outcome of ONE <see cref="CompensateFailedCreate"/>: the sentence the caller appends to
+    /// the original cause, and whether a row is still sitting there.
+    ///
+    /// <para>The singular create rolls back exactly one node and can simply quote the sentence. A
+    /// BULK create rolls back the failed node plus every node whose post-creation handlers never
+    /// ran (#4449), so "did it work" has to be readable WITHOUT parsing prose: the batch reports how
+    /// many rows it removed and quotes verbatim only the ones it could not.</para>
+    /// </summary>
+    /// <param name="Removed">
+    /// <c>true</c> when no row from this create remains at the path — it was deleted, or there was
+    /// none to delete. <c>false</c> when one is still present: the rollback stood down (the stored
+    /// row is no longer the one this request wrote) or the delete itself failed. Only a
+    /// <c>false</c> needs a human.
+    /// </param>
+    /// <param name="Message">The human-readable outcome sentence.</param>
+    private readonly record struct RollbackOutcome(bool Removed, string Message);
 
     /// <summary>
     /// Handles <see cref="CreateNodesRequest"/> — the BULK sibling of
@@ -1788,14 +1810,11 @@ public static class MeshExtensions
                                     }
 
                                     // ——— Phase 7: post-creation handlers per created node,
-                                    // sequential — same semantics as the singular create
-                                    // (FailsCreateOnError propagates; best-effort handlers
+                                    // sequential, with the singular create's COMPENSATING
+                                    // ROLLBACK on a critical failure (best-effort handlers
                                     // log-and-continue inside the runner). ———
-                                    return list
-                                        .Select(saved => RunPostCreationHandlersObs(hub, saved, capturedBy, logger))
-                                        .Concat()
-                                        .ToList()
-                                        .Select(_ => (list, existingPaths));
+                                    return RunBulkPostCreationHandlers(
+                                        hub, list, existingPaths, capturedBy, logger, PostFail);
                                 });
                         });
                     });
@@ -1899,6 +1918,131 @@ public static class MeshExtensions
                 });
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// PHASE 7 of the bulk create: the post-creation handlers, per created node, in caller order —
+    /// WITH the compensating rollback the singular create has had since #638. Emits the created +
+    /// existing pair when every node's handlers completed, and NOTHING (having posted the failure
+    /// itself, like every other refusal in this handler) when a critical one did not.
+    ///
+    /// <para>🚨 <b>A bulk create leaves TWO populations of ghost rows, not one</b> (#4449). Storage
+    /// writes ALL rows in phase 6 before any handler runs, and the handlers then run sequentially,
+    /// so a <c>FailsCreateOnError</c> fault at index <i>k</i> leaves: node <i>k</i>, whose critical
+    /// handler failed — the singular path's case — AND nodes <i>k+1…n</i>, whose handlers NEVER RAN.
+    /// The second population is the larger hazard because it is invisible: those rows are
+    /// indistinguishable from successfully-created ones by inspection, yet nothing ever granted
+    /// their owner, announced their partition, or ran whatever else their type's contract requires.
+    /// Both are compensated here; nodes <i>0…k-1</i> completed and are KEPT.</para>
+    ///
+    /// <para>🚨 <b>In REVERSE order (n … k).</b> Caller order is the bulk create's contract —
+    /// parents before children — so the rollback walks it backwards and a child is removed before
+    /// its parent.</para>
+    ///
+    /// <para>🚨 <b>The first fault must STOP the chain, and only a fault does that reliably.</b> The
+    /// obvious shape — catch per index into a failure element, then <c>Take(1)</c> — was MEASURED
+    /// not to stop it: <c>Observable.Concat(IEnumerable&lt;IObservable&lt;T&gt;&gt;)</c> went on to
+    /// subscribe every later node although the downstream had already disposed, so nodes
+    /// <i>k+1…n</i> ran their handlers after all. That is not merely wasted work: those handlers
+    /// write side effects (a creator grant, an <c>Admin/Partition</c> definition) for rows this
+    /// request is about to remove, and the rollback would leave them orphaned. So the per-index
+    /// <c>Catch</c> RE-THROWS, tagged with the index — a fault terminates a <c>Concat</c> by
+    /// construction — and the single <c>Catch</c> that turns it into a decision sits DOWNSTREAM,
+    /// where it can run at most once per batch because there is no later node left to fault.</para>
+    ///
+    /// <para><b>Why deleting rows is safe here.</b> Two independent facts, both load-bearing:
+    /// everything in <paramref name="created"/> is by construction this request's OWN (phase 1
+    /// filters out every pre-existing path into <c>existingPaths</c>, which is reported and never
+    /// touched); and <see cref="CompensateFailedCreate"/> re-reads each row and compares
+    /// <see cref="MeshNode.CreatedDate"/> before deleting, so a path a concurrent writer has
+    /// re-created is left alone and SAID SO rather than destroyed. Additional nodes a handler emits
+    /// are written only after its <c>Handle</c> succeeded, so a failed critical handler leaves
+    /// none — the same reasoning as the singular path.</para>
+    /// </summary>
+    private static IObservable<(ImmutableList<MeshNode>, ImmutableList<string>)>
+        RunBulkPostCreationHandlers(
+            IMessageHub hub,
+            ImmutableList<MeshNode> created,
+            ImmutableList<string> existingPaths,
+            string? createdBy,
+            ILogger logger,
+            Action<string, NodeCreationRejectionReason, string?, ImmutableList<MeshNode>?> postFail)
+    {
+        // The FIRST critical failure with the index it happened at, or null when all completed.
+        var firstFailure = created
+            .Select((node, index) => RunPostCreationHandlersObs(hub, node, createdBy, logger)
+                // TAG AND RE-THROW — never swallow into an element here (see the remarks): the
+                // fault is what stops the Concat before the next node's handlers run.
+                .Catch<System.Reactive.Unit, Exception>(
+                    ex => Observable.Throw<System.Reactive.Unit>(new BulkPostCreationFault(index, ex))))
+            .Concat()
+            // The runner's Unit values carry nothing: only COMPLETION (every node's handlers are
+            // done) and the tagged FAULT are information.
+            .IgnoreElements()
+            .Select(_ => (BulkPostCreationFault?)null)
+            .Catch<BulkPostCreationFault?, Exception>(ex => ex is BulkPostCreationFault tagged
+                ? Observable.Return<BulkPostCreationFault?>(tagged)
+                // Anything untagged did not come from a handler chain and is not this method's to
+                // decide — it belongs to the outer error arm, which probes the store and reports
+                // what actually landed. Never swallowed.
+                : Observable.Throw<BulkPostCreationFault?>(ex))
+            .DefaultIfEmpty(null);
+
+        return firstFailure.SelectMany(failure =>
+        {
+            if (failure is not { } f)
+                return Observable.Return<(ImmutableList<MeshNode>, ImmutableList<string>)>(
+                    (created, existingPaths));
+
+            var survivors = created.Take(f.Index).ToImmutableList();
+            var ghosts = created.Skip(f.Index).ToImmutableList();
+            var failedPath = created[f.Index].Path;
+
+            logger.LogError(f.Cause,
+                "[CreateNodes] critical post-creation handler failed at {Path} ({Position} of {Count}) — "
+                + "rolling back that node and the {NeverRan} node(s) whose handlers never ran; "
+                + "{Kept} node(s) created before it are kept",
+                failedPath, f.Index + 1, created.Count, ghosts.Count - 1, survivors.Count);
+
+            // REVERSE: index n down to k, spelled as an index walk so it cannot be read as (or
+            // silently become) an in-place reversal of the batch's caller order.
+            return Enumerable.Range(0, ghosts.Count)
+                .Select(i => CompensateFailedCreate(hub, ghosts[ghosts.Count - 1 - i], "create", logger))
+                .Concat()
+                .ToList()
+                .SelectMany(outcomes =>
+                {
+                    var stillPresent = outcomes.Where(o => !o.Removed).Select(o => o.Message).ToImmutableList();
+                    postFail(
+                        $"Create failed in a post-creation step for '{failedPath}': {f.Cause.Message} "
+                        + $"{outcomes.Count - stillPresent.Count} of {ghosts.Count} node(s) this batch wrote were "
+                        + $"rolled back (that node, and the {ghosts.Count - 1} whose post-creation handlers never "
+                        + $"ran); the {survivors.Count} node(s) created before it completed and were kept."
+                        + (stillPresent.IsEmpty ? string.Empty : " " + string.Join(" ", stillPresent)),
+                        NodeCreationRejectionReason.Unknown,
+                        failedPath,
+                        survivors);
+                    return Observable.Empty<(ImmutableList<MeshNode>, ImmutableList<string>)>();
+                });
+        });
+    }
+
+    /// <summary>
+    /// A critical post-creation handler's failure, carrying the INDEX of the batch entry it happened
+    /// on. It exists so the fault can do two jobs at once: TERMINATE the sequential handler chain —
+    /// which is the only reliable way to keep a later node's handlers from running — and still say
+    /// WHICH node failed, so the rollback knows where to cut. Never leaves
+    /// <see cref="RunBulkPostCreationHandlers"/>: the caller is answered with
+    /// <see cref="Cause"/>'s message, not with this wrapper.
+    /// </summary>
+    private sealed class BulkPostCreationFault(int index, Exception cause)
+        : Exception($"Post-creation handlers failed for batch entry {index}: {cause.Message}", cause)
+    {
+        /// <summary>The failing node's position in the batch's caller order.</summary>
+        public int Index { get; } = index;
+
+        /// <summary>The handler's own failure — the ORIGINAL cause the caller is told about.</summary>
+        public Exception Cause { get; } = cause;
     }
 
     /// <summary>
