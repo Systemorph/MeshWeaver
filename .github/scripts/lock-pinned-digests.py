@@ -555,7 +555,12 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
         return scan
     # 🚨 BOTH globs, or the local arm answers a different question from the remote one — and the
     # local arm is what a person runs by hand to check the remote arm's verdict.
-    candidates = sorted(set(base.rglob("values*.y*ml")) | set(base.rglob("*.json")))
+    # 🚨 The record glob is ANCHORED to the directory the predicate requires, not `**/*.json`: the
+    # remote arm filters GitHub's tree listing, which costs nothing, but a bare `rglob("*.json")`
+    # here walks `node_modules`, `bin/`, `obj/` and every fixture in a real working tree to discard
+    # almost all of it. `is_deployment_record_path` still decides — this only stops the walk from
+    # visiting files it is certain to reject.
+    candidates = sorted(set(base.rglob("values*.y*ml")) | set(base.glob("**/Deployments/*.json")))
     for path in candidates:
         rel = path.relative_to(base).as_posix()
         if not (is_overlay_path(rel) or is_deployment_record_path(rel)):
