@@ -216,8 +216,14 @@ c=$(suite conclusion); echo "PR $PR CI: $c"; [ "$c" = "SUCCESS" ]   # exit 0 iff
 #    - CI red  → pull the failing job log (REST, but ONE call — not a poll — so it's fine), fix, push, GOTO 3.
 #        gh run view <run-id> --log-failed | grep -iE 'error|##\[error\]'
 #    - Copilot review (arrives automatically — see step 2) → read its comments, address the
-#      actionable ones, resolve threads, push, GOTO 3. Same for any human review.
-#        gh pr view <PR> --json reviews,comments
+#      actionable ones, push, and REPLY to EVERY thread it opened (fixed, or why not), GOTO 3.
+#      Same for any human review. The `Automatic review answered` check (review-answered.yml,
+#      #4299) is RED until the review has landed and each of its threads has a reply from a person
+#      — resolving a thread is not a reply. Never apply the `review-waived` label yourself: it is
+#      a maintainer's decision, and your session runs under an account the check cannot tell apart
+#      from the maintainer's. Doc: Doc/Architecture/ReviewFindingsAnswered.
+#        gh api "repos/Systemorph/MeshWeaver/pulls/<PR>/comments?per_page=100"          # REST, not GraphQL
+#        gh api -X POST "repos/Systemorph/MeshWeaver/pulls/<PR>/comments/<id>/replies" -f body='…'
 
 # 5. MERGE — only now, only if step 3 was green.
 gh pr merge <PR> --merge
