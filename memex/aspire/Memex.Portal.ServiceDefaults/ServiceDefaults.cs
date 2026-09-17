@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -285,7 +285,7 @@ public static class ServiceDefaults
     internal static Task WriteHealthWithDetail(HttpContext context, HealthReport report)
     {
         context.Response.ContentType = "text/plain; charset=utf-8";
-        var lines = new List<string> { report.Status.ToString() };
+        var lines = new List<string> { report.Status.ToString(), TimingLine(report) };
         foreach (var (name, entry) in report.Entries)
         {
             if (entry.Status == HealthStatus.Healthy && !entry.Tags.Contains(ProbeEndpoints.CensusTag))
@@ -293,6 +293,74 @@ public static class ServiceDefaults
             lines.Add($"{name}: {entry.Status}" + (string.IsNullOrEmpty(entry.Description) ? "" : $" — {entry.Description}"));
         }
         return context.Response.WriteAsync(string.Join('\n', lines));
+    }
+
+    /// <summary>
+    /// A check slower than this is NAMED on <see cref="ProbeEndpoints.Health"/>; the rest are
+    /// counted. 10 ms is a hundredth of the smallest probe budget the fleet runs, so nothing under
+    /// it can be part of an explanation for a probe that timed out — and leaving the cheap ones
+    /// unnamed is what keeps the line from growing with every check that costs nothing.
+    /// </summary>
+    internal const double TimingNamedAboveMs = 10;
+
+    /// <summary>
+    /// 🚨 <b>What the probe's own endpoint SPENT, published on it</b> (MeshWeaver#4588).
+    ///
+    /// <para>The chart reads <see cref="ProbeEndpoints.Health"/> as the <c>startupProbe</c> with a
+    /// <c>timeoutSeconds</c> budget, and that is the one probe whose failure is not recoverable: a
+    /// container that never records a success never leaves startup, is never Ready, and is killed
+    /// when <c>periodSeconds x failureThreshold</c> runs out — then repeats. So once this endpoint's
+    /// own LATENCY reaches the probe's timeout, the verdict stops mattering: the instrument, not the
+    /// health of the pod, decides the rollout.</para>
+    ///
+    /// <para><b>Measured 2026-09-17 on memex.systemorph.com</b>, from outside, three consecutive
+    /// reads: <c>/health</c> answered 200 in 8.12 s, 9.62 s and 9.52 s while <c>/alive</c> and
+    /// <c>/ready</c> on the same host and pod answered in 0.12 s — so the seconds were entirely in
+    /// the untagged checks. The startup probe's budget is 10 s. The replica rolled onto
+    /// 3.0.0-ci.8812 at 11:23:40Z was still not Ready at 14:51Z and had been killed once at almost
+    /// exactly its 3 h budget (10 s x 1080), with the bake gate GREEN throughout — the aggregate
+    /// word on line one was <c>Degraded</c>, which is a 200 and therefore a passing verdict.</para>
+    ///
+    /// <para>🚨 <b>And nothing could say WHICH check spent it.</b> The framework logs a per-check
+    /// duration, but a check that answers <see cref="HealthStatus.Healthy"/> logs it at Information,
+    /// which this fleet filters out of Loki for the <c>Microsoft.*</c> categories (measured: not one
+    /// line matching <c>with status Healthy</c> has ever reached the log store). So the slow check
+    /// was, by construction, the one kind of check no reader could name. The report carries
+    /// <see cref="HealthReport.TotalDuration"/> and every entry's
+    /// <see cref="HealthReportEntry.Duration"/> and this writer dropped both — the same shape
+    /// #3703/#3704 fixed for the bake and discovery readings, on the endpoint's own cost. #4588's
+    /// own attribution caveat is exactly this hole — <i>"the fleet watch reports /health unreachable
+    /// … TaskCanceledException for that pod, and for one of the two healthy ci.8710 pods as well, so
+    /// that signal does not separate them"</i> — and it does not separate them because BOTH are over
+    /// that watch's 8 s budget for a reason this endpoint never stated.</para>
+    ///
+    /// <para>Placed on line TWO, directly under the status word: a reader of a truncated body (the
+    /// fleet watch keeps the first 2000 characters) needs the timing before any description, and
+    /// line one stays exactly the bare status word every caller parses. Pure, so
+    /// <c>HealthTimingIsPublishedTest</c> can pin it without a socket.</para>
+    /// </summary>
+    /// <param name="report">The report the probe just produced.</param>
+    /// <returns>The one timing line.</returns>
+    internal static string TimingLine(HealthReport report)
+    {
+        var total = Math.Round(report.TotalDuration.TotalMilliseconds);
+        var header = $"timing: {total:F0}ms total over {report.Entries.Count} check(s)";
+        if (report.Entries.Count == 0)
+            return $"{header} — none registered, so this endpoint measures NOTHING";
+
+        var named = report.Entries
+            .Select(e => (e.Key, Ms: e.Value.Duration.TotalMilliseconds))
+            .Where(e => e.Ms >= TimingNamedAboveMs)
+            .OrderByDescending(e => e.Ms)
+            .ToList();
+        var rest = report.Entries.Count - named.Count;
+        if (named.Count == 0)
+            return $"{header} — all {rest} under {TimingNamedAboveMs:F0}ms";
+
+        var slowest = string.Join("; ", named.Select(e => $"{e.Key} {e.Ms:F0}ms"));
+        return rest == 0
+            ? $"{header}, slowest first — {slowest}"
+            : $"{header}, slowest first — {slowest}; {rest} more under {TimingNamedAboveMs:F0}ms";
     }
 
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
