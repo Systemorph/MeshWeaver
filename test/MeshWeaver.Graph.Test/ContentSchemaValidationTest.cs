@@ -39,6 +39,7 @@ namespace MeshWeaver.Graph.Test;
 public class ContentSchemaValidationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string GuardedType = "SchemaGuarded";
+    private const string RequiredType = "SchemaRequired";
 
     /// <summary>The declared content shape of the NodeType under test.</summary>
     public record SchemaGuardedContent
@@ -50,6 +51,20 @@ public class ContentSchemaValidationTest(ITestOutputHelper output) : MonolithMes
         public string? Label { get; init; }
     }
 
+    /// <summary>
+    /// A declared shape carrying a <c>required</c> member — the shape whose bind failure is a
+    /// WHOLE-DOCUMENT one (<c>JsonException.Path</c> is <c>$</c>), which is the half the guard
+    /// promises to admit and, before this fix, let ESCAPE as a raw System.Text.Json error.
+    /// </summary>
+    public record RequiredMemberContent
+    {
+        /// <summary>The member the type cannot be materialised without.</summary>
+        public required string Body { get; init; }
+
+        /// <summary>A plain label the payload may carry on its own.</summary>
+        public string? Label { get; init; }
+    }
+
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
@@ -58,6 +73,12 @@ public class ContentSchemaValidationTest(ITestOutputHelper output) : MonolithMes
                 Name = "Schema Guarded",
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<SchemaGuardedContent>())
+            },
+            new MeshNode(RequiredType)
+            {
+                Name = "Schema Required",
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<RequiredMemberContent>())
             });
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -75,6 +96,71 @@ public class ContentSchemaValidationTest(ITestOutputHelper output) : MonolithMes
         State = MeshNodeState.Active,
         Content = JsonSerializer.Deserialize<JsonElement>(contentJson),
     };
+
+    /// <summary>A node declared as the <see cref="RequiredMemberContent"/> shape.</summary>
+    private static MeshNode Required(string id, string contentJson) => new(id, TestPartition)
+    {
+        Name = "Required",
+        NodeType = RequiredType,
+        State = MeshNodeState.Active,
+        Content = JsonSerializer.Deserialize<JsonElement>(contentJson),
+    };
+
+    /// <summary>
+    /// 🚨 THE REGRESSION. A payload that omits a <c>required</c> member fails to bind as a WHOLE
+    /// DOCUMENT — <c>JsonException.Path</c> is <c>$</c>, which names no member — and the guard's
+    /// refusal clause is filtered on a member. Before this fix that exception matched no catch at
+    /// all and left the validator, so the write failed with a raw System.Text.Json message
+    /// ("was missing required properties including: 'body'") — the guard refusing, untranslated,
+    /// the exact shape its own documentation calls "the ordinary partial-content shape a
+    /// legitimate writer produces". Measured on the fleet 2026-09-17: it took MeshWeaver.Plugins
+    /// main dark, because every <c>Markdown</c> write that omitted <c>content</c> hit it.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task Create_OmittingARequiredMember_WhileNamingADeclaredOne_StillLands()
+    {
+        var id = NewId();
+        var path = $"{TestPartition}/{id}";
+
+        await MeshService.CreateNode(Required(id, """{"label":"partial"}"""))
+            .Take(1).Should().Within(60.Seconds()).Emit(
+                "partial content is what a legitimate writer produces, and this guard says so in "
+                + "its own class doc — a missing `required` member must not fail the write, by "
+                + "refusal OR by an exception that escapes the validator",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var stored = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds())
+            .Await(TestContext.Current.CancellationToken);
+        stored!.Id.Should().Be(id, "the write must have landed, not merely failed quietly");
+    }
+
+    /// <summary>
+    /// The other half, and the control that keeps this fix from being a hole: content NONE of whose
+    /// members the type declares is still REFUSED on a type with a <c>required</c> member — and
+    /// refused by the guard's own message, naming what was sent and what is declared, never by an
+    /// escaping System.Text.Json error.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task Create_WithNoDeclaredMember_OnATypeWithARequiredOne_IsRefusedByTheGuard_NotThrownFromIt()
+    {
+        var id = NewId();
+
+        var failure = await Record.ExceptionAsync(() =>
+            MeshService.CreateNode(Required(id, """{"markdown":"# a whole document"}"""))
+                .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken));
+
+        failure.Should().NotBeNull(
+            "a payload sharing NO member with its declared type is the #4601 shape, and a required "
+            + "member in that type must not turn the refusal into a pass");
+        failure!.Message.Should().Contain("markdown",
+            "the refusal must name the members that matched nothing");
+        failure.Message.Should().Contain("body",
+            "…and what the declared members are, so the caller can fix the payload in one retry");
+        failure.Message.Should().NotContain("missing required properties",
+            "that is System.Text.Json's own wording: seeing it here means the exception ESCAPED "
+            + "the validator again instead of being judged by it");
+    }
 
     [Fact(Timeout = 180_000)]
     public async Task Create_WithAMemberContradictingItsDeclaredType_IsRefused_NamingTheMemberAndTheType()

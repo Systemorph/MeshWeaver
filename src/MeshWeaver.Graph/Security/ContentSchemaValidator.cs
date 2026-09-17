@@ -41,11 +41,17 @@ namespace MeshWeaver.Graph.Security;
 ///     <see cref="JsonException.Path"/> naming a MEMBER (<c>$.country</c>), never a whole-document
 ///     failure (<c>$</c>) — a missing <c>required</c> member is the ordinary partial-content shape
 ///     a legitimate writer produces, and refusing it would turn this guard into a schema-strictness
-///     change nobody asked for.</item>
+///     change nobody asked for. 🚨 Not refused is not the same as not CAUGHT: a whole-document
+///     failure is caught and carried into rule 2 below, because an exception thrown out of a
+///     validator fails the write just as hard as a refusal, and less legibly — that escape is what
+///     made every <c>Markdown</c> write omitting <c>content</c> fail with a raw System.Text.Json
+///     message on 2026-09-17.</item>
 ///   <item><b>Content NONE of whose members the declared type knows</b> — the
 ///     <c>{"markdown": "…"}</c>-on-a-Markdown-node shape. System.Text.Json's
 ///     <see cref="JsonUnmappedMemberHandling.Skip"/> makes this bind CLEANLY to an instance
-///     carrying none of the authored data, which is why no exception can catch it. Refused only in
+///     carrying none of the authored data, which is why no exception can catch it — and a type with
+///     a <c>required</c> member reaches the same census from the other direction, having thrown
+///     rather than bound. Refused only in
 ///     the total case — at least one member present and NOT ONE of them declared — so content
 ///     carrying an extra member alongside real ones (an older or newer writer, a legacy field)
 ///     still lands, and the read path's <c>WarnIfLossy</c> keeps reporting what it drops.</item>
@@ -144,6 +150,33 @@ public sealed class ContentSchemaValidator : INodeValidator
                     ValueKindOf(content, member), declared.Name, node.NodeType!),
                 $"member '{member}' does not match its declared type");
         }
+        catch (JsonException ex)
+        {
+            // 🚨 A WHOLE-DOCUMENT failure — `Path` is `$` or absent, which in practice means a
+            // `required` member the payload does not carry. It is NOT a member contradiction, and
+            // the class doc above says why it must not be refused: partial content is what a
+            // legitimate writer produces.
+            //
+            // It must not ESCAPE either, and that is the defect this clause closes. With only the
+            // filtered clause above, a JsonException whose Path names no member matched NO catch
+            // at all, so it left this validator and failed the write with a raw System.Text.Json
+            // message — the guard refusing, loudly and untranslated, the one shape it had promised
+            // to admit. Measured 2026-09-17: every `Markdown` write whose content omitted
+            // `content` began failing with "was missing required properties including: 'content'",
+            // which took MeshWeaver.Plugins main dark (Plugins#2049) over a payload this guard
+            // exempts twice over — once as partial content, once for the extension-data buffer
+            // MarkdownContent carries.
+            //
+            // Fall through to the member census below: it is the one judgement that still applies
+            // to content which did not bind, and it answers Valid for a type with an extension-data
+            // buffer and for any payload naming at least one declared member, so the only thing it
+            // can still refuse is content NONE of whose members the type knows — the #4601 shape,
+            // now refused by the guard's own localized message instead of by an escaping exception.
+            _logger.LogDebug(ex,
+                "ContentSchemaGuard: content for {Path} does not bind to {ContentType} as a whole "
+                + "({JsonPath}) — partial content is not refused; judging its members instead.",
+                node.Path, declared.Name, ex.Path ?? "$");
+        }
         catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
         {
             // The target has no usable contract here (a collectible assembly gone, a type the
@@ -156,7 +189,10 @@ public sealed class ContentSchemaValidator : INodeValidator
             return NodeValidationResult.Valid();
         }
 
-        // It bound — but UnmappedMemberHandling.Skip means "bound" can mean "carried nothing".
+        // It bound — but UnmappedMemberHandling.Skip means "bound" can mean "carried nothing" —
+        // or it did not bind as a whole document, which says nothing about its members either
+        // way. Both reach here, and this census is what separates partial content from content
+        // the declared type shares no member with.
         if (HasExtensionDataBuffer(declared, options))
             return NodeValidationResult.Valid();
         var names = DeclaredMemberNames(declared, options);

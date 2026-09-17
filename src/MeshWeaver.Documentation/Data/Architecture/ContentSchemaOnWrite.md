@@ -71,6 +71,21 @@ were never the problem:
   when it blames the document as a whole (`$`). A missing `required` member is the ordinary
   partial-content shape a legitimate writer produces; refusing it is a different decision, and not
   this one.
+
+  🚨 **Not refused is not the same as not caught, and the difference cost a fleet-wide outage.** The
+  first implementation expressed "we do not judge this half" as a `catch` *filtered* on the member —
+  so a whole-document failure matched no clause at all and travelled OUT of the validator. An
+  exception leaving a validator fails the write exactly as hard as a refusal, and worse: untranslated,
+  naming no node, carrying System.Text.Json's own wording. Measured 2026-09-17, hours after the guard
+  merged: every `Markdown` write that omitted `content` failed with *"was missing required properties
+  including: 'content'"* — in-mesh licensing tests creating `Admin/Keys/…` nodes, and the AI plugin's
+  update tool, across MeshWeaver.Plugins (#2049) — for a shape this guard exempts twice over, once as
+  partial content and once for the extension-data buffer `MarkdownContent` carries. A whole-document
+  failure is now CAUGHT and carried into the member census below, which is the only judgement that
+  still applies to content that did not bind. Two tests pin it: a payload omitting a `required` member
+  while naming a declared one lands, and one naming no declared member at all is refused **by the
+  guard's own message** — asserted by its *absence* of the serializer's wording, which is what tells a
+  judgement from an escape.
 - **Unmapped members are refused only in the TOTAL case** — at least one member present and not one
   of them declared. Content carrying an extra member *alongside* real ones is what an older or newer
   writer of the same record produces all the time, and the read path's `WarnIfLossy` already reports
