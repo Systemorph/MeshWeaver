@@ -195,6 +195,16 @@ Two bugs that make a monitor lie, both hit in one session:
 - **An empty or partial rollup is vacuously green.** "No failures and nothing incomplete" is *true*
   of a PR with zero checks. Decide readiness by asserting the **required set is present and
   SUCCESS**, never by the absence of failures.
+- **A PAGE of check-runs is not the commit's check-runs.** `commits/<sha>/check-runs` caps at
+  `per_page=100`, and a main commit here carries far more than that — every workflow, every matrix
+  leg, both synthetic probes, the combo verdict. Measured 2026-09-17 on `be8f452c79`: **278**
+  check-runs, page 1 holding **zero** named `Consolidate test results` and page 3 holding its two,
+  both green since the evening before. CD's gate filtered page 1 in `jq`, read `absent/none` for a
+  green commit, and walked delivery back to its parent for six hours until the parent's heal budget
+  ran out and CD reported delivery STUCK with main green (#4526). **Name the check in the request —
+  `&check_name=<name>` — so the API filters server-side**, or `--paginate` when you really want all
+  of them; `CheckRunReadsAreServerFilteredGuard` holds every workflow to that. The failure grows
+  with the repository's check volume, so a reader that works today starts lying later, silently.
 
 ### 🚨 A lookup that cannot reach its target answers the DEFAULT, forever, on every machine
 
