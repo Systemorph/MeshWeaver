@@ -1619,5 +1619,8 @@
   "notification.delivery.compiled.title": "'{typeName}' compiled from the current source",
   "notification.delivery.compiled.body": "'{nodeTypePath}' was compiled from the current source (fingerprint {fingerprint}); the build it was serving from is retired.",
   "notification.delivery.heldIncompatible.title": "'{typeName}' is awaiting a bundle (incompatible build)",
-  "notification.delivery.heldStale.title": "'{typeName}' is serving its last build; source moved ahead"
+  "notification.delivery.heldStale.title": "'{typeName}' is serving its last build; source moved ahead",
+  "layout.areaNotFound.title": "This section could not be displayed.",
+  "layout.areaNotFound.pageUnaffected": "The rest of this page is unaffected.",
+  "layout.areaNotFound.details": "Technical details"
 }
