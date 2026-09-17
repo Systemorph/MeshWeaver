@@ -469,6 +469,10 @@ def cmd_dispose(args: argparse.Namespace) -> int:
             try:
                 if future.result():
                     deleted += 1
+                    # One line per file DELETED from a production share, the same shape `upload`
+                    # prints per file published. It is not recurring noise: a prefix has one flat
+                    # copy to dispose of, so after its first phase-5 publication this loop prints
+                    # nothing and the summary reads "seal already absent, 0 of 0".
                     log(f"disposed: {where}/{rel}")
                 else:
                     absent += 1
