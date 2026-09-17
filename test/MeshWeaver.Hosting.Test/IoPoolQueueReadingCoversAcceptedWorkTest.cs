@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -40,8 +41,6 @@ namespace MeshWeaver.Hosting.Test;
 /// </summary>
 public class IoPoolQueueReadingCoversAcceptedWorkTest
 {
-    private sealed record Entry(string Name, Func<IoPool, IObservable<int>> Build, bool ParksInPrologue);
-
     /// <summary>
     /// The three entry points that defer their prologue to the ThreadPool, plus <c>InvokeBlocking</c>
     /// — which is here as the CONTROL: it has always taken its admission and started its wait clock
@@ -61,10 +60,18 @@ public class IoPoolQueueReadingCoversAcceptedWorkTest
         // no prologue seam, because it never deferred its prologue in the first place. The other
         // three are held in their own prologue by the seams, so the cap is irrelevant to them; using
         // the same pool for all four keeps the reading being asserted identical.
-        var pool = (IoPool)registry.Get(IoPoolNames.PostgresAdapterPrefix + "probe-" + entryPoint);
+        var poolName = IoPoolNames.PostgresAdapterPrefix + "probe-" + entryPoint;
+        var pool = (IoPool)registry.Get(poolName);
         var parked = new AsyncSubject<Unit>();
+        var completed = new AsyncSubject<Unit>();
         var release = 0;
         IDisposable? occupant = null;
+
+        void Completed()
+        {
+            completed.OnNext(Unit.Default);
+            completed.OnCompleted();
+        }
 
         void Park()
         {
@@ -88,7 +95,11 @@ public class IoPoolQueueReadingCoversAcceptedWorkTest
                     break;
                 case "SubscribeThroughPool":
                     pool.OnSubscribeSetupLeafStarting = Park;
-                    leg = pool.SubscribeThroughPool(Observable.Never<int>());
+                    // A source that COMPLETES, so the leg terminates once its setup leaf has been
+                    // granted a slot. A never-ending feed — the shape this entry point usually
+                    // carries — would hold the leg open forever and the completion signal below could
+                    // not fire; what is under test is the setup leaf's admission, not the feed.
+                    leg = pool.SubscribeThroughPool(Observable.Return(1));
                     break;
                 default:
                     // The control: the pool's ONE slot is taken by a leaf that parks, so the leaf
@@ -103,7 +114,11 @@ public class IoPoolQueueReadingCoversAcceptedWorkTest
             }
 
             var baseline = registry.Snapshot();
-            using var subscription = leg.Subscribe(_ => { }, _ => { });
+            var baselineSamples = baseline.FirstOrDefault(r => r.Name == poolName).QueueWait.Samples;
+            // The interval the leaf provably spends ACCEPTED but not running. The new clock must see
+            // it; the old one, which started at the gate, saw ~0 of it.
+            var accepted = Stopwatch.StartNew();
+            using var subscription = leg.Subscribe(_ => { }, _ => Completed(), Completed);
 
             if (entryPoint != "InvokeBlocking")
                 await parked.Should().Within(TestTimeouts.Quick).Emit(
@@ -126,9 +141,32 @@ public class IoPoolQueueReadingCoversAcceptedWorkTest
                 + "than clear it. Its own contract is that 'nothing queued' is the conclusive half — "
                 + "so issuing it over work the pool is holding is the instrument asserting the "
                 + "opposite of the truth, which is the failure mode #1198 keeps meeting");
+
+            // 🚨 THE OTHER INPUT TO THE SAME VERDICT. The report is built from the gauge AND the wait
+            // buckets, so a change that moved only the gauge would leave the sentence half-wrong and
+            // this test green (Copilot review). The leaf is released here and its RECORDED admission
+            // is compared against the interval it was held: with the clock at the gate that admission
+            // reads ~0 ms however long the leaf waited to run.
+            accepted.Stop();
+            Volatile.Write(ref release, 1);
+
+            await completed.Should().Within(TestTimeouts.Quick).Emit(
+                $"{entryPoint}: the released leaf must finish, so its admission is recorded",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            var after = registry.Snapshot().First(r => r.Name == poolName).QueueWait;
+            after.Samples.Should().BeGreaterThan(baselineSamples,
+                $"{entryPoint}: the leaf was granted a slot, so exactly that admission must appear in "
+                + "the distribution the cap decision reads");
+            after.Max.Should().BeGreaterThan(accepted.Elapsed / 2,
+                $"{entryPoint}: the recorded wait must cover the interval the leaf was ACCEPTED but "
+                + $"not running ({accepted.Elapsed.TotalMilliseconds:F0} ms here). Half of it, not all, "
+                + "because the release and the grant are two instants on two threads — the "
+                + "discrimination is against a gate-start clock, which records ~0 ms for the same leaf");
         }
         finally
         {
+            // Idempotent safety: an assertion that throws above must not leave a pool thread parked.
             Volatile.Write(ref release, 1);
             occupant?.Dispose();
         }
