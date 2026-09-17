@@ -2,7 +2,7 @@
 nodeType: Markdown
 name: Router Traffic Detection
 category: Architecture
-description: The ROUTER_TRAFFIC detector has two sites — the receiving hub, which names the two addresses, and the origin, which names the call site. Why the receiver-side line alone could not close an issue in four re-filings and 41,087 lines, what each site can and cannot see, the seam a violating caller hops onto, and why the two ratchets that hold that seam derive their denominators — one from the framework's own handler registrations, one from the receivers the code has already declared router-capable — instead of listing anything.
+description: The ROUTER_TRAFFIC detector has two sites — the receiving hub, which names the two addresses, and the origin, which names the call site. Why the receiver-side line alone could not close an issue in four re-filings and 41,087 lines, what each site can and cannot see, the three seams a violating caller hops onto and why they are not interchangeable, why a SUBSCRIPTION is one violation reported as three, and why the two ratchets that hold those seams derive their denominators — one from the framework's own handler registrations, one from the receivers the code has already declared router-capable — instead of listing anything.
 icon: /static/NodeTypeIcons/box.svg
 ---
 
@@ -104,6 +104,18 @@ So the recorded decision is that a `mesh/{id}` sender on this release is **corre
 awaiting a fix, and the detector should stop demanding a change nobody may make. Reporting it is the
 shape that trains people to mute the channel.
 
+🚨 **"Correct" here means *correct relative to its subscribe* — never "the router may be a
+subscriber".** #4614 is the same family read one level out, and it shows what the move actually is:
+the pair is not hopped post-by-post at all, it moves when the WORKSPACE the stream is opened on
+moves, because `IWorkspace` is `AddScoped` and therefore belongs to one hub. `StreamSubscribingHub()`
+does exactly that, and it keeps every property this section demands — the subscribe and its release
+still leave from the same hub, so the owner's per-subscriber bookkeeping still pairs; and
+`SubscribeRequest.Identity` is unaffected, because it is an explicit argument
+(`MintSubscribeRequest(streamId, reference, identityForSubscribe)`) resolved from the mesh-wide
+`AccessService` singleton, not read off the posting hub. What was never available is hopping the
+subscribe ALONE onto a seam whose hub cannot receive the fan-out, which is what the origin line's
+generic advice would have done.
+
 🚨 **Scope: this reaches the ORIGIN site, and the receiver site only for a delivery that never left
 the process.** `ReportRouterTraffic` runs at the top of `DeliverMessage` (`MessageHub.cs:2007`),
 *before* `RouteMessageAsync` unpacks — and a cross-hub delivery arrives packed, so at that point its
@@ -141,13 +153,22 @@ node" alone emitted five lines. The ends are always the **delivery's**: `deliver
 
 ## The fix at a violating call site
 
-Two seams, both in `MeshExtensions`, both the identity function for any hub that is not the router —
+Three seams, all in `MeshExtensions`, all the identity function for any hub that is not the router —
 so adopting one is a no-op everywhere except where it matters:
 
 | you are about to | hop onto |
 |---|---|
 | post a node-lifecycle request (`CreateNodeRequest`, `DeleteNodeRequest`, `MoveNodeRequest`, `CopyNodeRequest`, an upsert) | `hub.NodeOperationIssuingHub()` → `portal/nodeops-{meshId}` |
 | issue a one-shot node READ | `hub.ReadIssuingHub()` → `portal/reads-{meshId}` |
+| SUBSCRIBE to a remote synchronization stream (`workspace.GetRemoteStream(...)`) | `hub.StreamSubscribingHub().GetWorkspace()` → `portal/streams-{meshId}` |
+
+🚨 **They are not interchangeable, and picking the wrong one is silent.** `portal/reads-{meshId}`
+deliberately registers NO handlers, which is what makes it the right mailbox for a bounded reply and
+the WRONG hub for a subscription: it carries no `RouteStreamMessage` route and hosts no
+`sync/{streamId}` sub-hub, so an owner's fan-out addressed there arrives nowhere. `portal/nodeops-`
+would receive it, and then queue every frame behind every write in the mesh (#2901). The third seam
+exists because a subscriber has to be a real, data-wired actor — the shape `MeshNodeStreamCache`'s
+own `cache/{meshId}` hub has had all along.
 
 The hop is needed on the **sender**, not only on the target. `hub.NodeOperationTarget()` puts the
 request's destination off the router; it does nothing about where the request came FROM, and the
@@ -304,6 +325,46 @@ it would move the inner create off the hub that is mid-upsert and buy nothing. I
 allowance rather than joining the self-directed exclusion, because that exclusion is for HUB
 lifecycle only — a target-less node CRUD post on the router is the wedge, not a benign self-post.
 
+### A SUBSCRIPTION is one violation seen from both ends (#4614 / #4615 / #4617)
+
+> 🚨 **Three tickets, one delivery family, and two of the three name a call site that can never be
+> the fix.** On 2026-09-17 12:58:47Z a single `PearlTechnology/CompanyProfile` render on `memex`
+> filed three ORIGIN reports within the same second:
+>
+> ```
+> SubscribeRequest  … as sender (sender: mesh/q8f5…, target: PearlTechnology/CompanyProfile)   #4614
+> SubscribeAck      … as target (sender: PearlTechnology/CompanyProfile, target: mesh/q8f5…)   #4615
+> StreamEndedEvent  … as target (sender: PearlTechnology/CompanyProfile, target: mesh/q8f5…)   #4617
+> ```
+
+The second and third are the OWNER answering the first. `CreateSynchronizationStream` acks with
+`ResponseFor(delivery)` and fans out with `WithTarget(request.Subscriber)`, and
+`request.Subscriber` **is** `delivery.Sender` — so `SubscribeAck`, every `DataChangedEvent`,
+`StreamErrorEvent` and the `StreamEndedEvent` announcement are all addressed at whatever hub posted
+the subscribe. There is nothing to hop at those three call sites: a reply goes where the request
+came from, by definition. **The sender of the `SubscribeRequest` is the only address in the family a
+caller chooses, and choosing it silences every report in it at once.**
+
+And that sender is load-bearing in a second way, which is why the remedy the origin line *suggests*
+would have been a regression rather than a fix. `CreateExternalClient` posts from the outer `hub`
+on purpose — the comment at the call site says so — because that address is also the hub HOSTING
+the `sync/{streamId}` sub-hub the owner's frames must be routed to by `RouteStreamMessage`. Move the
+sender to `portal/reads-{meshId}` and the reports stop while the data stops with them.
+
+**Which hub a subscription opens on is decided by `hub.GetWorkspace()`, not by a post** — a
+workspace is registered `AddScoped`, so it belongs to the hub whose provider resolved it. That is
+why neither `src/` ratchet can see this class: `SubscribeRequest` is not a lifecycle message, so the
+message-keyed denominator excludes it, and the receiver-keyed guard reads `.Post`/`.Observe` call
+sites, of which this is none. The instrument that named it was the runtime ORIGIN line, and the
+runtime pin is `RouterTrafficOnNodeCreateFromTheRootHubTest.ARenderAreaIssuedFromTheRootMeshHub_NeverSubscribesAsTheRouter`
+— reverted in rehearsal it reproduces all three production shapes in one run, including #4617's
+sibling incident `f6c4de9d08505308` down to the frame
+(`<CreateSynchronizationStream>b__9 (JsonSynchronizationStream.cs:1588)`).
+
+The one caller in `src/` was `MeshOperations.RenderResolvedArea` — the `render_area` MCP verb and
+every agent-driven page preview. Every other `GetWorkspace()` use on that facade goes through
+`GetMeshNodeStream`, which is off the router by construction (the process-wide `cache/{meshId}` hub).
+
 ### The two callers this rule was written from
 
 `MeshOperations.RecycleCore` (the Recycle tool / Compile button) and
@@ -358,6 +419,19 @@ another process.
   (`UpdateViaDataChange`, `PatchViaDataRequest`) were reachable from nowhere in the repo. They are
   deleted rather than hopped — a router-issuing shape sitting in dead code is a loaded gun for
   whoever wires it up next, and hopping it would have been decoration that reads like a fix.
+- `RouterTrafficOnNodeCreateFromTheRootHubTest.ARenderAreaIssuedFromTheRootMeshHub_NeverSubscribesAsTheRouter`
+  — the SUBSCRIPTION family (#4614/#4615/#4617), in the same fixture and for the same reason: every
+  other test of `RenderArea` drives it through a session or client hub, where the seam is the
+  identity function. Reverted in rehearsal it emits all three production shapes in one run —
+  `SubscribeRequest` as sender, `SubscribeAck` as target, `DataChangedEvent` as target from
+  `JsonSynchronizationStream.cs:1588` — which is also the measurement that the three tickets are one
+  defect rather than three. Its positive anchor is a parsed `{areas, …}` frame, because the verb
+  answers `"Not found: …"` / `"Error: …"` without opening any stream and its budget gate faults
+  before subscribing, so silence would otherwise be trivially true.
+- `EverySeam_IsTheIdentityFunction_ForAHubThatIsNotTheRouter` — the premise all three seams rest on,
+  plus the half that matters for the third: `StreamSubscribingHub()` must not resolve to
+  `ReadIssuingHub()`'s hub, because that one registers no handlers and could never deliver a
+  fan-out.
 - `RouterAsNodeOperationOriginRatchetGuard` — the message-keyed `src/` ratchet, in two tests that
   fail independently: one asserts no new router-issued lifecycle site, the other asserts that the
   denominator was actually DERIVED (both families non-empty, every derived name resolving to a real

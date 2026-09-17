@@ -467,6 +467,141 @@ public static class MeshExtensions
             : hub;
 
     /// <summary>
+    /// Address-id prefix of the mesh's dedicated STREAM-SUBSCRIBING hub. A <c>portal/</c> address
+    /// for the same reason <see cref="NodeOperationHubPrefix"/> and
+    /// <see cref="ReadIssuingHubPrefix"/> are: <c>portal</c> is already a stream-routed address
+    /// type, so an owner's fan-out addressed here is dispatched cross-silo by the existing routing
+    /// rules — no new address type, no new routing rule.
+    /// </summary>
+    private const string StreamHubPrefix = "streams-";
+
+    /// <summary>
+    /// The address of <paramref name="mesh"/>'s dedicated stream-subscribing hub. Pure address
+    /// arithmetic — it does NOT materialise the hub.
+    /// </summary>
+    private static Address StreamHubAddress(IMessageHub mesh) =>
+        AddressExtensions.CreatePortalAddress($"{StreamHubPrefix}{mesh.Address.Id}");
+
+    /// <summary>
+    /// The mesh's ONE dedicated stream-subscribing hub — <c>portal/streams-{meshId}</c>, hosted by
+    /// the mesh hub, created on first use and shared thereafter.
+    ///
+    /// <para>🚨 <b>Why a THIRD hub and not one of the other two seams
+    /// (<see href="https://github.com/Systemorph/MeshWeaver/issues/4614">#4614</see>).</b> A
+    /// SUBSCRIPTION is not a bounded request/response, and its sender is not incidental. The
+    /// address a <c>SubscribeRequest</c> leaves from IS the subscriber the owner keys its
+    /// per-subscriber stream by: it is the target of the <c>SubscribeAck</c>
+    /// (<c>ResponseFor(delivery)</c>), of every outbound <c>DataChangedEvent</c>
+    /// (<c>WithTarget(request.Subscriber)</c>), of <c>StreamErrorEvent</c> and of the
+    /// <c>StreamEndedEvent</c> announcement — and it is also the hub that HOSTS the
+    /// <c>sync/{streamId}</c> sub-hub those frames must be routed to by
+    /// <c>DataExtensions.RouteStreamMessage</c>. So the subscriber hub has to be a real actor with
+    /// the data plugin on it. <see cref="MeshReadHub"/> deliberately registers NO handlers — it
+    /// would receive the fan-out and route it nowhere — and
+    /// <see cref="NodeOperationExecutionHub"/> runs every create/upsert in the mesh one turn at a
+    /// time, which is the #2901 queueing a rendered frame must not sit behind.</para>
+    ///
+    /// <para><b>Wired like the node-stream cache's own <c>cache/{meshId}</c> hub</b>
+    /// (<c>MeshNodeStreamCache</c>), which is the process-wide precedent for exactly this: a
+    /// mesh-singleton that needs to be a stream SUBSCRIBER and therefore refuses to let the router
+    /// be one. It shares the mesh hub's TYPE REGISTRY (a hub with a private registry never learns a
+    /// dynamically-registered content type, and the payload degrades to an untyped
+    /// <c>JsonElement</c>), inherits the mesh hub's PERMISSION EVALUATOR (a hub's configuration
+    /// starts empty and <c>ResolveEvaluator</c> does not walk the parent chain, so an uncopied
+    /// evaluator silently grants <see cref="Permission.All"/>), inherits the mesh hub's POSTING
+    /// IDENTITY (the hosted <c>sync/{id}</c> sub-hubs take it from their host — a background
+    /// <c>UpdateStreamRequest</c> from a "User but no user" hub fails the never-null AccessContext
+    /// guard in a storm), carries <c>AddData()</c> for the workspace and the stream route, and
+    /// registers itself with the ROUTING SERVICE so the fan-out lands on it cross-silo.</para>
+    ///
+    /// <para>🚨 <b>Returns <c>null</c> for a TEARDOWN RACE ONLY, and that is why it asks
+    /// <see cref="IMessageHub.TryGetHostedHub"/> rather than the plain overload.</b>
+    /// <c>GetHostedHub</c> answers null for conditions that belong at opposite log levels (#3243),
+    /// and here they call for opposite BEHAVIOUR: a mesh going down means the subscription is being
+    /// abandoned anyway, so falling back to the caller's own hub costs nothing — while a
+    /// configuration that THREW would, under the same <c>?? hub</c>, silently put the subscription
+    /// back on the router, which is the exact defect this seam exists to prevent, with the real
+    /// error swallowed. So a fault is THROWN: <c>RenderResolvedArea</c> builds the stream inside an
+    /// <c>Observable.Defer</c>, so the throw surfaces as the render's own <c>"Error: …"</c> instead
+    /// of a silently-degraded success. (Copilot on #4622.)</para>
+    /// </summary>
+    /// <param name="hub">Any hub in the mesh; the stream hub is resolved from its mesh root.</param>
+    /// <returns>The shared stream-subscribing hub, or <c>null</c> while the mesh is disposing.</returns>
+    /// <exception cref="InvalidOperationException">The hub could not be constructed for a reason
+    /// that is NOT a shutdown race — a faulted configuration, or an unclassified null.</exception>
+    public static IMessageHub? MeshStreamHub(this IMessageHub hub)
+    {
+        var mesh = hub.GetMeshHub();
+        // Teardown: never materialise a hub during disposal (HostedHubsCollection refuses it and
+        // logs a warning). The caller falls back to its own hub, at which point the subscription is
+        // being abandoned anyway.
+        if (mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+            return null;
+
+        var routingService = mesh.ServiceProvider.GetService<IRoutingService>();
+        var permissionEvaluator = mesh.Configuration.Get<EffectivePermissionsDelegate>();
+        var result = mesh.TryGetHostedHub(
+            StreamHubAddress(mesh),
+            config =>
+            {
+                config = config
+                    .WithTypeRegistry(mesh.TypeRegistry)
+                    .WithPostingIdentity(mesh.Configuration.PostingIdentity)
+                    .AddData()
+                    .WithInitialization(h =>
+                    {
+                        if (routingService is not null)
+                            h.RegisterForDisposal(routingService.RegisterStream(h));
+                    });
+                return permissionEvaluator is null
+                    ? config
+                    : config.WithPermissionEvaluator(permissionEvaluator);
+            },
+            HostedHubCreation.Always);
+
+        if (result.Hub is not null)
+            return result.Hub;
+        if (result.IsShutdownRace)
+            return null;
+        throw new InvalidOperationException(
+            $"The mesh's stream-subscribing hub ({StreamHubAddress(mesh)}) could not be created "
+            + $"({result.Outcome}). Falling back to the caller's hub would put the subscription on "
+            + "the ROUTER — the defect this seam exists to prevent — so the subscription is "
+            + "refused instead.",
+            result.Error);
+    }
+
+    /// <summary>
+    /// The hub a REMOTE SYNCHRONIZATION STREAM must be SUBSCRIBED FROM — the caller's own hub,
+    /// except when that hub is the ROOT MESH HUB (the router), where the subscription hops onto
+    /// <see cref="MeshStreamHub"/>.
+    ///
+    /// <para>🚨 This seam is the one fix for the whole
+    /// <see href="https://github.com/Systemorph/MeshWeaver/issues/4614">#4614</see> /
+    /// <see href="https://github.com/Systemorph/MeshWeaver/issues/4615">#4615</see> /
+    /// <see href="https://github.com/Systemorph/MeshWeaver/issues/4617">#4617</see> cluster,
+    /// because those three are ONE delivery family seen from both ends: the subscriber posts the
+    /// <c>SubscribeRequest</c> (#4614's <c>sender: mesh/{id}</c>) and the owner then answers that
+    /// same address with the <c>SubscribeAck</c> (#4615's <c>target: mesh/{id}</c>), the
+    /// <c>DataChangedEvent</c>s and the <c>StreamEndedEvent</c> (#4617). Hopping any of the REPLIES
+    /// is not available — a reply goes where the request came from, by definition — so the sender
+    /// of the subscribe is the only address in the family a caller may choose, and choosing it
+    /// silences all four report shapes at once.</para>
+    ///
+    /// <para>For any hub that is NOT the router this returns the hub unchanged, so a per-node,
+    /// portal, MCP-session or Blazor-circuit subscriber keeps its identity byte-for-byte — which
+    /// matters here more than for the other two seams, because the subscriber address is also the
+    /// key the owner's per-subscriber bookkeeping and the workspace's remote-stream cache use.</para>
+    /// </summary>
+    /// <param name="hub">The hub the caller holds — returned unchanged unless it is the root mesh hub.</param>
+    /// <returns>The off-router stream-subscribing hub.</returns>
+    public static IMessageHub StreamSubscribingHub(this IMessageHub hub) =>
+        string.Equals(hub.Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal)
+            ? hub.MeshStreamHub() ?? hub
+            : hub;
+
+
+    /// <summary>
     /// Registers handlers for mesh node operations. Idempotent — calling twice on the
     /// same configuration is a no-op on the second call. Without this guard, every
     /// extra call would add a duplicate set of handlers; each delivery would invoke
