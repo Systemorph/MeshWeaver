@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using MeshWeaver.Plugin.Build;
+using MeshWeaver.Plugin.Packaging;
 using Xunit;
 
 namespace MeshWeaver.PluginTester.Test;
@@ -237,6 +239,152 @@ public class NativeClosureTest : IDisposable
         var closure = PrivateClosure.Derive(["MeshWeaver.Data"], PortableImage(), shelf: null);
 
         closure.Natives.Should().BeEmpty();
+    }
+
+    // ─────── #4367 / #4445: what this lane does NOT carry is NAMED, in the SDK lane's words ───────
+
+    private const string UnprobedWasm = "runtimes/browser-wasm/nativeassets/net9.0/e_sqlite3.so";
+    private const string RidManaged = "runtimes/win-x64/lib/net10.0/Rid.Specific.Managed.dll";
+
+    /// <summary>The two literals a wave's logs are grepped for — the measurement #4367 was armed
+    /// on and #4445 arms on. Pinned here so a rewording cannot quietly blind that grep.</summary>
+    private const string UnprobedLiteral = "which is NOT the layout the module loader probes";
+    private const string RidManagedLiteral = "declares a RID-specific MANAGED asset the bundle does not carry";
+
+    /// <summary>
+    /// 🚨 #4445 — the container lane used to drop both shapes WITHOUT A LINE: the native reader
+    /// filtered to the probed layout and said nothing about the rest, and the managed walk reads
+    /// only <c>runtime</c>. Nothing ever printed, so no wave could be measured and no refusal could
+    /// be armed on evidence. Now each is NAMED, with the SAME finding the SDK lane refuses on and a
+    /// remedy this lane can actually offer (the sdk path). The portable record is the shelf's shape.
+    /// </summary>
+    [Fact]
+    public void APORTABLERecordsUncarriedShapesAreNAMED_inTheWordsTheSDKLaneRefusesOn()
+    {
+        var closure = PrivateClosure.Derive(["SQLitePCLRaw.lib.e_sqlite3"], PortableImage(), shelf: null);
+
+        closure.Uncarried.Should().HaveCount(2,
+            "the portable record declares one unprobed native and one RID-specific managed "
+            + "assembly, and neither can ride this lane");
+        closure.Uncarried.Should().Contain(f => f.StartsWith(
+            UncarriedAssetFindings.UnprobedNative("SQLitePCLRaw.lib.e_sqlite3", UnprobedWasm),
+            StringComparison.Ordinal));
+        closure.Uncarried.Should().Contain(f => f.StartsWith(
+            UncarriedAssetFindings.RidSpecificManaged("SQLitePCLRaw.lib.e_sqlite3", RidManaged),
+            StringComparison.Ordinal));
+        closure.Uncarried.Should().OnlyContain(
+            f => f.EndsWith(NativeContributions.ContainerRemedy, StringComparison.Ordinal),
+            "the remedy must be one THIS lane can take — the sdk path — never --with, which the "
+            + "container lane never passes");
+        closure.Uncarried.Should().NotContain(f => f.Contains("e_sqlite3.a", StringComparison.Ordinal),
+            "a static library is a link-time input nothing loads, so it is excluded, not named");
+    }
+
+    /// <summary>
+    /// The IMAGE's shape: a RID-specific publish resolves natives into a <c>native</c> section, and
+    /// a key there at an unprobed layout is exactly as uncarried as one in <c>runtimeTargets</c> —
+    /// and was exactly as silent.
+    /// </summary>
+    [Fact]
+    public void ARIDSpecificImagesNativeAtAnUnprobedKey_IsNamedToo()
+    {
+        const string key = "runtimes/linux-x64/nativeassets/net10.0/libodd.so";
+        var app = Path.Combine(_root, "rid-unprobed");
+        Directory.CreateDirectory(app);
+        Dll(app, "MeshWeaver.Data");
+        File.WriteAllText(Path.Combine(app, "libodd.so"), "ELF-linux-x64");
+        File.WriteAllText(Path.Combine(app, "Portal.deps.json"), $$"""
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0/linux-x64" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0/linux-x64": {
+                  "Portal/1.0.0": { "dependencies": { "Odd.Natives": "1.0.0" } },
+                  "Odd.Natives/1.0.0": { "native": { "{{key}}": { "fileVersion": "0.0.0.0" } } },
+                  "MeshWeaver.Data/3.0.0": {
+                    "runtime": { "MeshWeaver.Data.dll": { "assemblyVersion": "3.0.0.0" } }
+                  }
+                }
+              },
+              "libraries": {
+                "Portal/1.0.0": { "type": "project" },
+                "Odd.Natives/1.0.0": { "type": "package" },
+                "MeshWeaver.Data/3.0.0": { "type": "package" }
+              }
+            }
+            """);
+
+        var closure = PrivateClosure.Derive(
+            ["Odd.Natives"], ContainerReferenceSet.Read(app, trustedPlatformAssemblies: string.Empty),
+            shelf: null);
+
+        closure.Natives.Should().BeEmpty("the key is not the probed layout, so it is not carried");
+        closure.Uncarried.Should().ContainSingle().Which.Should().StartWith(
+            UncarriedAssetFindings.UnprobedNative("Odd.Natives", key));
+    }
+
+    /// <summary>Each finding is ONE warning line from the builder — the channel a wave's logs are
+    /// grepped on — and never a refusal: nothing is armed on this lane until #4445's measurement.</summary>
+    [Fact]
+    public void EveryNamedFindingIsOneWARNINGLine()
+    {
+        var closure = PrivateClosure.Derive(["SQLitePCLRaw.lib.e_sqlite3"], PortableImage(), shelf: null);
+        var warnings = new List<string>();
+
+        var named = ProjectBuild.ReportUncarried("MeshWeaver.Test.Sqlite", closure, warnings.Add);
+
+        named.Should().Be(2);
+        warnings.Should().HaveCount(2).And.OnlyContain(w => w.StartsWith(
+            "[MeshWeaver.Test.Sqlite] private closure: 'SQLitePCLRaw.lib.e_sqlite3'", StringComparison.Ordinal));
+        warnings.Should().Contain(w => w.Contains(UnprobedLiteral, StringComparison.Ordinal));
+        warnings.Should().Contain(w => w.Contains(RidManagedLiteral, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 🚨 ONE grep must measure BOTH lanes, so the two derivations must word the same finding the
+    /// same way. The SDK lane derives from the module's own deps.json and the container lane from
+    /// the image's — so the same package node is described both ways and the finding held against
+    /// itself, exactly as <see cref="LaneClosuresAgreeTest"/> holds the closures.
+    /// </summary>
+    [Fact]
+    public void BothLanesNameTheSameFinding_inTheSameWords()
+    {
+        var sdk = DepsClosure.Derive($$"""
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0": {
+                  "Widget.Module/1.0.0": {
+                    "dependencies": { "SQLitePCLRaw.lib.e_sqlite3": "3.50.3" },
+                    "runtime": { "Widget.Module.dll": {} }
+                  },
+                  "SQLitePCLRaw.lib.e_sqlite3/3.50.3": {
+                    "runtimeTargets": {
+                      "{{UnprobedWasm}}": { "rid": "browser-wasm", "assetType": "native" },
+                      "{{RidManaged}}": { "rid": "win-x64", "assetType": "runtime" }
+                    }
+                  }
+                }
+              },
+              "libraries": {
+                "Widget.Module/1.0.0": { "type": "project" },
+                "SQLitePCLRaw.lib.e_sqlite3/3.50.3": { "type": "package" }
+              }
+            }
+            """, "Widget.Module");
+        var container = PrivateClosure.Derive(["SQLitePCLRaw.lib.e_sqlite3"], PortableImage(), shelf: null);
+
+        foreach (var finding in new[]
+                 {
+                     UncarriedAssetFindings.UnprobedNative("SQLitePCLRaw.lib.e_sqlite3", UnprobedWasm),
+                     UncarriedAssetFindings.RidSpecificManaged("SQLitePCLRaw.lib.e_sqlite3", RidManaged),
+                 })
+        {
+            sdk.Warnings.Should().Contain(w => w.StartsWith(finding, StringComparison.Ordinal),
+                "the SDK lane refuses on this finding");
+            container.Uncarried.Should().Contain(w => w.StartsWith(finding, StringComparison.Ordinal),
+                "the container lane must name it in the same words, or a wave reads clean on one "
+                + "lane while the other said it in words nobody grepped for");
+        }
     }
 
     [Fact]

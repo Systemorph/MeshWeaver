@@ -95,8 +95,14 @@ core change seals → the freeze moves → the Plugins port lands under it; ever
 in between reds once on the guard and re-runs after merging main.
 
 **2. The value must name the NEWEST SEALED set, because that is what the runners hold.** The CI
-runners mount `/opt/platform` read-only, and a CronJob refreshes it every ten minutes with *the
-newest sealed set* (Memex `deployments/aks/ci-runners/ci-platform-refresh.py`). Pin anything else
+runners mount `/opt/platform` read-only, and a CronJob refreshes it every ten minutes (Memex
+`deployments/aks/ci-runners/ci-platform-refresh.py`). It installs *the newest sealed set* — and,
+since Memex#329, also **the set each subscribed repository's `main` last PASSED**, installing that
+one back when it is missing rather than merely declining to purge it. What it KEEPS is those two
+plus a bounded window of the newest sets by install time. 🚨 **Never write the window's size into a
+document or a diagnostic**: it is the cluster's to set, it moved `3` → `16` on 2026-09-17, and the
+gate's own refusal spent that day telling three sessions the volume keeps the 3 newest while it kept
+16. Pin anything else
 and every heavy leg misses the mount, falls back to pulling the image, and that pull fails:
 `could not pull meshweaver.azurecr.io/memex-portal-ai@sha256:… for the registry fallback`, with
 `the platform mount at /opt/platform holds no COMPLETE set for the run's tester digest` beside it.
@@ -108,16 +114,39 @@ That is what held Plugins `main` red on the evening of 2026-09-13 while the free
 was set. The core sha of the set satisfied both readers; since #1809 the lanes translate a set name
 through `resolve-platform.py` themselves.
 
-**4. `rerun-failed-jobs` REUSES the run's original platform resolution.** After a newer set seals,
-re-running the failed jobs changes nothing — measured on Plugins#1816, which failed the same three
-catalog assertions twice across a seal. Re-run the WHOLE workflow so `Resolve the released platform`
-runs again.
+**4. Neither kind of re-run is a remedy for a purged set, and the difference matters.**
+`rerun-failed-jobs` REUSES the run's original platform resolution: the job that resolved it
+SUCCEEDED, so it is not re-run and its output is replayed verbatim — measured on Plugins#1816, which
+failed the same three catalog assertions twice across a seal. A re-run of the WHOLE workflow does
+run `Resolve the released platform` again — **and returns the SAME set for as long as `main` has not
+PASSED on a newer one, which while `main` is red is forever.** Measured 2026-09-17 on
+Plugins#2040: three attempts (original, `rerun-failed-jobs`, full `rerun`), one resolution
+(`3.0.0-ci.8820`) each time. So when the refusal is *"below the OLDEST set kept"*, the fix is the
+volume carrying the set again — rule 2 above — and a re-run only helps AFTER that. Reaching for a
+re-run first is the standing trap here: it is the action the tooling used to recommend, it is free,
+and it cannot work.
 
 **The deadlock they produce, and how to break it.** `main` red → no green main run → every pull
 request resolves an old set → the pull request that would FIX main is itself red on that old set.
 Measured 2026-09-13 23:44Z: Plugins#1822 (the one-line fix restoring publication) died on
 `KeyVaultSecretRef.CopyFrom` — a symbol `main` had required since #1541 merged at 22:24Z and which
 the resolved set predated. **Break it by pinning the newest sealed set, never by waiting for main.**
+
+🚨 **The RETENTION form of the same deadlock, and why rule 2 is the thing that ends it** (2026-09-17,
+Memex#329). When `main` is red its main-passed set stops moving, so every pull request keeps
+resolving that one set. If that set also ages out of the window, every PR in the repository goes red
+in `resolve-gate-platform` on a diff that cannot reach it — *including* the PR that would green
+`main` — and no re-run of any kind re-resolves anywhere else, because there is nowhere else to
+resolve to. Measured that evening: MeshWeaver.Plugins was red on `main` and on all seven branches
+with recent runs, every shard refused `3.0.0-ci.8820` while the volume held three sets whose oldest
+was `#8836`. Rule 2 is exactly the invariant that makes this unreachable: *the set a subscribed
+repository's PRs resolve is on the volume, installed back if absent, for as long as that repository's
+main has not moved*. A red main therefore pins its own set in place instead of losing it — the
+longer main stays red, the more firmly the set its PRs need is held. 🚨 **And committing that rule
+is not running it**: the rule sat in git from 09-14 and was applied to the cluster on 09-17, and for
+those three days the volume kept the 3 newest exactly as before. The lane that applies it is Memex
+`.github/workflows/ci-runners-apply.yml`; editing `ci-platform.yaml` without dispatching it changes
+nothing at all.
 
 So: setting a freeze, moving it and clearing it all need two things in view at once — the colour of
 `main` and the set the mount carries. A cleared freeze is not a neutral state; it is a decision to

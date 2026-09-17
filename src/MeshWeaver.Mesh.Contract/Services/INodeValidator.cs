@@ -35,7 +35,9 @@ public interface INodeValidator
 /// name, …) do NOT implement this marker and therefore run client-side, so
 /// <c>UpdateNode</c> surfaces their rejection before issuing the write.
 /// </summary>
-public interface IOwnerEnforcedNodeValidator { }
+public interface IOwnerEnforcedNodeValidator
+{
+}
 
 /// <summary>
 /// Context for node validation containing all relevant information.
@@ -85,6 +87,15 @@ public record NodeValidationContext
     /// removed while its partition stays".
     /// </summary>
     public string? DeleteCascadeRootPath { get; init; }
+
+    /// <summary>
+    /// The ONE resolution of "does this node's NodeType own its partition?" that the checks of THIS
+    /// operation share (<c>PartitionOwningTypes.OwnsPartitionOnce</c>). A fresh context is built per
+    /// operation, so the memo cannot outlive it or cross users; see
+    /// <see cref="PartitionOwnershipMemo"/> for why sharing it is a deliberate semantic change and
+    /// for the window that is deliberately NOT collapsed.
+    /// </summary>
+    public PartitionOwnershipMemo PartitionOwnership { get; init; } = new();
 }
 
 /// <summary>
@@ -250,9 +261,27 @@ public enum NodeRejectionReason
 public interface INodePostCreationHandler
 {
     /// <summary>
-    /// The node type this handler applies to (e.g. "Organization").
+    /// The node type this handler applies to (e.g. "Organization"), used by the default
+    /// <see cref="Matches"/>. A handler that matches STRUCTURALLY overrides <see cref="Matches"/>
+    /// and this property is then only a diagnostic label.
     /// </summary>
     string NodeType { get; }
+
+    /// <summary>
+    /// Does this handler apply to <paramref name="createdNode"/>? The default is the historical
+    /// rule — case-insensitive equality with <see cref="NodeType"/>.
+    ///
+    /// <para>🚨 The creation-side twin of <see cref="INodePostDeletionHandler.Matches"/> (#3436): a
+    /// NodeType string cannot name a partition-owning type declared in mesh CONTENT
+    /// (<c>Crm/Client</c>), so the handler that makes such a root a whole partition — its creator's
+    /// Admin grant, its <c>Admin/Partition</c> definition — answers from the node's SHAPE instead.
+    /// Without the seam a top-level instance of such a type was created without an owner.</para>
+    /// </summary>
+    /// <param name="createdNode">The persisted node.</param>
+    /// <returns><c>true</c> when <see cref="Handle"/> should run for this node.</returns>
+    bool Matches(MeshNode createdNode) =>
+        !string.IsNullOrEmpty(createdNode.NodeType)
+        && NodeType.Equals(createdNode.NodeType, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Executes after the node has been saved to persistence. Reactive — returns

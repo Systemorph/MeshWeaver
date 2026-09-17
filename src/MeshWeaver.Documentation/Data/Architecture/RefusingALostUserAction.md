@@ -478,6 +478,98 @@ descriptive sentence would satisfy all five of the others on its own. The pairwi
 the other two"* assertions are the other half of that — they are what a re-merge of two causes into
 one sentence reds on.
 
+## 🚨 The door the ordering never reached — the portal hub's own teardown (2026-09-16)
+
+Everything above orders the **release** behind an accepted action. It was re-examined from the code
+on 2026-09-16 with one question — *can an action the client accepted still be lost before it is
+delivered?* — and two routes were driven against real hubs with the click provably still **queued**
+on the client-side `sync/{id}` hub when the teardown starts (the hub is busy: a large patch, a
+binding update). The busy queue is not raced: the test parks that hub's turn loop, submits the click
+behind the park through the real `SubmitUserAction`, starts the teardown, and only then lets the
+click leave. The owner-side action records whether its own `sync/{id}` had already been told to go
+when it ran, so a click that is refused and a click that runs on a handler being released are both
+red, without a timed "nothing happened" window.
+
+| route | what disposes | on `main` before this change |
+|---|---|---|
+| the stream is released directly (navigation, eviction) | the STREAM | ✅ ran — the release sits on the stream's hub (#4001) and queues behind the click |
+| the hub HOSTING the stream is disposed (the per-circuit portal hub on circuit close) | the PARENT hub | ❌ **refused** — `Hub sync/… cannot route ClickedEvent to host/1 — its parent hub client/… is shutting down (RunLevel=DisposeHostedHubs)` |
+
+So the ordering fix was right and the drop was one hop earlier. The release is not what lost the
+click on the second route: **the portal hub closed its door to its own hosted hubs in the very phase
+in which it asks them to go down.** A parent in `DisposeHostedHubs` refused all transit — in the
+child's route-up (`HierarchicalRouting`) and again at its own intake gate (tier 2 of
+`MessageService.RefusesIntake`) — on the stated ground that "the children are going down with it".
+But that phase is when the children are *asked* to go down: each child's `ShutdownRequest` queues
+FIFO behind the work it already accepted, and that work runs first. The click was accepted work
+with no door left.
+
+### The fix — a parent carries what its children already accepted
+
+`MessageHub.CarriesAcceptedWorkOfAHostedHub` is one predicate, asked at both places the delivery
+was refused, and each clause is a reason:
+
+- only while the parent is **in** `DisposeHostedHubs` — before it the gate is open; it cannot reach
+  `ShutDown` until every hosted hub has completed, and a hosted hub cannot complete before its
+  accepted backlog has been handed up, so the delivery is in the parent's queue before the parent's
+  own `ShutDown` is even posted;
+- only a request its **originating hub holds a live response callback for** — the receipt that
+  hub's `Quiescing` drain waits on. A one-way `IRequest` posted without `Observe`, and fire-and-forget,
+  keep their historical drop; a reply already has its own exemption, which is also how the owner's
+  receipt gets back into the child's drain;
+- only **transit** — a request addressed to the parent itself is new work for a hub that is going
+  away and stays refused;
+- only while the hosted hub handing it up is still **below `Quiescing`** — the acceptance fence, and
+  it is structural, not a snapshot: routing runs inside that hub's own turn, and the hub leaves
+  `Started` only by handling the `ShutdownRequest` its `Dispose()` posted FIFO. A delivery routed from
+  below `Quiescing` was therefore queued ahead of that request (accepted before its teardown); one it
+  takes on afterwards queues behind it, is routed from `Quiescing`, and is refused;
+- only when the parent's **own parent still routes** — in a whole-tree teardown the request could
+  only be dropped one hop later, and the requester is better served by today's immediate transient
+  refusal than by waiting out its quiesce budget.
+
+Nothing new waits and nothing is timed: the parent was already joined on its children's
+`DisposalCompleted`; it simply keeps routing for them while it is.
+
+### The measurement
+
+`UserActionQueuedBehindABusySyncHubTest` (`MeshWeaver.Layout.Test`):
+
+| test | asserts |
+|---|---|
+| `AClickQueuedOnABusySyncHubRunsWhenItsStreamIsReleased` | the click runs on a live handler, the release still reaches the owner afterwards, and the sender's drain ended on the receipt (`QuiescingTimedOut` false) |
+| `AClickQueuedOnABusySyncHubRunsWhenTheClientHubIsDisposed` | the click runs on a live handler although the hub hosting its stream is torn down, and the sender's drain ended on the receipt |
+| `AClickTakenOnAfterItsSyncHubWasAskedToGoDownIsRefusedNotCarried` | the other side of the fence: a click queued BEHIND the sync hub's own `ShutdownRequest` is still refused, not carried |
+
+Each also asserts that the park released on the condition the test meant, not on its budget — a park
+that timed out would have let the click leave at an unknown point and made a green result meaningless.
+
+Each falsification was built and run against this change, and each reddened on its own assertion:
+
+| mutant | result |
+|---|---|
+| none (`main` before the fix) | the client-hub test red: `found "refused: Hub sync/… cannot route ClickedEvent … (RunLevel=DisposeHostedHubs)"`; the stream test green |
+| release registered on the STREAM again (#4001 reverted) | the stream test red: `found "ran on an owner-side handler already told to go"`, and `AnAcceptedActionHoldsTheReleaseUntilTheOwnerAnswers` red too; the client-hub test green |
+| only the parent's intake half removed | the client-hub test red: `found "refused: Hub client/… is shutting down (RunLevel=DisposeHostedHubs …) — cannot process ClickedEvent"` |
+| only the child's route-up half removed | the client-hub test red: `found "refused: Hub sync/… cannot route ClickedEvent …"` |
+| the "still below `Quiescing`" clause dropped (carry anything a live hosted hub sends) | the fence test red: `Expected "ran" to start with "refused"`; the two route tests green |
+
+### 🚨 Measured on the same route, and NOT changed here: the release itself is dropped
+
+With nothing owed at all, disposing the client hub does **not** release the owner-side `sync/{id}`:
+measured on the same fixture, its `DisposalCompleted` did not emit within 12 s. The
+`UnsubscribeRequest` is posted by the PARENT from the child's `ShutDown`, and the parent is then in
+`DisposeHostedHubs`, where its own fire-and-forget post is refused at intake. So on the portal-hub
+teardown route the owner is never told to unsubscribe; its per-subscriber stream is reclaimed only by
+the unserved-subscriber eviction (`EvictClientSubscriptions`) when a later change finds the
+subscriber gone. The comment in MeshWeaver.Plugins' `CircuitAccessHandler.OnCircuitClosedAsync` —
+*"each child's teardown posts UnsubscribeRequest to its owner node, so the owner-side mirrors close
+too"* — is therefore not true on that route. It does not lose a click (the release is the last thing
+the child does), so it is recorded here rather than folded into this fix. It is a candidate
+contributor to the owner-side half of the `Started` `sync/` population in #3432 — a candidate only:
+how often the Blazor components dispose their streams before the portal hub reaches
+`DisposeHostedHubs` (which sends the release through the still-open door) was not measured.
+
 ## What this deliberately does not do
 
 - **Any retry, resubscribe or widened grace.** The issue rules all three out and so does this: an

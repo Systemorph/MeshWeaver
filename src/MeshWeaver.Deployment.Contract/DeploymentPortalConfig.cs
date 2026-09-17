@@ -22,6 +22,37 @@ public static class DeploymentPortalConfig
     /// <summary>The configuration key prefix the portal reads its module policy from.</summary>
     public const string ModulesSection = "Modules";
 
+    /// <summary>
+    /// The key a record states with that its own <c>Modules:Required</c> entries are the COMPLETE
+    /// required set for the instance — see <see cref="DeploymentContent.RequiredModulesAuthoritative"/>.
+    /// The reader is <c>MeshWeaver.Mesh.MeshBuilderModuleActivation.RequiredIsAuthoritativeKey</c>;
+    /// the string is repeated rather than shared because this assembly deliberately carries ZERO
+    /// MeshWeaver references (it ships inside the published Aspire package), and
+    /// <c>RequiredModuleAuthorityTest</c> holds the two spellings together.
+    /// </summary>
+    public const string RequiredIsAuthoritativeKey = $"{ModulesSection}:RequiredIsAuthoritative";
+
+    /// <summary>
+    /// The HIGHEST <c>Modules:Required:N</c> index the HELM CHART renders. It names every key
+    /// literally (no <c>range</c>, which the key-literal guards cannot see), so the list has a
+    /// hand-written ceiling and a slot above it reaches no container IN KUBERNETES.
+    ///
+    /// <para>🚨 <b>A chart property, not a contract one.</b> The Aspire route has no such ceiling —
+    /// it injects whatever <see cref="PortalConfig"/> emits as container environment — so a slot
+    /// above this delivers correctly on a laptop and vanishes in the cluster, which is precisely why
+    /// it is worth naming rather than a reason to stay quiet. <see cref="ChartModuleSlotProblems"/>
+    /// is scoped to the chart for the same reason: a route-neutral "the spec cannot come up" surface
+    /// that carried it would be false for an Aspire run.</para>
+    ///
+    /// <para>🚨 And the consequence is worse than it was. An unrendered slot used to mean "the
+    /// image's entry at that index stands", which is merely wrong; under
+    /// <see cref="RequiredIsAuthoritativeKey"/> it means the module is NOT REQUIRED AT ALL, because
+    /// the claim excludes the image's list. <c>RequiredModuleAuthorityTest</c> holds this number to
+    /// the chart's actual block — a constant that drifts from the template is the Memex#128/#131
+    /// shape wearing a different hat.</para>
+    /// </summary>
+    public const int MaxChartRenderedRequiredModuleSlot = 19;
+
     /// <summary>Conventional suffix of the vault secret holding the main DB connection string.</summary>
     public const string DatabaseSecretSuffix = "db-connection";
 
@@ -139,15 +170,28 @@ public static class DeploymentPortalConfig
     /// <summary>
     /// The <c>Modules:Required:N</c> entries for a record's boot modules — trimmed, <c>.dll</c>
     /// appended when the author wrote the bare assembly name, deduplicated case-insensitively,
-    /// order preserved. 🚨 These entries override the image's own list BY INDEX (an array key never
-    /// appends), so a non-empty list is the COMPLETE required set.
+    /// order preserved.
+    ///
+    /// <para>🚨 <b>These entries override the image's own list BY INDEX, and an indexed override
+    /// replaces only the entries it NAMES.</b> The tail of a longer list stays exactly where it
+    /// was, so this list is NOT the complete required set on its own (#4476): a list shorter than
+    /// the image's leaves the image's remaining entries required, and an EMPTY list renders nothing
+    /// at all, so the image's list stands in full — emptying a record's
+    /// <see cref="DeploymentContent.RequiredModules"/> does not relax the requirement, it restores
+    /// it. Neither this renderer nor the record can know how long the image's list is; the image
+    /// ships from another repository and has already grown from seven entries to nine underneath a
+    /// record that picked "the first free slot".</para>
+    ///
+    /// <para>A record says "these and only these" with
+    /// <see cref="DeploymentContent.RequiredModulesAuthoritative"/>, which renders
+    /// <see cref="RequiredIsAuthoritativeKey"/> beside the entries. That is a SCALAR key, so it
+    /// cannot be index-merged away, and it is what makes the empty list mean "require nothing".</para>
     /// </summary>
     public static ImmutableList<string> ModuleEntries(IEnumerable<string>? requiredModules)
     {
         var names = (requiredModules ?? Enumerable.Empty<string>())
             .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Select(name => name.Trim())
-            .Select(name => name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name : name + ".dll")
+            .Select(WithDllSuffix)
             .ToArray();
         var entries = ImmutableList.CreateBuilder<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -173,8 +217,7 @@ public static class DeploymentPortalConfig
         {
             if (builder.ContainsKey(slot) || string.IsNullOrWhiteSpace(assembly))
                 continue;
-            var name = assembly.Trim();
-            builder[slot] = name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name : name + ".dll";
+            builder[slot] = WithDllSuffix(assembly);
         }
         return builder.ToImmutable();
     }
@@ -280,9 +323,173 @@ public static class DeploymentPortalConfig
     /// module policy — one deterministic list, so "what will this instance boot with" is
     /// answerable from the record alone.
     /// </summary>
-    public static ImmutableList<string> BootConfigurationEntries(DeploymentContent? record) =>
-        ConfigurationEntries(record?.PluginRepos, record?.PreInstall)
-            .AddRange(ModuleEntries(record?.RequiredModules));
+    public static ImmutableList<string> BootConfigurationEntries(DeploymentContent? record)
+    {
+        var entries = ConfigurationEntries(record?.PluginRepos, record?.PreInstall);
+        if (record is null)
+            return entries;
+
+        // 🚨 ModuleSlots, NOT ModuleEntries: the same slots PortalConfig emits. This route used to
+        // render the contiguous list alone and drop every explicit RequiredModuleSlots entry, so
+        // the two renderers of ONE record described different required sets — the drift this type
+        // exists to make impossible. Harmless while both were read as a by-index OVERLAY; with the
+        // claim beside them the two routes would state two different COMPLETE sets, and the one
+        // that dropped a slot would say a module is not required at all.
+        foreach (var (slot, assembly) in ModuleSlots(record))
+            entries = entries.Add($"{ModulesSection}:Required:{slot}={assembly}");
+
+        // The authority claim rides with the entries it qualifies, on BOTH routes — an entry list
+        // delivered without it reads as a by-index overlay, which is what it was before #4476.
+        return record.RequiredModulesAuthoritative
+            ? entries.Add($"{RequiredIsAuthoritativeKey}=true")
+            : entries;
+    }
+
+    /// <summary>
+    /// The required-module slots this record declares that the HELM CHART does not render — a slot
+    /// above <see cref="MaxChartRenderedRequiredModuleSlot"/> or below 0, neither of which its
+    /// literal-key block carries. Empty when every slot is inside the block.
+    ///
+    /// <para>🚨 <b>Scoped to the chart on purpose, and NOT folded into
+    /// <see cref="SpecProblems(IEnumerable{PluginRepoMount}, IEnumerable{string})"/>.</b> The Aspire
+    /// route injects whatever <see cref="PortalConfig"/> emits, ceiling and all, so it delivers such
+    /// a slot correctly — a route-neutral "why the spec cannot come up" answer that named it would
+    /// be false for an Aspire run. A Helm renderer asks this ALONGSIDE the spec problems; anything
+    /// else must not.</para>
+    ///
+    /// <para>Reported rather than dropped, for the same reason <see cref="Validate"/> reports a
+    /// half-configured mount: a slot the chart does not carry is invisible at deploy time — helm
+    /// succeeds, the ConfigMap is well-formed, and the module is quietly not required. It is also
+    /// the nastiest shape of all, because it WORKS under Aspire and disappears in the cluster.
+    /// Pure.</para>
+    /// </summary>
+    public static ImmutableList<string> ChartModuleSlotProblems(DeploymentContent? record)
+    {
+        if (record is null)
+            return ImmutableList<string>.Empty;
+        var problems = ImmutableList.CreateBuilder<string>();
+        foreach (var (slot, assembly) in ModuleSlots(record))
+        {
+            if (slot > MaxChartRenderedRequiredModuleSlot)
+                problems.Add(
+                    $"required module '{assembly}' is declared at slot {slot}, above the highest "
+                    + $"slot the Helm chart renders ({MaxChartRenderedRequiredModuleSlot}) — in "
+                    + "Kubernetes it would reach no container, so the module would not be required "
+                    + "at all (the Aspire route delivers it, so this works locally and disappears "
+                    + "in the cluster). Raise the chart's Modules__Required__N block (one hasKey "
+                    + "entry per index) and MaxChartRenderedRequiredModuleSlot together, or move "
+                    + "the entry into the contiguous requiredModules list.");
+            // 🚨 The SAME asymmetry at the other end, and the same remedy shape. A negative slot is
+            // not an unbound entry: the reader enumerates the section's CHILDREN rather than
+            // binding a CLR array, so an injected `Modules:Required:-1` is returned and the module
+            // IS required under Aspire. The chart's literal-key block starts at 0, so in Kubernetes
+            // the key reaches no container and the module is required by nobody — works locally,
+            // disappears in the cluster, exactly like a slot above the ceiling. Raising the ceiling
+            // cannot fix this one, so the remedy names the only two that can.
+            else if (slot < 0)
+                problems.Add(
+                    $"required module '{assembly}' is declared at slot {slot}, below the lowest slot "
+                    + "the Helm chart renders (0) — in Kubernetes it would reach no container, so "
+                    + "the module would not be required at all (the Aspire route delivers it, "
+                    + "because the reader enumerates the section's children rather than binding an "
+                    + "array — so this works locally and disappears in the cluster). Move the entry "
+                    + "into the contiguous requiredModules list — or give it a slot that is FREE "
+                    + "(past that list, whose entries win at the indices they occupy, so a slot "
+                    + "inside it is dropped just as silently) and no higher than "
+                    + $"{MaxChartRenderedRequiredModuleSlot}.");
+        }
+        return problems.ToImmutable();
+    }
+
+    /// <summary>
+    /// Why this record's POSITIONAL boot-module slots cannot be trusted, or an empty list when it
+    /// declares none — the ROUTE-NEUTRAL half, wrong under Aspire exactly as in the cluster.
+    ///
+    /// <para>🚨 <b>A slot names an index in an array whose OTHER HALF this record cannot read.</b>
+    /// <c>Modules:Required</c> merges by index, so slot N means "replace whatever the image's own
+    /// list holds at N" — and the image's list lives in another repository, versions on its own
+    /// schedule and is not given to the record at render time. The advice that produced every one
+    /// of these slots ("put it at the first free index") is therefore a measurement of a list the
+    /// record does not own, taken once and silently invalidated by the next append.</para>
+    ///
+    /// <para>🚨 <b>It has already happened twice, on the same instance.</b> Memex#131:
+    /// <c>Modules__Required__5</c> named MCP over an image whose index 5 had become
+    /// <c>MeshWeaver.Social.dll</c>. Memex#378, measured 2026-09-16 and unchanged at record v92 on
+    /// 2026-09-17: <c>requiredModuleSlots {"7": "MeshWeaver.Mcp.dll"}</c> over an image whose list
+    /// has grown from seven entries to nine, so index 7 is now
+    /// <c>MeshWeaver.Markdown.Collaboration.dll</c> — the collaboration pack is REQUIRED BY NOBODY
+    /// on the public instance, and a pod that never landed it reports Healthy and rolls out green.
+    /// Neither shadow was visible: the module is not MISSING (nothing asks for it), so the
+    /// readiness contract has nothing to say, and the override is rendered, so the key-coverage
+    /// gate passes.</para>
+    ///
+    /// <para><b>The rule, and why it is this one.</b> A positional slot is sound only where the
+    /// record owns the WHOLE index space — which is exactly what
+    /// <see cref="DeploymentContent.RequiredModulesAuthoritative"/> claims (#4476/#4483). Under the
+    /// claim the image's list does not apply at any index, so no entry of it can be shadowed and a
+    /// slot is merely a position in the record's own set. Without the claim the slot's meaning is
+    /// whatever the image happened to ship that day, and no amount of care in the record can fix
+    /// that — so this reports it rather than waiting for the next append to make it wrong
+    /// again.</para>
+    ///
+    /// <para>🚨 <b>This is a rule with no production caller yet</b>, exactly like
+    /// <see cref="ChartModuleSlotProblems"/> beside it: the one renderer that asks a record "why
+    /// can you not be deployed" is <c>HelmValues.Problems</c> in MeshWeaver.Plugins, and it asks
+    /// neither. Until it does, both are pinned here and reach no deploy — stated so the next reader
+    /// does not mistake a defined surface for an enforced one.</para>
+    ///
+    /// <para>A slot BELOW ZERO is NOT this surface's business, and measuring said so: the reader
+    /// enumerates <c>GetSection("Modules:Required").GetChildren()</c> rather than binding a CLR
+    /// array, so an injected <c>Modules:Required:-1</c> IS returned and the module IS required on
+    /// the Aspire route. It is the chart that drops it — the literal-key block starts at 0 — which
+    /// makes it the ceiling's question at the other end, and <see cref="ChartModuleSlotProblems"/>
+    /// reports it there.</para>
+    ///
+    /// <para>Pure.</para>
+    /// </summary>
+    public static ImmutableList<string> PositionalModuleSlotProblems(DeploymentContent? record)
+    {
+        if (record is null || record.RequiredModuleSlots.IsEmpty)
+            return ImmutableList<string>.Empty;
+
+        if (record.RequiredModulesAuthoritative)
+            return ImmutableList<string>.Empty;
+
+        var problems = ImmutableList.CreateBuilder<string>();
+
+        // 🚨 The RENDERED slots, never the raw map. <see cref="ModuleSlots"/> drops a blank entry
+        // and drops an explicit slot the contiguous list already occupies, so the raw map contains
+        // entries that emit no key at all — and a problem saying "the key IS rendered" about one of
+        // those would be false where it matters most, in the sentence explaining why nothing else
+        // reports this. Above the contiguous count is exactly the explicit half that survived: the
+        // list's own entries occupy 0..count-1 and nothing else.
+        var contiguous = ModuleEntries(record.RequiredModules).Count;
+        foreach (var (slot, assembly) in ModuleSlots(record).Where(entry => entry.Key >= contiguous))
+            problems.Add(
+                $"required module '{WithDllSuffix(assembly)}' is declared at SLOT {slot}, and this record "
+                + "does not claim the complete set — so the slot replaces whatever the IMAGE's own "
+                + $"{ModulesSection}:Required list holds at index {slot}, which this record cannot "
+                + "read and which versions on its own schedule (it has already grown from seven "
+                + "entries to nine underneath a slot chosen as 'the first free index', twice: "
+                + "Memex#131 and Memex#378). The replaced module is then required by nobody, which "
+                + "nothing reports — it is not missing, so readiness is silent, and the key IS "
+                + "rendered, so coverage passes. State the complete set in requiredModules and set "
+                + "requiredModulesAuthoritative, after which no index of the image's list applies "
+                + "and a slot can shadow nothing.");
+        return problems.ToImmutable();
+    }
+
+    /// <summary>
+    /// A stated module name as the render writes it — trimmed, with the <c>.dll</c> suffix added
+    /// when it is not already there. ONE rule, asked by every place that turns a record's word into
+    /// a <c>Modules:Required</c> value, so a record cannot be normalized one way into the entries
+    /// and another into a problem that names it. Pure.
+    /// </summary>
+    private static string WithDllSuffix(string? stated)
+    {
+        var name = (stated ?? "").Trim();
+        return name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name : name + ".dll";
+    }
 
     /// <summary>
     /// Why the instance spec cannot bring an instance up, or an empty list when it can — the
@@ -354,6 +561,12 @@ public static class DeploymentPortalConfig
         SetBool("Modules__AutoRecycleOnStaleBuild", d.AutoRecycleOnStaleBuild);
         foreach (var (slot, assembly) in ModuleSlots(d))
             Set($"Modules__Required__{slot}", assembly);
+        // 🚨 Rendered only when the record CLAIMS it, and never as "false": the reader takes an
+        // explicit false as a withdrawal, and a record that says nothing must leave the merged
+        // reading exactly as it was. The key is a scalar, so it survives the by-index merge that
+        // the entries above cannot — which is the whole reason the empty list can mean "none".
+        if (d.RequiredModulesAuthoritative)
+            Set(RequiredIsAuthoritativeKey.Replace(":", "__"), "true");
 
         // The catalog wiring rides with the record on BOTH routes, but the chart delivers it through
         // the operator's catalog config file (BootConfigurationEntries → HOSTING_CATALOG_CONFIG)
@@ -421,6 +634,20 @@ public static class DeploymentPortalConfig
 
         if (d.Operator is { Enabled: true })
             Set("Hosting__Operator__Enabled", "true");
+
+        // The executor switch (Plugins#1738), independent of Enabled: the Actions executor runs with
+        // the in-cluster Job disabled. Blank emits nothing, and the portal and the chart then both
+        // mean Job. ActionsExecutor reads Hosting:Operator:Executor and Hosting:Operator:Maintainer.
+        // Canonicalised HERE, not only in WithOperatorExecutor: a record read from JSON or built
+        // with an initializer never passes the transform, and the Aspire path hands this value
+        // straight to the container. A misspelling fails closed on both renderers.
+        if (d.Operator is { } operatorSpec)
+        {
+            if (!HostingOperatorSpec.TryCanonicalExecutor(operatorSpec.Executor, out var operatorExecutor))
+                throw new InvalidOperationException($"operator executor '{operatorSpec.Executor}' is neither Job nor Actions. The portal reads every other value as Job, so it would silently keep the in-cluster operator Job.");
+            Set("Hosting__Operator__Executor", operatorExecutor);
+            Set("Hosting__Operator__Maintainer", string.IsNullOrWhiteSpace(operatorSpec.Maintainer) ? null : operatorSpec.Maintainer.Trim());
+        }
 
         foreach (var (key, value) in d.ExtraPortalConfig)
             if (!c.Keys.Contains(key, StringComparer.OrdinalIgnoreCase))

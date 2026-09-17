@@ -13,12 +13,12 @@ you were on — so it was there on the document's root page and gone the moment 
 sub-page, which has no sub-pages of its own. You landed on the sub-page with no index and nothing
 telling you where in the document you were.
 
-**The index is now the document's whole tree, on every page of it.** It is rooted one level below
-the Space — `Infrastructure/Inference`, say — and every page beneath that root shows the same index:
-the root's pages in their order, a page with sub-pages as a collapsible group, the groups on your
-path open, and **the page you are reading marked** with the accent bar. Clicking into a sub-page
-keeps the index and moves the marker. A page directly under a Space with nothing beside or below it
-still renders full width, as before.
+**The index is now the Space's whole tree, on every page of it.** It is rooted at the Space —
+`Infrastructure`, say — and every page beneath it shows the same index: the Space's pages in their
+order, a page with sub-pages as a collapsible group, the groups on your path open, and **the page
+you are reading marked** with the accent bar. Clicking into a sub-page keeps the index and moves
+the marker; a page directly under the Space, such as `Infrastructure/Options`, shows it too. A Space
+with a single page and nothing beside it still renders full width, as before.
 
 Two pieces of chrome came with it:
 

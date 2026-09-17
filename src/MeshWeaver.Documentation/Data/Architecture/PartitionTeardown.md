@@ -20,7 +20,8 @@ and [Postgres Schema Architecture](../PostgresSchemaArchitecture).
 |---|---|---|
 | Trigger | `OwnsPartitionProvisioningValidator` (a top-level create of an `OwnsPartition` type) **and** `PackageInstaller.EnsurePartitionsProvisioned` (an install's target partition) | `PartitionDropPostDeletionHandler` |
 | Registered | once, by `AddRowLevelSecurity` | once, by `AddGraph` |
-| Keyed on | `NodeTypeDefinition.OwnsPartition` / the installer's own manifest | **the deleted node's SHAPE** — `PartitionDefinition.IsPartitionRoot` |
+| Keyed on | `NodeTypeDefinition.OwnsPartition` — static OR declared in mesh content, read through `PartitionOwningTypes` (until 2026-09-15 only the static registry was asked, so an in-mesh owning type such as `Crm/Client` could not be created at all — see [Access Control](/Doc/Architecture/AccessControl)) / the installer's own manifest | **the deleted node's SHAPE** — `PartitionDefinition.IsPartitionRoot` |
+| Owner + routing | `SpaceNodeType`'s handler for a Space; `InMeshPartitionOwnerPostCreationHandler` (structural) for an in-mesh owning type — creator Admin + `Admin/Partition/{id}` | — |
 | Does | `EnsurePartitionProvisioned` on every provider, before the root write | `DeletePartition` on every provider, then delete `Admin/Partition/{id}` |
 
 Note the asymmetry in the first row: **creation has two triggers, and only one of them consults

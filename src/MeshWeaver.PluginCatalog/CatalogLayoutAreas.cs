@@ -99,7 +99,11 @@ public static class CatalogLayoutAreas
             .AddDefaultLayoutAreas()
             .AddMeshDataSource(s => s.WithContentType<PluginCatalogContent>())
             .AddLayout(layout => layout
-                .WithView(MeshNodeLayoutAreas.OverviewArea, Overview)
+                // #4500: this page replaced the framework Overview and silently dropped the
+                // provenance line with it. A catalog node is content — it is declared, published
+                // and re-pointed by people — so "who set this source up, and when" is a question
+                // its page is genuinely asked. WithNodePage composes the line above the catalog.
+                .WithNodePage(MeshNodeLayoutAreas.OverviewArea, Overview)
                 .WithView(CatalogArea, Catalog));
             // Create / Delete are no longer re-registered here: their views ride the
             // MeshWeaver.Graph.Views module, which registers them on every per-node hub, so this
@@ -843,6 +847,18 @@ public static class CatalogLayoutAreas
                 .WithStyle("color: var(--error-foreground, #a4262c); font-size: 12px; "
                            + "display: block; margin-top: 6px;"));
 
+        // 🚨 MeshWeaver#4550 — the SEVENTH state, and the one that used to wear the restart prompt
+        // above. The landed generation was DECLINED in favour of the copy this image ships (#4161),
+        // so the module RUNS — from the image's copy — and the version this card says is installed
+        // is not the one in effect. Neither "restart required" (the next boot re-runs the same
+        // comparison) nor "not running here" (it is running). Localized like every other line on
+        // this card: platform-owned chrome follows the VIEWER.
+        else if (activation.DeclineForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}") is { } decline)
+            card = card.WithView(Controls.Body(
+                    $"ℹ️ {host.Localize("ui.moduleRunsImageCopy", decline.Version ?? "?")}")
+                .WithStyle("color: var(--warning-foreground, #9d5d00); font-size: 12px; "
+                           + "display: block; margin-top: 6px;"));
+
         // 🚨 #3649 — the FIFTH state, and the first that is not a fault: the newest generation
         // does not load on this platform, so this installation runs the previous one. The module
         // works; the line says which version that is and that the newer one is waiting on a
@@ -1320,14 +1336,20 @@ public static class CatalogLayoutAreas
         if (verdict.Kind is InstallCompletenessKind.Incomplete)
         {
             // 🚨 WARNING, NOT ERROR — and the trade-off is deliberate (MeshWeaver#2387). This line
-            // describes a DETECTION followed immediately by a repair, and the repair usually works:
-            // measured on memex.meshweaver.cloud 2026-09-13, Feedback/Feedback/Source/
-            // FeedbackHandover was named here at 22:02:37Z and was present at 22:02:45Z. Logged at
-            // Error it shipped a SUCCESS to Loki, where the watcher minted an incident from it and
-            // — incident identity folding per log CATEGORY — re-opened #2387, an issue about the
-            // [DefaultInstall] summary line in this same class. The Error now sits on the OUTCOME
-            // (VerifyLanded → InstallCompleteness.DescribeLanding), where it can only fire when the
-            // repair did NOT restore the nodes, which is the fact worth waking someone for.
+            // describes a DETECTION followed immediately by a repair. Logged at Error it re-opened
+            // #2387 — an issue about the [DefaultInstall] summary line in this same class — through
+            // the watcher's per-CATEGORY incident fold, on every boot. The Error now sits on the
+            // OUTCOME (VerifyLanded → InstallCompleteness.DescribeLanding), which fires when the
+            // repair did NOT restore the nodes.
+            //
+            // 🚨 But that outcome is read right after the write, so it proves the write LANDED,
+            // never that it HELD. Measured on memex.meshweaver.cloud 2026-09-16:
+            // Feedback/Feedback/Source/FeedbackHandover was named here on ELEVEN boots at one module
+            // version — written back each time (22:02:45Z on 09-13 was the first), pruned each time
+            // by Feedback/_GitSync importing the sealed commit whose tree lacks it (#4259's two
+            // writers; that image predated #4292). A detection that REPEATS at an unchanged module
+            // version is a repair that did not hold, and on this path no line above Warning says so
+            // — Doc/Architecture/LogWatchTriage, "A REOPEN is not a recurrence".
             logger?.LogWarning(
                 "Package {Id} records module {ModuleVersion} as installed, but {Missing} of "
                 + "{Declared} declared node(s) are ABSENT from the mesh: [{Paths}]. Counted over: "
@@ -1371,7 +1393,10 @@ public static class CatalogLayoutAreas
 
     /// <summary>
     /// The manifest-diff fast path: fetch only <c>manifest.lock</c>, diff, fetch only the changed
-    /// files — <b>plus the declared files whose node is ABSENT from the mesh</b> (MeshWeaver#4259).
+    /// CONTENT files — <b>plus the declared files whose node is ABSENT from the mesh</b>
+    /// (MeshWeaver#4259). A changed module source (<c>src/&lt;Module&gt;/…</c>) is never fetched:
+    /// it travels compiled, in the module bundle, and the content source does not serve it
+    /// (MeshWeaver#4429).
     ///
     /// <para>🚨 <b>The diff alone is a comparison of two DECLARATIONS.</b>
     /// <c>newManifest.DiffFrom(record.InstalledFiles)</c> asks what the source changed since the
@@ -1417,6 +1442,25 @@ public static class CatalogLayoutAreas
                         $"Package '{pkg.Id}' ships no parseable {ModuleManifest.FileName}.");
 
                 var delta = newManifest.DiffFrom(record.InstalledFiles);
+
+                // 🚨 #4429 — A MODULE SOURCE IS A CHANGE TOKEN, NEVER A FILE TO FETCH.
+                // gen-manifests.py folds a mixed package's `src/<Module>/…` — and the in-tree
+                // siblings that ride its bundle — into the SAME `files` map as its node files, so a
+                // source-only commit moves the module version (Plugins#878/#1118). Those files are
+                // compiled into the module bundle and arrive through the module lane (WithModule →
+                // AdoptModule); the content source serves only `{Id}/…` (NodeRepoPackageSource keeps
+                // the package folder, and the registry's /files answers from it). Asked for one, it
+                // can only ever return 0 of N — which EnsureFetchComplete, correctly, refuses — so
+                // every update that touched a source fell back to a FULL install and recompiled every
+                // type in the package: `Edu` on memex.systemorph.com, 2026-09-15T14:12Z, for
+                // `src/MeshWeaver.Courses/CourseAssetService.cs`. They stay in the record
+                // (InstallNodeRepoDelta stamps newManifest.Files whole) so the next diff is clean;
+                // they never enter the fetch. The ONE predicate the node mapping, the delta prune and
+                // InstallCompleteness already share (#4101).
+                var changedContent = delta.AddedOrChangedFiles
+                    .Where(f => !PackageInstaller.IsModuleSourcePath(f))
+                    .ToImmutableSortedSet(StringComparer.Ordinal);
+                var changedModuleSources = delta.AddedOrChangedFiles.Count - changedContent.Count;
 
                 // A change to the package's SHARED Source/Test (partition-level compile inputs)
                 // affects every type in the package — the full install's release-all handles that;
@@ -1471,8 +1515,15 @@ public static class CatalogLayoutAreas
                         hub.JsonSerializerOptions, declaredNodePaths)
                     .SelectMany(present =>
                     {
+                        // 🚨 #3659 — a file the install itself could not read as a node is
+                        // PERMANENTLY node-less, so widening the fetch for it would re-fetch,
+                        // re-parse and re-skip it on every update forever, under a line that calls
+                        // it an absent node being restored. A file whose hash MOVED is in
+                        // `changedContent` and travels regardless, so a fixed one is still
+                        // re-examined and drops out of the record.
                         var restore = InstallCompleteness.FilesToRestore(
-                            newManifest.Files, delta.AddedOrChangedFiles, present, parsers);
+                            newManifest.Files, changedContent, present, parsers,
+                            record.UnreadableFiles);
 
                         // 🚨 The SAME rule the changed-file guard above applies, and for the same
                         // reason: a package's shared Source/Test are compile inputs for EVERY type
@@ -1503,12 +1554,14 @@ public static class CatalogLayoutAreas
                                 pkg.Id, restore.Count, declaredNodePaths.Count,
                                 string.Join(", ", restore.Take(InstallCompleteness.MaxNamedInALine)));
 
-                        var wanted = delta.AddedOrChangedFiles.Union(restore);
+                        var wanted = changedContent.Union(restore);
                         logger?.LogInformation(
-                            "Updating {Id} incrementally: {Changed} changed file(s), {Restored} "
-                            + "restored, {Removed} removed → module {ModuleVersion}.",
-                            pkg.Id, delta.AddedOrChangedFiles.Count, restore.Count,
-                            delta.RemovedFiles.Count, newManifest.ModuleVersion);
+                            "Updating {Id} incrementally: {Changed} changed content file(s), "
+                            + "{Restored} restored, {Removed} removed; {ModuleSources} changed module "
+                            + "source(s) travel in the module bundle, not the fetch → module "
+                            + "{ModuleVersion}.",
+                            pkg.Id, changedContent.Count, restore.Count,
+                            delta.RemovedFiles.Count, changedModuleSources, newManifest.ModuleVersion);
 
                         return (wanted.Count == 0
                                 ? Observable.Return((IReadOnlyList<PackageFile>)[])
@@ -1546,6 +1599,13 @@ public static class CatalogLayoutAreas
     /// absent-shared-source arm uses a few lines above: the caller catches it and falls back to a
     /// FULL install, which rewrites everything and writes a record that is true. The user gets an
     /// updated package either way; only the silent-stale path is removed.</para>
+    ///
+    /// <para>🚨 <b>A module source never reaches <paramref name="wanted"/></b> (MeshWeaver#4429).
+    /// The lock declares a mixed package's <c>src/&lt;Module&gt;/…</c> beside its node files, but
+    /// they travel in the module bundle and no content source serves them; the caller drops them
+    /// with <see cref="PackageInstaller.IsModuleSourcePath"/> before it asks. Until it did, this
+    /// guard turned every update that touched a module source into a full install. So a shortfall
+    /// here is always a file the source SHOULD have served.</para>
     /// </summary>
     /// <param name="packageId">The package being updated.</param>
     /// <param name="wanted">The paths the fetch asked for.</param>

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Text.Json.Serialization;
 
@@ -216,6 +217,29 @@ public record GitHubSyncConfig
     public bool LastAttemptWasFinal { get; init; }
 
     /// <summary>
+    /// 🚨 <b>The CONFIGURATION the attempt at <see cref="LastAttemptedCommitSha"/> read under</b>
+    /// (<c>GitHubSyncService.SourceFingerprint</c>) — the third member of the attempt pair, and the
+    /// one that makes "final" mean what it says (issue #4499).
+    ///
+    /// <para>A verdict is final for the BYTES AS THIS SOURCE READS THEM, not for the commit alone:
+    /// the same commit read under a different <see cref="Subdirectory"/>, <see cref="Ignore"/> set,
+    /// <see cref="Direction"/> or <see cref="TwoWay"/> setting is a different import and may reach a
+    /// different verdict. Without this field the skip keyed on the commit only, so correcting a
+    /// misconfigured source changed nothing until the repository happened to produce a new commit —
+    /// which is exactly the case a refusal needs most: a subdirectory that matches nothing is fixed
+    /// by editing the source, at the same commit. So a final verdict licenses a skip only while this
+    /// fingerprint still equals the CURRENT configuration's; an edit re-attempts at once.</para>
+    ///
+    /// <para>Written in the same patch as the other two and cleared with them. Absent on a source
+    /// whose last attempt predates this field — which never licenses a skip, so such a source
+    /// attempts once more and records it (the safe direction).</para>
+    ///
+    /// <para>Set by the sync operation; not user-editable.</para>
+    /// </summary>
+    [Browsable(false)]
+    public string? LastAttemptedConfigFingerprint { get; init; }
+
+    /// <summary>
     /// WHY the last attempt did not move the source — the hold reason of the sealed-publication
     /// gate ("built at X, not sealed for this instance …"), or the reconciler's finding — so an
     /// operator reading the config sees the cause rather than only the outcome. Cleared by the
@@ -223,4 +247,24 @@ public record GitHubSyncConfig
     /// </summary>
     [Browsable(false)]
     public string? LastSyncNote { get; init; }
+
+    /// <summary>
+    /// 🚨 The NodeTypes whose SOURCES the last import held back because no bundle for this instance's
+    /// framework identity carries the fingerprint they would produce — adopt-then-sync per NodeType
+    /// (MeshWeaver#3845 hole 4; <c>Doc/Architecture/AdoptThenSyncPerNodeType</c>).
+    ///
+    /// <para><b>Why it is on the record and not only in a log.</b> #4063's lesson, one level down: a
+    /// held source that says nothing is indistinguishable from one that is up to date. Each entry
+    /// names the type, the fingerprint its sources have now, the fingerprint a bundle must record for
+    /// the hold to release, and the framework identity the judgement was made under — so a reader can
+    /// tell "waiting for a publication" from "judged under an identity this instance no longer
+    /// runs", which a roll makes true of every entry.</para>
+    ///
+    /// <para>It is also what the seal reconciler asks before re-fetching: a publication arriving
+    /// releases a source only when the inventory now carries a wanted fingerprint (or the identity
+    /// moved), so an unrelated publication costs nothing. Written on every import conclusion; an
+    /// import that holds nothing clears it. Not user-editable.</para>
+    /// </summary>
+    [Browsable(false)]
+    public ImmutableList<BundleHeldNodeType>? BundleHeldNodeTypes { get; init; }
 }

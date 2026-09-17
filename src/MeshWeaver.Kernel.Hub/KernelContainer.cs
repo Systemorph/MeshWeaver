@@ -41,13 +41,19 @@ public class KernelContainer(IServiceProvider serviceProvider)
     private readonly object executorHubLock = new();
 
     /// <summary>
-    /// Idle window after which a kernel-hosting hub disposes itself. 15 minutes by default; a host
-    /// (or a test that needs to observe the reclamation inside its budget) can override it by
-    /// registering a <see cref="KernelHubOptions"/> singleton. 🚨 NOT a memory tuning knob — see
-    /// <see cref="KernelHubOptions.IdleDisconnectTimeout"/>.
+    /// The idle-disconnect's shared state — set by <see cref="DisposeOnTimeout"/>, read by the
+    /// submission forwarder. Holds the hub only WEAKLY (see <see cref="DisposeOnTimeout"/>).
     /// </summary>
-    private readonly TimeSpan disconnectTimeout =
-        (serviceProvider.GetService<KernelHubOptions>() ?? new KernelHubOptions()).IdleDisconnectTimeout;
+    private IdleState? idle;
+
+    /// <summary>
+    /// The idle window after which a kernel-hosting hub disposes itself (15 minutes by default) and
+    /// the clock it runs on. A host (or a test that needs to observe the reclamation inside its
+    /// budget) can override either by registering a <see cref="KernelHubOptions"/> singleton.
+    /// 🚨 NOT a memory tuning knob — see <see cref="KernelHubOptions.IdleDisconnectTimeout"/>.
+    /// </summary>
+    private readonly KernelHubOptions options =
+        serviceProvider.GetService<KernelHubOptions>() ?? new KernelHubOptions();
 
     /// <summary>
     /// Hub configuration for the standalone kernel-hub (full mesh-types + routes).
@@ -194,21 +200,137 @@ public class KernelContainer(IServiceProvider serviceProvider)
         // [RunLevel=1] — the MeshHub_IsCollected leak). A WeakReference + static callback
         // lets the GC reclaim an unreferenced hub: if it's already collectable the
         // disconnect is moot; if it's still alive the weak ref resolves and disposes it.
-        var weakHub = new WeakReference<IMessageHub>(hub);
-        var timer = new Timer(static state =>
-        {
-            if (((WeakReference<IMessageHub>)state!).TryGetTarget(out var h))
-                h.Dispose();
-        }, weakHub, disconnectTimeout, Timeout.InfiniteTimeSpan);
+        //
+        // 🚨 IDLE MEANS "NO MESSAGE *AND* NOTHING EXECUTING" (MeshWeaver#4422). The timer is
+        // re-armed by messages DELIVERED to this hub, and a running script delivers none: it
+        // executes on the hosted executor, its mesh reads answer elsewhere, and its log lines
+        // leave as outgoing writes. So a script still working 15 min after the last inbound
+        // message had this hub — and its executor with it — disposed mid-run, silently: no
+        // SubmitCodeResponse, no terminal status (an approved OperationRequest died that way on
+        // memex, 2026-09-15). While a forwarded submission is in flight the callback re-arms
+        // instead of disposing; the finished-activity reclamation (#1324/#1435) is unchanged,
+        // because a finished run has nothing in flight and the window restarts when it ends.
+        var state = new IdleState(new WeakReference<IMessageHub>(hub), options.IdleDisconnectTimeout, options.TimeProvider);
+        idle = state;
         // Dispose the timer WITH the hub for the normal (activated → disposed) path so
         // the queue drops it promptly rather than waiting on a GC.
-        hub.RegisterForDisposal((IDisposable)timer);
-        var idle = disconnectTimeout;
+        hub.RegisterForDisposal(state);
         hub.Register<object>(d =>
         {
-            timer.Change(idle, Timeout.InfiniteTimeSpan);
+            state.Rearm();
             return d;
         });
+    }
+
+    /// <summary>
+    /// The idle-disconnect: the hub (WEAKLY — the timer queue is a GC root), the window, its one-shot
+    /// timer, and the submissions forwarded to the executor that have not answered yet. The timer
+    /// holds this object and this object holds the timer — a cycle the GC collects; nothing here
+    /// roots the hub.
+    ///
+    /// <para>🚨 <b>ONE atomic snapshot, never a counter beside a flag</b> (the #4423 review). The
+    /// timer's decision — "nothing is working, so close and dispose" — and a submission's — "claim a
+    /// slot unless closed" — are each ONE compare-and-swap on the same immutable
+    /// <see cref="Snapshot"/>, so the two are totally ordered: a claim lands before the close (and
+    /// the close does not happen) or after it (and the claim is refused; the hub is going). There is
+    /// no count to go negative, and no window between a decrement and a clamp for a concurrent
+    /// claim to fall into: a submission's claim is an OBJECT in a set, removed by that claim alone,
+    /// and removing it twice is a no-op.</para>
+    /// </summary>
+    internal sealed class IdleState : IDisposable
+    {
+        private readonly WeakReference<IMessageHub> hub;
+        private readonly TimeSpan window;
+        private readonly ITimer timer;
+        private Snapshot current = new(false, ImmutableHashSet<Claim>.Empty);
+
+        /// <summary>Starts the window on <paramref name="clock"/> — <see cref="TimeProvider.System"/> in every host.</summary>
+        public IdleState(WeakReference<IMessageHub> hub, TimeSpan window, TimeProvider clock)
+        {
+            this.hub = hub;
+            this.window = window;
+            // A STATIC callback over this state: the hub is reachable from the timer only weakly.
+            timer = clock.CreateTimer(static s => ((IdleState)s!).Elapsed(), this, window, Timeout.InfiniteTimeSpan);
+        }
+
+        /// <summary>Submissions forwarded to the executor that have not answered yet.</summary>
+        public int InFlight => Volatile.Read(ref current).InFlight.Count;
+
+        /// <summary>The window elapsed with nothing working, or the hub was disposed: no claim is accepted any more.</summary>
+        public bool Closed => Volatile.Read(ref current).Closed;
+
+        /// <summary>
+        /// Runs one submission as IN FLIGHT: the claim is taken on subscribe, BEFORE
+        /// <paramref name="dispatch"/> sets anything up, so a window that elapses during the setup
+        /// sees a submission being set up rather than an idle hub. <paramref name="dispatch"/> runs
+        /// INSIDE the tracked observable, so a synchronous throw from the setup or from the post
+        /// reaches <c>Finally</c> like a response, an error or a teardown does — every path releases
+        /// the claim, and none can pin the hub for ever. A hub the timer already closed refuses the
+        /// claim and never runs <paramref name="dispatch"/>.
+        /// </summary>
+        public IObservable<T> Track<T>(Func<Claim, IObservable<T>> dispatch) =>
+            Observable.Defer(() =>
+            {
+                var claim = new Claim();
+                if (!ImmutableInterlocked.Update(ref current, s => s.Closed ? s : s with { InFlight = s.InFlight.Add(claim) }))
+                    return Observable.Throw<T>(new ObjectDisposedException(nameof(KernelContainer),
+                        "The kernel host is shutting down (idle reclamation or disposal); submit the code again."));
+                return Observable.Defer(() => dispatch(claim)).Finally(() => Release(claim));
+            });
+
+        /// <summary>A submission answered, failed or was torn down — the idle window starts again from now.</summary>
+        private void Release(Claim claim)
+        {
+            ImmutableInterlocked.Update(ref current, s => s.InFlight.Contains(claim) ? s with { InFlight = s.InFlight.Remove(claim) } : s);
+            Rearm();
+        }
+
+        /// <summary>Restart the idle window.</summary>
+        public void Rearm()
+        {
+            if (Volatile.Read(ref current).Closed)
+                return;
+            try { timer.Change(window, Timeout.InfiniteTimeSpan); }
+            catch (ObjectDisposedException) { /* disposed with the hub between the read above and here */ }
+        }
+
+        /// <summary>
+        /// The window elapsed. A submission still executing on a LIVE executor (or still being set
+        /// up) keeps the hub and re-arms the window; a dead executor cannot answer, so its claim no
+        /// longer means "working", and a hub whose claims are all dead goes.
+        /// </summary>
+        internal void Elapsed()
+        {
+            if (ImmutableInterlocked.Update(ref current, s => s.Closed || s.InFlight.Any(c => c.Working) ? s : s with { Closed = true }))
+            {
+                if (hub.TryGetTarget(out var h))
+                    h.Dispose();
+                return;
+            }
+            Rearm();
+        }
+
+        /// <summary>The hub is going: refuse further claims and drop the timer from the queue.</summary>
+        public void Dispose()
+        {
+            ImmutableInterlocked.Update(ref current, s => s.Closed ? s : s with { Closed = true });
+            timer.Dispose();
+        }
+
+        private sealed record Snapshot(bool Closed, ImmutableHashSet<Claim> InFlight);
+
+        /// <summary>One forwarded submission's slot, bound to the executor it was sent to once that exists.</summary>
+        internal sealed class Claim
+        {
+            private WeakReference<IMessageHub>? executor;
+
+            /// <summary>The submission was sent to <paramref name="hosted"/> — only a live one can still answer.</summary>
+            public void Bind(IMessageHub hosted) => Volatile.Write(ref executor, new WeakReference<IMessageHub>(hosted));
+
+            /// <summary>Still being set up (no executor yet), or sent to an executor that is alive.</summary>
+            internal bool Working =>
+                Volatile.Read(ref executor) is not { } bound || (bound.TryGetTarget(out var e) && !e.IsDisposing);
+        }
     }
 
     ISynchronizationStream<ImmutableDictionary<string, object>> GetAreaStream(IServiceProvider sp)
@@ -266,9 +388,14 @@ public class KernelContainer(IServiceProvider serviceProvider)
     /// </summary>
     private IMessageDelivery ForwardSubmitCodeRequest(IMessageHub hub, IMessageDelivery<SubmitCodeRequest> request)
     {
-        var executor = GetOrCreateExecutor(hub);
-
-        hub.Observe<SubmitCodeResponse>(request.Message, o => o.WithTarget(executor.Address))
+        // In flight from BEFORE the executor is set up until it answers — the idle-disconnect must
+        // not dispose this hub under a running script (MeshWeaver#4422). The executor setup AND the
+        // post run inside the tracked observable: Observe posts before it returns and rethrows a
+        // synchronous post failure, so outside it a throw would skip Finally and leak the claim.
+        var submission = idle is { } state
+            ? state.Track(claim => Dispatch(hub, request.Message, claim))
+            : Observable.Defer(() => Dispatch(hub, request.Message, null));
+        submission
             .Take(1)
             .Subscribe(
                 resp => hub.Post(resp.Message, o => o.ResponseFor(request)),
@@ -277,6 +404,15 @@ public class KernelContainer(IServiceProvider serviceProvider)
                     o => o.ResponseFor(request)));
 
         return request.Processed();
+    }
+
+    /// <summary>Sets up (or reuses) the executor, binds the claim to it, and posts the submission.</summary>
+    private IObservable<IMessageDelivery<SubmitCodeResponse>> Dispatch(
+        IMessageHub hub, SubmitCodeRequest submission, IdleState.Claim? claim)
+    {
+        var executor = GetOrCreateExecutor(hub);
+        claim?.Bind(executor);
+        return hub.Observe<SubmitCodeResponse>(submission, o => o.WithTarget(executor.Address));
     }
 
     /// <summary>

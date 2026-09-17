@@ -1,3 +1,5 @@
+using MeshWeaver.Utils;
+
 namespace MeshWeaver.Mesh.Persistence;
 
 /// <summary>
@@ -48,6 +50,13 @@ namespace MeshWeaver.Mesh.Persistence;
 /// closing. Creating a name that does not yet exist is a single directory-entry insert on every
 /// filesystem this runs on. Callers whose target names embed a content hash (the assembly store)
 /// lose nothing: an existing target of that name already holds exactly these bytes.</para>
+///
+/// <para>🚨 <b>…and that insert is a RENAME, never <c>File.Move(…, overwrite: false)</c>
+/// (MeshWeaver#2190).</b> On Unix that call only renames when the rename succeeds; when it fails it
+/// falls back to a hard link and, on a volume without hard links (Azure Files SMB), to a COPY into
+/// the target — which creates the target first, locks it exclusively and fills it afterwards: the
+/// very window this type exists to close. The no-replace publications here go through
+/// <see cref="NoReplaceMove"/>, which publishes the complete file or throws.</para>
 /// </summary>
 public static class AtomicFileWrite
 {
@@ -124,10 +133,13 @@ public static class AtomicFileWrite
         try
         {
             WriteDurably(tempPath, bytes, openTemp);
-            // overwrite:false → File.Move throws IOException when the target already exists.
-            // That is the race being handled, not an error: the winner's bytes stay published.
-            File.Move(tempPath, filePath, overwrite: false);
-            return true;
+            // false: the target already exists. That is the race being handled, not an error: the
+            // winner's bytes stay published. NoReplaceMove — never File.Move(overwrite: false), whose
+            // failed rename COPIES into the target and publishes it incomplete (#2190).
+            if (NoReplaceMove.TryMove(tempPath, filePath))
+                return true;
+            TryDelete(tempPath);
+            return false;
         }
         // 🚨 A short write is never "the other writer won": on a full volume the other writer's
         // file is short too, and returning false would hand the caller a name whose bytes are
@@ -240,8 +252,10 @@ public static class AtomicFileWrite
         try
         {
             await writeTemp(tempPath).ConfigureAwait(false);
-            File.Move(tempPath, filePath, overwrite: false);
-            return true;
+            if (NoReplaceMove.TryMove(tempPath, filePath))
+                return true;
+            TryDelete(tempPath);
+            return false;
         }
         catch (IOException) when (File.Exists(filePath))
         {

@@ -60,7 +60,7 @@ on:
 jobs:
   supersede:
     name: Cancel superseded main runs
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       actions: write        # cancel runs of this repository

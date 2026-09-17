@@ -318,6 +318,33 @@ data:
   delete namespaces and drop databases across the fleet. An installation that does not declare
   `hostingOperator.enabled` renders `false` and cannot be talked into provisioning anything. */}}
   Hosting__Operator__Enabled: "{{ (.Values.hostingOperator).enabled | default "false" }}"
+{{- /* ---- WHICH EXECUTOR runs the actions (Plugins#1738) — OUTSIDE the enabled block ----
+
+  🚨 OUTSIDE ON PURPOSE. The Actions executor dispatches Systemorph/Memex aks-ops.yml through the
+  systemorph-com GitHub App and runs with `hostingOperator.enabled: false`: no Job in the ops
+  namespace, no jobrunner token, no cluster credential in the portal. Rendered inside the block, the
+  switch would reach the pod only on an installation that still arms the Job it replaces, which is
+  the one shape it exists to leave. Until this line the chart named no such key, so the pod read Job
+  whatever the overlay declared: the `Modules__Root` class again (invariant 8), now invariant 18 of
+  check-chart-invariants.
+
+  Both values follow the record's rule (HostingOperatorSpec.TryCanonicalExecutor), so the two
+  renderers agree: the executor is trimmed and case-folded, and blank means Job. Any other value is
+  REFUSED, because ActionsExecutor.ExecutorOf reads anything but "Actions" as Job and a misspelling
+  would silently keep the in-cluster path. The maintainer (the one user id that may approve its own
+  request) is trimmed and renders only when non-blank; absent means nobody may. */}}
+{{- $operatorExecutorRaw := (.Values.hostingOperator).executor | default "" | toString | trim }}
+{{- $operatorExecutor := "Job" }}
+{{- if eq (lower $operatorExecutorRaw) "actions" }}
+{{- $operatorExecutor = "Actions" }}
+{{- else if and $operatorExecutorRaw (ne (lower $operatorExecutorRaw) "job") }}
+{{- fail (printf "hostingOperator.executor is %q, and it must be Job or Actions. The portal reads every other value as Job (ActionsExecutor.ExecutorOf), so this render would silently keep the in-cluster operator Job instead of the Actions lane it asks for." $operatorExecutorRaw) }}
+{{- end }}
+  Hosting__Operator__Executor: "{{ $operatorExecutor }}"
+{{- $operatorMaintainer := (.Values.hostingOperator).maintainer | default "" | toString | trim }}
+{{- if $operatorMaintainer }}
+  Hosting__Operator__Maintainer: {{ $operatorMaintainer | quote }}
+{{- end }}
 {{- if (.Values.hostingOperator).enabled }}
 {{- if not (.Values.hostingOperator).image }}
 {{- fail "hostingOperator.enabled is true but hostingOperator.image is unset. The operator runs every lifecycle action as a Job from that image; without it HostingOperator.Resolve refuses with 'no operator image configured' and every action on this installation fails at the point of use rather than here. Set hostingOperator.image to the hosting-operator build this fleet runs." }}
@@ -452,7 +479,8 @@ data:
   # (MeshWeaver#3353). Rendered ONLY when selfUpdate.registry is set: SelfUpdateOptions.Registry
   # has a real default (the upstream ACR) and every image the updater rolls to is named on it, so
   # an empty string here would make the poller roll to "/memex-portal-ai:<tag>" — the opposite of
-  # inert. Absent ⇒ the image default; a host ⇒ the OCI mirror, listed with the instance key.
+  # inert. Absent ⇒ the image default; a host ⇒ an OCI Distribution registry (the fleet's is
+  # cr.meshweaver.cloud), listed with the instance key.
   {{- if (.Values.selfUpdate).registry }}
   SelfUpdate__Registry: "{{ .Values.selfUpdate.registry }}"
   {{- end }}
@@ -476,26 +504,6 @@ data:
   # bool, always rendered — the image's own default is TRUE (an image under an older chart, which
   # renders no key, keeps behaving as before), so this line is what moves an install.
   SelfUpdate__CanPatch: "{{ if (.Values.selfUpdate).canPatch }}true{{ else }}false{{ end }}"
-  # ---- Container image mirror (MeshWeaver#3353, src/MeshWeaver.ContainerImages) --------------
-  # The /v2 pull surface THIS installation serves. Rendered only when containerImages.upstream is
-  # set — an absent block reaches no container and the mirror stays OFF (every /v2 route 404s).
-  # 🚨 ContainerImages__Password is NOT here: a secret arrives through the Key Vault CSI mapping
-  # (keyVaultSecrets.secrets → key: ContainerImages__Password), never through a ConfigMap.
-  {{- if (.Values.containerImages).upstream }}
-  ContainerImages__Upstream: "{{ .Values.containerImages.upstream }}"
-  ContainerImages__Username: "{{ .Values.containerImages.username | default "" }}"
-  ContainerImages__ImageRoot: "{{ .Values.containerImages.imageRoot | default "" }}"
-  ContainerImages__CacheDirectory: "{{ .Values.containerImages.cacheDirectory | default "" }}"
-  {{- /* Binds to a long: rendered only when set, never "" (invariant 9 in check-chart-invariants). */}}
-  {{- if .Values.containerImages.cacheMaxBytes }}
-  ContainerImages__CacheMaxBytes: "{{ .Values.containerImages.cacheMaxBytes }}"
-  {{- end }}
-  {{- /* The allowlist, index by index, the same shape as PluginCatalog__Registries__<i>. An empty
-         list renders no key, which the mirror reads as "serve nothing" — never as "serve all". */}}
-  {{- range $i, $r := .Values.containerImages.repositories }}
-  ContainerImages__Repositories__{{ $i }}: "{{ $r }}"
-  {{- end }}
-  {{- end }}
   # ---- Deployment inventory (Doc/Architecture/DeploymentInventory) ---------------------------
   # Every instance reports what it runs — platform build, commit, framework identity, update policy
   # and every module's pinned coordinate — to the control instance's Hosting/Modules inbox, once
@@ -577,9 +585,16 @@ data:
   #
   # 🚨 It overrides BY INDEX, and it never APPENDS. Configuration merges an array element per
   # key, so Modules__Required__5 REPLACES whatever the image baseline holds at index 5 — it does
-  # not add a sixth requirement. The baseline is 7 entries today (0..6: Radzen, Analysis,
-  # EntityViews, GoogleMaps, Speech, Social, AI), so an overlay ADDING a module must start at the
-  # first index PAST it, and an overlay that restates the baseline must restate all of it.
+  # not add a sixth requirement. The baseline is 9 entries today (0..8: Radzen, Analysis,
+  # EntityViews, GoogleMaps, Speech, Social, Blazor.Chat, Markdown.Collaboration, AI) — it was 7
+  # when this block was written — so an overlay ADDING a module must start at the first index PAST
+  # it, and an overlay that restates the baseline must restate all of it.
+  #
+  # 🚨 And an indexed override replaces only the entries it NAMES, so a SHORTER overlay leaves the
+  # baseline's tail required and an EMPTY one leaves the baseline standing in full: these keys
+  # cannot say "these and only these". Modules__RequiredIsAuthoritative below is what says it — a
+  # SCALAR, immune to the index merge, and the only thing an empty list can still state
+  # (MeshWeaver#4476, Doc/Architecture/RequiredModuleAuthority).
   #
   # 🚨 Un-templated, an override is silently dropped and the health check wins anyway — the #1925
   # defect, third occurrence. Not cosmetic here: `required_modules` reports Unhealthy, /health
@@ -593,14 +608,18 @@ data:
   # by looking for the key. A range renders correctly and is invisible to the guard — which is how
   # the first draft of this block passed helm and failed the test, correctly.
   #
-  # 🚨 THE CEILING IS 9 — the block renders 0..9 and NOTHING ABOVE. A ceiling is not an oversight
+  # 🚨 THE CEILING IS 19 — the block renders 0..19 and NOTHING ABOVE. A ceiling is not an oversight
   # here, it is the price of the literal-key contract above: a bounded list is what the guard can
   # check, and an unbounded `range` is what it cannot. So the ceiling has to be stated where it is
   # raised, because twice now an overlay declared the first index past it and the key reached no
   # container at all — Memex#128/#131 (MeshWeaver.Mcp, /mcp answering 404 with Mcp__BaseUrl
-  # configured beside it) and Memex#129. Why 9 and not 7: the baseline consumes 0..6, so a ceiling
-  # of 7 leaves exactly ONE appendable slot; ten slots leave three. RAISING IT is one hasKey block
-  # per index and nothing else — do that rather than reusing a baseline index.
+  # configured beside it) and Memex#129. Why 19 and not 9: the ceiling has to clear a COMPLETE set,
+  # not a delta. It was 9 while the baseline consumed 0..6 and an overlay was a three-slot append;
+  # the baseline is 0..8 now and a deployment stating Modules__RequiredIsAuthoritative renders its
+  # whole set, so memex-cloud's (the nine plus MCP) already fills 0..9 exactly — with the next
+  # module added to the image, a complete set would silently lose its last entry, which under the
+  # authority claim means NOT REQUIRED. RAISING IT is one hasKey block per index and nothing else —
+  # do that rather than reusing a baseline index or trimming a set to fit.
   #
   # Two guards in test/MeshWeaver.Documentation.Test/PlatformBakeLaneGuard.cs hold this shape:
   # ModulesRequired_IsRenderedAsAContiguousRangeFromZero (a gap silently truncates nothing and
@@ -638,6 +657,49 @@ data:
   {{- end }}
   {{- if hasKey .Values.config.memex_portal "Modules__Required__9" }}
   Modules__Required__9: "{{ .Values.config.memex_portal.Modules__Required__9 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__10" }}
+  Modules__Required__10: "{{ .Values.config.memex_portal.Modules__Required__10 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__11" }}
+  Modules__Required__11: "{{ .Values.config.memex_portal.Modules__Required__11 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__12" }}
+  Modules__Required__12: "{{ .Values.config.memex_portal.Modules__Required__12 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__13" }}
+  Modules__Required__13: "{{ .Values.config.memex_portal.Modules__Required__13 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__14" }}
+  Modules__Required__14: "{{ .Values.config.memex_portal.Modules__Required__14 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__15" }}
+  Modules__Required__15: "{{ .Values.config.memex_portal.Modules__Required__15 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__16" }}
+  Modules__Required__16: "{{ .Values.config.memex_portal.Modules__Required__16 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__17" }}
+  Modules__Required__17: "{{ .Values.config.memex_portal.Modules__Required__17 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__18" }}
+  Modules__Required__18: "{{ .Values.config.memex_portal.Modules__Required__18 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__19" }}
+  Modules__Required__19: "{{ .Values.config.memex_portal.Modules__Required__19 }}"
+  {{- end }}
+  # The deployment's own Required entries above are the COMPLETE set: the image's baseline list
+  # does not apply, including when the deployment names none (MeshWeaver#4476). A SCALAR, so the
+  # by-index merge that defeats the entries cannot touch it, and the one statement an EMPTY list
+  # can still make — with no indexed keys rendered, "require nothing" and "this deployment has no
+  # opinion" are otherwise the same ConfigMap.
+  #
+  # 🚨 Emitted only when the deployment SETS it, and the renderer never emits `false`: the host
+  # reads an explicit false as a WITHDRAWAL of a claim layered under it, so rendering one by
+  # default would cancel the claim rather than stay silent. Absent = the entries above stay a
+  # by-index overlay, which is what every deployment was before #4476.
+  {{- if hasKey .Values.config.memex_portal "Modules__RequiredIsAuthoritative" }}
+  Modules__RequiredIsAuthoritative: "{{ .Values.config.memex_portal.Modules__RequiredIsAuthoritative }}"
   {{- end }}
   # Convergence policy (MeshWeaver#2192): when a NodeType publishes a usable build, instances
   # self-recycle onto it instead of waiting behind the "Recycle" banner. Off = the image default

@@ -244,15 +244,15 @@ public class NodeRepoLaneHostGuard
     /// 🚨 <b>NO caller in this repository publishes FLAT, and that is the mitigation — not a
     /// coincidence worth measuring once</b> (MeshWeaver#3461).
     ///
-    /// <para>The residual the generation layout still has is a FLAT publication and a GENERATION
-    /// publication on one prefix: the generation run writes its own directory, moves
-    /// <c>_current</c>, and refreshes the flat compatibility copy LAST, so a flat run whose whole
-    /// publication lands after that seal leaves flat readers on its bytes while pointer-following
-    /// readers stay on the generation — with no overlap for the byte-level postcondition to refuse.
-    /// #4249 makes it unreachable for a run that RESOLVES a live pointer (it publishes a generation
-    /// instead, loudly), so what is left needs a writer that takes the flat arm: a caller passing
-    /// <c>flat</c>, or a run whose <c>publish-bake-bundles.sh</c> predates #4249 — and the second
-    /// cannot be helped by any code added to today's script, because it is not running it.</para>
+    /// <para>The residual the generation layout still has is a FLAT publication on a prefix whose
+    /// <c>_current</c> the run could not resolve: it publishes IN PLACE at the prefix, which since
+    /// #3461 phase 5 is a location the generation publishers DISPOSE of rather than refresh — so a
+    /// flat run re-creates a sealed copy there that only a torn pointer read would ever be served,
+    /// and that the prefix's next generation publication removes again. #4249 makes it unreachable
+    /// for a run that RESOLVES a live pointer (it publishes a generation instead, loudly), so what
+    /// is left needs a writer that takes the flat arm: a caller passing <c>flat</c>, or a run whose
+    /// <c>publish-bake-bundles.sh</c> predates #4249 — and the second cannot be helped by any code
+    /// added to today's script, because it is not running it.</para>
     ///
     /// <para>So the reachable half is kept at zero HERE. Measured 2026-09-14: no caller in the
     /// fleet passes the input at all. This asserts the repository's own callers never introduce one

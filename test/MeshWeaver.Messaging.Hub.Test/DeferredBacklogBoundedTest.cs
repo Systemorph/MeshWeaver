@@ -1,4 +1,5 @@
 using System;
+using System.Reactive.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -26,7 +27,7 @@ public class DeferredBacklogBoundedTest(ITestOutputHelper output) : HubTestBase(
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => configuration
-            .WithTypes(typeof(Filler))
+            .WithTypes(typeof(Filler), typeof(Awaited), typeof(Ack))
             // A user gate that never opens: every non-bypass message defers behind it forever —
             // exactly a client sync/cache hub whose [Initialize] never fires.
             .WithInitializationGate("test-never-opens", _ => false);
@@ -74,5 +75,110 @@ public class DeferredBacklogBoundedTest(ITestOutputHelper output) : HubTestBase(
             $"backlog should climb and settle behind the never-opening gate (last saw {settled})");
         Assert.True(settled <= Cap,
             $"deferred backlog must stay bounded at the cap {Cap}; settled at {settled} — unbounded accumulation is the wedge");
+    }
+
+    /// <summary>A request somebody is awaiting — the shape the overflow drop used to silence.</summary>
+    private record Awaited : IRequest<Ack>;
+
+    /// <summary>Its reply. Never posted in this test: the request is dropped before any handler.</summary>
+    private record Ack;
+
+    /// <summary>
+    /// 🚨 <b>Bounding memory is right; doing it SILENTLY to a request/response caller is not
+    /// (MeshWeaver#1174).</b>
+    ///
+    /// <para>The overflow branch returned <c>delivery.Ignored()</c> and answered nobody,
+    /// justified in comment as <i>"a fire-and-forget writer's retry isn't fed; a client re-syncs a
+    /// fresh Full on reconnect"</i>. That holds for the traffic it was written about and is simply
+    /// false for an awaited <see cref="IRequest"/>: nothing re-syncs a <c>CreateNodeRequest</c>, so
+    /// its caller burns its ENTIRE <c>RequestTimeout</c> on a drop this hub had already decided —
+    /// and the timeout it finally raises cannot name the cause, because from the caller's side an
+    /// intake drop and a handler that never replied look identical.</para>
+    ///
+    /// <para>That path is reachable on the mesh's node-CRUD hub: <c>portal/nodeops-{meshId}</c> is
+    /// built with <c>.AddData()</c>, which installs the <c>DataContextInit</c> gate whose only
+    /// bypass predicate is <c>PingRequest</c> — so node CRUD IS deferrable there.</para>
+    ///
+    /// <para>The drop itself is unchanged. What changes is that a sender waiting on it is told, at
+    /// once, with a classification that says "no verdict was reached, retry" rather than "denied"
+    /// or "absent".</para>
+    /// </summary>
+    // 🚨 No hand-written [Fact(Timeout = …)] here, deliberately. The bound this test needs is the
+    // hub's OWN RequestTimeout: if the drop went back to being silent, the Observe below waits it
+    // out and raises a TimeoutException instead of the DeliveryFailureException asserted — which
+    // fails the test with the right reason. A literal would spend TestTimeoutLiteralRatchetGuard's
+    // inventory, which may only shrink, to add a second, weaker net.
+    [Fact]
+    public async Task ARequestDroppedByTheOverflowCap_IsAnswered_NotSilenced()
+    {
+        var host = GetHost();
+
+        // Fill the deferred queue past the cap FIRST. The main queue is strict FIFO and each
+        // filler is deferred on its own turn, so by the time the request below takes its turn the
+        // deferred queue is provably at the cap — no polling, no sleeping, no load loop.
+        for (var i = 0; i < Cap + 50; i++)
+            host.Post(new Filler(i), o => o.WithTarget(host.Address));
+
+        var act = async () => await host
+            .Observe<Ack>(new Awaited(), o => o.WithTarget(host.Address))
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        // A DeliveryFailureException — NOT a TimeoutException. The distinction is the whole test:
+        // a TimeoutException here would mean the request was dropped in silence and the caller
+        // spent its whole budget discovering it.
+        var failure = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
+
+        failure.Message.Should().Contain("cap",
+            "the answer must name the stuck-gate overflow that dropped it, not a generic failure");
+        failure.Message.Should().Contain("retry",
+            "a stuck gate is 'no verdict was reached' — the same request is meaningful again once "
+            + "the gate opens, so the answer must not read as a denial or an absence");
+        failure.Failure.ErrorType.Should().Be(ErrorType.Unavailable,
+            "a stuck gate says nothing about the caller's rights and nothing about whether the "
+            + "target exists; Forbidden or NotFound would be actionable-looking lies");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The classification must survive the PARENT-NACK route, not only the fallback</b>
+    /// (MeshWeaver#1174, Copilot review on #4468).
+    ///
+    /// <para><c>AnswerUnreleasableDelivery</c> tries <c>NackThroughParent</c> first and falls back
+    /// to <c>ReportFailure</c>. Only the fallback used the caller's <c>errorType</c>; the parent
+    /// route hard-coded <c>ShuttingDown</c> for every non-tombstoned address. So the honest
+    /// "no verdict was reached, retry" verdict was replaced by "this address is going away"
+    /// EXACTLY when the answer did get through — and the case above cannot catch it, because a
+    /// hub posting to ITSELF makes <c>NackThroughParent</c> decline at its <c>sender-is-self</c>
+    /// guard and take the fallback every time.</para>
+    ///
+    /// <para>So this one posts from a DIFFERENT hub: sender ≠ target, a live parent, the parent
+    /// route taken. The tombstone branch is untouched — a deleted address stays the authoritative
+    /// <c>NotFound</c> that #1029 exists for.</para>
+    /// </summary>
+    [Fact]
+    public async Task TheOverflowAnswer_KeepsItsClassification_WhenTheParentCarriesIt()
+    {
+        var host = GetHost();
+        var client = GetClient(c => c
+            .WithTypes(typeof(Awaited), typeof(Ack))
+            .WithPostingIdentity(PostingIdentity.System));
+
+        // Same deterministic fill as above, and it completes before the routed request below can
+        // reach the host's queue: every Post here enqueues synchronously on the host itself.
+        for (var i = 0; i < Cap + 50; i++)
+            host.Post(new Filler(i), o => o.WithTarget(host.Address));
+
+        var act = async () => await client
+            .Observe<Ack>(new Awaited(), o => o.WithTarget(CreateHostAddress()))
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        var failure = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
+
+        failure.Failure.ErrorType.Should().Be(ErrorType.Unavailable,
+            "the drop's own classification must reach the sender whichever carrier takes it — "
+            + "ShuttingDown here would tell the caller the address is going away, which is false, "
+            + "and is what the parent route substituted before the classification was threaded "
+            + "through it");
     }
 }

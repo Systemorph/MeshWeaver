@@ -420,14 +420,42 @@ is): a `global.json` in a **sibling** directory of the cwd does **not** apply �
 question two reviews got wrong in opposite directions. **Two** core-owned reusable workflows invoke
 `dotnet test` against satellite suites — `node-repo-module-pack.yml` (a module's sibling `*.Test`
 project, ×2 call sites) and `node-repo-platform-canary.yml` (the scheduled pin-vs-main canary) — and
-both run with cwd = the **caller's** checkout while keeping the platform in a **sibling** checkout
-(`$GITHUB_WORKSPACE/meshweaver`, `…/core-pin`, `…/core-main`). So core's own `global.json` never
-reaches them and cannot break them; the **caller's** does, which means a satellite adding one is
-exactly the event that would have. Both lanes therefore now read the caller's `global.json` and
-choose their own flags — VSTest (`-warnaserror`, `--logger "trx;…"`) when it selects nothing, and
-xunit's MTP reporter (`--report-xunit-trx`, `--report-xunit-trx-filename`) when it selects
-Microsoft.Testing.Platform. Nothing about a 3.x caller changes, and a repo that moves no longer has
-to land a core PR in the same change set to keep its lane working.
+both keep the platform in a **sibling** checkout (`$GITHUB_WORKSPACE/meshweaver`, `…/core-pin`,
+`…/core-main`), and `dotnet test` reads its runner from the first `global.json` walking up from its
+**cwd**. So the rule both lanes apply is: read the caller's `global.json` **and** the platform's;
+run under Microsoft.Testing.Platform when either selects it, with xunit's MTP reporter
+(`--report-xunit-trx`, `--report-xunit-trx-filename`), otherwise under VSTest (`-warnaserror`,
+`--logger "trx;…"`). The cwd is the **caller's checkout by default**, and the **platform's
+checkout only when the platform alone selects MTP**, which is the one way to make its
+`global.json` the one found. Both are executed against temp checkouts in CI's own shell
+(`.github/scripts/test-module-pack-test-runner.py`, `.github/scripts/test-platform-canary.py`).
+
+🚨 **"Nothing about a 3.x caller changes" was false, and it darkened main-cd the hour the upgrade
+merged (#4414).** A satellite does not pick its own xunit.v3 version: it builds with
+`-p:MeshWeaverRoot=` the platform checkout and consumes the platform's `Directory.Packages.props`
+versionless, so the moment core moved to 4.x **every** caller's suite was a 4.x suite. And xunit.v3
+4.x refuses the VSTest target on .NET 10 outright — `Testing with VSTest target is no longer
+supported by Microsoft.Testing.Platform on .NET 10 SDK and later` — so a caller with no
+`global.json` (MeshWeaver.Plugins, 2026-09-15) was run under VSTest against a framework that
+refuses it. main-cd's Plugins pack failed `MeshWeaver.AI`, `Markdown.Collaboration` and
+`Payments.Stripe` with nothing executed, no set sealed, and the lane recorded it as "the module's
+own suite failed". The runner follows the **framework**, and the **platform** pins the framework.
+So both lanes now select Microsoft.Testing.Platform when EITHER checkout's `global.json` does, and
+when only the platform's does they run `dotnet test` **from the platform checkout** on the suite's
+absolute path, which makes that `global.json` the one found. Measured: from the caller's cwd, the
+refusal above and no trx; from the platform's, 36 of 36 run and `ledger.trx` written. The build is
+untouched — `Directory.Build.props` and the NuGet config resolve from the project's directory, not
+the cwd. A repo that moves its own runner still lands no core PR; a repo that does not move is
+carried by the platform it compiles against — for the RUNNER. Its code needs one more thing:
+`xUnit1069` is a **warning** by default, and it stops a build only where warnings are errors. Core's
+`test/Directory.Build.props` does not import the root, so core's test projects never had
+`TreatWarningsAsErrors`; MeshWeaver.Plugins' `*.Test` projects live under `src/` and inherited it,
+so the same rule was `error xUnit1069` there (measured 2026-09-15, `MeshWeaver.AI.Test` against
+core main: 269 distinct sites). MeshWeaver.Plugins#1920 aligned its test projects with core's
+policy; after it, main-cd run 34964034139 built the same suites with the advisories as warnings and
+ran them green. A satellite that applies warnings-as-errors to its tests meets the rule as an error
+the day its platform set carries 4.x. The warnings are not the finish line either: a timed test that
+ignores the token still outlives its verdict, so each one is threaded, as core did for its 707.
 
 Three more measurements the lanes are built on, same SDK and day: `-p:` properties **do** reach the
 build under MTP (falsified with `-p:LangVersion=7.0` → `error CS8630`, exit 1), so

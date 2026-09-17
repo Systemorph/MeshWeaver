@@ -1,0 +1,112 @@
+# Hold a pull request while the automatic review is missing or any of its findings is unanswered.
+#
+# 🚨 WHY (MeshWeaver#4299, option B — the maintainer's decision of 2026-09-17). The ruleset reviews
+# every pull request into main and auto-arm.yml arms every pull request the moment it opens, and
+# nothing joined the two: a review was ADVISORY. #4310 merged with 14 findings and 0 replies and
+# stopped the fleet's publication for six hours; 9 of the 31 merges on 2026-09-14/15 carried
+# unanswered findings; #4383 lost the fix push for its findings to the merge by a minute. In every
+# measured miss the review had LANDED and was simply unread. Replayed over 60 merges
+# (2026-09-16T08:48Z → 09-17T07:41Z), 32 carried at least one unanswered finding at merge.
+#
+# The predicate lives in .github/scripts/check-review-answered.py, which states it in full; this
+# file only decides WHEN it is re-evaluated and makes sure every evaluation can go red:
+#
+#   pull_request           opened / synchronize / reopened / ready_for_review — and labeled /
+#                          unlabeled, because the waiver IS a label
+#   pull_request_review    submitted (the reviewer's own review; a person's reply creates one too)
+#                          and dismissed
+#   pull_request_review_comment  created / deleted — a finding arriving, a reply arriving or going
+#   merge_group            the queue entry is judged again with the data as it stands at admission;
+#                          the pull request number comes from the queue ref
+#                          gh-readonly-queue/main/pr-<N>-<sha>
+#
+# 🛡️ NO SKIP-TRAPDOOR (AGENTS.md — a gate never tests its own inputs):
+#   * no job-level `if:` at all — a skipped required context counts as SATISFIED, so every event
+#     that reaches this file evaluates the predicate in full, forks included (every read here is
+#     public-repository data a read-only token can see, so there is nothing to exempt);
+#   * no `continue-on-error`, and no `|| true` on the reads — an unreadable review is RED, named;
+#   * no path or branch filter — a pull request that "passes" by not running is the same defect;
+#   * the self-test runs first, so a predicate that can no longer say no fails here before its
+#     verdict on the real pull request is believed.
+#
+# 🚨 NOT A REQUIRED CHECK YET. It lands observed-only; the maintainer adds the context
+# `Automatic review answered` to ruleset 2128472 beside `Consolidate test results` once it has
+# been watched on live pull requests. Doc/Architecture/ReviewFindingsAnswered lists what to confirm
+# first (including the merge-queue steward's reading of an ejection this check causes).
+name: Review answered
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, dismissed]
+  pull_request_review_comment:
+    types: [created, deleted]
+  merge_group:
+    types: [checks_requested]
+
+# Reads only, and only what the predicate needs: the pull request, its reviews and review comments
+# (pull-requests), the label events that attribute a waiver (issues), and the checkout (contents).
+# The collaborator-permission read that verifies a waiver needs `metadata: read`, which every
+# GITHUB_TOKEN carries.
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+# 🚨 The group is per PULL REQUEST for pull-request events and per QUEUE ENTRY for `merge_group`
+# (the queue head ref carries the entry's sha), because that is the granularity that matters: two
+# evaluations racing would publish the same check-run NAME on the same commit, and two queue entries
+# of one pull request are two different commits with two separate check-runs. So a re-queue of the
+# same pull request may evaluate concurrently with an older entry, by design.
+#
+# NEVER cancelled mid-read: a review lands as one `submitted` event plus one `created` event per
+# inline comment, and the evaluation that runs LAST must be the one that read LAST. GitHub keeps one
+# pending run per group, so a burst of fourteen comments collapses to the running evaluation plus
+# the newest pending one. Cancelling would also eject a merge-queue entry rather than retry it.
+concurrency:
+  group: review-answered-${{ github.event.pull_request.number || github.event.merge_group.head_ref }}
+  cancel-in-progress: false
+
+jobs:
+  answered:
+    name: Automatic review answered
+    runs-on: ubuntu-latest
+    # 20 = the 15-minute bounded wait below + headroom for the checkout and the reads. The wait is
+    # not slack: it is the measured consequence of the reviewer's own event being unable to start a
+    # run here (see the `--wait-for-review` note on the step).
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: "Prove the predicate can say no (self-test)"
+        run: python3 .github/scripts/check-review-answered.py --self-test
+
+      # 🚨 `--wait-for-review 15`: while the ONLY thing missing is the review itself, the step
+      # re-reads for up to 15 minutes and then answers RED. Measured on this check's own pull
+      # request (#4575, run 35197843933): the reviewer's `pull_request_review` event DOES arrive and
+      # GitHub DOES create a run for it — `action_required`, ZERO jobs, because the triggering actor
+      # is `Copilot` and this repository requires approval for runs triggered by a first-time
+      # contributor (`actions/permissions/fork-pr-contributor-approval` → `first_time_contributors`).
+      # So the event that would say "the review has landed" cannot start an evaluation, and without
+      # the wait a pull request whose review raises NO findings would keep the red from its `opened`
+      # evaluation until somebody pushed again. The reviewer took 4m38s on #4575; 3–12 minutes is
+      # the range on the thread of #4299. Nothing else is ever waited for.
+      - name: Judge the pull request's automatic review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "merge_group" ]; then
+            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --merge-group-ref "$QUEUE_REF" --wait-for-review 15
+          else
+            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR" --wait-for-review 15
+          fi

@@ -70,6 +70,37 @@ public class PackageListingCacheIsArmedTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
+    /// 🚨 The LISTING asks for the narrow transfer, and the INSTALL still asks for the whole
+    /// package folder — the two halves of #4222's second fix, asserted against the real factory.
+    ///
+    /// <para>A listing that quietly reverted to the unfiltered <c>Fetch</c> would still answer
+    /// correctly and still be cached, so nothing else in this suite could see it: the only symptom
+    /// is that the registry goes back to moving the whole repository (47.8 MB / 13 s against
+    /// MeshWeaver.Plugins) for the manifests it parses. Narrowing the INSTALL would be the opposite
+    /// and much louder failure — an empty package — which is why the second half is pinned too.</para>
+    /// </summary>
+    [Fact]
+    public async Task TheListingAsksForTheNarrowFetch_AndTheInstallStillReadsTheWholeFolder()
+    {
+        await Request();
+
+        Assert.Equal(1, repoClient.Fetches);
+        Assert.Equal(1, repoClient.FilteredFetches);
+
+        var source = PackageSources.FromRepo(Mesh, Repo, sourceSubdir: null, logger: null, nodeRepo: true);
+        Assert.NotNull(source);
+        await source.FetchPackageFiles(new PackageManifest { Id = "Widget", SourceFolder = "Widget" }, Ref)
+            .Should().Within(TestTimeouts.Quick)
+            .Emit("an install must read the package's files",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        // The install read the repository again (file fetches are deliberately NOT cached) and it
+        // did so UNFILTERED — the filtered count did not move.
+        Assert.Equal(2, repoClient.Fetches);
+        Assert.Equal(1, repoClient.FilteredFetches);
+    }
+
+    /// <summary>
     /// 🚨 And the green build still gets through: after the webhook's eviction the next request
     /// fetches again, so a merge is visible without waiting out the freshness window.
     /// </summary>
@@ -145,13 +176,32 @@ public class PackageListingCacheIsArmedTest(ITestOutputHelper output) : Monolith
     private sealed class CountingRepoClient : IGitHubRepoClient
     {
         private int fetches;
+        private int filteredFetches;
 
         public int Fetches => fetches;
+
+        /// <summary>
+        /// 🚨 How many reads asked for the NARROW transfer. This override is what makes that
+        /// question answerable at all: with only the four-argument <c>Fetch</c> implemented, the
+        /// interface's DEFAULT five-argument member forwards to it, so every assertion below would
+        /// have held whether or not <c>PackageSources</c> wired <c>NarrowFetch</c> — and the
+        /// listing could regress to whole-repository reads with this suite still green (#4222).
+        /// </summary>
+        public int FilteredFetches => filteredFetches;
 
         public IObservable<RepoSnapshot> Fetch(
             string repositoryUrl, string commitish, string? subdirectory, string accessToken)
         {
             System.Threading.Interlocked.Increment(ref fetches);
+            return Observable.Return(new RepoSnapshot("sha-1", []));
+        }
+
+        public IObservable<RepoSnapshot> Fetch(
+            string repositoryUrl, string commitish, string? subdirectory, string accessToken,
+            Func<string, bool> pathFilter)
+        {
+            System.Threading.Interlocked.Increment(ref fetches);
+            System.Threading.Interlocked.Increment(ref filteredFetches);
             return Observable.Return(new RepoSnapshot("sha-1", []));
         }
 

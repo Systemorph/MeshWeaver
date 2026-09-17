@@ -92,6 +92,10 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
     private const string MixSynced = "MixSyncedPkg";
     private const string MixOwned = "MixOwnedPkg";
 
+    /// <summary>A partition whose only sync source is mesh → repo — configured, and unable to
+    /// write the mesh (MeshWeaver#4588).</summary>
+    private const string ExportOnlyPartition = "ExportOnlySpace";
+
     /// <summary>The name a second writer puts on a node the installer believes it owns — the
     /// content DRIFT that #4259's presence check cannot see, because the node is still there.</summary>
     private const string DriftedName = "rewritten by the other writer";
@@ -357,6 +361,80 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
         // The package's OWN policy still speaks first: it is the more specific answer.
         RegistryUpdateReconciler.PolicyDecline(new PackageManifest { Id = "X", AutoUpdate = false })
             .Should().NotBeNull("a Notify record declines for its own reason, ownership aside");
+    }
+
+    /// <summary>
+    /// 🚨 <b>An EXPORT-ONLY source is not a second writer</b> — Systemorph/MeshWeaver#4588, Copilot
+    /// review of #4619.
+    ///
+    /// <para><c>SyncDirection.ExportOnly</c> is mesh → repo and REJECTS imports, so nothing it
+    /// configures can overwrite or prune what an installer wrote: on such a partition the installer
+    /// IS the only writer, and holding an install there would be a false positive — the quiet "my
+    /// plugin never installs" this gate must not create. The one-bit seam the compile control plane
+    /// reads (<c>IsTracked</c>) deliberately stays WIDE for the same partition, because its question
+    /// is the opposite one: with the mesh as the source of truth its live source IS current, and a
+    /// type must compile there rather than park (MeshWeaver#3583).</para>
+    ///
+    /// <para>Both readings are taken from the same real provider over the same real config node, so
+    /// the arm fails if the two questions are ever collapsed back into one bit.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AnExportOnlySourceIsNotASecondWriter()
+    {
+        await MeshService.CreateNode(new MeshNode(GitHubSyncService.ConfigId, ExportOnlyPartition)
+            {
+                Name = "GitHub Sync",
+                NodeType = GitHubSyncService.ConfigNodeType,
+                State = MeshNodeState.Active,
+                Content = new GitHubSyncConfig
+                {
+                    RepositoryUrl = "https://github.com/Systemorph/Example",
+                    Branch = "main",
+                    Direction = SyncDirection.ExportOnly,
+                },
+            })
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the export-only source is the precondition of both readings",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var provider = Mesh.ServiceProvider.GetServices<IPartitionSourceTracking>()
+            .Should().ContainSingle("the GitHub provider is this mesh's tracking layer").Subject;
+
+        // The compile control plane's question, unchanged and still WIDE.
+        await provider.IsTracked(ExportOnlyPartition)
+            .Where(tracked => tracked)
+            .FirstAsync()
+            .Timeout(TestTimeouts.CrossSilo)
+            .Await(TestContext.Current.CancellationToken);
+
+        // THE assertion: the installer's question. The verdict is polled because the seam reads a
+        // live listing, so the arm waits for the state it is about rather than the first snapshot.
+        var verdict = await Observable.Interval(TestTimeouts.Quick / 20).StartWith(0L)
+            .SelectMany(_ => PartitionContentOwnership.Observe(Mesh, ExportOnlyPartition))
+            .Where(v => v.Owner != PartitionContentOwner.Undetermined)
+            .FirstAsync()
+            .Timeout(TestTimeouts.CrossSilo)
+            .Await(TestContext.Current.CancellationToken);
+        verdict.InstallerOwnsTheContent.Should().BeTrue(
+            "THE assertion: a mesh → repo source writes nothing into the mesh, so it cannot revert "
+            + "or prune an install — reading it as a second writer would hold every install on that "
+            + "partition for a writer that cannot write (MeshWeaver#4588)");
+
+        // And the control: the same partition, the same node, one field different.
+        await Mesh.GetMeshNodeStream(GitHubSyncService.ConfigPath(ExportOnlyPartition))
+            .Update(node => node with
+            {
+                Content = new GitHubSyncConfig
+                {
+                    RepositoryUrl = "https://github.com/Systemorph/Example",
+                    Branch = "main",
+                    Direction = SyncDirection.Bidirectional,
+                },
+            })
+            .Should().Within(TestTimeouts.WriteConvergence)
+            .Emit("flipping the direction is the control", cancellationToken: TestContext.Current.CancellationToken);
+
+        await AssertOwnership(ExportOnlyPartition, PartitionContentOwner.SyncSource);
     }
 
     // ── harness ─────────────────────────────────────────────────────────────────────────────────

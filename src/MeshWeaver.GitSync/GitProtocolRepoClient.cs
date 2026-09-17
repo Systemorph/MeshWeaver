@@ -86,30 +86,58 @@ public sealed class GitProtocolRepoClient(
     /// </summary>
     public IObservable<RepoSnapshot> Fetch(
         string repositoryUrl, string commitish, string? subdirectory, string accessToken)
-        => Fetch(repositoryUrl, commitish, subdirectory, accessToken, _ => true);
+        => Wire(repositoryUrl, commitish, subdirectory, accessToken, _ => true, narrow: false);
 
     /// <summary>
-    /// Filtered fetch. The git protocol transfers the (shallow) pack in one exchange, so the
-    /// filter is applied while reading the worktree — same REST cost (zero) either way. The
-    /// interface's contract (only matching files in the snapshot) is unchanged.
+    /// Filtered fetch — and, unlike the unfiltered one above, it transfers ONLY the blobs the
+    /// filter keeps, which is the interface's stated contract
+    /// (<see cref="IGitHubRepoClient.Fetch(string,string,string?,string,Func{string,bool})"/>:
+    /// <i>"every package's <c>*/index.json</c> manifest without pulling the rest of the repo"</i>).
+    ///
+    /// <para>🚨 <b>It used to fetch everything and filter while reading the worktree</b>, on the
+    /// reasoning that the git protocol transfers its pack in one exchange so the filter costs the
+    /// same REST calls (zero) either way. That is true of REST CALLS and false of BYTES, and bytes
+    /// are what the caller waits for. Measured against <c>MeshWeaver.Plugins</c> on 2026-09-16:
+    /// the whole-content transfer is <b>47.8 MB / 13 s</b>, while the 143 manifest files the
+    /// plugin catalog's listing actually parses are <b>0.8 MB</b> — 1.7% of it. That 13 s was the
+    /// dominant term in <c>GET /api/plugins</c>'s 12–19 s time to first byte and the reason the
+    /// consumer's 30 s attempt budget was exceeded ~60×/day (#4222). The narrow path below
+    /// measures <b>3.3 s / 1.3 MB</b> for the identical answer at the identical commit.</para>
+    ///
+    /// <para><b>How.</b> <c>--filter=blob:none</c> fetches commits and TREES only (a blobless
+    /// partial clone), so the whole path list is known before a single file's bytes move;
+    /// <c>ls-tree</c> then reads that list for free, the caller's predicate selects from it, and a
+    /// <c>--no-cone</c> sparse-checkout of exactly those paths makes the checkout materialise them
+    /// in ONE batched lazy fetch. Nothing else is ever transferred. A filter that matches nothing
+    /// skips the checkout entirely and moves no blobs at all.</para>
+    ///
+    /// <para><b>Fallback, and why it is not fault-hiding.</b> Partial clone is a server capability
+    /// (<c>uploadpack.allowFilter</c>); a remote that refuses it fails the fetch. That one case
+    /// retries the plain shallow fetch — the SAME snapshot the caller would have got before this
+    /// change, just with more bytes moved — and says so in the log. A failure of THAT fetch
+    /// propagates; nothing is swallowed.</para>
     /// </summary>
     public IObservable<RepoSnapshot> Fetch(
         string repositoryUrl, string commitish, string? subdirectory, string accessToken,
         Func<string, bool> pathFilter)
     {
         ArgumentNullException.ThrowIfNull(pathFilter);
+        return Wire(repositoryUrl, commitish, subdirectory, accessToken, pathFilter, narrow: true);
+    }
+
+    /// <summary>
+    /// The shared shape of both fetches: one temp clone, the short-SHA REST fallback around it.
+    /// <paramref name="narrow"/> picks whether the blobs are selected before or after transfer.
+    /// </summary>
+    private IObservable<RepoSnapshot> Wire(
+        string repositoryUrl, string commitish, string? subdirectory, string accessToken,
+        Func<string, bool> pathFilter, bool narrow)
+    {
         var commitRef = string.IsNullOrWhiteSpace(commitish) ? "main" : commitish.Trim();
         var prefix = NormalizePrefix(subdirectory);
-        var wire = WithTempDir(tmp =>
-            Expect(git.Run(tmp, ["init", "-q"]))
-                .SelectMany(_ => Expect(git.Run(tmp, ["remote", "add", "origin", repositoryUrl])))
-                .SelectMany(_ => Expect(git.Run(tmp,
-                    [.. GitCredentials.AuthArgs(accessToken), "fetch", "-q", "--depth", "1", "origin", commitRef],
-                    GitCredentials.AuthEnv(accessToken))))
-                .SelectMany(_ => Expect(git.Run(tmp, ["checkout", "-q", "--detach", "FETCH_HEAD"])))
-                .SelectMany(_ => Expect(git.Run(tmp, ["rev-parse", "FETCH_HEAD"])))
-                .SelectMany(sha => ReadWorktree(tmp, prefix, pathFilter)
-                    .Select(files => new RepoSnapshot(sha.StdOut.Trim(), files))));
+        var wire = WithTempDir(tmp => narrow
+            ? NarrowSnapshot(tmp, repositoryUrl, commitRef, accessToken, prefix, pathFilter)
+            : WholeSnapshot(tmp, repositoryUrl, commitRef, accessToken, prefix, pathFilter));
         // A hex-looking name is tried over the wire FIRST — "deadbee" may be a legitimate
         // branch/tag, and the whole point of this client is to avoid per-file REST. Only when
         // the wire fetch fails AND the commitish is an ABBREVIATED SHA (the one commitish the
@@ -117,6 +145,12 @@ public sealed class GitProtocolRepoClient(
         return IsShortSha(commitRef)
             ? wire.Catch((Exception ex) =>
             {
+                // 🚨 An UNSUBSCRIBE is not a failed fetch. The pool cancels its token when nobody is
+                // listening any more, and re-reading the repository over REST there would start a
+                // second read for an answer no one will receive — so cancellation propagates rather
+                // than selecting the fallback.
+                if (ex is OperationCanceledException)
+                    return Observable.Throw<RepoSnapshot>(ex);
                 logger?.LogInformation(
                     "Wire fetch of '{Commitish}' failed ({Error}); resolving the abbreviated SHA via REST.",
                     commitRef, ex.Message);
@@ -124,6 +158,208 @@ public sealed class GitProtocolRepoClient(
             })
             : wire;
     }
+
+    /// <summary>Today's transfer: the whole (shallow) pack, then read the worktree through the
+    /// filter. What the UNFILTERED fetch wants — every file is the answer, so selecting paths
+    /// before the transfer would only add round trips.</summary>
+    private IObservable<RepoSnapshot> WholeSnapshot(
+        string tmp, string repositoryUrl, string commitRef, string accessToken,
+        string prefix, Func<string, bool> pathFilter)
+        => InitRemote(tmp, repositoryUrl)
+            .SelectMany(_ => Expect(git.Run(tmp,
+                [.. GitCredentials.AuthArgs(accessToken), "fetch", "-q", "--depth", "1", "origin", commitRef],
+                GitCredentials.AuthEnv(accessToken))))
+            .SelectMany(_ => CheckoutEverything(tmp, accessToken))
+            .SelectMany(_ => Snapshot(tmp, prefix, pathFilter));
+
+    /// <summary>
+    /// The narrow transfer: trees first, then exactly the blobs the filter keeps. See the
+    /// <see cref="Fetch(string,string,string?,string,Func{string,bool})"/> doc for the measurement
+    /// that motivates it.
+    /// </summary>
+    private IObservable<RepoSnapshot> NarrowSnapshot(
+        string tmp, string repositoryUrl, string commitRef, string accessToken,
+        string prefix, Func<string, bool> pathFilter)
+        => InitRemote(tmp, repositoryUrl)
+            .SelectMany(_ => Expect(git.Run(tmp,
+                    [.. GitCredentials.AuthArgs(accessToken),
+                        "fetch", "-q", "--depth", "1", "--filter=blob:none", "origin", commitRef],
+                    GitCredentials.AuthEnv(accessToken)))
+                .Select(result =>
+                {
+                    // 🚨 A remote that does not serve partial clones does NOT fail the fetch: git
+                    // prints "filtering not recognized by server, ignoring" and exits 0, having
+                    // transferred everything. The answer is still correct — the sparse checkout
+                    // below just finds the blobs already local — but the byte saving is gone, and
+                    // an unannounced loss of it is exactly how this latency came back last time.
+                    if (FilterWasIgnored(result))
+                        logger?.LogInformation(
+                            "{Repo} does not serve partial clones (uploadpack.allowFilter), so the "
+                            + "filtered fetch still transferred the whole repository.", repositoryUrl);
+                    return true;
+                })
+                .Catch((Exception ex) =>
+                {
+                    // 🚨 ONLY a refusal of the FILTER selects the fallback. Everything else — a bad
+                    // ref, an auth failure, a transport error, an unsubscribe — propagates, because
+                    // retrying those as a WHOLE-repository fetch would double page-facing work and
+                    // turn an ordinary failure into an expensive one before failing anyway.
+                    if (!IsPartialCloneRefusal(ex))
+                        return Observable.Throw<bool>(ex);
+                    // Capability negotiation, not fault suppression: the remote does not serve
+                    // partial clones, so the ONLY thing lost is the byte saving. The retry below
+                    // produces the identical snapshot, and its own failure propagates.
+                    logger?.LogInformation(
+                        "Partial (blob:none) fetch of {Repo} was refused ({Error}); falling back to a "
+                        + "full shallow fetch — same answer, more bytes.", repositoryUrl, ex.Message);
+                    return Expect(git.Run(tmp,
+                            [.. GitCredentials.AuthArgs(accessToken),
+                                "fetch", "-q", "--depth", "1", "origin", commitRef],
+                            GitCredentials.AuthEnv(accessToken)))
+                        .Select(_ => false);
+                }))
+            .SelectMany(partial => partial
+                ? MaterializeMatching(tmp, accessToken, prefix, pathFilter)
+                : CheckoutEverything(tmp, accessToken))
+            .SelectMany(_ => Snapshot(tmp, prefix, pathFilter));
+
+    /// <summary>
+    /// Selects the matching paths off the (blobless) tree and checks out ONLY those, so the lazy
+    /// blob fetch moves nothing else. Falls back to a whole checkout when the selection cannot be
+    /// expressed as sparse patterns — see <see cref="MaxNarrowPaths"/> and
+    /// <see cref="HasPatternMetacharacter"/>; that is still correct, just not narrow.
+    /// </summary>
+    private IObservable<System.Reactive.Unit> MaterializeMatching(
+        string tmp, string accessToken, string prefix, Func<string, bool> pathFilter)
+        // -z so paths arrive raw: ls-tree QUOTES anything unusual otherwise, and a quoted path
+        // would be selected, pattern-matched and read under a name the worktree does not have.
+        => Expect(git.Run(tmp, ["ls-tree", "-r", "--name-only", "-z", "FETCH_HEAD"]))
+            .SelectMany(tree =>
+            {
+                var total = CountPaths(tree.StdOut);
+                var wanted = WantedPatterns(tree.StdOut, prefix, pathFilter);
+                if (wanted is null)
+                {
+                    // Not expressible as sparse patterns — check everything out. The read still
+                    // applies the filter, so the ANSWER is identical either way.
+                    logger?.LogDebug(
+                        "Narrow fetch: the selection over {Total} path(s) is not expressible as "
+                        + "sparse patterns; checking out the whole tree.", total);
+                    return CheckoutEverything(tmp, accessToken);
+                }
+                logger?.LogDebug(
+                    "Narrow fetch: {Wanted} of {Total} path(s) selected.", wanted.Count, total);
+                if (wanted.Count == 0)
+                    // The filter matches nothing at this commit: no checkout, no blob, no bytes.
+                    return Observable.Return(System.Reactive.Unit.Default);
+                return Expect(git.Run(tmp, ["sparse-checkout", "set", "--no-cone", "--", .. wanted]))
+                    // Emitted only AFTER the sparse set actually succeeded, so it reports the
+                    // command that ran rather than the intention to run it — which is what lets a
+                    // test tell a narrowed checkout from a whole one.
+                    .Do(_ => logger?.LogDebug(
+                        "Narrow fetch: sparse-checkout restricted the worktree to {Wanted} path(s).",
+                        wanted.Count))
+                    .SelectMany(_ => CheckoutEverything(tmp, accessToken));
+            });
+
+    /// <summary>The checkout. Carries the credentials because in a partial clone it is the command
+    /// that lazily fetches the missing blobs — an unauthenticated checkout of a private repo would
+    /// fail there rather than at the fetch.</summary>
+    private IObservable<System.Reactive.Unit> CheckoutEverything(string tmp, string accessToken)
+        => Expect(git.Run(tmp,
+                [.. GitCredentials.AuthArgs(accessToken), "checkout", "-q", "--detach", "FETCH_HEAD"],
+                GitCredentials.AuthEnv(accessToken)))
+            .Select(_ => System.Reactive.Unit.Default);
+
+    private IObservable<GitCommandResult> InitRemote(string tmp, string repositoryUrl)
+        => Expect(git.Run(tmp, ["init", "-q"]))
+            .SelectMany(_ => Expect(git.Run(tmp, ["remote", "add", "origin", repositoryUrl])));
+
+    private IObservable<RepoSnapshot> Snapshot(string tmp, string prefix, Func<string, bool> pathFilter)
+        => Expect(git.Run(tmp, ["rev-parse", "FETCH_HEAD"]))
+            .SelectMany(sha => ReadWorktree(tmp, prefix, pathFilter)
+                .Select(files => new RepoSnapshot(sha.StdOut.Trim(), files)));
+
+    /// <summary>
+    /// The sparse-checkout patterns for the paths the filter keeps — repo-root-relative and
+    /// leading-slash anchored, which is what <c>--no-cone</c> matches exactly.
+    /// <see langword="null"/> means "cannot be expressed", and the caller then checks out
+    /// everything rather than guessing.
+    /// </summary>
+    private static IReadOnlyList<string>? WantedPatterns(
+        string treeOutput, string prefix, Func<string, bool> pathFilter)
+    {
+        var wanted = ImmutableArray.CreateBuilder<string>();
+        var bytes = 0;
+        // 🚨 `-z` records are NUL-delimited and NOTHING else may be stripped: git permits '\n' and
+        // '\r' INSIDE a path, so trimming them would evaluate the filter against a name the
+        // worktree does not have — the file would then be selected under one name and read under
+        // another, and the filtered fetch would silently omit it. Only a genuinely empty record
+        // (the trailing one) is skipped.
+        foreach (var path in treeOutput.Split('\0'))
+        {
+            if (path.Length == 0)
+                continue;
+            if (prefix.Length > 0 && !path.StartsWith(prefix, StringComparison.Ordinal))
+                continue;
+            var subRel = prefix.Length == 0 ? path : path[prefix.Length..];
+            if (!pathFilter(subRel))
+                continue;
+            // A path carrying a gitignore metacharacter would be read as a PATTERN and could
+            // select files the caller did not ask for. Refuse the whole narrowing rather than
+            // build one wrong pattern.
+            if (HasPatternMetacharacter(path))
+                return null;
+            wanted.Add("/" + path);
+            // 🚨 Bound the ARGV, not just the count: a few hundred very long paths reach the
+            // platform's argument limit long before 2,000 entries do, and `sparse-checkout set`
+            // would then fail the whole fetch instead of taking the whole-checkout fallback this
+            // returns. Both bounds are cheap and only one of them is about how MANY files there are.
+            bytes += path.Length + 2;
+            if (wanted.Count > MaxNarrowPaths || bytes > MaxNarrowArgumentBytes)
+                return null;
+        }
+        return wanted.ToImmutable();
+    }
+
+    /// <summary>How many paths the tree carries — the denominator the narrowing is reported against,
+    /// so a log line that says "2 of 5" cannot be read without knowing what was passed over.</summary>
+    private static int CountPaths(string treeOutput)
+        => treeOutput.Split('\0').Count(p => p.Trim('\n', '\r').Length > 0);
+
+    /// <summary>Whether git honoured <c>--filter</c> or told us the server ignored it.</summary>
+    private static bool FilterWasIgnored(GitCommandResult result)
+        => result.StdErr.Contains("filtering not recognized", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Beyond this many matches the patterns stop being worth an argv: a selection this
+    /// wide is close to the whole tree anyway, so the whole checkout is both simpler and safe
+    /// against the platform's argument-length limit.</summary>
+    private const int MaxNarrowPaths = 2000;
+
+    /// <summary>The other half of that bound, in BYTES — what the platform actually limits. 128 KiB
+    /// is far below the smallest `ARG_MAX` in use and leaves room for the rest of the command line.</summary>
+    private const int MaxNarrowArgumentBytes = 128 * 1024;
+
+    /// <summary>
+    /// Whether a failed fetch is the remote REFUSING the filter — the one condition the
+    /// whole-repository retry exists for. Matched on git's own wording for an unsupported or
+    /// malformed filter; anything else is a real failure and must propagate rather than be retried
+    /// as a far more expensive read.
+    /// </summary>
+    private static bool IsPartialCloneRefusal(Exception ex)
+        => ex is not OperationCanceledException
+           && ex.Message is { } m
+           && (m.Contains("filter", StringComparison.OrdinalIgnoreCase)
+               || m.Contains("partial clone", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The gitignore-pattern syntax a literal path must not contain to be usable as one.
+    /// An immutable, never-written lookup — the one shape a <c>static readonly</c> may take
+    /// (<c>Doc/Architecture/NoStaticState</c>).</summary>
+    private static readonly System.Buffers.SearchValues<char> PatternMetacharacters =
+        System.Buffers.SearchValues.Create("*?[]\\!#");
+
+    private static bool HasPatternMetacharacter(string path)
+        => path.AsSpan().IndexOfAny(PatternMetacharacters) >= 0;
 
     // ══════════════════════════════════════════════════════════════════════════
     //  Everything else — cheap single REST calls, delegated to Octokit

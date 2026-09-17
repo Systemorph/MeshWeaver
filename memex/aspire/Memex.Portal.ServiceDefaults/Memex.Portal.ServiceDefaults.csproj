@@ -16,6 +16,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- NameDoesNotResolve is the pure half of the default retry predicate (#4613) and is asserted
+         directly: a predicate that can only be exercised through a real socket is a predicate
+         nobody checks. -->
+    <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
   </ItemGroup>

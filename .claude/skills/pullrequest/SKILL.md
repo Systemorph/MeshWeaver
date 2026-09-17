@@ -24,6 +24,45 @@ made — one line, then stop. A change set spanning repos (MeshWeaver.Education,
 MeshWeaver.Plugins) is finished when every part is merged in dependency order: platform first, then
 what depends on it.
 
+### 🚨 …and MERGED is not LIVE — the running grain still serves its old state
+
+**"The grain keeps serving old state until we send a dispose request"** (maintainer, 2026-09-17).
+Merging is where *your* work ends; it is not where the change starts being served. A per-node hub —
+on Orleans, a grain activation — is built ONCE out of what it read while activating, and **nothing
+re-reads it while it lives**. Every change a portal absorbs *while it keeps running* — a merge that
+syncs in, a package installed or updated, a NodeType recompiled in place — changes what the NEXT
+activation would load and reaches a live one through nothing at all: it keeps answering from what it
+holds, with no error, no log line and nothing to grep. So a merged fix that "does not work" is as
+likely to be an un-recycled activation as a bad fix. (A pod restart or a roll DOES end the
+activations on the pods it replaces — the gap is the running portal, and what a fresh activation
+then chooses.)
+
+**This is the last step of the change set, and it is yours.** For a PR that changes something a
+per-node hub serves — a NodeType's `Source/*.cs`, node content shipped in an image or a bake, a
+layout area compiled in the mesh:
+
+1. **Exercise the feature against the RUNNING address** after the roll. Not the image tag, not the
+   install record, not the green tick — the thing a user does.
+2. **Still the old answer? Recycle that address** and exercise it again. The two surfaces do
+   different amounts of work: `hub.RecycleNode(path, reason: "…")` is **dispose-only**, while the
+   operator `recycle` verb (the MCP tool, the node's **Recycle** menu entry, `mw recycle <path>`)
+   *also* stamps a FORCED release request — but **only when the target is a NodeType node**, and a
+   forced release is what skips prebuilt adoption and compiles the live source (#2818). Recycling an
+   ordinary page recompiles nothing.
+3. **Still the old answer after that? The activation was never the problem.** A third recycle finds
+   nothing. Go look at delivery — the `[ModuleLoad] … (written=…)` line says which bytes the pod
+   actually loaded.
+4. **Name the addresses a deploy has to recycle in the PR body.** A recycle nobody knew to run is
+   indistinguishable from a fix that did not work, and the next session inherits the confusion.
+
+🚨 **A recycle makes the activation RE-READ; it does not decide what the re-read FINDS.** A
+dispose-only recycle compiles nothing at all — it re-resolves the same store key
+`(nodeTypePath, version)` and re-binds the same local copy, which is why a same-path build mismatch
+is reported and deliberately NOT offered as a recycle (#2471). It clears no data, and it touches one
+address, not the process and not the other replicas. Full reference:
+[StaleStateUntilRecycle.md](../../../src/MeshWeaver.Documentation/Data/Architecture/StaleStateUntilRecycle.md)
+· [/deployment](../deployment/SKILL.md).
+
 ### PR capability is CREDENTIAL × REPO — measure it, never remember it
 
 The guidance here once read *"`gh` CLI has read + push only — cannot merge, resolve threads, or
@@ -216,8 +255,14 @@ c=$(suite conclusion); echo "PR $PR CI: $c"; [ "$c" = "SUCCESS" ]   # exit 0 iff
 #    - CI red  → pull the failing job log (REST, but ONE call — not a poll — so it's fine), fix, push, GOTO 3.
 #        gh run view <run-id> --log-failed | grep -iE 'error|##\[error\]'
 #    - Copilot review (arrives automatically — see step 2) → read its comments, address the
-#      actionable ones, resolve threads, push, GOTO 3. Same for any human review.
-#        gh pr view <PR> --json reviews,comments
+#      actionable ones, push, and REPLY to EVERY thread it opened (fixed, or why not), GOTO 3.
+#      Same for any human review. The `Automatic review answered` check (review-answered.yml,
+#      #4299) is RED until the review has landed and each of its threads has a reply from a person
+#      — resolving a thread is not a reply. Never apply the `review-waived` label yourself: it is
+#      a maintainer's decision, and your session runs under an account the check cannot tell apart
+#      from the maintainer's. Doc: Doc/Architecture/ReviewFindingsAnswered.
+#        gh api "repos/Systemorph/MeshWeaver/pulls/<PR>/comments?per_page=100"          # REST, not GraphQL
+#        gh api -X POST "repos/Systemorph/MeshWeaver/pulls/<PR>/comments/<id>/replies" -f body='…'
 
 # 5. MERGE — only now, only if step 3 was green.
 gh pr merge <PR> --merge

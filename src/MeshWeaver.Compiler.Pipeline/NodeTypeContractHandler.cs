@@ -679,6 +679,9 @@ internal static class NodeTypeContractHandler
             DispatchedBuildInputs = null,   // terminal ⇒ no compile in flight (#3390)
             CompilationStatus = CompilationStatus.Ok,
             CompilationError = null,
+            // #4469 — the import finding belongs to the FAILURE it explained, and this record has
+            // settled Ok. Cleared wherever the error text is (Copilot review).
+            CompilationImportRefusals = null,
             // 🚨 A HYDRATE IS NOT A COMPILE (#2895). Handle's published-release
             // short-circuit resolves bytes the record ALREADY names, out of the
             // assembly store, under the key it already carries — nothing is built.

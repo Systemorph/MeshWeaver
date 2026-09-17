@@ -92,6 +92,7 @@ Browse the full set of controls, layout primitives, and data-binding guides:
 | [Side Panel](SidePanel) | Slide-in panels for detail views and settings |
 | [Reactive Dialogs](ReactiveDialogs) | Modal dialogs backed by observable state |
 | [Node Menu](NodeMenu) | Context menus on mesh nodes |
+| [Unreadable Content Is Not Empty Content](UnreadableContentIsNotEmpty) | An empty state is an INVITATION — rendering it over content the view could not interpret is how the stored text gets overwritten |
 | [React Frontend](React) | The client-side React frontend — same `UiControl` contract, rendered in the browser over gRPC-web: running it, rendering, theming, chat, testing |
 | [Custom Blazor Controls](BlazorCustomControls) | Extend the Blazor portal with your own control — a `UiControl` subclass + a `BlazorView`, registered with `WithView`; ships from core, a pack, or a plugin at runtime |
 | [Custom React Controls](ReactCustomControls) | Extend the React renderer with your own control — server-side `$type` + a React registry entry |

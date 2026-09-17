@@ -150,6 +150,8 @@ cleared by the next attempt that actually runs.
    the state this page is about — the note says which commit the instance IS sealed at.
 2. Compare `/health`'s `framework=…` with the `identity` on `Hosting/PlatformBuilds/<source>`. If they
    differ, the instance is not being published for, and no publication will release the hold.
+   **Since #4063 the note states this itself** — see section 7; this step is the manual form, and the
+   one to fall back on for a hold recorded before that shipped.
 3. `search 'namespace:<Space>/_Activity scope:descendants sort:lastModified-desc'`. A green-build
    import appears as `Update <Space> to the built commit <sha>`; the boot reconciler's appears as
    `Reconcile <Space> with the sealed commit <sha>`. An empty tail is a Space nothing has touched,
@@ -250,3 +252,152 @@ Related: [Module Publication Gate](/Doc/Architecture/ModulePublicationGate),
 [Sealed Publication Reads](/Doc/Architecture/SealedPublicationReads),
 [Bake Identity Mismatch](/Doc/Architecture/BakeIdentityMismatch),
 [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost).
+
+## 7. The hold now names its own direction
+
+**A hold's sentence was true and ambiguous, and the ambiguity was acted on the wrong way twice.**
+
+```
+lastSyncOutcome: Held
+lastSyncNote: "built at e2ef5679, not sealed for this instance
+               (identity sd608997…: 'plugins' is sealed at 627fb3cd)"
+```
+
+That is consistent with two situations whose remedies are opposite:
+
+| | what it means | what to do |
+|---|---|---|
+| **A** | nothing has sealed recently — the publishing lane is broken | fix the lane; another publication is exactly what is needed |
+| **B** | seals are advancing under a **newer framework identity** this instance does not run | **roll the instance**; no further publication will ever release the hold |
+
+Measured on memex.meshweaver.cloud, 2026-09-16: held at `627fb3cd` under identity `sd608997…`,
+while `get @Hosting/PlatformBuilds/*` showed the live publication sealed under `s799247a…`. **Case
+B.** Two issues were open reading the same note as case A — MeshWeaver.Plugins#1823 (*"no publication
+has sealed since 2026-09-12"*) and #1798 (*"9 events queued, nothing dispatched"*) — against a lane
+that was green (77 jobs, 0 failures, `Register the publication with memex` success) and an inbox that
+returned `[]`. Both were closed on measurement; neither was ever a lane defect.
+
+**The fact that separates them was on the instance the whole time.** The release markers under the
+published root (`_releases/`, one file per platform version naming its framework identity) name
+*every* line, not only this instance's. `SealedPublicationIndex.NewerLineThan` reads them and
+answers "the newest line strictly above mine, or nothing", and `SealedSyncGate` appends it:
+
+```
+… 'plugins' is sealed at 627fb3cd. The registry has since sealed 3.0.0-ci.8600 under framework
+identity s799247a…, which this instance does not run — so this source advances when this
+instance's IMAGE does (a roll), NOT when another publication lands
+```
+
+Three properties are deliberate:
+
+- **Silence over a guess.** Null — and the note reads exactly as it did before — when the root
+  carries no markers, when this identity is on no line the markers place, and when this instance
+  already *is* the newest. Inventing a direction for an instance nobody can place would be the same
+  defect pointing the other way: telling an operator to roll on no evidence.
+- **Lineage, never SemVer.** Ordering is `PlatformReleaseOrder.Newest`, the same total order
+  `ReleasesOf` documents. Under SemVer §11.4 the retired `3.0.0-rc9.ci.7824` sorts *above* the later
+  `3.0.0-ci.8600`, which would report a current instance as behind a three-day-old line and send an
+  operator to roll **backwards** (#3542).
+- **Both hold shapes.** The clause rides on the sealed-at-another-commit hold and on the
+  publication-not-sealed hold alike; an operator reads them in the same place and is misled by them
+  in the same direction.
+
+---
+
+## 8. A reading that FAILED is not a reading that found nothing
+
+`SealedSyncGate.Decide` answers `Go` when no sealed source is attributable to the repository —
+correctly: an instance that runs no publication of it is not this gate's business. That verdict is
+taken from an **empty list**, and until #3461 an empty list had two meanings:
+
+| why the list is empty | what it means | what the gate did |
+|---|---|---|
+| no published root / no identity configured | this instance seeds from nothing | `Go` — right |
+| the identity has no directory under the root yet | an ordinary new platform line | `Go` — right |
+| **the root is configured and the enumeration FAILED** | **nothing was measured** | `Go` — **the rule, off** |
+
+The third row is the whole rule switching itself off, for **every repository at once**, with a
+single Warning in a log nothing gates on. `SealedPublicationIndex`'s own comment named the trigger
+before there was a guard for it: under phase 5 (dropping the flat compatibility copy) this reader
+*"would find no sentinel at all, report every source unsealed, and SealedSyncGate would then see an
+EMPTY `mine` and return Go for every repository — silently removing the whole rule at the moment it
+matters most."*
+
+**The reading now states which it is** (`SealedPublicationIndex.ReadingFor` → `SealedReadOutcome`),
+and the caller asks **once per delivery, before any verdict**:
+
+```csharp
+var (sealedForThisIdentity, readOutcome) = SealedPublicationIndex.ReadingFor(root, identity, logger);
+var indexRefusal = SealedSyncGate.RefusedForUnreadableIndex(readOutcome, identity);
+// … if it answers, EVERY source is held, not just this repository's
+```
+
+🚨 It is deliberately **not** a parameter of `Decide`. The question is not per repository: if the
+index could not be read, no per-repository answer is trustworthy, so one refusal holds them all.
+
+🚨 **`Directory.Exists` returns false for two different worlds, and the first version of this fix
+got it wrong** — caught by its own test before it shipped. *Nothing* at the identity path is the
+ordinary state of a framework identity nobody has published for; reporting that as a failure would
+hold every source on every new platform line. A **file** (or a broken link) at exactly that path is
+the opposite — something is there and it is not enumerable, which is what a half-finished layout
+migration looks like from this reader. Absent reads as `Read`; occupied-by-something-else reads as
+`Unreadable`.
+
+---
+
+## 9. A refusal is a conclusion, and it records itself too
+
+A sync source can fail to import for a reason that is **not** a hold and never resolves on its own:
+its configured **subdirectory matches nothing** in the named repository. The refusal is correct and
+protective — an empty snapshot under `FullReplace` would mirror the whole Space away (#1326) — but
+until #4499 it logged, threw, and wrote **nothing** to the config node. From outside, a source
+refusing on *every single pass* was indistinguishable from one that is working.
+
+**Measured on memex.systemorph.com, 2026-09-16.** Two Spaces — `DeepSign` and `UWDeepfield` —
+refusing at **~32 passes/hour**, one every two minutes, on both replicas, for an unbounded duration.
+`DeepSign` was verified absent rather than merely reported absent: `061976bc` is a valid commit in
+MeshWeaver.Plugins and no `DeepSign` path exists in that tree nor anywhere on its `main`. The sync
+was following the publication seal correctly — the **subdirectory** was the wrong half.
+
+```
+lastSyncOutcome: Refused
+lastSyncNote:    "No files found under subdirectory 'DeepSign' at 061976bc in …
+                  Refusing to import an empty snapshot — it would prune the whole Space.
+                  Check the subdirectory (including its exact capitalisation …)"
+```
+
+🚨 **`Refused` is deliberately not `Held`.** A hold is a source waiting for a seal it will
+eventually get; a refusal is a **configuration fault** that repeats identically forever and clears
+only when someone edits the source. Reading one as the other sends an operator to wait for a
+publication that would change nothing.
+
+Three details carry it:
+
+- **It is #3581's rule, not a new one.** *"EVERY conclusion records when it happened and what it
+  was"* — including branches that advance nothing. This refusal was the one branch that escaped it.
+- **Recorded, then RE-THROWN.** The error contract is unchanged:
+  `SyncSubdirectoryEmptyException` derives from `InvalidOperationException`, which is what this path
+  threw before, so every existing catch behaves identically. It exists as a *type* only so the
+  caller can record the conclusion without matching on message text.
+- **The SEEN commit does not move; the attempt pair DOES.** Nothing landed, so `lastSyncCommitSha`
+  and the horizon stay put. The first version of this fix also *cleared* the `#3945` attempt pair,
+  reasoning that an "already attempted" marker would licence skipping an import that never ran — and
+  that kept the refusal RETRYABLE, so the seal reconciler went on refusing on every publication
+  announcement at the same commit. A refusal is an attempt with a final verdict (the same commit
+  under the same subdirectory lists the same nothing), so it is now stamped `(commit, final)` with
+  the fingerprint of the configuration it read under; both unattended triggers skip it, and an edit
+  of the source re-attempts at once. See
+  [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost), §7.
+
+**What the two measured sources actually were** (read 2026-09-16 from the repositories' own history,
+not inferred from the message's "check the capitalisation"): neither is a typo, and neither has a
+"correct" subdirectory to point at.
+
+| Space | Repository | What happened to the folder | The source is |
+|---|---|---|---|
+| `DeepSign` | MeshWeaver.Plugins | **renamed** to `Signature` by `c3262d1e9` (2026-09-12, *"provider-neutral Electronic Signature package (renames DeepSign)"*); `DeepSign/_GitSync` last imported at `933a002f`, before the rename | **orphaned** — `Signature/_GitSync` already syncs `Signature` on the same instance, so repointing this one would import the same package into a second Space |
+| `UWDeepfield` | MeshWeaver.Reinsurance | **deleted** by `896ed23` (2026-09-04, *"retire the Deepfield workstations"*), whose message already says *"their Spaces on memex and systemorph still GitSync from folders that no longer exist; retiring those is a mesh-side action"* | **retired** — superseded by `Underwriting` |
+
+So the data remedy for both is to retire the source (delete the `_GitSync` node, or clear its
+`repositoryUrl`), never to rewrite `subdirectory`. That is why the settings tab's refused line offers
+both checking the subdirectory and removing the source.

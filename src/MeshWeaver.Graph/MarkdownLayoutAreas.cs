@@ -35,7 +35,12 @@ public static class MarkdownLayoutAreas
             .Set(new PageLayoutOptions { MaxWidth = "1280px" })
             .AddLayout(layout => layout
                 .WithDefaultArea(OverviewArea)
-                .WithView(OverviewArea, MarkdownOverviewLayoutArea.Overview)
+                // The markdown page draws the standard header itself
+                // (MarkdownOverviewLayoutArea.BuildOverview → MeshNodeLayoutAreas.BuildHeader), so
+                // the framework adds no second provenance line. Declared rather than inferred —
+                // see NodePageProvenance (#4500).
+                .WithNodePage(OverviewArea, MarkdownOverviewLayoutArea.Overview,
+                    NodePageProvenance.RenderedByThePage)
                 .WithView(EditArea, MarkdownEditLayoutArea.Edit)
                 .WithView(SuggestArea, MarkdownEditLayoutArea.Suggest)
                 .WithView(NotebookArea, MarkdownNotebookLayoutArea.Notebook)

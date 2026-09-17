@@ -57,8 +57,11 @@ namespace MeshWeaver.PluginCatalog;
 /// load here. The older upload is kept as the head's fallback generation when it is the better one
 /// (loadable here first, then the higher version); direct adoption remains unchanged because
 /// <see cref="ModuleUpdateDecision"/> already refuses unattended downgrades before it downloads a
-/// byte. The rule holds per process (landings are serialised on one pool slot); two REPLICAS landing
-/// the same module in the same few seconds are still last-writer-wins — #4026.</para>
+/// byte. 🚨 The rule holds across REPLICAS too (#4026): a landing no longer decides against a
+/// snapshot and replaces a shared file with its decision — it records its own facts
+/// (<see cref="ModuleLandingRecord"/>) and the head is DERIVED from every record present, so two
+/// publishes of one module reaching two replicas seconds apart fold to the same head on every
+/// replica. See <c>Doc/Architecture/ModuleActivationHeadOwnership</c>.</para>
 ///
 /// <para><b>The generation a landing displaces is KEPT, as the new entry's fallback (#3649).</b>
 /// <see cref="ModuleActivationEntry.PreviousDirectory"/> names it, the GC references it, and boot
@@ -88,7 +91,9 @@ namespace MeshWeaver.PluginCatalog;
 /// process; <c>/data</c> is shared by every portal replica. So the activation record is one file
 /// PER MODULE (<see cref="ModuleActivationSidecar"/>) and a landing writes only its own — two
 /// replicas landing different modules share no path, cannot lose each other's entry, and never
-/// contend for one file's SMB lease.</para>
+/// contend for one file's SMB lease. And since #4026 the same holds one level down, for two
+/// replicas landing the SAME module: each writes a record of its own landing, and nothing a
+/// landing decides is written back over a file another replica may have just written.</para>
 ///
 /// <para><b>…except a GC pass against a CONCURRENT landing (#2303).</b> A landing's two writes
 /// (move the bytes, then <see cref="ModuleActivationSidecar.WriteEntry"/>) are not atomic across
@@ -212,31 +217,43 @@ public sealed class ModuleLandingService : IDisposable
     /// real SMB lock.</summary>
     internal static int CollectGarbage(
         string baseDirectory, ILogger? logger, TimeSpan? minAge, DateTime? nowUtc,
-        Action<string>? deleteDirectory, CancellationToken cancellationToken = default)
+        Action<string>? deleteDirectory, CancellationToken cancellationToken = default,
+        Func<string?>? ownPlatform = null)
     {
         var modulesRoot = Path.Combine(baseDirectory, "modules");
         if (!Directory.Exists(modulesRoot))
             return 0;
         var delete = deleteDirectory ?? (dir => Directory.Delete(dir, recursive: true));
         var readFaults = 0;
-        var activation = ModuleActivationSidecar.Read(baseDirectory,
-            msg =>
-            {
-                readFaults++;
-                logger?.LogError("{Message}", msg);
-            });
-        var referenced = activation.Entries
-            .Where(e => !string.IsNullOrWhiteSpace(e.Directory))
-            .Select(e => e.Directory!)
+        void OnReadFault(string msg)
+        {
+            readFaults++;
+            logger?.LogError("{Message}", msg);
+        }
+        // 🚨 #4026: TWO answers are referenced, not one. The DERIVED activation (head and fallback
+        // computed from the landing records) is what every current image runs; the STORED entries
+        // are what an image that predates the records reads as its whole answer — and a
+        // rolled-back replica boots from them. Referencing only the derived set would reclaim the
+        // bytes a rollback needs; referencing both keeps a superset of what either reads, so this
+        // pass never deletes anything the pre-#4026 pass would have kept.
+        //
+        // 🚨 And the fallback is ranked PER PLATFORM (Copilot's review of #4427): a rolling update
+        // has two images live on one volume, each ranking by its own link verdicts, so the derived
+        // generations of EVERY platform a verdict exists for — and of the platform with none — are
+        // referenced, never only this process's.
+        // 🚨 …for the PROTECTED platforms only (post-merge review of #4427): this pass's own, the one
+        // with no verdicts, and the two that measured each module most recently. The platform key
+        // is the framework identity, which changes with most builds, so protecting every platform
+        // that ever recorded a verdict kept every old build's fallback for the life of the module.
+        var own = (ownPlatform ?? ModuleActivationSidecar.LivePlatform)();
+        var stored = ModuleActivationSidecar.ReadStoredActivation(baseDirectory, OnReadFault);
+        var referenced = ModuleActivationSidecar.ReferencedGenerations(baseDirectory, stored, OnReadFault, own)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         // 🚨 #3649: an entry's PREVIOUS generation is referenced exactly like its head one. It is
         // the generation boot falls back to when the head does not load on this platform — for a
         // Store-only module the ONLY generation that runs — and reclaiming it is precisely how a
         // shelved landing built for a newer platform used to take a working module away.
-        foreach (var previous in activation.Entries
-                     .Where(e => !string.IsNullOrWhiteSpace(e.PreviousDirectory))
-                     .Select(e => e.PreviousDirectory!))
-            referenced.Add(previous);
+        // (ReferencedGenerations includes every PREVIOUS generation as well as every head.)
         // 🚨 #3395: the activation entries are NOT the whole reference set any more. The mesh's
         // module set deliberately pins an OLDER generation than the entry while a wave's landings
         // wait to be proposed — and that older generation is what every running replica LOADED. A
@@ -286,6 +303,30 @@ public sealed class ModuleLandingService : IDisposable
         var referencesReliable = readFaults == 0;
         var reportedUnreliable = false;
         var cutoff = (nowUtc ?? DateTime.UtcNow) - (minAge ?? DefaultGarbageMinAge);
+        // 🚨 #4026: the landing records are retired here too, and by a rule that cannot change
+        // what Read answers — a record goes only when the entry derived without it is identical
+        // (ModuleActivationSidecar.PruneLandingRecords). Behind the same fail-closed counter and
+        // the same grace window as the generation deletes: a record younger than the window may be
+        // a landing on another replica, and with anything unreadable nothing is retired.
+        if (referencesReliable)
+        {
+            var retired = 0;
+            foreach (var moduleName in ModuleActivationSidecar.ModuleNamesWithLandingRecords(baseDirectory))
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    break;
+                var storedEntry = stored.For(moduleName);
+                retired += ModuleActivationSidecar.PruneLandingRecords(
+                    baseDirectory, moduleName, storedEntry,
+                    stored.WrittenAtOf(storedEntry?.Name ?? moduleName), cutoff, own,
+                    msg => logger?.LogInformation("Modules GC: {Message}", msg));
+            }
+            retired += ModuleActivationSidecar.PruneLandingTemps(baseDirectory, cutoff);
+            if (retired > 0)
+                logger?.LogInformation(
+                    "Modules GC: retired {Count} landing record file(s) the derived activation no "
+                    + "longer needs", retired);
+        }
         var removed = 0;
         foreach (var dir in Directory.EnumerateDirectories(modulesRoot))
         {
@@ -378,7 +419,8 @@ public sealed class ModuleLandingService : IDisposable
     // lock, no semaphore outside the sealed IoPool primitive. Landing is rare and short; 1 costs
     // nothing. 🚨 It is NOT what makes the activation record safe: this pool bounds ONE process,
     // and /data is shared by every replica. Cross-process safety comes from the record's SHAPE —
-    // one file per module (ModuleActivationSidecar), so concurrent writers never share a path.
+    // one file per module (ModuleActivationSidecar), and one immutable record per landing within
+    // it (#4026), so concurrent writers never decide through a path they both write.
     private readonly IoPool pool = new(1);
     private readonly string baseDirectory;
     private readonly ILogger<ModuleLandingService>? logger;
@@ -454,6 +496,55 @@ public sealed class ModuleLandingService : IDisposable
         announce = Subject.Synchronize(activationChanged);
         announceProposed = Subject.Synchronize(moduleSetProposed);
     }
+
+    /// <summary>
+    /// The #4026 pin's constructor (InternalsVisibleTo): <paramref name="beforeRecording"/> runs on
+    /// the landing's own thread once its bytes are on the volume and before it records anything —
+    /// the window in which another replica's landing of the same module used to be lost. A test
+    /// runs a second replica's whole landing inside it, which makes the interleaving that lost
+    /// Mail 1.7.0 deterministic instead of a timing accident.
+    /// </summary>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="baseDirectory">The deployment root.</param>
+    /// <param name="beforeRecording">Runs once a landing's bytes are on the volume, before it records.</param>
+    /// <param name="beforeProjecting">Runs once a landing or an uninstall has decided, before it writes
+    /// the per-module file older images read — the window Copilot's review of #4427 named, in which
+    /// a projection derived before another replica's uninstall (or landing) can be written after it.</param>
+    /// <param name="platformIdentity">The platform build this replica runs — what its link verdicts
+    /// are measured against and read back for. Production uses the live framework identity.</param>
+    /// <param name="platformSurface">The platform half of the link probe's surface, given the probe
+    /// directories. Production uses the running process; a test stands up a replica on ANOTHER image
+    /// by handing it a surface built from that image's files.</param>
+    internal ModuleLandingService(
+        ILogger<ModuleLandingService>? logger, string? baseDirectory, Action<string>? beforeRecording,
+        Action<string>? beforeProjecting = null, string? platformIdentity = null,
+        Func<string[], ModulePlatformSurface>? platformSurface = null)
+        : this(logger, baseDirectory)
+    {
+        this.beforeRecording = beforeRecording;
+        this.beforeProjecting = beforeProjecting;
+        if (platformIdentity is not null)
+            platform = () => platformIdentity;
+        if (platformSurface is not null)
+            this.platformSurface = platformSurface;
+    }
+
+    /// <summary>Null in production — see the internal constructor.</summary>
+    private readonly Action<string>? beforeRecording;
+
+    /// <summary>Null in production — see the internal constructor.</summary>
+    private readonly Action<string>? beforeProjecting;
+
+    /// <summary>
+    /// The platform build this replica runs — the key its link verdicts are recorded under and read
+    /// back for (#4026, Copilot's review of #4427). The live framework identity in production,
+    /// resolved on first use.
+    /// </summary>
+    private readonly Func<string?> platform = ModuleActivationSidecar.LivePlatform;
+
+    /// <summary>The running process in production — see the internal constructor.</summary>
+    private readonly Func<string[], ModulePlatformSurface> platformSurface =
+        directories => ModulePlatformSurface.OfRunningProcess(directories);
 
     /// <summary>The deployment root the <c>modules/</c> tree lives under — exposed so the serving
     /// side (<see cref="ModuleBundleSource"/> callers) reads the SAME tree this service writes,
@@ -635,8 +726,8 @@ public sealed class ModuleLandingService : IDisposable
     /// as the writes so a read never observes a landing halfway through its read-modify-write.
     /// </summary>
     public IObservable<ModuleActivationList> GetActivation()
-        => pool.InvokeBlocking(_ => ModuleActivationSidecar.Read(baseDirectory,
-            msg => logger?.LogError("{Message}", msg)));
+        => pool.InvokeBlocking(_ => ModuleActivationSidecar.ReadFor(baseDirectory,
+            msg => logger?.LogError("{Message}", msg), platform));
 
     /// <summary>
     /// Proposes the module set the deployment's activation record now describes — the coordination
@@ -660,8 +751,22 @@ public sealed class ModuleLandingService : IDisposable
     public IObservable<ModuleSet?> ProposeModuleSet()
         => pool.InvokeBlocking(_ =>
         {
-            var landed = ModuleActivationSidecar.Read(baseDirectory,
-                msg => logger?.LogError("{Message}", msg));
+            // 🚨 Never from a PARTIAL read (post-merge review of #4427): a module the read dropped,
+            // or one derived without a record it could not read, would be proposed as the mesh's
+            // module set and carried to every replica that boots after it. Every caller catches
+            // this and leaves the mesh on its current set; the next wave proposes again.
+            var faults = ImmutableList<string>.Empty;
+            var landed = ModuleActivationSidecar.ReadFor(baseDirectory,
+                msg =>
+                {
+                    faults = faults.Add(msg);
+                    logger?.LogError("{Message}", msg);
+                }, platform);
+            if (!faults.IsEmpty)
+                throw new InvalidOperationException(
+                    $"Not proposing a module set: the activation record could not be read whole "
+                    + $"({faults.Count} fault(s): {string.Join(" | ", faults)}). A set proposed from it "
+                    + "could name generations the whole record does not.");
             var proposed = ModuleSetStore.Propose(baseDirectory, landed,
                 proposedBy: Environment.MachineName,
                 onCorrupt: msg => logger?.LogWarning("{Message}", msg));
@@ -695,7 +800,10 @@ public sealed class ModuleLandingService : IDisposable
         })
         .Do(_ => AnnounceActivationChanged());
 
-    private ModuleLandingOutcome LandCore(
+    // Internal for the #4026 pin (InternalsVisibleTo): a second REPLICA's landing runs to
+    // completion inside the first one's recording window, on the calling thread — a replica is
+    // another process, and its pool is not this one's.
+    internal ModuleLandingOutcome LandCore(
         string name,
         IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
         string? frameworkMvid,
@@ -761,8 +869,8 @@ public sealed class ModuleLandingService : IDisposable
         // Read ONCE: the surface below is measured against the landed set, and the previous
         // generation (#3649) is taken from the same read, so the two cannot disagree about which
         // generation this module currently has.
-        var landedBefore = ModuleActivationSidecar.Read(baseDirectory,
-            msg => logger?.LogWarning("{Message}", msg));
+        var landedBefore = ModuleActivationSidecar.ReadFor(baseDirectory,
+            msg => logger?.LogWarning("{Message}", msg), platform);
         var surface = PlatformSurface(landedBefore);
         var linkVerdict = LinkVerdict();
         var held = linkVerdict.MayLoad ? null : linkVerdict.Report();
@@ -822,23 +930,19 @@ public sealed class ModuleLandingService : IDisposable
         // that report is now about something that actually differs.
         var generation = $"{name}@{GenerationIdOf(assemblies, staticAssets, nativeAssets)}";
 
-        // 🚨 #3649 — THE PREVIOUS GENERATION IS KEPT, never overwritten. The entry this landing
-        // displaces becomes the new entry's fallback: boot loads the head generation, and when
-        // that one cannot load on the running platform it loads this one instead and says so.
-        // Until now the pointer simply moved, the displaced generation was unreferenced, and the
-        // next GC pass reclaimed it — so a shelved landing built for a newer platform took a
-        // working Store-only module away for good (rule R1 of the module adoption policy).
-        //
-        // Carried FORWARD when the displaced generation is itself measured unloadable here and
-        // holds a fallback of its own: two unloadable landings in a row must not push the one
-        // generation that loads out of reach. Measured on the bytes, like every other decision
-        // point — a persisted "held" flag would go stale the moment the platform moved.
+        // The head BEFORE this landing, exactly as THIS replica read it — for the report and the
+        // restart signal only. 🚨 It DECIDES NOTHING any more (#4026): a decision taken against
+        // this snapshot and written back seconds later, by an unconditional rename of a file every
+        // replica shares, is how two replicas landing one module lost each other's landing. The
+        // decision is DERIVED after this landing's record is on the volume, from every record
+        // present (ModuleActivationSidecar.DeriveEntry), so it is the same on every replica
+        // whatever order the writes landed in.
         var displaced = landedBefore.Entries.FirstOrDefault(e =>
             e.Enabled
             && string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(e.Directory));
 
-        // 🚨 #3996 — THE HEAD IS THE HIGHEST VERSION THE SHELF HOLDS, NEVER THE LAST TO ARRIVE.
+        // 🚨 #3996 — ON THE SHELF THE HEAD IS THE HIGHEST VERSION HELD, NEVER THE LAST TO ARRIVE.
         //
         // A publish makes bytes AVAILABLE; it does not, by itself, choose what the registry serves.
         // The head pointer used to move for every accepted upload, so which version a registry
@@ -851,82 +955,37 @@ public sealed class ModuleLandingService : IDisposable
         // `Version=1.6.1 PreviousVersion=1.7.0`, i.e. the next restart silently un-shipped a merged
         // change. MeshWeaver.AI showed the same shape the same night.
         //
-        // The rule, stated: ARRIVAL ORDER is a property of the build queue; VERSION ORDER is a
-        // property of the artifacts, and it is the only order the two publishers — and every
-        // consumer — already agree on. So the head moves only for an upload that does not rank
-        // BELOW it, and the comparer is the SAME NuGetVersionComparer ModuleUpdateDecision uses for
-        // SkipOlder ("never rolled back unattended"). That identity is load-bearing rather than
-        // tidy: a registry whose head ranked by a different order than its consumers' would serve a
-        // version every one of them refuses as older, and nothing would ever converge.
-        //
+        // The rule is applied by the DERIVATION's replay (KeepsHead), and this landing contributes
+        // the one fact it needs: its LANE (ModuleLandingRecord.YieldsToNewerHead — true here on the
+        // shelf, false on the adopt path, where an older version is an operator who asked for it).
         // What each case does, deliberately:
         //   • STRICTLY OLDER  → shelf-only. The bytes land (the publisher's job succeeded — its
-        //     artifact is on the shelf and is this instance's fallback generation), the head stays.
-        //     A DELIBERATE ROLLBACK therefore cannot be expressed by re-publishing an older
-        //     version any more: publish the fixed build under a HIGHER version (roll forward), or
-        //     uninstall the module on this registry first (RemoveModule disables the entry, so the
-        //     next publish is a first landing). The Store's adopt path (LandModule) does not carry
-        //     the rule at all. That is the same trade SkipOlder already makes on the consumer side,
-        //     and it is worth making here because the publish route has no operator to mean it —
-        //     the caller is a build job, and a build job never intends a rollback.
+        //     artifact is on the shelf, and it competes for the fallback), the head stays. A
+        //     DELIBERATE ROLLBACK therefore cannot be expressed by re-publishing an older version:
+        //     publish the fixed build under a HIGHER version (roll forward), or uninstall the module
+        //     on this registry first (RemoveModule disables it and removes its landing records, so
+        //     the next publish is a first landing). The same trade SkipOlder makes on the consumer
+        //     side, worth making because the publish route has no operator to mean a rollback.
         //   • EQUAL VERSION   → the head MOVES. Strictly-below, never at-or-below: a module's
         //     version encodes CONTENT only, so a rebuild of unchanged source against a new platform
         //     republishes under the SAME version and is exactly the artifact consumers are waiting
-        //     for (Plugins#931/#723). If the bytes are also identical the content address resolves
-        //     to the generation the entry already names, so it is the no-op it should be.
+        //     for (Plugins#931/#723). Identical bytes resolve to the generation already recorded,
+        //     so they are the no-op they should be.
         //   • PRE-RELEASE     → SemVer order, from the same comparer: 1.7.0 outranks 1.7.0-rc1, and
         //     3.0.0-ci.3758 outranks 3.0.0-ci.900 (numerically, which is the whole reason that type
-        //     exists). Publishing a pre-release after the stable it precedes is shelf-only.
-        //   • UNKNOWN VERSION on either side → the head MOVES, as before. An unrecorded version is
-        //     absence of evidence, not evidence of olderness, and reading it as "older" would let
-        //     one unversioned entry freeze a module's head for good — a string deciding what the
-        //     bytes should (rule R2 of Doc/Architecture/ModuleAdoptionPolicy). A version that is
-        //     not SemVer at all counts as unknown too: NuGetVersionComparer reads an unparseable
-        //     part as 0, so "nightly" would otherwise rank below every real version for good.
+        //     exists).
+        //   • UNKNOWN VERSION on either side → the head MOVES. An unrecorded or non-SemVer version is
+        //     absence of evidence, not evidence of olderness (rule R2 of
+        //     Doc/Architecture/ModuleAdoptionPolicy).
         //   • A NEWER HEAD WHOSE BYTES ARE GONE → the head MOVES. Only a LANDED generation is
-        //     protected: a record naming a directory whose entry DLL is missing (a lost volume, a
-        //     manual deletion) is not a version this registry holds, and protecting it would make
-        //     the rule a self-sealing outage — the one upload that could heal it, refused. A
-        //     re-publish of the head's OWN bytes is not this case: it resolves to the head's own
-        //     directory, the landing restores the files that directory lost, and the head keeps
-        //     its (higher) label.
-        //   • A NEWER HEAD THAT DOES NOT LINK HERE → the head STAYS, deliberately. The shelf
-        //     carries modules for platforms NEWER than the registry serving them (ModuleBundleSource),
-        //     and boot already runs the fallback when the head does not load here (#3649, rule R1).
-        //     Letting an older loadable upload take the head would, the moment this registry's own
-        //     platform caught up, restart it onto the OLDER version — #3996 again by another road —
-        //     and PreviousToKeep would drop the newer generation outright whenever a loadable
-        //     fallback already existed, taking it away from every consumer too. Loadability HERE is
-        //     the FALLBACK's question, and the older upload competes for that slot (ShelfOnlyEntry).
-        var keepsNewerHead = keepNewerHead
-            && displaced is { Version.Length: > 0 }
-            && IsOrderableVersion(version)
-            && IsOrderableVersion(displaced.Version)
-            && NuGetVersionComparer.Instance.Compare(version, displaced.Version) < 0
-            && (ModuleActivationBoot.LandedModuleDllExists(baseDirectory, displaced)
-                // These very bytes ARE the head's generation (the content address ignores the
-                // version label), and the landing below restores any file that generation lost
-                // (RestoreMissingFiles) — so it is present again by the time this is acted on.
-                || string.Equals(displaced.Directory, generation, StringComparison.OrdinalIgnoreCase));
-
-        var previous = displaced is null || keepsNewerHead ? null : PreviousToKeep(displaced);
-
-        ModuleActivationEntry? PreviousToKeep(ModuleActivationEntry current)
-        {
-            // A re-land of the IDENTICAL bytes resolves to the generation the entry ALREADY names,
-            // because the leaf is the content address. Nothing is displaced, so nothing becomes a
-            // fallback: the entry keeps the fallback it had. Recording itself would be a fallback
-            // that is no fallback (PreviousGeneration reads it back as none anyway).
-            if (string.Equals(current.Directory, generation, StringComparison.OrdinalIgnoreCase))
-                return ModuleActivationBoot.PreviousGeneration(current);
-            var older = ModuleActivationBoot.PreviousGeneration(current);
-            if (older is null || !ModuleActivationBoot.LandedModuleDllExists(baseDirectory, older))
-                return current;
-            var currentDll = ModuleActivationBoot.LandedDllPath(baseDirectory, current);
-            if (!File.Exists(currentDll))
-                return older; // the displaced bytes are gone; its own fallback is what is left
-            return ModulePlatformLink.Check(currentDll, surface).MayLoad ? current : older;
-        }
+        //     protected; protecting a record that names missing bytes would make the rule a
+        //     self-sealing outage. A re-publish of the head's OWN bytes is not this case: it
+        //     resolves to the head's own directory, the landing restores the files that directory
+        //     lost, and the head keeps its (higher) label.
+        //   • A NEWER HEAD THAT DOES NOT LINK HERE → the head STAYS, deliberately. The shelf carries
+        //     modules for platforms NEWER than the registry serving them, and boot runs the fallback
+        //     when the head does not load here (#3649, rule R1). Loadability HERE is the FALLBACK's
+        //     question — the derivation ranks the fallback by it, never the head.
 
         // 🚨 The same-identity trap-door: modules/<name>/<name>.dll wins over the app folder in
         // ResolveModulePath, so a module named after an app-closure assembly would shadow the
@@ -1030,109 +1089,131 @@ public sealed class ModuleLandingService : IDisposable
                 name, nativeAssets.Count, generation,
                 string.Join(", ", nativeAssets.Select(a => a.RelativePath)));
 
-        var entry = !keepsNewerHead
-            ? new ModuleActivationEntry
-            {
-                Name = name,
-                Source = ModuleActivationSources.Store,
-                PackagePath = packagePath,
-                FrameworkMvid = frameworkMvid,
-                SourceCommit = sourceCommit,
-                Version = version,
-                MinMeshVersion = minMeshVersion,
-                Enabled = true,
-                Directory = generation,
-                PreviousDirectory = previous?.Directory,
-                PreviousVersion = previous?.Version,
-                PreviousFrameworkMvid = previous?.FrameworkMvid,
-                PreviousSourceCommit = previous?.SourceCommit,
-            }
-            : ShelfOnlyEntry(displaced!);
-
-        // 🚨 #3996 — a SHELF-ONLY landing keeps the head and still has to leave its generation
-        // REACHABLE. The modules GC reclaims any directory no entry and no module set references
-        // (CollectGarbage above), so an upload that merely fails to become head and is recorded
-        // NOWHERE is not "shelved" at all — it is deleted five minutes later, which would trade one
-        // silent loss for another. The slot it belongs in already exists and means exactly this: the
-        // entry's PREVIOUS generation (#3649) — the one boot loads when the head does not load on
-        // this platform, kept out of the GC's reach by the same rule.
+        // 🚨 #4026 — RECORD THE LANDING; NEVER DECIDE BY REPLACING A SHARED FILE.
         //
-        // It takes that slot only when it is genuinely the better second-best, judged by the two
-        // things the policy judges everything else by, in this order (KeepsRecordedFallback):
-        //   • LOADING here comes first (measured, not declared) — a working fallback is never
-        //     displaced by bytes this platform just measured as unloadable, and an unloadable one is
-        //     displaced by bytes that load, whatever the two versions say; then
-        //   • the HIGHER version, by the same comparer as the head rule. On a tie the recorded one
-        //     stays: identical rank is no reason to rewrite a shared file, and the generation already
-        //     referenced is the one a running pod may hold open.
-        // A fallback whose bytes are GONE is replaced regardless — it references nothing. An upload
-        // that loses is NOT retained and the GC reclaims it; the outcome says so (RetainedAsFallback)
-        // rather than calling it shelved. One slot means a registry holds at most two generations of
-        // a module, which is the #3649 design, not a new limit.
-        ModuleActivationEntry ShelfOnlyEntry(ModuleActivationEntry head)
+        // The landing's facts go into a file of their own, named by their content address, and the
+        // head is DERIVED afterwards from every record on the volume. Two replicas landing
+        // DIFFERENT content of this module write different files, so neither can lose the other's
+        // landing; two landing the SAME bundle write one name with one content, the benign
+        // collision #3656 already relies on for the generation directory. Nothing is decided against
+        // a snapshot and written back later, which is the lost update #3996's rule could not see
+        // across replicas (Mail 1.7.0 and 1.6.1 reaching two replicas seconds apart).
+        beforeRecording?.Invoke(name);
+        var record = new ModuleLandingRecord
         {
-            // A re-upload of the head's OWN bytes at a lower version label resolves to the head's
-            // generation. There is nothing to keep beside it, and PreviousGeneration would read a
-            // self-referencing fallback back as none anyway.
-            if (string.Equals(head.Directory, generation, StringComparison.OrdinalIgnoreCase))
-                return head;
-            if (KeepsRecordedFallback(ModuleActivationBoot.PreviousGeneration(head)))
-                return head;
-            return head with
-            {
-                PreviousDirectory = generation,
-                PreviousVersion = version,
-                PreviousFrameworkMvid = frameworkMvid,
-                PreviousSourceCommit = sourceCommit,
-            };
-        }
-
-        bool KeepsRecordedFallback(ModuleActivationEntry? recorded)
+            Name = name,
+            Source = ModuleActivationSources.Store,
+            PackagePath = packagePath,
+            Directory = generation,
+            Version = version,
+            FrameworkMvid = frameworkMvid,
+            MinMeshVersion = minMeshVersion,
+            SourceCommit = sourceCommit,
+            YieldsToNewerHead = keepNewerHead,
+        };
+        void OnCorrupt(string message) => logger?.LogWarning("{Message}", message);
+        // 🚨 What THIS platform measured about these bytes, recorded under THIS platform's identity
+        // (Copilot's review of #4427). Loadability is a fact about the bytes AND the image, so a
+        // replica on another image — or a later one on this image after a sibling landed — records
+        // its own measurement instead of finding the first replica's frozen in the landing record.
+        // Written before the landing record, so a record is never visible without its verdict.
+        if (platform() is { Length: > 0 } measuredOn)
+            ModuleActivationSidecar.WriteVerdict(baseDirectory, name, generation, measuredOn, held is null);
+        var recorded = ModuleActivationSidecar.WriteLanding(baseDirectory, record);
+        // 🚨 Nothing is derived — and so nothing projected or reported — from a PARTIAL read (the
+        // post-merge review of #4427): an unreadable tombstone skipped would read an uninstalled
+        // module as installed, an unreadable head record an older generation as the head.
+        ModuleActivationSidecar.ModuleHeadState ReadWhole()
         {
-            if (recorded is null || !ModuleActivationBoot.LandedModuleDllExists(baseDirectory, recorded))
-                return false;
-            // These very bytes already ARE the fallback (an identical older re-publish).
-            if (string.Equals(recorded.Directory, generation, StringComparison.OrdinalIgnoreCase))
-                return true;
-            var recordedLoads = ModulePlatformLink.Check(
-                ModuleActivationBoot.LandedDllPath(baseDirectory, recorded), surface).MayLoad;
-            var incomingLoads = held is null;
-            if (recordedLoads != incomingLoads)
-                return recordedLoads;
-            return !string.IsNullOrWhiteSpace(recorded.Version)
-                   && NuGetVersionComparer.Instance.Compare(version, recorded.Version) <= 0;
+            var read = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name, OnCorrupt, platform);
+            return read.Whole
+                ? read
+                : throw new InvalidOperationException(
+                    $"Module '{name}': its activation records could not be read whole, so nothing is "
+                    + "derived or projected from this landing now. Its bytes and its landing record are "
+                    + "on the volume; the next read that sees the records whole derives it.");
         }
+        var state = ReadWhole();
+        // The record was already on the volume — and the modules GC may have retired it between
+        // that existence check and this read (it retires a record the answer does not need). This
+        // landing still happened, so it is recorded again, once, into a name that is now absent:
+        // not a retry of anything that failed.
+        if (!recorded && !state.Log.Records.Any(r => ModuleActivationSidecar.SameFacts(r, record)))
+        {
+            recorded = ModuleActivationSidecar.WriteLanding(baseDirectory, record);
+            state = ReadWhole();
+        }
+        // The same bundle landed before, so its record was already here. Usually a no-op — but an
+        // adopt landing re-installing the generation this deployment ran before (the Store's
+        // rollback) must still take the head, so a landing that WOULD move it records a
+        // re-arrival of its own instead of relying on a record that arrived earlier.
+        if (!recorded
+            && ModuleActivationSidecar.ReArrival(baseDirectory, state, record, platform) is { } again)
+        {
+            ModuleActivationSidecar.WriteLanding(baseDirectory, again);
+            state = ReadWhole();
+        }
+        var entry = state.Derived
+            ?? throw new InvalidOperationException(
+                $"Module '{name}': the landing record for {generation} is not on the volume after it "
+                + "was written, and nothing else is recorded for the module. Nothing was activated; land "
+                + "it again.");
 
-        string ShelfOnlyReason(ModuleActivationEntry head, ModuleActivationEntry kept) =>
-            $"version {version} ranks below {head.Version}, which this registry already holds as the "
-            + $"head generation {head.Directory} — the upload is SHELF-ONLY and the head does not "
-            + "regress (#3996). "
-            + (string.Equals(kept.PreviousDirectory, generation, StringComparison.OrdinalIgnoreCase)
+        // What this landing's report says, against the head as DERIVED — which on a quiet volume is
+        // what the landing alone would have decided, and under a concurrent landing is the answer
+        // every replica agrees on.
+        var becameHead = string.Equals(entry.Directory, generation, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(entry.Version, version, StringComparison.Ordinal);
+        var retainedAsFallback = !becameHead
+            && string.Equals(entry.PreviousDirectory, generation, StringComparison.OrdinalIgnoreCase);
+        var shelfOnly = becameHead ? null : ShelfOnlyReason(entry);
+
+        string ShelfOnlyReason(ModuleActivationEntry head)
+        {
+            var ranksBelow = ModuleActivationSidecar.IsOrderableVersion(version)
+                && ModuleActivationSidecar.IsOrderableVersion(head.Version)
+                && NuGetVersionComparer.Instance.Compare(version, head.Version) < 0;
+            var lead = ranksBelow
+                ? $"version {version} ranks below {head.Version}, which this registry already holds as "
+                  + $"the head generation {head.Directory} — the upload is SHELF-ONLY and the head does "
+                  + "not regress (#3996). "
+                : $"version {version ?? "(unversioned)"} landed, but {head.Version ?? "(unversioned)"} "
+                  + $"({head.Directory}) arrived after it on this deployment's shared volume and is the "
+                  + "head (#4026). ";
+            var kept = string.Equals(head.PreviousDirectory, generation, StringComparison.OrdinalIgnoreCase)
                 ? $"Its bytes are retained as the head's fallback generation and serve at version {version}. "
                 : string.Equals(head.Directory, generation, StringComparison.OrdinalIgnoreCase)
                     ? "Its bytes are identical to the head's, so there is nothing to keep beside it. "
-                    : $"Its bytes are NOT retained: the fallback slot keeps {kept.PreviousVersion ?? "(unversioned)"} "
-                      + $"({kept.PreviousDirectory}), the better fallback by loadability here first and "
-                      + "version second, so the modules GC reclaims this generation. ")
-            + "To make these bytes the head, publish them under a higher version.";
+                    : $"Its bytes are NOT retained: the fallback slot keeps {head.PreviousVersion ?? "(unversioned)"} "
+                      + $"({head.PreviousDirectory}), the better fallback by loadability here first and "
+                      + "version second, so the modules GC reclaims this generation. ";
+            return lead + kept + "To make these bytes the head, publish them under a higher version.";
+        }
 
-        var retainedAsFallback = keepsNewerHead
-            && string.Equals(entry.PreviousDirectory, generation, StringComparison.OrdinalIgnoreCase);
-        var shelfOnly = keepsNewerHead ? ShelfOnlyReason(displaced!, entry) : null;
-
-        // 🚨 THIS MODULE'S OWN FILE, and nothing else (#2090). The landing used to read the whole
-        // shared activation index, append to it and rename the result over the live file — a
-        // read-modify-write of state every replica shares on the RWX /data volume. Two concurrent
-        // landings of DIFFERENT modules therefore raced: the later write silently dropped the
-        // earlier module's entry, and the rename itself contended for the SMB lease on the one hot
-        // file ('Access to the path …/activation.json is denied' → HTTP 409). Writing only
-        // activation.d/<Name>.json removes the shared cell instead of guarding it — different
-        // modules no longer share a path at all.
-        // 🚨 A shelf-only landing that changed nothing on the entry writes NOTHING: the record is
-        // shared by every replica on /data, and re-writing a byte-identical entry is contention
-        // with no reader. It writes exactly when the fallback moved.
-        if (!keepsNewerHead || !entry.Equals(displaced))
-            ModuleActivationSidecar.WriteEntry(baseDirectory, entry);
+        // 🚨 THE PROJECTION, for images that predate the landing records. They read this module's
+        // own file (activation.d/<Name>.json) as their whole answer, and a rolled-back replica boots
+        // from it — so it is still written, now as the head this landing DERIVED, and only when it
+        // differs (the file is shared by every replica, and a byte-identical rewrite is contention
+        // with no reader). Two replicas may overwrite each other's projection, exactly as before;
+        // for a module with records a current image never reads a head from it, so that lost
+        // update now reaches only an older image, which had it anyway.
+        //
+        // 🚨 And it is marked as a PROJECTION (ProjectionOf), which is what keeps it from ever
+        // deciding anything for a current image (Copilot's review of #4427): a landing that derived
+        // "installed" before another replica's uninstall can still write this file after that
+        // uninstall — re-reading first would not be a compare-and-swap — but a current image orders
+        // the uninstall's TOMBSTONE against this landing's RECORD by arrival and never reads
+        // installed-ness from a projection. An image that predates the records reads this file as
+        // its whole answer, and for it the file stays last-writer-wins, as it always was.
+        beforeProjecting?.Invoke(name);
+        // 🚨 …and an OLDER image's entry is preserved as an immutable event BEFORE it is overwritten
+        // (post-merge review of #4427): that file is the only trace of the older image's install or
+        // uninstall, and the derivation reads it as an event at its own write time.
+        ModuleActivationSidecar.PreserveOlderImageEntry(baseDirectory, state);
+        if (state.Stored is not { ProjectionOf: not null } stored
+            || !entry.Equals(stored with { ProjectionOf = null }))
+            ModuleActivationSidecar.WriteEntry(baseDirectory,
+                entry with { ProjectionOf = ModuleActivationSidecar.LatestEventName(state) });
         // Bytes landed (head or shelf), so a refusal marker from an earlier landing of this module
         // no longer describes the state (#4083).
         ModuleActivationSidecar.ClearRefused(baseDirectory, name);
@@ -1144,16 +1225,25 @@ public sealed class ModuleLandingService : IDisposable
         // is already running — the same false prompt from the other direction. The ONE exception:
         // a shelf-only landing that MOVED the fallback while the head does not load here — measured
         // by the link probe now, or by the boot that already failed to load it (its unloadable
-        // marker, which a static probe cannot see). Boot runs
-        // the fallback then, so a restart genuinely loads something different, and staying silent
-        // would be the false negative of the same prompt.
+        // marker, which a static probe cannot see). Boot runs the fallback then, so a restart
+        // genuinely loads something different, and staying silent would be the false negative of
+        // the same prompt.
         var restartRequired = held is null
-            && (!keepsNewerHead
-                || (!string.Equals(entry.PreviousDirectory, displaced!.PreviousDirectory,
+            && (becameHead
+                || (!string.Equals(entry.PreviousDirectory, displaced?.PreviousDirectory,
                         StringComparison.OrdinalIgnoreCase)
-                    && (displaced.UnloadableFrameworkMvid is not null
-                        || !ModulePlatformLink.Check(
-                            ModuleActivationBoot.LandedDllPath(baseDirectory, displaced), surface).MayLoad)));
+                    && HeadDoesNotLoadHere(entry)));
+
+        bool HeadDoesNotLoadHere(ModuleActivationEntry head)
+        {
+            if (ModuleActivationSidecar.ReadUnloadable(baseDirectory, name) is { } measured
+                && string.Equals(measured.Generation, head.Directory, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(measured.FrameworkMvid))
+                return true;
+            var headDll = ModuleActivationBoot.LandedDllPath(baseDirectory, head);
+            return !File.Exists(headDll) || !ModulePlatformLink.Check(headDll, surface).MayLoad;
+        }
+
         if (restartRequired)
             ModuleActivationSidecar.SetPendingRestart(baseDirectory, true);
 
@@ -1173,14 +1263,14 @@ public sealed class ModuleLandingService : IDisposable
                 + "fallback) — activation recorded, RESTART REQUIRED to load it",
                 name, generation, assemblies.Count, minMeshVersion ?? "(none)",
                 ModulePlatformFloor.RunningVersion ?? "(unknown)", frameworkMvid ?? "(unrecorded)",
-                previous?.Directory ?? "(none)");
+                entry.PreviousDirectory ?? "(none)");
         else
             logger?.LogInformation(
                 "Module '{Name}' SHELVED into modules/{Generation}/ ({Count} assemblies) but HELD "
                 + "from local activation: {Reason}. It SERVES to consumers from here; this "
                 + "process's boot runs the previous generation {Previous} until a platform update "
                 + "carries the types it links against, and that same boot then loads it",
-                name, generation, assemblies.Count, held, previous?.Directory ?? "(none)");
+                name, generation, assemblies.Count, held, entry.PreviousDirectory ?? "(none)");
 
         return new ModuleLandingOutcome(Held: held is not null, HoldReason: held)
         {
@@ -1288,15 +1378,11 @@ public sealed class ModuleLandingService : IDisposable
             if (File.Exists(destination))
                 continue;
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            try
-            {
-                File.Move(staged, destination);
+            // A rename, never File.Move(staged, destination): that call COPIES when its rename fails,
+            // and a pod loading this generation would read the DLL incomplete (#2190). False: another
+            // replica restored the same file first — identical bytes by construction.
+            if (MeshWeaver.Utils.NoReplaceMove.TryMove(staged, destination))
                 restored = restored.Add(relative);
-            }
-            catch (IOException) when (File.Exists(destination))
-            {
-                // Another replica restored the same file first — identical bytes by construction.
-            }
         }
         if (!restored.IsEmpty)
             logger?.LogWarning(
@@ -1305,31 +1391,22 @@ public sealed class ModuleLandingService : IDisposable
                 name, generation, restored.Count, string.Join(", ", restored));
     }
 
-    /// <summary>Whether <paramref name="candidate"/> is a SemVer version
-    /// <see cref="NuGetVersionComparer"/> orders meaningfully: a numeric dotted core of one to four
-    /// parts, optionally a pre-release and build metadata. The comparer reads any unparseable part
-    /// as 0, so without this check "nightly" would rank below 0.0.1.</summary>
-    private static bool IsOrderableVersion(string? candidate)
-    {
-        if (string.IsNullOrWhiteSpace(candidate))
-            return false;
-        var plus = candidate.IndexOf('+');
-        var withoutBuild = plus >= 0 ? candidate[..plus] : candidate;
-        var dash = withoutBuild.IndexOf('-');
-        var core = dash >= 0 ? withoutBuild[..dash] : withoutBuild;
-        var coreParts = core.Split('.');
-        return coreParts.Length is >= 1 and <= 4
-               && coreParts.All(part => part.Length > 0 && part.All(char.IsAsciiDigit))
-               && (dash < 0 || withoutBuild[(dash + 1)..].Split('.').All(id =>
-                   id.Length > 0 && id.All(c => char.IsAsciiLetterOrDigit(c) || c == '-')));
-    }
-
-    private void RemoveCore(string name)
+    // Internal for the #4427 review pins (InternalsVisibleTo): an uninstall on a second REPLICA
+    // runs inside the first one's projection window, on the calling thread.
+    internal void RemoveCore(string name)
     {
         ValidateFileName(name, "module name");
 
-        var list = ModuleActivationSidecar.Read(baseDirectory,
-            msg => logger?.LogError("{Message}", msg));
+        // Nothing is uninstalled over a PARTIAL read: the tombstone orders against what was read,
+        // and an older image's entry has to be preserved whole before it is overwritten.
+        var state = ModuleActivationSidecar.ReadModuleHead(baseDirectory, name,
+            msg => logger?.LogError("{Message}", msg), platform);
+        if (!state.Whole)
+            throw new InvalidOperationException(
+                $"Module '{name}': its activation records could not be read whole, so nothing is "
+                + "uninstalled now; repeat the uninstall once they read whole.");
+        var list = ModuleActivationSidecar.ReadFor(baseDirectory,
+            msg => logger?.LogError("{Message}", msg), platform);
         var existing = list.Entries.FirstOrDefault(e =>
             string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase));
         if (existing is null)
@@ -1341,6 +1418,23 @@ public sealed class ModuleLandingService : IDisposable
         // directory (or its fallback's, #3649) 'referenced', or the GC pass could never reclaim
         // them. Written to THIS module's own file, never through the shared index (#2090): an
         // uninstall racing another module's landing used to drop whichever entry lost.
+        //
+        // 🚨 #4026, Copilot's review of #4427 — the uninstall is an EVENT first: a tombstone in the
+        // module's record directory, immutable and ordered by its own arrival against every landing
+        // record. A current image reads "uninstalled" whenever the newest tombstone is newer than
+        // every landing, WHATEVER the per-module file says — so a landing on another replica that
+        // derived "installed" before this tombstone and writes its projection after it cannot bring
+        // the module back. No record is deleted: the landings before the tombstone simply stop
+        // counting, which also makes the next landing a first landing (the documented "uninstall,
+        // then publish the older build" rollback), and retention retires them once they change
+        // nothing. Deleting records instead would be an order nothing can rely on — a landing
+        // writing its record while they are deleted.
+        var tombstone = ModuleActivationSidecar.WriteUninstall(baseDirectory, name,
+            ModuleActivationSidecar.LatestEventName(state));
+        // The disabled per-module file is what an image that predates the records reads. It is a
+        // projection of the tombstone, marked as one, so it decides nothing for a current image.
+        beforeProjecting?.Invoke(name);
+        ModuleActivationSidecar.PreserveOlderImageEntry(baseDirectory, state);
         ModuleActivationSidecar.WriteEntry(baseDirectory,
             existing with
             {
@@ -1349,6 +1443,8 @@ public sealed class ModuleLandingService : IDisposable
                 PreviousDirectory = null,
                 PreviousVersion = null,
                 PreviousFrameworkMvid = null,
+                PreviousSourceCommit = null,
+                ProjectionOf = tombstone,
             });
         ModuleActivationSidecar.SetPendingRestart(baseDirectory, true);
         // An uninstalled module has no head to have measured (#3650); a marker left behind would
@@ -1418,7 +1514,7 @@ public sealed class ModuleLandingService : IDisposable
             .Where(Directory.Exists)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        return ModulePlatformSurface.OfRunningProcess([AppContext.BaseDirectory, .. landed]);
+        return platformSurface([AppContext.BaseDirectory, .. landed]);
     }
 
     private static void ValidateFileName(string? value, string what)

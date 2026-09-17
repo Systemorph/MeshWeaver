@@ -194,7 +194,7 @@ Put the tier on the model NODE (`"tier": "coding"`); leave `utility`/`reasoning`
 
 > 🕰️ These previously ran on Azure AI Foundry (`DeepSeek-V4-Pro/V3-0324/V4-Flash`); the deployment moved to the OpenRouter open-weight set above (2026-08). The tier *mechanism* is unchanged — only the model ids behind the labels.
 
-> **Claude (Anthropic) works very well — noticeably stronger on the hardest agentic and coding tasks — but it comes at a price.** It is intentionally **not** wired as a shared org key. Each user connects **Claude Code** (the co-hosted CLI, `Features:Ai:Clis:ClaudeCode`) under their own account in **Settings → Models → Connect**, which stores a per-user `{user}/_Memex/ClaudeCode` provider and injects Claude into their picker on their own subscription. To turn this on for a deployment, see [Enabling per-user Claude Code Connect](#enabling-per-user-claude-code-connect).
+> **Claude (Anthropic) works very well — noticeably stronger on the hardest agentic and coding tasks — but it comes at a price.** It is intentionally **not** wired as a shared org key. Each user installs the **Claude Code** harness from **AI → Providers → Execution harnesses**, then completes that package's own **Connect** flow under their own account. That places the picker entry in the user's own space and stores a per-user `{user}/_Memex/ClaudeCode` provider, so Claude usage stays on their subscription. To turn this on for a deployment, see [Enabling per-user Claude Code Connect](#enabling-per-user-claude-code-connect).
 
 `modelTier:` frontmatter names the USAGE tier an agent's work belongs on (`utility` / `chat` / `reasoning` / `coding`). It is optional and never fatal: it fills the gap where nobody picked a concrete model — every headless flow, and every round left on **Auto**, which dispatches on exactly this value. An explicit composer selection always wins over it, and a tier no model carries falls through to the deployment default. See [Model Tiers](/Doc/AI/ModelTiers).
 
@@ -202,13 +202,14 @@ Put the tier on the model NODE (`"tier": "coding"`); leave `utility`/`reasoning`
 
 ## Enabling per-user Claude Code Connect
 
-**Claude is intentionally not wired as a shared org key.** Instead each user connects **Claude Code** — the co-hosted CLI — under their **own** Claude subscription in **Settings → Models → Connect**, so their Claude usage is billed to their personal account. This is the *Connect* flow (a subscription / CLI provider), **not** a per-user Anthropic API key: the login captures the user's subscription token, never an `sk-ant-…` key. It is gated behind one deploy-time flag — `Features:Ai:Clis:ClaudeCode` (env `Features__Ai__Clis__ClaudeCode`) — and **coexists** with the shared providers: turning it on **adds** the per-user "Claude Code" card and does not touch the shared org Anthropic key (`Features:Ai:Providers:Anthropic`, a *separate* flag).
+**Claude is intentionally not wired as a shared org key.** Each user first installs **Claude Code** from **AI → Providers → Execution harnesses**. That shared catalogue embeds the Store's normal **Get** action; it copies only the `Harness/ClaudeCode` entry into that user's thread picker, never into anyone else's. The package then owns the second, provider-specific step: **Connect** the co-hosted CLI under the user's Claude subscription. This is a subscription / CLI provider flow, **not** a per-user Anthropic API key: the login captures the user's subscription token, never an `sk-ant-…` key. It is gated behind one deploy-time flag — `Features:Ai:Clis:ClaudeCode` (env `Features__Ai__Clis__ClaudeCode`) — and **coexists** with the shared providers: turning it on makes the package connectable and does not touch the shared org Anthropic key (`Features:Ai:Providers:Anthropic`, a *separate* flag).
 
 ### What Connect is — and is not
 
 - **Per-user, own subscription.** The card runs the CLI's native login (`claude setup-token`, `ClaudeConnectStrategy`), captures the user's token, and stores it **encrypted** as a `ModelProvider` node at `{user}/_Memex/ClaudeCode` — via `ConnectTokenSink` → `ModelProviderService.CreateProvider` / `RotateKey`, which `Protect()`-encrypt it. Each user self-connects; there is **no** per-person admin activation.
 - **Resolved by the per-user token, not by model id.** When a user runs a Claude Code round, the CLI harness (`ClaudeCodeHarness`) resolves *that user's own* token through `ChatClientCredentialResolver.ResolveConnectToken` / `ResolveConnectCredential` (reading `{user}/_Memex/ClaudeCode`). It never forwards the composer's selected-model API key, so it does not collide with the shared model catalog.
 - **Independent of the shared org key.** `Features:Ai:Providers:Anthropic` (shared org Anthropic key) and `Features:Ai:Clis:ClaudeCode` (per-user Connect) are two flags gated separately in `MemexConfiguration`. Enabling Connect neither removes nor changes the shared key; users who have not connected keep using the shared providers.
+- **Separate from the Claude desktop app.** Signing into the desktop app does **not** renew the co-hosted CLI's per-user token or change `{user}/_Memex/ClaudeCode`. A node can still exist there while a Claude Code round reports **Not logged in** because its stored session is no longer usable. Reconnect from **AI → Providers → Claude Code → Connect / Log in**; do not treat `/login` in an agent conversation as the recovery path, because that command can be unavailable in a co-hosted thread.
 
 ### Prerequisites and enablement
 
@@ -221,7 +222,7 @@ Connect is a **deploy-time capability**, and the packaged deployment paths ship 
 
 ### Verifying it
 
-1. **Card appears.** With the flag set, open **Settings → Models**: a **"Claude Code"** CLI card with a **Connect / Log in** button is shown. When the flag is unset the card is **absent** — CLI providers render no UI at all.
+1. **Package and connection appear.** With the flag set, open **AI → Providers**: the **Execution harnesses** catalog shows **Claude Code** with the Store's **Get** action. After Get, its package page shows **Connect / Log in**. When the flag is unset the package cannot complete that connection.
 2. **Connect uses the user's subscription.** Complete Connect as a user, then run a Claude model: the round runs on **that user's** Claude subscription, and a per-user encrypted-token `ModelProvider` node is created at `{user}/_Memex/ClaudeCode`.
 3. **Shared path unchanged.** The shared org Anthropic key path is untouched and still serves users who have not connected.
 

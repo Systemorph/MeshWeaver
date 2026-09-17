@@ -28,6 +28,7 @@ summarises contains the failure.
 Usage
 -----
     record-host-crash.py <trx-path> <label> <exit-code> <classification>
+    record-host-crash.py --self-test
 
 ``<trx-path>`` need not exist: a host killed at the wall-clock cap writes no trx at all,
 and that case must produce evidence too — a complete one-result trx is written instead.
@@ -174,11 +175,86 @@ def record(trx_path, label, exit_code, classification):
         counters.set(key, str(int(counters.get(key, "0") or "0") + 1))
 
     reorder(run)
+    # 🚨 THE DIRECTORY TOO, not only the file. "The host wrote no trx at all" is the case this script
+    # exists for, and a host that died before writing anything has usually not created its results
+    # directory either — so a caller naming `<project>/TestResults/host-crash.trx` got
+    # `[Errno 2] No such file or directory` and the crash went unrecorded (MeshWeaver.Plugins,
+    # `src/MeshWeaver.Kernel.Test`, 2026-09-15). Creating a directory is idempotent and changes
+    # nothing for a trx that already exists.
+    os.makedirs(os.path.dirname(os.path.abspath(trx_path)), exist_ok=True)
     ET.ElementTree(run).write(trx_path, encoding="utf-8", xml_declaration=True)
     return test_name
 
 
+def self_test():
+    """Offline cases for the three shapes a caller hands this script."""
+    import tempfile
+    failures = []
+
+    def results_of(path):
+        root = ET.parse(path).getroot()
+        rows = root.findall(f"{q('Results')}/{q('UnitTestResult')}")
+        counters = root.find(f"{q('ResultSummary')}/{q('Counters')}")
+        return rows, counters
+
+    def check(name, cond, detail=""):
+        print(f"  {'ok  ' if cond else 'FAIL'} {name}{(' — ' + detail) if detail and not cond else ''}")
+        if not cond:
+            failures.append(name)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # 1 — no trx AND no directory: the host died before creating either.
+        absent = os.path.join(tmp, "src", "Some.Test", "TestResults", "host-crash.trx")
+        try:
+            record(absent, "Some.Test", "134", "SIGABRT")
+            rows, counters = results_of(absent)
+            check("a trx whose DIRECTORY does not exist is created and records the crash",
+                  len(rows) == 1 and rows[0].get("outcome") == "Failed"
+                  and rows[0].get("testName") == "Some.Test.HOST_CRASHED"
+                  and counters.get("failed") == "1", f"{len(rows)} row(s)")
+        except Exception as exc:  # noqa: BLE001 — a throw here IS the failure being tested
+            check("a trx whose DIRECTORY does not exist is created and records the crash", False,
+                  f"{type(exc).__name__}: {exc}")
+
+        # 2 — a streamed trx: the crash is APPENDED, the streamed results stay.
+        streamed = os.path.join(tmp, "streamed.trx")
+        run = build_empty_run("Streamed.Test")
+        results = ensure(run, "Results")
+        for i in range(3):
+            ET.SubElement(results, q("UnitTestResult"), {"testName": f"t{i}", "outcome": "Passed"})
+        counters = ensure(ensure(run, "ResultSummary", {"outcome": "Completed"}), "Counters",
+                          {k: "0" for k in COUNTER_KEYS})
+        for key in ("total", "executed", "passed"):
+            counters.set(key, "3")
+        ET.ElementTree(run).write(streamed, encoding="utf-8", xml_declaration=True)
+        record(streamed, "Streamed.Test", "139", "SIGSEGV")
+        rows, counters = results_of(streamed)
+        check("a streamed trx keeps its results and gains one failed HOST_CRASHED",
+              len(rows) == 4 and sum(r.get("outcome") == "Failed" for r in rows) == 1
+              and counters.get("total") == "4" and counters.get("failed") == "1",
+              f"{len(rows)} row(s), counters {dict(counters.attrib)}")
+
+        # 3 — a truncated trx is itself evidence: replaced by a document that SAYS so.
+        truncated = os.path.join(tmp, "truncated.trx")
+        with open(truncated, "w", encoding="utf-8") as handle:
+            handle.write("<?xml version='1.0'?><TestRun><Results><UnitTestResult")
+        record(truncated, "Cut.Test", "137", "SIGKILL")
+        rows, _ = results_of(truncated)
+        message = rows[0].find(f"{q('Output')}/{q('ErrorInfo')}/{q('Message')}").text if rows else ""
+        check("a truncated trx is replaced by one that says the host died mid-write",
+              len(rows) == 1 and "unparseable" in message and "mid-write" in message)
+
+    if failures:
+        print(f"::error::record-host-crash.py self-test: {len(failures)} case(s) FAILED: "
+              + "; ".join(failures))
+        return 1
+    print("record-host-crash.py self-test: all cases pass")
+    return 0
+
+
 def main(argv):
+    if argv[1:] == ["--self-test"]:
+        return self_test()
     if len(argv) != 5:
         print("::error::record-host-crash.py <trx-path> <label> <exit-code> <classification>",
               file=sys.stderr)

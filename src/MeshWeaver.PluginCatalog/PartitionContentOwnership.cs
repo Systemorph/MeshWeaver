@@ -165,7 +165,12 @@ public static class PartitionContentOwnership
             if (providers.Length == 0)
                 return Observable.Return(Decide(partition, tracked: null, providerCount: 0));
             return providers
-                .Select(p => Observable.Defer(() => p.IsTracked(partition))
+                // 🚨 ImportsContent, not IsTracked (MeshWeaver#4588): the question here is "does
+                // anything else WRITE this partition's content", and an export-only source
+                // (mesh → repo, imports rejected) writes nothing — holding an install there would
+                // be a false positive. The seam's default IS IsTracked, so a provider that cannot
+                // tell the directions apart keeps the pre-#4588 answer.
+                .Select(p => Observable.Defer(() => p.ImportsContent(partition))
                     .Take(1)
                     .Select(tracked => (bool?)tracked)
                     .DefaultIfEmpty(null)

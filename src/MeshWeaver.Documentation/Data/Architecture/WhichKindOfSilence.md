@@ -56,7 +56,7 @@ minimised.
 **The tick runs on a thread of its own.** A tick scheduled on the ThreadPool — a `Timer`,
 `Observable.Interval`, a `BackgroundService` loop — is silenced *by* the pool starvation it exists to
 name, so rows 2 and 3 of that table would collapse into one. The precedent is
-`IoPool.StartCancelOffCallerThread`, which refuses the pool for the same reason: the work you are
+`IoPool.StartCanceller`, which refuses the pool for the same reason: the work you are
 trying to observe may be holding every slot. And a tick that throws **reports and continues** — a
 heartbeat that dies on one bad read goes silent forever, and its silence then reads as row 3. An
 instrument that can manufacture its own verdict is not an instrument.

@@ -172,6 +172,40 @@
       ]
     },
     {
+      "id": "dispose-to-serve-new-state",
+      "hub": "Systemorph/MeshWeaver",
+      "required-in": ["Systemorph/MeshWeaver"],
+      "slots": ["reference"],
+      "why": [
+        "Maintainer directive, 2026-09-17, verbatim across three messages: 'the grain keeps serving",
+        "old state until we send dispose request' / 'write this prominently in all repos' / 'in pull",
+        "request skill etc'. The occasion was a session that told the maintainer a dispose 'wouldn't",
+        "help' and was corrected — which is the whole reason the rule is stated rather than assumed:",
+        "the failure has no signal of its own. A per-node hub answers promptly and answers the OLD",
+        "thing, so it reads as a bad fix rather than as an un-recycled activation.",
+        "",
+        "It is a FLEET rule and not a core one because the addresses that go stale are the ones the",
+        "satellites author: a NodeType's Source/*.cs, a layout area compiled in the mesh, node content",
+        "shipped in a bake. A satellite author who never reads this concludes their merged change did",
+        "not work. Core carries the framework half (RecycleNode, the off-router seam, HandleDispose's",
+        "root refusal); every repo carries the consequence.",
+        "",
+        "One slot, `reference`, for the same reason never-hand-roll-ui has one: core links its own",
+        "Documentation tree and .claude/skills paths, which do not exist in the spokes; the spokes",
+        "point at the same page on the mesh as an absolute URL.",
+        "",
+        "Landed hub-first in three steps, per SharedRuleBlocks.md: (1) core wraps its copy and",
+        "registers the block with `required-in` naming only the hub — green on its own, and the id",
+        "becomes known; (2) the six spoke copies; (3) `required-in` widened to all seven.",
+        "",
+        "Systemorph/MeshWeaver.Crm is deliberately NOT here. It is absent from `repos` above, so this",
+        "gate never reads it, and adding it is a separate change: it would require the read-only",
+        "fleet-reader App to be installed there AND Crm to carry every block already registered, and",
+        "an unreadable repo is a RED here by design. Crm carries this block's text anyway, so a later",
+        "registration is a one-line change rather than a rollout."
+      ]
+    },
+    {
       "id": "never-hand-roll-ui",
       "hub": "Systemorph/MeshWeaver",
       "required-in": [

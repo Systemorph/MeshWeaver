@@ -337,6 +337,118 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
             + "not be a route around the parent's declaration");
     }
 
+    /// <summary>
+    /// 🚨 <b>AN OFFERED TYPE THAT OWNS ITS PARTITION IS PLACED AT THE ROOT — ALSO WHEN IT IS DECLARED
+    /// IN MESH CONTENT</b> (#4449). The form used to force the namespace to root only when
+    /// <c>FindStaticNode</c> answered, so it authored a nested instance of an in-mesh owning type
+    /// (<c>Crm/Client</c>) itself, under whatever namespace the field held. The provider already
+    /// materialises each offered definition, so <see cref="CreatableTypeInfo.OwnsPartition"/> carries
+    /// the declaration at no extra read and the namespace field locks to root.
+    ///
+    /// <para>A convenience, never the rule: the boundary refusal is
+    /// <c>OwnsPartitionProvisioningValidator</c> (<c>InMeshPartitionOwnerNestedCreateTest</c>).</para>
+    ///
+    /// <para>Non-vacuous twice over: the owning type is proved NOT static (so only the provider's
+    /// answer can lock the field), and the same form with a non-owning in-mesh type selected renders
+    /// the ordinary namespace picker (so "the field is locked" is not what this form always does).</para>
+    /// </summary>
+    [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
+    public async Task AnOfferedInMeshTypeThatOwnsItsPartition_IsCarriedAsSuch_AndTheFormPlacesItAtTheRoot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var types = "Co" + Guid.NewGuid().ToString("N")[..8];
+        var host = "Hc" + Guid.NewGuid().ToString("N")[..8];
+        var owning = $"{types}/Client";
+        var ordinary = $"{types}/Note";
+
+        await Import(new FakeRepoSource(types)
+        {
+            Root = Space(types),
+            Nodes =
+            [
+                TypeNode(types, "Client", new NodeTypeDefinition
+                {
+                    Configuration = "config => config",
+                    OwnsPartition = true,
+                    DefaultNamespace = "",
+                }),
+                TypeNode(types, "Note", new NodeTypeDefinition { Configuration = "config => config" }),
+                TypeNode(types, "Book", new NodeTypeDefinition
+                {
+                    Configuration = "config => config",
+                    CreatableTypes = [owning, ordinary],
+                }),
+            ],
+        }, ct);
+        await Import(new FakeRepoSource(host)
+        {
+            Root = Space(host),
+            Nodes = [Instance(host, "Ledger", $"{types}/Book")],
+        }, ct);
+        var parentPath = $"{host}/Ledger";
+
+        Mesh.ServiceProvider.FindStaticNode(owning).Should().BeNull(
+            "the premise: the owning type is declared in mesh content. A static one would lock the "
+            + "field through FindStaticNode, and this test would not measure the provider's answer");
+
+        var parent = await Mesh.GetWorkspace().GetMeshNodeStream(parentPath)
+            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var offered = await Mesh.ServiceProvider.GetRequiredService<ICreatableTypesProvider>()
+            .GetCreatableTypes(parentPath, parent)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        Output.WriteLine($"offered under {parentPath}: "
+            + string.Join(", ", offered.Select(t => $"{t.NodeTypePath}(owns={t.OwnsPartition})")));
+        offered.Single(t => t.NodeTypePath == owning).OwnsPartition.Should().BeTrue(
+            "the provider materialised the definition to build the entry, and the definition "
+            + "declares ownsPartition — so the entry says so");
+        offered.Single(t => t.NodeTypePath == ordinary).OwnsPartition.Should().BeFalse(
+            "a definition that declares nothing owns nothing");
+
+        (await NamespaceFieldTakesShape($"{parentPath}?type={owning}", lockedToRoot: true)).Should().BeTrue(
+            "an instance of a type that owns its partition can only be created at the top level, so "
+            + "the form must show the namespace as the read-only root — and the Create button places "
+            + "it there. A false here means the field stayed a namespace picker, i.e. the form never "
+            + "learned the declaration");
+        (await NamespaceFieldTakesShape($"{parentPath}?type={ordinary}", lockedToRoot: false)).Should().BeTrue(
+            "control: an ordinary in-mesh type keeps the namespace picker, so the lock above is the "
+            + "declaration's doing and not this form's default");
+    }
+
+    /// <summary>
+    /// Whether the rendered Create form's namespace field takes the asked shape within the budget:
+    /// the read-only ROOT label (<paramref name="lockedToRoot"/>) or the namespace PICKER. Waits for
+    /// the shape rather than taking the first render, because the field re-renders when the
+    /// provider's answer arrives — and answers <c>false</c> on the bound rather than throwing a bare
+    /// <c>TimeoutException</c>, so a caller's `because` is what a failure reads.
+    /// </summary>
+    private async Task<bool> NamespaceFieldTakesShape(string nodePath, bool lockedToRoot)
+    {
+        var (stream, areas) = await RenderedAreas(nodePath);
+        return await Observable.Merge(areas.Select(area => area
+                .Select(control => control switch
+                {
+                    MeshNodePickerControl picker when IsNamespacePicker(picker) => Observable.Return(!lockedToRoot),
+                    StackControl stack when lockedToRoot => Observable.Merge(stack.Areas
+                            .Select(a => a.Area?.ToString())
+                            .Where(a => !string.IsNullOrEmpty(a))
+                            .Select(a => stream.GetControlStream(a!)))
+                        .OfType<LabelControl>()
+                        .Where(label => string.Equals(label.Data?.ToString(), "Root (top-level)", StringComparison.Ordinal))
+                        .Select(_ => true),
+                    _ => Observable.Empty<bool>(),
+                })
+                .Switch()))
+            .Where(matched => matched)
+            .Take(1)
+            .Timeout(TestTimeouts.Convergence, Observable.Return(false))
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+    }
+
+    private static bool IsNamespacePicker(MeshNodePickerControl picker) =>
+        picker.Data is JsonPointerReference { Pointer: var p }
+        && p.TrimStart('/').Equals("namespace", StringComparison.OrdinalIgnoreCase);
+
     // ── fixture ────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>

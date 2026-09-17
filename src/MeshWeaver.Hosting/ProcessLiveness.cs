@@ -142,7 +142,7 @@ public sealed record ProcessLivenessReading(
 /// <c>Diagnostics:LivenessHeartbeatSeconds = 0</c> turns it off.</para>
 ///
 /// <para>🚨 <b>A DEDICATED thread, never the ThreadPool</b> — same argument
-/// <c>IoPool.StartCancelOffCallerThread</c> makes: a tick scheduled on the pool is silenced BY pool
+/// <c>IoPool.StartCanceller</c> makes: a tick scheduled on the pool is silenced BY pool
 /// starvation, so it could not tell starvation from suspension, and those have different owners. A
 /// thread of its own is silenced only when every managed thread is.</para>
 ///

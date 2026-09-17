@@ -44,6 +44,10 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
     /// </summary>
     private static TimeSpan ReadBudget => TestTimeouts.Quick;
 
+    /// <summary>How long the icon walk waits on ONE area before reading it as "renders nothing".
+    /// Short deliberately: the walk begins after the whole frame has arrived.</summary>
+    private static TimeSpan ProbeBudget => TimeSpan.FromSeconds(2);
+
     /// <summary>A layout-area render round-trip, which settles later than a node read.</summary>
     private static TimeSpan RenderBudget => TestTimeouts.Convergence;
 
@@ -185,13 +189,32 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
         {
             if (depth > 6)
                 return;
+            // 🚨 AN AREA THAT RENDERS NOTHING IS NOT A FAILURE. The walk starts only after the
+            // store already carries the awaited fragment, so every area that will render has
+            // rendered; an area still empty here is one that renders null by design (the supplied
+            // navigation says so in as many words). Asserting a non-null control on every area
+            // turned "this page also has an index" into a 12 s timeout that said nothing about
+            // the icon under test.
+            // Whichever comes first: the area's first real control, or "nothing" once the probe
+            // budget runs out. Awaited through the package's own wait (Should().Within), never an
+            // observable-to-task bridge (ObservableToTaskBridgeGuard: "no ToTask ever").
             var control = await stream.GetControlStream(area)
-                .Should().Within(ReadBudget).Match(c => c != null, cancellationToken: cancellationToken);
+                .Where(c => c != null)
+                .Take(1)
+                .Amb(Observable.Timer(ProbeBudget).Select(_ => (UiControl?)null))
+                .Should().Within(ProbeBudget + ReadBudget).Match(_ => true, cancellationToken: cancellationToken);
+            if (control is null)
+                return;
             if (control is HtmlControl html
                 && (html.Data?.ToString() ?? "").Contains(IconTileMarker))
                 tiles.Add(html.Data!.ToString()!);
-            if (control is StackControl stack)
-                foreach (var name in stack.Areas.Select(a => a.Area?.ToString())
+            // 🚨 EVERY container, not just a stack. Since the default index became the page's
+            // SPACE (DefaultNodeNavigation.IndexRoot), a page one level under a Space renders
+            // inside a SplitterControl — content beside its index — so a walker that descends
+            // only through StackControl finds nothing and the assertion fails on an EMPTY
+            // collection, saying nothing about the icon it is actually about.
+            if (control is IContainerControl container)
+                foreach (var name in container.Areas.Select(a => a.Area?.ToString())
                              .Where(n => !string.IsNullOrEmpty(n)))
                     await Collect(name!, depth + 1);
         }

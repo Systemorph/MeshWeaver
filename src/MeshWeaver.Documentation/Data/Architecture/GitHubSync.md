@@ -146,6 +146,17 @@ and click **Re-import at this commit** — the Space is mirrored to that exact s
 (added / updated / removed to match), and the new commit is recorded. This is how you
 roll a Space forward or back to a specific repository state.
 
+> 🚨 **For a repository whose compiled modules this portal runs, "latest" means the latest this
+> portal can RUN** (since 2026-09-17, MeshWeaver#3845). When a publication of the repository is
+> sealed for the portal's framework identity, both buttons import **the sealed commit** — the commit
+> the portal's bundles were baked from — whatever branch or commit was asked for, and the activity
+> says so in a Warning line naming both. When that publication is torn, at an unknown commit or
+> disagreeing, they import **nothing** and say which publication holds the Space and what releases
+> it: **roll the portal** when a newer platform line is sealed, otherwise the publishing lane sealing
+> a newer commit. A repository this portal runs no publication of (a course, a document tree, a
+> deployment record) is unaffected and reads exactly what was asked. The rule and its reasons:
+> [The Sync-Ref Contract](../SyncRefContract).
+
 Import reuses the platform's content-addressed import pipeline (fingerprint gate +
 activity lock + canonical upsert + prune) — see
 [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport).
@@ -183,7 +194,7 @@ another's question is how an investigation goes wrong. They are deliberately ind
 | `lastSyncAttemptAt` + `lastSyncOutcome` | *When did a sync last RUN here, and what did it conclude?* | **Every** conclusion — an import, a no-op, one that preserved server-side edits, one that landed nothing. |
 | `lastSyncCommitSha` | *Which repo commit has this Space already got?* | Whenever the mesh genuinely reached that commit — **including** a no-op update, so a repo commit touching no node files does not leave the Space forever "behind". |
 | `lastSyncedAt` | *When were mesh and repo last RECONCILED?* — the two-way **conflict horizon** | Only on an import that really reconciled: **not** on a fingerprint-matched no-op, **not** when server-newer nodes were preserved, **not** when something failed to land. |
-| `lastAttemptedCommitSha` + `lastAttemptWasFinal` | *Have we already LOOKED at exactly these bytes, and could looking again change the answer?* | On every import conclusion; **cleared** by an export and by a hold. This is the pair that makes a green build free for a source that cannot converge — see [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost). |
+| `lastAttemptedCommitSha` + `lastAttemptWasFinal` (+ `lastAttemptedConfigFingerprint`) | *Have we already LOOKED at exactly these bytes, as this source is configured now, and could looking again change the answer?* | On every import conclusion, a refusal included; **cleared** by an export and by a hold. This is the pair that makes a green build or a publication announcement free for a source that cannot converge, and the fingerprint is what lets an edit of the source re-attempt at the same commit — see [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost). |
 
 The horizon is the one with teeth. Everything newer than it counts as a pending server-side change
 and is protected from overwrite and from the prune, so advancing it past uncommitted work disarms
@@ -226,7 +237,10 @@ The safe loop for anything you want to keep — the **git-first** discipline:
 1. **Edit in the repo** — or, if you edited live, **Sync now** (`op: commit`) *immediately*
    to capture it in the repo; never let live-only state accumulate.
 2. **Commit / open a PR**, review, **merge**.
-3. **Update to latest** (`op: update`) — pull the merged state back into the Space.
+3. **Update to latest** (`op: update`) — pull the merged state back into the Space. On a
+   repository whose modules this portal runs, the merged state arrives once it is **sealed** for the
+   portal's framework identity; until then the Space stays on the sealed commit and the activity says
+   why (see §4).
 4. **Recycle** any node whose **type or configuration changed**. Importing new content
    into a node that is already *running* does not swap its live views: a node that flipped
    `Markdown → Deck`, or whose `NodeType` source recompiled, keeps its old hub until you

@@ -127,13 +127,29 @@ neither of them a bug in the sweep:
    no `AgenticOffice/*` rows for this identity, while the same deployment's system-side `/health`
    counted **594 instances of three `AgenticOffice` types**.
 2. **`compilationStatus` is one shared field over a per-replica compile.** A replica still serving an
-   adopted prebuilt leaves the field `Ok` while another replica's fallback compile fails.
-   `/health`'s `bake-report` read `previouslybroken=11` on the failing replica against the sweep's 8.
+   adopted prebuilt leaves the field `Ok` while another replica's fallback compile fails. This is a
+   property of the MECHANISM, and it stands — but the number first cited for it does not show it:
+   `/health`'s `bake-report` read `previouslybroken=11` on the failing replica against the sweep's 8,
+   and `previouslybroken` reads the SAME shared field (`NodeTypeBakeStatus` classifies
+   `CompilationStatus.Error` as `PreviouslyBroken` first). So 11 against 8 is reason 1 — a system
+   denominator against an RLS-filtered one — not an independent per-replica verdict (corrected on
+   [#4320](https://github.com/Systemorph/MeshWeaver/issues/4320)). The genuinely per-replica signals
+   are `/health`'s `content-types` (a read that degraded on THIS replica) and `bake-report`'s
+   `Baked` / `BytesMissing` split — the only states decided by probing this replica's own assembly
+   store. `FrameworkStale`, `NeverBuilt` and `PreviouslyBroken` are decided from the shared record
+   alone (`NodeTypeBakeStatus.ClassifyDetailed` returns them before the store is asked).
 
 🚨 And `/health` answers about **one replica you did not choose**: six calls to the same host landed
 on at least five replicas, whose bake sweeps ranged from 2026-09-12T12:55Z to 2026-09-14T08:44Z and
 whose `content-types` lists were disjoint. For a per-replica census with no guesswork, use the
-control instance's `{ "requestedAction": "Sample" }` — see [Operating From The Portal](../OperatingFromThePortal).
+control instance's `{ "requestedAction": "Sample" }` — see [Operating From The Portal](../OperatingFromThePortal)
+— **once it has replicas to walk**: its `replicas[]` comes from kube-state-metrics, which has no series
+for the portal namespaces, so every `Ops/Status/*` reads `notScraped: true / replicas: []` until
+[#4218](https://github.com/Systemorph/MeshWeaver/issues/4218) is fixed, and a `Sample` today carries no
+per-replica `/health` body at all. What does protect a roll is the new replica's `nodetype_bake`
+readiness gate — **when it is registered and armed** (the host registers it only under `gateBake`,
+and an unarmed gate admits traffic) — which refuses readiness for a type that REGRESSED on its image
+and passes one already at `Error`, so such a type is never named by it.
 
 ## What would close this class
 

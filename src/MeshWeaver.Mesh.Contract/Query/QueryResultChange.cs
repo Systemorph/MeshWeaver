@@ -84,6 +84,31 @@ public record QueryResultChange<T>
     public IReadOnlyList<string>? Partitions { get; init; }
 
     /// <summary>
+    /// The providers that COMPLETED WITHOUT emitting an <see cref="QueryChangeType.Initial"/> and
+    /// were counted as EMPTY so the merged query could proceed — never <see langword="null"/>-safe
+    /// to ignore, and never the same statement as an empty <see cref="Items"/>.
+    ///
+    /// <para>🚨 <b>A snapshot naming any provider here is a FLOOR, not an answer.</b> "Nobody
+    /// answered yet" and "there is nothing there" are different facts, and until this field existed
+    /// they arrived in the same shape: <c>MeshQuery.MergeProviderObservables</c> counts a silent
+    /// completion as an empty Initial <i>by contract</i> — the alternative starved the gate and hung
+    /// every real-user search for 300 s — and the frame it produced then said "nothing matches" with
+    /// nothing behind it. Downstream that is worse than a hang, because
+    /// <c>MeshNodeStreamCache</c> caches the first frame in a <c>Replay(1)</c> chain it never
+    /// rebuilds: the fabricated empty became the durable negative for the life of the PROCESS, and
+    /// the one event that would refresh it — a change notification for a matching path — never fires
+    /// for the most common writer, a reconcile re-writing an unchanged node (a NO-OP at the store,
+    /// which publishes nothing). Measured on memex-cloud 2026-09-16: the plugin gate read durably
+    /// present <c>_Access</c> grants and <c>_Policy</c> nodes as missing for 24 minutes after a
+    /// restart, and reported them at Error as lost writes (MeshWeaver#4557, #1246).</para>
+    ///
+    /// <para><see langword="null"/> or empty means every provider answered — the snapshot is a real
+    /// answer and may be cached and replayed like one. Sibling of <see cref="Partitions"/>: both
+    /// exist so an empty result can be read against what actually produced it.</para>
+    /// </summary>
+    public IReadOnlyList<string>? SilentProviders { get; init; }
+
+    /// <summary>
     /// The original query that produced this change.
     /// </summary>
     public ParsedQuery Query { get; init; } = null!;

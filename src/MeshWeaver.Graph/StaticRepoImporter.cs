@@ -59,6 +59,20 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     public ImmutableList<string> HeldNodeTypePaths { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// 🚨 The NodeType paths whose SOURCES this import held back because no bundle for this
+    /// instance's framework identity carries the fingerprint they would produce — adopt-then-sync per
+    /// NodeType (MeshWeaver#3845 hole 4; <c>Doc/Architecture/AdoptThenSyncPerNodeType</c>).
+    ///
+    /// <para>A DIFFERENT hold from <see cref="HeldNodeTypePaths"/>, which is a retirement the mesh
+    /// still has instances for. This one is a delivery ordering: the type's bytes are here and
+    /// serving, its sources match them, and the tree's newer sources wait for the bundle that was
+    /// built from them. The caller that computed it (<c>GitHubSyncService</c>) sets this after the
+    /// import so the one activity line every import path already logs can name the held types, and so
+    /// the last-sync baseline is not advanced past content the mesh deliberately does not hold.</para>
+    /// </summary>
+    public ImmutableList<string> BundleHeldNodeTypePaths { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
     /// How many source nodes this import could NOT land — the per-file failures the
     /// <c>ImportedWithErrors</c> outcome and the activity's ⚠ lines report.
     ///
@@ -72,6 +86,22 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     /// not advance the baseline" — was never implemented for this outcome.</para>
     /// </summary>
     public int Failed { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>Issue #4459 / #4456 — WHICH nodes did not land, and why.</b> The per-path twin of
+    /// <see cref="Failed"/>, carried to the CALLER rather than only to the attempt activity's ⚠
+    /// lines — the same argument <see cref="RefusedContent"/> already makes for content files.
+    ///
+    /// <para>Every other category the import can leave behind names its paths:
+    /// <see cref="WrittenPaths"/>, <see cref="PrunedPaths"/>, <see cref="BlockedCreatePaths"/>,
+    /// <see cref="HeldNodeTypePaths"/>, <see cref="RefusedContent"/>. Failures were the one reported
+    /// as a bare NUMBER, and that is how one dropped node cost memex.systemorph.com an evening: a
+    /// literal NUL byte in <c>Hosting/Deployment/Source/SelfUpdateRouting.cs</c> made Postgres refuse
+    /// that one row, the import reported <c>ImportedWithContentErrors (41 node(s))</c> — naming
+    /// neither the path nor even how many —, five Hosting NodeTypes parked on <c>CS0246</c>, and the
+    /// operator's only visible symptom was a compile error on a symbol whose file is in git.</para>
+    /// </summary>
+    public ImmutableList<FailedImport> FailedPaths { get; init; } = ImmutableList<FailedImport>.Empty;
 
     /// <summary>
     /// The node paths this import could NOT create, for a reason no retry of the same pass can close,
@@ -213,6 +243,16 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     /// bytes re-derives this same refusal". Named here, beside <see cref="VerdictIsFinal"/> which
     /// reads it and the fold in <c>StaticRepoImporter.Run</c> which writes it, so a re-wording
     /// cannot silently split the two.
+    ///
+    /// <para>🚨 <b>It is NOT a fingerprint-recording outcome (issue #4459).</b> The marker keeps it
+    /// as a RECORD of what the pass found; it is no longer a licence to answer <c>Skipped</c> for
+    /// the partition without reading it. A content verdict is earned by a NODE — one file that
+    /// Postgres, a validator or RLS refuses — and a pass earns this word on the evidence of that one
+    /// node even when forty others landed, so reading it as "this whole partition cannot import"
+    /// froze a partition out of the mesh over a single unstorable byte. The refusal is remembered
+    /// per node instead, in the import manifest (see <c>StaticRepoImporter.RefusedTokenPrefix</c>),
+    /// which keeps #3146's storm protection — the failing write is not re-issued — without the
+    /// freeze.</para>
     /// </summary>
     public const string ContentErrorsOutcome = "ImportedWithContentErrors";
 }
@@ -231,6 +271,24 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
 /// <param name="NodePath">The owning node whose content collection the sync targeted.</param>
 /// <param name="Reason">Why it did not succeed, with sizes and limits named where they apply.</param>
 public sealed record RefusedContentSync(string NodePath, string Reason);
+
+/// <summary>
+/// 🚨 <b>Issue #4459 / #4456.</b> ONE source node whose write the import could not complete, the
+/// reason the write path gave, and whether that reason was a verdict about the BYTES
+/// (<paramref name="Deterministic"/> — see <c>StaticRepoImporter.IsContentVerdict</c>) rather than
+/// about the moment.
+///
+/// <para>The reason is the half that was missing, exactly as it was for
+/// <see cref="RefusedContentSync"/>: <c>ImportedWithContentErrors (41 node(s))</c> is
+/// indistinguishable between a file Postgres cannot store, a validator refusing a rule, and RLS
+/// declining the write — three problems with three different fixes, reported identically and with
+/// no path at all.</para>
+/// </summary>
+/// <param name="NodePath">The source node whose write did not land.</param>
+/// <param name="Reason">The write path's own message, so the fix is visible without the attempt log.</param>
+/// <param name="Deterministic">True when the same bytes re-read at the same fingerprint break the
+/// same rule — the fact the per-node refusal memory records so the next pass does not re-attempt it.</param>
+public sealed record FailedImport(string NodePath, string Reason, bool Deterministic);
 
 /// <summary>
 /// Conflict policy for an import that reconciles against a LIVE partition — the GitHub
@@ -844,8 +902,12 @@ public static class StaticRepoImporter
         // customize it (the Doc welcome page); otherwise we synthesize a generic Space root. It is
         // included in the fingerprint so editing the welcome re-imports.
         var root = ResolveRoot(source);
+        // The inline content files are part of the content-version too: a commit that only adds,
+        // edits or removes one must not match the previous import's marker, or the mirror never
+        // runs (MeshWeaver#4394 exposed the gap — see PartitionSourceFingerprint.Compute).
         var fingerprint = PartitionSourceFingerprint.Compute(
-            nodes.Append(root).ToArray(), source.Versioned, hub.JsonSerializerOptions);
+            nodes.Append(root).ToArray(), source.Versioned, hub.JsonSerializerOptions,
+            source.EnumerateInlineContentSyncs());
         var activityId = $"import-{fingerprint}";
         var activityNamespace = $"{source.Partition}/_Activity";
         // 🚨 issue #919 — THE MARKER. Content-addressed BY DESIGN and therefore the ONE id that cannot
@@ -1100,31 +1162,48 @@ public static class StaticRepoImporter
                 // degraded JsonElement (typed → as-is, JsonElement → deserialized, else null + logged).
                 var existingLog = existing?.ContentAs<ActivityLog>(hub.JsonSerializerOptions, logger);
 
-                // 🚨 #3146 — a recorded CONTENT verdict at this fingerprint is as final as a green
-                // one, and for the same reason: the marker is content-addressed, so re-running reads
-                // the same bytes and re-derives the same refusal. memex-cloud paid 19 full passes in
-                // 3 h — ≈425 identical validation failures plus a NodeType compile storm each — on a
-                // portal already at 8/8 replicas, because "not Succeeded" was read as "try again".
+                // 🚨 #4459/#4456 — A CONTENT VERDICT IS FINAL FOR THE NODE THAT EARNED IT, NEVER FOR
+                // THE PARTITION. This arm used to answer "Skipped" for the whole partition whenever
+                // the marker recorded ContentErrorsOutcome, on #3146's argument: the marker is
+                // content-addressed, so re-running re-reads the same bytes and re-derives the same
+                // refusal (memex-cloud paid 19 full passes in 3 h — ≈425 identical validation
+                // failures plus a NodeType compile storm each — for not making it).
                 //
-                // Only an ALL-deterministic pass lands here (see the outcome fold); a single
-                // retryable failure among them keeps Warning and keeps re-importing, and a
-                // fingerprint change re-runs this from scratch because the marker id IS the
-                // fingerprint. Force still re-runs — that is its purpose.
-                if (policy?.Force != true
-                    && existingLog is { Status: ActivityStatus.Failed }
-                    && MarkerOutcome(existingLog) == StaticRepoImportResult.ContentErrorsOutcome)
-                {
-                    logger?.LogWarning(
-                        "[StaticRepoImport] {Partition} already FAILED at {Fingerprint} on content "
-                        + "rules — skipping. These same bytes cannot import; re-running compiles and "
-                        + "re-writes for nothing. Fix the source (or force) — see {Path}.",
-                        source.Partition, fingerprint, activityPath);
-                    return Observable.Return(
-                        new StaticRepoImportResult(source.Partition, fingerprint, "Skipped"));
-                }
-
+                // The argument is right and the GRANULARITY was wrong, and the granularity is what
+                // cost memex.systemorph.com an evening on 2026-09-15. A literal NUL byte in ONE
+                // file — Hosting/Deployment/Source/SelfUpdateRouting.cs — is unstorable in a
+                // Postgres text column, so that one row was refused while 40 others landed. The pass
+                // earned ContentErrorsOutcome on the evidence of that single node, the marker
+                // recorded it for the partition, and every later import answered:
+                //
+                //     Skipped — an earlier FULL import already recorded this exact content at
+                //     fingerprint bb9801101e859a21 … so the partition was not re-read
+                //
+                // which is not true: the import lost a node, and the sentence claims the content was
+                // recorded. Five Hosting NodeTypes stayed parked on CS0246 SelfUpdateRouting, among
+                // them Hosting/InstanceAction — so NO instance action could run on the control
+                // instance at all (no Sample, no Logs, no HelmRelease, no Roll) — and the operator's
+                // one repair, a re-import, was refused by this arm with that same sentence.
+                //
+                // The memory now lives PER NODE, in the partition's import manifest (see
+                // RefusedTokenPrefix and the refusal skip in Run's stage loop): the write that
+                // provably fails is not re-issued — no storm, and #3146's measurement is pinned on
+                // WRITE REQUESTS rather than on the word "Skipped" — while every other node in the
+                // partition is evaluated again, so a re-import can still repair, create and prune.
+                // ImportedWithContentErrors is therefore no longer a fingerprint-recording outcome:
+                // the marker keeps it as a RECORD of what happened, never as a licence to skip.
                 if (existingLog is not { Status: ActivityStatus.Succeeded })
+                {
+                    if (existingLog is { Status: ActivityStatus.Failed }
+                        && MarkerOutcome(existingLog) == StaticRepoImportResult.ContentErrorsOutcome)
+                        logger?.LogInformation(
+                            "[StaticRepoImport] {Partition}: the marker at {Fingerprint} records a "
+                            + "CONTENT verdict. Re-importing anyway — the refusal is remembered per "
+                            + "node, so the refused write is not re-issued while the rest of the "
+                            + "partition is evaluated. See {Path}.",
+                            source.Partition, fingerprint, activityPath);
                     return Reimport();
+                }
 
                 // A FORCED import must re-apply even when the content fingerprint is unchanged: its
                 // purpose is to overwrite/prune local edits back to the (possibly identical) repo
@@ -1558,6 +1637,90 @@ public static class StaticRepoImporter
                             // expensive cross-hub upsert + owner re-render. Token is over the RAW source node,
                             // matching what the manifest stored.
                             var token = PartitionSourceFingerprint.ComputeNodeToken(sourceNode, hub.JsonSerializerOptions);
+
+                            // 🚨 #4459/#4456 — THE REFUSAL IS REMEMBERED PER NODE, NOT PER PARTITION.
+                            //
+                            // A previous pass evaluated exactly these bytes at exactly this path and
+                            // the write path refused them for a reason that is a verdict about the
+                            // bytes (IsContentVerdict). Re-issuing that write re-derives the identical
+                            // refusal — the cost #3146 measured on memex-cloud: 19 full passes in 3 h,
+                            // ≈425 identical failing upserts plus a NodeType compile each.
+                            //
+                            // That memory USED to live on the content-addressed marker, as a verdict
+                            // about the WHOLE partition, and answering "Skipped" on it is what turned
+                            // one dropped node into an outage: on 2026-09-15 a literal NUL byte in
+                            // Hosting/Deployment/Source/SelfUpdateRouting.cs made Postgres refuse that
+                            // ONE row, the marker recorded a content verdict for the partition, and
+                            // every later import answered "an earlier FULL import already recorded
+                            // this exact content … the partition was not re-read" — a claim about 40
+                            // nodes made on the evidence of 1. Five Hosting NodeTypes stayed parked on
+                            // CS0246 and no instance action could run on the control instance.
+                            //
+                            // Per node, both hold: the write that provably fails is not re-issued (no
+                            // storm), and every other node in the partition is still evaluated, so a
+                            // re-import can still repair, create and prune (no freeze). Force and
+                            // Reconcile bypass it — re-applying regardless is their whole purpose.
+                            //
+                            // 🚨 The sentence says "the mesh does not hold this content", NOT "the node
+                            // is not in the mesh" — deliberately, because a refused write is not always
+                            // a refused CREATE. An UPDATE refused on a node that already exists leaves
+                            // that node PRESENT and STALE, and telling an operator it is absent would
+                            // send them looking for the wrong thing.
+                            if (policy?.Force != true && policy?.Reconcile != true
+                                && manifest.TryGetValue(path, out var priorEntry)
+                                && IsRefusalOf(priorEntry, token))
+                            {
+                                logger?.LogDebug(
+                                    "[StaticRepoImport] {Partition}: {Path} was REFUSED at this exact "
+                                    + "content by an earlier pass — reported, not re-attempted.",
+                                    source.Partition, path);
+                                // 🚨 #4469 — REPORT THE ORIGINAL REASON when the ledger kept one.
+                                // The generic sentence is now the fallback for an entry written
+                                // before reasons were recorded, not the only thing a remembered
+                                // refusal can ever say: an operator who re-syncs and reads "the
+                                // manifest says so, re-import with force to find out why" has been
+                                // handed the shape of an answer instead of the answer.
+                                // 🚨 #4469 — REPORT THE ORIGINAL REASON when the ledger kept one,
+                                // under its OWN catalog key.
+                                //
+                                // 🚨 The existing key's TEMPLATE is left exactly as it was
+                                // (Copilot review). Activity log messages are PERSISTED with their
+                                // arguments, and pre-#4469 rows stored only `path`; adding
+                                // `{reason}` to that template would make every historical import
+                                // activity render a literal "{reason}" for ever, because
+                                // LocalizationCatalog.GetNamed deliberately leaves an unknown
+                                // placeholder visible. A second key is the only shape that can
+                                // carry a new argument without rewriting the past — and it doubles
+                                // as the correct wording for a ledger entry written before reasons
+                                // were recorded, which genuinely has none to report.
+                                var recordedReason = RefusalReasonOf(priorEntry);
+                                var rememberedReason = recordedReason ?? RememberedRefusalReason;
+                                var refusedBefore = recordedReason is null
+                                    ? new LogMessage(
+                                            $"⚠ {path} was REFUSED at this exact content by an earlier "
+                                            + "import, so the mesh does NOT hold it — the same bytes "
+                                            + "break the same rule, and no write was attempted. Fix the "
+                                            + "source file, or re-import with force to see the refusal "
+                                            + "again in full.",
+                                            Microsoft.Extensions.Logging.LogLevel.Warning)
+                                        .WithKey("activity.import.itemRefusedBefore", ("path", path))
+                                    : new LogMessage(
+                                            $"⚠ {path} was REFUSED at this exact content by an earlier "
+                                            + "import, so the mesh does NOT hold it — the same bytes "
+                                            + $"break the same rule, and no write was attempted "
+                                            + $"({recordedReason}). Fix the source file in the "
+                                            + "repository and re-import.",
+                                            Microsoft.Extensions.Logging.LogLevel.Warning)
+                                        .WithKey("activity.import.itemRefusedBeforeWithReason",
+                                            ("path", path), ("reason", recordedReason));
+                                settled.Add(new ImportItem(
+                                    Failed: 1,
+                                    FailedDeterministic: 1,
+                                    Failure: new FailedImport(path, rememberedReason, true),
+                                    Log: refusedBefore));
+                                continue;
+                            }
+
                             // Reconcile was requested because this ledger disagrees with the live
                             // sources; evaluate the write with conflict protection instead of trusting it.
                             if (policy?.Reconcile != true && target is not null
@@ -1721,6 +1884,13 @@ public static class StaticRepoImporter
                         Blocked: results
                             .Where(x => x.Blocked is not null)
                             .Select(x => x.Blocked!)
+                            .ToImmutableList(),
+                        // 🚨 #4459/#4456 — the failures NAMED, collected in the same single
+                        // materialization pass as every other path list. A bare count is what let one
+                        // refused node sit unnoticed until five NodeTypes parked on it.
+                        Failures: results
+                            .Where(x => x.Failure is not null)
+                            .Select(x => x.Failure!)
                             .ToImmutableList(),
                         Written: results
                             .Where(x => x.Written is not null)
@@ -1922,7 +2092,7 @@ public static class StaticRepoImporter
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
                         return WriteContentSyncLedgers(hub, source.Partition, content, logger)
                             .SelectMany(_ => WriteManifest(hub, source.Partition, nodes.Append(root).ToArray(), manifest, changedNodePaths,
-                            heldPaths, hub.JsonSerializerOptions, logger)).Select(_ =>
+                            heldPaths, count.Failures, count.Written, hub.JsonSerializerOptions, logger)).Select(_ =>
                         {
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
                             // Warning (the ⚠ lines above pinpoint which files), all-clear →
@@ -1997,6 +2167,22 @@ public static class StaticRepoImporter
                             // very different problems — an asset tree the transport cannot carry, a
                             // content collection that is not configured, a path escaping the root —
                             // read identically without it, and only one of them is about size.
+                            // 🚨 #4459/#4456 — NAMED, not counted. Every other thing an import can
+                            // leave behind names its paths; a failure was the one reported as a bare
+                            // number, and "ImportedWithContentErrors (41 node(s))" is what an operator
+                            // was given while a NodeType parked on the one file that did not land.
+                            // Bounded exactly like blockedNote/refusedNote so a pathological source
+                            // cannot write an unbounded log line.
+                            var failedNote = count.Failures.Count > 0
+                                ? $" ⚠ {count.Failures.Count} node(s) did NOT land — the mesh does NOT hold "
+                                  + "this content, so anything referencing them will not compile: "
+                                  + string.Join("; ", count.Failures.Take(BlockedPathsNamed)
+                                      .Select(f => $"{f.NodePath} ({f.Reason})"))
+                                  + (count.Failures.Count > BlockedPathsNamed
+                                      ? $", … (+{count.Failures.Count - BlockedPathsNamed} more)"
+                                      : "")
+                                  + "."
+                                : "";
                             var refusedNote = refusedContent.Count > 0
                                 ? $" 📦 {refusedContent.Count} node(s) whose CONTENT SYNC WAS REFUSED — their "
                                   + "assets are NOT in the mesh: "
@@ -2026,7 +2212,7 @@ public static class StaticRepoImporter
                             // routine housekeeping unless it says what the prune refused and why.
                             var heldNote = heldReport is null ? "" : " " + heldReport.Message;
                             var summary = failed > 0
-                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}{refusedNote}{heldNote}"
+                                ? $"Imported {count.Imported} node(s), {failed} FAILED{preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{failedNote}{blockedNote}{refusedNote}{heldNote}"
                                 : $"Imported {count.Imported} node(s){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}{refusedNote}{heldNote}";
                             NodeTypeCompilationActivity.Complete(hub, activityPath, status,
                                 new[]
@@ -2081,6 +2267,11 @@ public static class StaticRepoImporter
                                 // last-sync guard has to know a node did not land, or it advances
                                 // the baseline past it and the miss is permanent (#2229 item C).
                                 Failed = failed,
+                                // 🚨 #4459/#4456 — and the PATHS with it, for the same reason
+                                // RefusedContent carries its reasons: a caller (the GitSync activity,
+                                // a webhook, a test) that has to read the attempt node to learn WHICH
+                                // node is missing will not learn it at all.
+                                FailedPaths = count.Failures,
                                 BlockedCreatePaths = blockedCreates,
                                 WriteRequests = tally.Requests,
                                 // 🚨 #3101 — carried to the CALLER with the reason, not just to the
@@ -2648,10 +2839,183 @@ public static class StaticRepoImporter
                     partition, activityPath));
     }
 
+    /// <summary>
+    /// 🚨 <b>Issue #4459 / #4456 — the sigil that turns a manifest entry from "the partition holds
+    /// this" into "this was REFUSED at this token".</b>
+    ///
+    /// <para>The per-node manifest is the <c>{path → token}</c> ledger of what the partition holds.
+    /// Before this, a node whose write the owner REFUSED was recorded under its plain source token
+    /// anyway — the same false claim the content-addressed marker used to make, one layer down: the
+    /// ledger said "already at this content" about content that is not there. Recording the refusal
+    /// INSTEAD keeps the ledger honest AND gives the next pass the one fact it needs to avoid
+    /// re-attempting a write that provably fails (#3146's storm), WITHOUT freezing the whole
+    /// partition on a per-node fact (#4459's outage).</para>
+    ///
+    /// <para>A prefix rather than a schema change, deliberately: an OLDER reader compares
+    /// <c>"!abc"</c> to the token it computes (<c>"abc"</c>), sees a mismatch, and re-evaluates the
+    /// node — the safe direction, and exactly what it did before this field existed. A NEWER reader
+    /// on an older manifest sees no sigils and behaves as it always did. <c>'!'</c> cannot occur in a
+    /// token: <see cref="PartitionSourceFingerprint.ComputeNodeToken"/> ends in
+    /// <c>Convert.ToHexString</c>, so every token is <c>0-9A-F</c> and nothing else.</para>
+    /// </summary>
+    internal const string RefusedTokenPrefix = "!";
+
+    /// <summary>
+    /// 🚨 <b>Issue #4469 — the separator that puts the WHY next to the WHAT.</b> A refusal entry is
+    /// <c>!{token}</c> or <c>!{token}|{reason}</c>, and the second form is what lets a NodeType's
+    /// compile failure say <i>which</i> import lost <i>which</i> file for <i>what</i> reason instead
+    /// of leaving an operator with a <c>CS0246</c> on a symbol whose file is in git.
+    ///
+    /// <para>Unambiguous by construction, in the same way the prefix is: a token is the output of
+    /// <c>Convert.ToHexString</c> (<see cref="PartitionSourceFingerprint.ComputeNodeToken"/>), so it
+    /// is <c>0-9A-F</c> and nothing else — the FIRST <c>'|'</c> therefore always ends the token, and
+    /// a reason that itself contains one loses nothing. Both directions of compatibility hold, for
+    /// the same reasons the prefix has: a reader that does not know the separator compares the whole
+    /// value to the token it computes, sees a mismatch and re-evaluates the node (the safe
+    /// direction); a reader that does know it, on an entry written before this, finds no separator
+    /// and reports the refusal with <b>no reason recorded</b> — which is a different sentence from
+    /// "no reason", and is said as such.</para>
+    /// </summary>
+    internal const string RefusedReasonSeparator = "|";
+
+    /// <summary>
+    /// The reason carried by a failure the run did not re-derive because a previous pass already
+    /// recorded it (see the refusal-memory skip in the stage loop), for a ledger entry that predates
+    /// <see cref="RefusedReasonSeparator"/> and therefore records none. It is a statement about the
+    /// LEDGER, not about the bytes — the original message is on the attempt that first measured it —
+    /// so it says which instrument answered rather than pretending to a diagnosis it did not run.
+    /// </summary>
+    private const string RememberedRefusalReason =
+        "Refused at this exact content by an earlier import (recorded in the partition's import "
+        + "manifest); no write was attempted. Re-import with force to re-derive the original reason.";
+
+    /// <summary>
+    /// The manifest value that records "<paramref name="token"/> was REFUSED here, for
+    /// <paramref name="reason"/>" — see <see cref="RefusedTokenPrefix"/> and
+    /// <see cref="RefusedReasonSeparator"/>. Pure.
+    ///
+    /// <para>The reason is bounded far more tightly than the one an activity line carries
+    /// (<see cref="RefusalReasonMaxChars"/>): this is a LEDGER with one entry per node in the
+    /// partition, and a pathological message repeated across a hundred of them would bloat a
+    /// document every later import has to read before it can do anything.</para>
+    /// </summary>
+    private static string RefusedEntry(string token, string? reason)
+    {
+        var sanitized = SanitizeLedgerReason(reason);
+        return sanitized.Length == 0
+            ? RefusedTokenPrefix + token
+            : RefusedTokenPrefix + token + RefusedReasonSeparator + sanitized;
+    }
+
+    /// <summary>
+    /// 🚨 <b>The ledger must not become unstorable because of what it records about something
+    /// unstorable.</b> The reason is a message from the WRITE PATH — the very layer that refused
+    /// these bytes — so it can carry whatever the refusal was about, and this entry is then written
+    /// back into a Postgres text column as part of the manifest. A refusal reason echoing a literal
+    /// NUL would make the manifest write fail for exactly the reason the node's did, which is the
+    /// incident this whole change set is about, one level of irony down. (The manifest write is
+    /// best-effort, so the consequence would be a silently non-incremental next import rather than
+    /// an outage — still a defect, and a cheap one to refuse.)
+    ///
+    /// <para>Every control character becomes a space (newlines included — an entry is one line),
+    /// runs are collapsed, and the result is capped. The cap never splits a surrogate PAIR: cutting
+    /// one in half leaves a lone surrogate, which is not valid text and is replaced downstream by
+    /// U+FFFD — a second way to write something nobody can read. Pure.</para>
+    /// </summary>
+    private static string SanitizeLedgerReason(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            return string.Empty;
+
+        var builder = new System.Text.StringBuilder(
+            Math.Min(reason.Length, LedgerReasonMaxChars + 1));
+        var lastWasSpace = false;
+        foreach (var ch in reason)
+        {
+            var c = char.IsControl(ch) || ch == '\0' ? ' ' : ch;
+            if (c == ' ')
+            {
+                if (lastWasSpace || builder.Length == 0)
+                    continue;
+                lastWasSpace = true;
+            }
+            else
+            {
+                lastWasSpace = false;
+            }
+            if (builder.Length >= LedgerReasonMaxChars)
+            {
+                // Never end on a HIGH surrogate: its partner is what we are about to drop.
+                if (char.IsHighSurrogate(builder[^1]))
+                    builder.Length--;
+                builder.Append('…');
+                break;
+            }
+            builder.Append(c);
+        }
+
+        // A trailing separator space carries nothing.
+        while (builder.Length > 0 && builder[^1] == ' ')
+            builder.Length--;
+        return builder.ToString();
+    }
+
+    /// <summary>How much of a refusal reason the per-node manifest keeps. See
+    /// <see cref="RefusedEntry"/> for why it is shorter than the activity line's budget.</summary>
+    private const int LedgerReasonMaxChars = 300;
+
+    /// <summary>
+    /// The token half of a manifest <paramref name="entry"/> — everything after the refusal sigil and
+    /// before <see cref="RefusedReasonSeparator"/>. Pure; the entry itself for a non-refusal.
+    /// </summary>
+    private static string RefusedTokenPart(string entry)
+    {
+        var body = entry[RefusedTokenPrefix.Length..];
+        var sep = body.IndexOf(RefusedReasonSeparator, StringComparison.Ordinal);
+        return sep < 0 ? body : body[..sep];
+    }
+
+    /// <summary>
+    /// True when <paramref name="entry"/> is a recorded refusal of exactly <paramref name="token"/> —
+    /// i.e. a previous pass evaluated THESE bytes at THIS path and the write path refused them for a
+    /// reason that is a verdict about the bytes. Any other token re-opens the question. Pure.
+    /// </summary>
+    private static bool IsRefusalOf(string entry, string token) =>
+        IsRefusal(entry) && string.Equals(RefusedTokenPart(entry), token, StringComparison.Ordinal);
+
+    /// <summary>
+    /// True when <paramref name="entry"/> records a refusal at all, whatever the token. Pure —
+    /// this is the question <see cref="StaticRepoImportRefusals"/> asks, because the compile side
+    /// wants "is this declared node missing from the mesh", not "is it missing at THIS content".
+    /// </summary>
+    internal static bool IsRefusal(string entry) =>
+        entry.Length > RefusedTokenPrefix.Length
+        && entry.StartsWith(RefusedTokenPrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The reason recorded alongside a refusal <paramref name="entry"/>, or <see langword="null"/>
+    /// when the entry is not a refusal or was written before reasons were kept. Pure.
+    ///
+    /// <para>🚨 <c>null</c> here means NOT RECORDED, never "no reason" — the caller says so rather
+    /// than inventing a diagnosis, for the same reason the whole seam distinguishes
+    /// could-not-answer from answered-and-empty.</para>
+    /// </summary>
+    internal static string? RefusalReasonOf(string entry)
+    {
+        if (!IsRefusal(entry))
+            return null;
+        var body = entry[RefusedTokenPrefix.Length..];
+        var sep = body.IndexOf(RefusedReasonSeparator, StringComparison.Ordinal);
+        if (sep < 0 || sep + 1 >= body.Length)
+            return null;
+        var reason = body[(sep + 1)..].Trim();
+        return reason.Length == 0 ? null : reason;
+    }
+
     private const string ManifestId = "import-manifest";
 
     /// <summary>Path of a partition's per-node import manifest (an <c>_Activity</c> node; survives prune).</summary>
-    private static string ManifestPath(string partition) => $"{partition}/_Activity/{ManifestId}";
+    internal static string ManifestPath(string partition) => $"{partition}/_Activity/{ManifestId}";
 
     private const string ContentManifestId = "content-manifest";
 
@@ -2899,21 +3263,43 @@ public static class StaticRepoImporter
     /// <see cref="ActivityLog.ReturnValue"/>. Empty on absence / any parse failure → the next import is a
     /// full (non-incremental) import, never a wrong one.
     /// </summary>
-    private static ImmutableDictionary<string, string> ParseManifest(MeshNode? manifestNode, JsonSerializerOptions opts)
+    internal static ImmutableDictionary<string, string> ParseManifest(MeshNode? manifestNode, JsonSerializerOptions opts)
+        => TryParseManifest(manifestNode, opts) ?? ImmutableDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// 🚨 <b>The same parse, with the FAILURE kept (#4469, Copilot review).</b> Returns
+    /// <see langword="null"/> when the node exists but its manifest could not be read — corrupt
+    /// content, an unreadable <c>ReturnValue</c>, a materialization fault — and an (possibly empty)
+    /// map when it genuinely was read.
+    ///
+    /// <para><see cref="ParseManifest"/> collapses the two on purpose: for the IMPORT, "could not
+    /// read" and "nothing recorded" both mean the same thing — do a full, non-incremental pass,
+    /// which is conservative in the right direction. For a READER of the refusal ledger they are
+    /// opposite answers: an unreadable manifest reported as the determined-empty set would claim
+    /// "this partition's import lost nothing" on the evidence of a parse failure, and would
+    /// suppress the attribution at exactly the moment the bookkeeping is broken. Same parse, one
+    /// implementation, so the two can never drift about what a manifest SAYS — only about what an
+    /// unreadable one MEANS.</para>
+    /// </summary>
+    internal static ImmutableDictionary<string, string>? TryParseManifest(
+        MeshNode? manifestNode, JsonSerializerOptions opts)
     {
         if (manifestNode is null) return ImmutableDictionary<string, string>.Empty;
         try
         {
             var log = manifestNode.ContentAs<ActivityLog>(opts);
-            if (log?.ReturnValue is not { } rv) return ImmutableDictionary<string, string>.Empty;
+            // 🚨 Content that would not materialize as an ActivityLog at all is a node we could NOT
+            // READ, not one recording nothing — the degrade path ObjectAsExtensions exists for.
+            if (log is null) return null;
+            if (log.ReturnValue is not { } rv) return ImmutableDictionary<string, string>.Empty;
             var map = rv.Deserialize<Dictionary<string, string>>(opts);
             return map is null
-                ? ImmutableDictionary<string, string>.Empty
+                ? null
                 : map.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
         }
         catch
         {
-            return ImmutableDictionary<string, string>.Empty;
+            return null;
         }
     }
 
@@ -2937,10 +3323,18 @@ public static class StaticRepoImporter
     /// only evidence about nodes this run did not evaluate.</param>
     /// <param name="evaluatedPaths">The git-diff scope; <see langword="null"/> means the run evaluated
     /// every source node and may claim the whole map.</param>
+    /// <param name="failures">🚨 The nodes this run could NOT write (issue #4459/#4456). A run may
+    /// only claim what it WROTE — the same rule as <paramref name="evaluatedPaths"/>, for the other
+    /// way a node can fail to land. A DETERMINISTIC refusal is recorded as a refusal
+    /// (<see cref="RefusedEntry"/>) so the next pass skips the write instead of re-deriving it; a
+    /// retryable one is dropped from the map entirely, which is what makes the next pass look again.</param>
+    /// <param name="writtenPaths">The paths that DID land. A source may carry duplicate entries for
+    /// one path, so a path can appear in both lists; what landed wins (see the failures clause).</param>
     private static IObservable<int> WriteManifest(
         IMessageHub hub, string partition, IReadOnlyList<MeshNode> nodes,
         IReadOnlyDictionary<string, string> previous, IReadOnlySet<string>? evaluatedPaths,
-        IReadOnlyCollection<string> heldNodeTypePaths,
+        IReadOnlyCollection<string> heldNodeTypePaths, IReadOnlyCollection<FailedImport> failures,
+        IReadOnlyCollection<string> writtenPaths,
         JsonSerializerOptions opts, ILogger? logger)
     {
         var map = nodes
@@ -2989,6 +3383,61 @@ public static class StaticRepoImporter
                     builder[path] = prior;
                 else
                     builder.Remove(path);
+            }
+            map = builder.ToImmutable();
+        }
+
+        // 🚨 #4459/#4456 — A RUN MAY ONLY CLAIM WHAT IT WROTE, and this is the LAST word because it
+        // is the only clause stating something this run MEASURED. Until now a node whose upsert the
+        // owner REFUSED was recorded under its plain source token, so the ledger asserted the
+        // partition held content that is provably not in it — the same false claim the
+        // content-addressed marker made about the whole partition, one layer down, and the claim
+        // that has to become honest before that whole-partition skip can be retired.
+        //
+        // 🚨 The token comes from the SOURCE node, never from `map`: the git-diff carve-out above
+        // may just have written the PREVIOUS run's token into this entry (a node absent from the DB
+        // is attempted even when it is outside the diff scope), and a refusal recorded against the
+        // wrong token would be re-opened on the next pass — or, worse, honoured for bytes nobody
+        // refused.
+        if (failures.Count > 0)
+        {
+            var written = writtenPaths.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+            var sourceTokens = nodes
+                .Where(n => !string.IsNullOrEmpty(n.Path))
+                .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
+                .ToImmutableDictionary(
+                    g => g.Key,
+                    g => PartitionSourceFingerprint.ComputeNodeToken(g.First(), opts),
+                    StringComparer.OrdinalIgnoreCase);
+            var builder = map.ToBuilder();
+            foreach (var failure in failures)
+            {
+                if (!sourceTokens.TryGetValue(failure.NodePath, out var token))
+                    continue;
+                // 🚨 A path that ALSO landed is not a refused path (Copilot review). A source may
+                // carry two entries at one path — ImportWriteOrder deliberately preserves duplicates
+                // — so one attempt can fail while another succeeds. Recording a refusal for a node
+                // that IS in the mesh would make every later pass re-report a refusal that no longer
+                // describes anything, and `map`'s own token comes from `g.First()`, which need not be
+                // the entry that won. The written set is the authority on what landed.
+                if (written.Contains(failure.NodePath))
+                    continue;
+                if (failure.Deterministic)
+                    // These bytes break a rule, and they break it again at the same token. Recorded
+                    // so the next pass reports the refusal WITHOUT re-attempting the write (#3146's
+                    // storm) while still evaluating every other node (#4459's freeze).
+                    //
+                    // 🚨 WITH THE REASON (#4469). The refusal is what a later NodeType compile has
+                    // to be able to read to say "the mesh does not hold the file that defines this
+                    // symbol, because an import refused it for THIS". Recording the path alone would
+                    // leave that reader with the same half-answer the bare `Failed` count left the
+                    // operator: 'refused' cannot separate a byte Postgres will not store from a
+                    // validator rule from an RLS denial, and those have three different fixes.
+                    builder[failure.NodePath] = RefusedEntry(token, failure.Reason);
+                else
+                    // A store blip, an owner that did not answer. Unknown means retryable: leave no
+                    // entry at all, which is exactly the state that makes the next pass look again.
+                    builder.Remove(failure.NodePath);
             }
             map = builder.ToImmutable();
         }
@@ -3084,6 +3533,9 @@ public static class StaticRepoImporter
     /// <param name="Claimed">1 when a claim declined the node, else 0.</param>
     /// <param name="Written">The path that landed, or <c>null</c>.</param>
     /// <param name="Blocked">The path that can never be created, or <c>null</c>.</param>
+    /// <param name="Failure">The path that did NOT land and why, or <c>null</c> — always present
+    /// when <c>Failed: 1</c>, so the caller can NAME what is missing instead of counting it
+    /// (#4459/#4456).</param>
     /// <param name="Log">The activity line this item contributes, or <c>null</c>.</param>
     private readonly record struct ImportItem(
         int Imported = 0,
@@ -3093,6 +3545,7 @@ public static class StaticRepoImporter
         int Claimed = 0,
         string? Written = null,
         string? Blocked = null,
+        FailedImport? Failure = null,
         LogMessage? Log = null);
 
     /// <summary>
@@ -3252,9 +3705,11 @@ public static class StaticRepoImporter
                 logger?.LogWarning(ex,
                     "[StaticRepoImport] {Partition}: upsert of {Path} failed (continuing).",
                     partition, node.Path);
+                var deterministic = IsContentVerdict(ex);
                 return Observable.Return(new ImportItem(
                     Failed: 1,
-                    FailedDeterministic: IsContentVerdict(ex) ? 1 : 0,
+                    FailedDeterministic: deterministic ? 1 : 0,
+                    Failure: new FailedImport(node.Path!, ex.Message, deterministic),
                     Log: new LogMessage(
                         $"⚠ Failed to import {node.Path}: {ex.Message}",
                         Microsoft.Extensions.Logging.LogLevel.Warning)

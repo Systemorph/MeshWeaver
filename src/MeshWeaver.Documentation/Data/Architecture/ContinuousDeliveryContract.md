@@ -157,6 +157,80 @@ Build-and-Test is running and when it never ran at all, so a conclusion-only rea
 cannot be published" for a perfectly healthy commit on any tick landing shortly after a merge.
 Running, or merged minutes ago with no check yet, means **wait silently**.
 
+**🚨 A `pending` run is ambiguous, and NO snapshot predicate can resolve it — measured both ways
+(2026-09-17). OPEN DECISION.** The reconciler's first question is *"is an older run of this workflow
+already publishing this commit?"* (#3376, so one commit yields ONE image set), and both that probe
+and the stuck-delivery verdict below answer it with `.status != "completed"`. GitHub reports a run
+held behind a concurrency group as **`pending`**, and that status has been observed resolving **both
+ways**:
+
+| date | the pending run | deferring to it was |
+|---|---|---|
+| 2026-09-10 | `workflow_run 34506317727`, pending behind the preceding delivery — **subsequently built** | **right**; not deferring duplicated `c3b6fdf`'s whole image set |
+| 2026-09-17 | `35252764043` and `35246058388`, pending in the same lane — **evicted, zero jobs each** | **wrong**; delivery stopped |
+
+🚨 **And the two are indistinguishable at decision time.** This lane is `cancel-in-progress: false`,
+so GitHub holds one in-progress run **plus one pending** and evicts the pending one *when the next
+merge arrives* — a run that did not exist when the decision was made. At 17:26:42Z run `35252764043`
+was five seconds old and the newest in its lane; it looked exactly like 09-10's. What tipped it was
+the future.
+
+What the 09-17 side cost: **77 of 150** runs of this workflow `cancelled`, every sampled one with
+`total_count: 0` jobs; reconcile **#8842** deferred to pending **#8841** and **#8847** to pending
+**#8846**, both evicted; **nothing published after run #8839 (15:53Z)** — including `6e21e91b`, the
+commit carrying the #4602 gate fix. Every run reported `success` or `cancelled`; none reported a
+failure, because the *same* predicate suppresses the stuck-delivery alarm below *"only while a run is
+observably live"*.
+
+**So the defect is NOT the predicate's snapshot — it is that a deferral is never revisited.** The
+design says *"if that run fails, the next reconcile tick heals HEAD"*, and that recovery did not fire
+because each hourly tick found a **new** pending run on a **new** HEAD and deferred again. Two
+consecutive ticks deferred; a quiet hour would have healed it, which is why this is a stall rather
+than a permanent stop — but "eventually, if merges pause" is not a delivery guarantee, and the alarm
+is silent throughout.
+
+🚨 **Do not "fix" this by narrowing the predicate to `in_progress`/`queued`.** That was tried on
+2026-09-17 and `.github/scripts/test-cd-steps.py` rejected it in two cases written for the 09-10
+incident — correctly: it trades a visible stall for a silent duplicate delivery, and the duplicate is
+the one that mints two digests for one commit.
+
+### Revisiting a deferral needs a CARRIER, and there is none today
+
+The obvious repair is *"the next tick resolves what this tick could not: the run we deferred to
+either executed jobs or it did not"*. The **evidence** for that is real and unambiguous —
+`/runs/<id>/jobs --jq .total_count` is `0` for a run that never executed a step. What is missing is
+the **carrier**, and both halves were checked on 2026-09-17:
+
+- **Nothing persists the deferral.** The `#3376` defer path calls `decision false …` and `exit 0`;
+  `decision` writes `publish=` to `$GITHUB_OUTPUT` and a line to the job summary. The verdict step's
+  `deferred_to` / `deferred_status` are read by exactly one consumer — the summary step of **the same
+  run** (`main-cd.yml`, the `DEFERRED_TO`/`DEFERRED_STATUS` env of the summary). Nothing survives the
+  run.
+- **And the target MOVES between ticks**, so the next tick cannot rediscover it: reconcile **#8842**
+  targeted `cf64edd`, reconcile **#8847** targeted `92c13083`. Both probes filter `head_sha=$SHA`, so
+  last tick's deferred-to run is on a different commit and is invisible to this tick — recorded or
+  not.
+- **Where the target *does* hold still, the evidence is redundant**: at the next tick the deferred-to
+  run is `completed`, so `.status != "completed"` already stops deferring and the tick publishes.
+  That is the "a quiet hour heals it" path, and it already works.
+
+So the repair is a **durable, run-id-keyed** record of the deferral, revisited on a later tick
+whatever its target — and the contract's healing ledger is deliberately *"the `ci-failure` issue …
+no new state store"*, so which carrier to use is a decision, not a detail.
+
+🚨 **And the root is one level below that: the ambiguity exists only because a pending run can be
+evicted.** If the push lane did not discard queued runs, `pending` would always mean "will build",
+every existing case would stay correct, and no revisiting would be needed at all.
+
+> 🚨 **The registry was never the problem, and this is how to tell.** The same night produced
+> `az exit 3` / *"the registry did not answer"* reports, which read like a credential outage. Run
+> **#8839** — 1h40m before the stall was diagnosed — ran `Build + push` (×3), `Mirror portal-ai to
+> the fleet registry`, `Promote: tag the full set` and **`Verify every image shipped`**, all
+> `success`. That is the whole credential path exercised end to end. When delivery stops, ask first
+> **whether any job ran at all**: `gh api …/actions/runs/<id>/jobs --jq .total_count`. A run that
+> executed zero jobs cannot have hit the registry, and reading its cancellation as an outage sends
+> the next hour to Azure instead of to the workflow.
+
 **It terminates.** Each tick is one attempt and does not re-trigger itself. Persistent failure is
 bounded at **3 attempts per commit**, with the `ci-failure` issue as the ledger — no new state store.
 The slot is consumed when an attempt *starts*, so a run that dies without reporting cannot buy

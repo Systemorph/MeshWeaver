@@ -73,6 +73,40 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// 🚨 <b>The hub every request/response exchange on this facade is ISSUED FROM
+    /// (<see href="https://github.com/Systemorph/MeshWeaver/issues/1140">#1140</see>).</b>
+    ///
+    /// <para><see cref="hub"/> is whatever hub constructed this facade, and for the AI/agent surface
+    /// that is the DI-injected <see cref="IMessageHub"/> — which in the mesh's ROOT container IS the
+    /// ROUTER. That is not an inference: production named this exact class on 2026-09-16 01:10:13Z,
+    /// <c>ROUTER_TRAFFIC ORIGIN: DisposeRequest was POSTED with the mesh hub as sender … at
+    /// MeshWeaver.AI.MeshOperations+&lt;&gt;c__DisplayClass95_0.&lt;RecycleCore&gt;b__3</c>
+    /// (<see href="https://github.com/Systemorph/MeshWeaver/issues/4463">#4463</see>). Every OTHER
+    /// exchange this facade issues leaves from the same field, so every one of them puts the router
+    /// on an end too — the request reaches the node's hub stamped <c>Sender = mesh/{id}</c> and the
+    /// reply is addressed straight back at <c>mesh/{id}</c>, which is #1140's receiver-side pair
+    /// verbatim (<c>RawJson has the mesh hub as sender … target: &lt;node path&gt;</c>).</para>
+    ///
+    /// <para><b>Why THIS seam and not <see cref="MeshExtensions.NodeOperationIssuingHub"/>.</b>
+    /// Every exchange left on this facade is one the ISSUING hub does not execute: the work runs on
+    /// the TARGET (a per-node hub) and this hub is only the mailbox its reply lands in, under a
+    /// bounded deadline with a person or an agent waiting. <c>portal/reads-{meshId}</c> registers NO
+    /// handlers, so its block only ever dispatches those replies, whereas the node-operation hub
+    /// runs every create/upsert in the mesh one turn at a time — a reply queued behind a bulk
+    /// install or a bake is #2901's ~10.3 s-then-503. Node MUTATIONS are the other case and do use
+    /// the node-operation seam; on this facade the one that remains is <c>RecycleCore</c>'s
+    /// <c>DisposeRequest</c>, which names it at the call site.</para>
+    ///
+    /// <para>Both seams are the IDENTITY FUNCTION for every hub whose address type is not the mesh
+    /// type, so the MCP session / portal / per-node callers that dominate this surface are
+    /// byte-for-byte unaffected. Cached like <c>MeshService.IssuingHub</c>: the parent chain is
+    /// stable for this facade's lifetime.</para>
+    /// </summary>
+    private IMessageHub? readHub;
+
+    private IMessageHub ReadHub => readHub ??= hub.ReadIssuingHub();
+
+    /// <summary>
     /// Looks up the cached compilation error for the owning NodeType of <paramref name="node"/>.
     /// - If <paramref name="node"/> is a NodeType definition (Content is
     ///   <see cref="Graph.Configuration.NodeTypeDefinition"/> OR <c>NodeType</c>
@@ -637,7 +671,22 @@ public class MeshOperations
             using var callerScope = caller is not null
                 ? accessService?.SwitchAccessContext(caller)
                 : null;
-            var stream = hub.GetWorkspace()
+            // 🚨 SUBSCRIBED OFF THE ROUTER (#4614/#4615/#4617). `hub` is whatever hub built this
+            // facade, and for the AI/agent surface that is the DI-injected IMessageHub — the
+            // ROUTER (see ReadHub). A workspace is SCOPED PER HUB, so `hub.GetWorkspace()` would
+            // open this layout-area stream on the router's workspace: the SubscribeRequest leaves
+            // stamped `sender: mesh/{id}` (#4614), the owner then addresses its SubscribeAck
+            // (#4615), every DataChangedEvent and the StreamEndedEvent (#4617) straight back at
+            // `mesh/{id}` — because those are all posted to `request.Subscriber`, which IS the
+            // subscribe's sender — and the router hosts the `sync/{streamId}` sub-hub and routes
+            // every frame through its own action block for the life of the render.
+            //
+            // The remedy the ORIGIN report suggests — ReadIssuingHub() — is NOT available here and
+            // would break data sync: `portal/reads-{meshId}` registers no handlers, so it has no
+            // RouteStreamMessage route and no sync sub-hub, and the owner's fan-out would arrive
+            // nowhere. The subscriber hub must be a data-wired actor; that is StreamSubscribingHub,
+            // the identity function for every MCP-session / portal / per-node caller of this facade.
+            var stream = hub.StreamSubscribingHub().GetWorkspace()
                 .GetRemoteStream<JsonElement, LayoutAreaReference>(
                     (Address)resolution.Prefix, reference);
             if (stream is null)
@@ -1093,86 +1142,6 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Writes a full <see cref="MeshNode"/> to the node's own hub via
-    /// <see cref="DataChangeRequest"/>. The target hub's data-change handler applies
-    /// the update to its workspace (ticking the <c>MeshNodeReference</c> stream so
-    /// subsequent <see cref="GetDataRequest"/> sees the new value) and persists via
-    /// its data source. Emits the saved node on success.
-    /// </summary>
-    private IObservable<MeshNode> UpdateViaDataChange(MeshNode node, int timeoutSeconds = 10) =>
-        Observable.Create<MeshNode>(observer =>
-        {
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
-            var completed = 0;
-
-            void Fail(Exception ex)
-            {
-                if (Interlocked.Exchange(ref completed, 1) != 0) return;
-                observer.OnError(ex);
-            }
-
-            void Emit(MeshNode n)
-            {
-                if (Interlocked.Exchange(ref completed, 1) != 0) return;
-                observer.OnNext(n);
-                observer.OnCompleted();
-            }
-
-            // 🚨 Capture the inner Subscribe so disposal removes the
-            // hub-level pending callback. See FetchNode for the failure
-            // mode this avoids (test-base Quiescing leak detection trips
-            // on the orphaned callback entry).
-            IDisposable? innerSubscription = null;
-
-            try
-            {
-                // 🚨 Pre-registering Observe(request, options) — registers the response
-                // subject BEFORE posting. The old Post-then-Observe(delivery) shape had a
-                // window in which an immediate response/DeliveryFailure (deleted target →
-                // instant NotFound) was pumped before the subject existed and silently
-                // lost; the caller then sat until the hub's 60s RequestTimeout — the
-                // McpNegativeOperationsTest.DeletedNode_EveryVerb_FailsCleanly 45.5s CI
-                // flake (PR #500, run 29571004819 shard 0).
-                innerSubscription = hub.Observe(
-                        DataChangeRequest.Update([node]),
-                        o => o.WithTarget(new Address(node.Path)))
-                    .Subscribe(
-                        d =>
-                        {
-                            if (d.Message is DataChangeResponse resp)
-                            {
-                                if (resp.Status == DataChangeStatus.Committed)
-                                    Emit(node with { Version = resp.Version });
-                                else
-                                    Fail(new InvalidOperationException(
-                                        $"DataChangeRequest rejected for {node.Path}: {resp.Log?.Status}"));
-                            }
-                            else
-                            {
-                                Fail(new InvalidOperationException(
-                                    $"Unexpected response {d.Message?.GetType().Name} for DataChangeRequest at {node.Path}"));
-                            }
-                        },
-                        ex => Fail(new InvalidOperationException(
-                            ex.Message ?? $"Delivery failed to {node.Path}", ex)));
-
-                cts.Token.Register(() => Fail(new TimeoutException(
-                    $"DataChangeRequest for {node.Path} did not complete within {timeoutSeconds}s.")));
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "UpdateViaDataChange: Post/Observe failed for {Path}", node.Path);
-                Fail(ex);
-            }
-
-            return () =>
-            {
-                innerSubscription?.Dispose();
-                cts.Dispose();
-            };
-        });
-
-    /// <summary>
     /// Tries to resolve a path as a Unified Path with prefix (schema/, model/, data/, content/).
     /// Supports both legacy colon format (address/prefix:path) and new slash format (address/prefix/path).
     /// Parses the path to find the prefix, splits into address and remainder,
@@ -1231,6 +1200,24 @@ public class MeshOperations
         var reference = new UnifiedReference(remainder);
         var address = !string.IsNullOrEmpty(addressPart) ? new Address(addressPart) : hub.Address;
 
+        // 🚨 ISSUED OFF THE ROUTER (#1140) — see ReadHub — but ONLY when the read actually LEAVES
+        // this hub, and that is decided by the resolved TARGET, never by whether an address part was
+        // written. A UCR may address this very hub EXPLICITLY (`mesh/{id}/$area/…` parses an
+        // addressPart that resolves straight back to `hub.Address`), so testing the address part for
+        // emptiness would hop the sender to portal/reads-{meshId} while leaving the target on this
+        // hub: the router becomes the TARGET of a work delivery and a local self-read turns into a
+        // routed request the ROUTER has to EXECUTE — the opposite of the fix. Hopping the target too
+        // is not available either: portal/reads-{meshId} registers NO handlers, so it could never
+        // answer. Comparing the resolved address is the same structural exclusion the lifecycle
+        // ratchet makes for a self-directed post — a rule whose remedy is nonsense at a site must
+        // not be applied there. (Copilot on #4487; the emptiness test was the first spelling.)
+        //
+        // Spelled as the seam CALL rather than through the cached `ReadHub` property deliberately:
+        // the receiver of a post is what RouterAsRouterCapableReceiverRatchetGuard reads, and a
+        // local bound from anything but a seam call would make this site invisible to it. One
+        // GetMeshHub() walk per UCR resolution is the price of staying measurable.
+        var issuingHub = address.Equals(hub.Address) ? hub : hub.ReadIssuingHub();
+
         logger.LogInformation("Resolving Unified Path: address={Address}, remainder={Remainder}",
             addressPart, remainder);
 
@@ -1251,8 +1238,11 @@ public class MeshOperations
             {
                 // 🚨 Pre-registering Observe(request, options) — subject registered
                 // BEFORE the post, so an immediate response/DeliveryFailure can never
-                // race past the registration and be lost (see UpdateViaDataChange).
-                innerSubscription = hub.Observe(
+                // race past the registration and be lost (see FetchNode, which states
+                // the failure mode: with Post-then-Observe(delivery), an immediate
+                // NotFound is pumped before the subject exists and is silently dropped,
+                // leaving the caller on the hub's 60 s RequestTimeout).
+                innerSubscription = issuingHub.Observe(
                         new GetDataRequest(reference),
                         o => o.WithTarget(address))
                     .Subscribe(
@@ -2300,74 +2290,6 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Posts a <see cref="PatchDataRequest"/> to the node's hub with the raw JSON
-    /// delta. The hub applies the JSON merge patch to its own <c>MeshNodeReference</c>
-    /// workspace stream and returns <see cref="PatchDataResponse"/>. Emits the
-    /// committed version on success; OnError on failure/timeout.
-    /// </summary>
-    private IObservable<long> PatchViaDataRequest(string resolvedPath, string rawPatch, int timeoutSeconds = 10) =>
-        Observable.Create<long>(observer =>
-        {
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
-            var completed = 0;
-
-            void Fail(Exception ex)
-            {
-                if (Interlocked.Exchange(ref completed, 1) != 0) return;
-                observer.OnError(ex);
-            }
-
-            void Emit(long version)
-            {
-                if (Interlocked.Exchange(ref completed, 1) != 0) return;
-                observer.OnNext(version);
-                observer.OnCompleted();
-            }
-
-            // 🚨 Capture inner Subscribe for proper teardown.
-            IDisposable? innerSubscription = null;
-
-            try
-            {
-                // 🚨 Pre-registering Observe(request, options) — subject registered
-                // BEFORE the post, so an immediate response/DeliveryFailure can never
-                // race past the registration and be lost (see UpdateViaDataChange).
-                innerSubscription = hub.Observe(
-                        new PatchDataRequest(new MeshNodeReference(), new RawJson(rawPatch)),
-                        o => o.WithTarget(new Address(resolvedPath)))
-                    .Subscribe(
-                        d =>
-                        {
-                            if (d.Message is PatchDataResponse resp)
-                            {
-                                if (resp.Success)
-                                    Emit(resp.Version);
-                                else
-                                    Fail(new InvalidOperationException(resp.Error ?? "Patch rejected"));
-                            }
-                            else
-                                Fail(new InvalidOperationException(
-                                    $"Unexpected response {d.Message?.GetType().Name} for PatchDataRequest at {resolvedPath}"));
-                        },
-                        ex => Fail(new InvalidOperationException(ex.Message ?? "Delivery failed", ex)));
-
-                cts.Token.Register(() => Fail(new TimeoutException(
-                    $"PatchDataRequest for {resolvedPath} did not complete within {timeoutSeconds}s.")));
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "PatchViaDataRequest: Post/Observe failed for {Path}", resolvedPath);
-                Fail(ex);
-            }
-
-            return () =>
-            {
-                innerSubscription?.Dispose();
-                cts.Dispose();
-            };
-        });
-
-    /// <summary>
     /// Up-front identity validation shared by Create and Update. Returns a descriptive,
     /// actionable error string when the node is missing 'id', 'nodeType', or 'name', or when
     /// the namespace is malformed — or null when the node is sound enough to attempt the write.
@@ -2560,7 +2482,9 @@ public class MeshOperations
             // boundary does ops.Upload(...).FirstAsync().ToTask(), that wedges the calling
             // request (the 2026-06-14 prod upload wedge). On timeout the TimeoutException
             // falls through to the .Catch below and surfaces as a clean "Error: …" string.
-            return hub.Observe(
+            // 🚨 ISSUED OFF THE ROUTER (#1140) — see ReadHub. The read runs on the TARGET node hub;
+            // this hub is only the reply mailbox, so it is the read seam, not the write one.
+            return ReadHub.Observe(
                 new GetDataRequest(new ContentCollectionReference([collectionName])),
                 o => o.WithTarget(targetAddress))
                 .Take(1)
@@ -2677,7 +2601,8 @@ public class MeshOperations
 
             // Same collection-config lookup the static GET endpoint + Upload use — .Timeout is
             // mandatory (a node hub without AddContentCollections never answers this).
-            return hub.Observe(
+            // 🚨 ISSUED OFF THE ROUTER (#1140) — see ReadHub.
+            return ReadHub.Observe(
                 new GetDataRequest(new ContentCollectionReference([collectionName])),
                 o => o.WithTarget(targetAddress))
                 .Take(1)
@@ -3510,7 +3435,9 @@ public class MeshOperations
     private IObservable<IReadOnlyList<ContentCollectionConfig>> RequestCollectionConfigs(
         Address address, IReadOnlyCollection<string> names)
     {
-        return hub.Observe(
+        // 🚨 ISSUED OFF THE ROUTER (#1140) — see ReadHub. `address` is always `new Address(nodePath)`
+        // (GetNodeCollectionConfigs), never this hub's own, so the hop is unconditional here.
+        return ReadHub.Observe(
                 new GetDataRequest(new ContentCollectionReference(names)),
                 o => o.WithTarget(address))
             .Take(1)
@@ -4088,15 +4015,28 @@ public class MeshOperations
                 // call site as an ungated disposer for the same reason: it is the one teardown
                 // that comes from OUTSIDE the framework's own lifecycle, so it is the one whose
                 // attribution a log cannot reconstruct.
-                hub.Post(
-                    new DisposeRequest
-                    {
-                        Reason = $"MeshOperations.Recycle: an operator asked for '{resolvedPath}' "
-                                 + "to be recycled (the Recycle tool / Compile button), which "
-                                 + "stamps a release request and then tears the hub down so the "
-                                 + "next access reactivates it",
-                    },
-                    o => o.WithTarget(new Address(resolvedPath)));
+                // 🚨 OFF-ROUTER ISSUING (#4463), exactly as PackageInstaller.SettleRetypedRoot and
+                // the MoveNodeRequest above already do. `hub` here is whatever hub constructed this
+                // facade, and for the AI/agent surface that is the DI-injected IMessageHub — which
+                // in the mesh's ROOT container IS the ROUTER. Posting there stamps the teardown
+                // `Sender = mesh/{id}` and makes the router an END of a work delivery: measured in
+                // production 2026-09-16 01:10:13Z as `ROUTER_TRAFFIC ORIGIN: DisposeRequest was
+                // POSTED with the mesh hub as sender … target: Hosting/Triage/ci-failure/…`, with
+                // this exact frame on top. Node-hub lifecycle then competes with routing on the
+                // router's single-threaded action block, which is the 2026-06-11 portal wedge's
+                // shape. NodeOperationIssuingHub is the IDENTITY FUNCTION for every hub whose
+                // address type is not the mesh type, so the MCP/session/portal callers that
+                // dominate this surface are byte-for-byte unaffected.
+                hub.NodeOperationIssuingHub()
+                    .Post(
+                        new DisposeRequest
+                        {
+                            Reason = $"MeshOperations.Recycle: an operator asked for '{resolvedPath}' "
+                                     + "to be recycled (the Recycle tool / Compile button), which "
+                                     + "stamps a release request and then tears the hub down so the "
+                                     + "next access reactivates it",
+                        },
+                        o => o.WithTarget(new Address(resolvedPath)));
                 return JsonSerializer.Serialize(
                     new
                     {
@@ -5202,7 +5142,10 @@ public class MeshOperations
     private IObservable<string> DispatchScript(string resolvedPath, int timeoutSeconds)
     {
         var submissionId = Guid.NewGuid().ToString("N");
-        return hub
+        // 🚨 ISSUED OFF THE ROUTER (#1140) — see ReadHub. The script runs on the Code node's own
+        // hub; this hub only waits for the verdict under a caller-supplied deadline, which is
+        // exactly the case portal/reads-{meshId} exists for.
+        return ReadHub
             .Observe<ExecuteScriptResponse>(
                 new ExecuteScriptRequest { SubmissionId = submissionId },
                 o => o.WithTarget(new Address(resolvedPath)))
