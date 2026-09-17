@@ -16,20 +16,21 @@ public record SelfUpdateOptions
     /// <para>Two kinds of host are understood, told apart by <see cref="RegistryIsAzureContainerRegistry"/>:
     /// an Azure Container Registry (<c>*.azurecr.io</c>, the default — tags are listed through
     /// ACR's own <c>/acr/v1/{repo}/_tags</c> with Workload Identity), and ANY OTHER host, which is
-    /// read as an OCI Distribution registry — in this fleet the read-through mirror another
-    /// installation serves at <c>{portal}/v2</c> (#3353, <c>Doc/Architecture/ContainerRegistryInMemex</c>),
+    /// read as an OCI Distribution registry — in this fleet <c>cr.meshweaver.cloud</c>, the separate
+    /// distribution + docker_auth service (<c>Doc/Architecture/ContainerRegistryInMemex</c>),
     /// authenticated with this installation's own plugin-registry instance key. The chart renders
     /// it from <c>selfUpdate.registry</c>; the images the updater rolls to
-    /// (<see cref="PortalImage"/>, <see cref="MigrationImage"/>) are named on this host, so a
-    /// mirror-consuming installation must ALSO carry the pull secret the chart's
+    /// (<see cref="PortalImage"/>, <see cref="MigrationImage"/>) are named on this host, so an
+    /// installation consuming that registry must ALSO carry the pull secret the chart's
     /// <c>portal.imagePullSecret</c> declares, or the roll names an image its kubelet cannot pull.</para>
     /// </summary>
     public string Registry { get; init; } = "meshweaver.azurecr.io";
 
     /// <summary>
-    /// The username presented to a non-ACR registry's token endpoint (<c>Basic user:key</c>). The
-    /// mirror authenticates the KEY and discards the username by design (<c>RegistryCredential</c>),
-    /// so this is a placeholder there; another OCI registry may care.
+    /// The username presented to a non-ACR registry's token endpoint (<c>Basic user:key</c>).
+    /// <c>cr.meshweaver.cloud</c>'s docker_auth validates the KEY for any account name other than its
+    /// static publisher account, so this is a placeholder there — it must simply not be that
+    /// account's name; another OCI registry may care.
     /// </summary>
     public string RegistryUsername { get; init; } = "instance";
 

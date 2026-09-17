@@ -1,4 +1,7 @@
+using System.Collections.Immutable;
+using MeshWeaver.Data;
 using MeshWeaver.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.GitSync;
 
@@ -59,6 +62,282 @@ public static class SealedSyncGate
     }
 
     private static FirstImportPlan Hold(string reason) => new(null, reason, reason);
+
+    /// <summary>
+    /// What an import that was ASKED for a ref lands on once the seal has spoken —
+    /// <see cref="FirstImportPlan"/>'s three answers, for a person's <b>Update to latest</b> /
+    /// <b>Re-import at this commit</b> (<see cref="DecideRequestedImport"/>, MeshWeaver#3845 hole 3)
+    /// and for a green build (<see cref="DecideBuild"/>). The ref that was asked for is kept beside
+    /// the one that is used, because the difference between them is exactly what a person has to be
+    /// told.
+    /// </summary>
+    /// <param name="Commit">The commitish to import at — what was asked for, or the sealed commit.
+    /// Null only on a hold.</param>
+    /// <param name="SealedCommit">The commit this instance's publication of the repository was baked
+    /// from, when the gate established one; null when the repository is not attributable.</param>
+    /// <param name="HoldReason">Why nothing may be imported, or null.</param>
+    /// <param name="Reason">Log copy (English) for whichever answer this is — always populated.</param>
+    /// <param name="Notice">The same statement as keyed activity lines, rendered in the VIEWER's
+    /// language (#3236); empty when the import runs exactly as asked.</param>
+    public sealed record ImportPlan(
+        string? Commit, string? SealedCommit, string? HoldReason, string Reason,
+        ImmutableList<LogMessage> Notice)
+    {
+        /// <summary>True when an import may run at all.</summary>
+        public bool Proceed => HoldReason is null;
+
+        /// <summary>True when the gate chose the sealed commit over the ref that was asked for.</summary>
+        public bool Redirected { get; init; }
+    }
+
+    /// <summary>
+    /// 🚨 What a PERSON's import may land on — <b>Update to latest</b> (the configured branch) or
+    /// <b>Re-import at this commit</b> (a typed commitish). MeshWeaver#3845 hole 3.
+    ///
+    /// <para><b>Why a person is gated at all.</b> <c>SyncRefContract</c> used to exempt a human:
+    /// "only a human-initiated Update may read a branch tip". That rule keyed the protection on WHO
+    /// asked, while the harm is keyed on WHAT lands — a module repository's sources on a tree no
+    /// bundle for this identity was baked from are declined on their source fingerprint whoever
+    /// pressed the button. So the answer is <see cref="DecideFirstImport"/>'s, with the requested ref
+    /// in place of "the branch":</para>
+    /// <list type="bullet">
+    ///   <item><description>the index could not be READ → hold (#3461, "cannot tell" is never "clear
+    ///   to proceed");</description></item>
+    ///   <item><description>nothing attributable → exactly what was asked (hole 1's adjudication: a
+    ///   repository no lane publishes could never be released from a hold);</description></item>
+    ///   <item><description>every attributable publication sealed and agreeing on C → import C, and
+    ///   say so when C is not what was asked;</description></item>
+    ///   <item><description>torn / unknown commit / disagreeing → hold, and say which.</description></item>
+    /// </list>
+    ///
+    /// <para>Attribution is <see cref="BelongsTo"/>'s — the repository marker, or for a seal that
+    /// predates it the requested commit or the commit the Space already sits on — so a person's
+    /// import and the webhook attribute the same seal to the same repository.</para>
+    ///
+    /// <para>🚨 There is deliberately no parameter that reads the tip anyway. A bypass would be the
+    /// fail-open this decision exists to remove, with a flag's name on it; recovery from a hold is
+    /// what the hold names — roll the instance, or fix the publishing lane.</para>
+    /// </summary>
+    /// <param name="repo">The repository the Space's sync source reads.</param>
+    /// <param name="requested">What was asked for: the configured branch, or the typed commitish.</param>
+    /// <param name="lastSyncSha">The commit the sync source currently sits on, or null.</param>
+    /// <param name="readOutcome">Whether the seal index was READ (<see cref="SealedPublicationIndex.ReadingFor"/>).</param>
+    /// <param name="sealedForThisIdentity">What the registry sealed under this instance's identity.</param>
+    /// <param name="identity">This instance's framework identity.</param>
+    /// <param name="newerLine">The newest publication line above this identity's, or null
+    /// (<see cref="SealedPublicationIndex.NewerLineThan"/>) — names the direction of a hold.</param>
+    /// <returns>The plan; never null.</returns>
+    public static ImportPlan DecideRequestedImport(
+        RepoIdentity repo, string requested, string? lastSyncSha, SealedReadOutcome readOutcome,
+        IReadOnlyList<SealedSource> sealedForThisIdentity, string identity, PublicationLine? newerLine)
+    {
+        ArgumentNullException.ThrowIfNull(repo);
+        ArgumentException.ThrowIfNullOrWhiteSpace(requested);
+        ArgumentNullException.ThrowIfNull(sealedForThisIdentity);
+
+        if (RefusedForUnreadableIndex(readOutcome, identity) is { HoldReason: { } unreadable })
+            return new ImportPlan(null, null, unreadable, unreadable,
+            [
+                new LogMessage(
+                        $"Nothing was imported: the publication index for this instance's framework identity "
+                        + $"{identity} could not be read, so the commit its bundles were baked from is unknown.",
+                        LogLevel.Warning)
+                    .WithKey("activity.gitsync.seal.heldUnreadable", ("identity", identity)),
+            ]);
+
+        var mine = sealedForThisIdentity
+            .Where(s => BelongsTo(s, repo, requested, lastSyncSha))
+            .ToList();
+        if (mine.Count == 0)
+            return new ImportPlan(requested, null, null,
+                $"no publication of {repo} is sealed for identity {identity} — this instance runs none, "
+                + $"so the import reads '{requested}' as asked", []);
+
+        var adopted = AdoptableCommit(mine, repo, identity);
+        if (adopted.HoldReason is { } hold)
+        {
+            var reason = WithLine(hold, newerLine);
+            return new ImportPlan(null, null, reason, reason,
+                [adopted.Notice!, DirectionLine(repo, identity, newerLine)]);
+        }
+
+        var commit = adopted.Commit!;
+        if (SameCommit(requested, commit))
+            return new ImportPlan(requested, commit, null,
+                $"'{requested}' is the commit {repo} is sealed at for identity {identity} — imported as asked", []);
+
+        return new ImportPlan(commit, commit, null,
+            WithLine(
+                $"'{requested}' is not what this instance runs: {repo} is sealed at {Short(commit)} for identity "
+                + $"{identity} — importing that commit instead", newerLine),
+            [
+                LandsOnSealLine(repo, commit, identity, requested),
+                DirectionLine(repo, identity, newerLine),
+            ])
+        {
+            Redirected = true,
+        };
+    }
+
+    /// <summary>
+    /// What a GREEN BUILD at <paramref name="headSha"/> lands on — <see cref="Decide(RepoIdentity, string, string?, IReadOnlyList{SealedSource}, string, PublicationLine?)"/>
+    /// with its hold turned into a landing wherever one is possible. The webhook was the last
+    /// unattended lane that only HELD: the first import (#4212), the seal's arrival
+    /// (<c>SealedPublicationSyncReconciler</c>, #4209) and the boot install (#4259) all land on the
+    /// sealed commit.
+    ///
+    /// <para>Where <c>Decide</c> proceeds, this proceeds at <paramref name="headSha"/> — unchanged,
+    /// including <c>Decide</c>'s "any sealed publication at the built commit is enough". Where
+    /// <c>Decide</c> holds, this lands on the sealed commit C when every attributable publication is
+    /// usable and they agree (<see cref="DecideFirstImport"/>'s strictness — a good seal must not
+    /// override a torn sibling), and otherwise holds with <c>Decide</c>'s own reason. A landing keeps
+    /// that reason as its <see cref="ImportPlan.Reason"/>: the build's commit still did not arrive, and
+    /// the hold note a source already at C records is that sentence.</para>
+    /// </summary>
+    /// <param name="repo">The repository the green build is of.</param>
+    /// <param name="headSha">The built commit.</param>
+    /// <param name="lastSyncSha">The commit the sync source currently sits on, or null.</param>
+    /// <param name="sealedForThisIdentity">What the registry sealed under this instance's identity.</param>
+    /// <param name="identity">This instance's framework identity — log copy only.</param>
+    /// <param name="newerLine">The newest publication line above this identity's, or null.</param>
+    /// <returns>The plan; never null.</returns>
+    public static ImportPlan DecideBuild(
+        RepoIdentity repo, string headSha, string? lastSyncSha,
+        IReadOnlyList<SealedSource> sealedForThisIdentity, string identity, PublicationLine? newerLine)
+    {
+        ArgumentNullException.ThrowIfNull(repo);
+        ArgumentException.ThrowIfNullOrWhiteSpace(headSha);
+        ArgumentNullException.ThrowIfNull(sealedForThisIdentity);
+
+        var mine = sealedForThisIdentity
+            .Where(s => BelongsTo(s, repo, headSha, lastSyncSha))
+            .ToList();
+        var verdict = Decide(repo, headSha, lastSyncSha, sealedForThisIdentity, identity, newerLine);
+        if (verdict.Proceed)
+            return new ImportPlan(headSha,
+                mine.Any(s => s.IsSealed && SameCommit(s.SourceCommit, headSha)) ? headSha : null,
+                null,
+                mine.Count == 0
+                    ? $"no publication of {repo} is sealed for identity {identity} — imported at the built commit"
+                    : $"{repo} is sealed at the built commit {Short(headSha)} for identity {identity}",
+                []);
+
+        var holdReason = verdict.HoldReason ?? "held";
+        var adopted = AdoptableCommit(mine, repo, identity);
+        if (adopted.Commit is not { } commit)
+            return new ImportPlan(null, null, holdReason, holdReason,
+                [adopted.Notice!, DirectionLine(repo, identity, newerLine)]);
+
+        return new ImportPlan(commit, commit, null, holdReason,
+            [
+                LandsOnSealLine(repo, commit, identity, Short(headSha)),
+                DirectionLine(repo, identity, newerLine),
+            ])
+        {
+            Redirected = true,
+        };
+    }
+
+    /// <summary>
+    /// The one commit every attributable publication agrees on, or the reason there is none — the
+    /// core <see cref="DecideFirstImport"/>, <see cref="DecideRequestedImport"/> and
+    /// <see cref="DecideBuild"/> share, so the three can never disagree about which seal is usable.
+    /// </summary>
+    private static (string? Commit, string? HoldReason, LogMessage? Notice) AdoptableCommit(
+        IReadOnlyList<SealedSource> mine, RepoIdentity repo, string identity)
+    {
+        // 🚨 EVERY attributable publication must be usable, not merely ONE of them. Selecting the
+        // sealed ones first and deciding on those would let a good seal OVERRIDE a torn sibling of
+        // the same repository — `plugins` sealed at C beside a `plugins-extra` with no completion
+        // sentinel would pin the Space at C while part of that repository's bytes are missing here.
+        // That is the fail-open this decision exists to remove, one level in. So the refusal is
+        // evaluated over `mine`, before any selection narrows it.
+        var unusable = mine
+            .Where(s => !s.IsSealed || s.SourceCommit is not { Length: > 0 })
+            .OrderByDescending(s => s.IsSealed)
+            .ThenBy(s => s.Source, StringComparer.Ordinal)
+            .ToList();
+        if (unusable.Count > 0)
+        {
+            var witness = unusable[0];
+            var others = unusable.Count > 1 ? $" (and {unusable.Count - 1} more of {repo})" : "";
+            return witness.IsSealed
+                ? (null,
+                    $"this instance's publication of '{witness.Source}' ({repo}) is sealed at an unknown "
+                    + $"commit (identity {identity}){others} — an unattended import has no commit to land on",
+                    new LogMessage(
+                            $"Nothing was imported: this instance's publication of '{witness.Source}' ({repo}) "
+                            + "is sealed at an unknown commit, so there is no commit to land on.",
+                            LogLevel.Warning)
+                        .WithKey("activity.gitsync.seal.heldUnknownCommit",
+                            ("source", witness.Source), ("repo", repo.ToString())))
+                : (null,
+                    $"this instance's publication of '{witness.Source}' ({repo}) is not sealed "
+                    + $"(identity {identity}: {witness.Refusal}){others} — an unattended import waits for it",
+                    new LogMessage(
+                            $"Nothing was imported: this instance's publication of '{witness.Source}' ({repo}) "
+                            + $"is not sealed for framework identity {identity} ({witness.Refusal}).",
+                            LogLevel.Warning)
+                        .WithKey("activity.gitsync.seal.heldNotSealed",
+                            ("source", witness.Source), ("repo", repo.ToString()), ("identity", identity),
+                            ("refusal", witness.Refusal ?? "")));
+        }
+
+        // 🚨 Several sealed publications of ONE repository that disagree about the commit is a state
+        // no reading here can resolve — picking one would put the Space on a tree half this
+        // instance's own bytes were not baked from. Hold and name them, exactly as a torn seal does.
+        var commit = mine[0].SourceCommit!;
+        if (mine.Any(s => !SameCommit(s.SourceCommit, commit)))
+        {
+            var commits = string.Join(", ", mine
+                .OrderBy(s => s.Source, StringComparer.Ordinal)
+                .Select(s => $"'{s.Source}' at {Short(s.SourceCommit!)}"));
+            return (null,
+                $"this instance's publications of {repo} disagree about the commit (identity {identity}: "
+                + commits + ") — an unattended import cannot choose between them",
+                new LogMessage(
+                        $"Nothing was imported: this instance's publications of {repo} disagree about the "
+                        + $"commit ({commits}), so no single commit matches the bundles it runs.",
+                        LogLevel.Warning)
+                    .WithKey("activity.gitsync.seal.heldDisagree",
+                        ("repo", repo.ToString()), ("commits", commits)));
+        }
+        return (commit, null, null);
+    }
+
+    /// <summary>The Warning line a redirect writes: what was asked, what lands, and why.</summary>
+    private static LogMessage LandsOnSealLine(RepoIdentity repo, string commit, string identity, string requested)
+        => new LogMessage(
+                $"{repo} is sealed at {Short(commit)} for this instance (framework identity {identity}) — "
+                + $"importing that commit instead of {requested}, so the Space's sources match the bundles "
+                + "this instance runs.",
+                LogLevel.Warning)
+            .WithKey("activity.gitsync.seal.landsOnSeal",
+                ("repo", repo.ToString()), ("sealed", Short(commit)), ("identity", identity),
+                ("requested", requested));
+
+    /// <summary>
+    /// The line that says what RELEASES a hold or a redirect — the direction a845184a89 put on the
+    /// webhook's note, as a viewer-localized activity line. Roll when a newer line is sealed that
+    /// this instance does not run; otherwise both remedies, never a guess between them.
+    /// </summary>
+    private static LogMessage DirectionLine(RepoIdentity repo, string identity, PublicationLine? newerLine)
+        => newerLine is not null
+            ? new LogMessage(
+                    $"The registry has since sealed {newerLine.Version} under framework identity "
+                    + $"{newerLine.Identity}, which this instance does not run — this Space advances when "
+                    + "this instance is ROLLED onto it, not when another publication lands.",
+                    LogLevel.Information)
+                .WithKey("activity.gitsync.seal.advanceByRoll",
+                    ("version", newerLine.Version), ("newerIdentity", newerLine.Identity))
+            : new LogMessage(
+                    $"This Space advances when a newer commit of {repo} is sealed for framework identity "
+                    + $"{identity} (the publishing lane), or when this instance is rolled onto a platform whose "
+                    + "publication is. Importing the branch tip instead is not offered: it would put sources "
+                    + "ahead of the bundles this instance runs.",
+                    LogLevel.Information)
+                .WithKey("activity.gitsync.seal.advanceBySeal",
+                    ("repo", repo.ToString()), ("identity", identity));
 
     /// <summary>
     /// 🚨 The PRECONDITION on every verdict below: a reading that FAILED holds everything.
@@ -212,46 +491,17 @@ public static class SealedSyncGate
                 $"no publication of {repo} is sealed for identity {identity} — this instance runs none, "
                 + "so an unattended import keeps today's behaviour and resolves the branch");
 
-        // 🚨 EVERY attributable publication must be usable, not merely ONE of them. Selecting the
-        // sealed ones first and deciding on those would let a good seal OVERRIDE a torn sibling of
-        // the same repository — `plugins` sealed at C beside a `plugins-extra` with no completion
-        // sentinel would pin the Space at C while part of that repository's bytes are missing here.
-        // That is the fail-open this decision exists to remove, one level in, and it contradicts
-        // this method's own contract ("attributable but torn … import nothing"). So the refusal is
-        // evaluated over `mine`, before any selection narrows it.
+        // 🚨 EVERY attributable publication must be usable and they must agree — see
+        // AdoptableCommit, which the requested-import and green-build decisions share.
         //
         // This is deliberately STRICTER than `Decide`, which proceeds when ANY sealed source sits at
         // the built commit. The two answer different questions: `Decide` admits a tree a build
         // proved onto a source already carrying content, while this decides what a Space that holds
         // NOTHING YET is first populated with. There is no partial state to preserve here and no
         // second chance to be more careful later, so "cannot tell" is never "clear to proceed".
-        var unusable = mine
-            .Where(s => !s.IsSealed || s.SourceCommit is not { Length: > 0 })
-            .OrderByDescending(s => s.IsSealed)
-            .ThenBy(s => s.Source, StringComparer.Ordinal)
-            .ToList();
-        if (unusable.Count > 0)
-        {
-            var witness = unusable[0];
-            var others = unusable.Count > 1 ? $" (and {unusable.Count - 1} more of {repo})" : "";
-            return Hold(witness.IsSealed
-                ? $"this instance's publication of '{witness.Source}' ({repo}) is sealed at an unknown "
-                  + $"commit (identity {identity}){others} — an unattended import has no commit to land on"
-                : $"this instance's publication of '{witness.Source}' ({repo}) is not sealed "
-                  + $"(identity {identity}: {witness.Refusal}){others} — an unattended import waits for it");
-        }
-
-        // 🚨 Several sealed publications of ONE repository that disagree about the commit is a state
-        // no reading here can resolve — picking one would put the Space on a tree half this
-        // instance's own bytes were not baked from. Hold and name them, exactly as a torn seal does.
-        var commit = mine[0].SourceCommit!;
-        if (mine.Any(s => !SameCommit(s.SourceCommit, commit)))
-            return Hold(
-                $"this instance's publications of {repo} disagree about the commit (identity {identity}: "
-                + string.Join(", ", mine
-                    .OrderBy(s => s.Source, StringComparer.Ordinal)
-                    .Select(s => $"'{s.Source}' at {Short(s.SourceCommit!)}"))
-                + ") — an unattended import cannot choose between them");
+        var adopted = AdoptableCommit(mine, repo, identity);
+        if (adopted.Commit is not { } commit)
+            return Hold(adopted.HoldReason!);
 
         return new FirstImportPlan(commit, null,
             $"'{mine[0].Source}' ({repo}) is sealed at {Short(commit)} for identity {identity} — "
@@ -275,7 +525,7 @@ public static class SealedSyncGate
         return parts.Length == 2 ? new RepoIdentity(parts[0], parts[1]) : new RepoIdentity("", "");
     }
 
-    private static bool SameCommit(string? a, string? b) =>
+    internal static bool SameCommit(string? a, string? b) =>
         !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b)
         && (a.StartsWith(b, StringComparison.OrdinalIgnoreCase) || b.StartsWith(a, StringComparison.OrdinalIgnoreCase))
         && Math.Min(a.Length, b.Length) >= 7;

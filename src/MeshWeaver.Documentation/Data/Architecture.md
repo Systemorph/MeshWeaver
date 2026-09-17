@@ -155,7 +155,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Storage Adapter Implementation](StorageAdapterImplementation)
 - [Change-Feed Isolation](ChangeFeedIsolation) — one throwing subscriber must never starve the others
 - [In-Memory Child Index Consistency](InMemoryChildIndexConsistency) — a listing taken while the in-memory store re-indexed came back short, a synced query cached it for good, and one NodeType's compile then failed on files that were there; the three rules that keep a reader from ever seeing a half-built index, and how it composes with the mid-install judgement race (#4280)
-- [A Container Registry in Memex](ContainerRegistryInMemex) — PROPOSAL: serving OCI images from the mesh, and the bootstrap circularity that keeps the boot image on ACR
+- [A Container Registry in Memex](ContainerRegistryInMemex) — the fleet's own registry at cr.meshweaver.cloud (a separate distribution + docker_auth service), the bootstrap circularity that keeps the hosting instance's boot image off it, and the in-portal mirror that was built, never wired, and deleted (#4066)
 - [Static Repo Import](StaticRepoImport)
 - [The Prune Requires a Complete Listing](PruneRequiresACompleteListing) — an import prunes on "absent from the source ⇒ deleted"; a truncated GitHub tree arrives as HTTP 200 and turns every unread file into a deletion
 - [Import Write Ordering](ImportWriteOrdering) — a NodeType lands before the instances that name it
@@ -200,6 +200,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Threads, activities & AI
 
 - **Start here:** [Thread Operations](ThreadOperations)
+- [Agent Task Collaboration](AgentTaskCollaboration) — launch shared work only through `start_collaboration`; participant effort, harness, and model are creation-time settings, not follow-up-message overrides
 - [Thread Execution Streaming](ThreadExecutionStreaming)
 - [Activity Control Plane](ActivityControlPlane)
 - [Activity Mirror Release Lifetime](/Doc/Architecture/ActivityMirrorReleaseLifetime)
@@ -293,7 +294,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Install Readability](InstallReadability) — the two doors an install can open, and the cover-grant deadlock detector
 - [A Module's Static Web Assets](ModuleStaticAssets) — a module's CSS/JS ride the bundle in their own folder and must land MODULE-RELATIVE beside the entry assembly; anything that copies only the closure loads perfectly and 404s every asset behind one Debug line
 - [Static Repo Import](StaticRepoImport)
-- [The Sync-Ref Contract](SyncRefContract) — an UNATTENDED import reads a commit CI proved; only a person clicking Update may read a branch tip, and resolving the ref twice put sources no build had compiled onto two production portals for five hours
+- [The Sync-Ref Contract](SyncRefContract) — an import of a repository whose bundles this instance runs lands on the commit they were baked from, whoever asked — a person's Update included since 2026-09-17; every other repository reads a commit CI proved, or a branch tip a person asked for; resolving the ref twice put sources no build had compiled onto two production portals for five hours
 - [Node Type Compilation](NodeTypeCompilation)
 - [The Platform Image's Closure](PlatformImageClosure) — the image IS the reference set every satellite's modules compile against; the two invariants, and why every consumer used to discover them by failing to compile
 - [Compiled Against A Platform The Instance Does Not Run](CompiledAgainstAnotherPlatform) — the link gate measures a module's bytes against the platform ACTUALLY RUNNING; the source lane measures Code nodes against the platform it is about to ship, and `judge-against-baseline` — the arm that reads what the fleet runs today — is wired into core's promote, not into the satellite PR where the content half lands first
@@ -412,6 +413,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Self-Update on the Control Lane](SelfUpdateControlLane) — detection stays on the instance, the apply is one signed event to the control instance, the chart's one declaration binds the self-patch Role to the poller's intent; no portal holds a credential that changes the cluster
 - [The Continuous Delivery Contract](ContinuousDeliveryContract) — all-or-nothing publication; verify the image, never the tick
 - [Reading a Bake Publication Receipt](BakePublicationReceipt) — the four target outcomes and what each licenses; the one that had no word rendered "already everywhere" as "reached nothing", and two readers acted on it
+- [CD Reconciles the Plugins Seal](CdReconcilesThePluginsSeal) — a set seals on its trio alone, so it can seal with no `plugins` publication for its framework identity; why the reconciler REPAIRS that rather than the seal forbidding it, and the three probe answers of which only one licenses a re-attempt
 - [The Self-Update Schema Wall](SelfUpdateSchemaWall) — every schema-bumping release is un-takeable by self-update, the stall is invisible, and a promoted tag is not a deployable tag
 - [Bake Identity Mismatch](BakeIdentityMismatch) — why a green CD can publish a bake no portal adopts, and the one rule that keeps two images of one commit on one address
 - [Release Availability Gates](ReleaseGates) — one predicate; never roll or build into a release a package cannot survive
@@ -426,6 +428,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Transitional Allow Entries](TransitionalAllowEntries) — an allow entry is written for ONE merge and expires with it by mechanism; the instruction that was ignored once cost every C#-touching PR in the fleet ~40 minutes of red
 - [Pinned Image Retention](PinnedImageRetention) — registry retention deletes what CI pins, and republishing frequency is what destroys a pin rather than what protects it; the guard that names a dead pin, and the retention design that stops the deletion
 - [Artifact Retention Interlock](ArtifactRetentionInterlock) — the one mechanism behind the four retention issues: cleanup may delete only what a COMPLETE and FRESH consumer inventory shows to be unreferenced. Three axes (the third asks each installation what it is RUNNING, because a committed pin is a proxy that drifts), the denominator every run must state, the TAG lock a manifest lock does not provide, and the instrument control that replaced an assertion about the fleet
+- [CI Artifact Storage](CiArtifactStorage) — where CI's big build outputs live: the measured $260/month GitHub Actions storage bill, the ONE artifact family that is read across runs (and why most of its bytes are duplicates of themselves), the 66.8 GB the fleet uploaded for a reader that was never built, the object-store seam and the degrade rule that keeps the public repo working, and the two Azure grants the migration still needs
 - [Fleet Registry Retention](FleetRegistryRetention) — the same question asked of `cr.meshweaver.cloud`, the fleet's OWN registry and the default for new instances: what deletes today (nothing — enumerated, with the one row that is a maintainer read), and why a registry with NO LOCK needs a stricter rule than the ACR rather than the same one, because there the derivation IS the whole safety margin
 - [The Image Tag Contract](ImageTagContract) — which image tags the promotion actually publishes, why the portal has no `latest`, and the two-writer history of the one that had no producer at all: retired lane, then retention, and every check green throughout
 - [Pin Set Consistency](PinSetConsistency) — every pinned digest EXISTING is not every pinned digest naming the same BUILD; the invariants that red a half-moved set, three written deliberately weaker than the obvious version, and the falsification that found the vacuity trap inside the gate itself

@@ -47,6 +47,13 @@ public class ModuleBuildLedgerLaneGuard
         var select = JobBody("select");
         Assert.Contains("module-build-key.py --self-test", select, StringComparison.Ordinal);
         Assert.Contains("module-build-ledger.py --self-test", select, StringComparison.Ordinal);
+        // The object-store seam's rules — the DEGRADE rule above all, which decides whether a repo
+        // with no store (the public one, a fork PR) still builds. Executed on every run of every
+        // caller, store or no store: the mode this lane is not using is the one nobody would notice
+        // rotting. And the store is resolved ONCE here, so two pack legs cannot disagree about where
+        // a ledger record's bundle lives.
+        Assert.Contains("$ARTIFACT_STORE_PY\" --self-test", select, StringComparison.Ordinal);
+        Assert.Contains("resolve --declared \"$DECLARED\"", select, StringComparison.Ordinal);
         Assert.Contains("module-build-key.py --root repo", select, StringComparison.Ordinal);
         Assert.Contains("module-build-ledger.py decide", select, StringComparison.Ordinal);
         // The flag is a three-way case with a RED default arm — an unreadable value never means "off".
@@ -123,8 +130,28 @@ public class ModuleBuildLedgerLaneGuard
         // chosen from the CALLER's global.json (#4378), so asserting one literal would have gone
         // on passing while the other branch wrote nothing.
         AssertWritesTheLedgerTrxUnderBothRunners(pack, "pack");
-        // The reuse window is the artifact's retention.
-        Assert.Contains("retention-days: 7", pack, StringComparison.Ordinal);
+        // 🚨 THE REUSE WINDOW IS THE ARTIFACT'S RETENTION — and since 2026-09-17 that is ONE
+        // expression with TWO readers rather than two independent literals that nothing related:
+        // the ten upload slots' `retention-days:` and the `--retention-days` the Built record
+        // states. 7 days while the GitHub artifact IS the durable copy; 1 day once an object store
+        // holds it (`artifact-store`) and the artifact is only this run's handoff between jobs.
+        // A record that outlived the artifact it names would make `decide` answer "reuse" for bytes
+        // that are gone — a red in the pack leg instead of the rebuild it should have chosen.
+        const string retention =
+            "${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}";
+        Assert.Equal(10, Regex.Matches(pack, Regex.Escape("retention-days: " + retention)).Count);
+        Assert.Contains("ART_RETENTION: " + retention, pack, StringComparison.Ordinal);
+        Assert.Contains("--retention-days \"$ART_RETENTION\"", pack, StringComparison.Ordinal);
+        Assert.DoesNotContain("retention-days: 7", pack, StringComparison.Ordinal);
+
+        // 🚨 THE DEGRADE RULE, in the leg that fetches. With no store the reuse leg must still be
+        // the `gh run download` it has always been (asserted above); with one it prefers the
+        // durable copy and VERIFIES it — and neither branch may pack bytes it could not verify.
+        Assert.Contains("\"$ARTIFACT_STORE_PY\" get --store \"$ARTIFACT_STORE\"", pack, StringComparison.Ordinal);
+        var shelve = At("Shelve the durable bundle copy");
+        Assert.True(shelve < built,
+            "the durable copy must be shelved BEFORE the `Built` record that names it — a record naming an "
+            + "object nothing has written yet is a reuse that fetches nothing");
     }
 
     /// <summary>

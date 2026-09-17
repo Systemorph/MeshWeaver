@@ -71,6 +71,15 @@ public class PlatformBakeLaneGuard
     /// may appear exactly once — as the input of the step whose <c>id</c> is <c>release</c> — and
     /// the publish and the assert must read <c>steps.release.outputs.version</c>. A second raw
     /// consumer is the regression: correct on every push, empty on every reconcile.</para>
+    ///
+    /// <para>🚨 <b>The RECOVERY half moved to <c>gate</c> (MeshWeaver#4539), and this guard moved
+    /// with its subject rather than being relaxed.</b> A second consumer of the recovered version
+    /// appeared — the seal probe, which needs the release version to name this set's framework
+    /// identity — so the ACR read now happens ONCE, in <c>gate</c>'s <c>bake_version</c> step, and
+    /// arrives here as <c>needs.gate.outputs.release_version</c>. The invariant is unchanged and
+    /// the assertion is STRICTER than before: the recovery must exist, must still stop rather than
+    /// fall back, and must appear in exactly ONE job of the whole workflow — so nobody re-adds a
+    /// local "safety net" read, which is the two-resolutions-of-one-fact shape the file forbids.</para>
     /// </summary>
     [Fact]
     public void PlatformBake_ResolvesTheReleaseVersionOnce_AndEveryConsumerReadsIt()
@@ -81,9 +90,9 @@ public class PlatformBakeLaneGuard
         var rawRefs = lines.Where(l => l.Contains("needs.portal-image.outputs.version", StringComparison.Ordinal)).ToList();
         Assert.True(rawRefs.Count == 1,
             $"'{JobName}' in {Workflow} must read needs.portal-image.outputs.version in exactly ONE place — the "
-            + "`release` step that resolves the version for the whole job (this run's, else the promoted image's "
-            + $"tag). Found {rawRefs.Count}: on a bake-only reconcile that output is EMPTY, so any other consumer "
-            + "publishes under no version and the availability assert dies on `${1:?usage}`.");
+            + "`release` step that resolves the version for the whole job (this run's, else the version `gate` "
+            + $"recovered off the promoted image). Found {rawRefs.Count}: on a bake-only reconcile that output is "
+            + "EMPTY, so any other consumer publishes under no version and the availability assert dies on `${1:?usage}`.");
 
         var releaseStep = Array.FindIndex(lines, l => l.Trim() == "id: release");
         Assert.True(releaseStep >= 0, $"'{JobName}' must carry a step with `id: release` that resolves the release version.");
@@ -94,10 +103,9 @@ public class PlatformBakeLaneGuard
 
         var release = lines.Skip(releaseStep).TakeWhile((l, i) => i == 0 || !l.TrimStart().StartsWith("- name:", StringComparison.Ordinal));
         var releaseText = string.Join('\n', release);
-        Assert.True(releaseText.Contains("az acr manifest list-metadata", StringComparison.Ordinal)
-                    && releaseText.Contains("memex-portal-ai", StringComparison.Ordinal),
-            "on a bake-only run the `release` step must recover the version from the PROMOTED image's tags "
-            + "(az acr manifest list-metadata … memex-portal-ai) — the record promote's Phase C wrote and "
+        Assert.True(releaseText.Contains("needs.gate.outputs.release_version", StringComparison.Ordinal),
+            "on a bake-only run the `release` step must take the version `gate` recovered from the PROMOTED "
+            + "image's tags (needs.gate.outputs.release_version) — the record promote's Phase C wrote and "
             + "SelfUpdateHostedService rolls from — never recompute or invent one.");
         Assert.True(releaseText.Contains("exit 1", StringComparison.Ordinal),
             "a sha with no version tag was never armed as a release; the step must STOP (exit 1), not fall back.");
@@ -105,6 +113,66 @@ public class PlatformBakeLaneGuard
         var consumers = lines.Count(l => l.Contains("RELEASE_VERSION: ${{ steps.release.outputs.version }}", StringComparison.Ordinal));
         Assert.True(consumers >= 2,
             $"both the publish step and the availability assert must read steps.release.outputs.version (found {consumers}).");
+    }
+
+    /// <summary>
+    /// <b>The version recovery itself — wherever it lives, it lives EXACTLY once, and it stops
+    /// rather than inventing.</b> The half this pins is the one the reconcile depends on: a
+    /// bake-only tick has no minted version, so the promoted image's tag set is the only record of
+    /// which release it is re-asserting. Since MeshWeaver#4539 that read is <c>gate</c>'s
+    /// <c>bake_version</c> step, because the seal probe needs the same answer.
+    /// </summary>
+    [Fact]
+    public void TheReleaseVersionRecovery_LivesInExactlyOneJob_AndRefusesRatherThanInventing()
+    {
+        var gate = ExecutableLinesOf(ReadJobBlock("gate"));
+        var lines = gate.Split('\n');
+
+        var step = Array.FindIndex(lines, l => l.Trim() == "id: bake_version");
+        Assert.True(step >= 0,
+            $"'gate' in {Workflow} must carry a step with `id: bake_version` that recovers the promoted set's "
+            + "release version. Without it a bake-only reconcile publishes under no version, and the seal probe "
+            + "has no key for the `_releases/<version>` marker — the only thing outside the image that names this "
+            + "set's framework identity (#4539).");
+
+        var body = string.Join('\n', lines.Skip(step)
+            .TakeWhile((l, i) => i == 0 || !l.TrimStart().StartsWith("- name:", StringComparison.Ordinal)));
+        Assert.True(body.Contains("az acr manifest list-metadata", StringComparison.Ordinal)
+                    && body.Contains("memex-portal-ai", StringComparison.Ordinal),
+            "`bake_version` must recover the version from the PROMOTED image's tags "
+            + "(az acr manifest list-metadata … memex-portal-ai), never recompute or invent one.");
+        Assert.True(body.Contains("tags &&", StringComparison.Ordinal),
+            "the jmespath query must short-circuit rows whose `tags` is null (`tags && contains(...)`). "
+            + "contains() THROWS on null and the throw aborts the WHOLE query, so ONE of the registry's untagged "
+            + "orphan manifests makes the step find no tag at all — the defect that killed nine consecutive "
+            + "reconciles (2026-08-28 22:12Z → 08-29 05:26Z) while accusing promote (#2642).");
+        Assert.DoesNotContain("2>/dev/null", body, StringComparison.Ordinal);
+        Assert.True(body.Contains("exit 1", StringComparison.Ordinal),
+            "a sha with no version tag was never armed as a release; the step must STOP (exit 1), not fall back.");
+
+        // 🚨 EXACTLY ONE job may make this read. A second one is not a safety net: two resolutions
+        // of one fact can disagree, and then the bake publishes a release marker for one version
+        // while the seal probe asks about another — an availability answer about the wrong identity,
+        // which is the one thing a seal check must never get wrong.
+        var all = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
+        var jobs = Enumerable.Range(0, all.Length)
+            .Where(i => IsJobKey(all[i]))
+            .ToList();
+        var jobsWithRecovery = jobs
+            .Select((startLine, idx) =>
+            {
+                var endLine = idx + 1 < jobs.Count ? jobs[idx + 1] : all.Length;
+                var text = ExecutableLinesOf(string.Join("\n", all[startLine..endLine]));
+                return (name: all[startLine].Trim().TrimEnd(':'), hasRead: text.Contains("az acr manifest list-metadata", StringComparison.Ordinal)
+                    && text.Contains("memex-portal-ai", StringComparison.Ordinal));
+            })
+            .Where(x => x.hasRead)
+            .Select(x => x.name)
+            .ToList();
+        Assert.True(jobsWithRecovery.Count == 1 && jobsWithRecovery[0] == "gate",
+            $"the promoted set's version must be recovered in exactly ONE job — `gate` — and is recovered in: "
+            + $"{string.Join(", ", jobsWithRecovery)}. Two readers of one registry fact can disagree, and then the "
+            + "platform bake's release marker and the seal probe's availability question name different releases.");
     }
 
     [Fact]
@@ -900,14 +968,16 @@ public class PlatformBakeLaneGuard
     /// <c>  &lt;name&gt;:</c> line rather than "indented and ends with a colon", so a two-space
     /// comment between jobs cannot truncate the block and turn this guard into a false failure.
     /// </summary>
-    private static string ReadJobBlock()
+    private static string ReadJobBlock() => ReadJobBlock(JobName);
+
+    private static string ReadJobBlock(string jobName)
     {
         var path = Path.Combine(FindRepoRoot(), Workflow);
         Assert.True(File.Exists(path), $"expected {Workflow} at the repo root");
         var lines = File.ReadAllLines(path);
 
-        var start = Array.FindIndex(lines, l => l.Equals($"  {JobName}:", StringComparison.Ordinal));
-        Assert.True(start >= 0, $"no '{JobName}:' job in {Workflow} — the platform's own content "
+        var start = Array.FindIndex(lines, l => l.Equals($"  {jobName}:", StringComparison.Ordinal));
+        Assert.True(start >= 0, $"no '{jobName}:' job in {Workflow} — the platform's own content "
             + "bake is what publishes the shipped NodeType bundles the portals adopt; deleting it "
             + "returns every pod to compiling every shipped type at boot (#1347, #1725).");
 

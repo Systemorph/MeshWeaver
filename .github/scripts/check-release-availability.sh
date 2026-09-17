@@ -188,15 +188,43 @@ ROOT="${BASE:+$BASE/}prebuilt-bundles"
 # producer recorded. A missing marker means exactly one thing: that release published no platform
 # content bake. Guessing is the failure mode this marker exists to remove.
 if [ -z "$IDENTITY" ]; then
+  MARKER_PATH="$ROOT/$RELEASES_DIR/$VERSION"
   MARKER_LOCAL=$(mktemp -d)/marker
+  # 🚨 TWO BUCKETS HERE TOO (MeshWeaver#4539). A failed `download` used to be reported as
+  # "release '$VERSION' has no marker" WHATEVER the reason, with az's own stderr thrown away by
+  # `2>&1 > /dev/null` — so an auth expiry, a throttled share or a network blip all read as the one
+  # benign cause. That is the same fold this file refuses for the SOURCE probes twenty lines below
+  # ("TWO BUCKETS, NEVER ONE"), and the identity resolution simply never got it. It matters because
+  # a caller may legitimately treat "no marker yet" as benign — main-cd's reconcile does, since the
+  # platform bake on that very tick writes it — and must NEVER treat an unreadable share that way.
+  # So ask EXISTENCE first, and let the two answers carry different headlines.
+  # az's exit status and stderr are KEPT, never `2>/dev/null || true`. The whole point of this branch is
+  # to tell an unreadable share from an absent marker, and WHY the existence check failed (an expired
+  # login, throttling, a missing share) is the one thing the operator needs in order to fix it.
+  MARKER_ERR=$(mktemp)
+  MARKER_EXISTS=""
+  if ! MARKER_EXISTS=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
+        --path "$MARKER_PATH" --auth-mode login --backup-intent --only-show-errors \
+        --query exists -o tsv 2>"$MARKER_ERR"); then
+    MARKER_EXISTS=""
+  fi
+  case "$MARKER_EXISTS" in
+    false)
+      die "CANNOT RESOLVE a framework identity: release '$VERSION' has no marker at $MARKER_PATH. This is a REFUSAL, not a verdict about any upstream — with no identity there is no directory to ask about, so nothing below was checked and NO source may be reported absent. Cannot determine ≠ clear to proceed." ;;
+    true) ;;
+    *)
+      die "CANNOT DETERMINE release availability: whether the release marker at $MARKER_PATH exists could not be established (az returned '${MARKER_EXISTS:-<nothing>}': $(tr '\n' ' ' < "$MARKER_ERR")). Refusing rather than assuming it is absent — that assumption would report an unreadable share as the benign 'this release published no bake'. Fix the access (az login / BAKE_PUBLISH_TARGETS / the share) and re-run." ;;
+  esac
+  # It EXISTS, so a failed read is a read failure and nothing else. az's stderr is kept this time:
+  # an error that names a HEALTHY component as the culprit is worse than a silent failure.
   if ! az storage file download --account-name "$ACCOUNT" --share-name "$SHARE" \
-        --path "$ROOT/$RELEASES_DIR/$VERSION" --dest "$MARKER_LOCAL" \
-        --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
-    die "CANNOT RESOLVE a framework identity: release '$VERSION' has no marker at $ROOT/$RELEASES_DIR/$VERSION. This is a REFUSAL, not a verdict about any upstream — with no identity there is no directory to ask about, so nothing below was checked and NO source may be reported absent. Cannot determine ≠ clear to proceed."
+        --path "$MARKER_PATH" --dest "$MARKER_LOCAL" \
+        --auth-mode login --backup-intent --only-show-errors > /dev/null; then
+    die "CANNOT DETERMINE release availability: the release marker at $MARKER_PATH EXISTS but could not be read (see az's message above). An unreadable marker is not an absent one, and this release's framework identity is therefore unknown — nothing below was checked."
   fi
   IDENTITY=$(tr -d '[:space:]' < "$MARKER_LOCAL")
   [ -n "$IDENTITY" ] || die "CANNOT RESOLVE a framework identity: the release marker for '$VERSION' is empty — the producer recorded none. This is a REFUSAL, not a verdict about any upstream; nothing below was checked."
-  [ -n "$IDENTITY_ORIGIN" ] || IDENTITY_ORIGIN="the release marker at $ROOT/$RELEASES_DIR/$VERSION"
+  [ -n "$IDENTITY_ORIGIN" ] || IDENTITY_ORIGIN="the release marker at $MARKER_PATH"
 fi
 
 # 🚨 Printed on EVERY path, before the first probe, whether or not anything is wrong. The identity
