@@ -315,12 +315,28 @@ public static class PublishedBundleCatalogue
                 continue;
             // The sentinel's DECLARATION, not a per-bundle presence check — see DeclaredBundlesOf
             // for why the denominator must be both inclusive and cheap.
-            var declaredHere = Directory.EnumerateDirectories(identityDirectory)
-                .OrderBy(d => d, StringComparer.Ordinal)
-                .Select(DeclaredBundlesOf)
-                .Where(listing => listing is not null)
-                .SelectMany(listing => listing!)
-                .ToList();
+            var declaredHere = new List<string>();
+            foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory)
+                         .OrderBy(d => d, StringComparer.Ordinal))
+            {
+                // 🚨 A POINTER THAT CANNOT BE FOLLOWED SHRINKS THIS DENOMINATOR, and a smaller
+                // denominator is the one direction that EXEMPTS a package from the gate (#3461
+                // phase 5). Until the flat compatibility copy was disposed of, the fall-back landed
+                // on a sealed copy and this read what that source declares; now it lands on a
+                // source directory holding nothing, so the source silently declares NOTHING. The
+                // floor is the set of packages that must carry a sealed bake, so reading it short
+                // clears a release that should hold — cannot determine ≠ clear to proceed.
+                var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, logger);
+                var declared = DeclaredBundlesOf(pointer.Directory);
+                if (declared is null && pointer.Fault is not null)
+                    return SealedBundleFloor.Unreadable(
+                        $"the publication pointer of '{sourceDirectory}' could not be followed "
+                        + $"({pointer.Fault}) and no sealed publication sits behind it, so what that "
+                        + "source declares could not be read — the floor would be SMALLER than what "
+                        + "is published, which exempts a package instead of holding it (#3461)");
+                if (declared is not null)
+                    declaredHere.AddRange(declared);
+            }
             if (declaredHere.Count == 0)
                 continue;
             identities++;
@@ -800,10 +816,13 @@ public static class PublishedBundleCatalogue
     /// enough to time out would freeze every environment, turning this gate into the outage it
     /// exists to prevent. Reading the sentinel alone is one file read per source.</para>
     /// </summary>
-    private static IReadOnlyList<string>? DeclaredBundlesOf(string sourceDirectory)
+    /// <param name="publication">The publication directory — <b>already resolved</b> by the caller
+    /// (<see cref="ShippedPrebuiltBundles.ResolvePublicationPointer"/>), because the caller is the
+    /// one that must tell "this source declares nothing" from "the pointer could not be followed".</param>
+    private static IReadOnlyList<string>? DeclaredBundlesOf(string publication)
     {
         var sentinel = Path.Combine(
-            ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory),
+            publication,
             ShippedPrebuiltBundles.CompletionSentinelFileName);
         return ReadSealLines(sentinel)?.Select(line => line.Trim())
             .Where(line => line.Length > 0)
