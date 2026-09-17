@@ -257,11 +257,39 @@ Before adding it:
    the policy is relaxed, drop `--wait-for-review` to 0 and the job's cap to 5 minutes.
 2. **Watch it on live pull requests** — red on open, green once the review lands on a pull request
    with no findings (through the wait), and green after the replies on one with findings.
-3. **Teach the merge-queue steward this check.** `merge-queue-steward.py` reads only the failed
-   `merge_group` run of `MeshWeaver Build and Test` under the pull request's queue prefix. An ejection
-   caused by this check would find no such run (and be rejected as unclassifiable) or find an older
-   failed build of the same pull request and classify that instead.
+3. ✅ **Teach the merge-queue steward this check — done 2026-09-17.** It read only the failed
+   `merge_group` run of `MeshWeaver Build and Test` under the pull request's queue prefix, so an
+   ejection caused by this check reached it with **both** outcomes wrong: no such run → rejected as
+   *unclassifiable*, naming the wrong workflow; or an **older** failed build of the same pull
+   request → it classifies a failure that is not why the entry was removed, and if that stale
+   failure is a catalogued flake it **re-queues a pull request whose findings are unanswered**.
+   `merge-queue-steward.py` now reads the other `merge_group` workflows first and rejects with
+   `kind=gate`, naming the workflow — keyed on *"not the test workflow"* rather than on this check
+   by name, so a gate added later is covered the day it runs rather than the day somebody remembers
+   that file.
 4. **Decide the cost.** 32 of the last 60 merges would have waited for replies.
+
+### The timing, re-measured 2026-09-17 (39 merged pull requests)
+
+The original framing — *"checks outran the reviewer"* — is **no longer the live mechanism**, and the
+numbers say so:
+
+| | median | p90 | max |
+|---|--:|--:|--:|
+| reviewer latency (open → first review submitted) | **4.1 min** | 7.8 | 17.2 |
+| required gate (open → `Consolidate test results`) | **17.9 min** | 53.8 | 1074.5 |
+
+**The required gate finished before the reviewer submitted on 0 of 37.** The denominator is 37 of the
+39 because **two merged pull requests carry no automatic review at all** — #4584 and #4582, both with
+**zero** reviews of any kind, checked rather than inferred from the gap in the counts. With no review
+there is no submission time to compare against, so they are excluded from the comparison rather than
+counted as a win for either side. They are also exactly the pull requests this check would hold: no
+review landed, condition 1 unmet — so the two numbers disagreeing is itself a measurement, not an
+inconsistency.
+
+The reviewer is reliably *first*. So what merges past a finding today is not a race — it is that the
+review **lands, and nothing requires it to be read**. That is precisely what this check asserts, and
+it is why the remaining step is the ruleset edit rather than any further engineering.
 
 ## What an author does
 
