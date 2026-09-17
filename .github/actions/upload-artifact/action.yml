@@ -1,0 +1,77 @@
+name: Store a CI artifact
+description: Upload to the explicitly selected store; an unavailable own store fails closed.
+inputs:
+  store:
+    description: Empty or gha for GitHub; file:/mounted/shared/path for our runners.
+    default: ''
+  name:
+    description: Unique artifact name within this run and attempt.
+    default: artifact
+  path:
+    description: Files, directories or glob patterns, one per line; ! excludes a pattern.
+    required: true
+  if-no-files-found:
+    description: error, warn or ignore.
+    default: warn
+  retention-days:
+    description: Retention in days; zero uses the backend default.
+    default: '0'
+  compression-level:
+    description: Compression level from zero through nine.
+    default: '6'
+  overwrite:
+    description: Replace an artifact with this name in this attempt.
+    default: 'false'
+  include-hidden-files:
+    description: Include hidden files only when explicitly requested.
+    default: 'false'
+outputs:
+  artifact-id:
+    description: GitHub artifact ID; empty for the own store (use artifact-locator).
+    value: ${{ steps.github.outputs.artifact-id }}
+  artifact-url:
+    description: GitHub artifact URL; empty for the own store.
+    value: ${{ steps.github.outputs.artifact-url }}
+  artifact-digest:
+    description: SHA-256 of the stored archive.
+    value: ${{ steps.own.outputs.artifact-digest || steps.github.outputs.artifact-digest }}
+  artifact-locator:
+    description: Own-store locator; not a GitHub artifact ID or browser URL.
+    value: ${{ steps.own.outputs.artifact-locator }}
+runs:
+  using: composite
+  steps:
+    - name: Upload to GitHub when no own store is declared
+      id: github
+      if: ${{ inputs.store == '' || inputs.store == 'gha' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}
+        compression-level: ${{ inputs.compression-level }}
+        overwrite: ${{ inputs.overwrite }}
+        include-hidden-files: ${{ inputs.include-hidden-files }}
+    - name: Upload to our shared artifact store
+      id: own
+      if: ${{ inputs.store != '' && inputs.store != 'gha' }}
+      shell: bash
+      env:
+        CI_ARTIFACT_ACTION_PATH: ${{ github.action_path }}
+        CI_ARTIFACT_STORE: ${{ inputs.store }}
+        CI_ARTIFACT_NAME: ${{ inputs.name }}
+        CI_ARTIFACT_PATH: ${{ inputs.path }}
+        CI_ARTIFACT_MISSING: ${{ inputs.if-no-files-found }}
+        CI_ARTIFACT_RETENTION: ${{ inputs.retention-days }}
+        CI_ARTIFACT_COMPRESSION: ${{ inputs.compression-level }}
+        CI_ARTIFACT_OVERWRITE: ${{ inputs.overwrite }}
+        CI_ARTIFACT_HIDDEN: ${{ inputs.include-hidden-files }}
+      run: |
+        python3 "$CI_ARTIFACT_ACTION_PATH/../../scripts/ci-run-artifacts.py" upload \
+          --store "$CI_ARTIFACT_STORE" --repository "$GITHUB_REPOSITORY" \
+          --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+          --name "$CI_ARTIFACT_NAME" --path "$CI_ARTIFACT_PATH" \
+          --if-no-files-found "$CI_ARTIFACT_MISSING" --retention-days "$CI_ARTIFACT_RETENTION" \
+          --compression-level "$CI_ARTIFACT_COMPRESSION" --overwrite "$CI_ARTIFACT_OVERWRITE" \
+          --include-hidden-files "$CI_ARTIFACT_HIDDEN"
