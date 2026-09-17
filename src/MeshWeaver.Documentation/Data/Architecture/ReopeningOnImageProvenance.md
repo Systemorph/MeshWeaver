@@ -76,7 +76,8 @@ every minute makes the map's depth equal to whatever version retention happens t
 
 ## The missing link: where an image learns its commit
 
-Two places can supply it, and the first is nearly free:
+**One route, and one candidate that was considered and rejected.** Both are listed, because a
+rejected candidate that is not written down is proposed again by the next reader:
 
 1. **The fleet watch already probes each pod's `/health`** — that is where `healthDetail` and the
    per-pod warnings in `Ops/Status` come from. Probing `/api/version` in the same pass yields
