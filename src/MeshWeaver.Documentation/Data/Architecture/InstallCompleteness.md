@@ -140,13 +140,80 @@ The registry is a required argument, deliberately: which extensions are claimed 
 module contributes parsers), so a hard-coded list would be a fourth copy of a rule that drifts the
 moment one is added.
 
-**The residual, stated because it is reachable.** The declared side holds PATHS, not bytes, so it
-can ask only the extension half. A file whose extension IS claimed can still fail to become a node
-on its CONTENT — a `.json` object carrying no `$type`/`id`/`nodeType`, a file no parser can read —
-and such a file is still counted. Measured on the same day over every package folder in
-`MeshWeaver.Plugins`: that set is **empty** (every `.json` inside a package carries a node key; the
-non-node ones all live under `app/` and `e2e/`, which are not packages). Closing it properly means
-recording what the install actually wrote rather than re-deriving it, which is a different change.
+### The content half: the question a PATH cannot answer
+
+The predicate above unified the half a path can decide. **It structurally cannot decide the other
+half**, and that residual was reachable, unguarded, and produced exactly the same symptom.
+
+A file whose extension IS claimed can still fail to become a node on its CONTENT. `JsonFileParser`
+answers "no node here" for a well-formed `.json` carrying no `$type`/`id`/`nodeType` — which is
+every `tsconfig.json`, `package.json` and `app.json` that has ever sat inside a package folder, and
+`Chess` ships exactly such a folder (`Chess/gui/rn/`). The installer writes nothing for it. The
+sweep, deriving its population from paths, counted `{Pkg}/tsconfig` as a node the install owed the
+mesh and reported it **ABSENT, at Error, on every boot of every pod, forever** — and no reinstall
+could ever clear it, because the same bytes fail the same way. The line's own remedy
+(*"reinstalling it now repairs it"*) is false for precisely this class, and it is spelled
+identically to the genuinely lost node the sweep exists to find.
+
+🚨 **The fix is evidence, not a longer exclusion list.** A list would have needed a case for `.tsx`,
+then one for `package.json`, then one for the next shape — which is how this defect was filed
+twice. Only the installer holds the bytes, so **the installer records the answer** and the sweep
+reads it:
+
+| Side | What it does |
+|---|---|
+| write | `ParseAll` already knew which node candidates did not parse; that set is now stamped on the record as `PackageManifest.UnreadableFiles` |
+| declared | `DeclaredNodePaths` subtracts exactly those files — no list, no heuristic, no second derivation |
+| report | they are named on their **own** line, at Error, as a PACKAGING defect that no reinstall can fix |
+
+🚨 **The report names the FILE, never the node path it would have produced.** The remedy is applied
+to `gui/rn/tsconfig.json`; a line naming `gui/rn/tsconfig` points at nothing on disk, and two files
+can fold onto one node path so the node form can also name fewer things than there are. A report
+whose purpose is to be acted on has to name the thing the operator acts on.
+
+🚨 **`null` and empty are different answers, and only a WHOLE-PACKAGE look may produce the empty
+one.** `null` means no install has recorded an answer — a record stamped before the field existed, or
+one whose only writes since were partial — and subtracts **nothing**, so such a record behaves exactly
+as it did before rather than reading as a clean zero. An empty set is the positive claim that every
+declared node candidate was parsed and all of them became nodes.
+
+🚨 **An update MERGES rather than replaces — and may not certify what it did not read.** An
+incremental install examines only the files it fetched, so replacing would forget every unreadable
+file outside the delta and the next boot sweep would start reporting them ABSENT again — this defect,
+recreated inside its own bookkeeping. `PackageInstaller.MergeUnreadableFiles` keeps four rules: a file
+this install examined is decided by this install (a package that fixes its file stops being reported),
+a file it did not examine keeps the previous verdict, a file that has left the package is dropped
+whatever it said, and — with no previous answer to build on — a pass that did not look at every
+declared file returns `null` rather than an empty set. Two fetched files out of two hundred cannot
+certify the other one hundred and ninety-eight.
+
+That last rule also settles an ambiguity at the call site: the install record read there degrades a
+FAULT to `null`, indistinguishable from "no record". A full install after such a fault re-derives the
+whole answer and is correct regardless; an incremental one now yields `null` — honestly unknown —
+instead of dropping every carried-forward entry.
+
+🚨 **The buckets must ADD UP, and the order they are asked in decides whether they do.** The recorded
+set is an install-time observation; the registry serving *this* boot may differ, because a module
+contributes parsers. So the CURRENT rule is asked first — a file `NodePathForFile` maps to null today
+is a non-node file today — and the record only classifies files that are still node candidates.
+Asking the record first made such a file neither a non-node nor an unreadable one, and `DeclaredFiles`
+silently stopped accounting for it.
+
+🚨 **The incremental restore set excludes them too.** A file the install could not read as a node is
+permanently node-less, so widening the fetch for it would re-fetch, re-parse and re-skip it on every
+update forever, under a line calling it an absent node being restored — a second place where the
+unhealable case wears the actionable one's words. A file whose hash *moved* is in the delta and
+travels regardless, so a package that fixes its file is still re-examined and drops out of the record.
+
+**Excluding it from the ABSENT count is only half the fix.** A file a package ships that cannot
+become a node IS a fault — the package declares a node that will never exist — so silently dropping
+it would trade a wrong Error for a missing one. What changes is *which sentence it gets*.
+
+Measured 2026-09-16 over all 60 `manifest.lock`s in `MeshWeaver.Plugins` — 5,427 declared files, 998
+node candidates, 259 of them `.json` — that set is currently **empty**. It is empty by luck, not by
+construction: nothing before this change would have failed when it stopped being. The count now
+travels on every verdict line, so an occupied case announces itself instead of arriving as an
+unhealable ABSENT.
 
 ### The verdict states its own population
 
@@ -157,7 +224,8 @@ indistinguishable for as long as the sweep existed. Every verdict now carries an
 | Field | Says |
 |---|---|
 | `DeclaredFiles` | how many FILES the record's map holds — the population that was read |
-| `NonNodeFiles` | how many of them are not node candidates, and why (README/manifest/content asset, or an extension no parser claims) |
+| `NonNodeFiles` | how many of them are not node candidates, and why (README/manifest/content asset, module source, or an extension no parser claims) |
+| `UnreadablePaths` | how many are a claimed extension the install met and could NOT read as a node — a packaging defect, counted separately because "excluded by design" and "the install failed on this file" must never render alike |
 | `Declared` | the DISTINCT node paths the rest map to |
 
 `Population` renders the three as one clause on every line that reports a verdict. The three are

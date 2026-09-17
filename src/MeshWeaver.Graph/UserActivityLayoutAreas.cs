@@ -85,7 +85,17 @@ public static class UserActivityLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddUserActivityLayoutAreas(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout
-            .WithView(ActivityArea, Activity)
+            // #4500: the User page is the one landing page in core where the provenance line is
+            // the WRONG answer, and saying so is the point of the verdict — an absence used to be
+            // indistinguishable from an oversight.
+            .WithNodePage(ActivityArea, Activity, NodePageProvenance.Declined(
+                "The subject of this page is a PERSON, not a document, and the User node's own "
+                + "stamps describe the row rather than the person: LastModified moves whenever a "
+                + "preference is flipped, and CreatedBy is the sign-in flow, so 'Updated … by "
+                + "system-security' across the top of somebody's home would state a fact about a "
+                + "database row to a reader asking about a colleague. The reader's real question — "
+                + "'member since' — belongs in the profile the page already renders "
+                + "(UserActivityLayoutAreas.BuildProfile) and is tracked separately."))
             .WithView(PinnedArea, PinnedAreaView)
             .WithView(ThreadsArea, ThreadsAreaView)
             .WithView(CatalogArea, CatalogAreaView)

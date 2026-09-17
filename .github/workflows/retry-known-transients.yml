@@ -3,18 +3,19 @@
 # was re-running ~25-minute CI cycles whose only failures were registry blips (`connection
 # refused` from ACR mid-login, the plugins registry answering 503 during #2915's window).
 #
-# 🚨 THIS IS NOT A FLAKE-RETRIER, and three guards make that structural:
-#   1. It reruns ONLY when EVERY failed job's log matches a NAMED signature below. One failed job
-#      without a match — a compile error, a test failure, anything — and it does nothing: a real
-#      red must stay red, and retrying it would be the investigate-the-red rule's forbidden shape.
-#   2. ONE attempt, ever: it acts only on run_attempt 1, so a transient that persists through the
-#      retry surfaces as the durable failure it is.
-#   3. Every decision is printed: which jobs failed, which signature matched, or which job refused
-#      the retry — so a rerun in the history is never a mystery.
+# 🚨 THIS IS NOT A FLAKE-RETRIER. The decision — the curated signature list, the EVERY-job rule,
+# and the refusal to act on an unreadable log — lives in `.github/scripts/retry-known-transients.py`
+# so that it can be PROVEN offline; read its module docstring before changing any of it.
 #
-# The signature list is CURATED — add an entry with the incident that proved it transient, in the
-# commit message. Signatures assert INFRASTRUCTURE identity (the registry hostname, the exact
-# refusal), never generic words like "error" or "timeout".
+# 🚨 WHY THE DECISION MOVED OUT OF THIS FILE (#4534). As inline shell this step read its input with
+# `gh api …/actions/jobs/<id>/logs`, and between at least 2026-09-10 and 2026-09-17 that read failed
+# EVERY time, fleet-wide: the hosted runner's `gh` refuses to output a body containing terminal
+# escape sequences unless `--allow-escape-sequences` is passed, and every Actions log has them (each
+# `run:` line is echoed as `\e[36;1m…\e[0m`). The step then printed "log unreadable … cannot prove a
+# transient, no retry" and `exit 0` — a sentence that reads like a judgement, over a green tick, for
+# a week, with nobody noticing. The script reads the API DIRECTLY (no `gh`, so no dependency on a
+# CLI output policy that has already changed under us once) and treats "I cannot see my input" as a
+# RED, never a decline. An automation that cannot read its input must say so, not pass.
 name: Retry known transients
 
 on:
@@ -23,7 +24,8 @@ on:
     types: [completed]
 
 permissions:
-  actions: write
+  actions: write      # list the run's jobs, read their logs, POST rerun-failed-jobs
+  contents: read      # check this repo out for the decision script
 
 jobs:
   retry:
@@ -33,55 +35,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # 🚨 DEFAULT REF ON PURPOSE. On `workflow_run` this checks out the DEFAULT BRANCH, which is
+      # what must run: the triggering run may be a fork's pull request, and this job holds
+      # `actions: write`. Never add `ref: github.event.workflow_run.head_branch` — that would
+      # execute an untrusted contributor's script with the token that can rerun this repo's jobs.
+      - uses: actions/checkout@v7
+
+      # An unproven gate is no gate — and this one spent a week proving exactly that. The self-test
+      # is offline and takes seconds; it drives the read failures, the EVERY-job rule, and the
+      # signature list in both directions, so a steward that has gone blind again cannot reach the
+      # step below wearing a clean decision.
+      - name: "The steward reads a log, refuses a real red, and reds when blind (self-test)"
+        run: python3 .github/scripts/retry-known-transients.py --self-test
+
       - name: Rerun iff EVERY failure matches a named transient
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID: ${{ github.event.workflow_run.id }}
           REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          # The curated signatures. Each line: an extended regex + the incident that proved it.
-          #   meshweaver.azurecr.io.*connection refused — 2026-08-31, ACR login refused mid-run,
-          #     10+ jobs across Plugins#1032; every build that ran was green.
-          #   registry answered 503 — #2915, the plugins registry's key-resolution outage window.
-          signatures='meshweaver\.azurecr\.io.*connection refused|dial tcp .*: connect: connection refused|registry answered 503 for https://memex\.meshweaver\.cloud'
-          # 🚨 BLOCK signatures span TWO consecutive log lines, so they are matched on the log with
-          # newlines collapsed to spaces (each raw line carries its ISO timestamp, hence the
-          # `[0-9TZ:.-]*` between the two halves). Same grep -E, same EVERY-job rule below.
-          #   api.github.com/app/installations/<id>/access_tokens + status: 5xx — 2026-09-13
-          #     08:56:18–08:56:40Z, run 34748690865 (push, ff277fb67) job 103701175062 "AGENTS.md
-          #     shared rule blocks": actions/create-github-app-token got `status: 500` from
-          #     GitHub's own API on all 4 of its attempts; the same gate was green on 8 other runs
-          #     between 08:49Z and 08:57Z, and the two manual `rerun-failed-jobs` POSTs at 09:01Z
-          #     and 09:03Z ALSO answered 500 — GitHub was degraded, nothing in this repo was.
-          #     The regex asserts GitHub's OWN identity (the exact installations/access_tokens
-          #     URL in the mint's RESPONSE block, immediately followed by its status) and accepts
-          #     ONLY a 5xx there: a 401/403/404/422 on that same URL is a PERMISSION or
-          #     installation problem — the App lacks a grant, or the installation id is wrong —
-          #     and MUST NOT retry; measured on the incident log with the status mutated to 403
-          #     and 404, neither matches.
-          block_signatures="url: 'https://api\.github\.com/app/installations/[0-9]+/access_tokens', [0-9TZ:.-]*[[:space:]]*status: 5[0-9][0-9],"
-          mapfile -t failed < <(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
-            --jq '.jobs[] | select(.conclusion=="failure") | .id')
-          if [ "${#failed[@]}" -eq 0 ]; then
-            echo "run $RUN_ID: failure conclusion but no failed jobs listed — doing nothing."
-            exit 0
-          fi
-          for job in "${failed[@]}"; do
-            # An unreadable log cannot PROVE a transient — so it disables the retry, loudly,
-            # instead of becoming an empty answer that matches nothing by accident.
-            if ! log="$(gh api "repos/$REPO/actions/jobs/$job/logs" 2>&1)"; then
-              echo "job $job: log unreadable ($(printf '%s' "$log" | head -1)) — cannot prove a transient, no retry."
-              exit 0
-            fi
-            if printf '%s' "$log" | grep -qE "$signatures"; then
-              echo "job $job: matches a named transient signature."
-            elif printf '%s' "$log" | tr '\n' ' ' | grep -qE "$block_signatures"; then
-              echo "job $job: matches a named transient BLOCK signature (App-token mint answered 5xx by api.github.com)."
-            else
-              echo "job $job: NO named signature matched — this is (or may be) a real red, so no retry. Investigate it."
-              exit 0
-            fi
-          done
-          echo "all ${#failed[@]} failed job(s) matched named transients — one retry."
-          gh api -X POST "repos/$REPO/actions/runs/$RUN_ID/rerun-failed-jobs"
+        run: python3 .github/scripts/retry-known-transients.py --repo "$REPO" --run-id "$RUN_ID"

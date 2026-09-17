@@ -1378,15 +1378,11 @@ public sealed class ModuleLandingService : IDisposable
             if (File.Exists(destination))
                 continue;
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            try
-            {
-                File.Move(staged, destination);
+            // A rename, never File.Move(staged, destination): that call COPIES when its rename fails,
+            // and a pod loading this generation would read the DLL incomplete (#2190). False: another
+            // replica restored the same file first — identical bytes by construction.
+            if (MeshWeaver.Utils.NoReplaceMove.TryMove(staged, destination))
                 restored = restored.Add(relative);
-            }
-            catch (IOException) when (File.Exists(destination))
-            {
-                // Another replica restored the same file first — identical bytes by construction.
-            }
         }
         if (!restored.IsEmpty)
             logger?.LogWarning(

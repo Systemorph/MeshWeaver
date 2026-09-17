@@ -345,12 +345,27 @@ would have loaded. So the roll gate asks the same question this page's probe ask
 these bytes load there?* — about a platform that is **not running anywhere the gate can reach**.
 
 The answer needs the target's type surface at gate time, and the one process that can write it is
-the bake, because the bake runs inside the target image. Every bake therefore writes
+the bake, because the bake has the target image. Every bake therefore writes
 **`platform-surface.json`** beside `framework-mvid.txt` (`BakeOutput.WritePlatformSurface`, from
 `ModulePlatformSurface.ToJson`), `publish-bake-bundles.sh` uploads it beside `_complete` for every
 identity, and `PublishedBundleCatalogue` reads it back (`ModulePlatformSurface.FromJson`). The shape
 is deliberately minimal — the identity the document is keyed to, and per assembly the full type
-names it exports, exactly the set `TypesOf` answers on a running process:
+names it exports, exactly the set `TypesOf` answers on a running process.
+
+**Equal framework identities do not imply equal host closures.** On 2026-09-16, Memex's release
+gate read a 111-assembly tester surface from `meshweaver-content` although the portal publication
+carried 531 assemblies under the same identity. It therefore reported Blazor as absent. Core CD
+now replaces the tester's surface with a measurement of the exact promoted portal image, after
+verifying its identity and before publishing the seal. The reader prefers that canonical core
+publication over a satellite's host description, regardless of source-name sort order. The
+`platform-surface` command's directory-host measurements include
+image-seeded module entries through `PlatformShippedAssemblies`, using the runtime's
+`modules/<name>/<name>.dll` witness. Private siblings are not promoted into the shared surface,
+and an unreadable seeded entry fails publication rather than disappearing from the measurement.
+Seeded entries precede same-named app-root copies, matching the module path resolver. Ordinary
+`--module` bake composition and its existing duplicate-producer checks are unchanged.
+
+The serialized shape is:
 
 ```json
 {

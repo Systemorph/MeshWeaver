@@ -55,6 +55,20 @@ public sealed record ModuleLoadLine(
     /// the difference between "landed" and "adopted".
     /// </summary>
     public string? FrameworkMvid { get; init; }
+
+    /// <summary>
+    /// 🚨 True when this line is a BASELINE entry that is loading the image's own copy because the
+    /// store copy of the same module was DECLINED on its framework identity
+    /// (<see cref="EffectiveModule.PreferImageCopy"/>, #4161) — never merely because no store entry
+    /// exists.
+    ///
+    /// <para>The distinction is the whole of the STALE PACK remediation: a baseline winning
+    /// for want of a store entry is fixed by installing one, and a baseline winning because the
+    /// store entry was declined is fixed by nothing an operator can do on this pod. Printing the
+    /// first advice over the second is what sent readers of memex.systemorph.com's STALE PACK lines
+    /// to re-install eight modules that would be declined again (MeshWeaver#4550).</para>
+    /// </summary>
+    public bool ImageCopyPreferred { get; init; }
 }
 
 /// <summary>One copy of a module's entry assembly found on disk.</summary>
@@ -143,6 +157,7 @@ public static class ModuleLoadReport
             {
                 SourceCommit = built.SourceCommit,
                 FrameworkMvid = built.FrameworkMvid,
+                ImageCopyPreferred = module.PreferImageCopy,
             });
         }
         return lines.ToImmutable();
@@ -168,7 +183,7 @@ public static class ModuleLoadReport
                      + $"store holds a NEWER, DIFFERENT copy at {shadowed.Path} "
                      + $"(mvid={Format(shadowed.Mvid)}, written={Format(shadowed.WrittenUtc)}). "
                      + "This portal is serving the older pack — a fix that merged, built and landed can "
-                     + $"be invisible here. {Remediation(line.Source)}");
+                     + $"be invisible here. {Remediation(line.Source, line.ImageCopyPreferred)}");
         }
     }
 
@@ -181,8 +196,22 @@ public static class ModuleLoadReport
     /// <c>Modules:Assemblies</c> at all, so telling an operator to delist it sends them looking for
     /// a line that does not exist.</para>
     /// </summary>
-    private static string Remediation(string source) =>
-        string.Equals(source, ModuleActivationSources.Store, StringComparison.Ordinal)
+    private static string Remediation(string source, bool imageCopyPreferred = false) =>
+        // 🚨 The DECLINED baseline is its own advice, and it is "nothing to do here"
+        // (MeshWeaver#4550). The branch below asserts "no usable store-installed entry claims this
+        // name", which is FALSE for a declined one — there is an enabled entry, its landed DLL
+        // exists, and boot preferred the image's copy on the framework identity (#4161). Measured on
+        // memex.systemorph.com 2026-09-16: eight modules printed this line every boot while the
+        // [ModuleActivation] SKIPPED line two seconds earlier named the decline, and the re-install
+        // it asked for lands the same bytes and is declined again.
+        imageCopyPreferred
+            ? "This entry is loading the image's own copy because the landed store copy was "
+              + "DECLINED on its framework identity — the [ModuleActivation] SKIPPED line for this "
+              + "module names both identities. Re-installing lands the same bytes and reaches the "
+              + "same verdict, and so does a restart; the module is running, from the copy this "
+              + "image ships. It changes when the module is published built against this platform "
+              + "build."
+        : string.Equals(source, ModuleActivationSources.Store, StringComparison.Ordinal)
             // The sidecar's Directory pointer names the generation to load. A newer generation on
             // disk means landing wrote the bytes but this entry is still pointing at the previous
             // one — the pointer write is the half that did not land.

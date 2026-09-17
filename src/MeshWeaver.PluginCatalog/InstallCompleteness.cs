@@ -54,6 +54,18 @@ public static class InstallCompleteness
     /// <see cref="InstallCompletenessVerdict.DeclaredFiles"/> and
     /// <see cref="InstallCompletenessVerdict.NonNodeFiles"/> now travel with every verdict and are
     /// printed: a wrong population is visible rather than silent.</para>
+    ///
+    /// <para>🚨 <b>And the CONTENT half, which no path can answer</b> (the second half of #3659).
+    /// A file whose extension IS claimed can still fail to become a node on its bytes — a
+    /// well-formed <c>package.json</c> or <c>tsconfig.json</c> inside a package folder carries no
+    /// <c>$type</c>/<c>id</c>/<c>nodeType</c>, so <c>JsonFileParser</c> answers "no node here" and
+    /// the installer writes nothing. Deriving the population from paths alone counted it anyway and
+    /// reported <c>{Pkg}/tsconfig</c> ABSENT, at Error, on every boot forever — unhealable, because
+    /// the same bytes fail the same way on every reinstall, and spelled identically to the genuinely
+    /// lost node this sweep exists to find. The installer now RECORDS that answer
+    /// (<see cref="PackageManifest.UnreadableFiles"/>) and this reads it, so the two sides cannot
+    /// disagree about the content question either. 🚨 <c>null</c> (a record stamped before the
+    /// installer recorded it) subtracts NOTHING — unknown is not "checked, none".</para>
     /// </summary>
     /// <param name="record">The install record's manifest, as stamped by the installer.</param>
     /// <param name="parsers">The parser registry the INSTALL would use. Required — the claimed
@@ -66,10 +78,51 @@ public static class InstallCompleteness
         ArgumentNullException.ThrowIfNull(parsers);
         if (record?.InstalledFiles is not { Count: > 0 } files)
             return ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
+        var unreadable = record.UnreadableFiles;
         return files.Keys
+            .Where(f => unreadable?.Contains(f) != true)
             .Select(f => PackageInstaller.NodePathForFile(f, parsers))
             .Where(p => !string.IsNullOrWhiteSpace(p))
             .Select(p => p!)
+            .ToImmutableSortedSet(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// The FILES a record's <see cref="PackageManifest.UnreadableFiles"/> still names — the ones
+    /// that would otherwise have been reported ABSENT forever, so the sweep can name them under
+    /// their OWN sentence instead of dropping them silently (#3659).
+    ///
+    /// <para>🚨 <b>FILES, with their extensions — never the node paths they would have mapped to</b>
+    /// (Copilot review). The remedy for one of these is to move or fix <c>gui/rn/tsconfig.json</c>;
+    /// a line naming <c>gui/rn/tsconfig</c> points at nothing on disk, and two files can fold onto
+    /// one node path, so the node form can also name fewer things than there are. A report whose
+    /// purpose is to be ACTED on has to name the thing the operator acts on.</para>
+    ///
+    /// <para>🚨 Subtracting them from the declared set is only half the fix. A file a package ships
+    /// that cannot become a node IS a fault — the package declares a node that will never exist —
+    /// and silently excluding it would trade a wrong Error for a missing one. What changes is WHICH
+    /// sentence it gets: a packaging defect nobody can reinstall away, not an absence a reinstall
+    /// repairs.</para>
+    ///
+    /// <para>Two filters, both load-bearing. A file the record no longer DECLARES is gone from the
+    /// package and is not reported. And a file that is no longer a node candidate AT ALL under the
+    /// registry serving this boot — a module contributed the parser and is not loaded here — is not
+    /// reported either: it is an ordinary non-node file today, counted as one, and reporting it as a
+    /// packaging defect would accuse a package of shipping something wrong because THIS host is
+    /// configured differently.</para>
+    /// </summary>
+    /// <param name="record">The install record's manifest, as stamped by the installer.</param>
+    /// <param name="parsers">The parser registry the INSTALL would use.</param>
+    public static ImmutableSortedSet<string> UnreadableFilePaths(
+        PackageManifest? record, FileFormatParserRegistry parsers)
+    {
+        ArgumentNullException.ThrowIfNull(parsers);
+        if (record?.UnreadableFiles is not { Count: > 0 } unreadable)
+            return ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
+        var declared = record.InstalledFiles;
+        return unreadable
+            .Where(f => declared is null || declared.ContainsKey(f))
+            .Where(f => PackageInstaller.NodePathForFile(f, parsers) is not null)
             .ToImmutableSortedSet(StringComparer.Ordinal);
     }
 
@@ -139,7 +192,41 @@ public static class InstallCompleteness
         IReadOnlyDictionary<string, string>? declaredFiles,
         IReadOnlySet<string>? alreadyFetching,
         IReadOnlySet<string>? presentNodePaths,
-        FileFormatParserRegistry parsers)
+        FileFormatParserRegistry parsers) =>
+        FilesToRestore(declaredFiles, alreadyFetching, presentNodePaths, parsers, null);
+
+    /// <summary>
+    /// <see cref="FilesToRestore(IReadOnlyDictionary{string,string}, IReadOnlySet{string}, IReadOnlySet{string}, FileFormatParserRegistry)"/>,
+    /// minus the files the install itself recorded as UNREADABLE (#3659).
+    ///
+    /// <para>🚨 <b>Why this arm exists</b> (Copilot review). The restore set is "declared, and its
+    /// node is not in the mesh" — and a file the installer could not read as a node is
+    /// PERMANENTLY in that state. Without this it is re-fetched, re-parsed and re-skipped on
+    /// EVERY incremental update, for the life of the package, and the update's own log line names
+    /// it as an absent node being restored — a second place where an unhealable case wears an
+    /// actionable one's words.</para>
+    ///
+    /// <para>🚨 <b>And it does not strand a package that FIXES the file.</b> The exclusion applies
+    /// only to files whose hash did not move: a changed file is in <paramref name="alreadyFetching"/>
+    /// (the delta), which this method never returns anyway, so it still travels, still gets parsed,
+    /// and — now readable — is dropped from the record by
+    /// <see cref="PackageInstaller.MergeUnreadableFiles"/>. The recorded set can only ever delay a
+    /// re-examination that nothing else would have triggered.</para>
+    /// </summary>
+    /// <param name="declaredFiles">The CANDIDATE manifest's file map.</param>
+    /// <param name="alreadyFetching">The delta's own added/changed files; never returned.</param>
+    /// <param name="presentNodePaths">The node paths OBSERVED in the mesh, or <c>null</c> when the
+    /// read did not happen.</param>
+    /// <param name="parsers">The parser registry the INSTALL would use.</param>
+    /// <param name="knownUnreadable">The record's <see cref="PackageManifest.UnreadableFiles"/>, or
+    /// <c>null</c> when no install has recorded one — in which case nothing is excluded, exactly as
+    /// before.</param>
+    public static ImmutableSortedSet<string> FilesToRestore(
+        IReadOnlyDictionary<string, string>? declaredFiles,
+        IReadOnlySet<string>? alreadyFetching,
+        IReadOnlySet<string>? presentNodePaths,
+        FileFormatParserRegistry parsers,
+        IReadOnlySet<string>? knownUnreadable)
     {
         ArgumentNullException.ThrowIfNull(parsers);
         var empty = ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
@@ -147,6 +234,7 @@ public static class InstallCompleteness
             return empty;
         return declaredFiles.Keys
             .Where(f => alreadyFetching?.Contains(f) != true)
+            .Where(f => knownUnreadable?.Contains(f) != true)
             .Select(f => (File: f, Node: PackageInstaller.NodePathForFile(f, parsers)))
             .Where(x => !string.IsNullOrWhiteSpace(x.Node) && !presentNodePaths.Contains(x.Node!))
             .Select(x => x.File)
@@ -154,7 +242,9 @@ public static class InstallCompleteness
     }
 
     /// <summary>
-    /// The reactive half of <see cref="FilesToRestore"/>: ONE batched
+    /// The reactive half of
+    /// <see cref="FilesToRestore(IReadOnlyDictionary{string,string}, IReadOnlySet{string}, IReadOnlySet{string}, FileFormatParserRegistry, IReadOnlySet{string})"/>:
+    /// ONE batched
     /// <see cref="IStorageAdapter.ReadMany"/> over a bounded, KNOWN set of node paths, answering
     /// which of them the mesh holds.
     ///
@@ -240,8 +330,12 @@ public static class InstallCompleteness
                       + "writes one."
                     : $"all {declaredFiles} file(s) the record declares are non-node files (a "
                       + "README, the manifest sidecar, a content/** asset, a src/** module source, "
-                      + "or an extension no parser claims), so this package declares no node to "
-                      + "compare against"));
+                      + "or an extension no parser claims)"
+                      + (population.UnreadableFilePaths.Count == 0
+                          ? ""
+                          : $" or, for {population.UnreadableFilePaths.Count} of them, a claimed "
+                            + "extension the install could NOT read as a node")
+                      + ", so this package declares no node to compare against"));
 
         // 🚨 A file map that does not map ONTO this partition cannot be compared against it, and
         // guessing a rebase would manufacture a shortfall out of a naming difference. Say so
@@ -431,7 +525,8 @@ public static class InstallCompleteness
     /// </summary>
     private readonly record struct Population(
         int DeclaredFiles, int NonNodeFiles, int ModuleSourceFiles,
-        ImmutableSortedSet<string> ModuleSourceDirectories)
+        ImmutableSortedSet<string> ModuleSourceDirectories,
+        ImmutableSortedSet<string> UnreadableFilePaths)
     {
         public InstallCompletenessVerdict Apply(InstallCompletenessVerdict verdict) => verdict with
         {
@@ -439,20 +534,35 @@ public static class InstallCompleteness
             NonNodeFiles = NonNodeFiles,
             ModuleSourceFiles = ModuleSourceFiles,
             ModuleSourceDirectories = ModuleSourceDirectories,
+            UnreadableFilePaths = UnreadableFilePaths,
         };
     }
 
     private static Population PopulationOf(PackageManifest? record, FileFormatParserRegistry parsers)
     {
+        var empty = ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
         if (record?.InstalledFiles is not { Count: > 0 } files)
-            return new Population(0, 0, 0,
-                ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal));
+            return new Population(0, 0, 0, empty, empty);
+        // 🚨 THREE buckets, not two. A non-node file is excluded BY DESIGN (a README, the manifest
+        // sidecar, a content asset, a module source, an extension no parser claims); an UNREADABLE
+        // one is a packaging fault the installer met and recorded (#3659). Folding them together
+        // would hide the fault inside a number that reads as routine.
+        //
+        // 🚨 ORDER MATTERS, and getting it wrong loses a file from the arithmetic entirely (Copilot
+        // review). The recorded set is an INSTALL-TIME observation; the registry serving THIS boot
+        // may differ — a module contributed the parser and is not loaded here. Asking the recorded
+        // set first made such a file neither a non-node (excluded by the record) nor an unreadable
+        // one (UnreadableFilePaths drops it, since it is no longer a node candidate), so
+        // DeclaredFiles stopped accounting for it. The CURRENT rule is therefore asked first, and
+        // the record only classifies files that are still node candidates today.
         var nonNode = files.Keys.Count(f => PackageInstaller.NodePathForFile(f, parsers) is null);
         var sources = files.Keys.Where(PackageInstaller.IsModuleSourcePath).ToList();
         var directories = sources
             .Select(ModuleSourceDirectoryOf)
             .ToImmutableSortedSet(StringComparer.Ordinal);
-        return new Population(files.Count, nonNode, sources.Count, directories);
+        return new Population(
+            files.Count, nonNode, sources.Count, directories,
+            UnreadableFilePaths(record, parsers));
     }
 
     /// <summary><c>src/X/a/b.cs</c> → <c>src/X</c>: the module directory a declared source
@@ -569,13 +679,18 @@ public static class InstallCompleteness
     /// <para><b>The line that lies by being early.</b> Until this existed, the only completeness
     /// line an install ever wrote was emitted BEFORE the repair ran — at
     /// <see cref="LogLevel.Error"/>, saying the install "is being REPAIRED rather than skipped" —
-    /// and nothing anywhere ever said whether the repair worked. Measured on
-    /// <c>memex.meshweaver.cloud</c> 2026-09-13: <c>Feedback/Feedback/Source/FeedbackHandover</c>
-    /// was named ABSENT at 22:02:37Z and was present at 22:02:45Z, eight seconds later. That Error
-    /// reports a SUCCESS. It ships to Loki, the log watcher mints an incident from it, and because
-    /// incident identity folds per log CATEGORY it lands on MeshWeaver#2387 — an issue about a
-    /// different call site in the same class — which is why that issue re-opens no matter what
-    /// anyone fixes.</para>
+    /// and nothing anywhere ever said whether the repair worked. That Error ships to Loki, the log
+    /// watcher mints an incident from it, and because incident identity folds per log CATEGORY it
+    /// lands on MeshWeaver#2387 — an issue about a different call site in the same class.</para>
+    ///
+    /// <para>🚨 <b>Landed is not HELD.</b> The verdict this method describes is taken right after
+    /// the write, so a writer that undoes the repair LATER is invisible to it. Measured on
+    /// <c>memex.meshweaver.cloud</c>: <c>Feedback/Feedback/Source/FeedbackHandover</c> was named
+    /// ABSENT at 22:02:37Z on 2026-09-13 and present at 22:02:45Z — read at the time as a repair
+    /// that worked — and was named ABSENT again on ten further boots through 2026-09-16 at the same
+    /// module version, pruned after each repair by <c>Feedback/_GitSync</c> importing the sealed
+    /// commit whose tree lacks it (MeshWeaver#4259). The signature of a repair that did not hold is
+    /// the pre-install detection REPEATING at an unchanged module version.</para>
     ///
     /// <para>🚨 <b>And the case that deserved the Error had no line at all.</b> A completeness
     /// verdict was only ever taken on the SKIP path, where the module hash was unchanged; an
@@ -598,6 +713,39 @@ public static class InstallCompleteness
     {
         ArgumentNullException.ThrowIfNull(after);
         var module = string.IsNullOrEmpty(moduleVersion) ? "(none)" : moduleVersion;
+        var ordinary = DescribeVerdict(after, module);
+        // 🚨 A file the install could not READ as a node is a fault of its OWN, and it outranks the
+        // absence verdict (#3659). It is an Error whatever the rest of the package did — the package
+        // declares a node that will never exist — and it is spelled as a PACKAGING defect, because
+        // the one thing that cannot fix it is the remedy every other line here names: reinstalling
+        // meets the same bytes and fails the same way, forever.
+        return after.UnreadableFilePaths.Count == 0
+            ? ordinary
+            : new LandingReport(LogLevel.Error, UnreadableSentence(after) + " " + ordinary.Message);
+    }
+
+    /// <summary>
+    /// The one sentence a file the install could not read as a node gets — its own, never an
+    /// ABSENT (#3659). Shared by the post-install landing and the boot sweep so the two cannot
+    /// describe the same fault differently.
+    /// </summary>
+    /// <param name="verdict">The verdict carrying <see cref="InstallCompletenessVerdict.UnreadableFilePaths"/>.</param>
+    public static string UnreadableSentence(InstallCompletenessVerdict verdict)
+    {
+        ArgumentNullException.ThrowIfNull(verdict);
+        return $"Package {verdict.PackageId} ships {verdict.UnreadableFilePaths.Count} FILE(s) whose "
+               + "extension a parser claims but whose CONTENT the install could not read as a node, "
+               + "so the node(s) they declare do not exist and no install will create them: "
+               + $"[{string.Join(", ", verdict.UnreadableFilePaths.Take(MaxNamedInALine))}]. This is a "
+               + "PACKAGING defect, not mesh damage — reinstalling meets the same bytes and fails "
+               + "the same way. The usual cause is an ordinary config file inside a package folder "
+               + "(a package.json / tsconfig.json carries no $type, id or nodeType, so it is not a "
+               + "node): move it out of the package, or give it a shape the parser recognises "
+               + "(MeshWeaver#3659).";
+    }
+
+    private static LandingReport DescribeVerdict(InstallCompletenessVerdict after, string module)
+    {
         return after.Kind switch
         {
             // The one arm that is a genuine fault: the install ran, the record is stamped, and the
@@ -912,6 +1060,24 @@ public sealed record InstallCompletenessVerdict(
     public ImmutableSortedSet<string> ModuleSourceDirectories { get; init; } =
         ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The FILES the record's <see cref="PackageManifest.UnreadableFiles"/> still names — files the
+    /// install PARSED and could not turn into a node (#3659). Empty both when the package has none
+    /// and when the record predates the installer recording them, which is why the number is
+    /// printed on every line rather than inferred from its absence.
+    ///
+    /// <para>🚨 FILES with their extensions, never the node paths they would have mapped to: the
+    /// remedy is to move or fix <c>gui/rn/tsconfig.json</c>, and a line naming <c>gui/rn/tsconfig</c>
+    /// points at nothing on disk (Copilot review). See <see cref="InstallCompleteness.UnreadableFilePaths"/>.</para>
+    ///
+    /// <para>🚨 These are NOT in <see cref="Missing"/> and never will be: a reinstall meets the
+    /// same bytes and fails the same way, so reporting them as an absence a reinstall repairs is
+    /// the false remedy this field exists to stop. They are reported under their own sentence, at
+    /// Error, as what they are — a package that declares a node it can never deliver.</para>
+    /// </summary>
+    public ImmutableSortedSet<string> UnreadableFilePaths { get; init; } =
+        ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
+
     /// <summary>What this verdict counted, and over what — one clause, on every line that reports
     /// a verdict, so a wrong population is visible instead of silent.</summary>
     /// <summary>
@@ -955,6 +1121,10 @@ public sealed record InstallCompletenessVerdict(
             : $", {ModuleSourceFiles} of them module sources "
               + $"({string.Join(", ", ModuleSourceDirectories)}), compiled into the module bundle, "
               + "not compared as nodes")
+        + (UnreadableFilePaths.Count == 0
+            ? ""
+            : $", {UnreadableFilePaths.Count} of them a claimed extension the install could NOT read as "
+              + "a node, recorded by the install itself and reported separately, not as absences")
         + $" → {Declared} distinct node path(s) compared";
 
     /// <inheritdoc />

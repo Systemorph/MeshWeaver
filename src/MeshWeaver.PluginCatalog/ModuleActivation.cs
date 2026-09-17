@@ -944,9 +944,10 @@ public static class ModuleActivationSidecar
     /// <para>🚨 <b>That is the whole fix for <a href="https://github.com/Systemorph/MeshWeaver/issues/4026">#4026</a>.</b>
     /// Two replicas landing DIFFERENT content of one module write different names, so neither can
     /// lose the other's landing. Two writing the SAME record race for one name, and whichever wins
-    /// wrote identical bytes — so the create does not need to be atomic: .NET's no-overwrite move is
-    /// <c>link(2)</c> where the file system supports it and an existence check plus
-    /// <c>rename(2)</c> where it does not (a CIFS mount), and the design survives both.</para>
+    /// wrote identical bytes, so a racing create is benign. What the create must still be is ONE
+    /// rename of a complete file (#2190): readers drop the whole module over a record they cannot
+    /// read, so the name must never be visible while its bytes are being written — see
+    /// <c>WriteOnce</c>.</para>
     /// </summary>
     /// <returns>True when this call wrote the file; false when the record was already on the
     /// volume — an idempotent re-landing, never an error.</returns>
@@ -1032,10 +1033,20 @@ public static class ModuleActivationSidecar
 
     /// <summary>
     /// The one immutable create every record kind goes through: skip when the name exists (it
-    /// already holds this content), otherwise write a temp file and move it into place without
+    /// already holds this content), otherwise write a temp file and RENAME it into place without
     /// overwriting. The temp is written into <c>activation.d/</c> itself, not into the module's
     /// record directory, so the rename moves <c>activation.d/</c>'s last-write time — the
     /// fingerprint <see cref="PendingModuleActivations"/> memoises the activation read behind.
+    ///
+    /// <para>🚨 <b>The name appears by ONE rename of a complete file, or not at all
+    /// (#2190).</b> Every reader of a module's records drops the WHOLE module when one of them cannot
+    /// be read — at boot for the life of the process — so a record must never be observable while it
+    /// is being written. <c>File.Move(temp, path, overwrite: false)</c> did not guarantee that: when
+    /// its rename failed on the Azure Files share it silently COPIED the temp into the final name,
+    /// holding that name under an exclusive lock and incomplete for the whole copy, and a replica
+    /// booting at that moment logged "being used by another process" and ran without the module.
+    /// <see cref="MeshWeaver.Utils.NoReplaceMove"/> has no copy: a rename it cannot make throws and publishes
+    /// nothing, and the next landing records the event.</para>
     /// </summary>
     private static bool WriteOnce(string baseDirectory, string moduleName, string path, string content)
     {
@@ -1045,18 +1056,18 @@ public static class ModuleActivationSidecar
         var temp = Path.Combine(
             EntriesDirectory(baseDirectory),
             "." + moduleName + "." + Guid.NewGuid().ToString("N") + LandingTempSuffix);
-        File.WriteAllText(temp, content);
+        var published = false;
         try
         {
-            File.Move(temp, path, overwrite: false);
-            return true;
+            File.WriteAllText(temp, content);
+            // false: another replica published this very content first — the name holds it already.
+            published = MeshWeaver.Utils.NoReplaceMove.TryMove(temp, path);
+            return published;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        finally
         {
-            DeleteTemp(temp);
-            if (File.Exists(path))
-                return false; // another replica wrote this very content first
-            throw;
+            if (!published)
+                DeleteTemp(temp);
         }
     }
 
@@ -2752,6 +2763,55 @@ public static class ModuleActivationBoot
         Action<string, string>? onSkipped,
         Action<string, string>? onAdvisory,
         string? liveFrameworkIdentity)
+        => ComputeEffectiveModuleEntriesForPlatform(baselineEntries, persisted, platformGate,
+            landedModuleDllExists, onSkipped, onAdvisory,
+            string.IsNullOrWhiteSpace(liveFrameworkIdentity) ? null : [liveFrameworkIdentity]);
+
+    /// <summary>
+    /// <see cref="ComputeEffectiveModuleEntries(IReadOnlyList{string}, ModuleActivationList, Func{string, string}, Func{ModuleActivationEntry, bool}, Action{string, string}, Action{string, string}, string)"/>
+    /// with EVERY reading the platform states about itself (MeshWeaver#4550), which is what makes
+    /// the identity discriminator able to say YES.
+    ///
+    /// <para>🚨 <b>A platform states its build in two schemes, and a bundle can only ever state
+    /// one.</b> A portal resolves the API-SURFACE identity (<c>s&lt;hash&gt;</c>) for the content it
+    /// compiles; every module-pack lane states the producer reading of the platform it packed
+    /// against (<c>g&lt;sha&gt;</c>, read off that platform's <c>MeshWeaver.Compiler.dll</c> —
+    /// <see cref="MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedIdentity"/> is this
+    /// process's own). Comparing the two with ordinal equality — the seven-argument form's only
+    /// option — answers "different" for every pair that exists in the fleet, so the store copy of
+    /// every module the image also ships was declined on every boot, whatever was published.
+    /// Measured on memex.systemorph.com 2026-09-16: eight modules declined against
+    /// <c>s4b2836…</c> while stating a core commit, re-landed by every reconcile and re-declined by
+    /// every boot, reported as "landed but not yet loaded — a restart activates them".</para>
+    ///
+    /// <para>With both readings stated, a bundle packed by the very build that produced this image
+    /// MATCHES and is adopted — the convergence the decline's "self-healing" note always claimed.
+    /// A bundle from another build still loses to the image's own copy, and so does one this
+    /// platform has no comparable reading for: that copy is correct here by construction, and
+    /// letting an uncomparable one override it would reinstate Plugins#1483. What changes there is
+    /// the WORDS — <paramref name="onSkipped"/> now says which scheme each side stated and what
+    /// would clear it, instead of asserting a difference nothing measured.</para>
+    /// </summary>
+    /// <param name="baselineEntries">The raw <c>Modules:Assemblies</c> values (may be null/empty).</param>
+    /// <param name="persisted">The sidecar list (may be null).</param>
+    /// <param name="platformGate">Words the declared-floor ADVISORY; skips nothing (#3648).</param>
+    /// <param name="landedModuleDllExists">Whether a persisted module's LANDED entry DLL exists.</param>
+    /// <param name="onSkipped">The loud channel, one call per persisted entry that does NOT become
+    /// effective, with (module name, reason).</param>
+    /// <param name="onAdvisory">The advisory channel (#3648), for EFFECTIVE entries only.</param>
+    /// <param name="platformIdentities">Every identity this platform states about itself —
+    /// production passes <c>PrebuiltAssemblySeeder.LiveFrameworkMvid</c> AND
+    /// <see cref="MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedIdentity"/>. Null or
+    /// empty states nothing and decides nothing, exactly as a blank
+    /// <c>liveFrameworkIdentity</c> does.</param>
+    public static ImmutableList<EffectiveModule> ComputeEffectiveModuleEntriesForPlatform(
+        IReadOnlyList<string>? baselineEntries,
+        ModuleActivationList? persisted,
+        Func<string?, string?> platformGate,
+        Func<ModuleActivationEntry, bool> landedModuleDllExists,
+        Action<string, string>? onSkipped,
+        Action<string, string>? onAdvisory,
+        IReadOnlyCollection<string>? platformIdentities)
     {
         var effective = ImmutableList.CreateBuilder<EffectiveModule>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2830,18 +2890,27 @@ public static class ModuleActivationBoot
             //     bytes it emitted, and it is compared against what this process measures about
             //     itself. Re-arming the floor here would hold the fleet again; this cannot — it
             //     never removes a module, it only prefers the copy the image already ships.
-            if (!string.IsNullOrWhiteSpace(liveFrameworkIdentity)
-                && !string.IsNullOrWhiteSpace(module.FrameworkMvid)
-                && !string.Equals(module.FrameworkMvid, liveFrameworkIdentity, StringComparison.Ordinal)
-                && imageShips.Contains(module.Name))
+            //
+            // 🚨 #4550 — and the comparison is SCHEME-AWARE, because the two sides write the same
+            // fact in two different alphabets. See ModuleFrameworkIdentity: an ordinal compare of a
+            // producer-stated g<sha> against a portal's surface s<hash> is "different" for every
+            // pair in the fleet, which turned this preference into a permanent shadow over the
+            // registry lane rather than the discriminator it is meant to be.
+            var identity = ModuleFrameworkIdentity.Compare(module.FrameworkMvid, platformIdentities);
+            if (identity.IsNotThisPlatform && imageShips.Contains(module.Name))
             {
                 onSkipped?.Invoke(module.Name,
-                    $"declined: built for another platform (framework {module.FrameworkMvid}; this "
-                    + $"deployment runs {liveFrameworkIdentity}) — the image's own copy runs "
-                    + "instead. Its DLL exists and its types link, and neither of those says its "
-                    + "registrations match the types this platform emits (#4161). No action is "
-                    + "needed: publish this module built against this platform and the next "
-                    + "reconcile lands it and it wins again.");
+                    $"declined: {identity.Describe(module.FrameworkMvid)} — the image's own copy "
+                    + "runs instead. Its DLL exists and its types link, and neither of those says "
+                    + "its registrations match the types this platform emits (#4161). "
+                    + (identity.Verdict == ModuleIdentityVerdict.Differs
+                        ? "No action is needed: publish this module built against this platform and "
+                          + "the next reconcile lands it and it wins again."
+                        : "No restart and no re-install changes this — both land these same bytes "
+                          + "and reach this same verdict. It is adopted when the module is "
+                          + "published stating an identity this platform also states "
+                          + $"({string.Join(", ", identity.PlatformReadings)}), which the platform's "
+                          + "own build states for every module it packs."));
                 declined.Add(module.Name);
                 continue;
             }

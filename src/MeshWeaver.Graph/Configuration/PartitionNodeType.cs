@@ -82,7 +82,15 @@ public static class PartitionNodeType
                     Order: 10)
                 { LabelKey = "settings.partitions" })
             .AddLayout(layout => layout
-                .WithDefaultArea(MeshNodeLayoutAreas.SearchArea))
+                .WithDefaultArea(MeshNodeLayoutAreas.SearchArea)
+                // #4500: repointing the default area to Search — without re-registering a renderer
+                // — moved the landing page off the framework Overview and took the provenance line
+                // with it, invisibly, because nothing here mentions a page at all. A partition
+                // record is administrative content whose first question is "who declared this
+                // space, and when", so the framework composes the line above the catalog. Scoped to
+                // the Partition hub: every other node's Search area is a TAB, not a landing page,
+                // and is left exactly as it was.
+                .WithNodePage(MeshNodeLayoutAreas.SearchArea, MeshNodeLayoutAreas.Search))
     };
 
     /// <summary>

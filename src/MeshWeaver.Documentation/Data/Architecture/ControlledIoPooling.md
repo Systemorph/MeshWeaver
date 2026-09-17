@@ -446,11 +446,16 @@ So the mesh teardown awaits **all three**, in order, before the scope is dispose
    async cleanup onto the `AsyncDisposeQueue` during this synchronous-`Dispose()` phase — `Dispose()`
    must never block, so async cleanup is *queued*, not run inline.)
 2. `IoPoolRegistry.DrainAll()` — offloaded ThreadPool I/O. **GRACE, then CANCEL + JOIN — never wait
-   alone, never cancel first.** The drain first lets every in-flight leaf finish on its own: it
-   re-acquires the gate permits one at a time, each under `IoPoolOptions.DrainGrace` (8 s), so every
-   completion restarts the clock and a leaf that is going to finish is never cancelled (a write that
-   would have landed in 50 ms lands). Only a leaf that outlives a whole grace with the pool making
-   no further progress is *wedged*: its call site is captured, and then the pool cancels. 🚨 Do *not*
+   alone, never cancel first.** The drain first lets every in-flight leaf finish on its own: it waits
+   while anything is still outstanding, under `IoPoolOptions.DrainGrace` (8 s) per step, and every
+   *completion* restarts the clock — so a leaf that is going to finish is never cancelled (a write
+   that would have landed in 50 ms lands), and a leaf that reaches the gate while the drain is
+   running extends it rather than consuming someone else's grace (see [the admission count says
+   OUTSTANDING, never PROGRESS](#-the-admission-count-says-outstanding-never-progress--the-grace-needs-a-second-counter)).
+   🚨 The grace is deliberately **not** the gate: re-acquiring permits here would compete with the
+   queued leaves for them, steal their turn and then cancel them at the gate — the very outcome it
+   exists to prevent. Only a leaf that outlives a whole grace with the pool making no further
+   progress is *wedged*: its call site is captured, and then the pool cancels. 🚨 Do *not*
    use the wait-only `WhenDrained(timeout)` in place of that cancel: a live change-feed leaf never
    completes on its own, so a polled wait times out and lets the scope dispose *while the leaf is
    still running* — its ThreadPool thread then dereferences a collectible node ALC's freed metadata
@@ -636,6 +641,101 @@ the pool will not run is a CANCELLATION, never an `ObjectDisposedException`** �
 the region exists to keep, and it is why there is no `catch (ObjectDisposedException)` anywhere in the
 file. Adding one would hide a region that was never entered.
 
+### 🚨 The admission count says OUTSTANDING, never PROGRESS — the grace needs a second counter
+
+The drain's grace is a **stall bound, not a budget**: every completion restarts it, so a burst of ten
+short writes drains in ten completions rather than one budget, and work that keeps finishing is never
+cancelled. The obvious way to implement that — and the way it *was* implemented — is to take a
+baseline of the admission count and wait for it to fall below it.
+
+**That reads progress off a counter that moves in both directions.** `_gateUsers` is a live census:
+it rises on an arrival exactly as far as it falls on a completion. And arrivals during a drain are
+routine rather than exotic, because the pool creates them itself — `Invoke` and `InvokeStream` defer
+their prologue to the ThreadPool (`SubscribeOn`), as does `SubscribeThroughPool`'s setup leaf, so a
+leaf whose `Subscribe()` returned *before* the drain enters its gate region *after* the drain has
+taken its baseline. (`InvokeBlocking` is the exception: its region is taken on the subscriber's
+thread and spans the whole leaf.) Each such arrival then cancels out a
+completion one for one, and the predicate cannot fire until **every** arrival has also finished:
+
+| | what the pool did | what the grace saw |
+|---|---|---|
+| baseline | one leaf running | `outstanding = 1`, wait for `< 1` |
+| +0 ms | three queued leaves reach the gate | `outstanding = 4` |
+| +0 ms | the running leaf **finishes** | `outstanding = 3` — not `< 1` |
+| +800 ms | the next leaf **finishes** | `outstanding = 2` — not `< 1` |
+| +1600 ms | the next leaf **finishes** | `outstanding = 1` — not `< 1` |
+| +2000 ms | *nothing has changed* | grace expires ⇒ **wedged**, cancel |
+
+The per-completion grace had silently become one total budget for the whole queue. The pool made
+progress four times in that window and the drain called it a stall, then cancelled a leaf 400 ms from
+the end of work it was going to finish — accepted work discarded, which is precisely what the grace
+exists to prevent and a contradiction of what the teardown contract promises: *teardown lets accepted
+work finish and NAMES what it had to stop.* This did neither; it discarded the work and reported a
+stall.
+
+**So progress is now counted, not inferred.** `LeaveGateRegion` increments a monotone
+`_admissionsCompleted` (published *after* the census decrement, so a drain that observes the
+completion also observes the settled count behind it), and the two counters answer the two different
+questions the loop actually asks:
+
+```csharp
+var seen = Volatile.Read(ref _admissionsCompleted);
+while (Volatile.Read(ref _gateUsers) - 1 > 0)          // is anything still OUTSTANDING?
+{
+    var progressed = SpinWait.SpinUntil(
+        () => Volatile.Read(ref _admissionsCompleted) != seen,   // has anything FINISHED?
+        _drainGrace);
+    if (!progressed)
+        break;                                          // a whole grace, nothing finished ⇒ wedged
+    seen = Volatile.Read(ref _admissionsCompleted);
+}
+```
+
+A leaf that reaches the gate mid-drain now **extends** the drain — it is outstanding, so the loop
+keeps going — and never consumes the grace of the leaf that finished before it. Nothing about the
+cancel changed: a leaf that outlives a whole grace with nothing finishing is still wedged, still
+cancelled, and still named in `CancelledLeafSites`.
+
+#### How it was found, and why load was not the explanation
+
+It surfaced as a 1-in-5 failure of `IoPoolTest.Drain_restartsTheGraceOnEveryCompletion_…` —
+`Expected 3 … but found 1` — on a machine at load ~29 across 18 cores. **Saturation is the
+condition, never the cause.** It changes nothing about the predicate; it only widens the window in
+which a prologue lands on the far side of the baseline, which is what makes an arrival available to
+mask a completion. Raising the grace, lengthening the leaves or widening the test's margin would
+have bought slack against the load and left the defect exactly where it was.
+
+`IoPoolDrainGraceTest` reproduces it on an **idle** machine instead, by arranging that ordering
+structurally rather than waiting for load to arrange it: a test seam
+(`IoPool.OnDrainGraceBaselineTaken`) runs on the drain's own thread the instant the baseline is
+taken, subscribes the queued leaves there, and waits until each is provably *at the gate* before the
+grace clock starts. The queue then outlasts one grace **by construction** — three 800 ms leaves
+against a 2000 ms grace, and `Task.Delay` never fires early — so the red is structural and load can
+only make it redder. Its sibling test is the control that keeps the fix honest: a leaf that reaches
+the gate after the baseline and then *wedges* is still cancelled and still named, so the fix cannot
+have degenerated into unconditional patience.
+
+#### 🚨 The residue: a leaf between `Subscribe()` and its prologue is invisible, and that is separate
+
+Closing this closes the masking, not the whole window. Between `Subscribe()` returning and the
+ThreadPool running the prologue, a leaf is counted by nothing at all — the drain cannot extend a
+grace for work it cannot see, and if the outstanding count reaches zero in that gap the grace simply
+ends. **Three of the four entry points have such a window**, and the consequence is not the same in
+each:
+
+| entry point | region taken | consequence of the gap |
+|---|---|---|
+| `Invoke` / `InvokeStream` | inside the `SubscribeOn`'d body | the leaf is cancelled at its gate wait when it finally arrives, too late even to be **named** — accepted work discarded silently |
+| `SubscribeThroughPool` (setup leaf) | outer region released in the subscribe's `finally`, before the leaf runs | milder: the drain registration is already **armed**, and the leaf re-checks its linked token before `source.Subscribe`, so the leg is refused and **terminated** rather than run after teardown. The use-after-unload precondition is not reopened; what is lost is that the drain does not *wait* for it |
+| `InvokeBlocking` | subscriber's thread, spanning the whole leaf | **none** |
+
+That window is the pool's own making and is structurally evident in the code, but it was **not** the
+mechanism measured here and is not closed by this change. It is tracked as **#4555**, separately and
+deliberately: closing it means moving the admission onto the subscriber's thread, which is a change
+to the subscribe path — the same path #4530 / #4545 are editing — rather than to the drain. Both
+defects can produce the same observable symptom, a queued leaf cancelled during a drain, which is
+exactly why they are worth keeping apart.
+
 ### 🚨 The gate permit is the DRAIN'S SIGNAL — so a leaf publishes it LAST
 
 `Drain()` joins by re-acquiring every permit and then reports `0`, which the contract spells as *"no
@@ -719,10 +819,304 @@ So **.NET ThreadPool starvation is ruled out for that assertion by construction*
 experiment — which also explains why a `DOTNET_PROCESSOR_COUNT=2` run could never have reproduced it,
 while the very same regime *is* the right instrument for the `Drain` failure above, whose leaf
 demonstrably unwinds on a `.NET TP Worker`. Two sibling tests in one class, and the thread is what
-tells them apart. What is left standing for the open one is OS-level: `Drain()`/`Dispose()` start a
-**brand-new OS thread per call**, and a thread creation the kernel delays past 5 s under a full
-shard's contention would miss the bound while every in-process instrument reads healthy. That is the
-next experiment, not a wider bound — 0 ms against 5 s is a ~5000× margin, so nothing there is slow.
+tells them apart. What is left standing for the open one is OS-level — and the section below settles
+which half of it is ours to fix.
+
+### 🚨 Teardown must not MINT the thread that delivers the terminal
+
+`Drain()` and `Dispose()` used to call `new Thread(...).Start()` **per call**. That put OS thread
+creation on the critical path of every pooled subscription's terminal: nothing downstream is
+delivered until that thread exists *and* is first scheduled. Two independent reasons that is a
+defect and not merely a cost:
+
+- **It is a blocking call inside the method whose contract forbids blocking.** `Thread.Start()` takes
+  the runtime's thread store lock and can queue behind a GC suspension. `Dispose()`'s own comment,
+  three lines above the call, is *"DISPOSE MUST NOT BLOCK"* — the same shape as the inline
+  `Cancel()` that #2394 removed from it, just one layer down.
+- **The latency it adds is unbounded and invisible.** Every in-process instrument reads healthy while
+  it elapses: `Dispose` returns in 0 ms, the awaited subject is a latched `AsyncSubject`, no gate
+  permit moves, `CurrentInFlight`/`CurrentlyWaiting` are both 0.
+
+So the canceller is now **started with the pool and parked** on a one-shot latch — a
+`CancellationTokenSource`'s wait handle, because the wait is raised once, never resets, and lasts the
+pool's whole lifetime, which is the one wait a *slim* spin-then-block primitive is documented not to
+be for. `Drain()`/`Dispose()` raise that latch instead of minting a thread; `Drain()` joins on a
+`ManualResetEventSlim` the canceller sets once `Cancel()` has *returned*, waited on with the drain
+budget exactly like `_blockingIdle`, in place of `Thread.Join`. The requester
+takes the gate region before raising the signal, exactly as it did before `Start()`, so `_poolCts` is
+still provably alive when the canceller wakes; the canceller publishes the completion event **before**
+handing that region back, because handing it back can complete disposal and dispose the very event a
+`Drain()` would be waiting on. The thread exits as soon as the one cancel it exists for has run, and
+`IoPoolRegistry` creates pools lazily by name, so the cost is one parked stack per resource class
+actually in use, for as long as it is in use.
+
+**Two consequences of owning a thread from the constructor, both of which had to be paid.** A thread
+is a **GC root**, so a pool that nobody disposes no longer merely leaks a semaphore that the
+collector reclaims — it parks a thread for the process's life. `ConcurrentDictionary.GetOrAdd` does
+not promise its value factory runs once, so `IoPoolRegistry.Get` now records what it built and
+disposes any candidate that lost the race, which wakes that canceller and lets it exit. And the
+thread is started with `Thread.UnsafeStart()`, never `Start()`: `Start` captures the starting
+thread's `ExecutionContext` and flows it for the thread's whole life, and a lazily-resolved pool is
+started from *whatever* caller first touched that resource class — a hub turn serving a viewer,
+say. A captured context would run every pooled subscription's downstream teardown under that user's
+`AsyncLocal` identity, `AccessService.Context` included, and pin it until the pool died. Identity-
+neutral is both correct and what the old shape gave for free, since it created the thread on the
+mesh-teardown thread, which carries none.
+
+#### What the widened window proves — and what it does not
+
+The race is two thread-state transitions wide and 26 class runs across three load regimes reproduced
+nothing, so the mechanism is established the same way #4466's was: by **widening the window in
+place** and watching the verdict flip. Two wideners, because there are two distinct latencies and
+only one of them is the pool's to remove:
+
+| widener (6 s, in place) | before — thread minted at teardown | after — canceller parked from the constructor |
+|---|---|---|
+| **A** — thread *creation* costs 6 s (sleep before `Start()`) | **FAILS**: `Expected 00:00:06.0026424 to be less than 00:00:02 … Dispose must return immediately` | **PASSES** (6.1 s test, all of it paid in the constructor) |
+| **B** — the canceller gets no timeslice for 6 s (sleep before `Cancel()`) | **FAILS**: *"…emit a value within 5s … The observable emitted nothing at all"* | **FAILS**, identically |
+| none | passes | passes |
+
+**A is the discriminator**: creation cost moved off the teardown path entirely. **B is the honest
+half**: it reproduces the merge-queue failure *verbatim*, including the message, and the fix does not
+change it — because "the OS did not run the thread" cannot be designed away while the cancel is
+forbidden to run on the caller. What the change does is reduce that residue from *create a thread,
+register it with the runtime, and have it first-scheduled* to *wake a thread that already exists*,
+which needs no thread store lock, no stack allocation and no GC-safe-point transition.
+
+So if this assertion ever fails again, the reading has already narrowed:
+`IoPoolTest.Dispose_doesNotBlockOnASlowPooledSubscriptionTeardown` now asserts `CancellerIsAlive`
+**before** the disposal it measures, and `TheCancellerThreadIsStartedWithThePool_NotAtTeardown` pins
+the property on its own. A green line there with a red terminal below it means the thread existed and
+the OS did not wake it — a host-level verdict, not a pool defect, and still never a reason to widen
+the 5 s bound.
+
+#### One forensic note on the occurrence, because it was read the other way round
+
+The original triage read the failure as *"the pooled subscribe landing ~3.4 s late on a busy
+ThreadPool, followed by `Within(5 s)` expiring"*, on the strength of *718 tests in 333 s* on that
+shard. `test/xunit.runner.json` sets `maxParallelThreads: 1` and `parallelizeTestCollections: false`,
+so **that assembly runs one test at a time** — the shard's 718 tests are never concurrent demand, and
+only one `IoPoolTest` case ran in that job at all. The 8.39 s hole in the runner log
+(17:54:16.97 → 17:54:25.36, with no other line in it) is this test plus the preceding class's mesh
+teardown, not evidence of parallel load. The test's own precondition also passed, which rules the
+ThreadPool leg out directly: `source.HasObservers` is only true once `source.Subscribe(observer)` has
+run, so the subscribe had already landed before `Dispose()` was called.
+
+### 🚨 A drain callback registered LATE runs on the SUBSCRIBER — so it is registered disarmed, before the leaf
+
+The canceller thread (#2394, #4448) decides where `_poolCts.Cancel()` is **called**. It says nothing
+about a callback that is **registered after** the cancel, and `CancellationToken.Register` on a token
+that is already cancelled registers nothing at all: it runs the callback synchronously, on the
+registering thread (#4524).
+
+`SubscribeThroughPool` registers one such callback per subscription — `inner.Dispose();
+observer.OnCompleted();`, the subscription's whole downstream teardown — and it registers it inside the
+subscribe, on the subscriber's thread: a hub action block, a grain turn, `OrderedRouteDispatcher.DrainNext`.
+The refusal that should keep it out is read when the cold observable is **built** (`_draining`), and the
+admission region only refuses once `_disposing` is set, which `Drain()` never does. So a leg built a
+moment before a drain and subscribed as its cancel lands is admitted, reaches `Register` on a cancelled
+token, and runs its teardown on the subscriber. Two orderings reach it, and the second is worse:
+
+| order on the subscriber | what the late callback is |
+|---|---|
+| cancel lands before the setup leaf gets a pool thread | a *second* terminal — the setup leaf's cancelled gate wait also reports one, from the pool; whichever arrives first is the one downstream sees |
+| the setup leaf (started first) opens the source, **then** the cancel lands, **then** `Register` runs | the leg's **only** terminal |
+
+**The fix changes the order, not `Drain()`'s admission.** The registration is created **first** and
+**disarmed**; `armed` is published (with `Interlocked.Exchange`) once `Register` has returned; only then
+is the setup leaf started. That publication is the synchronisation point. A callback that finds itself
+unarmed ran before it — inline inside `Register`, or on the canceller at any moment up to the
+`Exchange`, including after `Register` returned — so the cancel was requested before the setup leaf
+exists, and that leaf cannot miss it: its linked token is created cancelled, its gate wait throws, and
+its error arm delivers `OnCompleted` from a pool thread. The CTS's state transition and the arm are
+both full fences, so a callback reading `armed == 0` and a leaf reading the token as uncancelled cannot
+both happen. Starting the leaf after the registration also removes the second row: the source is never
+opened without an armed registration covering it. The two producers share one exactly-once latch, so
+the hand-off is explicit; the producer that takes it delivers the terminal in a `finally`, so a
+throwing source `Dispose()` cannot leave the latch taken and the observer unterminated.
+
+Neither shape the issue sketched closes the window. Refusing new regions in `Drain()` still admits a
+subscribe that was already past its region check when the grace expired and the cancel ran. Checking
+`IsCancellationRequested` before registering is check-then-act against the same cancel — and "route the
+terminal through the canceller" has nothing to route to, because that thread exits once its one cancel
+has run.
+
+**Proven by widening, not sweeping.** `IoPoolLateDrainRegistrationTest` builds the leg while the pool is
+alive, lets `Drain()` complete — it joins the cancel — and only then subscribes from a dedicated thread,
+so the entire drain sits inside the window. The one other producer of a terminal, the setup leaf, is
+parked at a test seam (`IoPool.OnSubscribeSetupLeafStarting`) until `Subscribe()` has returned; without
+it the test would pass whenever the pool thread happened to win the race. Against main's ordering
+(seam only) it fails every run with `Did not expect value to be 10` — the subscriber's own thread id; with
+the fix it passes, and reverting the fix lines and **rebuilding** turns it red again.
+
+**What this did not cover** was the other way a terminal reaches the caller's thread: a leg the pool
+*refuses*. That was filed as #4530 and is the section below.
+
+### 🚨 A REFUSED leg terminates off the subscriber's thread as well
+
+A refusal is what every entry point answers once the pool is terminal — `Cancelled<T>()` for a leg
+**built** after `Drain()`/`Dispose()`, and the admission region's own `observer.OnError(...)` for one
+built while the pool was alive and **subscribed** after disposal began. Both ran on Rx's *immediate*
+scheduler, so the terminal was delivered inside the caller's `Subscribe()` call, on the caller's
+thread. Measured on `main`, 50 subscribes per cell from a dedicated thread:
+
+| entry point | refusal | terminal | on the subscriber's thread | median |
+|---|---|---|---|---|
+| `Invoke` · `InvokeStream` · `InvokeBlocking` · `SubscribeThroughPool` | built after `Drain()` / after `Dispose()` | `OnError(OperationCanceled)` | **50/50, inside `Subscribe()`** | 0.3–1.2 µs |
+| `InvokeBlocking` · `SubscribeThroughPool` | built before `Dispose()`, subscribed after | `OnError(OperationCanceled)` | **50/50, inside `Subscribe()`** | 0.5–1.0 µs |
+| `Invoke` · `InvokeStream` | built before `Drain()`/`Dispose()`, subscribed after | `OnError(TaskCanceled)` | 0/50 — already off-thread | 13–30 µs |
+| `SubscribeThroughPool` | built before `Drain()`, subscribed after | `OnCompleted` | 0/50 — the #4524 fix | 27 µs |
+
+So **an admitted leaf's terminal already came from a pool thread and only the refusal was handed back
+to the caller** — the one thread this pool exists to keep work off.
+
+**The consequence is not symmetry, it is stack depth.** `OrderedRouteDispatcher.DrainNext` subscribes
+the next leg for a destination from the previous leg's terminal, and says why that is safe: *"No
+recursion depth to worry about: every leg is subscribed through the pool, which hops to a thread-pool
+thread, so a leg can never complete inside its own subscribe call."* Once refusals are inline that
+premise is false, and the drain walks the destination's whole backlog by recursion. Measured
+(`OrderedRouteDispatcherDrainRecursionTest`, 32 legs queued behind an in-flight head): completions ran
+at stack depths **31 → 248**, about 7 frames per leg, 65 `DrainNext`/`Enqueue` frames under the last
+one — all on the pool's single `IoPool-cancel` thread, inside `_poolCts.Cancel()`. A destination's
+backlog is deepest exactly when a saturated silo goes down, which is when this path runs.
+
+**The fix is the scheduler, not a gate.** `Cancelled<T>()` throws on `TaskPoolScheduler.Default`, and
+the admission region's refusal is scheduled there too (`RefuseOffSubscriber`, whose returned disposable
+is the scheduled item, so an unsubscribe cancels it). That is the same scheduler every admitted leaf
+already terminates on. After the change the first two rows above read **0/50** on the subscriber's
+thread at 7–12 µs, and the recursion test's spread collapses.
+
+**What it costs, measured rather than asserted.** A refusal takes 4.4 µs at the median instead of
+0.5 µs (p95 9.8 µs) — inside the 13–30 µs an admitted leaf's cancellation already costs. With every
+ThreadPool worker deliberately saturated, 41 of 50 refusals arrived within 500 ms and the slowest took
+291 ms: a refusal now queues for the pool the way the work it refuses would have.
+
+🚨 **And a delayed refusal is not free at teardown, which is worth stating precisely.** The POOL joins
+nothing on it — no permit, no admission region, so `Drain()`/`Dispose()` neither wait for it nor report
+it. A CONSUMER does: `RoutingGrain.Dispatch` releases its `RoutingQuiescence` slot from the leg's
+`.Finally`, and `RoutingQuiescenceSiloParticipant` holds the silo stop until that count reaches zero.
+So under a saturated ThreadPool a refusal can delay that hold, bounded by the hold's own 30 s budget,
+after which it names the residual and the silo proceeds. That is the trade: a *bounded* delay under
+saturation, against an *unbounded* stack and downstream teardown on a hub turn. A dedicated thread
+would dodge the ThreadPool and buy back the worse half — every refusal's downstream teardown
+serialised behind the slowest one, which is the shape #2394 is about — so the shared pool is the
+deliberate choice, not the convenient one.
+
+🚨 **One cell in that matrix was a different defect, fixed separately as #4545 — the section below.**
+
+### 🚨 A blocking leaf the POOL cancels FAULTS; one the SUBSCRIBER cancels stays silent
+
+`InvokeBlocking` starts its work with a token linked to the pool's, so a drain, a dispose and an
+unsubscribe all land the task on `IsCanceled`. The continuation's arm named one of them — *"Unsubscribed
+before completion — silent teardown"* — and stayed silent for all three. The other two are the pool
+ending the caller's work:
+
+- a leaf still **queued** on the limited-concurrency scheduler when `Drain()` cancels the pool, and
+- a leaf **built before a drain and subscribed after**, whose task is created with an already-cancelled
+  token, so its delegate never runs at all.
+
+Measured on the second: **0 terminals in 50 subscribes** — the one cell of the matrix where a
+subscriber got neither `OnNext`, `OnError` nor `OnCompleted`. That is the #1789 shape: the `.Finally`
+that releases a route slot and advances a FIFO never runs, and a caller with a bounded wait sees only
+its own timeout.
+
+**The terminal is a FAULT, and the choice is forced by what callers do with a completion.**
+`InvokeBlocking<T>` emits one value and completes, so an empty completion does not read as "cancelled"
+— it reads as *"the IO ran and produced nothing"*, and this codebase folds exactly that into a value:
+
+| caller | what an empty completion becomes |
+|---|---|
+| `CatalogLayoutAreas` (install completeness) | `DefaultIfEmpty()` → the **Undeclared verdict** — its own comment: *"an absent record is a value here … never a silence"* |
+| `InstalledPackageRepairService.TargetPartitionIsGone` | `DefaultIfEmpty(true)` → **"the partition is present"** |
+| `PublishedBundleCatalogue` | the rule in one line: *"'I could not look' is NOT 'there is nothing here', and the difference decides the verdict"* |
+
+A cancelled read that completed empty would be read as a successful negative answer by all three. The
+siblings agree: `Invoke`/`InvokeStream` already fault with `TaskCanceledException` when the pool cancels
+them, and every refusal answers `OperationCanceledException` — so a cancellation-shaped fault is also
+the only terminal that keeps the three value-producing entry points identical.
+`SubscribeThroughPool` is the one surface that COMPLETES on a drain, and it is not a counter-example:
+a change feed's terminal carries no value, nobody reads a result out of it, and its job is to run the
+`.Finally` bookkeeping (#1789).
+
+**The discrimination is explicit, because the task cannot tell you.** The subscription's disposable
+publishes `unsubscribed` before it cancels, and the arm reads it: the subscriber's own cancellation
+stays silent (after a dispose nothing may be delivered), the pool's gets
+`OperationCanceledException`.
+
+🚨 **And WHERE that terminal is delivered decides whether the drain covers it.** The continuation runs
+before its own `finally` hands the leaf's region back, and `TryFinishDisposal` refuses to complete
+disposal while any region is open — so delivering **inline there** puts the subscriber's teardown
+strictly inside the window `Disposed` closes, which is the window a caller waits on before releasing
+the mesh and unloading collectible ALCs. Scheduling it away would put it *after* that join. Measured,
+same scenario both ways (a leaf queued behind a parked head, then `Dispose()`):
+
+```
+always scheduled:  head released → Disposed fired → queued OnError      (terminal ~200 µs AFTER the join)
+delivered inline:  head released → queued OnError → Disposed fired      (terminal INSIDE the join)
+```
+
+So the arm delivers inline, and schedules only in the one case that cannot be delivered there: a token
+already cancelled when the continuation was ATTACHED runs it on whoever subscribed, and a terminal must
+never run on that thread (#4530). Nothing of that leaf ever ran — no delegate, no slot — so it is a
+refusal in all but name and takes the refusal's path, with the refusal's stated trade.
+`IoPoolCancelledBlockingLeafTest.ACancelledBlockingLeafsTerminal_RunsBeforeDisposedReportsTheJoin`
+pins the ordering, and fails on the always-scheduled shape by the microseconds above.
+
+**The whole matrix, measured after the change** (50 subscribes per cell, from a dedicated thread):
+16 of 16 cells deliver a terminal, **0 of 16 on the subscriber's thread**, medians 7–17 µs. The
+previously-silent cell answers `OperationCanceledException` at 9.7 µs. The only `OnCompleted` left is
+`SubscribeThroughPool` on a drain, which is the deliberate exception above. Pinned by
+`IoPoolRefusedLegTerminatesOffSubscriberTest` (the matrix, now including that cell) and
+`IoPoolCancelledBlockingLeafTest` (the queued-then-drained path, and the unsubscribe that must stay
+silent).
+
+### 🚨 ADMISSION is taken on the subscriber's thread, so "accepted" means one thing
+
+Three of the four entry points deferred their whole prologue to the ThreadPool (`SubscribeOn`) and
+took their admission region **inside** it. Between a caller's `Subscribe()` returning and that
+prologue running, the leaf was counted by **nothing** — not `_gateUsers`, not `_inFlight`, not
+`CurrentlyWaiting`. The caller believed the work was queued; the pool did not know it existed
+(#4555).
+
+`Drain()` waits while anything is outstanding and gives it a grace. A leaf in that window is
+outstanding to nobody, so the drain never enters the grace at all, cancels the pool token, and the
+leaf then arrives to find itself cancelled — too late even to be counted in
+`LeavesCancelledAfterGrace`, which is captured *before* the cancel. **Measured on `main`**, subscribing
+one leaf and draining immediately: **50 of 50** for `Invoke` and **50 of 50** for `InvokeStream` lost
+the work, terminated the subscriber with a cancellation, and reported `LeavesCancelledAfterGrace == 0`.
+That is accepted work discarded in silence — the exact outcome #3291 forbids (*teardown lets accepted
+work finish and NAMES what it had to stop*).
+
+**The fix is where the region is taken, not a new counter.** `Invoke`, `InvokeStream` and
+`SubscribeThroughPool`'s setup leaf now enter the region **synchronously, on the subscriber's thread**
+— which is what `InvokeBlocking` always did — and the leaf claims it when its prologue starts:
+
+```csharp
+if (!TryEnterGateRegion())
+    return RefuseOffSubscriber(observer);          // a refusal still leaves on a POOL thread (#4530)
+
+var regionOwner = 0;                               // 0 unclaimed · 1 the leaf · 2 an unsubscribe
+// prologue:   if (Interlocked.CompareExchange(ref regionOwner, 1, 0) != 0) throw …   // already released
+// unsubscribe: if (Interlocked.CompareExchange(ref regionOwner, 2, 0) == 0) LeaveGateRegion();
+```
+
+The CAS is the whole protocol, and it exists because **only one of the two may release**: a leaf that
+has started still touches `_gate` and `_poolCts`, so an unsubscribe releasing the region under it
+would reopen the hole #2146 closed. A leaf that never started is released by the unsubscribe, so a
+subscription dropped before its prologue cannot leak a region and park `Disposed` forever.
+
+What does **not** change: the work still runs on a pool thread (the `SubscribeOn` is untouched — only
+the admission moved), refusals still leave off the subscriber's thread, and the region still ends with
+the **setup leaf** for `SubscribeThroughPool`, never with the long-lived subscription — holding it for
+a live change feed would park disposal behind every feed routed through the pool.
+
+**What it costs.** `Disposed` now waits for a leaf that has been accepted but whose prologue has not
+run, where before it could complete and leave that leaf to be refused on arrival. That is the correct
+direction — the pool waits for work it accepted — and it is bounded by the ThreadPool getting to the
+prologue. Pinned by `IoPoolAcceptedWorkIsAccountedTest`, which parks a prologue on
+`IoPool.OnLeafPrologueStarting` (so the leaf is inside the window by construction, not by racing it)
+and then asserts both halves of the contract: the drain **spends its grace**, and the leaf it has to
+cancel is **counted**. On `main` it fails at `Expected 0 to be greater than 0`.
 
 ---
 

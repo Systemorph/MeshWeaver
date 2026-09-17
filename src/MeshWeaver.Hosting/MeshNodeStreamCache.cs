@@ -2963,6 +2963,34 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             new ObjectDisposedException(nameof(MeshNodeStreamCache)));
                     var typeSource = new global::MeshWeaver.Graph.SyncedQueryMeshNodes(
                         cacheHub.GetWorkspace(), id, queries);
+                    // 🚨 A FRAME NOBODY ANSWERED IS NOT AN ANSWER, SO IT MUST NOT BE THE CACHED ONE
+                    // (MeshWeaver#4557). `MeshQuery` counts a provider that completes without an
+                    // Initial as an EMPTY Initial — deliberately, because the alternative starved
+                    // the gate and hung every real-user search for 300 s — and everything below
+                    // this line treats a first frame as durable truth: Replay(1) hands it to every
+                    // later caller and AutoConnect never reconnects, while the only thing that
+                    // would refresh it, a change notification for a matching path, never fires for
+                    // the commonest writer (a reconcile re-writing an unchanged node is a NO-OP at
+                    // the store, which publishes nothing). So a cold moment became a permanent
+                    // false "absent": measured on memex-cloud 2026-09-16, the plugin gate read
+                    // durably present grants and policies as missing for 24 minutes after a restart
+                    // and alarmed them as lost writes.
+                    //
+                    // The frame is still DELIVERED — nothing hangs, which is the property the
+                    // counted-as-empty rule exists for — but the chain is DROPPED from the registry,
+                    // so the next GetQuery for this (id, query set) builds a fresh chain and asks
+                    // again. Not an expiry timer and not a per-call-site bypass: the cache simply
+                    // does not keep what nobody said. A genuine answer keeps its Replay(1).
+                    connectionOwner.Add(typeSource.Unanswered
+                        .Where(silent => silent.Count > 0)
+                        .Take(1)
+                        .Subscribe(
+                            silent => EvictUnansweredQuery(id, signature, silent),
+                            // The side-channel is a Subject the collection owns; a fault here is a
+                            // defect in the fold, not a query failure, and must not be silent.
+                            ex => logger.LogWarning(ex,
+                                "MeshNodeStreamCache: the unanswered-frame probe for query "
+                                + "'{QueryId}' faulted; a cold frame may stay cached.", id)));
                     var updates = typeSource.StreamUpdates();
                     // 🚨 Hold SYSTEM identity across this synced-query subscription — the SAME
                     // pattern (and for the SAME reason) as ChatClientCredentialResolver
@@ -3080,6 +3108,60 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // empty registration; leaving it would grow the registry by one per contended miss.
             _queryConnections.Remove(connectionOwner);
             // Retry the read.
+        }
+    }
+
+    /// <summary>
+    /// Drops the chain registered for (<paramref name="id"/>, <paramref name="signature"/>) because
+    /// its complete-snapshot frame NAMED providers that never answered — see
+    /// <see cref="QueryResultChange{T}.SilentProviders"/> and MeshWeaver#4557. The frame itself was
+    /// already delivered to whoever is subscribed (a silent provider must not hang them); what this
+    /// prevents is that frame becoming the process-lifetime replayed answer.
+    ///
+    /// <para>Pair-exact against (id, signature) for the same reason
+    /// <see cref="EvictFaultedQuery"/> is: one id can hold several query sets since #1311, and
+    /// evicting by id alone would either miss the cold set or drop a healthy sibling. Live
+    /// subscribers keep the chain they hold — it is a real, running query whose next frame may well
+    /// be complete; only the REGISTRY entry goes, so the next caller asks again instead of being
+    /// handed an answer nobody gave.</para>
+    /// </summary>
+    private void EvictUnansweredQuery(object id, string signature, IReadOnlyList<string> silent)
+    {
+        while (true)
+        {
+            var current = _queries;
+            if (!current.TryGetValue(id, out var entry)
+                || !entry.BySignature.TryGetValue(signature, out var found))
+                return; // already replaced or evicted — never touch a newer chain
+
+            var remaining = entry.BySignature.Remove(signature);
+            var updated = remaining.IsEmpty
+                ? current.Remove(id)
+                : current.SetItem(id, entry with { BySignature = remaining });
+            if (Interlocked.CompareExchange(ref _queries, updated, current) != current)
+                continue; // CAS lost — re-read and retry; nothing has been released yet.
+
+            // 🚨 The chain's upstream is NOT released here, and that is the difference from
+            // EvictFaultedQuery: a faulted chain is dead, this one is alive and its subscribers are
+            // reading it. Releasing the connection would tear a live read out from under them to
+            // save one subscription. The owner is still registered with _queryConnections, so cache
+            // disposal still reaches it.
+            //
+            // Drop the memoised options wrappers for this id, or the eviction would be invisible
+            // from the public surface (the #1316 lesson, same as EvictFaultedQuery).
+            foreach (var key in _optionsWrappedQueries.Keys)
+                if (Equals(key.Id, id) && key.Signature == signature)
+                    _optionsWrappedQueries.TryRemove(key, out _);
+
+            logger.LogWarning(
+                "MeshNodeStreamCache: query '{QueryId}' (query set '{QuerySet}') answered its first "
+                + "complete snapshot with provider(s) {Silent} having completed WITHOUT an Initial — "
+                + "an EMPTY that nobody actually said. The frame stands for the readers that have it "
+                + "(a silent provider must not hang them), but it is NOT kept as this id's cached "
+                + "answer: the next read opens a fresh chain and asks again. Fix the provider — every "
+                + "Query<T> observable must emit exactly one Initial.",
+                id, signature, string.Join(", ", silent));
+            return;
         }
     }
 

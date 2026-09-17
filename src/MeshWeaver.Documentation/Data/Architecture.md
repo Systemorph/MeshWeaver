@@ -86,6 +86,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Silent Completion](SilentCompletion) — an empty completion is invisible to every timeout
 - [AsyncLocal Across Scheduler Hops](AsyncLocalAcrossHops)
 - [Initialization Gates](InitializationGates)
+- [What the DataContext Init Time-Box Bounds](DataContextInitializationTimeout) — the 120 s box is nested three deep (data source → stream → type-source leg), a per-node hub's initialization is in practice ONE unbounded storage read, and the timeout now names the leg instead of guessing "a stuck NodeType compile", which cannot reach it
 - [Retiring an Activation](RetiringAnActivation) — a transient init fault retires instead of latching; the gate is failed BEFORE the dispose, because two drains cannot be ordered by a comment
 - [Aggregating Providers](AggregatingProviders)
 - [Hub Disposal Model](HubDisposalModel)
@@ -105,6 +106,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Reading & writing nodes
 
 - **Start here:** [CQRS — Queries vs. Content Access](CqrsAndContentAccess)
+- [An Answer Nobody Gave Is Not Cached](AnswerNobodyGaveIsNotCached) — a synced chain replays its FIRST frame for the life of the process, and a provider that completes without an Initial is counted as an empty one, so a cold moment used to become a permanent false "absent"; the frame now names who never answered and an unanswered frame is delivered but not kept
 - [MeshNode Stream Cache](MeshNodeStreamCache)
 - [Update Queue Ownership](UpdateQueueOwnership) — one published queue per path, retained until accepted work settles
 - [Request via Stream Update](RequestViaStreamUpdate)
@@ -227,6 +229,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Per-Tab Session State](PerTabSessionState) — a node is shared by every tab of one account, so "which page is this viewer on" and "navigate ME there" can never live on one
 - [Blazor Async](BlazorAsync)
 - [Available Controls](UserInterface/AvailableControls)
+- [Node Page Provenance](NodePageProvenance) — the landing page carries "who wrote this, and when" by default; declining it is a sentence, not an absence
 - [Menus as Data](MenuAsData) — re-word a menu without a build
 - [The Menu Contribution Boundary](MenuContributionBoundary) — what may be data, what stays compiled
 - [Markdown Fence Extensions](MarkdownFenceExtensions) — the platform emits a marker, the clients hydrate it; a new fence is always a two-repo change
@@ -258,6 +261,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Graph / Compiler Layering](GraphCompilerLayering) — the four assemblies, the cycle, and the full-MVID size rule
 - [Toolchain Re-evaluation Lane](ToolchainReevaluationLane) — why a toolchain change stopped rebaking the world
 - [The Dependency Record Floor](DependencyRecordFloor) — a record's module entry says "I need at least X", not "I need exactly this build"; the MVID pin that could not converge because Roslyn hashes absolute source paths, the two-replica recompile ping-pong it produced, and the four things the floor deliberately does not relax
+- [An Unloadable Build Is Never A Silent Default](AnUnloadableBuildIsNeverASilentDefault) — a recorded build that does not LOAD in this process used to bind the mesh default configuration for the grain's whole life; the always-activated Hosting/PlatformBuilds hub that ran twenty hours without its inbox, fleet watch and build queue while its record read Ok, and the two hypotheses (a missing module, "a restart activates it") the measurements refuted
 - [Producer Determinism of the Dependency Record](ProducerDeterminismOfTheDependencyRecord) — the same content must stamp the same record however the producer reached its bytes; the disk-cache hit that shipped a weaker guard, and why the digest is persisted beside the bytes rather than recomputed
 - [Rebake Waves](RebakeWaves) — why a roll rebakes the world anyway, and what one rebake writes
 - [Source-Set Establishment](SourceSetEstablishment) — a resolved source set of ZERO is ambiguous, and only the type's own persisted snapshot tells "owns no Code" from "the discovery pass came back short"; the boot that resolved 91 fewer Code nodes than its neighbours and held a portal out of rotation for the startup probe's full three hours
@@ -307,9 +311,11 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Deploying a plugin change — merging is not shipping](DeployingPluginChanges)
 - [Module Activation Head Ownership](ModuleActivationHeadOwnership) — which generation a deployment runs is a decision every replica writes to ONE shared file and replaces unconditionally; why the same-content case is already benign, why the regression propagates into the proposed module set rather than being bounded by it, why routing the write to an owning hub is a cycle (boot reads the record before the mesh exists), and what deriving the head costs measured rather than estimated
 - [Module Adoption Policy](ModuleAdoptionPolicy)
+- [Publishing A File On A Shared Volume](AtomicFilePublication) — a name readers watch must appear holding the whole file or not appear at all, and `File.Move(…, overwrite: false)` does not promise that: on a volume without hard links (Azure Files) its failed rename COPIES into the final name, which is then incomplete and exclusively locked for the length of the copy (measured: 21,573 sharing violations, 52,619 incomplete reads, ZERO "absent"). The primitive that replaces it, what it refuses rather than copies, and what is still not atomic
 - [Module Build Architecture](ModuleBuildArchitecture)
 - [Module Closure Accounting](ModuleClosureAccounting)
 - [The Module Identity Anchor](ModuleIdentityAnchor)
+- [Two Identity Schemes, One Comparison](ModuleIdentitySchemes) — a bundle states a `g<sha>` commit identity and a portal resolves an `s<hash>` surface identity, so the #4161 discriminator answered "different" for every pair in the fleet: measured on memex.systemorph.com, eight modules declined on every boot and reported as "a restart activates them" across a restart that could not clear one of them
 - [Module-Owned Siblings Ride](ModuleOwnedSiblingsRide)
 - [The Module Platform Link Gate](ModulePlatformLinkGate)
 - [Rolling-Update Build Tolerance](RollingUpdateBuildTolerance) — why a rolling platform update recompiled Store/Plugin ten times in four minutes and blanked every instance behind "build did not settle within 30s" (two generations, one record, one framework identity per record), and the rules that let an instance render on the last build its process can load instead
@@ -326,7 +332,8 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Platform-Shipped Witness](PlatformShippedWitness)
 - [The Plugin Build Contract](PluginBuildContract)
 - [Plugin Bundles in the Registry](PluginBundlesInTheRegistry)
-- [The Registry Listing Cache](RegistryListingCache) — GET /api/plugins re-read the whole repository per request and blew its 30 s budget ~60×/day; what is cached is the SOURCE snapshot, never the response, which is what keeps the fix from becoming a disclosure
+- [The Registry Listing Cache](RegistryListingCache) — GET /api/plugins re-read the whole repository per request and blew its 30 s budget ~60×/day; what is cached is the SOURCE snapshot, never the response, which is what keeps the fix from becoming a disclosure — and the read itself now transfers only the manifests it parses (47.8 MB / 13 s becomes 1.3 MB / 3.3 s) instead of the whole repository
+- [The Bundle Transfer Budget](BundleTransferBudget) — a module adopt's 120 s attempt used to cover the whole archive download, so the budget measured size ÷ throughput instead of whether the registry was answering; 18 adopts failed at exactly the outer 3-minute bound recording neither bytes nor elapsed time, which is why they could not be explained
 - [Plugin Publication Provenance](PluginPublicationProvenance) — the signed publication callback names the CONTENT commit that was built and the platform version read from the selected portal image, never the calling workflow's commit or event; core CD building Plugins used to announce a core sha as a Plugins commit
 - [Plugin Update on Green Build](PluginUpdateOnGreenBuild)
 

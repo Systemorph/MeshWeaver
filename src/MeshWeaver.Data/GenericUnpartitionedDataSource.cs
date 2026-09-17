@@ -104,6 +104,48 @@ public interface IDataSource : IDisposable
 
     internal Task Initialized { get; }
     internal void Initialize();
+
+    /// <summary>
+    /// The synchronization streams this data source ALREADY HOLDS — <b>presence, never creation</b>.
+    ///
+    /// <para>🚨 This exists because <see cref="GetStreamForPartition"/> CREATES on a miss, and the
+    /// one caller that must never create is the init-failure path (Systemorph/MeshWeaver#1122).
+    /// <c>DataContext</c> used to propagate a failed initialization with
+    /// <c>ds.GetStreamForPartition(null).OnError(failure)</c>, which is wrong twice:</para>
+    /// <list type="number">
+    ///   <item><b>It errored ONE stream of however many the source holds.</b> Every other stream —
+    ///     each partition stream of a partitioned source — was left un-errored, so its subscribers
+    ///     were never told the hub had failed and each waited out its own unrelated deadline
+    ///     instead. That is the four-log-site shape #1122 consolidated: #1313, #3517 and #2886 each
+    ///     reporting a different "cause" for one stall, none of them the stall.</item>
+    ///   <item><b>On a source with no null-partition stream it MINTED one.</b>
+    ///     <c>PartitionedHubDataSource.Initialize</c> opens only its declared
+    ///     <c>InitializingPartitions</c>, so the null key misses — and a
+    ///     <c>SynchronizationStream</c> constructor always calls
+    ///     <c>GetHostedHub(sync/{id}, HostedHubCreation.Always)</c>. The failure path therefore built
+    ///     a hub and a second Autofac container for a hub that had just been declared FAILED, and
+    ///     its null-partition <c>CreateStream</c> opens one REMOTE stream per declared partition,
+    ///     each starting its own 120 s initialization against the very dependency that had just
+    ///     failed to answer. A failure path that amplifies the failure, at the moment — a pod-wide
+    ///     stall — when it can least afford to.</item>
+    /// </list>
+    ///
+    /// <para>Empty by default so an out-of-tree implementer keeps compiling; every data source in
+    /// this repo derives from <c>DataSource&lt;,&gt;</c>, which answers from its own stream map.</para>
+    /// </summary>
+    internal IReadOnlyCollection<ISynchronizationStream<EntityStore>> OpenStreams => [];
+
+    /// <summary>
+    /// Diagnostic only: the type sources whose initial load has not settled yet, one entry per
+    /// <c>{streamId}/{collectionName}</c>. Read by <c>DataContext</c>'s init time-box so the
+    /// <see cref="TimeoutException"/> can NAME what did not finish instead of guessing at it.
+    ///
+    /// <para>A data source's initial store is built by fanning out over EVERY type source and
+    /// aggregating (<c>SelectMany</c> + <c>Aggregate</c>), and <c>Aggregate</c> emits only when the
+    /// whole fan-out completes — so ONE silent type source hangs the entire data source, and before
+    /// this nothing recorded which one.</para>
+    /// </summary>
+    internal IReadOnlyCollection<string> PendingTypeSources => [];
 }
 
 /// <summary>
@@ -306,6 +348,27 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
     /// unpartitioned stream).
     /// </summary>
     protected readonly Dictionary<object, ISynchronizationStream<EntityStore>> Streams = new();
+
+    /// <summary>
+    /// Presence-only view of <see cref="Streams"/> — see <see cref="IDataSource.OpenStreams"/> for
+    /// why the init-failure path must never reach <see cref="GetStreamForPartition"/>.
+    /// </summary>
+    IReadOnlyCollection<ISynchronizationStream<EntityStore>> IDataSource.OpenStreams
+    {
+        get
+        {
+            lock (Streams)
+                return Streams.Values.ToArray();
+        }
+    }
+
+    IReadOnlyCollection<string> IDataSource.PendingTypeSources => PendingTypeSourceKeys;
+
+    /// <summary>
+    /// Hook for <see cref="IDataSource.PendingTypeSources"/>. Empty here — only the type-source-based
+    /// data sources fan out over type sources, and they override this with what they recorded.
+    /// </summary>
+    protected virtual IReadOnlyCollection<string> PendingTypeSourceKeys => [];
 
     /// <summary>
     /// A task that completes once every created stream's hub has started.
@@ -581,6 +644,11 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
         GetStreamForPartition(null);
     }
 
+    private readonly TypeSourceInitializationLedger initializationLedger = new();
+
+    /// <inheritdoc />
+    protected override IReadOnlyCollection<string> PendingTypeSourceKeys => initializationLedger.Pending;
+
 
     /// <summary>
     /// Pushes a change item into every registered type source.
@@ -623,6 +691,12 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
             GetCollectionName = valueType => Workspace.DataContext.TypeRegistry.GetOrAddType(valueType, valueType.Name)
         };
 
+        // 🚨 Aggregate emits only when the WHOLE fan-out completes, so one type source that never
+        // emits hangs the entire data source — and therefore the sync/ sub-hub's BuildupAction and
+        // the owning DataContext's 120 s time-box with it (#1122). Claim a ledger entry per leg so
+        // the time-box can NAME the leg that never settled rather than guessing at a cause.
+        var pending = initializationLedger.Claim(stream, TypeSources.Values.Cast<ITypeSource>());
+
         return TypeSources.Values
             .ToObservable()
             .SelectMany(ts =>
@@ -636,6 +710,10 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
                         );
                 return ts.Initialize(reference, cancellationToken)
                     .Take(1)
+                    // Settled = emitted, completed empty, or faulted. NOT disposal: the time-box
+                    // expiring is exactly what disposes this chain, so releasing on dispose would
+                    // clear the ledger in the instant the diagnostic wants to read it.
+                    .Do(_ => pending.Settle(ts), _ => pending.Settle(ts), () => pending.Settle(ts))
                     .Select(instances => (Reference: reference, Instances: instances));
             })
             .Aggregate(emptyStore, (acc, item) => acc.Update(item.Reference, item.Instances))
@@ -782,6 +860,10 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
             GetCollectionName = valueType => Workspace.DataContext.TypeRegistry.GetOrAddType(valueType, valueType.Name)
         };
 
+        // Same ledger as the unpartitioned sibling, and for the same reason (#1122): Aggregate
+        // completes only when every leg does, so a silent type source hangs the whole data source.
+        var pending = initializationLedger.Claim(stream, TypeSources.Values.Cast<ITypeSource>());
+
         return TypeSources.Values
             .ToObservable()
             .SelectMany(ts =>
@@ -795,6 +877,7 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
                         );
                 return ts.Initialize(reference, cancellationToken)
                     .Take(1)
+                    .Do(_ => pending.Settle(ts), _ => pending.Settle(ts), () => pending.Settle(ts))
                     .Select(instances => (Reference: reference, Instances: instances));
             })
             .Aggregate(emptyStore, (acc, item) => acc.Update(item.Reference, item.Instances))
@@ -807,6 +890,11 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
             // ReportLateInitFault would have caught can no longer arise from work that has stopped.
             .ObserveCompletion(ReportLateInitFault, cancelSource: true, cancellationToken)!;
     }
+
+    private readonly TypeSourceInitializationLedger initializationLedger = new();
+
+    /// <inheritdoc />
+    protected override IReadOnlyCollection<string> PendingTypeSourceKeys => initializationLedger.Pending;
 
     /// <summary>
     /// Creates the partitioned data-source stream with the supplied configuration.
