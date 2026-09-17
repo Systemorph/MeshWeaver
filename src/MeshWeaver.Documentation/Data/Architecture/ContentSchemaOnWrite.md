@@ -70,12 +70,44 @@ were never the problem:
 - **A bind failure is refused only when `JsonException.Path` names a MEMBER** (`$.country`), never
   when it blames the document as a whole (`$`). A missing `required` member is the ordinary
   partial-content shape a legitimate writer produces; refusing it is a different decision, and not
-  this one.
+  this one. 🚨 "Not refused" is not the same as "not caught" — see below.
 - **Unmapped members are refused only in the TOTAL case** — at least one member present and not one
   of them declared. Content carrying an extra member *alongside* real ones is what an older or newer
   writer of the same record produces all the time, and the read path's `WarnIfLossy` already reports
   what it drops. Measured over this repository's 544 seeded node-content objects: exactly one shape
   carries no `$type` at all (`Systemorph/Marketing/Post`), and every one of its members is declared.
+
+## 🚨 A `when` filter on a catch does not mean "say nothing" — it means "escape"
+
+**A guard that declines to judge a case must still CATCH it.**
+[#4648](https://github.com/Systemorph/MeshWeaver/issues/4648): the whole-document exemption above was
+written as an exception filter —
+
+```csharp
+catch (JsonException ex) when (MemberOf(ex.Path) is { } member)   // ❌
+```
+
+— so a `$`-path `JsonException`, which is exactly what a missing `required` member raises, matched no
+`catch` in the method and left the validator. The write it documents as *not judged* failed with the
+serializer's own English text (`JSON deserialization for type 'MeshWeaver.Markdown.MarkdownContent'
+was missing required properties including: 'content'`) reported as the reason. That is strictly worse
+than refusing it: no localized message, no named member, no log line from this guard, and the reader
+of the error has no way to tell which component decided anything. It red core's Continuous Delivery
+inside three hours of the guard being registered — `MeshPluginTest.FullCrudWorkflow_CreateGetUpdateDelete`
+and `Update_ExistingNode_UpdatesSuccessfully`, both on a `Markdown` node.
+
+The catch is now unconditional and the judgement happens inside it. A member-path failure is refused;
+a whole-document failure **falls through to the declared-member rule** rather than returning Valid.
+That last part matters: a content type with a `required` member throws before
+`UnmappedMemberHandling.Skip` can apply, so returning Valid on `$` would exempt every such type from
+the rule that catches the `{"markdown": "…"}` shape — including `MarkdownContent`, the type the
+original defect was measured on.
+
+The general form, and the reason it is worth a section: **a validator's "I have no opinion" and a
+validator's "this write is bad" are two different answers, and an escaping exception is neither.**
+Whenever a guard has a documented case it declines to judge, the test for that case asserts the write
+LANDS — an assertion that the caller sees no error is the only one that can tell "said nothing" from
+"threw".
 
 ## Where it deliberately says nothing
 
