@@ -642,9 +642,11 @@ The table above says a torn pointer read with the **flat copy gone** finds a dir
 |---|---|
 | the generation is sealed | unchanged: the #3496 postcondition runs there and refuses, exactly as at phase 4 |
 | `_current` is moved | unchanged |
-| `_current` is **READ BACK** (`pointer_is_live`) and must resolve to a SEALED generation | 🚨 never the upload's exit code. This share has reported SUCCESS for files it did not store (39 of 45, 2026-09-08), and on a prefix being migrated the flat copy is the ONLY sealed publication a reader has — so a pointer that did not land disposes of NOTHING, is not counted as published, and fails the target |
+| `_current` is **READ BACK** (`pointer_is_live`) and must resolve to **THIS RUN'S** sealed generation | 🚨 never the upload's exit code. This share has reported SUCCESS for files it did not store (39 of 45, 2026-09-08) — and in exactly that case the PREVIOUS pointer survives, so a read-back that asked only "is SOME generation live" passes, counts the run as published, and disposes of the flat copy for a publication nobody points at (raised by the review of the phase-5 PR; reproduced as a negative control). The comparison is against `$dest/$PUBLICATION` |
+| anything else live ⇒ **which** is established, never guessed | If `_current` now names a publication whose content is NEWER (`pointer_moved_past_us`, the same compare API the pre-pointer check uses), a sibling won the pointer in that gap: nothing is wrong, that run owns the prefix and its own disposal, and this one is `superseded` — green, and it disposes of nothing. Anything else is our own write not landing: RED, and nothing is deleted |
 | the flat `_complete` is deleted, **alone** | the one write that turns a complete older publication into "being republished". If it fails, nothing else is touched and the target fails: a sealed flat copy that is no longer refreshed IS the frozen serve this phase removes |
 | the flat files are deleted (`publish-bake-files.py dispose`) | only files POSITIVELY identified as the flat publication — `*.zip`, `modules/*.module.nupkg`, `modules/_index`, the markers — matched per directory so a pattern can never reach into a generation. An unrecognised file is LEFT and named; the worst case of a narrow pattern is bytes that stay. A failure here is a `::warning::`, not fatal: the prefix is already unsealed, so a left-over is storage, not a publication, and the next publication retries it |
+| the flat `_complete` is read **again**, and removed again if it is back | 🚨 THE ONE INTERLEAVING THE ORDER CANNOT PREVENT, and the review of the phase-5 PR found it: a producer still running a pre-phase-5 publisher refreshes the flat copy — unseal, upload, VERIFY, seal LAST — so its seal can land *after* this sweep's deletes and leave the prefix SEALED over an emptied set, which a torn pointer read would be served. There is no lease on this store (no `lease` command under either `az storage` group), so this is a POSTCONDITION, not mutual exclusion: re-reading the sentinel and removing it turns that state into "being republished", which every reader already backs off from. A failure to remove it is the one state phase 5 must not leave behind — fatal, and named |
 
 🚨 **A SUPERSEDED run disposes of nothing.** `pointer_moved_past_us` returns before the pointer moves, so such a run never reaches the disposal — and it must not: the newer run it lost to owns that prefix, and may be a producer still refreshing the flat copy (a reconcile at an older `platform-ref`) whose seal this run would otherwise tear out from under it.
 
@@ -674,6 +676,15 @@ fixed with this phase:
   (`ModuleDiscoveryService.FirstImport`, `InstanceAutoRegistrationService`'s boot default install)
   read the index with `ReadFor`, which discards the outcome, so they would have provisioned a Space
   from the branch TIP; both now ask `RefusedFirstImportForUnreadableIndex` first.
+  🚨 **And the same false-for-errors class runs through every read in that file**, which the review
+  of the phase-5 PR named and which is fixed with it: `Directory.Exists` answers false for an
+  absent identity AND for one this process may not enumerate, so the walk is now attempted and its
+  own exception decides (`DirectoryNotFoundException` + nothing at the path ⇒ the clean empty
+  reading; an entry that IS there, an ACL, an unmounted share ⇒ `Unreadable`). The seal is read
+  through `ShippedPrebuiltBundles.ReadSealLines`, where the OPEN classifies absence and every other
+  I/O failure surfaces. And `ReadMarker` no longer swallows a failed read into the same `null` an
+  absent marker gets — null attribution is precisely what the gate answers with `Go`, so an ACL on
+  `repository.txt` could have opened the gate a torn publication is there to hold.
 - **`PublishedBundleCatalogue.EverSealedBundles`** — the release gate's *denominator* — read the
   declaration of whatever the fall-back landed on, so a faulted pointer silently dropped that
   source's packages out of the floor. A smaller floor is the one direction that EXEMPTS a package
@@ -685,7 +696,15 @@ fixed with this phase:
 - **`check-release-availability.sh`** classified it as ABSENT — `no sealed publication under …`, the
   one message that means *an upstream has not published*, and the wording that held
   MeshWeaver.Reinsurance 23 times in 24 hours (#3583). It is now CANNOT-DETERMINE, naming the
-  pointer, with the re-run that actually helps.
+  pointer, with the re-run that actually helps. 🚨 **And the fault itself has two buckets**, which
+  the review of the phase-5 PR asked for and which this file's own "TWO BUCKETS, NEVER ONE" rule
+  already required: a probe that ERRORED on `_current` (the existence query answered neither true
+  nor false, or the download of a pointer that exists failed) means the gate could not ask which
+  publication is live, so a sealed flat copy behind it is **not evidence** — it may be one a
+  generation publisher is about to dispose of, or one a disposal already emptied. That is
+  CANNOT-DETERMINE whatever the sentinel says. A pointer that WAS read and is merely unusable
+  (blank, refused, dangling) keeps the reader contract's fall-back, so a sealed flat copy behind it
+  still answers `sealed` exactly as it did before phase 4.
 
 #### The residues, named
 
@@ -843,9 +862,9 @@ was ever visible instead of silently shipping a mixed set.
 
 ## Verification
 
-- `.github/scripts/test-publish-bake-overlap.py` — **136 assertions, 136 passed / 0 failed**
-  (measured 2026-09-17 on phase 5; it was 105 before it, 98 at the phase-4 default move, 90 at
-  #4249), executing the REAL publish
+- `.github/scripts/test-publish-bake-overlap.py` — **145 assertions, 145 passed / 0 failed**
+  (measured 2026-09-17 on phase 5, 136 before its review round; it was 105 before the phase, 98 at
+  the phase-4 default move, 90 at #4249), executing the REAL publish
   script against a stub share (the stub `az` for the per-target decisions, a fake share backend for
   the bulk helper's uploads and read-back) and reading every verdict off the BYTES. The writer half is covered by
   seven generation cases: one publisher writes and seals under its own token and the pointer names it;
@@ -880,16 +899,25 @@ was ever visible instead of silently shipping a mixed set.
   `_complete` upload printed "sealed:" while a failed pointer move printed "this publication is now
   the live one". The disposal's own evidence is the fake backend's delete log, which records what
   `_current` names and whether each copy is sealed BEFORE every delete.
+  *(phase 5's review round)* **three more, one mutation each**: the read-back weakened to "any sealed
+  generation" — **4 fail**, and the flat copy is deleted for a publication nobody points at, which is
+  the finding itself reproduced; the post-disposal re-read of the seal removed — **3 fail**, the
+  prefix ending sealed over an emptied set; and, in
+  `test-release-availability-refusals.py`, the read-ERROR bucket removed — case 3c's **4**
+  assertions fail while its control (case 3d, the same sealed sentinel with the pointer probe
+  ANSWERING) passes, so the split cannot be mistaken for "the gate now refuses everything".
 - `.github/scripts/test-publication-pointer-readers.py` — **26 cases over three readers** (was 18):
   the phase-5 prefix — a pointer, its generation, and NO flat copy — for `compose-sealed-modules.sh`,
   the gate's `seed` and `check-release-availability.sh`; a dangling and a blank pointer over that
   prefix, which the availability gate must call CANNOT-DETERMINE rather than an absent upstream; and
   the control that a prefix with no pointer and nothing sealed is still reported ABSENT. Against
   `origin/main`'s availability gate **2 of the 26 fail**, both of them those two.
-- `AnUnreadableSealIndexHoldsTest` (7, was 4), `PrebuiltBundleRetentionTest` (53, was 51) and
+- `AnUnreadableSealIndexHoldsTest` (10, was 4), `PrebuiltBundleRetentionTest` (53, was 51) and
   `ReleaseGateDenominatorTest` (9, was 7) carry phase 5's reader half, each new case with its
   control on the same fixture and each watched failing with its own fix reverted (1 of 7, 1 of 53,
-  1 of 9).
+  1 of 9). The three cases the review round added make an unreadable read UNFAKEABLE rather than
+  privileged: the marker and the seal are made **DIRECTORIES**, which no `chmod` and no root can
+  turn into a successful read, so the fixture holds wherever CI runs it.
 - `bake-scope.sh --self-test` — four pointer-resolution assertions, and the positive one is
   discriminating by construction: the flat copy and the generation record *different* baselines (a
   diverged commit versus an ancestor), so the verdict itself says which was read. A resolver that

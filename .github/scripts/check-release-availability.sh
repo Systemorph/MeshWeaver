@@ -118,25 +118,38 @@ RESOLVED_DIR=""
 # published" — for a publication that is sealed, live and pointed at, read during the one small
 # write that replaces the pointer. So a faulted fall-back that finds nothing sealed is a
 # CANNOT-DETERMINE, never an ABSENT.
+#
+# 🚨 AND THE FAULT ITSELF HAS TWO BUCKETS, for the same reason everything else in this file does
+# (Copilot's review of the phase-5 PR). `RESOLVE_ERROR` is the PROBE failing — the existence query
+# answered neither true nor false, or the download of a pointer that EXISTS failed: this gate cannot
+# ask its question at all, and a sealed flat copy behind it proves nothing, because which publication
+# is live is precisely what could not be read. That is CANNOT-DETERMINE whatever the sentinel says.
+# `RESOLVE_STALE` is a pointer that WAS read and is unusable — blank, not a single name, or naming a
+# generation that is not on the share: the reading succeeded, the fall-back to the prefix is the
+# reader contract, and a sealed flat copy behind it is this gate's answer exactly as before phase 4.
 RESOLVE_FAULT=""
+RESOLVE_ERROR=""
 resolve_publication_dir() { # <account> <share> <source-dir>
   _rp_account="$1"; _rp_share="$2"; _rp_source="$3"
   RESOLVED_DIR="$_rp_source"
   RESOLVE_FAULT=""
+  RESOLVE_ERROR=""
   _rp_exists=$(az storage file exists --account-name "$_rp_account" --share-name "$_rp_share" \
     --path "$_rp_source/$POINTER" --auth-mode login --backup-intent --query exists -o tsv \
     --only-show-errors 2>/dev/null || echo "unknown")
   case "$_rp_exists" in
     true) ;;
     false) return 0 ;;
-    *) RESOLVE_FAULT="whether $_rp_source/$POINTER exists could not be read (exists=$_rp_exists)"; return 0 ;;
+    *) RESOLVE_ERROR="whether $_rp_source/$POINTER exists could not be read (exists=$_rp_exists)"
+       RESOLVE_FAULT="$RESOLVE_ERROR"; return 0 ;;
   esac
   _rp_local="$(mktemp)"
   if ! az storage file download --account-name "$_rp_account" --share-name "$_rp_share" \
       --path "$_rp_source/$POINTER" --dest "$_rp_local" \
       --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
     rm -f "$_rp_local"
-    RESOLVE_FAULT="$_rp_source/$POINTER exists but could not be read (a pointer being replaced reads this way)"
+    RESOLVE_ERROR="$_rp_source/$POINTER exists but could not be READ (a pointer being replaced reads this way, and so does an expired credential)"
+    RESOLVE_FAULT="$RESOLVE_ERROR"
     return 0
   fi
   _rp_named=$(sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' "$_rp_local" | grep -m1 '[^[:space:]]' || true)
@@ -252,6 +265,14 @@ for source in "${SOURCES[@]}"; do
   # behaviour, so the resolution can only ever ADD an answer it used to get wrong.
   resolve_publication_dir "$ACCOUNT" "$SHARE" "$ROOT/$IDENTITY/$source"
   publication="$RESOLVED_DIR"
+  # 🚨 A PROBE that ERRORED on the POINTER invalidates the sentinel answer before it is asked,
+  # whichever way it would have gone: this gate asks about the publication that is LIVE, and which
+  # one that is could not be read. A sealed flat copy behind such a read is not evidence — it may be
+  # a copy a generation publisher is about to dispose of, or one a phase-5 disposal already emptied.
+  if [ -n "$RESOLVE_ERROR" ]; then
+    UNDETERMINED+=("$source — $RESOLVE_ERROR, so WHICH publication is live at $ROOT/$IDENTITY/$source could not be established; the directory this gate fell back to says nothing about it (MeshWeaver#3461 phase 5). Fix the access to the artifact store, or re-run: a pointer being replaced is one small write")
+    continue
+  fi
   exists=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
     --path "$publication/$SENTINEL" --auth-mode login --backup-intent \
     --query exists -o tsv --only-show-errors 2>/dev/null || echo "unknown")

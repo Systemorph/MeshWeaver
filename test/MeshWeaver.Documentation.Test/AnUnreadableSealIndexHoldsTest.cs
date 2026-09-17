@@ -189,6 +189,87 @@ public class AnUnreadableSealIndexHoldsTest
     }
 
     /// <summary>
+    /// 🚨 A MARKER THAT COULD NOT BE READ is not an absent one, and null attribution is what the
+    /// gate answers with <c>Go</c> (Copilot's review of the phase-5 PR). The fixture makes
+    /// <c>repository.txt</c> a DIRECTORY, which is a read failure no test privilege can turn into a
+    /// success — <c>chmod 000</c> would not hold as root, which CI may well be.
+    /// </summary>
+    [Fact]
+    public void AMarkerThatCannotBeRead_IsUNREADABLE_NotAnUnattributableSource()
+    {
+        using var root = new TempRoot();
+        var source = Path.Combine(root.Path, Identity, "plugins");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "Store.zip"), "bytes");
+        File.WriteAllText(
+            Path.Combine(source, ShippedPrebuiltBundles.CompletionSentinelFileName), "Store.zip\n");
+        File.WriteAllText(
+            Path.Combine(source, SealedPublicationIndex.SourceCommitMarkerFileName),
+            "e2ef5679aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+        Directory.CreateDirectory(Path.Combine(source, SealedPublicationIndex.RepositoryMarkerFileName));
+
+        var (sources, outcome) = SealedPublicationIndex.ReadingFor(root.Path, Identity);
+
+        sources.Should().HaveCount(1);
+        sources[0].Repository.Should().BeNull("it could not be read — which is the point");
+        sources[0].Refusal.Should().Contain("marker could not be read");
+        outcome.Should().Be(SealedReadOutcome.Unreadable,
+            "an unattributable source is what the gate answers with Go, so 'I could not read the "
+            + "marker' must not arrive as 'this source belongs to nobody'");
+        SealedSyncGate.RefusedForUnreadableIndex(outcome, Identity)!.Proceed.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The same class one file over: a SEAL that is present and unreadable used to read as "no
+    /// completion sentinel" — an unsealed source, which holds only when something can attribute it.
+    /// </summary>
+    [Fact]
+    public void ASealThatCannotBeRead_IsUNREADABLE_NotAnUnsealedSource()
+    {
+        using var root = new TempRoot();
+        var source = Path.Combine(root.Path, Identity, "plugins");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(
+            Path.Combine(source, ShippedPrebuiltBundles.CompletionSentinelFileName));
+
+        var (sources, outcome) = SealedPublicationIndex.ReadingFor(root.Path, Identity);
+
+        sources.Should().HaveCount(1);
+        sources[0].IsSealed.Should().BeFalse();
+        sources[0].Refusal.Should().Contain("could not be read");
+        outcome.Should().Be(SealedReadOutcome.Unreadable);
+    }
+
+    /// <summary>
+    /// The control for both: a sealed, attributable source reads cleanly. Without it the two cases
+    /// above could pass because every reading had become UNREADABLE.
+    /// </summary>
+    [Fact]
+    public void AReadableSealedSource_StillReadsCleanly()
+    {
+        using var root = new TempRoot();
+        var source = Path.Combine(root.Path, Identity, "plugins");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "Store.zip"), "bytes");
+        File.WriteAllText(
+            Path.Combine(source, ShippedPrebuiltBundles.CompletionSentinelFileName), "Store.zip\n");
+        File.WriteAllText(
+            Path.Combine(source, SealedPublicationIndex.RepositoryMarkerFileName),
+            "Systemorph/MeshWeaver.Plugins\n");
+        File.WriteAllText(
+            Path.Combine(source, SealedPublicationIndex.SourceCommitMarkerFileName),
+            "e2ef5679aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+
+        var (sources, outcome) = SealedPublicationIndex.ReadingFor(root.Path, Identity);
+
+        sources.Should().HaveCount(1);
+        sources[0].IsSealed.Should().BeTrue();
+        sources[0].Repository.Should().Be("Systemorph/MeshWeaver.Plugins");
+        outcome.Should().Be(SealedReadOutcome.Read);
+        SealedSyncGate.RefusedForUnreadableIndex(outcome, Identity).Should().BeNull();
+    }
+
+    /// <summary>
     /// The negative control for the whole change: with the SAME empty list, the per-repository
     /// verdict still says Go. That is what makes the precondition necessary — the gate alone
     /// cannot tell these apart, and never could.

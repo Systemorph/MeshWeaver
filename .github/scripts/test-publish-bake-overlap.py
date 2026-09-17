@@ -208,6 +208,15 @@ if action == "upload":
     if os.environ.get("MOCK_AZ_DROP_UPLOAD_OF") == target.name:
         sys.exit(0)
     target.write_bytes(src.read_bytes())
+    # A hook AFTER a CLI upload landed — the pointer is the only file that still goes this way, so
+    # this is how a sibling publication is made to move `_current` in the gap between this run's
+    # pointer write and its read-back of it.
+    if os.environ.get("MOCK_AZ_AFTER_UPLOAD_OF") == target.name:
+        cmd = os.environ["MOCK_AZ_AFTER_UPLOAD_CMD"]
+        env = dict(os.environ)
+        for k in ("MOCK_AZ_AFTER_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_CMD"):
+            env.pop(k, None)
+        subprocess.run(["bash", "-c", cmd], env=env, check=False)
     mp = meta_path(rel)
     if mp.exists():
         mp.unlink()
@@ -388,6 +397,9 @@ class FakeShare:
         mp = self._meta(path)
         if mp.exists():
             mp.unlink()
+        # A hook AFTER a delete landed: this is how a LEGACY writer is made to seal the flat copy
+        # inside the disposal, which is the one interleaving the deletion order cannot prevent.
+        _run_hook("after", path)
         return True
 
     def delete_directory(self, path):
@@ -575,7 +587,7 @@ class Harness:
                   "MOCK_AZ_FAIL_UPLOADS_AFTER", "MOCK_AZ_UPLOAD_COUNTER", "MOCK_AZ_SHOW_FAILS",
                   "MOCK_AZ_EAT_STDIN", "MOCK_AZ_DELETE_LOG", "MOCK_AZ_DISPOSAL_PREFIX",
                   "MOCK_AZ_DELETE_FAILS", "MOCK_AZ_FAIL_UPLOAD_PATH", "MOCK_AZ_FAIL_UPLOAD_OF",
-                  "MOCK_AZ_DROP_UPLOAD_OF"):
+                  "MOCK_AZ_DROP_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_CMD"):
             env.pop(k, None)
         for k, v in (env_extra or {}).items():
             if v is None:
@@ -1250,8 +1262,9 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
               (s.dest / POINTER).is_file() and not any(row[0].endswith("/" + POINTER) for row in rows),
               f"deleted: {[row[0] for row in rows]}")
         check("the fixture really did record every delete (not vacuous)",
-              len(rows) == EXPECTED_FILES + 1,
-              f"{len(rows)} delete(s) logged, wanted the seal + {EXPECTED_FILES} file(s)")
+              len(rows) == EXPECTED_FILES + 2,
+              f"{len(rows)} delete(s) logged, wanted the seal + {EXPECTED_FILES} file(s) + the "
+              f"post-disposal re-read of the seal (the legacy-writer postcondition)")
         check("_complete is the FIRST thing deleted, and ALONE — no other file goes while the flat copy is sealed",
               bool(rows) and rows[0][0] == f"{DEST}/{SENTINEL}"
               and all(row[3] == "0" for row in rows[1:]),
@@ -1344,6 +1357,100 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
               s.sealed() and len(s.files()) == EXPECTED_FILES
               and set(s.bakes_present()) - {"<marker>"} == {"core-cd"},
               f"flat: {denominator(s)}")
+
+    # ── 🚨 …AND THE POINTER UPLOAD CAN LEAVE THE PREVIOUS POINTER IN PLACE, which is the shape that
+    # ── makes "does `_current` name a sealed generation" too weak a read-back (Copilot's review of
+    # ── this PR). The share reports SUCCESS for a file it did not store, so the PREVIOUS pointer
+    # ── survives — it resolves to the previous generation, sealed and whole. A check that asked only
+    # ── "is a generation live" therefore passed, counted this run as published, and deleted the flat
+    # ── copy for a publication nobody points at. The read-back compares against THIS run's token.
+    print("\nphase 5 — the pointer upload stores nothing and the PREVIOUS pointer survives:")
+    h.reset()
+    h.publish(core, "Systemorph/MeshWeaver", "3580", gen)        # generation A, pointed at
+    tok_a5 = "Systemorph-MeshWeaver-3580-1"
+    prefix_dir = h.shelf_root / ACCOUNT / SHARE / DEST
+    # A flat copy at the prefix, as a producer still running a pre-phase-5 publisher leaves one.
+    for p in sorted((prefix_dir / tok_a5).iterdir()):
+        if p.is_file():
+            shutil.copy2(p, prefix_dir / p.name)
+    (prefix_dir / "modules").mkdir(exist_ok=True)
+    for p in sorted((prefix_dir / tok_a5 / "modules").iterdir()):
+        shutil.copy2(p, prefix_dir / "modules" / p.name)
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3581", {
+        "MOCK_AZ_DROP_UPLOAD_OF": POINTER, **gen})
+    s = h.shelf()
+    check("the fixture really did leave the PREVIOUS pointer live (not vacuous)",
+          s.pointer() == tok_a5 and s.under(tok_a5).sealed()
+          and "Systemorph-MeshWeaver.Plugins-3581-1" in s.generations(),
+          f"_current={s.pointer()!r}, generations={s.generations()}")
+    if not expect_defect:
+        check("the read-back compares against THIS run's generation, so the target FAILS",
+              r.returncode != 0 and "The pointer did not land" in r.stdout
+              and "Systemorph-MeshWeaver.Plugins-3581-1" in r.stdout,
+              f"rc={r.returncode} — a previous generation being live is not this publication being live")
+        check("…and the flat copy is untouched: nothing was disposed of for a publication nobody points at",
+              s.sealed() and len(s.files()) == EXPECTED_FILES,
+              f"flat: {denominator(s)}")
+
+    # ── 🚨 THE ONE INTERLEAVING THE ORDER CANNOT PREVENT: a producer still running a pre-phase-5
+    # ── publisher refreshes the flat copy — unseal, upload, verify, seal LAST — and its seal lands
+    # ── AFTER this disposal's deletes. The prefix would then be SEALED over a set this sweep has
+    # ── emptied: a complete-looking flat publication with files missing, which a torn pointer read
+    # ── would be served. There is no lease on this store, so the answer is a POSTCONDITION: read the
+    # ── sentinel again after the deletes and remove it, turning that into "being republished".
+    print("\nphase 5 — a legacy writer SEALS the flat copy inside the disposal:")
+    h.reset()
+    h.publish(core, "Systemorph/MeshWeaver", "3590")             # a flat copy to dispose of
+    reseal = (f'printf "Chess.zip\\n" > "{h.shelf_root}/{ACCOUNT}/{SHARE}/{DEST}/{SENTINEL}"')
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3591", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/architecture.txt",
+        "MOCK_AZ_HOOK_WHEN": "after",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-reseal",
+        "MOCK_AZ_HOOK_CMD": reseal,
+        **gen})
+    s = h.shelf()
+    check("the fixture really did re-seal the flat copy mid-disposal (not vacuous)",
+          (work / "fired-reseal").is_file(), "the hook fired on the last flat file's delete")
+    if not expect_defect:
+        check("the re-appeared seal is removed again, so no reader can be served an incomplete set",
+              r.returncode == 0 and not s.sealed(),
+              f"rc={r.returncode}, flat sealed={s.sealed()} — 'being republished' is the state readers handle")
+        check("…and it says so, naming the writer that is still refreshing the copy",
+              "was written again WHILE this disposal ran" in r.stderr,
+              "a postcondition that fires silently is indistinguishable from one that never fires")
+
+    # ── …and the SIBLING case, which must NOT be red: a newer publication takes the pointer in the
+    # ── gap between this run's pointer write and its read-back. Nothing is wrong — that run owns the
+    # ── prefix and its own disposal — so this one is `superseded`, exactly as the pre-pointer check
+    # ── reports it, and it disposes of nothing.
+    print("\nphase 5 — a NEWER publication takes the pointer between the write and the read-back:")
+    h.reset()
+    older5 = Bake(work, "older-5", "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5")
+    newer5 = Bake(work, "newer-5", "f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6")
+    # 🚨 A flat copy of THIRD-PARTY content: publishing `older5` here would make the run under test
+    # skip as already-published, and the case would pass having exercised nothing.
+    h.publish(core, "Systemorph/MeshWeaver", "3595")             # a flat copy at the prefix
+    inner = h.publish_command(newer5, "Systemorph/MeshWeaver", "3597", {
+        **gen, "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+        "GH_TOKEN": "stub", "MOCK_GH_AHEAD": newer5.source_sha})
+    r = h.publish(older5, "Systemorph/MeshWeaver", "3596", {
+        "MOCK_AZ_AFTER_UPLOAD_OF": POINTER,
+        "MOCK_AZ_AFTER_UPLOAD_CMD": inner,
+        "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+        "GH_TOKEN": "stub", "MOCK_GH_AHEAD": newer5.source_sha,
+        **gen})
+    s = h.shelf()
+    check("the fixture really did hand the pointer to the newer publication (not vacuous)",
+          s.pointer() == "Systemorph-MeshWeaver-3597-1" and inner_run_succeeded(work, "3597"),
+          f"_current={s.pointer()!r}, inner receipt: {inner_receipt(work, '3597')!r}")
+    if not expect_defect:
+        check("the run SUCCEEDS as superseded — a sibling winning the pointer is not this run failing",
+              r.returncode == 0 and "A newer publication took the pointer" in r.stdout
+              and "targets-superseded=1" in r.stdout,
+              f"rc={r.returncode}")
+        check("…and it disposes of nothing: the prefix belongs to the run that owns the pointer",
+              "disposing of the flat compatibility copy beside it" not in r.stdout,
+              "the loser of a pointer race must not delete bytes the winner is responsible for")
 
     # ── 🚨 A FAILED pointer upload must stop the target where it fails. Until this change the
     # ── per-target subshell ran as an `if` CONDITION, where bash suspends `set -e` for the whole body:

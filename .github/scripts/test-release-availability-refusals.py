@@ -78,6 +78,16 @@ case "$args" in
         if [ "${AZ_MARKER_FAIL:-0}" = "1" ]; then printf 'false\n'; exit 0; fi
         printf 'true\n'; exit 0 ;;
     esac
+    # 🚨 The PUBLICATION POINTER is asked about separately from the sentinel (MeshWeaver#3461 phase
+    # 5): a probe that ERRORS on `_current` means the gate cannot tell WHICH publication is live, and
+    # a sealed flat copy behind it proves nothing — so the two must be drivable independently.
+    case "$path" in
+      */_current)
+        if [ "${AZ_POINTER_EXISTS_FAIL:-0}" = "1" ]; then
+          echo "ERROR: Please run 'az login' to setup account." >&2; exit 3
+        fi
+        printf '%s\n' "${AZ_POINTER_EXISTS:-false}"; exit 0 ;;
+    esac
     src=$(printf '%s' "$path" | awk -F/ '{print $(NF-1)}')
     if [ -n "${AZ_EXISTS_MAP:-}" ]; then
       for pair in $(printf '%s' "$AZ_EXISTS_MAP" | tr ';' ' '); do
@@ -271,6 +281,28 @@ def main() -> int:
     expect_only("case 3b", out, DETERMINE, [RESOLVE, ABSENT])
     check("case 3b", "floor, not the number" in out,
           "says the absent count is a floor while probes are erroring")
+
+    # 🚨 The probe that errors on the POINTER, with the flat sentinel answering TRUE behind it
+    # (MeshWeaver#3461 phase 5, Copilot's review). Reading that as "sealed" would pass the gate
+    # without having established which publication is live — and since phase 5 the directory it fell
+    # back to may be one a generation publisher is about to dispose of, or has already emptied. The
+    # sentinel is not evidence when the pointer could not be read: this is CANNOT DETERMINE.
+    print("case 3c — the POINTER probe errors while the flat sentinel says true: CANNOT DETERMINE")
+    rc, out = run(["--identity", "sabc", "plugins"], AZ_POINTER_EXISTS_FAIL=1, AZ_EXISTS="true")
+    check("case 3c", rc == 1, f"refuses (got {rc})")
+    expect_only("case 3c", out, DETERMINE, [ABSENT, RESOLVE])
+    check("case 3c", "sealed: plugins" not in out,
+          "never reports the source sealed off a sentinel it could not attribute to a publication")
+    check("case 3c", "3461" in out, "names the phase whose disposal makes the fall-back empty")
+
+    # …and its control, which is what keeps the split from swallowing the ordinary reading: the SAME
+    # sealed sentinel with the pointer probe ANSWERING (absent) is the flat layout, and it passes.
+    print("case 3d — CONTROL: no pointer, flat sentinel true, still a clean PASS")
+    rc, out = run(["--identity", "sabc", "plugins"], AZ_POINTER_EXISTS="false", AZ_EXISTS="true")
+    check("case 3d", rc == 0, f"exits 0 (got {rc})")
+    check("case 3d", "sealed: plugins" in out, "the flat layout is read exactly as before")
+    for headline in (RESOLVE, DETERMINE, ABSENT):
+        check("case 3d", headline not in out, f"prints no {headline!r}")
 
     print("case 4 — CONTROL: everything sealed must PASS")
     rc, out = run(["--identity", "sabc", "crm", "plugins"], AZ_EXISTS="true")

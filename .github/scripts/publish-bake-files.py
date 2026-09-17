@@ -65,6 +65,10 @@ THE PHASES
                 A failure here is reported as `::warning::` and is NOT fatal: once step 1 has run
                 the prefix holds no publication, so a left-over file is storage, re-attempted by the
                 prefix's next publication — never a reader-visible state.
+             3. the seal AGAIN, because a producer still running a pre-phase-5 publisher can seal
+                the flat copy INSIDE this disposal (its verify before the deletes, its `_complete`
+                after them) and leave a complete-looking publication with files missing. Removing it
+                again turns that into "being republished"; a failure to remove it is fatal.
 
            An already-absent file is the postcondition, not an error: two publications of one
            prefix may dispose of it concurrently. A directory the patterns name (`modules/`) is
@@ -480,7 +484,34 @@ def cmd_dispose(args: argparse.Namespace) -> int:
                 failed.append(rel)
                 log(f"::warning::could not delete {where}/{rel}: {type(exc).__name__}: {exc}")
 
-    # 3. A pattern directory the flat copy created (`modules/`), once nothing is left in it.
+    # 3. 🚨 THE SEAL AGAIN, because a LEGACY WRITER CAN SEAL INSIDE THIS DISPOSAL (Copilot's review
+    # of the phase-5 PR, and it is real). A producer still running a pre-phase-5 publisher refreshes
+    # the flat copy: it unseals, uploads, verifies, and writes `_complete` LAST. If its verify ran
+    # before this sweep's deletes and its seal lands after them, the prefix ends SEALED over a set
+    # this sweep has emptied — a complete-looking flat publication with files missing, which is the
+    # one outcome ordering alone cannot prevent. There is no lease on this store (measured: no
+    # `lease` command under either `az storage` group), so this is a POSTCONDITION, not mutual
+    # exclusion — the same shape, and the same honesty, as the publisher's own byte-level check.
+    #
+    # Re-reading the sentinel and removing it again converts that outcome into "being republished",
+    # which every reader already backs off from; a failure to remove it is the one state this phase
+    # must never leave behind, so it is fatal and named. (The legacy run's own postcondition sees
+    # its files gone and refuses, so its job goes red too — which is correct: it published nothing.)
+    try:
+        if backend.delete_file(seal):
+            log(f"::warning::{where}/{SENTINEL} was written again WHILE this disposal ran — a "
+                f"publisher that still refreshes the flat copy sealed it over files this sweep had "
+                f"already removed. Removed it again: the prefix reads as 'being republished', which "
+                f"every reader backs off from, rather than as a complete publication with files "
+                f"missing (MeshWeaver#3461 phase 5).")
+    except Exception as exc:  # noqa: BLE001 — fatal: this is the one state phase 5 must not leave
+        log(f"::error::{where}/{SENTINEL} reappeared while this disposal ran and could not be "
+            f"removed ({type(exc).__name__}: {exc}) — the prefix is SEALED over a publication whose "
+            f"files this sweep deleted, and a reader that falls back to it would be served an "
+            f"incomplete set. Remove it by hand.")
+        return 1
+
+    # 4. A pattern directory the flat copy created (`modules/`), once nothing is left in it.
     for d in sorted((d for d in directories if d), key=lambda d: -d.count("/")):
         if d in unlisted:
             continue

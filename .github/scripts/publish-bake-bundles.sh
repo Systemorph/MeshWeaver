@@ -1200,10 +1200,18 @@ move_pointer() { # <account> <share> <dest>
 # it never reaches here — and it must not: the newer run it lost to owns the prefix, and may be a
 # publisher still refreshing the flat copy (a reconcile run at an older platform-ref) whose seal this
 # run would otherwise tear out from under it.
-pointer_is_live() { # <account> <share> <dest> — true when `_current` resolves to a SEALED generation
+# 🚨 THIS RUN'S OWN GENERATION, not "some sealed generation" — Copilot's review of the phase-5 PR,
+# and it is the finding that matters most here. The read-back exists because the CLI has reported
+# SUCCESS for a file it never stored (39 of 45, 2026-09-08), and in exactly that case the PREVIOUS
+# pointer is still in place: it resolves to the previous sealed generation, so a check that only
+# asked "does `_current` name a sealed generation" passes, counts this run as published, and deletes
+# the flat copy for a publication that never became live. The comparison is therefore against
+# `$dest/$PUBLICATION`; anything else is handled by the caller, which can tell a sibling that moved
+# the pointer PAST us (a superseded run, nothing to do) from our own write not landing (red).
+pointer_is_live() { # <account> <share> <dest> — true when `_current` resolves to THIS run's SEALED generation
   local account="$1" share="$2" dest="$3" sealed
   resolve_publication_dir "$account" "$share" "$dest"
-  if [ "$RESOLVED_DIR" = "$dest" ]; then
+  if [ "$RESOLVED_DIR" != "$dest/$PUBLICATION" ]; then
     return 1
   fi
   sealed=$(az storage file exists --account-name "$account" --share-name "$share" \
@@ -1214,7 +1222,7 @@ pointer_is_live() { # <account> <share> <dest> — true when `_current` resolves
 
 dispose_flat_copy() { # <account> <share> <dest> — ONLY after pointer_is_live answered true
   local account="$1" share="$2" dest="$3"
-  echo "flat copy: $account/$share/$dest/$POINTER names '${RESOLVED_DIR##*/}', sealed — disposing of the flat compatibility copy beside it, $SENTINEL first (MeshWeaver#3461 phase 5)."
+  echo "flat copy: $account/$share/$dest/$POINTER names this run's generation $PUBLICATION, sealed — disposing of the flat compatibility copy beside it, $SENTINEL first (MeshWeaver#3461 phase 5)."
   # The patterns are the flat publication's OWN file set, spelled from the names this script
   # publishes, so they cannot drift from it. `*.zip` rather than this bake's bundle names: a flat
   # copy written by an earlier publication may list a bundle this one no longer carries.
@@ -1282,7 +1290,18 @@ publish_publication() { # <account> <share> <dest> <live-was-sealed>
   # publication is NOT live — so it is not counted as published, and the flat copy, which may be the
   # only sealed publication a reader of this prefix has, is not touched.
   if ! pointer_is_live "$account" "$share" "$dest"; then
-    echo "::error title=The pointer did not land — nothing disposed of::$account/$share/$dest/$POINTER does not resolve to a SEALED generation after this run moved it (it resolves to '${RESOLVED_DIR##*/}'). This publication is not live, and the flat compatibility copy is left exactly as it is: removing it now could leave a reader with NEITHER publication. The generation $PUBLICATION is sealed on the share; re-run once the share answers (MeshWeaver#3461 phase 5)."
+    # 🚨 TWO CAUSES, one reading, and they want opposite outcomes. Either a SIBLING moved the pointer
+    # onto a NEWER publication in the moment between our write and this read — in which case nothing
+    # is wrong, that run owns the prefix and its own disposal, and this run is `superseded` exactly
+    # as the pre-pointer check reports it — or OUR write did not land, which is the case the read-back
+    # exists for and is RED. `pointer_moved_past_us` is the same ordering question asked of the same
+    # compare API, so the two are separated by evidence rather than by a guess.
+    if pointer_moved_past_us "$account" "$share" "$dest"; then
+      echo "::notice title=A newer publication took the pointer after this one moved it::$account/$share/$dest/$POINTER now names '${RESOLVED_DIR##*/}', whose content is newer than this bake's ${SOURCE_SHA:-unknown} and contains it. This run's generation $PUBLICATION is sealed and complete on the share and is not pointed at; the flat compatibility copy is left to the run that owns the prefix (MeshWeaver#3461 phase 5)."
+      echo superseded >> "$OUTCOMES"
+      return 0
+    fi
+    echo "::error title=The pointer did not land — nothing disposed of::$account/$share/$dest/$POINTER does not resolve to THIS run's sealed generation $PUBLICATION after this run moved it (it resolves to '${RESOLVED_DIR##*/}', and no newer publication could be established there). This publication is not live, and the flat compatibility copy is left exactly as it is: removing it now could leave a reader with NEITHER publication. The generation $PUBLICATION is sealed on the share; re-run once the share answers (MeshWeaver#3461 phase 5)."
     exit 1
   fi
   # Recorded before the disposal: the publication IS live at this point, for every reader that
