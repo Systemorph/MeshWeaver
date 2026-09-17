@@ -944,9 +944,10 @@ public static class ModuleActivationSidecar
     /// <para>🚨 <b>That is the whole fix for <a href="https://github.com/Systemorph/MeshWeaver/issues/4026">#4026</a>.</b>
     /// Two replicas landing DIFFERENT content of one module write different names, so neither can
     /// lose the other's landing. Two writing the SAME record race for one name, and whichever wins
-    /// wrote identical bytes — so the create does not need to be atomic: .NET's no-overwrite move is
-    /// <c>link(2)</c> where the file system supports it and an existence check plus
-    /// <c>rename(2)</c> where it does not (a CIFS mount), and the design survives both.</para>
+    /// wrote identical bytes, so a racing create is benign. What the create must still be is ONE
+    /// rename of a complete file (#2190): readers drop the whole module over a record they cannot
+    /// read, so the name must never be visible while its bytes are being written — see
+    /// <c>WriteOnce</c>.</para>
     /// </summary>
     /// <returns>True when this call wrote the file; false when the record was already on the
     /// volume — an idempotent re-landing, never an error.</returns>
@@ -1032,10 +1033,20 @@ public static class ModuleActivationSidecar
 
     /// <summary>
     /// The one immutable create every record kind goes through: skip when the name exists (it
-    /// already holds this content), otherwise write a temp file and move it into place without
+    /// already holds this content), otherwise write a temp file and RENAME it into place without
     /// overwriting. The temp is written into <c>activation.d/</c> itself, not into the module's
     /// record directory, so the rename moves <c>activation.d/</c>'s last-write time — the
     /// fingerprint <see cref="PendingModuleActivations"/> memoises the activation read behind.
+    ///
+    /// <para>🚨 <b>The name appears by ONE rename of a complete file, or not at all
+    /// (#2190).</b> Every reader of a module's records drops the WHOLE module when one of them cannot
+    /// be read — at boot for the life of the process — so a record must never be observable while it
+    /// is being written. <c>File.Move(temp, path, overwrite: false)</c> did not guarantee that: when
+    /// its rename failed on the Azure Files share it silently COPIED the temp into the final name,
+    /// holding that name under an exclusive lock and incomplete for the whole copy, and a replica
+    /// booting at that moment logged "being used by another process" and ran without the module.
+    /// <see cref="MeshWeaver.Utils.NoReplaceMove"/> has no copy: a rename it cannot make throws and publishes
+    /// nothing, and the next landing records the event.</para>
     /// </summary>
     private static bool WriteOnce(string baseDirectory, string moduleName, string path, string content)
     {
@@ -1045,18 +1056,18 @@ public static class ModuleActivationSidecar
         var temp = Path.Combine(
             EntriesDirectory(baseDirectory),
             "." + moduleName + "." + Guid.NewGuid().ToString("N") + LandingTempSuffix);
-        File.WriteAllText(temp, content);
+        var published = false;
         try
         {
-            File.Move(temp, path, overwrite: false);
-            return true;
+            File.WriteAllText(temp, content);
+            // false: another replica published this very content first — the name holds it already.
+            published = MeshWeaver.Utils.NoReplaceMove.TryMove(temp, path);
+            return published;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        finally
         {
-            DeleteTemp(temp);
-            if (File.Exists(path))
-                return false; // another replica wrote this very content first
-            throw;
+            if (!published)
+                DeleteTemp(temp);
         }
     }
 

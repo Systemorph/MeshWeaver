@@ -16,4 +16,10 @@
     <PackageReference Include="NuGet.Frameworks" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- NoReplaceMove: the package cache publishes its archives with a rename that cannot degrade into
+         a copy (MeshWeaver#2190). Utils has no dependencies of its own. -->
+    <ProjectReference Include="..\MeshWeaver.Utils\MeshWeaver.Utils.csproj" />
+  </ItemGroup>
+
 </Project>
