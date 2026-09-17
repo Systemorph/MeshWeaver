@@ -351,6 +351,36 @@ public class ConfiguredModuleActivationTest
             MeshBuilderModuleActivation.RequiredEntries(ImagePlusOverlay(ImageBaseline, overlay)));
     }
 
+    /// <summary>
+    /// 🚨 THE MEASUREMENT THAT PLACED THE NEGATIVE-SLOT RULE. A slot below zero is NOT an unbound
+    /// array entry: this reader enumerates the section's CHILDREN
+    /// (<c>GetSection("Modules:Required").GetChildren()</c>) rather than binding a CLR array, so an
+    /// injected <c>Modules:Required:-1</c> comes back like any other child and the module IS
+    /// required — on the Aspire route, which injects whatever <c>PortalConfig</c> emits.
+    ///
+    /// <para>The chart is the half that drops it: its literal-key block starts at 0, so in
+    /// Kubernetes the key reaches no container and the module is required by nobody. That makes a
+    /// negative slot the CEILING's question at the other end — works locally, disappears in the
+    /// cluster — and it is reported by <c>DeploymentPortalConfig.ChartModuleSlotProblems</c>, not by
+    /// the route-neutral positional rule. This case is why: the rule was first written as
+    /// "renders a key that binds to nothing on every route", which this configuration falsifies.</para>
+    ///
+    /// <para>It lives HERE rather than beside that rule because only this project sees both
+    /// assemblies — the renderer (MeshWeaver.Deployment.Contract) and the reader
+    /// (MeshWeaver.Mesh.Contract) — which is the same reason the key-spelling assertion lives
+    /// here.</para>
+    /// </summary>
+    [Fact]
+    public void ANegativeSlotIsDeliveredByTheASPIREReader_WhichIsWhyTheRuleIsTheCHARTS()
+    {
+        var overlay = Rendered(authoritative: false, TheRecordsOwnList);
+        overlay["Modules:Required:-1"] = "MeshWeaver.Mcp.dll";
+
+        var required = MeshBuilderModuleActivation.RequiredEntries(ImagePlusOverlay(ImageBaseline, overlay));
+
+        Assert.Contains("MeshWeaver.Mcp.dll", required);
+    }
+
     [Fact]
     public void ABlankedEntryInAnAuthoritativeList_IsStillNotRequired()
     {
