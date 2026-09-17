@@ -671,7 +671,22 @@ public class MeshOperations
             using var callerScope = caller is not null
                 ? accessService?.SwitchAccessContext(caller)
                 : null;
-            var stream = hub.GetWorkspace()
+            // 🚨 SUBSCRIBED OFF THE ROUTER (#4614/#4615/#4617). `hub` is whatever hub built this
+            // facade, and for the AI/agent surface that is the DI-injected IMessageHub — the
+            // ROUTER (see ReadHub). A workspace is SCOPED PER HUB, so `hub.GetWorkspace()` would
+            // open this layout-area stream on the router's workspace: the SubscribeRequest leaves
+            // stamped `sender: mesh/{id}` (#4614), the owner then addresses its SubscribeAck
+            // (#4615), every DataChangedEvent and the StreamEndedEvent (#4617) straight back at
+            // `mesh/{id}` — because those are all posted to `request.Subscriber`, which IS the
+            // subscribe's sender — and the router hosts the `sync/{streamId}` sub-hub and routes
+            // every frame through its own action block for the life of the render.
+            //
+            // The remedy the ORIGIN report suggests — ReadIssuingHub() — is NOT available here and
+            // would break data sync: `portal/reads-{meshId}` registers no handlers, so it has no
+            // RouteStreamMessage route and no sync sub-hub, and the owner's fan-out would arrive
+            // nowhere. The subscriber hub must be a data-wired actor; that is StreamSubscribingHub,
+            // the identity function for every MCP-session / portal / per-node caller of this facade.
+            var stream = hub.StreamSubscribingHub().GetWorkspace()
                 .GetRemoteStream<JsonElement, LayoutAreaReference>(
                     (Address)resolution.Prefix, reference);
             if (stream is null)
