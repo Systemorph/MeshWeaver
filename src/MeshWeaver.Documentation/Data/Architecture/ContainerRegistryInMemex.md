@@ -1,7 +1,7 @@
 ---
 Name: A Container Registry in Memex
 Category: Architecture
-Description: The fleet's own container registry at cr.meshweaver.cloud — decided 2026-09-08 as a SEPARATE service built from CNCF distribution and docker_auth (no registry code of ours), why off-the-shelf, the bootstrap note, what was measured before it shipped — plus the in-mesh pull surface, bearer handshake, closure-as-data and read-through cache that remain built.
+Description: The fleet's own container registry at cr.meshweaver.cloud — decided 2026-09-08 as a SEPARATE service built from CNCF distribution and docker_auth (no registry code of ours), why off-the-shelf, the bootstrap note, what was measured before it shipped — plus the design record of the in-portal pull surface, bearer handshake, closure-as-data and read-through cache, which was built, never wired into a host, and deleted (issue 4066).
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="9" width="20" height="11" rx="2"/><path d="M6 9V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v3"/><line x1="7" y1="14" x2="7" y2="14"/><line x1="11" y1="14" x2="11" y2="14"/><line x1="15" y1="14" x2="15" y2="14"/></svg>
 ---
 
@@ -15,19 +15,24 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > `deploy/helm/templates/registry/` (`registry.enabled`, off by default); the bootstrap note
 > below is the one constraint that survives the change of shape.
 >
-> **Also built, and still standing:** the in-mesh v1 pull surface (`src/MeshWeaver.ContainerImages`,
-> issue #3353) — `GET`/`HEAD` on `/v2/`, `…/manifests/{reference}`, `…/blobs/{digest}` (Range
-> included) and `…/tags/list`, the bearer token exchange at `GET /v2/token`, the OCI-level closure
-> and provenance of every manifest served recorded as `ContainerImage` nodes, and the digest-keyed
-> read-through cache. It is what the closure-as-data sections below describe, and it is
-> unchanged; what the decision changes is WHERE images are authoritatively stored and served.
-> 🚨 The assembly is **`MeshWeaver.ContainerImages`, deliberately NOT `MeshWeaver.ContainerRegistry`**
-> — MeshWeaver.Plugins already ships an assembly of that name (the plugin registry module), in the
-> same namespace, declaring its own `ContainerRegistryEndpoints`, `ContainerRegistryOptions` and an
-> identical `MapContainerRegistry(this IEndpointRouteBuilder)`. Two assemblies of one name is the
+> **Also built, never wired, and DELETED (2026-09-17, #4066):** the in-portal v1 pull surface
+> (`src/MeshWeaver.ContainerImages`, issue #3353) — `GET`/`HEAD` on `/v2/`,
+> `…/manifests/{reference}`, `…/blobs/{digest}` (Range included) and `…/tags/list`, the bearer
+> token exchange at `GET /v2/token`, the OCI-level closure and provenance of every manifest served
+> recorded as `ContainerImage` nodes, and the digest-keyed read-through cache. **No host ever
+> mapped it**, and `cr.meshweaver.cloud` is not it — so it was deleted rather than wired. Why, what
+> that gave up, and what it did not: "The in-portal mirror was deleted" below. The sections from "The shape: a read-through mirror first" to "What would say this is
+> working" are kept as the DESIGN RECORD of what was built, in the present tense they were written
+> in, because their lessons apply to anything that serves OCI again.
+> 🚨 The assembly was **`MeshWeaver.ContainerImages`, deliberately NOT `MeshWeaver.ContainerRegistry`**
+> — MeshWeaver.Plugins ships an assembly of that name (the plugin registry module, the
+> `Plugins/ContainerRegistry` package on both portals), in the same namespace, declaring its own
+> `ContainerRegistryEndpoints`, `ContainerRegistryOptions` and an identical
+> `MapContainerRegistry(this IEndpointRouteBuilder)`. Two assemblies of one name is the
 > one-producer FATAL by name; two identical fully-qualified types is `CS0433`; two identical
-> extension signatures is `CS0121`. The config section moved to `ContainerImages:` for the same
-> reason. Renamed in #3361 while nothing referenced it yet — which is the only cheap moment.
+> extension signatures is `CS0121`. Renamed in #3361 while nothing referenced it yet — which is the
+> only cheap moment. **Name trap for a sweeper:** a `ContainerRegistry` hit in the mesh or in
+> `[ModuleLoad]` logs is that plugin, never the deleted code.
 >
 > 🚨 The token exchange arrived one increment LATE, and the gap is worth recording: the first cut
 > emitted a correct-looking `WWW-Authenticate` challenge naming a realm at `/v2/token`, and **nothing
@@ -51,9 +56,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 >   (rendered only when set — blank would be a roll to `/memex-portal-ai:<tag>`, not inert);
 >   `portal.imagePullSecret` → `imagePullSecrets` on the portal Deployment AND the migration Job
 >   (invariant 11 of `check-chart-invariants` holds the two equal); `containerImages:` →
->   `ContainerImages__Upstream/__Username/__ImageRoot/__CacheDirectory/__CacheMaxBytes` and
->   `ContainerImages__Repositories__<i>`, rendered only when `upstream` is set, `Password` arriving
->   through the Key Vault CSI mapping like every other secret; and `persistence.<name>.create: true`
+>   `ContainerImages__*` for the mirror instance's own configuration (**removed with the mirror in
+>   #4066** — it bound nothing, because no host mapped the mirror); and `persistence.<name>.create: true`
 >   rendering the PersistentVolumeClaim itself (`size` and `storageClass` required, kept on
 >   uninstall) so a record-driven Provision has storage — `create` defaults to absent because the
 >   existing environments' claims are unmanaged by helm.
@@ -66,7 +70,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 >   in `SelfUpdate:RegistryValidationUrl`, which is the fleet's shape and the only other pairing
 >   that qualifies; see [The Self-Update Registry Credential](../SelfUpdateRegistryCredential) —
 >   no second secret either way). A refused credential is an ERROR, never an
->   empty listing. The ACR path is byte-identical. 🚨 The mirror had to learn to forward the
+>   empty listing. The ACR path is byte-identical. 🚨 The (since deleted) in-portal mirror had to learn to forward the
 >   `tags/list` query string and the `Link` header for this: ACR pages at 100 tags in lexical
 >   order, so a mirror that dropped `?last=` served the OLDEST hundred to every caller and a lister
 >   through it would have printed "nothing newer" forever.
@@ -79,13 +83,15 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > * **Plugins** (MeshWeaver.Plugins#1514, in parallel): the Hosting deployment record grows the
 >   consumer fields (`imagePullSecret`, `volumes[].create`) and the `registry` block, renders
 >   exactly the values above, and the Provision/Roll/Reconcile plans emit `hosting-pull-secret`.
->   Wiring the in-portal mirror into the host was dropped in favour of the separate service. 🚨 The migration Job the
+>   Wiring the in-portal mirror into the host was dropped in favour of the separate service, and
+>   the unwired mirror was deleted on 2026-09-17 (#4066). 🚨 The migration Job the
 >   self-updater MINTS (`KubernetesDeploymentUpdater.RunMigrationAsync`) must carry the same
 >   `imagePullSecrets` as the portal pod — it builds its pod spec from scratch, and a Job without
 >   the credential is ImagePullBackOff on a mirror-consuming instance while the portal rolls.
 >
-> **Still not measured: pull latency** — the paragraph at the end of this page stands; every
-> consuming instance now produces the measurement for free, and it should be read.
+> **Still not measured: pull latency** — the paragraph at the end of this page asked it of the
+> mirror; with the mirror deleted it is a question about `cr.meshweaver.cloud`. Every consuming
+> instance produces the measurement for free, and it should be read.
 >
 > **PUBLISHED (2026-09-08): CD publishes every image AND every sealed bundle publication to
 > `cr.meshweaver.cloud`, beside ACR** — the last step of the fleet-registry program (#3353).
@@ -188,9 +194,10 @@ purging, garbage collection, and the token handshake's every corner case. distri
 decade of clients against all of it; docker_auth exists precisely to bolt an external
 authenticator onto it. A registry we wrote would be a second implementation of a solved problem,
 and every bug in it would be a fleet-wide pull failure. The mesh keeps what only it can provide —
-the closure and provenance DATA, which the mirror records and which the registry's notification
-endpoint (`registry.notifications.url`, every event POSTed with the vault-held bearer) can feed
-just as well.
+the closure and provenance DATA, which the deleted in-portal mirror recorded and which the
+registry's notification endpoint (`registry.notifications.url`, every event POSTed with the
+vault-held bearer) can feed just as well — nothing receives it yet
+([Retention on the fleet's own registry](../FleetRegistryRetention) §5.2).
 
 **🚨 The bootstrap note.** The registry's own two images are the only images an installation
 pulls from OUTSIDE its own registry: `distribution` from `ghcr.io`, `docker_auth` from Docker Hub.
@@ -341,6 +348,59 @@ entirely in CI and in other installations — exactly where the constraint is si
 | satellite CI (tester/portal image) | ACR pull credential per repo | existing memex token |
 | another installation | ACR credential it should not have | its own memex identity |
 | the registry instance's own cluster, at boot | ACR | **ACR, permanently** |
+
+## The in-portal mirror was deleted (#4066)
+
+**Decided 2026-09-17.** The maintainer's rule: the in-portal pull surface should be what serves
+`cr.meshweaver.cloud` — *"if this is not the one, please delete."* It was not the one, measured
+two ways:
+
+* **The host answers as a different service.** `curl -i https://cr.meshweaver.cloud/v2/` →
+  `401`, `docker-distribution-api-version: registry/2.0`,
+  `www-authenticate: Bearer realm="https://cr.meshweaver.cloud/auth",service="cr.meshweaver.cloud"`.
+  `/auth` is docker_auth's path (`deploy/helm/templates/registry/ingress.yaml` routes it there,
+  everything else to distribution); the deleted surface issued its realm at `/v2/token`.
+* **Nothing ever mapped it.** `MapContainerImages`, `AddContainerImageMirror` and
+  `AddContainerImages` had no caller outside the assembly's own tests — measured on core and
+  MeshWeaver.Plugins on 2026-09-12, -13, -15 and -17 (GitHub code search `org:Systemorph`: every
+  hit in the assembly, its tests, docs and the chart; Plugins `main` `5068f8fc8f`, 5,618 files: zero
+  hits). The assembly was referenced only by its own test project and two `MeshWeaver.slnx`
+  entries, so it never entered `/app` — in-mesh C# could not bind its types either.
+
+**What was deleted:** the assembly (21 public top-level types), its test project (66 test methods,
+including `PullSurfaceTest`), the two solution entries, and the chart's `containerImages:` block
+with the `ContainerImages__*` keys it rendered. The code is recoverable from the last `main` commit
+that carried it: `git show e483e7950f:src/MeshWeaver.ContainerImages/README.md`.
+
+🚨 **The chart block was a defect of its own, not just dead weight.** It rendered
+`ContainerImages__*` whenever `containerImages.upstream` was set, while no host called
+`MapContainerImages` — and the startup guard that refuses a half-configured mirror lived INSIDE
+`MapContainerImages`, so it could never fire. An operator who set the block got neither a mirror
+nor an error: configuration that read as wired and did nothing. Before deleting it, the one place
+an overlay could set it was read: `Systemorph/Memex` `main` `560fb0841f` (416 files, every overlay
+and every `mesh/Deployments` record) sets no `containerImages` key.
+
+**What the deletion gives up — and why that is not a loss today.** The one capability
+`cr.meshweaver.cloud` does not duplicate is the OCI-level closure and provenance of every manifest
+served, recorded as `ContainerImage` nodes. Because nothing was mapped, the fleet never produced a
+single such node, so no existing data goes away. The requirement it pointed at — an image's
+closure as queryable mesh data — stays open as #4066's second item, and this code would not have
+met it: a record of what was PULLED is a consumption log, not an inventory of what the registry
+holds ([Retention on the fleet's own registry](../FleetRegistryRetention) §5.1).
+
+**What carries over to anything that serves OCI again** — each was learned on the deleted code, and
+the design record below states them in full:
+
+* **The realm must answer.** A challenge naming a token route nothing serves passes every
+  per-endpoint test and fails every real `docker pull`; only a test that walks probe → challenge →
+  token → pull as ONE conversation sees it.
+* **404 and 504 are never merged** — "not found" when the upstream was unreachable tells a pinned
+  consumer its digest was purged.
+* **A tag is never cached, and nothing negative is cached** — both outlive the push that fixed
+  them and read as a stale build.
+* **A proxy mints no tokens** — echoing the caller's own key keeps revocation immediate.
+* **Layer transfers are bounded, not merely unbuffered** — through `IIoPool`'s `Blob` pool, never
+  `Http`.
 
 ## The shape: a read-through mirror first
 
@@ -583,7 +643,9 @@ verb list.
 
 ## What would say this is working
 
-Not "images pull". The measurable claims, with where each one actually stands:
+Not "images pull". The measurable claims, with where each one stood for the mirror as built.
+🚨 **Since its deletion (#4066) none of the "yes" rows holds on the fleet** — no image's closure is
+recorded anywhere, and the latency question below is now asked of `cr.meshweaver.cloud`:
 
 | claim | status |
 |---|---|

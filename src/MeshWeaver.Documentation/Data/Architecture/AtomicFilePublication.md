@@ -109,7 +109,7 @@ Every no-replace publication in the tree goes through it:
 `ModuleActivationSidecar.WriteOnce` (landing records, uninstall tombstones, platform verdicts,
 older-image snapshots), `ModuleSetStore.WriteOnce`, `AtomicFileWrite.PublishBytes` /
 `PublishAsync` (the assembly cache and everything else that publishes bytes),
-`ContainerBlobCache.Publish`, `FileSystemNuGetPackageCache.SaveAsync`,
+`FileSystemNuGetPackageCache.SaveAsync`,
 `ModuleLandingService.RestoreMissingFiles` and `EmitReferenceCapture`.
 
 `NoReplaceMoveRatchetGuard` (in `test/MeshWeaver.Documentation.Test`) scans `src`, `tools`,
