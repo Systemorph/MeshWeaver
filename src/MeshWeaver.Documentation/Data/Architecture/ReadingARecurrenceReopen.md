@@ -23,9 +23,17 @@ the one that mattered on 2026-09-17.
 ## The wave, and its residue
 
 Between **07:51:00Z and 07:53:59Z on 2026-09-17** the bot reopened a burst of closed core incident
-issues — filed as [#4577](https://github.com/Systemorph/MeshWeaver/issues/4577) (which counted ~130
-across a wider 07:45–07:55Z window) and
-[#4610](https://github.com/Systemorph/MeshWeaver/issues/4610) (which counted ~51 in the narrow one).
+issues. It is filed twice — [#4577](https://github.com/Systemorph/MeshWeaver/issues/4577) (~130
+across a wider 07:45–07:55Z window, backlog 43 → 164) and
+[#4610](https://github.com/Systemorph/MeshWeaver/issues/4610) (~51 in the narrow one, backlog
+46 → 97).
+
+🚨 **Those are ONE burst measured at two times, not two waves — do not add them.** #4577 was written
+at 08:54Z and #4610 at 15:37Z, and #4610's window sits inside #4577's; the backlog figures differ
+because re-closing had been going on in between. A third reading at ~17:30Z finds 102 open and 51
+from the burst — which matches #4610's count exactly, by a different instrument (it counted
+`updated_at` inside 07:40–08:15Z; this counts `reopened` events). Reading the two tickets as ~181
+issues of damage overstates it by roughly threefold.
 
 **Denominator, measured 2026-09-17T~17:30Z:** of core's 102 open issues, **51** carry a `reopened`
 event inside that three-minute burst. Every one of the 51 was closed **before** 2026-09-17 — 50 by
