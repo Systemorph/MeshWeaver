@@ -227,4 +227,80 @@ public static class PartitionContentOwnership
                         + "({Owner}) — {Because} (MeshWeaver#4355).",
                         packageId, verdict.Partition, verdict.Owner, verdict.Because);
             });
+
+    /// <summary>
+    /// Whether the partition's own writers DEFINITELY import from a repository other than the one
+    /// this candidate is sealed from — the only condition under which a PROVEN ref may be held
+    /// (MeshWeaver#4625).
+    ///
+    /// <para>🚨 <b>The asymmetry here is the opposite of gate 1c's, and that is the whole design.</b>
+    /// Gate 1c holds on <c>Undetermined</c> because an unproven ref is cheap to hold — the hold is
+    /// re-derived and lifted at the next boot. Here, "unknown" is the DEFAULT answer of every
+    /// provider that has not implemented
+    /// <see cref="IPartitionSourceTracking.ImportingRepositories"/>, so holding on it would hold
+    /// every proven install on the fleet's normal shape and take #4259's lane offline. That cost is
+    /// exactly why #4625 was filed rather than fixed in #4619. So: hold ONLY on a definite
+    /// disagreement — both sides known, and no tracked identity matching.</para>
+    ///
+    /// <para>Not established, and therefore NOT a hold: no provider registered; every provider
+    /// answering <see cref="TrackedRepositories.Unknown"/>; a provider that reports nothing
+    /// importing; a candidate whose own repository could not be parsed. Each of those is an absence
+    /// of evidence, and none is evidence of agreement — which is why this answers a HOLD question
+    /// and never "these two agree".</para>
+    /// </summary>
+    /// <param name="hub">The hub whose service provider carries the seam.</param>
+    /// <param name="partition">The partition the install would write.</param>
+    /// <param name="candidateRepository">The repository the candidate's source is sealed from — a
+    /// URL or an <c>owner/repo</c> slug, or null when this boot cannot name one.</param>
+    /// <param name="candidateSubdirectory">The subdirectory within it, if any.</param>
+    /// <returns>A cold observable emitting once: the sentence naming the disagreement, or null.</returns>
+    public static IObservable<string?> ImportedFromAnotherRepository(
+        IMessageHub hub, string partition, string? candidateRepository,
+        string? candidateSubdirectory = null)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        var candidate = TrackedRepositories.Normalize(candidateRepository, candidateSubdirectory);
+        if (candidate.Length == 0)
+            // 🚨 An unnameable candidate is NOT a mismatch. A registry source has no repository to
+            // compare — that residue is gate 1c's business (it is exactly what makes a ref
+            // unprovable), and answering "disagrees" here would hold it twice for one reason.
+            return Observable.Return<string?>(null);
+        return Observable.Defer(() =>
+        {
+            var providers = hub.ServiceProvider.GetServices<IPartitionSourceTracking>().ToArray();
+            if (providers.Length == 0)
+                return Observable.Return<string?>(null);
+            return providers
+                .Select(p => Observable.Defer(() => p.ImportingRepositories(partition))
+                    .Take(1)
+                    .DefaultIfEmpty(TrackedRepositories.Unknown)
+                    .Timeout(TrackingBudget)
+                    // A leg that faulted or timed out says nothing, and saying nothing may never
+                    // become a hold — same rule as the bit above.
+                    .Catch<TrackedRepositories, Exception>(_ =>
+                        Observable.Return(TrackedRepositories.Unknown)))
+                .CombineLatest()
+                .Take(1)
+                .Select(readings =>
+                {
+                    // 🚨 AGREEMENT IS DECISIVE, exactly as a positive is for the bit: one provider
+                    // that names this repository settles it, whatever a second could not say. Only
+                    // when nobody names it does a definite disagreement stand.
+                    if (readings.Any(r => r.Known && r.Identities.Contains(candidate, StringComparer.OrdinalIgnoreCase)))
+                        return null;
+                    var disagreeing = readings.Where(r => r.DefinitelyDisagreesWith(candidate)).ToList();
+                    if (disagreeing.Count == 0)
+                        return null;
+                    var tracked = string.Join(", ", disagreeing
+                        .SelectMany(r => r.Identities)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(i => i, StringComparer.Ordinal));
+                    return $"'{partition}' imports from {tracked}, and this package's source is "
+                           + $"sealed from '{candidate}' — two pinned writers, two repositories, one "
+                           + "partition. Both trees would be 'proven' and neither would be the "
+                           + "partition's (MeshWeaver#4625; Doc/Architecture/OnePartitionOneBookkeeping).";
+                })
+                .Catch<string?, Exception>(_ => Observable.Return<string?>(null));
+        });
+    }
 }
