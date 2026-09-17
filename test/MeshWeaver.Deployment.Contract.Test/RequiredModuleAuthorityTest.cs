@@ -160,6 +160,46 @@ public class RequiredModuleAuthorityTest
         var both = new DeploymentContent().WithRequiredModuleSlot(overCeiling, "MeshWeaver.Mcp");
         Assert.Single(DeploymentPortalConfig.ChartModuleSlotProblems(both));
         Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(both));
+
+        // And NEITHER — the fourth combination, which is the one a coupling of the two guards
+        // would break silently: inside the ceiling and authoritative is a record with nothing
+        // wrong, and both surfaces have to say so.
+        var neither = new DeploymentContent()
+            .WithRequiredModuleSlot(7, "MeshWeaver.Mcp")
+            .WithRequiredModulesAuthoritative();
+        Assert.Empty(DeploymentPortalConfig.ChartModuleSlotProblems(neither));
+        Assert.Empty(DeploymentPortalConfig.PositionalModuleSlotProblems(neither));
+    }
+
+    /// <summary>
+    /// 🚨 A problem is reported for the slots that are RENDERED, never for the raw map. A blank
+    /// entry and an entry the contiguous list already occupies both emit nothing — so reporting
+    /// them would name a module that is not there, in the very sentence that explains why nothing
+    /// else reports this ("the key IS rendered, so coverage passes"). A collision is a real defect
+    /// and it has its own reporter: <c>HelmValues.Problems</c>'s slot-collides-with-the-list check.
+    /// </summary>
+    [Fact]
+    public void ASlotThatRendersNothing_IsNotReportedAsAShadow()
+    {
+        var blank = new DeploymentContent().WithRequiredModuleSlot(7, "   ");
+        Assert.DoesNotContain(7, DeploymentPortalConfig.ModuleSlots(blank).Keys);
+        Assert.Empty(DeploymentPortalConfig.PositionalModuleSlotProblems(blank));
+
+        // Slot 1 is inside the record's OWN two-entry list, so the render keeps the list's entry
+        // and the slot emits nothing — no image index is shadowed by it.
+        var colliding = new DeploymentContent
+        {
+            RequiredModules = ["MeshWeaver.Blazor.Radzen.dll", "MeshWeaver.Blazor.Analysis.dll"],
+        }.WithRequiredModuleSlot(1, "MeshWeaver.Mcp");
+        Assert.Equal("MeshWeaver.Blazor.Analysis.dll", DeploymentPortalConfig.ModuleSlots(colliding)[1]);
+        Assert.Empty(DeploymentPortalConfig.PositionalModuleSlotProblems(colliding));
+
+        // …while the same record with the slot PAST its list is the reported shape.
+        var past = new DeploymentContent
+        {
+            RequiredModules = ["MeshWeaver.Blazor.Radzen.dll", "MeshWeaver.Blazor.Analysis.dll"],
+        }.WithRequiredModuleSlot(7, "MeshWeaver.Mcp");
+        Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(past));
     }
 
     /// <summary>
