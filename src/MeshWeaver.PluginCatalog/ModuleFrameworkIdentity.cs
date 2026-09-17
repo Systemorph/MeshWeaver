@@ -202,8 +202,12 @@ public readonly record struct ModuleIdentityMatch(
         ModuleIdentityVerdict.NotComparable =>
             $"built against a platform this one cannot compare itself to: the bundle states "
             + $"{ModuleFrameworkIdentity.Name(StatedScheme)} ({stated}) and this deployment states "
-            + $"{string.Join(", ", PlatformReadings)} — no reading in the same scheme, so nothing "
-            + "here can show these bytes belong to this build",
+            // A DEFAULT struct carries an uninitialised array; printing "(none)" for it is the same
+            // discipline the rest of this file keeps — a reading that cannot be shown is never
+            // allowed to throw inside a diagnostic.
+            + $"{(PlatformReadings.IsDefaultOrEmpty ? "(none)" : string.Join(", ", PlatformReadings))}"
+            + " — no reading in the same scheme, so nothing here can show these bytes belong to "
+            + "this build",
         _ => "nothing was stated on one side, so the identity decides nothing",
     };
 }
