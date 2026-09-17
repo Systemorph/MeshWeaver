@@ -203,34 +203,40 @@ public class RequiredModuleAuthorityTest
     }
 
     /// <summary>
-    /// 🚨 A slot BELOW ZERO renders a key that binds to nothing — an array has no index -1 — so the
-    /// module is required by nobody on either route. It is the one malformed index a hand-written
-    /// record can carry (<c>WithRequiredModuleSlot</c> takes any <c>int</c>) and the ceiling check
-    /// reads only the upper bound, so nothing else sees it. Reported whatever the record claims:
-    /// completeness does not make an impossible index deliverable.
+    /// 🚨 A slot BELOW ZERO is the ceiling's question at the other end, and it took a measurement to
+    /// place it. It is NOT an unbound array entry: the reader enumerates
+    /// <c>GetSection("Modules:Required").GetChildren()</c> rather than binding a CLR array, so an
+    /// injected <c>Modules:Required:-1</c> comes back and the module IS required under Aspire
+    /// (pinned across the assembly boundary by
+    /// <c>ConfiguredModuleActivationTest.ANegativeSlotIsDeliveredByTheASPIREReader</c>). The chart's
+    /// literal-key block starts at 0, so in Kubernetes the key reaches no container — works
+    /// locally, disappears in the cluster, exactly like a slot above the ceiling, and reported by
+    /// the same chart-scoped surface.
+    ///
+    /// <para>It is the one malformed index a hand-written record can carry —
+    /// <c>WithRequiredModuleSlot</c> takes any <c>int</c> — so leaving it to "the ceiling reads the
+    /// upper bound only" left it seen by nothing.</para>
     /// </summary>
     [Fact]
-    public void ASlotBelowZero_IsReported_EvenUnderTheAuthorityClaim()
+    public void ASlotBelowZero_IsReportedByTheCHART_Surface_WhateverTheRecordClaims()
     {
         var negative = new DeploymentContent().WithRequiredModuleSlot(-1, "MeshWeaver.Mcp");
 
-        // It really does render — this is not a hypothetical shape.
+        // It really is rendered on both routes — this is not a hypothetical shape.
         Assert.Equal("MeshWeaver.Mcp.dll", DeploymentPortalConfig.PortalConfig(negative, PortalConfigOptions.Helm)["Modules__Required__-1"]);
+        Assert.Equal("MeshWeaver.Mcp.dll", DeploymentPortalConfig.PortalConfig(negative, PortalConfigOptions.Aspire(null))["Modules__Required__-1"]);
 
-        var problem = Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(negative));
+        var problem = Assert.Single(DeploymentPortalConfig.ChartModuleSlotProblems(negative));
         Assert.Contains("MeshWeaver.Mcp.dll", problem, StringComparison.Ordinal);
         Assert.Contains("slot -1", problem, StringComparison.Ordinal);
 
-        // The claim removes the image's list from the question; it cannot make -1 an index.
-        var claimed = Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(negative.WithRequiredModulesAuthoritative()));
-        Assert.Contains("slot -1", claimed, StringComparison.Ordinal);
+        // The claim says which entries are the complete set; it does not decide which keys the
+        // chart renders, so it cannot excuse this one.
+        Assert.Single(DeploymentPortalConfig.ChartModuleSlotProblems(negative.WithRequiredModulesAuthoritative()));
 
-        // And the ceiling surface still does not see it — it reads the upper bound only.
-        Assert.Empty(DeploymentPortalConfig.ChartModuleSlotProblems(negative));
-
-        // Reported ONCE: the shadow loop walks the rendered slots at or above the contiguous
-        // count, so a negative one cannot be counted twice.
-        Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(negative));
+        // And it is NOT a positional shadow: no index of the image's list is at -1, so the surface
+        // that answers "does this index mean what you think" has nothing to say.
+        Assert.Empty(DeploymentPortalConfig.PositionalModuleSlotProblems(negative));
     }
 
     /// <summary>

@@ -347,8 +347,8 @@ public static class DeploymentPortalConfig
 
     /// <summary>
     /// The required-module slots this record declares that the HELM CHART does not render — a slot
-    /// above <see cref="MaxChartRenderedRequiredModuleSlot"/>, which its literal-key block does not
-    /// carry. Empty when every slot is inside the block.
+    /// above <see cref="MaxChartRenderedRequiredModuleSlot"/> or below 0, neither of which its
+    /// literal-key block carries. Empty when every slot is inside the block.
     ///
     /// <para>🚨 <b>Scoped to the chart on purpose, and NOT folded into
     /// <see cref="SpecProblems(IEnumerable{PluginRepoMount}, IEnumerable{string})"/>.</b> The Aspire
@@ -369,6 +369,7 @@ public static class DeploymentPortalConfig
             return ImmutableList<string>.Empty;
         var problems = ImmutableList.CreateBuilder<string>();
         foreach (var (slot, assembly) in ModuleSlots(record))
+        {
             if (slot > MaxChartRenderedRequiredModuleSlot)
                 problems.Add(
                     $"required module '{assembly}' is declared at slot {slot}, above the highest "
@@ -378,6 +379,22 @@ public static class DeploymentPortalConfig
                     + "in the cluster). Raise the chart's Modules__Required__N block (one hasKey "
                     + "entry per index) and MaxChartRenderedRequiredModuleSlot together, or move "
                     + "the entry into the contiguous requiredModules list.");
+            // 🚨 The SAME asymmetry at the other end, and the same remedy shape. A negative slot is
+            // not an unbound entry: the reader enumerates the section's CHILDREN rather than
+            // binding a CLR array, so an injected `Modules:Required:-1` is returned and the module
+            // IS required under Aspire. The chart's literal-key block starts at 0, so in Kubernetes
+            // the key reaches no container and the module is required by nobody — works locally,
+            // disappears in the cluster, exactly like a slot above the ceiling. Raising the ceiling
+            // cannot fix this one, so the remedy names the only two that can.
+            else if (slot < 0)
+                problems.Add(
+                    $"required module '{assembly}' is declared at slot {slot}, below the lowest slot "
+                    + "the Helm chart renders (0) — in Kubernetes it would reach no container, so "
+                    + "the module would not be required at all (the Aspire route delivers it, "
+                    + "because the reader enumerates the section's children rather than binding an "
+                    + "array — so this works locally and disappears in the cluster). Move the entry "
+                    + "into the contiguous requiredModules list, or give it a slot at or above zero.");
+        }
         return problems.ToImmutable();
     }
 
@@ -418,10 +435,12 @@ public static class DeploymentPortalConfig
     /// neither. Until it does, both are pinned here and reach no deploy — stated so the next reader
     /// does not mistake a defined surface for an enforced one.</para>
     ///
-    /// <para>🚨 It also reports a slot BELOW ZERO, and that half is NOT gated on the claim: an
-    /// array has no index -1 on either route, so such an entry renders a key that binds to nothing
-    /// and the module is required by nobody however complete the record's set is. The ceiling
-    /// check reads only the upper bound, so this is the only surface that sees it.</para>
+    /// <para>A slot BELOW ZERO is NOT this surface's business, and measuring said so: the reader
+    /// enumerates <c>GetSection("Modules:Required").GetChildren()</c> rather than binding a CLR
+    /// array, so an injected <c>Modules:Required:-1</c> IS returned and the module IS required on
+    /// the Aspire route. It is the chart that drops it — the literal-key block starts at 0 — which
+    /// makes it the ceiling's question at the other end, and <see cref="ChartModuleSlotProblems"/>
+    /// reports it there.</para>
     ///
     /// <para>Pure.</para>
     /// </summary>
@@ -430,25 +449,10 @@ public static class DeploymentPortalConfig
         if (record is null || record.RequiredModuleSlots.IsEmpty)
             return ImmutableList<string>.Empty;
 
-        var problems = ImmutableList.CreateBuilder<string>();
-
-        // 🚨 A slot BELOW ZERO first, and NOT gated on the authority claim: the record's index
-        // space is the array's, and an array has no index -1. The key renders on both routes and
-        // binds to nothing — the chart does not template it and the Aspire route injects a name no
-        // array element can take — so the module is silently not required, whatever the record
-        // claims. The ceiling check sees only the upper bound, so without this the one malformed
-        // index that can be written by hand escapes every surface.
-        foreach (var (slot, assembly) in record.RequiredModuleSlots)
-            if (slot < 0 && !string.IsNullOrWhiteSpace(assembly))
-                problems.Add(
-                    $"required module '{WithDllSuffix(assembly)}' is declared at slot {slot} — an "
-                    + "index no configuration array has. The key is rendered and binds to nothing "
-                    + "on every route, so the module is required by nobody and nothing reports it. "
-                    + "Move the entry into the contiguous requiredModules list, or give it a slot "
-                    + "at or above zero.");
-
         if (record.RequiredModulesAuthoritative)
-            return problems.ToImmutable();
+            return ImmutableList<string>.Empty;
+
+        var problems = ImmutableList.CreateBuilder<string>();
 
         // 🚨 The RENDERED slots, never the raw map. <see cref="ModuleSlots"/> drops a blank entry
         // and drops an explicit slot the contiguous list already occupies, so the raw map contains
