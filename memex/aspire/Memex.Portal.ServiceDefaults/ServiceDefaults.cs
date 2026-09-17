@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+using System.Globalization;
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -346,8 +347,12 @@ public static class ServiceDefaults
     /// <returns>The one timing line.</returns>
     internal static string TimingLine(HealthReport report)
     {
-        var total = Math.Round(report.TotalDuration.TotalMilliseconds);
-        var header = $"timing: {total:F0}ms total over {report.Entries.Count} check(s)";
+        // InvariantCulture throughout: this body is an operator/machine payload with no viewer
+        // locale, and its numbers are compared across replicas and pasted into issues.
+        var floor = TimingNamedAboveMs.ToString("F0", CultureInfo.InvariantCulture);
+        var header = "timing: "
+            + report.TotalDuration.TotalMilliseconds.ToString("F0", CultureInfo.InvariantCulture)
+            + $"ms total over {report.Entries.Count} check(s)";
         if (report.Entries.Count == 0)
             return $"{header} — none registered, so this endpoint measures NOTHING";
 
@@ -358,12 +363,13 @@ public static class ServiceDefaults
             .ToList();
         var rest = report.Entries.Count - named.Count;
         if (named.Count == 0)
-            return $"{header} — all {rest} under {TimingNamedAboveMs:F0}ms";
+            return $"{header} — all {rest} under {floor}ms";
 
-        var slowest = string.Join("; ", named.Select(e => $"{e.Key} {e.Ms:F0}ms"));
+        var slowest = string.Join("; ",
+            named.Select(e => $"{e.Key} {e.Ms.ToString("F0", CultureInfo.InvariantCulture)}ms"));
         return rest == 0
             ? $"{header}, slowest first — {slowest}"
-            : $"{header}, slowest first — {slowest}; {rest} more under {TimingNamedAboveMs:F0}ms";
+            : $"{header}, slowest first — {slowest}; {rest} more under {floor}ms";
     }
 
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
