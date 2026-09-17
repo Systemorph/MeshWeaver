@@ -506,12 +506,37 @@ public sealed class IoPool : IIoPool, IDisposable
             // Whoever loses the CAS does nothing: the winner's path releases exactly once.
             var regionOwner = 0;
 
+            // 🚨 THE WAIT CLOCK STARTS WHERE THE ADMISSION IS TAKEN — MeshWeaver#1198.
+            //
+            // It used to start at the GATE, inside the prologue, which is one ThreadPool hop later.
+            // So between accepting the work and running it the leaf counted in NEITHER the live gauge
+            // nor the wait distribution — and those two numbers are what IoPoolQueueReport turns into
+            // the verdict a cap decision rests on ("no I/O pool had work queued … no admission waited
+            // a second for a slot"). Measured on main: one leaf parked in that interval read
+            // `InFlight=0 Waiting=0` and the report returned that CONCLUSIVE sentence, and under
+            // ThreadPool saturation eight leaves waited up to 7,850 ms from accepted to running while
+            // the distribution's maximum read 0.2 ms. InvokeBlocking always counted from here; now all
+            // four entry points mean the same thing by "waiting": accepted, and not yet running.
+            var queuedAt = Stopwatch.GetTimestamp();
+            Interlocked.Increment(ref _waiting);
+            // Exactly-once, because three paths can end the wait: the gate granting a slot, the gate
+            // wait being cancelled, and an unsubscribe before the prologue ever ran. A double
+            // decrement would leave the gauge reading a queue that does not exist — which is the
+            // defect #4504 fixed on the blocking path, and it is not worth reintroducing here.
+            var waitLeft = 0;
+            void LeaveWaitOnce()
+            {
+                if (Interlocked.Exchange(ref waitLeft, 1) == 0)
+                    Interlocked.Decrement(ref _waiting);
+            }
+
             var leaf = Observable.FromAsync(async subscriberCt =>
             {
                 OnLeafPrologueStarting?.Invoke();
                 if (Interlocked.CompareExchange(ref regionOwner, 1, 0) != 0)
                     // The subscription was disposed before this prologue ran, so the region — and with
-                    // it the right to touch the primitives — is already gone.
+                    // it the right to touch the primitives — is already gone. The unsubscribe has
+                    // already left the wait; this call is the idempotent second one.
                     throw new OperationCanceledException(DisposedMessage);
                 try
                 {
@@ -524,12 +549,13 @@ public sealed class IoPool : IIoPool, IDisposable
                     // before the slot is granted throws here, before the increment, so
                     // no slot is ever leaked. The ThreadPool thread is released during
                     // the inner await, so the gate caps in-flight ops, not threads.
-                    var queuedAt = Stopwatch.GetTimestamp();
-                    // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
-                    // what lets a test synchronise on arrival instead of guessing with a duration.
-                    Interlocked.Increment(ref _waiting);
+                    // The wait began at SUBSCRIBE (see above), so this only ends it — and records the
+                    // admission only when a slot was actually granted. A cancelled wait never became
+                    // an admission, and folding it into the distribution would blend "how long work
+                    // waited to run" with "how long a teardown took to unwind".
                     try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
-                    finally { Interlocked.Decrement(ref _waiting); }
+                    catch { LeaveWaitOnce(); throw; }
+                    LeaveWaitOnce();
                     RecordWait(queuedAt);
                     Interlocked.Increment(ref _inFlight);
                     var gated = EnterLeaf(io);
@@ -556,7 +582,11 @@ public sealed class IoPool : IIoPool, IDisposable
                 Disposable.Create(() =>
                 {
                     if (Interlocked.CompareExchange(ref regionOwner, 2, 0) == 0)
+                    {
+                        // The prologue never ran, so nothing else will end this leaf's wait.
+                        LeaveWaitOnce();
                         LeaveGateRegion();
+                    }
                 }));
         });
 
@@ -682,6 +712,30 @@ public sealed class IoPool : IIoPool, IDisposable
 
             var regionOwner = 0;
 
+            // 🚨 THE WAIT CLOCK STARTS WHERE THE ADMISSION IS TAKEN — MeshWeaver#1198.
+            //
+            // It used to start at the GATE, inside the prologue, which is one ThreadPool hop later.
+            // So between accepting the work and running it the leaf counted in NEITHER the live gauge
+            // nor the wait distribution — and those two numbers are what IoPoolQueueReport turns into
+            // the verdict a cap decision rests on ("no I/O pool had work queued … no admission waited
+            // a second for a slot"). Measured on main: one leaf parked in that interval read
+            // `InFlight=0 Waiting=0` and the report returned that CONCLUSIVE sentence, and under
+            // ThreadPool saturation eight leaves waited up to 7,850 ms from accepted to running while
+            // the distribution's maximum read 0.2 ms. InvokeBlocking always counted from here; now all
+            // four entry points mean the same thing by "waiting": accepted, and not yet running.
+            var queuedAt = Stopwatch.GetTimestamp();
+            Interlocked.Increment(ref _waiting);
+            // Exactly-once, because three paths can end the wait: the gate granting a slot, the gate
+            // wait being cancelled, and an unsubscribe before the prologue ever ran. A double
+            // decrement would leave the gauge reading a queue that does not exist — which is the
+            // defect #4504 fixed on the blocking path, and it is not worth reintroducing here.
+            var waitLeft = 0;
+            void LeaveWaitOnce()
+            {
+                if (Interlocked.Exchange(ref waitLeft, 1) == 0)
+                    Interlocked.Decrement(ref _waiting);
+            }
+
             var leaf = Observable.Create<T>(async (inner, subscriberCt) =>
             {
                 OnLeafPrologueStarting?.Invoke();
@@ -691,12 +745,11 @@ public sealed class IoPool : IIoPool, IDisposable
                 {
                     using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
                     var ct = linked.Token;
-                    var queuedAt = Stopwatch.GetTimestamp();
-                    // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
-                    // what lets a test synchronise on arrival instead of guessing with a duration.
-                    Interlocked.Increment(ref _waiting);
+                    // Ends the wait that began at SUBSCRIBE; records an admission only when a slot
+                    // was granted — see InvokeCore for why a cancelled wait is not one.
                     try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
-                    finally { Interlocked.Decrement(ref _waiting); }
+                    catch { LeaveWaitOnce(); throw; }
+                    LeaveWaitOnce();
                     RecordWait(queuedAt);
                     Interlocked.Increment(ref _inFlight);
                     var gated = EnterLeaf(source);
@@ -723,7 +776,10 @@ public sealed class IoPool : IIoPool, IDisposable
                 Disposable.Create(() =>
                 {
                     if (Interlocked.CompareExchange(ref regionOwner, 2, 0) == 0)
+                    {
+                        LeaveWaitOnce();
                         LeaveGateRegion();
+                    }
                 }));
         });
 
@@ -1016,6 +1072,18 @@ public sealed class IoPool : IIoPool, IDisposable
             // catch below is one of the three paths that can own it.
             var regionOwner = 0;
 
+            // The setup leaf's wait starts HERE, with the admission, not at the gate one ThreadPool
+            // hop later — see InvokeCore for the measurement and for why the gauge and the wait
+            // distribution have to mean "accepted, and not yet running" (MeshWeaver#1198).
+            var queuedAt = Stopwatch.GetTimestamp();
+            Interlocked.Increment(ref _waiting);
+            var waitLeft = 0;
+            void LeaveWaitOnce()
+            {
+                if (Interlocked.Exchange(ref waitLeft, 1) == 0)
+                    Interlocked.Decrement(ref _waiting);
+            }
+
             try
             {
                 // The long-lived subscription the setup leaf produces; disposed on unsubscribe OR pool drain.
@@ -1113,12 +1181,11 @@ public sealed class IoPool : IIoPool, IDisposable
                         {
                             using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
                             var ct = linked.Token;
-                            var queuedAt = Stopwatch.GetTimestamp();
-                            // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
-                            // what lets a test synchronise on arrival instead of guessing with a duration.
-                            Interlocked.Increment(ref _waiting);
+                            // Ends the wait that began at SUBSCRIBE; an admission is recorded only
+                            // when a slot was granted (see InvokeCore).
                             try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
-                            finally { Interlocked.Decrement(ref _waiting); }
+                            catch { LeaveWaitOnce(); throw; }
+                            LeaveWaitOnce();
                             RecordWait(queuedAt);
                             Interlocked.Increment(ref _inFlight);
                             var subLeaf = EnterLeaf(source);
@@ -1204,7 +1271,11 @@ public sealed class IoPool : IIoPool, IDisposable
                     Disposable.Create(() =>
                     {
                         if (Interlocked.CompareExchange(ref regionOwner, 2, 0) == 0)
+                        {
+                            // The setup leaf never ran, so nothing else will end its wait.
+                            LeaveWaitOnce();
                             LeaveGateRegion();
+                        }
                     }));
             }
             catch
@@ -1212,7 +1283,10 @@ public sealed class IoPool : IIoPool, IDisposable
                 // The synchronous subscribe threw, so neither the setup leaf nor the disposable above
                 // will ever run: this is the only path that must undo the region itself.
                 if (Interlocked.CompareExchange(ref regionOwner, 2, 0) == 0)
+                {
+                    LeaveWaitOnce();
                     LeaveGateRegion();
+                }
                 throw;
             }
         });
