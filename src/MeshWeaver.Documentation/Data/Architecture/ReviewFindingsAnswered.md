@@ -19,7 +19,81 @@ maintainer's visible waiver. It is the build of option B on #4299, decided by th
 
 - Workflow: `.github/workflows/review-answered.yml`
 - Predicate and self-test: `.github/scripts/check-review-answered.py`
-- Status: **observed, not required** — see Rollout below.
+- Status: 🚨 **REQUIRED on `main` since 2026-09-17** — measured that evening on ruleset 2128472,
+  which now lists `Automatic review answered` beside `Consolidate test results`. The Rollout section
+  below is kept as the record of how it got there; it is no longer the current state.
+
+🚨 **What being required FEELS like, because it is not obvious from the outside.** An unanswered
+thread leaves the pull request `mergeable_state: blocked` with every build green — and `blocked` is
+the same word REST returns for a pull request merely waiting its turn in the queue. Three pull
+requests sat green, armed and silently OUTSIDE the merge queue for ~45 minutes on the evening this
+landed, and nothing in the REST view distinguished that from progress. If a green, armed pull
+request is not merging, read this check before anything else, and read the merge queue ITSELF rather than
+`mergeable_state` — the queue is one of the two things REST cannot express:
+
+```bash
+gh api graphql -f query='{repository(owner:"Systemorph",name:"MeshWeaver"){
+  mergeQueue(branch:"main"){entries(first:20){totalCount nodes{position state
+  pullRequest{number}}}}}}'
+```
+
+A `totalCount` that does not contain your pull request, while other pull requests merge through it,
+is the reading that separates "held" from "waiting".
+
+🚨 **It is answered by replying ON the thread**, and nothing else does it:
+
+```bash
+gh api "repos/Systemorph/MeshWeaver/pulls/<n>/comments/<comment-id>/replies" -f body='…'
+```
+
+🚨 Quote the path. Unquoted, the shell reads `<n>` as a redirection and the command fails
+before `gh` runs — which looks like a broken instruction rather than a quoting mistake.
+
+### 🚨 Answering the threads is NECESSARY AND NOT SUFFICIENT — re-run the `pull_request` run
+
+This is the part that will cost you an hour if nobody says it, and it did.
+
+`review-answered.yml` runs on several events. Replying to a thread fires it on
+`pull_request_review_comment`, and that run goes GREEN and publishes a check-run named
+`Automatic review answered` — **in its own check suite**. The check-run the ruleset actually counts
+is the one from the **`pull_request`** event, which already ran, before your replies existed, and
+FAILED. Nothing re-runs it for you.
+
+So the steady state after answering every thread correctly is:
+
+* the newest `Automatic review answered` check-run says **success**,
+* `check-review-answered`'s own log says `GREEN — threads opened by the automatic reviewer: 5,
+  answered by a person: 5`,
+* and `statusCheckRollup` — which is what branch protection reads — still says **FAILURE**, citing
+  the older run,
+* so `mergeStateStatus` is **BLOCKED**, the pull request never enters the queue, and REST's
+  `mergeable_state: blocked` is indistinguishable from waiting a turn.
+
+**The remedy is to re-run the run that counts**, which re-evaluates live GitHub state and lands green
+in the suite branch protection reads:
+
+```bash
+# the check-run the rollup cites → its workflow run → re-run that
+gh api graphql -f query='{repository(owner:"Systemorph",name:"MeshWeaver"){
+  pullRequest(number:<n>){commits(last:1){nodes{commit{statusCheckRollup{
+  contexts(last:100){nodes{... on CheckRun{name conclusion databaseId}}}}}}}}}}'
+gh api "repos/Systemorph/MeshWeaver/check-runs/<databaseId>" --jq .details_url
+gh run rerun <run-id> --repo Systemorph/MeshWeaver
+```
+
+Measured 2026-09-17 on #4652: `BLOCKED` / rollup `FAILURE` → `CLEAN` / rollup `SUCCESS` /
+`isInMergeQueue: true`, within a minute of the re-run. Re-arming auto-merge first did **not** clear
+it — the rollup is not stale in the usual sense, it is citing a real, still-current failure from
+another suite.
+
+🚨 This is a legitimate re-run, not a "re-run and see": the check reads live GitHub state, and
+that state CHANGED when the replies landed. It is not the merge-queue re-run the steward forbids,
+and it is not `rerun-failed-jobs` on a test job reading a previous attempt's artefact.
+
+A PR-level issue comment does NOT count, however thorough — that mistake cost the same session
+another round-trip — and neither does resolving the thread. The check's own log names each
+unanswered thread with its URL, its file and line, and the finding's first line, so it tells you
+exactly what it wants.
 
 ## Why: a review was advisory
 
@@ -243,8 +317,12 @@ polls, then RED naming the quota refusal.
 
 ## Rollout
 
-The check lands **non-required**. The context to add to ruleset 2128472, beside
-`Consolidate test results`, is:
+🚨 **This section is HISTORY — the context was added, and the check is required (see Status above).**
+It is kept because the reasoning for the order of operations is worth having if the check ever has
+to be re-rolled.
+
+The check landed **non-required**. The context to add to ruleset 2128472, beside
+`Consolidate test results`, was:
 
 ```text
 Automatic review answered

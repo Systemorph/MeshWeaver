@@ -11,9 +11,11 @@
     "unchanged') and by hand-carrying edits. MeshWeaver.Plugins#705 measured what that produced.",
     "The gate that reads this file is .github/scripts/check-shared-rules.py.",
     "",
-    "ADDING A BLOCK: wrap the region in every listed repo with the markers, add the entry here,",
-    "and land it as ONE change set. The gate fails RED for a repo that is listed and has no",
-    "markers, so a half-landed adoption cannot be mistaken for a pass."
+    "ADDING A BLOCK takes THREE change sets, because the gate is red both ways: for a repo that is",
+    "listed and has no markers, and for a marker whose id this register does not declare. (1) core",
+    "wraps the hub's copy and registers the block with `required-in` naming only the hub; (2) the",
+    "spokes land their copies; (3) core widens `required-in` to every repo. SharedRuleBlocks.md",
+    "says why; never-hand-roll-ui (2026-09-15) is the worked example."
   ],
 
   "marker-syntax": {
@@ -218,7 +220,15 @@
     {
       "id": "never-hand-roll-ui",
       "hub": "Systemorph/MeshWeaver",
-      "required-in": ["Systemorph/MeshWeaver"],
+      "required-in": [
+        "Systemorph/MeshWeaver",
+        "Systemorph/MeshWeaver.Plugins",
+        "Systemorph/MeshWeaver.Education",
+        "Systemorph/MeshWeaver.Reinsurance",
+        "Systemorph/MeshWeaver.SocialMedia",
+        "Systemorph/MeshWeaver.Manufacturing",
+        "Systemorph/Memex"
+      ],
       "slots": ["reference"],
       "why": [
         "Maintainer directive, 2026-09-15: 'please refactor to use platform layout. see also in all the",
@@ -237,7 +247,10 @@
         "register does not declare, and it reads all seven repos, so six spokes landing before this entry",
         "would have reddened every core pull request until core merged. Step 1 registers the block with",
         "`required-in` naming only the hub (green on its own, and the id becomes known); step 2 lands the",
-        "six spoke copies; step 3 widens `required-in` to all seven."
+        "six spoke copies; step 3 widens `required-in` to all seven.",
+        "",
+        "Landed: step 1 core#4412; step 2 Plugins#1916, Education#337, Reinsurance#211,",
+        "SocialMedia#190, Manufacturing#91, Memex#363; step 3 this entry's widening."
       ]
     }
   ]

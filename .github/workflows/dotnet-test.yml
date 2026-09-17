@@ -2212,6 +2212,11 @@ jobs:
     - name: "The CI artifact store degrades to GitHub artifacts, and can say no (self-test)"
       run: python3 .github/scripts/ci-artifact-store.py --self-test
 
+    - name: "Own-store named artifacts preserve rerun inputs and reject corrupt archives"
+      run: python3 .github/scripts/test_ci_run_artifacts.py
+    - name: "The composite actions execute the own-store transport contract"
+      run: python3 .github/scripts/test-ci-artifact-actions.py
+
     # 🚨 combo-verify.yml fires on `workflow_run` / `workflow_dispatch`, NEVER on `pull_request`, so
     # nothing else on this PR opens it — the same blind spot #2642 cost 33 hours on. Its `preflight`
     # is the only thing between "no per-instance credential was provisioned" and a lane that

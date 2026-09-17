@@ -41,14 +41,20 @@ namespace MeshWeaver.Graph.Security;
 ///     <see cref="JsonException.Path"/> naming a MEMBER (<c>$.country</c>), never a whole-document
 ///     failure (<c>$</c>) — a missing <c>required</c> member is the ordinary partial-content shape
 ///     a legitimate writer produces, and refusing it would turn this guard into a schema-strictness
-///     change nobody asked for.</item>
+///     change nobody asked for. 🚨 "Not judged on the bind" means the whole-document failure falls
+///     THROUGH to rule 2, not that the exception leaves this method: a <c>when</c> filter on the
+///     catch let it escape and fail the write with the raw serializer text, which is the opposite
+///     of saying nothing (#4648).</item>
 ///   <item><b>Content NONE of whose members the declared type knows</b> — the
 ///     <c>{"markdown": "…"}</c>-on-a-Markdown-node shape. System.Text.Json's
 ///     <see cref="JsonUnmappedMemberHandling.Skip"/> makes this bind CLEANLY to an instance
 ///     carrying none of the authored data, which is why no exception can catch it. Refused only in
 ///     the total case — at least one member present and NOT ONE of them declared — so content
 ///     carrying an extra member alongside real ones (an older or newer writer, a legacy field)
-///     still lands, and the read path's <c>WarnIfLossy</c> keeps reporting what it drops.</item>
+///     still lands, and the read path's <c>WarnIfLossy</c> keeps reporting what it drops. This is
+///     also where a whole-document bind failure lands, so a declared type with a <c>required</c>
+///     member — whose bind throws before <c>Skip</c> can apply — is judged by the same rule as one
+///     without.</item>
 /// </list>
 ///
 /// <para><b>Scope, and why it is not the discriminator guard's.</b>
@@ -134,15 +140,34 @@ public sealed class ContentSchemaValidator : INodeValidator
             // already reads it directly (review on #4624).
             content.Deserialize(declared, options);
         }
-        catch (JsonException ex) when (MemberOf(ex.Path) is { } member)
+        catch (JsonException ex)
         {
-            return Refuse(
-                context,
-                LocalizationCatalog.Get(
-                    "content.schema.memberTypeMismatch", context.AccessContext?.Locale,
-                    node.Path, member, DeclaredTypeName(declared, member, options),
-                    ValueKindOf(content, member), declared.Name, node.NodeType!),
-                $"member '{member}' does not match its declared type");
+            // 🚨 The catch is UNCONDITIONAL and the judgement happens INSIDE it. A `when` filter
+            // here (the original shape) left a whole-document failure — `$`, which is what a
+            // missing `required` member raises — UNCAUGHT, so the JsonException escaped the
+            // validator and failed the write it documents as NOT JUDGED. The agent surface then
+            // reported the raw serializer text ("… was missing required properties including:
+            // 'content'") as the reason its update failed, in English, for a write this guard has
+            // no opinion about (Systemorph/MeshWeaver#4648: two MeshPluginTest cases red in core's
+            // CD, on a `Markdown` node whose content omitted `MarkdownContent.Content`).
+            if (MemberOf(ex.Path) is { } member)
+                return Refuse(
+                    context,
+                    LocalizationCatalog.Get(
+                        "content.schema.memberTypeMismatch", context.AccessContext?.Locale,
+                        node.Path, member, DeclaredTypeName(declared, member, options),
+                        ValueKindOf(content, member), declared.Name, node.NodeType!),
+                    $"member '{member}' does not match its declared type");
+
+            // A whole-document failure is not judged on the bind — a missing `required` member is
+            // the ordinary partial-content shape a legitimate writer produces. Fall THROUGH to the
+            // member-counting rule below rather than returning Valid here: that rule is the half
+            // that catches the `{"markdown":"…"}`-on-a-Markdown-node shape, and a content type with
+            // a `required` member is exactly the case where the bind throws before it ever runs.
+            _logger.LogDebug(ex,
+                "ContentSchemaGuard: content of {Path} does not bind to {ContentType} as a whole "
+                + "(no member blamed) — not judged on the bind; the declared-member rule decides.",
+                node.Path, declared.Name);
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
         {
@@ -156,7 +181,8 @@ public sealed class ContentSchemaValidator : INodeValidator
             return NodeValidationResult.Valid();
         }
 
-        // It bound — but UnmappedMemberHandling.Skip means "bound" can mean "carried nothing".
+        // It bound (or failed as a whole, above) — but UnmappedMemberHandling.Skip means "bound"
+        // can mean "carried nothing", and a type with a `required` member never gets that far.
         if (HasExtensionDataBuffer(declared, options))
             return NodeValidationResult.Valid();
         var names = DeclaredMemberNames(declared, options);

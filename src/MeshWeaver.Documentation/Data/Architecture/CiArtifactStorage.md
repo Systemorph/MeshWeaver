@@ -1,19 +1,24 @@
 ---
 Name: CiArtifactStorage
 Category: Architecture
-Description: Where CI's big build outputs live — the measured GitHub Actions storage bill, which artifacts are cross-run and which are a handoff, the object-store seam and its degrade rule, and the two grants the migration still needs
+Description: The measured GitHub Actions storage bill, cross-run and same-run artifacts, and the object-store and named-artifact migration contracts
 Icon: CloudArchive
 ---
 
 # CI artifact storage — the bytes, the bill, and where they belong
 
 **Compute left GitHub; storage has not.** Every private-repo job now runs on our ARC scale sets
-(`aks-silos` / `aks-silos-dind`) and the org's Actions budget carries `prevent_further_usage` —
-nothing in a private repo can start a GitHub-hosted runner any more. What is still billed is
+(`aks-silos` / `aks-silos-dind`). Runner routing and billing limits are separate controls: a
+positive Actions budget does not enforce self-hosted-only execution. What is still billed is
 **Actions storage**, and it is the whole of the remaining Actions line.
 
 > Maintainer, 2026-09-17: *"we still incur cost for github actions … please see that it goes to 0"*
 > · *"disable for any private repo"* · *"and when free capacity gone => defer to our infra"*.
+
+The object-store changes described below do **not** by themselves remove every GitHub artifact
+handoff. [PR artifacts on our infrastructure](../OwnPrArtifacts) documents the named-artifact
+adapter, partial-rerun contract, shared-mount proof and remaining rollout gates. Do not treat a
+declared store variable, an admission check or an extra durable copy as proof of zero uploads.
 
 🚨 **READ THE BUDGET, NEVER REMEMBER IT — the amount moves within the day, and the whole fleet's CI
 hangs off it.** `GET /organizations/Systemorph/settings/billing/budgets` (the classic
