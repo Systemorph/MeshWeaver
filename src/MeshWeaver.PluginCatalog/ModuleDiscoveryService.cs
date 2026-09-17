@@ -784,11 +784,16 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
     {
         var (owner, name) = ModuleDiscovery.SplitRepo(source.RepoPath);
         var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
-        var sealedForThisIdentity = SealedPublicationIndex.ReadFor(
+        // 🚨 `ReadingFor`, not `ReadFor`: an unreadable index HOLDS this first import rather than
+        // provisioning the Space from the branch tip (#3461). The two answers are the same empty
+        // list, and at a first import there is no built commit and no `LastSyncCommitSha` to
+        // attribute a seal with, so "I could not look" is indistinguishable from "not my business".
+        var reading = SealedPublicationIndex.ReadingFor(
             hub.ServiceProvider.GetService<IConfiguration>()?[ShippedPrebuiltBundles.PublishedRootConfigKey],
             identity, logger);
-        return SealedSyncGate.DecideFirstImport(
-            new RepoIdentity(owner, name), sealedForThisIdentity, identity);
+        return SealedSyncGate.RefusedFirstImportForUnreadableIndex(reading.Outcome, identity)
+            ?? SealedSyncGate.DecideFirstImport(
+                new RepoIdentity(owner, name), reading.Sources, identity);
     }
 
     /// <summary>The branch a sync entry commits against. A ref of <c>HEAD</c> (the catalog default,

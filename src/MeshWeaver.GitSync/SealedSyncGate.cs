@@ -351,9 +351,10 @@ public static class SealedSyncGate
     /// <para>This is deliberately NOT a parameter of <c>Decide</c>. The question is not per
     /// repository — if the index could not be read, no per-repository answer is trustworthy — so
     /// the caller asks ONCE per delivery, before any verdict, and holds every source when it
-    /// answers. #3461 phase 5 (dropping the flat compatibility copy) is the documented trigger:
-    /// this reader would find no sentinel at all and silently switch the whole rule off at the
-    /// moment it matters most.</para>
+    /// answers. #3461 phase 5 (disposing of the flat compatibility copy) is the documented
+    /// trigger, and it is live since that landed: a pointer read while it is being replaced falls
+    /// back to a source directory that no longer holds a publication, so the source reads as
+    /// unsealed AND unattributable — which this gate would otherwise answer with Go.</para>
     /// </summary>
     /// <param name="outcome">What <see cref="SealedPublicationIndex.ReadingFor"/> reported.</param>
     /// <param name="identity">This instance's framework identity — log copy only.</param>
@@ -365,6 +366,32 @@ public static class SealedSyncGate
                 + "not be READ (see the SealedPublicationIndex warning above it) — that is an "
                 + "absence of measurement, not an empty index, so every source is held rather "
                 + "than advanced. 'Cannot tell' is never 'clear to proceed' (#3461)")
+            : null;
+
+    /// <summary>
+    /// The same precondition for a FIRST import (<see cref="DecideFirstImport"/>), whose two
+    /// unattended callers — <c>ModuleDiscoveryService.FirstImport</c> and
+    /// <c>InstanceAutoRegistrationService</c>'s boot default install — read the index themselves.
+    ///
+    /// <para>🚨 It is a separate method rather than an overload of <c>DecideFirstImport</c> on
+    /// purpose: an added overload makes every parameterless <c>&lt;see cref&gt;</c> to that name
+    /// ambiguous (<c>CS0419</c> under <c>-warnaserror</c>), here and in every repository that pins
+    /// this assembly.</para>
+    ///
+    /// <para>A first import reads WORSE from an unreadable index than a green build does, because
+    /// only the repository MARKER can attribute a seal there — no built commit, no
+    /// <c>LastSyncCommitSha</c> — so an unattributable source is indistinguishable from "this
+    /// instance runs no publication of that repository" and the Space would be populated from the
+    /// branch TIP. A held first import leaves a Space with its sync entry and no content, which
+    /// the next scan, the next seal arrival or the next boot completes.</para>
+    /// </summary>
+    /// <param name="outcome">What <see cref="SealedPublicationIndex.ReadingFor"/> reported.</param>
+    /// <param name="identity">This instance's framework identity — log copy only.</param>
+    /// <returns>A holding <see cref="FirstImportPlan"/>, or null when the reading is usable.</returns>
+    public static FirstImportPlan? RefusedFirstImportForUnreadableIndex(
+        SealedReadOutcome outcome, string identity)
+        => RefusedForUnreadableIndex(outcome, identity) is { HoldReason: { } reason }
+            ? Hold(reason)
             : null;
 
     /// <summary>
