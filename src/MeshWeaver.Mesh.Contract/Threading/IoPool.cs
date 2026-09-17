@@ -247,10 +247,13 @@ public sealed class IoPool : IIoPool, IDisposable
     // and never moves back. _gateUsers cannot serve, because it is a live CENSUS — it rises on an
     // arrival exactly as far as it falls on a completion.
     //
-    // Drain() used to take a baseline of that census and wait for it to fall BELOW it. Every entry
-    // point defers its prologue to the ThreadPool (SubscribeOn), so a leaf whose Subscribe() had
-    // already returned enters its region AFTER the drain has taken that baseline — routine, and
-    // the busier the machine the likelier. Each such arrival then cancelled out a completion one
+    // Drain() used to take a baseline of that census and wait for it to fall BELOW it. Invoke and
+    // InvokeStream defer their prologue to the ThreadPool (SubscribeOn) — and so does the SETUP
+    // LEAF of SubscribeThroughPool, whose synchronous outer region is released before it runs — so
+    // a leaf whose Subscribe() had already returned enters its region AFTER the drain has taken
+    // that baseline; routine, and the busier the machine the likelier. (InvokeBlocking is the one
+    // path with no such gap: its region is taken on the subscriber's thread and spans the whole
+    // leaf.) Each such arrival then cancelled out a completion one
     // for one, so the predicate could not fire until EVERY arrival had also finished: the
     // per-completion grace silently became a single total budget for the whole queue, and whatever
     // was still running when it expired was cancelled. Work the pool had accepted, was making
@@ -265,13 +268,23 @@ public sealed class IoPool : IIoPool, IDisposable
     // ordering through OnDrainGraceBaselineTaken instead of waiting for load to arrange it.
     //
     // 🚨 THIS REMOVES THE MASKING, NOT THE WHOLE WINDOW — #4555. Between Subscribe() returning and
-    // the ThreadPool running the prologue above, an Invoke/InvokeStream leaf is counted by NOTHING,
-    // so a drain whose outstanding count reaches zero in that gap ends its grace and cancels the
-    // leaf when it finally arrives — too late even to be NAMED. (InvokeBlocking and
-    // SubscribeThroughPool do not have that gap: both take their region on the subscriber's
-    // thread.) Structurally evident, never measured as having fired, and deliberately not fixed
-    // here: closing it moves the admission onto the subscriber's thread in two entry points, which
-    // is a change to the subscribe path rather than to the drain.
+    // the ThreadPool running the prologue, a leaf is counted by NOTHING, so a drain whose
+    // outstanding count reaches zero in that gap ends its grace without ever having seen it. THREE
+    // of the four entry points have such a window, and the consequence differs:
+    //
+    //  • Invoke / InvokeStream — the leaf is cancelled at its gate wait when it finally arrives,
+    //    too late even to be NAMED: accepted work discarded silently.
+    //  • SubscribeThroughPool's SETUP LEAF — its synchronous outer region is released in the
+    //    subscribe's finally, before the leaf runs. Milder, because the drain registration is
+    //    already ARMED (#4524) and the leaf re-checks its linked token before `source.Subscribe`,
+    //    so the leg is refused and TERMINATED rather than run after teardown — the use-after-unload
+    //    precondition is not reopened. What is lost is that the drain does not WAIT for it.
+    //  • InvokeBlocking — no gap: its region is taken on the subscriber's thread and spans the
+    //    whole leaf (closed by the ContinueWith).
+    //
+    // Structurally evident, never measured as having fired, and deliberately not fixed here:
+    // closing it moves the admission onto the subscriber's thread, which is a change to the
+    // subscribe path rather than to the drain.
     private long _admissionsCompleted;
 
     /// <summary>Number of operations currently executing through this pool.</summary>

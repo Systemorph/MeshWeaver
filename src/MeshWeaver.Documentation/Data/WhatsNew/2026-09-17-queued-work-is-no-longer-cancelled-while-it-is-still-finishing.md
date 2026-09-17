@@ -1,7 +1,7 @@
 ---
 Name: Queued work is no longer cancelled while it is still finishing
 Category: Fix
-Description: At shutdown the I/O pool gives in-flight work a grace period to finish, restarted by every completion. Work that reached the pool while that grace was running cancelled the reading out one for one, so the grace quietly became a single budget for the whole queue and the last items were killed seconds from the end of work they were going to complete. The drain now counts completions instead of inferring them.
+Description: At shutdown the I/O pool gives in-flight work a grace period to finish, restarted by every completion. It detected completions by watching a count of outstanding work fall — but work arriving mid-shutdown raised that same count, hiding the completions one for one, so the grace quietly became a single budget for the whole queue and the last items were killed seconds from the end of work they were going to complete. The drain now counts completions instead of inferring them.
 Icon: Timer
 Order: -20260917
 ---
@@ -16,11 +16,11 @@ writes drains in ten completions, and a write that would have landed in 50 ms la
 That promise held only while the pool's admission count moved in one direction, and it does not. The
 drain took a baseline of how much work was outstanding and waited for that number to fall below it —
 but the number **rises on an arrival exactly as far as it falls on a completion**, and arrivals
-during a drain are routine rather than exotic, because the pool hands every operation's start-up to
+during a drain are routine rather than exotic, because the pool hands most operations' start-up to
 the thread pool. So a task whose caller had already queued it joined the count after the baseline was
-taken, and cancelled out a completion. The reading stopped moving while the pool was finishing one
-item after another, and the per-completion grace silently became one total budget for the whole
-queue. Whatever was still running when it expired was cancelled — work the pool had accepted, was
+taken, and hid a completion behind its own arrival. The reading stopped moving while the pool was
+finishing one item after another, and the per-completion grace silently became one total budget for
+the whole queue. Whatever was still running when it expired was cancelled — work the pool had accepted, was
 making progress on, and had no reason to stop.
 
 In the measured case the pool completed four items in the window and the drain called it a stall,

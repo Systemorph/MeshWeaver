@@ -650,9 +650,11 @@ baseline of the admission count and wait for it to fall below it.
 
 **That reads progress off a counter that moves in both directions.** `_gateUsers` is a live census:
 it rises on an arrival exactly as far as it falls on a completion. And arrivals during a drain are
-routine rather than exotic, because the pool creates them itself — every entry point defers its
-prologue to the ThreadPool (`SubscribeOn`), so a leaf whose `Subscribe()` returned *before* the drain
-enters its gate region *after* the drain has taken its baseline. Each such arrival then cancels out a
+routine rather than exotic, because the pool creates them itself — `Invoke` and `InvokeStream` defer
+their prologue to the ThreadPool (`SubscribeOn`), as does `SubscribeThroughPool`'s setup leaf, so a
+leaf whose `Subscribe()` returned *before* the drain enters its gate region *after* the drain has
+taken its baseline. (`InvokeBlocking` is the exception: its region is taken on the subscriber's
+thread and spans the whole leaf.) Each such arrival then cancels out a
 completion one for one, and the predicate cannot fire until **every** arrival has also finished:
 
 | | what the pool did | what the grace saw |
@@ -715,15 +717,21 @@ have degenerated into unconditional patience.
 
 #### 🚨 The residue: a leaf between `Subscribe()` and its prologue is invisible, and that is separate
 
-Closing this closes the masking, not the whole window. `Invoke` and `InvokeStream` enter their gate
-region *inside* the `SubscribeOn`'d body, so between `Subscribe()` returning and the ThreadPool
-running that prologue the leaf is counted by nothing — the drain cannot extend a grace for work it
-cannot see, and if the outstanding count reaches zero in that gap the grace ends and the leaf is
-cancelled when it finally arrives, silently. (`InvokeBlocking` and `SubscribeThroughPool` do not have
-this gap: both take their region synchronously on the subscriber's thread.) That window is the pool's
-own making and is structurally evident in the code, but it was **not** the mechanism measured here and
-is not closed by this change. It is tracked as **#4555**, separately and deliberately: closing it
-means moving the admission onto the subscriber's thread in those two entry points, which is a change
+Closing this closes the masking, not the whole window. Between `Subscribe()` returning and the
+ThreadPool running the prologue, a leaf is counted by nothing at all — the drain cannot extend a
+grace for work it cannot see, and if the outstanding count reaches zero in that gap the grace simply
+ends. **Three of the four entry points have such a window**, and the consequence is not the same in
+each:
+
+| entry point | region taken | consequence of the gap |
+|---|---|---|
+| `Invoke` / `InvokeStream` | inside the `SubscribeOn`'d body | the leaf is cancelled at its gate wait when it finally arrives, too late even to be **named** — accepted work discarded silently |
+| `SubscribeThroughPool` (setup leaf) | outer region released in the subscribe's `finally`, before the leaf runs | milder: the drain registration is already **armed**, and the leaf re-checks its linked token before `source.Subscribe`, so the leg is refused and **terminated** rather than run after teardown. The use-after-unload precondition is not reopened; what is lost is that the drain does not *wait* for it |
+| `InvokeBlocking` | subscriber's thread, spanning the whole leaf | **none** |
+
+That window is the pool's own making and is structurally evident in the code, but it was **not** the
+mechanism measured here and is not closed by this change. It is tracked as **#4555**, separately and
+deliberately: closing it means moving the admission onto the subscriber's thread, which is a change
 to the subscribe path — the same path #4530 / #4545 are editing — rather than to the drain. Both
 defects can produce the same observable symptom, a queued leaf cancelled during a drain, which is
 exactly why they are worth keeping apart.

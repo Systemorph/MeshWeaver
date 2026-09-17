@@ -18,9 +18,10 @@ namespace MeshWeaver.Hosting.Test;
 /// census moved in ONE direction.
 ///
 /// <para><b>It does not.</b> The drain took a baseline of the live admission count and then waited
-/// for that count to fall BELOW it. The count also RISES — every entry point defers its prologue
-/// to the ThreadPool (<c>SubscribeOn</c>), so a leaf whose <c>Subscribe()</c> returned before the
-/// drain enters its gate region after the drain has taken its baseline. Each such arrival cancels
+/// for that count to fall BELOW it. The count also RISES — <see cref="IoPool.Invoke{T}"/> and
+/// <see cref="IoPool.InvokeStream{T}"/> defer their prologue to the ThreadPool (<c>SubscribeOn</c>),
+/// so a leaf whose <c>Subscribe()</c> returned before the drain enters its gate region after the
+/// drain has taken its baseline. Each such arrival cancels
 /// out a completion one for one, so the predicate can only fire once EVERY arrival has also
 /// finished: the per-completion grace silently becomes a single total budget for the whole queue,
 /// and whatever is left when it expires is cancelled — accepted work discarded, which is the one
@@ -94,6 +95,12 @@ public class IoPoolDrainGraceTest
         var releaseHolder = 0;
         var completed = 0;
         var cancelled = 0;
+        // 🚨 The repro's PRECONDITION, recorded so it can be ASSERTED. A synchronisation that
+        // proceeds on timeout is a verification step that cannot fail: if the queued leaves never
+        // reached the gate, everything below would pass having exercised nothing. Asserted after
+        // Drain() returns rather than thrown from inside the seam, so the failure names the
+        // precondition instead of escaping through the pool's teardown path.
+        var queuedLeavesReachedTheGate = false;
 
         // THE HOLDER. Admitted before the drain, so the drain's baseline counts exactly one unit of
         // accepted work — which is the whole point: everything else arrives on the far side of it.
@@ -116,10 +123,16 @@ public class IoPoolDrainGraceTest
             return Task.FromResult(0);
         }).Subscribe(_ => { }, _ => { });
 
-        // ISSUED BEFORE THE DRAIN — the pool's build-time refusal (`_draining`) rejects anything
-        // issued after it, and these are deliberately not that case: they are work the pool had
-        // already accepted, subscribed and queued. Only their arrival AT THE GATE is deferred, to
-        // the far side of the baseline, which is what a saturated ThreadPool does on its own.
+        // ISSUED BEFORE THE DRAIN, SUBSCRIBED AT THE SEAM. Issuing them here is what matters for
+        // the pool's build-time refusal: `_draining` rejects anything ISSUED after the drain
+        // begins, and these are deliberately not that case. They are cold, so nothing runs yet —
+        // the seam below subscribes them, which places their arrival AT THE GATE on the far side
+        // of the baseline.
+        //
+        // That placement is the point, and it is what a saturated ThreadPool produces on its own:
+        // the defect turns on WHEN the gate region is entered relative to the baseline, not on when
+        // Subscribe() was called, so arranging it deliberately models the same mechanism without
+        // waiting for load to arrange it.
         var queued = Enumerable.Range(0, QueuedLeaves)
             .Select(_ => pool.Invoke(async ct =>
             {
@@ -147,8 +160,10 @@ public class IoPoolDrainGraceTest
                     leaf.Subscribe(_ => { }, _ => { });
                 // Every queued leaf is provably AT THE GATE: it holds a region, so the drain can
                 // see it, and it is waiting for the slot the holder still owns. Structural, not a
-                // guess about ThreadPool dispatch order.
-                SpinWait.SpinUntil(() => pool.CurrentlyWaiting == QueuedLeaves, ReleaseBound);
+                // guess about ThreadPool dispatch order — and RECORDED, so the assertions below
+                // can prove it actually happened.
+                queuedLeavesReachedTheGate =
+                    SpinWait.SpinUntil(() => pool.CurrentlyWaiting == QueuedLeaves, ReleaseBound);
                 Volatile.Write(ref releaseHolder, 1);
             };
 
@@ -156,6 +171,9 @@ public class IoPoolDrainGraceTest
             var residual = pool.Drain();
             sw.Stop();
 
+            queuedLeavesReachedTheGate.Should().BeTrue(
+                "the whole repro is that work reaching the gate AFTER the baseline must not consume "
+                + "the grace — if the queued leaves never got there, nothing below was exercised");
             residual.Should().Be(0, "nothing ignored its token — the drain's join is real");
             sw.Elapsed.Should().BeGreaterThan(Grace,
                 "the queue outlasts one whole grace BY CONSTRUCTION (3 × 800 ms of work against a "
@@ -195,6 +213,8 @@ public class IoPoolDrainGraceTest
         var holderAdmitted = new AsyncSubject<Unit>();
         var releaseHolder = 0;
         var wedgedWasCancelled = false;
+        // Same precondition, same reason as the repro above: asserted, never assumed.
+        var wedgedLeafReachedTheGate = false;
 
         pool.Invoke(ct =>
         {
@@ -227,12 +247,16 @@ public class IoPoolDrainGraceTest
             pool.OnDrainGraceBaselineTaken = () =>
             {
                 wedged.Subscribe(_ => { }, _ => { });
-                SpinWait.SpinUntil(() => pool.CurrentlyWaiting == 1, ReleaseBound);
+                wedgedLeafReachedTheGate =
+                    SpinWait.SpinUntil(() => pool.CurrentlyWaiting == 1, ReleaseBound);
                 Volatile.Write(ref releaseHolder, 1);
             };
 
             pool.Drain();
 
+            wedgedLeafReachedTheGate.Should().BeTrue(
+                "this control only means anything for a leaf that actually reached the gate after "
+                + "the baseline — the same mid-drain admission the repro above exercises");
             wedgedWasCancelled.Should().BeTrue(
                 "a leaf that outlives a whole grace with nothing finishing is wedged, and the drain "
                 + "stops it — patience for accepted work is not patience for work that never ends");
