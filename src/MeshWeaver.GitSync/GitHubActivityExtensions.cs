@@ -459,6 +459,73 @@ public static class GitHubActivityExtensions
     }
 
     /// <summary>
+    /// 🚨 <b>An unattended import that lands on the SEALED commit rather than on the built one</b> —
+    /// <see cref="UpdateToProvenCommitFromGitHub"/>'s sibling for the green-build lane's redirect
+    /// (MeshWeaver#3845; review on #4576).
+    ///
+    /// <para><b>Why it is a separate surface and not a parameter.</b> The proven-commit activity
+    /// titles its commit <i>"the built commit"</i> and its progress line <i>"the commit the build
+    /// proved"</i>. For a redirect that is the one thing that is not true: the commit that lands is
+    /// the one this instance's BUNDLES were baked from, and the built commit is precisely what did
+    /// NOT arrive. An operator reading the activity — the artefact a person reads, not the server
+    /// log — would be told the opposite of what happened. Adding an optional parameter to the
+    /// proven-commit method instead would be a binary break for every assembly compiled against its
+    /// current signature (a call site bakes its whole argument list), which for this framework
+    /// includes prebuilt module bundles.</para>
+    ///
+    /// <para><paramref name="notice"/> is the gate's own statement, already keyed for the viewer's
+    /// language (<c>SealedSyncGate.ImportPlan.Notice</c>): what was asked for, what lands, and what
+    /// moves the Space further. It is logged onto the activity BEFORE the fetch, so the record says
+    /// why before it says what.</para>
+    /// </summary>
+    /// <param name="hub">The hub the activity and the import run on.</param>
+    /// <param name="spacePath">The Space to bring to <paramref name="commitSha"/>.</param>
+    /// <param name="userId">The GitHub identity whose credential authenticates the pull.</param>
+    /// <param name="commitSha">The sealed commit. Required — there is no branch-HEAD fallback.</param>
+    /// <param name="notice">The gate's viewer-localized lines, or empty.</param>
+    /// <param name="onActivityCreated">Receives the activity path as soon as it exists.</param>
+    /// <param name="sourceId">The sync source (null = the primary).</param>
+    public static IObservable<string> UpdateToSealedCommitFromGitHub(
+        this IMessageHub hub, string spacePath, string userId, string commitSha,
+        IReadOnlyList<LogMessage> notice, Action<string>? onActivityCreated = null,
+        string? sourceId = null)
+    {
+        if (string.IsNullOrWhiteSpace(commitSha))
+            return Observable.Throw<string>(new ArgumentException(
+                $"An import of '{spacePath}' at the sealed commit must name it; there is no "
+                + "branch-HEAD fallback (MeshWeaver.Plugins#1430).", nameof(commitSha)));
+
+        var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
+        var shortSha = Short(commitSha);
+        // 🚨 #3510 — hold the Space's root for the whole import; see HoldSpaceDuringImport.
+        return HoldSpaceDuringImport(hub, spacePath,
+            $"GitSync: an unattended import is writing '{spacePath}' at the sealed commit {shortSha}",
+            TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
+            () => hub.RunActivity(spacePath, ActivityCategory.Import,
+                new LogMessage(
+                        $"Update {spacePath} to the sealed commit {shortSha}", LogLevel.Information)
+                    .WithKey("activity.gitsync.updateToSealedCommit.title",
+                        ("space", spacePath), ("sha", shortSha)),
+                ctx =>
+                {
+                    foreach (var line in notice ?? [])
+                        ctx.Log(line);
+                    ctx.Log(new LogMessage(
+                            $"Fetching {shortSha} — the commit this instance's bundles were baked from — "
+                            + "from GitHub and importing the deltas…", LogLevel.Information)
+                        .WithKey("activity.gitsync.seal.fetching", ("sha", shortSha)));
+                    return sync.ReimportAtCommit(spacePath, commitSha, userId, sourceId, ctx.Log, force: false)
+                        .Select(r =>
+                        {
+                            if (r.PrunedPaths.Count > 0)
+                                ctx.Log(PrunedLine(r));
+                            LogImportOutcome(ctx, r, commitish: shortSha);
+                            return Unit.Default;
+                        });
+                }, onActivityCreated)));
+    }
+
+    /// <summary>
     /// <see cref="UpdateToProvenCommitFromGitHub"/> in RECONCILE mode
     /// (<see cref="ImportConflictPolicy.Reconcile"/>): the import re-evaluates the partition against
     /// the tree at <paramref name="commitSha"/> even when the content fingerprint matches a prior
@@ -626,7 +693,38 @@ public static class GitHubActivityExtensions
     {
         if (FailedNodesLine(result) is { } failedNodes)
             ctx.Log(failedNodes);
+        if (BundleHeldLine(result) is { } bundleHeld)
+            ctx.Log(bundleHeld);
         ctx.Log(ImportedLine(result, commitish));
+    }
+
+    /// <summary>
+    /// 🚨 <b>The NodeTypes whose SOURCES this import held for their bundle</b> (MeshWeaver#3845
+    /// hole 4) — named on the activity, in the viewer's language, by every import path at once,
+    /// because they all end here.
+    ///
+    /// <para>Warning, not Information: the Space is deliberately NOT at the commit the rest of it
+    /// took, and a reader who is told only "Imported" would draw the opposite conclusion. The
+    /// activity's terminal status therefore reads <c>Warning</c>, which is the honest state — nothing
+    /// failed, and nothing is complete either.</para>
+    /// </summary>
+    private static LogMessage? BundleHeldLine(StaticRepoImportResult result)
+    {
+        if (result.BundleHeldNodeTypePaths.Count == 0)
+            return null;
+        const int Named = 10;
+        var paths = string.Join(", ", result.BundleHeldNodeTypePaths.Take(Named))
+            + (result.BundleHeldNodeTypePaths.Count > Named
+                ? $", … (+{result.BundleHeldNodeTypePaths.Count - Named} more)"
+                : "");
+        return new LogMessage(
+                $"⏸ {result.BundleHeldNodeTypePaths.Count} NodeType(s) keep the sources their adopted "
+                + "build was compiled from — no bundle for this instance's framework identity carries "
+                + $"the repository's newer sources yet: {paths}. They advance when one does, or when "
+                + "this instance rolls onto a platform that has one.",
+                LogLevel.Warning)
+            .WithKey("activity.gitsync.bundleHeldTypes",
+                ("count", result.BundleHeldNodeTypePaths.Count), ("paths", paths));
     }
 
     /// <summary>
