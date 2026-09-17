@@ -808,6 +808,40 @@ def write_project(work: Path, cs_files, refs: dict):
 
 
 
+# 🚨 OPT-IN, and OFF is today's behaviour byte for byte. A repo turns this on only once its
+# in-mesh warning debt is actually paid (MeshWeaver.Plugins, 2026-09-17: 87 sites fixed,
+# plugin-gate-warnings.allow emptied of every code but the two centrally-suppressed families).
+# Defaulting it on would red every satellite that has not, on a gate it cannot pass — which is the
+# one thing a ratchet must never do.
+WARNINGS_AS_ERRORS = False
+
+# The in-mesh compile's NoWarn when warnings are errors — the PARITY list, and nothing else. It is
+# CompileWarning.NotReported spelled for MSBuild, minus CS1701/CS1702 which the SDK's own
+# Microsoft.NET.Sdk.CSharp.props already seeds into $(NoWarn) and which this file inherits by
+# appending rather than replacing.
+PARITY_NOWARN = "CS1591;CS1573;CS1712"
+
+# 🚨 The LENIENT list is NOT a smaller parity list — it is the old behaviour, kept verbatim so that
+# leaving the flag off cannot change a verdict. It silences CS1998 (an async method with no await)
+# in the one tree where `async` is a hard architectural ban, CS0618 ([Obsolete] use) in the one tree
+# whose cellSurface retirement policy depends on those being noticed, and three nullable codes. That
+# is exactly why the flag exists.
+LENIENT_NOWARN = "$(NoWarn);CS1591;CS1998;CS8618;CS8602;CS8604;CS0618"
+
+ANALYZERS_OFF = """    <!-- 🚨 The MESH runs NO analyzers. `EmitPipeline` builds a bare CSharpCompilation — no
+         analyzer references, no analysis level — so an analyzer diagnostic here is a property of
+         THIS csproj and cannot exist in production. Measured on MeshWeaver.Plugins: with warnings
+         as errors and analyzers left on, CA1416 (platform compatibility) failed 31 of 98 NodeTypes
+         with "'HttpClient' is only supported on: 'linux'", because the reference set IS the Linux
+         image's implementation assemblies and the analyzer reads their SupportedOSPlatform
+         attributes. Exactly the CS1701 shape: a reference-set artefact filed under the content's
+         name, unpayable by any author. -->
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <AnalysisLevel>none</AnalysisLevel>
+    <RunAnalyzers>false</RunAnalyzers>
+"""
+
+
 def build_csproj(work: Path, cs_files, ref_xml: str, with_config_check: bool = False,
                  impl_frameworks: bool = False) -> str:
     compiles = '    <Compile Include="GlobalUsings.cs" />\n'
@@ -843,10 +877,22 @@ def build_csproj(work: Path, cs_files, ref_xml: str, with_config_check: bool = F
     # before reaching this line, and a pin is a second place to forget that the platform moved.
     framework_items = ("" if impl_frameworks else
                        '    <FrameworkReference Include="Microsoft.AspNetCore.App" />\n')
+    # 🚨 `annotations`, NOT `enable`, when warnings are errors — and this is the difference between
+    # a gate and a false red. The MESH compiles with NullableContextOptions.Annotations
+    # (EmitPipeline.CreateCompilationOptions), so nullable ANALYSIS runs only in files that opt in
+    # with `#nullable enable`. `enable` here turns it on for every file, so the gate would report
+    # CS8618/CS8602 sites that do not exist in production. The lenient path keeps `enable` because
+    # it also NoWarns those three codes, which is how the divergence went unnoticed.
+    nullable = "annotations" if WARNINGS_AS_ERRORS else "enable"
+    wae = "true" if WARNINGS_AS_ERRORS else "false"
+    analyzers = ANALYZERS_OFF if WARNINGS_AS_ERRORS else ""
+    nowarn = f"$(NoWarn);{PARITY_NOWARN}" if WARNINGS_AS_ERRORS else LENIENT_NOWARN
+    # Doc diagnostics are only PRODUCED with the documentation file on — the mesh parses with
+    # DocumentationMode.Diagnose, so a gate that leaves this off cannot see a broken cref at all.
+    docfile = "true" if WARNINGS_AS_ERRORS else "false"
     return f'''<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
     <!-- Disable the SDK's implicit usings: the MESH compiler injects ONLY the explicit prelude
          (IMPLICIT_USINGS, lifted from DynamicMeshNodeAttributeGenerator) plus the per-set union of
          authored `using`s. `ImplicitUsings=enable` would auto-add System.IO / System.Net.Http /
@@ -854,9 +900,10 @@ def build_csproj(work: Path, cs_files, ref_xml: str, with_config_check: bool = F
          `using System.IO;` would compile here but fail on the mesh (a false PASS). -->
     <ImplicitUsings>disable</ImplicitUsings>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-    <NoWarn>$(NoWarn);CS1591;CS1998;CS8618;CS8602;CS8604;CS0618</NoWarn>
-    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Nullable>{nullable}</Nullable>
+{analyzers}    <TreatWarningsAsErrors>{wae}</TreatWarningsAsErrors>
+    <NoWarn>{nowarn}</NoWarn>
+    <GenerateDocumentationFile>{docfile}</GenerateDocumentationFile>
     <RestoreSources>$(RestoreSources);https://api.nuget.org/v3/index.json</RestoreSources>
 {impl_props}  </PropertyGroup>
   <ItemGroup>
@@ -1255,6 +1302,13 @@ def main() -> int:
     ap.add_argument("--image", action="store_true",
                     help="compile against the assemblies from the PLATFORM IMAGE (what CI uses and "
                          "what actually ships), cached per digest under ~/.cache/meshweaver/refs/ — see fetch-refs.py")
+    ap.add_argument("--warnings-as-errors", action="store_true",
+                    help="hold in-mesh C# to the same standard src/ is held to: warnings become "
+                         "ERRORS, NoWarn narrows to the parity list (CS1591;CS1573;CS1712 plus the "
+                         "SDK's own CS1701;CS1702), the documentation file is generated so doc "
+                         "diagnostics are produced at all, and the nullable context becomes "
+                         "`annotations` to match the mesh. OPT-IN: a repo turns it on once its "
+                         "in-mesh warning debt is paid.")
     ap.add_argument("--self-test", action="store_true",
                     help="check the using-directive parser against its known shapes and exit")
     ap.add_argument("--gen-allow", action="store_true",
@@ -1268,6 +1322,13 @@ def main() -> int:
                          "that has to RELAY the result reads, e.g. core's per-satellite compat lane. "
                          "Never changes the exit code.")
     args = ap.parse_args()
+
+    global WARNINGS_AS_ERRORS
+    WARNINGS_AS_ERRORS = args.warnings_as_errors
+    if WARNINGS_AS_ERRORS:
+        print("mode: WARNINGS ARE ERRORS — NoWarn is the parity list "
+              f"({PARITY_NOWARN} + the SDK's CS1701;CS1702), nullable context `annotations` "
+              "(as the mesh compiles), documentation file ON")
 
     if args.self_test:
         return _self_test()
