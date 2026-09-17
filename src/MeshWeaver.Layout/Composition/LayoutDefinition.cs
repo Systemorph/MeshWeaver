@@ -334,16 +334,36 @@ public record LayoutDefinition(IMessageHub Hub)
         var availableAreas = NamedRenderers.Keys.OrderBy(k => k).ToArray();
         var availableLine = availableAreas.Length == 0
             ? "_no named areas registered on this hub_"
-            : "Available named areas: " + string.Join(", ", availableAreas.Select(a => $"`{a}`"));
+            : "Available named areas: " + string.Join(", ", availableAreas.Select(a => $"`{Safe(a)}`"));
         return new MarkdownControl(
             $"{text.Title}\n\n{text.Unaffected}\n\n"
-            + $"<details><summary>{text.Details}</summary>\n\n"
-            + $"**Area not found**\n\nNo renderer is registered for area `{area}` on hub `{host.Hub.Address}`.\n\n"
+            + $"<details><summary>{Safe(text.Details)}</summary>\n\n"
+            + $"**Area not found**\n\nNo renderer is registered for area `{Safe(area)}` on hub `{Safe(host.Hub.Address)}`.\n\n"
             + $"{availableLine}\n\n</details>")
         {
             Id = AreaFrameClassifier.AreaNotFoundId
         };
     }
+
+    /// <summary>
+    /// HTML-encodes a value interpolated into this frame's markdown.
+    ///
+    /// <para>🚨 <b><see cref="RenderingContext.Area"/> comes from the REQUEST — the URL — and this
+    /// repo's Markdig pipeline allows raw HTML</b> (review on #4633). A code span is not a defence:
+    /// a crafted area name carrying a backtick closes the span and the rest lands in markdown TEXT,
+    /// where an <c>&lt;img onerror=…&gt;</c> would be emitted verbatim. Encoding is what makes the
+    /// break-out inert — after it there is no <c>&lt;</c> left to open a tag with, wherever in the
+    /// string the value ends up. Applied to every interpolated value, not only the two that are
+    /// attacker-reachable today, because which of them is reachable is a property of the CALLERS and
+    /// this frame should not have to be re-audited when one of them changes.</para>
+    ///
+    /// <para>The cost is cosmetic and bounded: a pathological area name renders its angle brackets
+    /// as entities inside the code span. A well-formed one — every real area name — is unchanged.</para>
+    /// </summary>
+    /// <param name="value">The value to interpolate; null renders as empty.</param>
+    /// <returns>The value with HTML metacharacters encoded.</returns>
+    private static string Safe(object? value)
+        => System.Net.WebUtility.HtmlEncode(value?.ToString() ?? string.Empty);
 
     private EntityStoreAndUpdates NotFound(
         LayoutAreaHost host, RenderingContext context, EntityStore store,

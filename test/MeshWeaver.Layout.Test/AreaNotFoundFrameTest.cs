@@ -103,6 +103,52 @@ public class AreaNotFoundFrameTest(ITestOutputHelper output) : HubTestBase(outpu
     }
 
     /// <summary>
+    /// 🚨 <b>The area name comes from the URL, and this repo's Markdig pipeline allows raw HTML.</b>
+    /// Putting the diagnostic inside a <c>&lt;details&gt;</c> block made that reachable, and a code
+    /// span is not a defence: a backtick in the crafted name closes the span and everything after it
+    /// lands in markdown TEXT, where a tag is emitted verbatim. The frame encodes every interpolated
+    /// value, so after the break-out there is no <c>&lt;</c> left to open a tag with.
+    ///
+    /// <para>The payload here is the real shape — close the span, close the summary, inject — and the
+    /// assertion is on what CANNOT appear, so it fails if the encoding is dropped anywhere in the
+    /// string rather than only at the position this payload happens to target. (Review on #4633.)</para>
+    /// </summary>
+    [HubFact]
+    public async Task ACraftedAreaName_CannotInjectHtmlIntoTheFrame()
+    {
+        const string payload = "x`</summary><img src=x onerror=alert(1)>`y";
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            new LayoutAreaReference(payload));
+
+        var control = await stream.GetControlStream(payload)
+            .Should().Within(10.Seconds()).Match(x => x != null);
+        var markdown = (control.Should().BeOfType<MarkdownControl>().Which.Markdown?.ToString())
+            ?? string.Empty;
+
+        markdown.Should().Contain("&lt;img",
+            "it is ENCODED, not stripped: the operator still sees what was actually requested, "
+            + "which is the whole point of printing the area name at all");
+        markdown.Should().Contain("<details>",
+            "the frame's own structural HTML is still there — only the interpolated values are encoded");
+
+        // 🚨 THE INVARIANT, stated as the thing that actually matters: no `<` survives except the
+        // frame's OWN structural tags. Asserting on the payload's words instead would overreach —
+        // `onerror=alert(1)` IS still in the output, as inert text, because encoding removes the
+        // means (`<`), not the vocabulary. A test that demanded the word be gone would be demanding
+        // stripping, which is a different and worse fix.
+        var structural = markdown
+            .Replace("<details>", string.Empty)
+            .Replace("<summary>", string.Empty)
+            .Replace("</summary>", string.Empty)
+            .Replace("</details>", string.Empty);
+        structural.Should().NotContain("<",
+            "every remaining '<' would be one an area name from the URL put there — and this repo's "
+            + "Markdig pipeline allows raw HTML, so it would be emitted as a tag");
+    }
+
+    /// <summary>
     /// 🚨 The marker is load-bearing and easy to localize away by accident.
     /// <see cref="AreaFrameClassifier"/> recognises this frame by its <c>Id</c> first and falls
     /// back to the literal <c>**Area not found**</c> in the prose, for a control that lost its id
