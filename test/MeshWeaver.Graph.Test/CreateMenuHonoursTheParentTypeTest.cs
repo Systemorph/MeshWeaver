@@ -404,21 +404,24 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
         offered.Single(t => t.NodeTypePath == ordinary).OwnsPartition.Should().BeFalse(
             "a definition that declares nothing owns nothing");
 
-        (await NamespaceField($"{parentPath}?type={owning}", lockedToRoot: true)).Should().BeTrue(
-            "an instance of a type that owns its partition can only be created at the top level, "
-            + "so the form shows the namespace as the root — and the Create button places it there");
-        (await NamespaceField($"{parentPath}?type={ordinary}", lockedToRoot: false)).Should().BeTrue(
+        (await NamespaceFieldTakesShape($"{parentPath}?type={owning}", lockedToRoot: true)).Should().BeTrue(
+            "an instance of a type that owns its partition can only be created at the top level, so "
+            + "the form must show the namespace as the read-only root — and the Create button places "
+            + "it there. A false here means the field stayed a namespace picker, i.e. the form never "
+            + "learned the declaration");
+        (await NamespaceFieldTakesShape($"{parentPath}?type={ordinary}", lockedToRoot: false)).Should().BeTrue(
             "control: an ordinary in-mesh type keeps the namespace picker, so the lock above is the "
             + "declaration's doing and not this form's default");
     }
 
     /// <summary>
-    /// Waits for the rendered Create form's namespace field to take the asked shape: the read-only
-    /// ROOT label (<paramref name="lockedToRoot"/>) or the namespace PICKER. Answers <c>true</c> once
-    /// it has; times out otherwise. Waits for the shape rather than taking the first render, because
-    /// the field re-renders when the provider's answer arrives.
+    /// Whether the rendered Create form's namespace field takes the asked shape within the budget:
+    /// the read-only ROOT label (<paramref name="lockedToRoot"/>) or the namespace PICKER. Waits for
+    /// the shape rather than taking the first render, because the field re-renders when the
+    /// provider's answer arrives — and answers <c>false</c> on the bound rather than throwing a bare
+    /// <c>TimeoutException</c>, so a caller's `because` is what a failure reads.
     /// </summary>
-    private async Task<bool> NamespaceField(string nodePath, bool lockedToRoot)
+    private async Task<bool> NamespaceFieldTakesShape(string nodePath, bool lockedToRoot)
     {
         var (stream, areas) = await RenderedAreas(nodePath);
         return await Observable.Merge(areas.Select(area => area
@@ -436,7 +439,10 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
                 })
                 .Switch()))
             .Where(matched => matched)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+            .Take(1)
+            .Timeout(TestTimeouts.Convergence, Observable.Return(false))
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
     }
 
     private static bool IsNamespacePicker(MeshNodePickerControl picker) =>
