@@ -433,6 +433,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Duplicate Keys in Workflow YAML](WorkflowDuplicateKeys) — a duplicate mapping key is accepted silently and the LAST one wins, so a pin can move in the diff and not in the job; the near-miss, why every existing gate was blind, and the guard that names the file, the key and both lines at the first job
 - [Image Pair Skew](ImagePairSkew) — a promoted image pairs a core commit with a Plugins head resolved hours later; each half green, the pair never run (the 2026-09-03 sign-in outage)
 - [The Merge Queue](MergeQueue) — one entry built at a time so nothing churns, and a steward that re-queues an ejected PR on evidence and never re-runs
+- [Review Findings Answered](ReviewFindingsAnswered) — a pull request reads red until the automatic review has landed and each thread it opened has a person's reply; the reviewer's two logins, the quota refusal posted as a review, and the maintainer-only waiver
 - [Carving Projects Out Of Core](CarvingProjectsOutOfCore) — what a SOURCE move costs and what it does not
 - [Red-Log Watching & Ticketing](LogWatchTriage) — every `fail:`/`crit:` becomes exactly one triaged issue
 - [Log Entries Are a Query Result, Not a Feed](LogEntriesAreAQueryResult) — `Hosting/LogEntry` is the output of one `Logs` action, so an absence in it is evidence of nothing; the denominator printed on every row, the level that lives on a different node, and how to ask for a line that carries an answer

@@ -2232,6 +2232,14 @@ jobs:
     - name: "Every PR-reachable secret is asserted by a preflight"
       run: python3 .github/scripts/check-pr-secret-preflight.py --root .
 
+    # 🚨 review-answered.yml runs its own self-test before every verdict, but only on the events it
+    # listens to — so a pull request that breaks the predicate (a bot reply counted as an answer, a
+    # quota refusal counted as a review, a waiver that releases findings) would first go red on
+    # somebody ELSE's review event. Proving it here puts that red on the pull request that caused it.
+    # No credential, no network: every case is a fixture (#4299).
+    - name: "An unanswered or unreviewed pull request goes red — the check can say no (self-test)"
+      run: python3 .github/scripts/check-review-answered.py --self-test
+
     # 🚨 THE TWO SCRIPTS THAT DECIDE WHAT A SATELLITE'S PULL REQUEST DOES *NOT* REBUILD, proven
     # here because core is the repo that OWNS them — every satellite gets them fetched at its
     # `platform-ref`, so a break shipped from here reaches five repos' cost model at once.
