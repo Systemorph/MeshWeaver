@@ -172,8 +172,9 @@ public class WorkflowJobTextTest
         Assert.Null(body);
         Assert.DoesNotContain("must have a `select` job", refusal!, StringComparison.Ordinal);
         Assert.Contains("# and a continuation that lost its indentation", refusal!, StringComparison.Ordinal);
-        // The line NUMBER, so the reader does not have to search for it: the header sits on line 3
-        // of "on: push\n" + Job, and the offending line is the sixth.
+        // The line NUMBER, so the reader does not have to search for it. In "on: push\n" + Job:
+        // 1 `on: push`, 2 blank, 3 `  select:`, 4 `runs-on`, 5 `steps:`, 6 the comment the Replace
+        // above keeps, 7 the continuation it appends — which is the one that loses its indentation.
         Assert.Contains("stops at line 7", refusal!, StringComparison.Ordinal);
         Assert.Contains("column 0", refusal!, StringComparison.Ordinal);
     }
