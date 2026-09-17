@@ -45,7 +45,37 @@ public static class ServiceDefaults
         builder.Services.ConfigureHttpClientDefaults(http =>
         {
             // Turn on resilience by default
-            http.AddStandardResilienceHandler();
+            http.AddStandardResilienceHandler(options =>
+            {
+                // 🚨 A HOSTNAME THAT DOES NOT EXIST IS NOT A TRANSIENT FAULT (#4613). The standard
+                // predicate handles every HttpRequestException, so an NXDOMAIN was retried three
+                // times — and no retry can make a name resolve. What that cost, measured on the
+                // control instance 2026-09-17: two agent web fetches of `www.boss-software.ch` and
+                // `www.bosssw.ch` — hostnames that do not exist ANYWHERE (all four spellings,
+                // including both apex domains, answer NXDOMAIN from the public internet, so this is
+                // not cluster DNS, not egress and not a missing route) — spent three attempts each
+                // and logged every one at Error under category `Polly`. The fleet's log watcher
+                // folds Error lines into a LogIncident and opens a ticket, so a URL in somebody's
+                // data manufactured a platform defect report.
+                //
+                // Excluded from the BREAKER for the same reason and one more: the default pipeline
+                // is shared by every client that does not name its own, so counting a dead hostname
+                // as a failure lets one bad URL push the breaker toward open for calls that have
+                // nothing to do with it. A name that does not resolve says nothing about the health
+                // of any endpoint.
+                //
+                // 🚨 Narrowest possible set: HostNotFound only. `TryAgain` (EAI_AGAIN) is a DNS
+                // server that did not answer — genuinely transient, and it must keep being retried.
+                // Every other transport failure (TLS, connection reset, timeout) is untouched.
+                var transient = options.Retry.ShouldHandle;
+                options.Retry.ShouldHandle = args => NameDoesNotResolve(args.Outcome.Exception)
+                    ? ValueTask.FromResult(false)
+                    : transient(args);
+                var breaks = options.CircuitBreaker.ShouldHandle;
+                options.CircuitBreaker.ShouldHandle = args => NameDoesNotResolve(args.Outcome.Exception)
+                    ? ValueTask.FromResult(false)
+                    : breaks(args);
+            });
             // Turn on service discovery by default
             http.AddServiceDiscovery();
         });
@@ -127,6 +157,31 @@ public static class ServiceDefaults
         builder.Services.AddOutputCache();
 
         return builder;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="exception"/> is a request that failed because the HOSTNAME DOES NOT
+    /// EXIST — the one transport failure that is a fact about the URL rather than about the network
+    /// or the remote service, and therefore the one a retry can never fix (#4613).
+    ///
+    /// <para>Walks the inner chain: <c>HttpClient</c> wraps the resolver's
+    /// <see cref="System.Net.Sockets.SocketException"/> in an
+    /// <c>HttpRequestException</c>, and a handler pipeline can wrap that again.</para>
+    ///
+    /// <para>🚨 <see cref="System.Net.Sockets.SocketError.HostNotFound"/> ONLY. <c>TryAgain</c>
+    /// (EAI_AGAIN) is a DNS server that failed to answer — genuinely transient, and excluding it
+    /// would turn a nameserver hiccup into a hard failure. Pure, so both predicates above can be
+    /// asserted without a socket.</para>
+    /// </summary>
+    /// <param name="exception">The outcome's exception, if any.</param>
+    /// <returns><c>true</c> when the name could not be resolved because it does not exist.</returns>
+    internal static bool NameDoesNotResolve(Exception? exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+            if (current is System.Net.Sockets.SocketException
+                { SocketErrorCode: System.Net.Sockets.SocketError.HostNotFound })
+                return true;
+        return false;
     }
 
     public static IHostApplicationBuilder ConfigureOpenTelemetry(this IHostApplicationBuilder builder)
