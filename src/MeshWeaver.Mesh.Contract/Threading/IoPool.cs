@@ -234,8 +234,58 @@ public sealed class IoPool : IIoPool, IDisposable
     private void LeaveGateRegion()
     {
         Interlocked.Decrement(ref _gateUsers);
+        // 🚨 AND THIS IS WHAT Drain()'s GRACE MEASURES PROGRESS ON — see _admissionsCompleted.
+        // Published AFTER the decrement, so a drain that observes the completion also observes the
+        // settled census behind it: the signal a joiner waits on is the LAST thing the fact it
+        // asserts publishes (#4466). Before TryFinishDisposal, which can run arbitrary downstream
+        // work through Disposed and must not be able to swallow the progress this leaf made.
+        Interlocked.Increment(ref _admissionsCompleted);
         TryFinishDisposal();
     }
+
+    // 🚨 THE GRACE'S PROGRESS SIGNAL — issue #4541. Monotone: it counts admissions that FINISHED
+    // and never moves back. _gateUsers cannot serve, because it is a live CENSUS — it rises on an
+    // arrival exactly as far as it falls on a completion.
+    //
+    // Drain() used to take a baseline of that census and wait for it to fall BELOW it. Invoke and
+    // InvokeStream defer their prologue to the ThreadPool (SubscribeOn) — and so does the SETUP
+    // LEAF of SubscribeThroughPool, whose synchronous outer region is released before it runs — so
+    // a leaf whose Subscribe() had already returned enters its region AFTER the drain has taken
+    // that baseline; routine, and the busier the machine the likelier. (InvokeBlocking is the one
+    // path with no such gap: its region is taken on the subscriber's thread and spans the whole
+    // leaf.) Each such arrival then cancelled out a completion one
+    // for one, so the predicate could not fire until EVERY arrival had also finished: the
+    // per-completion grace silently became a single total budget for the whole queue, and whatever
+    // was still running when it expired was cancelled. Work the pool had accepted, was making
+    // progress on, and had no reason to stop — the one outcome the grace exists to prevent, and a
+    // contradiction of what #3291 established (teardown lets accepted work finish and NAMES what
+    // it had to stop; this discarded it and reported a stall).
+    //
+    // Measured as a 1-in-5 failure of IoPoolTest.Drain_restartsTheGraceOnEveryCompletion_… under
+    // CPU saturation ("Expected 3 … but found 1", 2026-09-16). Saturation was the condition, never
+    // the cause: it only widened the window in which a prologue lands after the baseline.
+    // Reproduced deterministically on an idle machine by IoPoolDrainGraceTest, which arranges that
+    // ordering through OnDrainGraceBaselineTaken instead of waiting for load to arrange it.
+    //
+    // 🚨 THIS REMOVES THE MASKING, NOT THE WHOLE WINDOW — #4555. Between Subscribe() returning and
+    // the ThreadPool running the prologue, a leaf is counted by NOTHING, so a drain whose
+    // outstanding count reaches zero in that gap ends its grace without ever having seen it. THREE
+    // of the four entry points have such a window, and the consequence differs:
+    //
+    //  • Invoke / InvokeStream — the leaf is cancelled at its gate wait when it finally arrives,
+    //    too late even to be NAMED: accepted work discarded silently.
+    //  • SubscribeThroughPool's SETUP LEAF — its synchronous outer region is released in the
+    //    subscribe's finally, before the leaf runs. Milder, because the drain registration is
+    //    already ARMED (#4524) and the leaf re-checks its linked token before `source.Subscribe`,
+    //    so the leg is refused and TERMINATED rather than run after teardown — the use-after-unload
+    //    precondition is not reopened. What is lost is that the drain does not WAIT for it.
+    //  • InvokeBlocking — no gap: its region is taken on the subscriber's thread and spans the
+    //    whole leaf (closed by the ContinueWith).
+    //
+    // Structurally evident, never measured as having fired, and deliberately not fixed here:
+    // closing it moves the admission onto the subscriber's thread, which is a change to the
+    // subscribe path rather than to the drain.
+    private long _admissionsCompleted;
 
     /// <summary>Number of operations currently executing through this pool.</summary>
     public int CurrentInFlight => Volatile.Read(ref _inFlight);
@@ -739,6 +789,20 @@ public sealed class IoPool : IIoPool, IDisposable
     /// </summary>
     internal Action? OnSubscribeSetupLeafStarting { get; set; }
 
+    /// <summary>
+    /// Test seam (InternalsVisibleTo) — issue #4541. Runs on the DRAIN's own thread the instant
+    /// <see cref="Drain"/> has taken the baseline its grace measures progress against, and before
+    /// the grace clock starts. Null in production.
+    ///
+    /// <para>The defect this exists to pin is about work that reaches the pool AFTER that baseline
+    /// — which every entry point can produce, because each defers its prologue to the ThreadPool
+    /// (<c>SubscribeOn</c>), so a leaf whose <c>Subscribe()</c> returned before the drain can enter
+    /// its region after it. "After the baseline" is therefore the whole subject, and a test that
+    /// arranged it by subscribing and hoping would be measuring the ThreadPool's dispatch order —
+    /// a coin toss no assertion can pin. Parking here makes the ordering structural.</para>
+    /// </summary>
+    internal Action? OnDrainGraceBaselineTaken { get; set; }
+
     /// <inheritdoc />
     public IObservable<T> SubscribeThroughPool<T>(IObservable<T> source) =>
         (_disposed || _draining) ? Cancelled<T>() : SubscribeThroughPoolCore(source);
@@ -984,10 +1048,19 @@ public sealed class IoPool : IIoPool, IDisposable
             // provably stopped making progress. "Work" is every caller admitted to the pool —
             // running leaves, leaves still QUEUED on the gate, blocking leaves on their scheduler —
             // which is exactly what the admission counter (_gateUsers) counts, minus this drain's own
-            // region. The wait is progress-based: every time that count drops (a leaf finished, or a
-            // queued one ran and finished) the clock restarts, so a burst of short leaves drains in as
-            // many completions however long that takes in total. Only when a whole grace passes with
-            // NOTHING finishing is what remains wedged — and only then does the cancel below run.
+            // region. The wait is progress-based: every COMPLETION restarts the clock, so a burst of
+            // short leaves drains in as many completions however long that takes in total. Only when
+            // a whole grace passes with NOTHING finishing is what remains wedged — and only then does
+            // the cancel below run.
+            //
+            // 🚨 TWO COUNTERS, AND THEY ANSWER DIFFERENT QUESTIONS — issue #4541. _gateUsers says
+            // whether anything is still OUTSTANDING (the loop condition); _admissionsCompleted says
+            // whether anything has FINISHED (the grace). Reading progress off _gateUsers alone, as
+            // a fall below a baseline, is what let an ARRIVAL cancel out a completion and collapse
+            // the per-completion grace into one total budget — see _admissionsCompleted for the
+            // whole mechanism. A leaf that reaches the gate mid-drain is accepted work: it EXTENDS
+            // the drain (the loop keeps going while it is outstanding) and never consumes the grace
+            // of the leaf that finished before it.
             //
             // Not the gate itself: re-acquiring permits here would compete with the queued leaves for
             // them and steal their turn, then cancel them at the gate — accepted work discarded, which
@@ -999,16 +1072,19 @@ public sealed class IoPool : IIoPool, IDisposable
             // compile at teardown was aborted the instant the mesh decided to go down — a flush that
             // would have landed in 50 ms thrown away and its row handed to the sampler. The grace
             // costs nothing on an idle pool and one completion's worth on a busy one.
-            var lastSeen = Volatile.Read(ref _gateUsers) - 1;
-            while (lastSeen > 0)
+            var seen = Volatile.Read(ref _admissionsCompleted);
+            OnDrainGraceBaselineTaken?.Invoke();
+            // The `- 1` is this drain's own region, which it holds throughout and must not count as
+            // outstanding work. Re-read every iteration, never snapshotted: a leaf that arrives
+            // while the grace is running is accepted work too, and the drain waits for it.
+            while (Volatile.Read(ref _gateUsers) - 1 > 0)
             {
-                var seen = lastSeen;
                 var progressed = SpinWait.SpinUntil(
-                    () => Volatile.Read(ref _gateUsers) - 1 < seen,
+                    () => Volatile.Read(ref _admissionsCompleted) != seen,
                     _drainGrace);
                 if (!progressed)
                     break; // a whole grace with nothing finishing: what remains is wedged
-                lastSeen = Volatile.Read(ref _gateUsers) - 1;
+                seen = Volatile.Read(ref _admissionsCompleted);
             }
             var wedged = Math.Max(0, Volatile.Read(ref _gateUsers) - 1);
             if (wedged > 0)
