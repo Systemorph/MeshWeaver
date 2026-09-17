@@ -192,9 +192,35 @@ is silent throughout.
 🚨 **Do not "fix" this by narrowing the predicate to `in_progress`/`queued`.** That was tried on
 2026-09-17 and `.github/scripts/test-cd-steps.py` rejected it in two cases written for the 09-10
 incident — correctly: it trades a visible stall for a silent duplicate delivery, and the duplicate is
-the one that mints two digests for one commit. The open question is **how a deferral gets revisited**
-(the reconcile already emits `deferred_to`/`deferred_status`; nothing consumes them on the next
-tick), not which side of an unresolvable snapshot to guess.
+the one that mints two digests for one commit.
+
+### Revisiting a deferral needs a CARRIER, and there is none today
+
+The obvious repair is *"the next tick resolves what this tick could not: the run we deferred to
+either executed jobs or it did not"*. The **evidence** for that is real and unambiguous —
+`/runs/<id>/jobs --jq .total_count` is `0` for a run that never executed a step. What is missing is
+the **carrier**, and both halves were checked on 2026-09-17:
+
+- **Nothing persists the deferral.** The `#3376` defer path calls `decision false …` and `exit 0`;
+  `decision` writes `publish=` to `$GITHUB_OUTPUT` and a line to the job summary. The verdict step's
+  `deferred_to` / `deferred_status` are read by exactly one consumer — the summary step of **the same
+  run** (`main-cd.yml`, the `DEFERRED_TO`/`DEFERRED_STATUS` env of the summary). Nothing survives the
+  run.
+- **And the target MOVES between ticks**, so the next tick cannot rediscover it: reconcile **#8842**
+  targeted `cf64edd`, reconcile **#8847** targeted `92c13083`. Both probes filter `head_sha=$SHA`, so
+  last tick's deferred-to run is on a different commit and is invisible to this tick — recorded or
+  not.
+- **Where the target *does* hold still, the evidence is redundant**: at the next tick the deferred-to
+  run is `completed`, so `.status != "completed"` already stops deferring and the tick publishes.
+  That is the "a quiet hour heals it" path, and it already works.
+
+So the repair is a **durable, run-id-keyed** record of the deferral, revisited on a later tick
+whatever its target — and the contract's healing ledger is deliberately *"the `ci-failure` issue …
+no new state store"*, so which carrier to use is a decision, not a detail.
+
+🚨 **And the root is one level below that: the ambiguity exists only because a pending run can be
+evicted.** If the push lane did not discard queued runs, `pending` would always mean "will build",
+every existing case would stay correct, and no revisiting would be needed at all.
 
 > 🚨 **The registry was never the problem, and this is how to tell.** The same night produced
 > `az exit 3` / *"the registry did not answer"* reports, which read like a credential outage. Run
