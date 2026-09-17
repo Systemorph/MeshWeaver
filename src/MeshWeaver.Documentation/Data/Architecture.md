@@ -312,6 +312,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Module Build Architecture](ModuleBuildArchitecture)
 - [Module Closure Accounting](ModuleClosureAccounting)
 - [The Module Identity Anchor](ModuleIdentityAnchor)
+- [Two Identity Schemes, One Comparison](ModuleIdentitySchemes) — a bundle states a `g<sha>` commit identity and a portal resolves an `s<hash>` surface identity, so the #4161 discriminator answered "different" for every pair in the fleet: measured on memex.systemorph.com, eight modules declined on every boot and reported as "a restart activates them" across a restart that could not clear one of them
 - [Module-Owned Siblings Ride](ModuleOwnedSiblingsRide)
 - [The Module Platform Link Gate](ModulePlatformLinkGate)
 - [Rolling-Update Build Tolerance](RollingUpdateBuildTolerance) — why a rolling platform update recompiled Store/Plugin ten times in four minutes and blanked every instance behind "build did not settle within 30s" (two generations, one record, one framework identity per record), and the rules that let an instance render on the last build its process can load instead
