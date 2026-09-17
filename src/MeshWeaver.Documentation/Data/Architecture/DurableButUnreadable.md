@@ -178,6 +178,135 @@ goes through the adapter.
 > (`DescribeStaticServeCollision`); closing it at this seam needs the adapter to consult the
 > resolution rather than a flat list.
 
+## The storage-side mechanism, found and fixed (2026-09-17)
+
+A **second** producer of this exact signature lived in the Postgres backend, is now fixed, and is
+pinned by `DurableButUnreadableTest` (`MeshWeaver.Hosting.PostgreSql.Test`, MeshWeaver.Plugins). It
+is the first one that reproduces **on demand**, in a test, end to end — acknowledgement, version row,
+and three empty read seams — so it is the worked example of the class rather than another instance
+of it.
+
+**The write resolved its table from `(path, nodeType)`; every read resolves it from the `path`
+alone.** A reader only ever has a path, so `Read`, `ReadMany`, `Exists`, `ListChildPaths`,
+`ListDescendantPaths`, `FindBestPrefixMatch` and `DeleteMany` all call
+`PartitionDefinition.ResolveTable(path)`. The two WRITE sites — `PostgreSqlStorageAdapter.Write`
+(through `BuildUpsertAsync`) and `WriteMany` — passed the node's `NodeType` as well, and when the
+path resolved to `mesh_nodes` the adapter fell back to `ResolveTableByNodeType`. So a node whose
+**NodeType** maps to a satellite table but whose **PATH** carries no satellite segment — a `Comment`,
+`Thread`, `Notification`, `Activity`, `UserActivity`, `Approval` or `TrackedChange` filed at an
+ordinary path — was written into the satellite table and looked for in `mesh_nodes` by every single
+reader.
+
+Each seam then answers exactly as the three-seam test describes:
+
+| Seam | Why it misses | |
+|---|---|---|
+| the index | a `namespace:X scope:children` listing reads the table the PATH resolves to | absent |
+| the point read | `SELECT … FROM mesh_nodes WHERE path = $1` | absent |
+| the version store | `mesh_node_history` is matched on the stored `path` column and is **not** table-routed | **present** |
+
+And the write says it worked, twice over: `PostgreSqlStorageAdapter.Write` returns the saved node,
+`PersistenceService` reads any non-null emission as *a provider claimed this*, and
+`VersionWritingStorageAdapter` chains the `mesh_node_history` row off that same acknowledgement.
+
+Two fixes, because the mechanism has two halves:
+
+1. **Placement follows the path, because retrieval does.** `ResolveTable(string path)` takes a path
+   and nothing else, and the write goes through `ResolveWriteTable(node)`, which is that same
+   resolution plus ONE narrow, reasoned exception (below). `ResolveTableByNodeType` keeps its
+   documented job — the table for a QUERY that carries a `nodeType` filter and *no path*, where
+   there is no path to disagree with.
+2. **An unconfirmable write is raised, never acknowledged.** The version-conditional upsert can only
+   decline against a row that EXISTS (`#971`), so a refusal whose read-back finds nothing means the
+   two halves disagree about where the row lives. That case used to `return stored ?? node` — handing
+   back the caller's own node, which is the acknowledgement that turns a routing bug into an
+   invisible loss. It now throws `UnconfirmedWriteException`, on the single and the batch path alike.
+
+> **The exception, and why it is one.** An `AccessAssignment` still follows its NODE TYPE into the
+> access table even when its path does not resolve there. That placement is a **database-trigger
+> requirement**, not a locality choice: `trg_access_changed` lives on the access table and is what
+> rebuilds `user_effective_permissions`, so a grant written as a direct child (`Acme/rbuergi_Access`,
+> no `_Access` segment) that landed in `mesh_nodes` silently granted nothing — the production defect
+> `AccessAssignmentRoutingTests` pins. Grants are resolved by type-filtered query and never by a
+> point read of their path, so the placement costs nothing that is used. **The residual is real and
+> deliberate: such a grant is not readable BY PATH.** The durable fix is where every current writer
+> already puts it — `{owner}/_Access/{id}`, where the two resolutions agree. The exception is derived
+> from the partition's own `_Access` mapping rather than a hard-coded table name, and it is the only
+> one: measured against the whole Postgres suite (1,138 tests), removing the fallback for every other
+> type broke exactly this one case and nothing else.
+
+> **A second residual, on the INDEX half.** Restoring the point read does not by itself put a
+> satellite-TYPED node at a main path back into listings: `MeshExtensions.NormalizeSatelliteMainNode`
+> re-points such a node's `MainNode` at its namespace on the create/upsert path, and `is:main` is
+> SQL `n.main_node = n.path`. That is deliberate — a node of a satellite type belongs under its
+> satellite container, which is where `CreateLayoutArea` files it — but it means the two halves of
+> this failure have two different owners, and only the storage half is closed here.
+
+> 🚨 **Why the whole suite was blind to it.** Every satellite test — `SatelliteRoutingExhaustiveTest`,
+> `SatelliteNodeTests` — writes to a path that ALREADY contains the satellite segment, where the two
+> resolutions agree by construction. The asymmetry lived in the *argument*, so no test that never
+> varied the argument could see it. The new cases put the divergence there.
+
+### What it does NOT explain, and how you can tell
+
+**Not the third instance.** `mesh_node_history` has two writers and they stamp differently, which
+turns out to be the cheapest discriminator on this page:
+
+- the **trigger** `mesh_node_copy_to_history` is installed on `mesh_nodes` ONLY (satellite tables get
+  the `pg_notify` trigger and no history trigger) and copies `changed_by` from `last_modified_by`;
+- the app-side `PostgreSqlVersionQuery.WriteVersion` — the one `VersionWritingStorageAdapter` chains
+  off the acknowledgement — binds **no `changed_by` at all**.
+
+So **a history row with a non-null `changed_by` proves a committed `mesh_nodes` row of that version**
+(the trigger runs inside the write's transaction), and a history row with `changed_by IS NULL` proves
+only that the adapter acknowledged the write. Every one of `Deployments/pearl-provision-20260914`'s
+53 rows carries `system-security`, so its row **was** in `deployments.mesh_nodes`, at `v62`, with
+`main_node` equal to its path and `state: Active` (`get_version … 62`, measured 2026-09-17). The
+write path is exonerated by its own evidence: what #4513 has left to explain is what REMOVED or
+REPLACED that row, not where the write went. The caveat runs the other way too — a node all of whose
+writes were unauthored leaves unstamped history as well, so read the stamp as positive evidence of a
+commit, never its absence as proof of none.
+
+**And the newest version row does not describe the current row.** The upsert applies at an EQUAL
+version by design (`WHERE target.version <= EXCLUDED.version` — re-persisting an unchanged node is a
+legitimate, common shape) while the history trigger is `ON CONFLICT (namespace, id, version) DO
+NOTHING`. A write at the same version therefore replaces the row's content, `state` and `main_node`
+and leaves the version store holding the OLD snapshot under that number. `get_version <max>` is the
+last DISTINCT version, not necessarily what the row held when it vanished — which is why the pearl
+measurements above bound the row's state at `v62` and not at the moment it disappeared.
+
+## Finding the ones already out there
+
+Three instances were found one at a time, each by someone noticing a node they expected. The sweep
+that does not need anyone to notice is `DurableButUnreadableDetector`
+(`MeshWeaver.Hosting.PostgreSql`, MeshWeaver.Plugins): **it compares a partition's node tables
+against its version store**, reads them directly as the system, and reports per row.
+
+- **`MisplacedRow`** — a row in a satellite table whose path does not resolve there. Unreachable by
+  every reader, whatever put it there. This is the population the fix above stops GROWING and does
+  not move: rows written while the nodeType fallback was in force are still where it put them.
+- **`AcknowledgedButAbsent`** — the version store holds the path, no table in the partition does, and
+  no history row carries an author stamp. Nothing proves the row ever reached `mesh_nodes`.
+- **`RemovedAfterCommit`** — the same, but an author-stamped history row exists, so the row WAS
+  committed and is gone now. **A deleted node looks exactly like this**, which is why it is a
+  separate kind and never a defect on its own: it is the population to reconcile against deletes.
+- **`RowBehindItsHistory`** — the current row's `Version` is below the newest version its own history
+  records. Readable, so not this failure — reported by the same sweep because it is the other way the
+  two disagree, and no query can see it either.
+
+The report carries its **denominators** (satellite tables scanned, history paths with no `mesh_nodes`
+row, and whether the partition keeps history at all — an unversioned one has no control to compare
+against and says so), because a zero means nothing without them. It is read-only: what to do with a
+misplaced row — move it into `mesh_nodes`, or delete it as a duplicate of a node that was rewritten
+since — is a decision about content, not a mechanical one.
+
+**Running it is an operational step, from the portal.** The provider exposes it as
+`PostgreSqlPartitionStorageProvider.DetectUnreadableRows("<Namespace>")`, so an executable `Code`
+node resolves the provider from the mesh's services, subscribes it per partition, and writes the
+findings up. Start with the partitions that carry a known instance — `deployments` and
+`agenticengineering` on memex.systemorph.com, `sglauser` on memex.meshweaver.cloud — and compare its
+`RemovedAfterCommit` set against what was deliberately deleted.
+
 ## What the 2026-09-02 re-measurement settled, and what it falsified
 
 Re-measured read-only on memex.systemorph.com. Two hypotheses died on evidence that could have gone
@@ -240,8 +369,19 @@ in.**
 
 ## Open
 
-*Why these rows specifically are unreachable* is not settled from the MCP surface alone — it needs
-the partition schema inspected on that portal (`main_node`, `partition_access` and
+**For the third instance the question has MOVED** (2026-09-17). Its history rows all carry
+`changed_by = system-security`, and only the `mesh_nodes` trigger writes that column — so the row was
+committed to `deployments.mesh_nodes`, 53 times, with `main_node` equal to its path and `state:
+Active` at `v62`. Nothing about the WRITE is unexplained any more; what is unexplained is what
+removed or replaced that row afterwards. Two shapes can do it and only one leaves a trace: a DELETE
+(the history trigger is `AFTER INSERT OR UPDATE`, so a delete leaves the version rows untouched and
+writes nothing), or an EQUAL-version overwrite (which applies, and which the history trigger's
+`ON CONFLICT … DO NOTHING` silently declines to record). The Loki window taken for it covered
+10:03–11:09Z and was searched for *delete* and *prune*; the action's own observation deadline was
+11:16:56Z, and the three read-fault Warnings named above were never searched for at all.
+
+*Why the first two instances' rows specifically are unreachable* is not settled from the MCP surface
+alone — it needs the partition schema inspected on that portal (`main_node`, `partition_access` and
 `user_effective_permissions` for `agenticengineering`, against the same three columns for
 `agenticprimer`, which works; and for `deployments`, where the control is one ROW rather than one
 partition — `pearl-provision-20260914` against a sibling that reads, [#4513](https://github.com/Systemorph/MeshWeaver/issues/4513)).
