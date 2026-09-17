@@ -34,6 +34,10 @@ THE RULE (all three must hold, or the check is RED — it never skips)
    shorter than the `review_comments` count the pull request reported BEFORE the listing began
    (measured 2026-09-17: listing == count on 60 of 60 recent pull requests).
 
+`--wait-for-review MINUTES` re-reads while condition 1 is the ONLY thing missing, because the
+reviewer's own review event cannot start a run in this repository (measured; see
+`waiting_would_help`). Nothing else is ever waited for, and the wait ends RED.
+
 A maintainer WAIVER releases condition 1 and nothing else: the label `review-waived`, attributed
 through the REST issue-events API to the account that applied it, and honoured only when that
 account's `role_name` on this repository is `admin` or `maintain`. Threads the reviewer DID open
@@ -69,6 +73,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 REVIEWER_ACCOUNT_ID = 175728472
 REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot"})
@@ -214,6 +219,25 @@ def waiver_holder(waiver: Waiver, as_of: str | None) -> tuple[bool, str]:
                   "the waiver releases this condition only — every thread the reviewer opened still needs a reply")
 
 
+def waiting_would_help(verdict: Verdict) -> bool:
+    """True when the ONLY thing missing is the reviewer's review — an input that ARRIVES, with no
+    action by anyone on the pull request. Everything else (an unanswered thread, an unreadable
+    listing) is not waited for: the first needs a person, the second needs another read.
+
+    🚨 WHY A WAIT EXISTS AT ALL — measured on #4575 (2026-09-17T08:05Z, run 35197843933). The
+    reviewer's own `pull_request_review` event DOES reach this repository, and GitHub creates a
+    workflow run for it — with conclusion `action_required` and ZERO jobs, because the triggering
+    actor is `Copilot` and the repository requires approval for runs triggered by a first-time
+    contributor. So the event that says "the review has landed" cannot start an evaluation, and a
+    pull request whose review raises NO findings would otherwise keep the red from its `opened`
+    evaluation until somebody pushed again. The wait is bounded, it ends RED, and it is the only
+    reason this check does not need a person to press anything.
+    """
+    return (not verdict.green
+            and len(verdict.reasons) == 1
+            and "has not landed" in verdict.reasons[0])
+
+
 def pr_from_queue_ref(ref: str) -> int:
     m = QUEUE_REF.fullmatch(ref or "")
     if not m:
@@ -321,14 +345,27 @@ def summary_markdown(number: int, verdict: Verdict) -> str:
     return "\n".join(out) + "\n"
 
 
-def run(repo: str, number: int, as_of: str | None) -> int:
+POLL_SECONDS = 30
+
+
+def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0) -> int:
     gh = Gh(repo)
-    try:
-        pr, reviews, comments, waiver, author_role = read_inputs(gh, number, as_of)
-    except (ReadError, KeyError) as e:
-        print(f"::error::check-review-answered cannot read the review of #{number}, so it cannot say it was answered: {e}")
-        return 1
-    verdict = evaluate(pr, reviews, comments, waiver, as_of)
+    deadline = time.monotonic() + wait_minutes * 60
+    while True:
+        try:
+            pr, reviews, comments, waiver, author_role = read_inputs(gh, number, as_of)
+        except (ReadError, KeyError) as e:
+            print(f"::error::check-review-answered cannot read the review of #{number}, so it cannot say it was answered: {e}")
+            return 1
+        verdict = evaluate(pr, reviews, comments, waiver, as_of)
+        left = deadline - time.monotonic()
+        if not (waiting_would_help(verdict) and left > POLL_SECONDS):
+            break
+        print(f"  the automatic review has not landed yet; waiting up to {int(left)}s more for it "
+              f"(its own event cannot start a run here — see waiting_would_help)", flush=True)
+        time.sleep(POLL_SECONDS)
+    if wait_minutes and waiting_would_help(verdict):
+        print(f"  waited {wait_minutes} minute(s) for the automatic review and it did not land", flush=True)
     print(render(number, pr, verdict, author_role, as_of))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
@@ -470,6 +507,20 @@ def self_test() -> int:
     case("as-of: the waiver in force at that instant counts", GREEN, _pr(0), [], [],
          Waiver(None, (_labeled(PERSON, "2026-09-14T12:00:00Z"),), {"rbuergi": "admin"}), as_of="2026-09-14T13:00:00Z")
 
+    # waiting_would_help — only an ARRIVING input is waited for
+    for name, expect, pr_, reviews_, comments_, waiver_ in [
+        ("wait: only the review is missing", True, _pr(0), [], [], NO_WAIVER),
+        ("no wait: the review refused AND a thread is unanswered", False, _pr(1), [_review(REFUSAL_QUOTA)], [_comment(1)], NO_WAIVER),
+        ("no wait: only a thread is unanswered", False, _pr(1), [_review()], [_comment(1)], NO_WAIVER),
+        ("no wait: the listing was incomplete", False, _pr(9), [_review()], [], NO_WAIVER),
+        ("no wait: already green", False, _pr(0), [_review()], [], NO_WAIVER),
+        ("no wait: waived", False, _pr(0, [WAIVER_LABEL]), [], [], Waiver(True, (_labeled(PERSON),), {"rbuergi": "admin"})),
+    ]:
+        got = waiting_would_help(evaluate(pr_, reviews_, comments_, waiver_))
+        ok = got == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={'wait' if expect else 'no wait'} got={'wait' if got else 'no wait'}")
+
     # the merge-queue ref → pull request number
     sha = "0123456789abcdef0123456789abcdef01234567"
     for name, ref, expect in [
@@ -502,6 +553,10 @@ def main(argv=None) -> int:
     ap.add_argument("--pr", help="pull request number")
     ap.add_argument("--merge-group-ref", help="a merge-queue head ref; the pull request number is read from it")
     ap.add_argument("--as-of", help="evaluate as of this ISO-8601 UTC instant (e.g. a merged_at)")
+    ap.add_argument("--wait-for-review", type=int, default=0, metavar="MINUTES",
+                    help="while the ONLY thing missing is the reviewer's review, re-read for up to this "
+                         "many minutes (its own event cannot start a run here — see waiting_would_help), "
+                         "then answer RED")
     args = ap.parse_args(argv)
     if args.self_test:
         return self_test()
@@ -526,7 +581,13 @@ def main(argv=None) -> int:
     if args.as_of and not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", args.as_of):
         print(f"::error::--as-of must be an ISO-8601 UTC instant like 2026-09-14T14:04:21Z, got {args.as_of!r}")
         return 2
-    return run(args.repo, number, args.as_of)
+    if args.as_of and args.wait_for_review:
+        print("::error::--as-of replays a past instant; waiting for a review to arrive in it is meaningless")
+        return 2
+    if args.wait_for_review < 0 or args.wait_for_review > 30:
+        print(f"::error::--wait-for-review must be between 0 and 30 minutes, got {args.wait_for_review}")
+        return 2
+    return run(args.repo, number, args.as_of, args.wait_for_review)
 
 
 if __name__ == "__main__":

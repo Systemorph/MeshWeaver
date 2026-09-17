@@ -54,10 +54,16 @@ permissions:
   pull-requests: read
   issues: read
 
-# One evaluation per pull request at a time, NEVER cancelled mid-read: a review lands as one
-# `submitted` event plus one `created` event per inline comment, and the evaluation that runs LAST
-# must be the one that read LAST. GitHub keeps one pending run per group, so a burst of fourteen
-# comments collapses to the running evaluation plus the newest pending one.
+# 🚨 The group is per PULL REQUEST for pull-request events and per QUEUE ENTRY for `merge_group`
+# (the queue head ref carries the entry's sha), because that is the granularity that matters: two
+# evaluations racing would publish the same check-run NAME on the same commit, and two queue entries
+# of one pull request are two different commits with two separate check-runs. So a re-queue of the
+# same pull request may evaluate concurrently with an older entry, by design.
+#
+# NEVER cancelled mid-read: a review lands as one `submitted` event plus one `created` event per
+# inline comment, and the evaluation that runs LAST must be the one that read LAST. GitHub keeps one
+# pending run per group, so a burst of fourteen comments collapses to the running evaluation plus
+# the newest pending one. Cancelling would also eject a merge-queue entry rather than retry it.
 concurrency:
   group: review-answered-${{ github.event.pull_request.number || github.event.merge_group.head_ref }}
   cancel-in-progress: false
@@ -66,7 +72,10 @@ jobs:
   answered:
     name: Automatic review answered
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 20 = the 15-minute bounded wait below + headroom for the checkout and the reads. The wait is
+    # not slack: it is the measured consequence of the reviewer's own event being unable to start a
+    # run here (see the `--wait-for-review` note on the step).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -77,6 +86,16 @@ jobs:
       - name: "Prove the predicate can say no (self-test)"
         run: python3 .github/scripts/check-review-answered.py --self-test
 
+      # 🚨 `--wait-for-review 15`: while the ONLY thing missing is the review itself, the step
+      # re-reads for up to 15 minutes and then answers RED. Measured on this check's own pull
+      # request (#4575, run 35197843933): the reviewer's `pull_request_review` event DOES arrive and
+      # GitHub DOES create a run for it — `action_required`, ZERO jobs, because the triggering actor
+      # is `Copilot` and this repository requires approval for runs triggered by a first-time
+      # contributor (`actions/permissions/fork-pr-contributor-approval` → `first_time_contributors`).
+      # So the event that would say "the review has landed" cannot start an evaluation, and without
+      # the wait a pull request whose review raises NO findings would keep the red from its `opened`
+      # evaluation until somebody pushed again. The reviewer took 4m38s on #4575; 3–12 minutes is
+      # the range on the thread of #4299. Nothing else is ever waited for.
       - name: Judge the pull request's automatic review
         env:
           GH_TOKEN: ${{ github.token }}
@@ -87,7 +106,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "merge_group" ]; then
-            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --merge-group-ref "$QUEUE_REF"
+            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --merge-group-ref "$QUEUE_REF" --wait-for-review 15
           else
-            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR"
+            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR" --wait-for-review 15
           fi

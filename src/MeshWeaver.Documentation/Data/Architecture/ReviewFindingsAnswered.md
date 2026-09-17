@@ -115,10 +115,42 @@ context counts as satisfied, so every event evaluates the predicate in full. The
 runs before the verdict in the workflow, and again in `dotnet-test.yml`'s CI-shell lane so a pull
 request that breaks the predicate goes red on itself.
 
-Evaluations of one pull request share a concurrency group and are never cancelled mid-read. A review
-arrives as one `submitted` event and one `created` event per inline comment; GitHub keeps one running
-and one pending run per group, so a burst of fourteen collapses to two evaluations, and the one that
-runs last read last.
+Evaluations are serialised per **pull request** for pull-request events and per **queue entry** for
+`merge_group` — the queue head ref carries the entry's sha, so a re-queue of the same pull request
+may evaluate alongside an older entry. That is the right granularity: what must not race is two
+evaluations publishing the same check-run *name* on the same commit, and two queue entries of one
+pull request are two commits with two check-runs. Nothing is cancelled mid-read, which also matters
+because cancelling a `merge_group` run ejects the entry rather than retrying it. A review arrives as
+one `submitted` event and one `created` event per inline comment; GitHub keeps one running and one
+pending run per group, so a burst of fourteen collapses to two evaluations, and the one that runs
+last read last.
+
+### 🚨 The reviewer's own event cannot start a run here — so the check waits, briefly
+
+Measured on this check's own pull request, #4575 (2026-09-17T08:05Z): the reviewer's
+`pull_request_review` event **does** reach the repository and GitHub **does** create a workflow run
+for it — run `35197843933`, conclusion **`action_required`, zero jobs**. The triggering actor is
+`Copilot`, and the repository requires approval for runs triggered by a first-time contributor
+(`actions/permissions/fork-pr-contributor-approval` → `first_time_contributors`). The two
+`pull_request_review_comment` runs the review's own comments raised were `action_required` too.
+
+So the event that would say *"the review has landed"* cannot evaluate anything, and a pull request
+whose review raises **no** findings would keep the red from its `opened` evaluation until somebody
+pushed again — a permanent red over a review that did land.
+
+The check closes that itself: `--wait-for-review 15`. While the **only** thing missing is the review,
+the step re-reads every 30 seconds for up to fifteen minutes and then answers RED (the job's cap is
+20 minutes). Nothing else is ever waited for — an unanswered thread needs a person, an incomplete
+listing needs another read. On #4575 the review landed 4m38s after the pull request opened; the range
+on #4299's thread is 3–12 minutes.
+
+A **person's** reply is not gated: it re-runs the check within seconds, which is what turns a red
+into a green once the findings are answered.
+
+The cheaper mechanism is a repository setting, not a wait: if runs triggered by `Copilot` no longer
+need approval, the review's own event evaluates the check the moment it lands and the wait becomes
+dead weight. That is a maintainer decision about the Actions approval policy, and it is the first item
+in Rollout.
 
 Every read is REST — `pulls/{n}`, `pulls/{n}/reviews`, `pulls/{n}/comments`, `issues/{n}/events`,
 `collaborators/{login}/permission` — with the job's read-only `GITHUB_TOKEN`. The collaborator read
@@ -204,14 +236,16 @@ Automatic review answered
 
 Before adding it:
 
-1. **Watch it on live pull requests** — red on open, green after the review lands on a pull request
-   with no findings, green after replies on one with findings, and a run on the reviewer's own review
-   event.
-2. **Teach the merge-queue steward this check.** `merge-queue-steward.py` reads only the failed
+1. **Decide the approval policy for `Copilot`-triggered runs.** Today they are `action_required`
+   with zero jobs (measured, above), so the bounded wait is what makes the check self-sufficient. If
+   the policy is relaxed, drop `--wait-for-review` to 0 and the job's cap to 5 minutes.
+2. **Watch it on live pull requests** — red on open, green once the review lands on a pull request
+   with no findings (through the wait), and green after the replies on one with findings.
+3. **Teach the merge-queue steward this check.** `merge-queue-steward.py` reads only the failed
    `merge_group` run of `MeshWeaver Build and Test` under the pull request's queue prefix. An ejection
    caused by this check would find no such run (and be rejected as unclassifiable) or find an older
    failed build of the same pull request and classify that instead.
-3. **Decide the cost.** 32 of the last 60 merges would have waited for replies.
+4. **Decide the cost.** 32 of the last 60 merges would have waited for replies.
 
 ## What an author does
 
