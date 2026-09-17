@@ -1055,12 +1055,12 @@ jobs:
       # tags, not shallow — so a tag read, a publication baseline and a merge-base all still resolve.
       # Dropping `fetch-depth: 0` would NOT be a no-op; a verbosity change must not change a verdict.
       # 🚨 `$HEAD_SHA` is in the refspec because on a pull request `actions/checkout` checks out
-# `refs/pull/<n>/merge`, which `+refs/heads/*` does not name. Reachability makes it arrive
-# anyway in every case measured — a same-repo PR's merge ref, and even a MERGED PR whose
-# branch was deleted, both completed to 6,729+ commits — but that is an invariant nobody
-# wrote down, and an unmerged fork head would not be reachable. Naming the commit costs one
-# argument and removes the reasoning.
-# The shallow re-check afterwards is not ceremony: a quiet success and a fetch that quietly did
+      # `refs/pull/<n>/merge`, which `+refs/heads/*` does not name. Reachability makes it arrive
+      # anyway in every case measured — a same-repo PR's merge ref, and even a MERGED PR whose
+      # branch was deleted, both completed to 6,729+ commits — but that is an invariant nobody
+      # wrote down, and an unmerged fork head would not be reachable. Naming the commit costs one
+      # argument and removes the reasoning.
+      # The shallow re-check afterwards is not ceremony: a quiet success and a fetch that quietly did
       # nothing would otherwise read the same, and every selector here narrows silently when it cannot
       # see history.
       - name: Full history and tags, quietly
