@@ -64,12 +64,54 @@ nodes, the live `NodeTypeDefinition`, and the bundle inventory for this identity
 
 | # | the reading | the answer |
 |---|---|---|
+| 0 | the shelf could not be READ, or there is no shelf | **proceed** — see *An unreadable shelf holds nothing*, below |
 | 1 | the type does not exist on this mesh yet | **proceed** — nothing is adopted, so nothing can be held in step |
 | 2 | `BuildProvenance` is not `AdoptedVerified` | **proceed** — `Compiled` has no bytes to keep in step; `StaleAdopted` / `AdoptionRefused` are already behind, and holding protects nothing; `AdoptedUnverified` was never compared, so there is no verified state to preserve |
 | 3 | the fingerprint computed over the CURRENT nodes ≠ the live `CurrentSourceFingerprint` | **proceed**, and say so: this import cannot reproduce the live fold (a compile input reaching outside the Space, a lagging snapshot), so it cannot judge a move either. A calibration that fails is never a licence to hold |
 | 4 | the fingerprint over the INCOMING nodes == the one over the CURRENT nodes | **proceed** — the type's input does not move |
 | 5 | a bundle entry for this type under this identity records the INCOMING fingerprint | **proceed** — the release the import already performs (`ReleaseAffectedNodeTypes` → `SeedForTypes`) adopts it, so the type goes `AdoptedVerified` → `AdoptedVerified` |
 | 6 | otherwise | **HOLD** the type, naming the fingerprint it waits for |
+
+### 🚨 An unreadable shelf holds nothing — the one place "cannot tell" does NOT hold
+
+Everywhere else in this mechanism an unreadable reading HOLDS: an unreadable seal index holds every
+source (#3461), because a publication landing releases it. Here the direction is reversed, and the
+reason is the release: **the predicate that clears a bundle hold reads the same shelf.** So a hold
+taken from an unreadable inventory has nothing that can clear it — one locked or truncated archive
+would wedge every changed adopted type of the Space indefinitely. Holding requires evidence that the
+bytes are ABSENT, and an unreadable shelf is not that evidence; the import writes what it fetched, the
+type may report `StaleAdopted` (honest, serving, announced — #3583), and the next readable pass judges
+it properly. The refusal is logged at Warning naming the identity.
+
+**This does NOT reopen what the phase-5 reader contract closed** (#3461 phase 5, #4592: *"cannot
+tell", never "nothing sealed"*). That contract is about the SEAL INDEX, and an unreadable index still
+HOLDS — at the source level, where a publication arriving releases it
+(`SealedSyncGate.RefusedForUnreadableIndex`). An unreadable index therefore holds the whole source,
+so the import this gate sits inside does not even run. What is left for the abstain above is the
+narrow case where the index read fine and an ARCHIVE did not: a reading that can name no bundle for
+one type, inside an import the seal has already cleared. The source cannot move past its seal either
+way; only the per-type hold is skipped, and the type says it is behind.
+
+**Which readings count as "cannot tell" is one definition, and it is not the configuration.**
+`PrebuiltBundleInventory.Presence` answers it on the same pool as the read it fronts, and the full
+read starts from it so the two cannot disagree:
+
+| the shelf | the reading | why |
+|---|---|---|
+| no framework identity, or nothing configured and no image directory on disk | `NotConfigured` | every NodeType compiles here — nothing to keep in step |
+| a published root IS configured and is not there | `Unreadable` ⇒ **abstain** | unmounted or not yet mounted; the same absent root can never carry the release evidence |
+| the root is there but holds no directory for this identity | `Read`, 0 bundles ⇒ **hold** | a real "nothing published for this identity yet", and the publication that lands here releases it |
+| an archive under it cannot be read | `Unreadable` ⇒ **abstain** | a partial fold is not a short one |
+
+The distinction in rows two and three is the whole point: an empty reading and an unreadable one lead
+to opposite answers, so the difference must be measured rather than defaulted. 🚨 And it is measured
+**before the mesh is asked anything**: `imageDirectory` falls back to a non-empty default path, so a
+configuration-only pre-check is vacuous — it let a portal with no bundles at all pay for the
+mesh-wide NodeType listing plus one stream read per type on every import.
+
+The same asymmetry decides what the reading FOLDS: an archive whose manifest names another framework
+identity — or names none — is skipped, because `SeedBundles` declines exactly those before it looks at
+an assembly. A reading that folded them in would release a hold onto bytes that can never adopt here.
 
 Step 3 is the calibration that makes the rest honest, and it is deliberately self-checking: rather
 than introspecting a type's queries to guess whether they reach outside the Space, the gate
@@ -133,7 +175,21 @@ Three events, and they are the three the rest of this mechanism already has:
 2. **A publication arriving** (`PublicationSealArrivalService` → `SealedPublicationSyncReconciler`) or
    **the boot seed** (`ShippedPrebuiltBundles.SeedPublishedRoot` → the same reconciler). The
    reconciler re-attempts a source with held types when the inventory now carries a wanted
-   fingerprint — asked BEFORE re-fetching, so an unrelated publication costs nothing.
+   fingerprint — asked BEFORE re-fetching, so an unrelated publication costs nothing, and the shelf
+   is not even read unless a matched config is holding something.
+   🚨 **Only an INDEPENDENTLY held type is a trigger.** A type held by sharing can have its own
+   wanted fingerprint on the shelf while the type it shares a source with is still waiting;
+   releasing on it would re-import, re-hold the identical set and repeat that on every later
+   publication. `BundleHeldNodeType.HeldBySharing` is what tells the two apart, and a sharer is
+   re-judged by the import the root's own release dispatches.
+   🚨 **And an entry written before that field existed says NEITHER** (`heldBySharing` is `null`:
+   the list is persisted on the sync config, so records predating the field are read back by a
+   portal that has the code). Neither reading is available for it — as "independent" a legacy sharer
+   re-enters the futile loop, as "sharer" a legacy independent hold can never release on the arrival
+   it waits for. Such an entry is a trigger only when the shelf now carries **every** held entry's
+   fingerprint, the one case where the re-import cannot be futile because it clears the whole set —
+   and that import rewrites the list with the flag (`RecordSyncResult` writes it on every
+   conclusion), so the unknown state survives exactly one conclusion.
 3. **A roll.** A held entry records the identity it was judged under; on an instance running a
    different identity the judgement is void, so the source is re-attempted and re-judged against the
    new identity's inventory.
@@ -154,6 +210,14 @@ away.
   describes — and the reason is logged with the type's name, never silently.
 - **It is not a second adoption gate.** The bytes are still judged where they always were, by the
   owner, against the node's own fingerprint. This only decides whether the SOURCES may move.
+- 🚨 **It does not see a NodeType the read model did not list.** The types to judge come from the
+  partition's own listing, and that listing is the read model's — eventually consistent. A type it
+  omits is not judged, so its sources move as they did before this gate and it may report
+  `StaleAdopted`: the pre-#3845 behaviour, never a new harm, and self-healing on the next import.
+  Refusing to import until completeness is PROVEN is not available on this instrument — `.Complete()`
+  pins the read against a paging limit, which is the failure it exists to prevent, and the mesh
+  offers no authoritative enumeration of a partition. The importer's own prune snapshot declares the
+  same read for the same reason.
 
 ## How to check it is still true
 
@@ -162,8 +226,20 @@ away.
   source text and `CurrentSourceFingerprint` do not move, the rest of the Space does, the config
   keeps the older commit and names the held type), then a publication carrying the wanted fingerprint
   and the same import landing it.
-- `test/MeshWeaver.Documentation.Test/BundleKeyedHoldTest.cs` — the six rows above as data, both
-  directions.
+- `test/MeshWeaver.Documentation.Test/BundleKeyedHoldTest.cs` — the rows above as data, both
+  directions, including the unreadable shelf and the sharer's non-trigger hold.
+- `test/MeshWeaver.Documentation.Test/PrebuiltBundleInventoryTest.cs` — what the shelf reading folds
+  and refuses, over real archives: this identity's bundle is carried, another identity's is not named
+  at all, a legacy bundle names the type and satisfies no hold, and an unsealed publication
+  contributes nothing — plus the `Presence` rows above, including the configured-but-absent root that
+  must read `Unreadable` rather than empty.
+- `test/MeshWeaver.Documentation.Test/BundleHoldReleaseTest.cs` — the release predicate, every case
+  built in the state a held source is actually in (behind the seal, final verdict recorded at it, so
+  the settled shortcut is live and only a release can re-import — the first fact is that negative
+  control): an independent hold releases when its bundle arrives, a sharer never does, an unreadable
+  shelf releases nothing, a hold judged under another identity is retaken whatever the shelf says,
+  and a LEGACY entry (deserialized from #4595's own JSON shape, so the absent key is what is under
+  test) is a trigger only once the shelf carries the whole held set.
 - On a live portal: `get @{space}/_GitSync` shows `bundleHeldNodeTypes` beside the older
   `lastSyncCommitSha`; the import's activity names each held type and the fingerprint it waits for.
 

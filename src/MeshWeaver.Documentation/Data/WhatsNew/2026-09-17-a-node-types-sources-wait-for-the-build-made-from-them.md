@@ -31,7 +31,10 @@ keeps those sources unless a build made from the repository's newer ones is alre
 
 Nothing is held when there is nothing to protect: a type the portal compiles itself, a type already
 behind its sources, a space whose repository the portal runs no compiled builds of, and a portal that
-consumes no published builds at all are all unaffected.
+consumes no published builds at all are all unaffected. Nor is anything held when the portal cannot
+READ the builds it holds — the arrival of a build is what ends a hold, so a hold taken without being
+able to see the builds would have nothing that could end it; the sync proceeds and the type says it
+is behind, as it did before.
 
 The design, including what a partially-held space means for the recorded commit:
 [Adopt Then Sync, Per NodeType](/Doc/Architecture/AdoptThenSyncPerNodeType).

@@ -54,16 +54,90 @@ internal static class BundleKeyedHoldReading
                 ? configured
                 : ShippedPrebuiltBundles.DefaultDirectory;
             var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
-            if (string.IsNullOrWhiteSpace(publishedRoot) && !Directory.Exists(imageDirectory))
-                // No shelf: every type here compiles from source, so there is nothing to keep in step.
-                return Observable.Return(BundleHoldDecision.Nothing);
-
             var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            // 🚨 .Complete() — an ENUMERATION that gates a decision, not a search. A NodeType this
-            // listing does not return is simply not judged (the safe direction), but an unpinned read
-            // that inherits a bound from anywhere would silently turn "every type" into "the first
-            // page" — the same declaration the importer's own prune snapshot makes.
-            return meshService
+            // 🚨 THE SHELF DECIDES WHETHER TO ASK THE MESH AT ALL, and it is asked ON THE POOL
+            // (reviews on #4595 and #4605). Two wrong shapes were tried first and both are recorded
+            // here because each looks right: a `Directory.Exists` inline blocks whichever hub turn
+            // subscribed the import on a mounted share, and a CONFIGURATION-only gate is VACUOUS —
+            // `imageDirectory` falls back to `ShippedPrebuiltBundles.DefaultDirectory`, so a portal
+            // with no bundles at all took the mesh-wide NodeType listing plus one stream read per
+            // type on EVERY import before the pooled read answered NotConfigured. `Presence` is the
+            // cheap half of the read itself (two `Directory.Exists`, same definition, so the two can
+            // never disagree), and nothing below runs when there is no shelf to keep in step with.
+            return Presence(hub, imageDirectory, publishedRoot, identity, logger)
+                .Take(1)
+                .SelectMany(presence => presence is SealedReadOutcome.Read
+                    ? Judge(hub, meshService, partition, incoming, imageDirectory, publishedRoot,
+                        identity, logger)
+                    : Abstain(presence, partition, identity, logger));
+        })
+        .Catch((Exception exception) =>
+        {
+            // A reading that faulted holds NOTHING, deliberately: an import that cannot ask the
+            // question behaves exactly as it did before this gate existed, and the fault is stated.
+            // The opposite direction — hold on an unreadable reading — would freeze a Space on an
+            // I/O blip with nothing to release it, because the release predicate reads the same shelf.
+            logger?.LogWarning(exception,
+                "[BundleHold] {Partition}: the bundle-keyed hold could not be decided — this import "
+                + "writes what it fetched, exactly as it did before MeshWeaver#3845 hole 4", partition);
+            return Observable.Return(BundleHoldDecision.Nothing);
+        });
+
+    /// <summary>
+    /// 🚨 Why a non-<see cref="SealedReadOutcome.Read"/> shelf holds NOTHING rather than everything,
+    /// said once where it is decided (review on #4595): the predicate that RELEASES a bundle hold
+    /// reads the same shelf, so a hold taken from a shelf that cannot be read has nothing able to
+    /// clear it. `NotConfigured` is the ordinary case — every NodeType compiles here.
+    /// </summary>
+    /// <param name="presence">What the shelf reading can be.</param>
+    /// <param name="partition">The Space the import writes.</param>
+    /// <param name="identity">This instance's framework identity.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <returns>The empty decision.</returns>
+    private static IObservable<BundleHoldDecision> Abstain(
+        SealedReadOutcome presence, string partition, string identity, ILogger? logger)
+    {
+        if (presence is SealedReadOutcome.Unreadable)
+            logger?.LogWarning(
+                "[BundleHold] {Partition}: the bundle shelf for framework identity {Identity} cannot "
+                + "be read, so no NodeType is held — a hold taken from an unreadable shelf could not "
+                + "be released by the same shelf. This import writes what it fetched; a type whose "
+                + "sources move past its bundle reports StaleAdopted until the shelf is readable "
+                + "again", partition, identity);
+        return Observable.Return(BundleHoldDecision.Nothing);
+    }
+
+    /// <summary>
+    /// The mesh half: which NodeTypes this partition has, what each one's live definition says, and
+    /// the fold over its current Code nodes — read only once the shelf is known to be readable.
+    /// </summary>
+    /// <param name="hub">The hub whose workspace is read.</param>
+    /// <param name="meshService">The query surface.</param>
+    /// <param name="partition">The Space the import writes.</param>
+    /// <param name="incoming">The parsed nodes the import would write.</param>
+    /// <param name="imageDirectory">The image's shipped bundles.</param>
+    /// <param name="publishedRoot">The published bundle root, or null.</param>
+    /// <param name="identity">This instance's framework identity.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <returns>The decision.</returns>
+    private static IObservable<BundleHoldDecision> Judge(
+        IMessageHub hub, IMeshService meshService, string partition,
+        IReadOnlyList<MeshNode> incoming, string imageDirectory, string? publishedRoot,
+        string identity, ILogger? logger)
+        // 🚨 .Complete() — an ENUMERATION that gates a decision, not a search. A NodeType this
+        // listing does not return is simply not judged (the safe direction), but an unpinned read
+        // that inherits a bound from anywhere would silently turn "every type" into "the first
+        // page" — the same declaration the importer's own prune snapshot makes.
+        // 🚨 The RESIDUAL, stated where the assumption is made (review on #4595): this listing is
+        // the read model's, and the read model is eventually consistent. A NodeType it does not
+        // return is not judged, so its sources move as they did before this gate and the type can
+        // report StaleAdopted — the pre-#3845 behaviour, never a new harm, and self-healing on the
+        // next import. The alternative — refusing to import until completeness is PROVEN — cannot be
+        // built on this instrument: `.Complete()` pins the read against a paging limit (which is what
+        // silently turns "every type" into "the first page"), and nothing in the mesh offers an
+        // authoritative enumeration of a partition. The importer's own prune snapshot declares the
+        // same read for the same reason.
+        => meshService
                 .Query<MeshNode>(MeshQueryRequest
                     .FromQuery($"path:{partition} scope:descendants nodeType:{MeshNode.NodeTypePath}")
                     .Complete())
@@ -96,26 +170,18 @@ internal static class BundleKeyedHoldReading
                             if (!live.Values.Any(d => d.BuildProvenance is BuildProvenance.AdoptedVerified))
                                 return Observable.Return(BundleHoldDecision.Nothing);
                             return Inventory(hub, imageDirectory, publishedRoot, identity, logger)
-                                .SelectMany(inventory => inventory.Outcome is SealedReadOutcome.NotConfigured
-                                    ? Observable.Return(BundleHoldDecision.Nothing)
+                                // 🚨 `is not Read`, not `is NotConfigured`: the shelf was present at
+                                // the pre-check and an ARCHIVE under it could still be unreadable, and
+                                // that abstains for the same reason (review on #4605) — through the
+                                // same sentence, so the two paths cannot drift apart.
+                                .SelectMany(inventory => inventory.Outcome is not SealedReadOutcome.Read
+                                    ? Abstain(inventory.Outcome, partition, identity, logger)
                                     : Current(meshService, partition).Select(current => BundleKeyedHold.Decide(
                                         partition, incoming, current, live,
                                         node => node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger),
                                         inventory, identity, logger)));
                         });
                 });
-        })
-        .Catch((Exception exception) =>
-        {
-            // A reading that faulted holds NOTHING, deliberately: an import that cannot ask the
-            // question behaves exactly as it did before this gate existed, and the fault is stated.
-            // The opposite direction — hold on an unreadable reading — would freeze a Space on an
-            // I/O blip with nothing to release it, because the release predicate reads the same shelf.
-            logger?.LogWarning(exception,
-                "[BundleHold] {Partition}: the bundle-keyed hold could not be decided — this import "
-                + "writes what it fetched, exactly as it did before MeshWeaver#3845 hole 4", partition);
-            return Observable.Return(BundleHoldDecision.Nothing);
-        });
 
     /// <summary>The partition's Code nodes — the compile inputs the fingerprints fold over. A
     /// content-bearing enumeration, pinned like the type listing.</summary>
@@ -126,6 +192,23 @@ internal static class BundleKeyedHoldReading
                 .Complete())
             .Take(1)
             .Select(change => (IReadOnlyList<MeshNode>)change.Items);
+
+    /// <summary>Whether a shelf is there at all, on the FileSystem pool — the cheap pre-check that
+    /// keeps the mesh-wide listing off an instance that consumes no bundles. No pool registry means
+    /// the same answer as <see cref="Inventory"/> gives: nothing is read, and nothing is held.</summary>
+    /// <param name="hub">The hub whose pool registry is resolved.</param>
+    /// <param name="imageDirectory">The image's shipped bundles.</param>
+    /// <param name="publishedRoot">The published bundle root, or null.</param>
+    /// <param name="identity">This instance's framework identity.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <returns>What a full read could be.</returns>
+    private static IObservable<SealedReadOutcome> Presence(
+        IMessageHub hub, string imageDirectory, string? publishedRoot, string identity, ILogger? logger)
+        => hub.ServiceProvider.GetService<IoPoolRegistry>() is { } pools
+            ? pools.Get(IoPoolNames.FileSystem)
+                .InvokeBlocking(_ => PrebuiltBundleInventory.Presence(
+                    imageDirectory, publishedRoot, identity, logger))
+            : Observable.Return(SealedReadOutcome.NotConfigured);
 
     /// <summary>The bundle inventory, read on the FileSystem pool. A mesh with a shelf but no pool
     /// registry reads nothing and says so — untracked share I/O is the straggler the pool exists to

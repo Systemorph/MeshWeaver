@@ -842,11 +842,11 @@ public sealed class GitHubSyncService
                             foreach (var abstained in hold.Abstained)
                                 logger?.LogInformation(
                                     "[BundleHold] {Space}: not judged — {Reason}", spaceId, abstained);
-                            if (hold.Holds)
-                                progress?.Invoke(
-                                    $"{hold.Held.Count} NodeType(s) held for their bundle: "
-                                    + string.Join("; ", hold.Held.Select(h => $"{h.Path} ({h.Reason})")),
-                                    LogLevel.Warning);
+                            // 🚨 NOT through `progress` (review on #4595): that sink persists the
+                            // sentence as English with no catalog key, and the held types are already
+                            // named on the activity by the KEYED line every import path logs at the
+                            // end (`LogImportOutcome` → `BundleHeldLine`, en + de). Two writers of
+                            // one fact, one of them untranslatable, is the #3236 shape.
                             return StaticRepoImporter.ImportSource(hub, source, logger, policy, changedNodePaths)
                                 // The held types travel ON the result, so the one activity line every
                                 // import path logs can name them and the baseline decision below can
