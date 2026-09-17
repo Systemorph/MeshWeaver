@@ -257,6 +257,35 @@ class ArtifactTests(unittest.TestCase):
             self.assertEqual(0, ART.main(args + ["--if-no-files-found", "ignore"]))
         self.assertEqual([], self.art.list())
 
+    def test_empty_pattern_and_all_downloads_succeed_but_exact_name_is_required(self):
+        out = self.root / "out"
+        self.assertEqual(0, self.art.download(out))
+        self.assertEqual(0, self.art.download(out, pattern="compile-receipt-*"))
+        self.publish("unrelated")
+        self.assertEqual(0, self.art.download(out, pattern="compile-receipt-*"))
+        self.assertFalse(out.exists())
+        args = ["download", "--store", self.store, "--repository", "Systemorph/Plugins",
+                "--run-id", "12", "--path", str(out), "--pattern", "compile-receipt-*"]
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(0, ART.main(args))
+            self.assertEqual(1, ART.main(args[:-2] + ["--name", "compile-receipt-required"]))
+        self.assertIn(f"download-path={out.resolve()}", output.getvalue())
+        self.assertIn("file-count=0", output.getvalue())
+
+    def test_empty_pattern_does_not_hide_manifest_corruption_or_unmounted_store(self):
+        self.publish("unrelated")
+        manifest = self.share / self.art.name_prefix("unrelated") / "1/manifest.json"
+        manifest.write_text("not JSON")
+        with self.assertRaises(ART.Red):
+            self.art.download(self.root / "out", pattern="compile-receipt-*")
+        args = ["download", "--store", f"file:{self.root}/unmounted",
+                "--repository", "Systemorph/Plugins", "--run-id", "12",
+                "--path", str(self.root / "out"), "--pattern", "compile-receipt-*"]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(1, ART.main(args))
+        self.assertFalse((self.root / "unmounted").exists())
+
     def test_expiry_is_visible_for_metadata_but_not_download(self):
         self.publish()
         manifest = self.share / self.art.name_prefix("build") / "1/manifest.json"

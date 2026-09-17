@@ -343,7 +343,12 @@ class Artifacts:
                  merge_multiple: bool = False) -> int:
         selected = self.list(name, pattern)
         if not selected:
-            raise Red("no artifact matches this repository, run, attempt and name/pattern")
+            if name:
+                raise Red("no artifact matches this repository, run, attempt and name")
+            # Pattern/all downloads are collections: an empty collection is valid, as in
+            # actions/download-artifact. The constructor and list still validate the store
+            # and manifests; unavailable/corrupt storage must never become an empty success.
+            return 0
         destination = Path(os.path.abspath(destination))
         if destination.is_symlink():
             raise Red("artifact destination is a symbolic link")
