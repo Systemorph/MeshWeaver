@@ -66,6 +66,16 @@ class CompositeTests(unittest.TestCase):
                         CI_ARTIFACT_PATH=str(self.root / 'out'))
         self.assertTrue((self.root / 'out/payload.txt').is_file())
 
+    def test_output_names_the_canonical_extraction_directory(self):
+        self.run_action('upload-artifact')
+        actual = self.root / 'actual'
+        actual.mkdir()
+        alias = self.root / 'alias'
+        alias.symlink_to(actual, target_is_directory=True)
+        self.run_action('download-artifact', CI_ARTIFACT_PATH=str(alias / 'out'))
+        self.assertTrue((actual / 'out/payload.txt').is_file())
+        self.assertIn(f'download-path={actual}/out\n', (self.root / 'outputs').read_text())
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

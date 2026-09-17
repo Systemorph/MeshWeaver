@@ -241,6 +241,11 @@ class ArtifactTests(unittest.TestCase):
                 ART.Artifacts(store, "Systemorph/Plugins", "12", 1)
         self.assertFalse((self.root / "not-mounted").exists())
 
+    def test_store_failure_preserves_the_underlying_reason(self):
+        with patch.object(ART.STORE.FileStore, "reachable", return_value="share write refused: disk full"):
+            with self.assertRaisesRegex(ART.Red, "share write refused: disk full"):
+                self.client()
+
     def test_missing_and_no_file_policies_have_distinct_verdicts(self):
         with self.assertRaises(ART.Red):
             self.art.download(self.root / "out", name="absent")
@@ -290,7 +295,7 @@ class ArtifactTests(unittest.TestCase):
                 "--merge-multiple", "true"]
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(0, ART.main(args))
-        self.assertIn(f"download-path={self.root}/cli", output.getvalue())
+        self.assertIn(f"download-path={(self.root / 'cli').resolve()}", output.getvalue())
 
 
 if __name__ == "__main__":

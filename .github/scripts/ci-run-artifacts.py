@@ -208,8 +208,9 @@ class Artifacts:
         if not root.is_absolute() or not root.is_dir():
             raise Red("artifact store must name an existing absolute mounted directory")
         self.store = STORE.make_store("file:" + str(root.resolve()))
-        if self.store.reachable():
-            raise Red("artifact store mount is not writable by this runner")
+        unavailable = self.store.reachable()
+        if unavailable:
+            raise Red(f"artifact store is unavailable: {unavailable}")
         self.repository, self.run_id, self.attempt = repository, str(run_id), attempt
         self.prefix = f"named/{repository}/{run_id}/artifacts"
         self.root = self.store.root
@@ -451,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.name and args.pattern:
                 raise Red("choose name or pattern, not both")
             count = artifacts.download(Path(args.path), args.name, args.pattern, args.merge_multiple)
-            emit("download-path", str(Path(args.path).absolute()))
+            emit("download-path", str(Path(args.path).resolve()))
             emit("file-count", count)
         elif args.command == "list":
             print(json.dumps(artifacts.list(args.name, args.pattern, args.include_expired), sort_keys=True))
