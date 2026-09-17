@@ -692,8 +692,14 @@ SEAL_PHRASES = (
     "identity resolved: ",
     # the ONLY outcome that licenses a re-attempt
     "are not available for framework identity",
-    # the refusal that means "the platform bake has not published this release yet"
-    "CANNOT RESOLVE a framework identity",
+    # the refusal that means "the platform bake has not published this release yet" — keyed on its
+    # OWN wording: an empty marker shares the "CANNOT RESOLVE" prefix and must NOT read as pending
+    "has no marker at",
+    # the refusal that means "the marker's existence could not be established" (#4539 review) — the
+    # case the old script reported as "no marker", which the step then answered with a green
+    "exists could not be established",
+    # the refusal that means "the producer wrote a marker and recorded no identity" — a defect
+    "is empty — the producer recorded none",
     # the refusal that means "the store could not be read" — a red, never a verdict
     "CANNOT DETERMINE release availability",
 )
@@ -715,6 +721,15 @@ def _probe_stub(kind: str) -> str:
         # exit 1 — no `_releases` marker at all: the platform bake has not published this release.
         "unmarked": 'echo "::error::CANNOT RESOLVE a framework identity: release \'$1\' has no '
                     'marker at acct/share/prebuilt-bundles/_releases/$1."\nexit 1',
+        # exit 1 — the MARKER's existence could not be established (auth / throttling / network).
+        # Before the #4539 review fix the real script reported this as "has no marker", and the step
+        # answered it NOT MEASURED — a storage outage read as a pending bake.
+        "marker-unreadable": 'echo "::error::CANNOT DETERMINE release availability: whether the '
+                             'release marker at acct/share/prebuilt-bundles/_releases/$1 exists could '
+                             'not be established (az returned \'<nothing>\')."\nexit 1',
+        # exit 1 — a marker EXISTS but carries no identity: the producer's defect, not a pending bake.
+        "empty": 'echo "::error::CANNOT RESOLVE a framework identity: the release marker for \'$1\' '
+                 'is empty — the producer recorded none."\nexit 1',
         # exit 1 — the store could not be read. A refusal, in neither direction.
         "unreadable": f'{resolved}\necho "::error::CANNOT DETERMINE release availability for '
                       f'framework identity {IDENTITY} (release $1): 1 of 1 source(s) could not be '
@@ -767,8 +782,12 @@ def run_seal_cases(root, case) -> None:
     rc, log, outputs, calls = seal("absent")
     case("a sealed set whose `plugins` publication is ABSENT re-attempts the seal",
          rc == 0 and "plugins_seal_due=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    # 🚨 Assert on the step's OWN verdict line, never on `log` as a whole: `log` also carries the
+    # probe's relayed "identity resolved: <id>" line, so `IDENTITY in log` held WHATEVER the step
+    # extracted — a mutation reading the wrong field (identity `—`) stayed green on 86 of 86.
     case("...and it NAMES the framework identity it is acting on",
-         IDENTITY in log, f"the verdict named no identity:\n{log}")
+         f"NOT sealed for `{IDENTITY}`" in log,
+         f"the verdict named the wrong identity, or none:\n{log}")
     case("...and it records the attempt on the ledger before acting",
          "issue comment" in calls and "cd-seal:836d447-p07bcf72" in calls,
          f"no attempt marker was written; gh calls were:\n{calls}")
@@ -800,6 +819,22 @@ def run_seal_cases(root, case) -> None:
          "NOT MEASURED" in log, f"log={log}")
     case("...and it writes no ledger entry for a measurement it did not take",
          "issue comment" not in calls, f"gh calls were:\n{calls}")
+
+    # 🚨 The #4539 review finding. The marker's EXISTENCE could not be read — the case the old script
+    # folded into "has no marker". It must be RED, never NOT MEASURED.
+    rc, log, outputs, calls = seal("marker-unreadable")
+    case("a marker whose existence CANNOT be read fails RED, not NOT MEASURED",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it is not reported as a pending bake",
+         "NOT MEASURED" not in log, f"a storage outage was answered as a pending bake:\n{log}")
+
+    # An EMPTY marker shares the "CANNOT RESOLVE" prefix with the benign absent case. Keyed on the
+    # prefix, the step read a producer defect as "the bake has not run yet" and went green.
+    rc, log, outputs, calls = seal("empty")
+    case("an EMPTY release marker (producer recorded no identity) fails RED",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it is not reported as a pending bake",
+         "NOT MEASURED" not in log, f"a producer defect was answered as a pending bake:\n{log}")
 
     # Absent, but the probe named no identity: acting would be acting on the wrong identity.
     rc, log, outputs, calls = seal("nameless")

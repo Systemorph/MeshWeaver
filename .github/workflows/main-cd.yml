@@ -1184,7 +1184,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MAX_SEAL_ATTEMPTS: "3"
         run: |
-          set -uo pipefail
+          # 🚨 `-e` IS ON, and the two places that must survive a non-zero say so explicitly with
+          # `|| …`. Without it every `gh` read here fails OPEN: a transient `gh issue list` would
+          # yield an empty issue number and this step would CREATE A SECOND LEDGER ISSUE — once an
+          # hour, for as long as the API is unhappy. `decide` above holds the same discipline for
+          # the same reason.
+          set -euo pipefail
           verdict() { echo "plugins_seal_due=$1" >> "$GITHUB_OUTPUT"; echo "$2"; echo "### $2" >> "$GITHUB_STEP_SUMMARY"; }
 
           if [ -z "${RELEASE_VERSION:-}" ]; then
@@ -1199,10 +1204,15 @@ jobs:
           # not this step's verdict. The verdict is the annotation this step emits itself, over the
           # script's whole log printed verbatim. Its EXIT CODE is what branches.
           log="${RUNNER_TEMP:-/tmp}/plugins-availability.log"
-          .github/scripts/check-release-availability.sh "$RELEASE_VERSION" plugins > "$log" 2>&1
-          probe=$?
+          # The probe's non-zero is an ANSWER, not a step failure — `|| probe=$?` is what exempts
+          # this one command from `-e`, and nothing else in this step is exempt.
+          probe=0
+          .github/scripts/check-release-availability.sh "$RELEASE_VERSION" plugins > "$log" 2>&1 || probe=$?
           sed 's/^::error:://' "$log"
-          identity=$(sed -n 's/^identity resolved: \([^ ]*\) .*/\1/p' "$log" | head -1)
+          # awk exits on the FIRST match and reads the file itself: no pipe, so no SIGPIPE — `sed | head -1`
+          # under `pipefail` exits 141 whenever sed writes past head's one line, and `-e` would then
+          # abort this step on a log that merely printed the identity twice.
+          identity=$(awk '/^identity resolved: /{print $3; exit}' "$log")
 
           if [ "$probe" -eq 0 ]; then
             verdict false "✅ \`plugins\` IS sealed for \`${identity:-?}\` (release \`$RELEASE_VERSION\`) — nothing to re-attempt."
@@ -1219,8 +1229,13 @@ jobs:
           # `publish-bake` is running to fix on this same tick. The Plugins seal is judged on the
           # NEXT tick, an hour later, by which time the marker exists — self-clearing, with no timer
           # and no retry written here, and said out loud rather than folded into a green.
+          #
+          # 🚨 Match it by its OWN wording — `has no marker at` — never the shared `CANNOT RESOLVE`
+          # prefix. An EMPTY marker opens with the same prefix and is not "the bake has not run yet":
+          # the producer WROTE a marker and recorded no identity, which no later tick repairs. Keyed on
+          # the prefix, that producer defect was read as a pending bake and answered with a green.
           if ! grep -q 'are not available for framework identity' "$log"; then
-            if grep -q 'CANNOT RESOLVE a framework identity' "$log"; then
+            if grep -q 'has no marker at' "$log"; then
               verdict false "⏭️ NOT MEASURED: release \`$RELEASE_VERSION\` has no \`_releases/\` marker yet, so this set's framework identity is not established and nothing can be said about its \`plugins\` publication. The platform bake on THIS tick writes that marker; the next reconcile judges the seal."
               exit 0
             fi

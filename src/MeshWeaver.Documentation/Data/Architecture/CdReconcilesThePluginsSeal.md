@@ -125,8 +125,17 @@ them distinguishable too:
 |---|---|---|
 | `all N source(s) are published for identity s…` | `false` | The control: nothing to do, and nothing is written to any ledger. |
 | `N of M source(s) are not available for framework identity s…` | `true` | The only answer that is a statement about the publication. |
-| `CANNOT RESOLVE a framework identity` (no `_releases` marker) | `false`, said as **NOT MEASURED** | The platform content bake has never published this release — which is what `publish-bake` is running to fix on this same tick. The next tick judges the seal. Self-clearing, with no timer and no retry. |
-| `CANNOT DETERMINE …` (the store could not be read) | — the step goes **RED** | The gate could not ask its question. *Cannot determine* is not *clear to proceed*, and it is not *nothing to do* either. |
+| `CANNOT RESOLVE … has no marker at …` (no `_releases` marker **at all**) | `false`, said as **NOT MEASURED** | The platform content bake has never published this release — which is what `publish-bake` is running to fix on this same tick. The next tick judges the seal. Self-clearing, with no timer and no retry. |
+| `CANNOT RESOLVE … is empty` (a marker **exists** but records no identity) | — the step goes **RED** | The producer wrote a marker and recorded no identity. No later tick repairs that, so it is a defect, not a pending bake. |
+| `CANNOT DETERMINE …` (the marker's existence or content, or a source, could not be read) | — the step goes **RED** | The gate could not ask its question. *Cannot determine* is not *clear to proceed*, and it is not *nothing to do* either. `az`'s own reason (an expired login, throttling, a missing share) is carried in the message. |
+
+🚨 **The benign row is matched by its OWN wording, never by the `CANNOT RESOLVE` prefix.** The empty-marker
+refusal opens with the same prefix, so a step keyed on the prefix answers a producer defect with a green.
+And the script **asks whether the marker exists before reading it**: until the #4539 review fix, a failed
+read — auth, throttling, network — was reported as "has no marker" and landed in the benign row, so a
+storage outage read as a pending bake. `.github/scripts/test-cd-steps.py` pins all three rows, and
+asserts each phrase still exists in the real script so a stub cannot describe an outcome the script no
+longer produces.
 
 An absence that printed no identity is also a red: the finding names no identity and cannot be acted
 on.
