@@ -183,9 +183,24 @@ class AzBlob(Store):
 
         🚨 The sha comes from metadata we WROTE, not from Azure's Content-MD5: MD5 is not the
         digest the build ledger records, and a store that answers a different digest than the one
-        the caller verifies is a store that cannot be verified at all."""
-        r = self._az("show", "--container-name", self.container, "--name", blob, ok_codes=(0, 3))
-        if r.returncode == 3 or not r.stdout.strip():
+        the caller verifies is a store that cannot be verified at all.
+
+        🚨 ABSENT IS NOT AN ERROR, and which exit code the CLI uses for it has moved (3 today, 1 in
+        older builds, and the message is what is stable). So a not-found ANSWER is recognised by its
+        text and returns None — while anything else (a 403, a network failure, an unparseable
+        answer) still raises, because a store that cannot be read must never look like an empty one:
+        `put` would re-upload harmlessly, but `probe` would answer "absent" for bytes that are there
+        and the lane would rebuild a module it already had, silently and forever."""
+        r = self._az("show", "--container-name", self.container, "--name", blob, ok_codes=(0, 1, 3))
+        if r.returncode != 0:
+            text = ((r.stderr or "") + (r.stdout or "")).lower()
+            if any(m in text for m in ("blobnotfound", "not found", "notfound", "does not exist",
+                                       "resourcenotfound", "errorcode:blobnotfound")):
+                return None
+            raise Red(f"`az storage blob show` exited {r.returncode} for {blob} against "
+                      f"{self.account}/{self.container} and did not say the blob is absent: "
+                      f"{(r.stderr or r.stdout).strip()[:400]}")
+        if not r.stdout.strip():
             return None
         try:
             return (json.loads(r.stdout).get("metadata") or {}).get("sha256")
@@ -650,7 +665,27 @@ def self_test() -> int:
         except Red:
             check("file: resolve --require is red for an unmounted share", True)
 
-        # 16. an `az` that fails is a RED naming the account and the verb, never a silent skip
+        # 16. 🚨 ABSENT vs UNREADABLE. A `show` that says the blob is not there is `None` whatever
+        # exit code the CLI chose; a `show` that fails for any OTHER reason RAISES, because a store
+        # that cannot be read must never look like an empty one — `probe` would answer "absent" for
+        # bytes that are there and the lane would rebuild a module it already had, forever.
+        notfound = bindir / "az-notfound"
+        notfound.write_text("#!/bin/sh\necho 'ErrorCode:BlobNotFound' >&2\nexit 1\n")
+        notfound.chmod(0o755)
+        nf = make_store("azblob:meshweaverci/ciartifacts", az=str(notfound))
+        check("a not-found `show` is absent, not an error", nf._exists_sha("x") is None)
+        denied = bindir / "az-denied"
+        denied.write_text("#!/bin/sh\necho 'AuthorizationPermissionMismatch' >&2\nexit 1\n")
+        denied.chmod(0o755)
+        dn = make_store("azblob:meshweaverci/ciartifacts", az=str(denied))
+        try:
+            dn._exists_sha("x")
+            check("an unreadable store raises rather than reading as empty", False, "returned")
+        except Red as e:
+            check("an unreadable store raises rather than reading as empty",
+                  "did not say the blob is absent" in str(e))
+
+        # 17. an `az` that fails is a RED naming the account and the verb, never a silent skip
         broken = bindir / "az-broken"
         broken.write_text("#!/bin/sh\necho 'AuthorizationPermissionMismatch' >&2\nexit 1\n")
         broken.chmod(0o755)
