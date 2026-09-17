@@ -425,8 +425,15 @@ public static class DeploymentPortalConfig
         if (record is null || record.RequiredModuleSlots.IsEmpty || record.RequiredModulesAuthoritative)
             return ImmutableList<string>.Empty;
 
+        // 🚨 The RENDERED slots, never the raw map. <see cref="ModuleSlots"/> drops a blank entry
+        // and drops an explicit slot the contiguous list already occupies, so the raw map contains
+        // entries that emit no key at all — and a problem saying "the key IS rendered" about one of
+        // those would be false where it matters most, in the sentence explaining why nothing else
+        // reports this. Above the contiguous count is exactly the explicit half that survived: the
+        // list's own entries occupy 0..count-1 and nothing else.
+        var contiguous = ModuleEntries(record.RequiredModules).Count;
         var problems = ImmutableList.CreateBuilder<string>();
-        foreach (var (slot, assembly) in record.RequiredModuleSlots)
+        foreach (var (slot, assembly) in ModuleSlots(record).Where(entry => entry.Key >= contiguous))
             problems.Add(
                 $"required module '{WithDllSuffix(assembly)}' is declared at SLOT {slot}, and this record "
                 + "does not claim the complete set — so the slot replaces whatever the IMAGE's own "
