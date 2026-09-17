@@ -128,8 +128,8 @@ name: Node repo gate (reusable)
 #     `DOTNET_INSTALL_DIR=/home/runner/.dotnet`. No daemon, no registry credential, no pull.
 #   * **container** — `/opt/platform` is absent (a GitHub-hosted `ubuntu-latest` runner: `/opt` is
 #     EMPTY in ghcr.io/actions/actions-runner and the GitHub image has no such mount). The shard
-#     takes the pre-#4113 path verbatim: login, pull both, `docker cp`, four `docker run`s. A
-#     caller that passes nothing is on `ubuntu-latest` and therefore in this mode, unchanged.
+#     takes the pre-#4113 path verbatim: login, pull both, `docker cp`, four `docker run`s. This
+#     repo's own calls (the org runner variables are invisible to a public repo) are in this mode.
 #
 # 🚨 THERE IS NO FALLBACK BETWEEN THE MODES. Once the mount is present, a set that is missing,
 # half-written or paired with another portal is RED and NAMES `ci-platform-refresh`; it never
@@ -171,7 +171,8 @@ name: Node repo gate (reusable)
 #   * `aks-silos-dind` — still works (it mounts the same volume, so it takes the same volume mode);
 #     its privileged sidecar is simply unused here. It remains the label for the lanes that
 #     genuinely build or push images (`publish-bake`, `compile-check`, module-pack's `prepare`).
-#   * `ubuntu-latest` — the default, GitHub-hosted, container mode, byte-identical to before.
+#   * `ubuntu-latest` — GitHub-hosted, container mode. What the default resolves to wherever the
+#     org variable `MW_RUNNER_DOCKER` is invisible — i.e. on this PUBLIC repo's own runs (below).
 #
 #   The runner container is `ghcr.io/actions/actions-runner:2.337.0`: NON-ROOT (`runner`, uid 1001,
 #   passwordless sudo), no .NET, no Node, NO `gh`, NO `az`. What it has that this job uses: bash,
@@ -186,19 +187,21 @@ name: Node repo gate (reusable)
 #   the runner is non-root and setup-dotnet cannot write /usr/share/dotnet there. EMPTY on
 #   ubuntu-latest, which setup-dotnet reads as unset, so the default path is untouched.
 #
-#   `plan` and `verify` stay on `ubuntu-latest` whatever the input says: seconds of orchestration,
-#   no platform, and `verify` is the required context.
+#   `plan` and `verify` ignore the input: seconds of orchestration, no platform, and `verify` is the
+#   required context. They run on `vars.MW_RUNNER || 'ubuntu-latest'`.
 #
-# A caller opts in PER REPOSITORY behind a repository variable — its OWN, never the module-pack
-# lane's `vars.MW_RUNNER_HEAVY`, so one job family moves at a time and the move is one edit to
-# revert:
+# 💸 WHERE EVERY JOB OF THIS LANE RUNS (2026-09-17, "GitHub Actions cost is zero"): a called
+# workflow's hosted minutes bill the CALLER, and every caller is private — so no job here names a
+# bare `ubuntu-latest`. Each resolves through an org variable of visibility `private`, read from
+# the CALLER's `vars` context: `MW_RUNNER` (aks-silos) for `plan`/`verify`, and `MW_RUNNER_DOCKER`
+# (aks-silos-dind) as the DEFAULT of `runner` for the shards. This public repo cannot see either
+# variable, so its own calls fall back to the free hosted `ubuntu-latest`.
+# `check-reusable-workflow-runners.py` refuses a literal label. A caller may still pass its own:
 #
 #     with:
-#       runner: ${{ vars.MW_RUNNER_GATE || 'ubuntu-latest' }}
+#       runner: ${{ vars.MW_RUNNER_GATE || 'aks-silos-dind' }}
 #
-# Unset, the variable resolves to `ubuntu-latest` and this lane behaves byte-for-byte as before
-# this input existed. Doc: Doc/Architecture/ModuleBuildArchitecture ("The pipeline, end to end",
-# the 2026-09-12 notes).
+# Doc: Doc/Architecture/SelfHostedRunners ("Where jobs run — GitHub Actions cost is zero").
 
 on:
   workflow_call:
@@ -506,8 +509,12 @@ on:
       runner:
         description: >-
           The `runs-on` label for the gate SHARDS (`gate`) and nothing else — `plan` and `verify`
-          stay on `ubuntu-latest`. `ubuntu-latest` (the default) is exactly today's behaviour: no
-          platform volume, so the shard pulls both images and runs the tester in a container.
+          run on vars.MW_RUNNER. Omitted, it DEFAULTS to the caller's org variable
+          vars.MW_RUNNER_DOCKER (aks-silos-dind — where every caller ran its shards when this
+          default was set, and the set with the larger memory limit), falling back to
+          `ubuntu-latest` where that variable is invisible: this public repo's own calls, which are
+          free. `ubuntu-latest` has no platform volume, so the shard pulls both images and runs the
+          tester in a container.
 
           `aks-silos` is the Systemorph org's PLAIN self-hosted scale set — no Docker daemon, no
           privileged sidecar — and since MeshWeaver#4113 it is the right label for this lane: its
@@ -522,12 +529,15 @@ on:
           A runner with neither the volume nor a Docker daemon is red naming both. See "Where the
           heavy legs run" in the header.
 
-          Wire it from a repository variable of its own (`vars.MW_RUNNER_GATE`, falling back to
-          `ubuntu-latest` when unset — the header shows the expression) so the move is one edit to
-          revert.
+          A caller that wires it from a variable of its own (vars.MW_RUNNER_GATE) falls back to a
+          self-hosted label, never to `ubuntu-latest`: a called workflow's hosted minutes bill the
+          CALLER (Doc/Architecture/SelfHostedRunners, "Where jobs run").
         required: false
         type: string
-        default: ubuntu-latest
+        # 🚨 An expression in a workflow_call input default may read `github`, `inputs` and `vars`
+        # — and `vars` is the CALLER's. The resolved label is what every `inputs.runner` below sees
+        # (runs-on, DOTNET_INSTALL_DIR, RUNNER_LABEL), so the default needs no second resolution.
+        default: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
     secrets:
       acr-username:
         description: Registry user able to pull the test image.
@@ -570,7 +580,7 @@ jobs:
   # green tick. This job is also the only one that needs the base commits (`fetch-depth: 0`).
   plan:
     name: Plan the gate's shards
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
@@ -985,7 +995,7 @@ jobs:
           # this job moved off `gh` for exactly that reason and this one was left behind, so an
           # unpinned caller on `aks-silos` / `aks-silos-dind` would have died here on a missing
           # binary. Same endpoint, same ref, same token; the raw media type returns the bytes
-          # without the base64 round-trip. (`plan`'s copy keeps `gh api` — it is on ubuntu-latest.)
+          # without the base64 round-trip. (`plan`'s copy keeps `gh api` — both runner kinds it lands on carry `gh`.)
           curl -fsSL --retry 3 --retry-delay 5 -o "$SCRIPT" \
             -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -1113,7 +1123,7 @@ jobs:
               # The pre-#4113 contract, and the daemon is its precondition. A runner that has
               # neither the mount nor a daemon is named for BOTH here, not for one of them later.
               if ! docker info >/dev/null 2>&1; then
-                echo "::error::runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL') has NEITHER the CI platform volume at $PLATFORM_VOLUME NOR a reachable Docker daemon, and a gate shard needs one or the other: the volume (every runner pod of the self-hosted 'aks-silos' / 'aks-silos-dind' scale sets mounts it — Systemorph/Memex deployments/aks/ci-runners/) or a daemon to pull the tester image with. Set the caller's runner variable to 'aks-silos', or unset it (ubuntu-latest, which has Docker)."
+                echo "::error::runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL') has NEITHER the CI platform volume at $PLATFORM_VOLUME NOR a reachable Docker daemon, and a gate shard needs one or the other: the volume (every runner pod of the self-hosted 'aks-silos' / 'aks-silos-dind' scale sets mounts it — Systemorph/Memex deployments/aks/ci-runners/) or a daemon to pull the tester image with. Pass runner 'aks-silos' or 'aks-silos-dind', or omit it (the default resolves through the org variable MW_RUNNER_DOCKER, and to ubuntu-latest — which has Docker — where that variable is invisible)."
                 docker info 2>&1 | tail -5 || true
                 exit 1
               fi
@@ -2237,7 +2247,7 @@ jobs:
     # always(): a red or CANCELLED shard must still be folded and NAMED here, never leave this
     # context skipped — a skipped required check reads as satisfied (ReadingCiSignals).
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
     outputs:
       gate-log-artifact: ${{ steps.fold.outputs.artifact }}

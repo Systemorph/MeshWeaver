@@ -1100,6 +1100,12 @@ expensive says so rather than merely being slow.
 3. Reference this page from the repo's AGENTS.md — the build section defers here.
 4. Repo-specific policy (module lists, always-modules, allow-files, registry consumption)
    stays in the caller; mechanics never do.
+5. **No job bills GitHub-hosted minutes.** Core's lanes pick their runner through the caller's
+   private-visibility org variables `MW_RUNNER` / `MW_RUNNER_DOCKER` (falling back to
+   `ubuntu-latest` only where those are invisible — core itself); a private repo's own jobs and
+   its `with: runner:` fall back to `aks-silos` / `aks-silos-dind`, never to `ubuntu-latest`
+   ([Self-hosted CI runners](/Doc/Architecture/SelfHostedRunners) → "Where jobs run — GitHub
+   Actions cost is zero").
 
 ## The release: the pipeline ends by calling memex
 

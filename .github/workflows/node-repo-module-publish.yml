@@ -175,7 +175,7 @@ on:
 jobs:
   publish:
     name: Hand the validated bundles to the registry
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     # A LITERAL, never an input: the fleet cap is 45 minutes for every job in every workflow
     # (check-workflow-timeouts.py). This lane downloads a few megabytes and POSTs them.
     timeout-minutes: 20

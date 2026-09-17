@@ -307,16 +307,13 @@ name: node-repo module pack
 #     fallback, the Azure login, the ACR login and the `acr-*` secrets are GONE from `pack`, not
 #     guarded. The per-digest cache stays in `prepare` only, where it is what it always was — the
 #     accelerator that saves the registry pull on a hosted runner whose path string never moves.
-#   * `select`, `prepare`, `build-workspace` and `verify` stay on `ubuntu-latest` whatever the
-#     input says. `select` and `verify` are seconds of orchestration. `prepare` and
-#     `build-workspace` NEED DOCKER — `docker pull/save/load/run` of the platform and tester
-#     images; the compiler IS the image — and the aks-silos runners have NONE. Measured
-#     2026-09-12 in Systemorph/Memex `deployments/aks/ci-runners/arc-runner-scale-set-values.yaml`:
-#     no `containerMode:` at all (neither `dind` nor `kubernetes`), a single `runner` container
-#     from `ghcr.io/actions/actions-runner:2.337.0`, no dind sidecar, no socket mount. That image
-#     carries the `docker` CLI and no daemon, so every `docker …` there dies on the socket — a
-#     red, never a silent pass, but a leg that cannot run. Moving those two is not a `runs-on`
-#     edit; it is `containerMode: dind` on the scale set first.
+#   * `select`, `prepare`, `build-workspace` and `verify` ignore `runner`. `select` and `verify`
+#     are seconds of orchestration (`vars.MW_RUNNER`). `prepare` and `build-workspace` NEED DOCKER
+#     — `docker pull/save/load/run` of the platform and tester images; the compiler IS the image —
+#     and the plain aks-silos runners have NONE (no `containerMode:`, no dind sidecar, measured
+#     2026-09-12 in Systemorph/Memex `deployments/aks/ci-runners/arc-runner-scale-set-values.yaml`),
+#     so both go to the dind set: `prepare` on `vars.MW_RUNNER_DOCKER`, `build-workspace` on the
+#     `workspace-runner` input, whose default is that same variable.
 #
 # Two more facts about that runner image, both measured on Memex's `runner-proof.yml`:
 #   * it is NON-ROOT (`USER runner`, uid 1001; passwordless `sudo` exists). `actions/setup-dotnet`
@@ -352,15 +349,20 @@ name: node-repo module pack
 # needs more than 6 GiB is killed there, not slowed — so the first opt-in is a MEASUREMENT of one
 # job family, not a fleet switch.
 #
-# A caller opts in PER JOB FAMILY behind a repository variable, so the move is revertible in ONE
-# edit and never reaches a family nobody measured:
+# 💸 WHERE EVERY JOB OF THIS LANE RUNS (2026-09-17, "GitHub Actions cost is zero"): a called
+# workflow's hosted minutes bill the CALLER, and every caller but this repo's main-cd is private —
+# so no job here names a bare `ubuntu-latest`. Each resolves through an org variable of visibility
+# `private`, read from the CALLER's `vars` context: `MW_RUNNER` (aks-silos, no daemon) for
+# `select`/`verify` and as the DEFAULT of `runner` (`pack`/`tests`), `MW_RUNNER_DOCKER`
+# (aks-silos-dind) for `prepare` and as the DEFAULT of `workspace-runner`. This public repo cannot
+# see either variable, so main-cd's call falls back to the free hosted `ubuntu-latest`.
+# `check-reusable-workflow-runners.py` refuses a literal label. A caller may still pass its own,
+# falling back to a SELF-HOSTED label, never to `ubuntu-latest`:
 #
 #     with:
-#       runner: ${{ vars.MW_RUNNER_HEAVY || 'ubuntu-latest' }}
+#       runner: ${{ vars.MW_RUNNER_HEAVY || 'aks-silos' }}
 #
-# Unset, the variable resolves to `ubuntu-latest` and nothing changes. Every current caller — the
-# six satellites and this repo's main-cd — passes nothing and inherits that default. Doc:
-# Doc/Architecture/ModuleBuildArchitecture ("The pipeline, end to end", the 2026-09-12 note).
+# Doc: Doc/Architecture/SelfHostedRunners ("Where jobs run — GitHub Actions cost is zero").
 #
 # ──────────── Batched legs (`batch-size`, 2026-09-12) ────────────
 # 🚨 GitHub bills every job rounded UP to a whole minute, and most legs of this lane were shorter
@@ -719,34 +721,37 @@ on:
         description: >-
           The `runs-on` label for the HEAVY legs — `pack` (Module bundle) and `tests` (Module
           tests) — and nothing else; see "Where the heavy legs run" at the top of this file.
-          `ubuntu-latest` (the default) is exactly today's behaviour. `aks-silos` is the Systemorph
+          Omitted, it DEFAULTS to the caller's org variable vars.MW_RUNNER (aks-silos), falling
+          back to `ubuntu-latest` where that variable is invisible (this public repo's own calls,
+          which are free). `aks-silos` is the Systemorph
           org's self-hosted scale set: non-root, NO Docker, no preinstalled toolchain, 2 vCPU /
           6 GiB per runner — the two honouring jobs set DOTNET_INSTALL_DIR under /home/runner for
           it. Neither honouring job runs `docker` or touches a registry: `pack` takes the pinned
           image's /app from the runner's `/opt/platform/sha256-<tester hex>/platform-refs/` mount, else from the artifact
           `prepare` hands over, else fails RED naming both; `tests` consumes no image. Wire it
-          from a repository variable (`vars.MW_RUNNER_HEAVY`, falling back to `ubuntu-latest`
-          when unset — the header shows the expression) so the move is one edit to revert.
+          from a repository variable (vars.MW_RUNNER_HEAVY, falling back to a self-hosted label —
+          the header shows the expression) so the move is one edit to revert.
           `select`, `prepare`, `build-workspace` and `verify` ignore it — the middle two need a
-          Docker daemon the scale set does not have.
+          Docker daemon the plain scale set does not have.
         required: false
         type: string
-        default: ubuntu-latest
+        # An expression in a workflow_call input default may read `github`, `inputs` and `vars` —
+        # and `vars` is the CALLER's, so every `inputs.runner` below sees the resolved label.
+        default: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
       workspace-runner:
         description: >-
           The `runs-on` label for `build-workspace` — the ONE global build of every selected
           container entry, which `docker load`s the pinned platform image and `docker run`s it as
-          the compiler, so this label must serve a Docker daemon: `ubuntu-latest` (the default,
-          today's behaviour, a 4-core VM) or the org's Docker-capable self-hosted set
-          (`aks-silos-dind`, a dind sidecar on a 16-core D16). Measured 2026-09-13 on
+          the compiler, so this label must serve a Docker daemon: the org's Docker-capable
+          self-hosted set (`aks-silos-dind`, a dind sidecar on a 16-core D16 — the DEFAULT, through
+          the caller's org variable vars.MW_RUNNER_DOCKER) or `ubuntu-latest` (a 4-core VM, what
+          the default falls back to where that variable is invisible). Measured 2026-09-13 on
           MeshWeaver.Plugins#1756's full run: 7.1 min on the hosted 4-core, on the critical path
           of the gate (modules → pack → gate shard) — the 16-core set compiles the same workspace
-          in ~2.5 min. Wire it from a repository variable (`vars.MW_RUNNER_GATE`, the Docker set,
-          falling back to `ubuntu-latest`) so the move is one edit to revert. `prepare`, `select`
-          and `verify` ignore it.
+          in ~2.5 min. `prepare`, `select` and `verify` ignore it.
         required: false
         type: string
-        default: ubuntu-latest
+        default: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
       batch-size:
         description: >-
           How many modules ONE `pack` leg (and one `tests` leg) carries — see "Batched legs" at
@@ -860,7 +865,7 @@ jobs:
   # "pack everything", and it takes the second whenever it cannot be sure of the first.
   select:
     name: Select the affected bundles
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       # The helper is lane orchestration, while the workflow below is the exact definition GitHub
@@ -1290,7 +1295,7 @@ jobs:
     name: Warm the shared build environment (once)
     needs: select
     if: needs.select.result == 'success' && needs.select.outputs.count != '0'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
     timeout-minutes: 45
     # Deliberately inherit the caller's token permissions. `basic` callers grant only the reads
     # they use; the platform CD's `oidc` caller additionally grants `id-token: write`. A called
@@ -1396,6 +1401,19 @@ jobs:
               || steps.refs-cache.outputs.cache-hit != 'true'
               || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
         run: bash build-logic/.github/scripts/acr-login.sh
+      # 💸 The self-hosted runner image (Systemorph/Memex deployments/aks/ci-runners/runner-image)
+      # ships no `zstd`, which `ubuntu-latest` does — and since 2026-09-17 this job lands on the dind
+      # set by default (vars.MW_RUNNER_DOCKER). A no-op wherever the binary exists; RED by name when it
+      # cannot be installed. Delete this step once the image bakes zstd.
+      - name: zstd on this runner (the platform image tarball's codec)
+        run: |
+          set -euo pipefail
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd is not on $RUNNER_NAME — installing it (the runner image should bake it)"
+            sudo apt-get update -qq || { echo "::error::apt-get update failed on $RUNNER_NAME, so zstd (the platform image tarball's codec) cannot be installed. Bake zstd into the runner image: Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile."; exit 1; }
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends zstd || { echo "::error::apt-get could not install zstd on $RUNNER_NAME. Bake it into the runner image: Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile."; exit 1; }
+          fi
+          zstd --version
       - name: Fill whichever cache is cold — the run's ONE trip to the registry
         if: >-
           inputs.platform-image-digest != ''
@@ -1662,6 +1680,19 @@ jobs:
       - name: Keep lane tooling out of the global compiler's source mount
         if: inputs.acr-login == 'oidc'
         run: rm -rf build-logic-login
+      # 💸 The self-hosted runner image (Systemorph/Memex deployments/aks/ci-runners/runner-image)
+      # ships no `zstd`, which `ubuntu-latest` does — and since 2026-09-17 this job lands on the dind
+      # set by default (vars.MW_RUNNER_DOCKER). A no-op wherever the binary exists; RED by name when it
+      # cannot be installed. Delete this step once the image bakes zstd.
+      - name: zstd on this runner (the platform image tarball's codec)
+        run: |
+          set -euo pipefail
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd is not on $RUNNER_NAME — installing it (the runner image should bake it)"
+            sudo apt-get update -qq || { echo "::error::apt-get update failed on $RUNNER_NAME, so zstd (the platform image tarball's codec) cannot be installed. Bake zstd into the runner image: Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile."; exit 1; }
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends zstd || { echo "::error::apt-get could not install zstd on $RUNNER_NAME. Bake it into the runner image: Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile."; exit 1; }
+          fi
+          zstd --version
       # 🚨 `build-modules`, not `modules`: the ledger handed some entries a reusable bundle, and those
       # are NOT compiled here. The postcondition below is fed the SAME list — one enumerator.
       - name: Build every selected container entry in ONE workspace
@@ -4507,7 +4538,7 @@ jobs:
     name: All selected bundles built
     needs: [select, pack, tests]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
     outputs:
       bundles-built: ${{ steps.verify.outputs.bundles_built }}
