@@ -4,14 +4,15 @@
 # not listed. If you are here to add a line, read the whole header first.
 #
 # WHAT THE GUARD ASKS. Once a file has DECLARED a hub reference router-capable — by writing
-# `X.NodeOperationIssuingHub()` or `X.ReadIssuingHub()` on it anywhere in that file — no OTHER
+# `X.NodeOperationIssuingHub()`, `X.ReadIssuingHub()` or `X.StreamSubscribingHub()` on it
+# anywhere in that file — no OTHER
 # targeted `.Post`/`.Observe` in the file may still be issued from the bare `X`:
 #
 #     hub.NodeOperationIssuingHub().Post(new DisposeRequest { … }, o => o.WithTarget(nodeAddress));
 #     hub.Observe(new PatchDataRequest(…),                         o => o.WithTarget(nodeAddress));
 #     ^^^ the second one is the violation: same field, same router, no seam.
 #
-# WHY THE DECLARATION IS THE DENOMINATOR. Both seams are the IDENTITY FUNCTION for every hub whose
+# WHY THE DECLARATION IS THE DENOMINATOR. All three seams are the IDENTITY FUNCTION for every hub whose
 # address type is not the mesh type, so nobody writes one about a reference that cannot be the
 # router. The call is therefore the author's own statement, in production code, that this reference
 # reaches the ROUTER — and you cannot adopt the seam for one message on a hub without making it.
