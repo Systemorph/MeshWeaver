@@ -640,7 +640,18 @@ public sealed class PluginBundleClient
                       + $"?identity={Uri.EscapeDataString(PrebuiltAssemblySeeder.LiveFrameworkMvid)}"
                       + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
             using var request = Request(HttpMethod.Get, url);
-            using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
+            // 🚨 HEADERS FIRST, then stream — never the buffering default (#4528). With
+            // `ResponseContentRead` the whole archive is downloaded INSIDE `SendAsync`, so the
+            // transfer pipeline's 120 s ATTEMPT budget measured (bundle size ÷ throughput) rather
+            // than "is the registry answering?". Reading headers first puts the body outside the
+            // attempt — the attempt bounds RESPONSIVENESS, which is what a per-attempt budget can
+            // meaningfully bound, and the whole operation stays bounded by the caller's own budget
+            // (RegistryUpdateReconciler.PerPackageAdoptBudget), so this trades no hang for no
+            // timeout. `OciRegistryClient` has always read its blobs this way; this is the HTTP
+            // route catching up with its own sibling.
+            using var resp = await _http
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                .ConfigureAwait(false);
 
             if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
@@ -665,10 +676,53 @@ public sealed class PluginBundleClient
                     $"HTTP {(int)resp.StatusCode} from {_registryUrl}");
             }
 
-            return new FetchResult(
-                await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false),
-                BundleAdoptionKind.Adopted);
+            // 🚨 WHAT THIS TRANSFER MOVED, AND HOW FAST — the measurement whose absence made #4528
+            // unanswerable. Eighteen adopts failed across 2026-09-15/16 leaving only "The operation
+            // has timed out", with no byte count and no elapsed time anywhere in the fleet: nothing
+            // could say whether the budget was exceeded by a LARGE BUNDLE or by a SLOW REGISTRY,
+            // and those want opposite fixes. `Content-Length` is stated separately from the bytes
+            // actually received, because a transfer cut mid-body is exactly the interesting case.
+            var declared = resp.Content.Headers.ContentLength;
+            var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            await using var body = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            using var buffer = declared is > 0 and <= int.MaxValue
+                ? new System.IO.MemoryStream((int)declared.Value)
+                : new System.IO.MemoryStream();
+            try
+            {
+                await body.CopyToAsync(buffer, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Record what HAD arrived, then let the fault through untouched. A cancelled or
+                // faulted transfer is still evidence: zero bytes after two minutes accuses the
+                // registry, and most-of-a-large-archive accuses the size.
+                _logger?.LogWarning(
+                    "Bundle for {Plugin}@{Version} over HTTP did NOT complete after {Elapsed} ms — "
+                    + "{Received} of {Declared} byte(s) had arrived. Cause: {Cause}",
+                    pluginId, version,
+                    (long)System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                    buffer.Length, declared?.ToString() ?? "an undeclared number of",
+                    ex.Message);
+                throw;
+            }
+
+            var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
+            _logger?.LogInformation(
+                "Bundle for {Plugin}@{Version}: {Bytes} byte(s) over HTTP from {Registry} in "
+                + "{Elapsed} ms ({Throughput} KiB/s)",
+                pluginId, version, buffer.Length, _registryUrl,
+                (long)elapsed.TotalMilliseconds, ThroughputKibPerSecond(buffer.Length, elapsed));
+
+            return new FetchResult(buffer.ToArray(), BundleAdoptionKind.Adopted);
         });
+
+    /// <summary>
+    /// Transfer rate in KiB/s, or <c>0</c> when the elapsed time is too small to divide by — a
+    /// reported rate must never be an artefact of a near-zero denominator.
+    /// </summary>
+    internal static long ThroughputKibPerSecond(long bytes, TimeSpan elapsed)
+        => elapsed.TotalSeconds <= 0.001 ? 0 : (long)(bytes / 1024d / elapsed.TotalSeconds);
 
     /// <summary>
     /// Reads the archive and seeds each assembly, one after another.

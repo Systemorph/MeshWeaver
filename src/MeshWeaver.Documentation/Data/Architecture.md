@@ -329,6 +329,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Plugin Build Contract](PluginBuildContract)
 - [Plugin Bundles in the Registry](PluginBundlesInTheRegistry)
 - [The Registry Listing Cache](RegistryListingCache) — GET /api/plugins re-read the whole repository per request and blew its 30 s budget ~60×/day; what is cached is the SOURCE snapshot, never the response, which is what keeps the fix from becoming a disclosure — and the read itself now transfers only the manifests it parses (47.8 MB / 13 s becomes 1.3 MB / 3.3 s) instead of the whole repository
+- [The Bundle Transfer Budget](BundleTransferBudget) — a module adopt's 120 s attempt used to cover the whole archive download, so the budget measured size ÷ throughput instead of whether the registry was answering; 18 adopts failed at exactly the outer 3-minute bound recording neither bytes nor elapsed time, which is why they could not be explained
 - [Plugin Publication Provenance](PluginPublicationProvenance) — the signed publication callback names the CONTENT commit that was built and the platform version read from the selected portal image, never the calling workflow's commit or event; core CD building Plugins used to announce a core sha as a Plugins commit
 - [Plugin Update on Green Build](PluginUpdateOnGreenBuild)
 
