@@ -320,6 +320,44 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// 🚨 The sanitisation is NOT injective, and the id has to be (review on #4618). Every
+    /// disallowed character collapses to <c>_</c>, so <c>Estate/A/B</c> and a type literally named
+    /// <c>Estate/A_B</c> sanitise to the same string. Both are valid literal type paths, so a
+    /// digest appended only past the length cap would leave that collision open — and it surfaces
+    /// as the SECOND owning type's probe failing already-exists, i.e. the failure this whole change
+    /// exists to prevent, one door along. The gate fixture above cannot reach the case (its two
+    /// types differ before the collapse), so it is asserted directly on the id function.
+    /// </summary>
+    [Fact]
+    public void TestsProbeId_IsInjective_AcrossPathsThatSanitiseAlike()
+    {
+        var viaSlash = PluginGateRunner.TestsProbeId("Estate/A/B", ownsPartition: true);
+        var viaUnderscore = PluginGateRunner.TestsProbeId("Estate/A_B", ownsPartition: true);
+
+        viaSlash.Should().NotBe(viaUnderscore,
+            "two different type paths that sanitise to the same string must still get different "
+            + $"probe ids; got '{viaSlash}' for both");
+
+        foreach (var id in new[] { viaSlash, viaUnderscore })
+        {
+            MeshWeaver.Mesh.PartitionDefinition.IsValidPartitionSegment(id).Should().BeTrue(
+                $"a top-level probe's id becomes its PARTITION (and schema) name; '{id}' must "
+                + "satisfy the one charset rule by construction");
+        }
+
+        // A path far past the 63-BYTE cap still yields a valid, distinct segment.
+        var longA = PluginGateRunner.TestsProbeId(new string('x', 80) + "/One", ownsPartition: true);
+        var longB = PluginGateRunner.TestsProbeId(new string('x', 80) + "/Two", ownsPartition: true);
+        longA.Should().NotBe(longB, "two long paths sharing a head must not truncate into one id");
+        MeshWeaver.Mesh.PartitionDefinition.IsValidPartitionSegment(longA).Should().BeTrue();
+        MeshWeaver.Mesh.PartitionDefinition.IsValidPartitionSegment(longB).Should().BeTrue();
+
+        PluginGateRunner.TestsProbeId("Estate/Tenant", ownsPartition: false).Should().Be("GateProbe",
+            "a type that does NOT own its partition keeps the nested constant — the namespace is "
+            + "what makes that one unique");
+    }
+
+    /// <summary>
     /// The regression this pins: a package whose ROOT is typed by an in-package NodeType that
     /// ships a stale compile stamp must still serve that type's areas once installed. The gate
     /// runs the root's <c>Tests</c> area, which only exists in the type's compiled configuration

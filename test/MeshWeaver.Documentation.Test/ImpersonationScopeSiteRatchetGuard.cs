@@ -75,9 +75,14 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     /// <para>🚨 The step down is TWO, not one, and the second is the point: the allow file summed to
     /// 65 against a budget of 66, so one brand-new allowance could have been added without tripping
     /// the total check at all — a ratchet with a free slot in it. The seed is now EXACT against the
-    /// file (64), and the correct next edit is still DOWNWARD.</para>
+    /// file, and the correct next edit is still DOWNWARD.</para>
+    ///
+    /// <para>64 → 63 with <c>tools/MeshWeaver.PluginTester/PluginGateRunner.cs</c> (#4618): the gate's
+    /// Tests-probe create moved to <c>RunAsSystem</c>, so its line is gone from the allow file and
+    /// the budget follows it down in the same change — the tidy this guard's STALE report asks
+    /// for.</para>
     /// </summary>
-    private const int TotalBudget = 64;
+    private const int TotalBudget = 63;
 
     /// <summary>Production roots. <c>test/</c> and <c>samples/</c> are deliberately out of scope —
     /// the leak there costs test isolation, not a user's permissions, and listing 21 more entries

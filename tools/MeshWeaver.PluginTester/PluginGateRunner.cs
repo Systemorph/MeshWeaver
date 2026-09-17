@@ -799,9 +799,13 @@ public static class PluginGateRunner
         var access = harness.ServiceProvider.GetRequiredService<AccessService>();
         return PartitionOwningTypes.OwnsPartitionWithoutActivating(harness.Mesh, typePath)
             .Select(owns => BuildTestsProbe(typePath, ownsPartition: owns is true))
-            .SelectMany(probe => Observable.Using(
-                () => access.ImpersonateAsSystem(),
-                _ => meshService.CreateNode(probe)))
+            // RunAsSystem, never Observable.Using(access.ImpersonateAsSystem, …): the hand-written
+            // shape enters the AsyncLocal scope on the SUBSCRIBING thread and leaves it on
+            // whichever thread the create terminates on, so the subscriber stays latched as
+            // system-security (#1790). The sealed helper enters at Subscribe, leaves on the way
+            // out of that same Subscribe, and delivers every notification under the subscriber's
+            // own identity.
+            .SelectMany(probe => access.RunAsSystem(() => meshService.CreateNode(probe)))
             .Select(created => created.Path);
     }
 
@@ -835,11 +839,20 @@ public static class PluginGateRunner
     ///
     /// <para>The id becomes the PARTITION NAME (and so the backing schema name), so it is built to
     /// satisfy <see cref="PartitionDefinition.IsValidPartitionSegment"/> by construction: every
-    /// character outside <c>[letter|digit|.|-|_]</c> becomes <c>_</c>, the <c>GateProbe</c> prefix
-    /// guarantees the leading letter, and a path that would exceed the 63-BYTE cap (Postgres'
-    /// NAMEDATALEN, which truncates silently) is cut and closed with a stable SHA-256 prefix so two
-    /// long type paths sharing a head still get different ids. Deterministic on purpose — a run's
-    /// report names the probe, and a Guid would make two runs of the same repo unreadable side by
+    /// character outside <c>[letter|digit|.|-|_]</c> becomes <c>_</c>, and the <c>GateProbe</c>
+    /// prefix guarantees the leading letter.</para>
+    ///
+    /// <para>🚨 <b>The digest is UNCONDITIONAL, because the sanitisation is not injective</b>
+    /// (review on #4618). Every disallowed character collapses to <c>_</c>, so <c>Estate/A/B</c>
+    /// and a type literally named <c>Estate/A_B</c> — both valid literal type paths — sanitise to
+    /// the SAME string. Appending the digest only when the name got too long left exactly that
+    /// collision open, and it would surface as the second owning type's probe failing
+    /// already-exists: the very failure this method exists to prevent, one door along. Hashing the
+    /// UNSANITISED path keeps the two apart whatever the sanitiser does to them.</para>
+    ///
+    /// <para>Budget: <c>GateProbe</c> (9) + head + <c>_</c> + 8 hex = 63 bytes ⇒ head ≤ 45, so a
+    /// long path is cut and the digest still closes it. Deterministic on purpose — a run's report
+    /// names the probe, and a Guid would make two runs of the same repo unreadable side by
     /// side.</para>
     /// </summary>
     /// <param name="typePath">The NodeType path the probe instantiates.</param>
@@ -852,11 +865,6 @@ public static class PluginGateRunner
 
         var sanitized = string.Concat(typePath.Select(c =>
             char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' ? c : '_'));
-        var candidate = "GateProbe" + sanitized;
-        if (Encoding.UTF8.GetByteCount(candidate) <= 63)
-            return candidate;
-
-        // 63 bytes total: "GateProbe" (9) + head + "_" + 8 hex = 9 + head + 9 ⇒ head ≤ 45.
         var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(typePath)))[..8];
         return "GateProbe" + sanitized[..Math.Min(45, sanitized.Length)] + "_" + digest;
     }
