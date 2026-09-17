@@ -64,6 +64,8 @@ schema(s)".
 | 5 | `Admin/Menu/{X}` per-render route misses | point probes | `mesh_nodes` | **Fixed** 2026-08-29 (`83b1892be`, anchored existence query) |
 | 6 | **Hosting fleet pages + build broadcaster** (MeshWeaver.Plugins) — `HostingAdminLayoutAreas.Snapshot` (nine call sites on the Fleet and Fleet Console pages), `FleetConsoleLogic.*Query`, `PlatformBuildInboxWatcher.DeploymentsQuery` | was `nodeType:Hosting/Deployment[ scope:subtree]` and four siblings, bare | `mesh_nodes` | **Declared** 2026-09-15 (MeshWeaver.Plugins#1918, #3545) — a deployment record lives wherever its owner lives, so the set of partitions IS the answer: `MeshWideQuery.Declare`/`OfType`. On a refusing host the bare form faulted and the snapshot rendered an EMPTY fleet |
 | 7 | **Portal search box** (MeshWeaver.Plugins) — Blazor `MeshSearch`, the unbound `SearchBoxView`, portal-next `SearchBar` | was `source:accessed scope:descendants … context:search limit:N` and `*{text}* scope:descendants context:search is:main limit:50`, bare, per debounced keystroke | `mesh_nodes` + `user_activities` | **Declared** 2026-09-15 (MeshWeaver.Plugins#1918, #3545) — it searches everything the viewer can read; RLS still narrows the union. Cheaper still: narrow the accessed leg to the partitions the viewer's UserActivity rows name |
+| 8 | **Marketing event hub page** (MeshWeaver.SocialMedia) — `MarketingEventHubLayoutAreas.ObserveEvents` | was `nodeType:Marketing/Event limit:2000`, bare, then filtered to the hub by path prefix IN CODE, per render | `mesh_nodes` | **Anchored** 2026-09-17 (MeshWeaver.SocialMedia#195/#196, #3545) — `namespace:{hub} scope:descendants nodeType:Marketing/Event limit:2000`. Not only cost: the limit counted the MESH's events before the prefix filter ran, so past 2 000 events the rows cut could be this hub's own and the page left out events that exist |
+| 9 | **Hosting boards + the four operator scripts + three catalog reads** (MeshWeaver.Plugins) — the 11 `*LayoutAreas` boards, `Hosting/Script/{refresh-status,ingest-logs,detect-issues,report-modules}`, `DataModelExplorerLogic`, `CourseCatalogLayoutAreas`, `AppTileRefresh`, `SourceNodePurge`, `SystemRemoval` | was `nodeType:Hosting/{Backup,Build,Deployment,DeploymentStatus,InstanceAction,Issue,LogEntry,ModuleInventory,ConfigAudit,BackupStore,RepoHealth} scope:subtree …` and five bare catalog reads | `mesh_nodes` | **Anchored / declared** 2026-09-17 (MeshWeaver.Plugins#1993, #3545) — boards read the partition of the node they render on (their own summaries always said "in this partition"), the scripts read the two record homes `FleetWatch.RosterQueries` reads, and the catalog reads DECLARE. `SystemRemoval`'s dependents check was REFUSED on a CI mesh, so removing a package failed |
 
 🚨 **Rows 6 and 7 were invisible to the static census, and that is the lesson of #3545.**
 MeshWeaver.Plugins' `UnanchoredQueryAllowFileTest` and `ShellQueryShapesTest` scan `src/` — the
@@ -104,6 +106,7 @@ one:
 Each of these small sets is **tiny and rarely changing** — the fold's global reads return under
 ~50 rows; the bell's thousands of rows are its own defect — fetched the most expensive way the
 storage layer has, per render.
+
 
 ### What #3093 changed underneath this census
 
@@ -175,6 +178,43 @@ multiplier from every fan-out that survives, and it is independent of anchoring.
   (`Pinned` / `Unroutable` / `FanOut`), pins the four measured `path:-` shapes as never-the-fold's,
   and mirrors the global-satellite registry; `SecurityQueryRootLegRegistryTest` asserts that mirror
   against the real registry of a running mesh.
+
+## The 2026-09-16/17 content sweep, and the census that now covers it
+
+Rows 8 and 9 came from a sweep of the NODE CONTENT of the six satellite repositories plus
+MeshWeaver.Plugins: every `nodeType:` string literal in a NodeType's `Source/*.cs` and in an
+executable `Code` node's `content.code`, judged by the same predicate the planner uses (a concrete
+`path:`/`namespace:` first segment, `partitions:all`, or a registered `QueryRoutingRule`). Content
+is the blind spot rows 6 and 7 named: it compiles at RUNTIME, so `dotnet build` never sees it and
+`UnanchoredQueryAllowFileTest`, which scans `src/`, never read it.
+
+**The census now covers it.** `UnanchoredContentQueryCensusTest`
+(`src/MeshWeaver.Hosting.PostgreSql.Test`, MeshWeaver.Plugins) applies that predicate to every
+module folder's sources and scripts, and its negative control feeds it the exact pre-fix board and
+script lines — the script's inside a Code node's JSON — and asserts they are flagged while their
+anchored, declared and rule-pinned forms are not.
+
+**What the sweep found, beyond rows 8 and 9:**
+
+| Where | Shape | Verdict |
+|---|---|---|
+| MeshWeaver.Plugins `ProviderSetupAreas` (2 reads) | `nodeType:ModelProvider sort:name limit:100`, `nodeType:LanguageModel sort:name limit:400`, per render of the Providers page | **Open, censused.** The page's own text names two homes (`Provider/{Name}`, `{you}/_Memex/{Name}`) while `ChatClientCredentialResolver.BuildModelQueries` also reads `{space}/Provider` — which set the page MEANS is a product decision, not a mechanical anchor |
+| MeshWeaver.Plugins `CouponEditArea.PackageQuery` | `nodeType:Store/Plugin` as a picker's `Queries` | **Open, censused** — the picker class below |
+| MeshWeaver.Crm `CrmQueries.AllClients` / `.OpenPipeline` / `.AllOpportunities` / `.AllInteractions` | `nodeType:Crm/{Client,Opportunity,Interaction} scope:subtree`, the board's roster and pipeline | **Open.** Genuinely mesh-wide (a client IS a partition) and the code says so in prose — but it does not DECLARE it, so a CI mesh refuses it and production reports it at Error. The fix is `partitions:all`, not an anchor |
+| `[MeshNode("nodeType:X")]` picker attributes — 191 lines in MeshWeaver.Reinsurance, 19 in MeshWeaver.Crm, 15 in MeshWeaver.Manufacturing, 2 in MeshWeaver.Education, plus multi-line ones in MeshWeaver.Plugins | the attribute's query, sent verbatim by `MeshNodePickerView` (plus the typed text) on every dropdown open | **Open, and NOT a per-attribute fix.** The picker names no partition, so every `[MeshNode(…)]` in the fleet is unanchored. `{node.namespace}` does not help (it resolves to the edited node's own path). The fix belongs in the picker — let it name the partitions it searches — or in `NodeTypeDefinition.InstanceLocations` for types that have a home |
+
+**Two blind spots of the content census, stated rather than hidden.** The predicate is a line
+window, so an unrelated `path:`/`namespace:` within four lines hides a literal: MeshWeaver.Plugins'
+`AiSettingsAreas` "visible models" read (`nodeType:LanguageModel sort:name limit:200`, beside an
+anchored settings read) and `MailboxAreas.Query`'s empty-scope branch are both unanchored and both
+invisible to it. And a query assembled without a `"nodeType:…"` literal is not a candidate at all.
+
+**Corrections to the `unanchored-queries.allow` rows, from the same sweep** (each still listed, so
+each is still debt): `DeviceSeed`'s instances live at `Instance/{id}`, not "the device user's
+partition", so that row anchors rather than declares; `TokenUsageSettingsTab` is admin-only and
+groups by person, so anchoring it to the viewer's partition — what its line suggests — would break
+it, and it should declare; and nothing in MeshWeaver.Plugins calls `ChatHistorySelector`'s query any
+more, so that row's caller can be deleted rather than fixed.
 
 ## The elimination plan
 
