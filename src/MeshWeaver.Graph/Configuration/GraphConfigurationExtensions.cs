@@ -257,6 +257,17 @@ public static class GraphConfigurationExtensions
                 // IMessageHub, so the registry checked is the validating hub's own chain.
                 services.AddScoped<INodeValidator, Security.ContentDiscriminatorValidator>();
 
+                // …and its companion, which asks the OTHER half of "can a reader ever materialise
+                // this?": not whether the content's own $type resolves here, but whether the
+                // payload BINDS to the content type the node's NodeType declares — read off the
+                // mesh-wide IMeshContentTypeRegistry, so it answers for an in-mesh compiled type
+                // too (the discriminator guard exempts those by construction). A member holding a
+                // value its declaration contradicts, and content NONE of whose members the
+                // declared type knows, were both stored verbatim and then read as an empty node on
+                // every consumer — Systemorph/MeshWeaver#4601, and the birth of the payload in
+                // #4600. Same scope and lifetime as the guard above.
+                services.AddScoped<INodeValidator, Security.ContentSchemaValidator>();
+
                 // 🚨 THE partition teardown, registered ONCE and matching every partition ROOT
                 // structurally (#3436) — the deletion-side mirror of the single, centralized
                 // OwnsPartitionProvisioningValidator. It used to be registered PER NODETYPE at
