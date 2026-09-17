@@ -187,7 +187,26 @@ concurrency:
   # this group's single pending slot, and the cron did not fire at 07:23 or 08:23 at all (#2490).
   # Earlier a scheduled run that DID start was evicted with zero jobs by the one-pending-slot
   # rule. A no-op that holds the slot is the defect; keying the reconcile separately removes it.
-  group: main-cd-${{ github.event_name == 'schedule' && 'reconcile' || github.ref }}
+  #
+  # 🚨 A PLAIN `workflow_dispatch` BELONGS IN THE RECONCILE LANE, and until MeshWeaver#4652 it did
+  # not — it fell to the `github.ref` arm, i.e. into the PUSH lane, where a merge's arrival can
+  # discard it before it runs a single job. That matters because a dispatch is how the lane's
+  # handoff creates a publisher for a HEAD that has none (`delivery-verdict`'s `handoff` step), and
+  # a publisher GitHub may delete is not a publisher. A default dispatch and a schedule tick ask
+  # the registry the same question and take the same branches, so one superseding the other loses
+  # nothing.
+  #
+  # 🚨 `rebuild: true` IS NOT THAT, and it stays where it was. It is the operator's "the HOSTS
+  # changed, build it anyway" override (#2622) — an explicit request carrying an input no other
+  # entry can reproduce. Moving it here would put it in the single pending slot, where the next
+  # schedule tick replaces it and the request is silently dropped: the tick that survives takes
+  # `rebuild=false`, finds the set complete and no-ops, so the operator's button would appear to
+  # work and do nothing. Keeping it in the ref lane is not an endorsement of that lane — it is
+  # leaving an unrelated path exactly as it was rather than regressing it in passing. (Caught in
+  # review.) One consequence stays true and is NOT fixed here: a `rebuild` dispatch can still
+  # overlap a scheduled reconcile, which is the case the seal step's claim-then-rank workaround
+  # exists for — so that workaround is narrowed, never removed. Do not delete it.
+  group: main-cd-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && 'reconcile' || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -875,7 +894,17 @@ jobs:
             INFLIGHT=""
           fi
           if [ -n "$INFLIGHT" ]; then
-            decision false "⏳ An older run of this workflow is still publishing \`$SHORT\`: $INFLIGHT — deferring, so one commit yields ONE image set (MeshWeaver#3376). If that run fails, the next reconcile tick heals HEAD."
+            # 🚨 THE SENTENCE USED TO END "If that run fails, the next reconcile tick heals HEAD."
+            # That was true of a run that FAILS and false of the far commoner outcome: the run is
+            # DISCARDED by the one-pending-slot rule, having executed nothing, and the next tick
+            # simply defers to whatever is queued by then. Measured 2026-09-17 — the deferral
+            # targets of the 16:31Z, 17:26Z and 18:35Z ticks were all cancelled with zero jobs
+            # within minutes, and the reconcile said this each time. What actually discharges the
+            # deferral is `delivery-verdict`'s `handoff` step (MeshWeaver#4652): whichever run
+            # finally holds the lane checks, as it lets go, whether HEAD still has a publisher and
+            # dispatches one if not. Say that, because a reader acting on the old sentence would
+            # wait an hour for a heal that was never coming.
+            decision false "⏳ An older run of this workflow is still publishing \`$SHORT\`: $INFLIGHT — deferring, so one commit yields ONE image set (MeshWeaver#3376). That run may instead be DISCARDED by the one-pending-slot rule without executing anything; either way the run that ends up holding the lane hands HEAD on when it releases it (\`handoff\`, MeshWeaver#4652), so this deferral does not rest on the queued run surviving."
             exit 0
           fi
 
@@ -3515,12 +3544,22 @@ jobs:
     timeout-minutes: 5
     # Job-level permissions REPLACE the workflow-level map, so every one this job needs is here:
     #   contents — `commits/main`, the tip resolution that tells "superseded" from "stuck"
+    #   checks   — `commits/<head>/check-runs`, the handoff's publishability read. 🚨 NOT covered by
+    #              `contents`: the Checks API needs its own scope, `gate` declares it for the very
+    #              same call, and without it this probe 403s, takes the fail-safe warning path and
+    #              NEVER dispatches — the whole handoff would be inert behind a green tick, which is
+    #              precisely the "reads like a pass" defect it exists to close. (Caught in review.)
     #   actions  — `actions/runs?head_sha=…`, the live-publication probe that tells "a publish is
-    #              in flight" from "nobody is publishing" (MeshWeaver#3513)
-    # It checks out nothing and pushes nothing, so id-token and packages are deliberately absent.
+    #              in flight" from "nobody is publishing" (MeshWeaver#3513); WRITE because the
+    #              handoff step below dispatches this workflow when it is leaving main's HEAD
+    #              without a publisher (MeshWeaver#4652). `actions: write` is the least grant that
+    #              allows a dispatch — there is no narrower "dispatch only" scope. The step calls
+    #              exactly one mutating command, `gh workflow run` on THIS workflow and `--ref main`.
+    # It checks out nothing and pushes no code, so id-token and packages are deliberately absent.
     permissions:
       contents: read
-      actions: read
+      checks: read
+      actions: write
     steps:
       - name: A green, incomplete main must never end a reconcile unpublished
         id: verdict
@@ -3952,6 +3991,171 @@ jobs:
           else
             echo "### ❌ INCONCLUSIVE — gate=${GATE_RESULT} produced no verdict; this run is red above" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      # ───────────── THE LANE HANDS HEAD ON WHEN IT LETS GO OF IT (MeshWeaver#4652) ─────────────
+      # 🚨 A DEFERRAL IS A PROMISE. THIS IS THE STEP THAT KEEPS IT.
+      #
+      # The push lane is one concurrency group with `cancel-in-progress: false`, so GitHub holds
+      # ONE run in flight and ONE pending, and every further arrival REPLACES the pending one. That
+      # supersede rule is CORRECT and must stay — measured over the 21.7 h to 2026-09-17T19:29Z:
+      # 77 push-lane arrivals (median gap 8.3 min) against 14 runs that actually executed, whose
+      # wall clocks ran 35–107 min (median ~67). Not discarding would serialize 77 × ~67 min ≈ 86 h
+      # of lane time into a 21.7 h window: the lane would fall behind without bound and every
+      # publication would ship a commit hours stale. Discarding queued work is the only reason the
+      # lane keeps up at all — it ran 16.1 h busy out of 21.7 h, 74 % saturated.
+      #
+      # What is NOT correct is what the discard does to the two liveness probes. A run that is
+      # `pending` has executed nothing — measured: `jobs.total_count == 0` — and GitHub may delete
+      # it without ever running it. Both probes nevertheless read it as "a publication is in
+      # flight": `gate`'s #3376 probe DEFERS to it, and `delivery-verdict`'s #3513 probe SUPPRESSES
+      # the stuck-delivery alarm on it. Neither ever learns that the run it trusted was discarded.
+      # Measured on three consecutive hourly reconciles on 2026-09-17 — every one of them:
+      #   16:31Z run 35247143507 → deferred to 35246058388 → cancelled 16:37:35Z
+      #   17:26Z run 35252772696 → deferred to 35252764043 → cancelled 17:30:35Z, jobs.total_count 0
+      #   18:35Z run 35259738026 → deferred to 35259392545 → cancelled 18:42:33Z, jobs.total_count 0
+      # so the ONLY backstop for a failed or discarded cycle stood down, silently, on every tick.
+      #
+      # 🚨 THE FIX IS NOT TO NARROW THE PROBE. "Pending" genuinely means "will build" whenever the
+      # run survives (2026-09-10, workflow_run 34506317727 did), and a pending run has no job count
+      # to tell the two apart — the ambiguity is irreducible AT PROBE TIME. It is not irreducible
+      # AT RELEASE TIME: the run holding the lane is the one party that can see both what it built
+      # and what HEAD is now, and it sees it at the exact moment the lane frees. So the obligation
+      # is DISCHARGED here rather than promised there, and it needs no carrier, no marker and no
+      # state store — which is what the Continuous Delivery contract requires.
+      #
+      # 🚨 BOUNDED AT ONE HOP, BY CONSTRUCTION — this is a drain, never a retry loop. A run that was
+      # ITSELF dispatched does not dispatch again (`HANDOFF_ELIGIBLE` below), so one terminating
+      # lane holder produces at most ONE extra run. Without that, a deterministic promote failure
+      # would hand itself on forever; with it, the chain stops and `verdict` reds exactly as it does
+      # today. The dispatched run is additionally budgeted by the existing per-commit heal ledger
+      # (MAX_ATTEMPTS), which it consumes like any other reconcile.
+      #
+      # 🚨 IT COSTS ALMOST NOTHING, because it is gated on the state that makes a handoff MEAN
+      # something: HEAD's required check already GREEN, and no run of this workflow queued or
+      # running on HEAD. A green HEAD normally already has its own `workflow_run` CD run, so the
+      # probe finds a successor and this step dispatches nothing. It fires in precisely the two
+      # holes: HEAD's run was DISCARDED, or it EXECUTED AND FAILED. Everything else exits in three
+      # API reads inside a job that was running anyway.
+      - name: Hand main's HEAD on if this run is leaving it without a publisher
+        id: handoff
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          WORKFLOW_FILE: main-cd.yml
+          SHA: ${{ needs.gate.outputs.sha }}
+          PUBLISH: ${{ needs.gate.outputs.publish }}
+          COMPLETE: ${{ needs.gate.outputs.complete }}
+          PROMOTE_RESULT: ${{ needs.promote.result }}
+          # 🚨 EVERY SHIPPING LEG, not `promote` alone — promote is only phase A, the image TAGS.
+          # A run can tag the set and still fail afterwards in the bake or the Plugins bundle legs,
+          # which is EXACTLY the shape that stalled delivery on 2026-09-17 (run 35257430439 failed
+          # in `plugins-modules` well past promote). Keyed on promote alone, this step would call
+          # such a run "HEAD's publication", exit before the successor probe, and hand nothing on —
+          # silently, in the one case it was built for. (Caught in review.)
+          #
+          # The criterion for membership is "a failure here means HEAD's PUBLICATION is incomplete".
+          # Three needs are deliberately absent: `preflight`/`gate` (their failure leaves SHA empty,
+          # which exits above), `notify-platform-update` (the release EVENT — satellites do not
+          # learn, and rebuilding publishes nothing new), and `satellite-compat*` (the per-build
+          # COMPATIBILITY measurement, whose red this file twice states means "DELIVERY COMPLETED").
+          DELIVERY_LEGS: >-
+            ${{ needs.portal-image.result }} ${{ needs.portal-image-mirror.result }}
+            ${{ needs.migration-image.result }} ${{ needs.plugin-test-image.result }}
+            ${{ needs.promote.result }} ${{ needs.verify-images.result }}
+            ${{ needs.publish-bake.result }} ${{ needs.plugins-modules.result }}
+            ${{ needs.plugins-bake-image.result }} ${{ needs.plugins-bake.result }}
+          # 🚨 The one-hop bound. A run that arrived BY a handoff must not emit another, or a
+          # deterministic failure becomes an unbounded dispatch loop. Computed here rather than in
+          # the body because the body may carry no `${{ }}` — `test-cd-steps.py` extracts this step
+          # by its `id:` and refuses a body it would have to rewrite.
+          HANDOFF_ELIGIBLE: ${{ github.event_name != 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+          say() { echo "$1"; echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
+
+          # `gate` resolves a target for BOTH entry paths, so an EMPTY one means the gate never ran
+          # (a PR-triggered workflow_run) or died before resolving it. Either way this run never
+          # held the delivery lane and is leaving nothing behind.
+          if [ -z "${SHA:-}" ]; then
+            echo "no target commit — this run never held the delivery lane, so it hands nothing on."
+            exit 0
+          fi
+          if [ "$HANDOFF_ELIGIBLE" != "true" ]; then
+            echo "this run was itself dispatched — it does not hand on again (the chain is bounded at one hop). If HEAD is still unpublished, the hourly reconcile and the next merge's run both reach it, and \`verdict\` reds if nobody does."
+            exit 0
+          fi
+
+          # main's HEAD *now*. The gate's reading was taken before any leg ran; asking again is the
+          # whole point — the lane is about to be free and HEAD has usually moved.
+          if ! HEAD=$(gh api "repos/$REPO/commits/main" --jq '.sha') || [ -z "$HEAD" ]; then
+            echo "::warning::could not resolve main's tip, so this run cannot tell whether it is leaving HEAD without a publisher. NOT dispatching — this degrades to the hourly reconcile, which is where delivery stood before this step existed, rather than to silence. The API failure is the bug to chase."
+            exit 0
+          fi
+          SHORT_HEAD="${HEAD:0:9}"
+
+          # Did any SHIPPING leg fail? A `skipped` leg is not a failure — most of them skip on a
+          # bake-only or a no-publish run, which is the ordinary case. Only `failure` and
+          # `cancelled` mean this run did not finish what it started.
+          case " $DELIVERY_LEGS " in
+            *" failure "*|*" cancelled "*) DELIVERY_INCOMPLETE=true ;;
+            *)                             DELIVERY_INCOMPLETE=false ;;
+          esac
+
+          # Nothing is owed when this run IS HEAD's publication — either it shipped the set, or the
+          # gate found one already complete and took the bake-only branch. Two arms are
+          # load-bearing. Without the `COMPLETE` one a bake-only reconcile on HEAD would hand itself
+          # on forever; without `DELIVERY_INCOMPLETE` a run that tagged the set and then failed a
+          # later leg would count as HEAD's publication and hand nothing on.
+          if [ "$HEAD" = "$SHA" ] && [ "$DELIVERY_INCOMPLETE" != "true" ] \
+             && { { [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; } || [ "$COMPLETE" = "true" ]; }; then
+            echo "nothing owed — this run is main's HEAD ($SHORT_HEAD) publication (publish=$PUBLISH promote=$PROMOTE_RESULT complete=$COMPLETE, every shipping leg clean)."
+            exit 0
+          fi
+
+          # 🚨 Only a GREEN head is publishable, so only a green head can be owed anything. Same
+          # instrument and same filter as `gate`'s own read, deliberately: a handoff that disagreed
+          # with the gate about what "green" means would dispatch runs the gate then declines.
+          if ! CHECK=$(gh api "repos/$REPO/commits/$HEAD/check-runs?per_page=100&check_name=Consolidate%20test%20results" \
+                         --jq '[.check_runs[] | select(.name=="Consolidate test results")]
+                               | sort_by(.started_at) | last // {}
+                               | "\(.status // "absent") \(.conclusion // "none")"'); then
+            echo "::warning::could not read the required check on main's tip $SHORT_HEAD, so this run cannot tell whether HEAD is publishable. NOT dispatching — the hourly reconcile remains. Chase the API failure."
+            exit 0
+          fi
+          read -r C_STATUS C_CONCL <<< "$CHECK"
+          if [ "$C_STATUS" != "completed" ] || [ "$C_CONCL" != "success" ]; then
+            echo "nothing owed — main's HEAD $SHORT_HEAD is not publishable yet (\`Consolidate test results\` → $C_STATUS/$C_CONCL). The workflow_run that fires when it settles green IS HEAD's publisher; inventing one now would only be declined."
+            exit 0
+          fi
+
+          # Is anybody else on HEAD? A queued run counts here — not because queuing is a promise,
+          # but because it inherits this obligation: whichever run finally executes runs this same
+          # step when IT terminates. That is what closes the loop the discard used to open.
+          if ! SUCCESSOR=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD&per_page=50" \
+                             --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id != $RUN_ID and .status != \"completed\")]
+                                   | sort_by(.id) | .[0] // empty
+                                   | \"\(.id) \(.status)\""); then
+            echo "::warning::the successor probe on main's tip $SHORT_HEAD failed, so this run cannot tell whether HEAD already has a publisher. NOT dispatching — a dispatch on an unanswered probe would be a guess that costs a duplicate image set (MeshWeaver#3376). The hourly reconcile remains; chase the API failure."
+            exit 0
+          fi
+          if [ -n "$SUCCESSOR" ]; then
+            read -r S_ID S_STATUS <<< "$SUCCESSOR"
+            echo "nothing owed — run $S_ID is \`$S_STATUS\` on main's HEAD $SHORT_HEAD and inherits the obligation: when it terminates it runs this same step. If GitHub discards it instead, the arrival that replaced it targets a newer HEAD and hands THAT on."
+            exit 0
+          fi
+
+          # HEAD is green, has no complete publication from this run, and NOTHING is queued or
+          # running for it. That is the state the hourly tick was supposed to catch and has been
+          # standing down on. Say it, then create the publisher.
+          say "### 🔁 HANDED ON — main's HEAD \`$SHORT_HEAD\` is green and has NO run of this workflow queued or running, so this run is leaving it without a publisher. Dispatching one now rather than waiting up to an hour for the reconcile tick (which stands down whenever a queued run exists — measured 3 of 3 ticks on 2026-09-17)."
+          if ! gh workflow run "$WORKFLOW_FILE" --repo "$REPO" --ref main; then
+            echo "::error::main's HEAD \`$SHORT_HEAD\` is GREEN, has no complete image set from this run and NOTHING queued or running to publish it — and the dispatch that would have created its publisher FAILED. Delivery is left with no producer but the hourly reconcile, which stands down whenever a queued run appears. Check that this job still holds \`actions: write\`, then dispatch \`$WORKFLOW_FILE\` on main by hand."
+            exit 1
+          fi
+          say "   Dispatched \`$WORKFLOW_FILE\` on \`main\`. It enters the RECONCILE lane (so the push lane cannot discard it), resolves HEAD itself, and consumes the same per-commit heal budget as any other reconcile. It will NOT hand on again — the chain is bounded at one hop."
 
   alert-on-failure:
     name: "Alert: CD failed on main"
