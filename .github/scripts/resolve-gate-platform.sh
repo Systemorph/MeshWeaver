@@ -264,9 +264,16 @@ if [ "${1:-}" = "--self-test" ]; then
     || fail "the refusal must say a FULL re-run returns the same set while main is red (got: $o)"
   grep -q 'WAIT FOR THE SET, NOT FOR THE TICK' <<<"$o" \
     || fail "the refusal must not send the reader to re-run the moment a tick fires (got: $o)"
-  grep -qE 'keep(s|ing)? (only )?the [0-9]+ newest' <<<"$o" \
+  # \U0001f6a8 The SHAPE, not one word order. The first version of this guard rejected only
+  # `keeps ... the <n> newest`, so `retains the 3 newest`, `keeps the newest 3` and `keeps 3 sets`
+  # would all have walked a numeric retention claim back in while --self-test stayed green — a
+  # guard narrower than the contract it advertises is the bug it exists to prevent. Two patterns:
+  # a retention VERB reaching a digit, and a digit reaching a retention NOUN.
+  grep -qiE '(keep|retain|hold)[a-z]*( only)?( the)?( newest| most recent)? [0-9]+' <<<"$o" \
     && fail "no refusal may assert a retention NUMBER — the window is the cluster's to set and a \
 number written here goes stale the first time it moves (got: $o)"
+  grep -qiE '[0-9]+ (newest|most recent|sealed set|sets kept)|(newest|most recent) [0-9]+' <<<"$o" \
+    && fail "no refusal may count the sets kept — see above (got: $o)"
   grep -q 'only ever installs the NEWEST' <<<"$o" \
     && fail "the refresh also installs a missing main-passed set — Memex#329 (got: $o)"
 
