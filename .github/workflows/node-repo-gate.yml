@@ -2181,30 +2181,39 @@ jobs:
       # (exit 139) it actually is.
       #
       # `if: always()` because the only runs with a dump are the ones where the gate FAILED.
-      # The bake this gate produced — publish-bake reuses it on merge (bake-run-id) so the same
-      # source is never compiled twice. Short retention: it is an intermediate, not a publication.
       # 🚨 always(), and RED if the log is missing while the gate ran: a caller's ratchet that finds no
       # artifact must fail on "no log", never pass on "nothing to check" — the same rule the gate
       # itself applies to a truncated log. Named per commit so a merge-group ref cannot pick up a
       # sibling run's log.
-      # 🚨 PER SHARD. Two artifacts of one name cannot coexist in a run, and the CANONICAL names —
-      # `gate-log-<sha>` and `bake-<sha>`, which is what a caller's ratchet and publish-bake know —
-      # are re-emitted by the aggregate job below from the folded evidence. With `shards: 1` there is
-      # exactly one of each here and the fold is a copy, so the contract is identical either way.
+      # 🚨 PER SHARD. Two artifacts of one name cannot coexist in a run, and the CANONICAL name —
+      # `gate-log-<sha>`, which is what a caller's ratchet knows — is re-emitted by the aggregate job
+      # below from the folded evidence. With `shards: 1` there is exactly one here and the fold is a
+      # copy, so the contract is identical either way.
+      #
+      # 🚨 THE BAKE IS NOT UPLOADED (removed 2026-09-17). Until today this step also shipped
+      # `bake-<sha>-shard-<n>`, and the aggregate job below downloaded every shard's copy and
+      # re-uploaded the union as `bake-<sha>` "for publish-bake to reuse (bake-run-id)". That reuse
+      # was never built: `bake-run-id` exists in no workflow, no script and no input in any repo of
+      # the fleet — an exhaustive search over MeshWeaver{,.Plugins,.Education,.Reinsurance,
+      # .SocialMedia,.Manufacturing,.Crm} and Memex finds the two uploads and the one download that
+      # feeds the second upload, and no other reference. publish-bake bakes its own mount
+      # (node-repo-publish-bake.yml uploads no artifact at all), so both copies were written, billed
+      # for three days, and read by nothing.
+      # Measured the day they were removed: 66.8 GB live across the fleet — Plugins 36.7,
+      # Reinsurance 10.2, Manufacturing 6.1, Crm 6.0, SocialMedia 4.0, Education 3.8 — which is
+      # ~100% of four satellites' entire Actions-storage bill. Two copies of identical bytes, because
+      # every shard bakes the whole mount and the fold is a union of duplicates.
+      # Nothing is lost by dropping them: the gate ASSERTS its own bake in-job (the
+      # `framework-mvid.txt` check in the tester step above is what proves the bake stage ran), so
+      # the upload's `if-no-files-found: error` was never the thing that caught a missing bake.
+      # If a cross-run bake reuse is ever actually built, it must land WITH its consumer — an upload
+      # whose reader does not exist is not a contract, it is a bill.
       - name: Upload this shard's gate log (the tester's stdout)
         if: always() && env.GATE_LOG != ''
         uses: actions/upload-artifact@v7
         with:
           name: gate-log-${{ github.sha }}-shard-${{ matrix.shard }}
           path: ${{ env.GATE_LOG }}
-          retention-days: 3
-          if-no-files-found: error
-      - name: Upload this shard's bake for publish-bake to reuse
-        if: always() && env.OWN_BAKE != ''
-        uses: actions/upload-artifact@v7
-        with:
-          name: bake-${{ github.sha }}-shard-${{ matrix.shard }}
-          path: ${{ env.OWN_BAKE }}
           retention-days: 3
           if-no-files-found: error
       - name: Make core dumps readable by the uploader
@@ -2346,24 +2355,10 @@ jobs:
           path: ${{ runner.temp }}/gate.log
           retention-days: 3
           if-no-files-found: error
-      # The bake, likewise re-emitted under its canonical name. Every shard bakes the whole mount
-      # (`compile` takes no --shard — it is 70 s and its output is what the gate then consumes), so
-      # merge-multiple overwrites identical bundles and the union is the complete bake either way.
-      - name: Collect every shard's bake
-        if: steps.expect.outputs.fold == 'true' && needs.gate.result == 'success'
-        uses: actions/download-artifact@v8
-        with:
-          pattern: bake-${{ github.sha }}-shard-*
-          merge-multiple: true
-          path: ${{ runner.temp }}/bake
-      - name: Upload the merged bake for publish-bake to reuse
-        if: steps.expect.outputs.fold == 'true' && needs.gate.result == 'success'
-        uses: actions/upload-artifact@v7
-        with:
-          name: bake-${{ github.sha }}
-          path: ${{ runner.temp }}/bake
-          retention-days: 3
-          if-no-files-found: error
+      # (The bake used to be re-emitted here as `bake-<sha>`, folded from `bake-<sha>-shard-*`.
+      # Both are gone — see the long note beside the shard's gate-log upload above: the reader they
+      # were written for was never built, and the two copies cost 66.8 GB of live Actions storage
+      # across the fleet.)
       # 🚨 LAST, and unconditional on the fan-out's result: the fold above NAMES which shard broke,
       # and this is what makes that naming a RED rather than a note. Placed after the uploads so a
       # red gate still hands its evidence to the caller's ratchet — the same reason the shard job
