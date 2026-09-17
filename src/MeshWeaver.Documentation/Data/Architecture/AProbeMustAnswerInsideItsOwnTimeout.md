@@ -54,6 +54,19 @@ The replica rolled onto `3.0.0-ci.8812` at 11:23:40Z was still not Ready at 14:5
 replica's `/health` its own 8 s budget, reported `TaskCanceledException` not only for that pod but
 for the two **healthy, serving** replicas beside it.
 
+🚨 **And the reading exonerates the release.** The Service routes only to READY pods, so those
+three timings were taken on `3.0.0-ci.8710` — core commit `afde4eab` (2026-09-15 21:50Z), which
+**predates** every merge of the night the roll was meant to deliver (the unloadable-build fix merged
+2026-09-16 21:59Z; an ancestry check says it is not in that image). The latency is not something the
+candidate image introduced — and `memex-cloud`, on the older `3.0.0-ci.8411`, answers in 0.14–0.75 s,
+so it is not a property of the image line either. It is a property of **this instance**.
+
+What is still unmeasured is the latency on a pod that is **starting**. The fleet watch's own 8 s
+probe timed out on the new replica three times out of four (11:46Z, 14:43Z, 14:51Z) and answered
+once (14:38Z) — consistent with it being at least as slow as the serving pods, and nothing sharper
+than that. A booting replica runs its cold bake on the same CPU and volume as these checks, so the
+expectation is worse, not better.
+
 And the bake gate was green across it. At 14:38:15Z the fleet watch read a body from the new pod
 whose first word was `Degraded` — and the fleet watch's reader throws on any non-2xx, so that
 reading was a **200**, which means no registered check was Unhealthy at that instant. A pod whose
