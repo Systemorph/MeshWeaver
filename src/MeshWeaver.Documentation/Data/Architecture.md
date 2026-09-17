@@ -200,6 +200,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Threads, activities & AI
 
 - **Start here:** [Thread Operations](ThreadOperations)
+- [Agent Task Collaboration](AgentTaskCollaboration) — launch shared work only through `start_collaboration`; participant effort, harness, and model are creation-time settings, not follow-up-message overrides
 - [Thread Execution Streaming](ThreadExecutionStreaming)
 - [Activity Control Plane](ActivityControlPlane)
 - [Activity Mirror Release Lifetime](/Doc/Architecture/ActivityMirrorReleaseLifetime)
