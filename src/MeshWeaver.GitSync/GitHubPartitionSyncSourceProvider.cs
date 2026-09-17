@@ -48,6 +48,26 @@ public sealed class GitHubPartitionSyncSourceProvider(GitHubSyncService sync, IM
         => sync.WatchConfigNodes(partition)
             .Select(nodes => nodes.Any(n => Tracks(n) is { Direction: not SyncDirection.ExportOnly }));
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 Exactly the sources <see cref="ImportsContent"/> counts — the same reading, so the bit and
+    /// the identities can never disagree about which sources exist — each rendered as
+    /// <c>owner/repo#subdirectory</c>. The SUBDIRECTORY is part of the identity on purpose: a
+    /// package sealed from <c>Systemorph/MeshWeaver.Plugins</c> and a partition synced from that
+    /// repository's <c>Hosting</c> folder are two different trees, and MeshWeaver#4625 names that
+    /// as one of its two shapes.
+    ///
+    /// <para>This provider can always answer, so it returns a KNOWN reading — possibly empty, which
+    /// then means "no GitHub source imports into this partition", not "I cannot tell". A provider
+    /// that cannot tell inherits the default and licences no hold.</para>
+    /// </remarks>
+    public IObservable<TrackedRepositories> ImportingRepositories(string partition)
+        => sync.WatchConfigNodes(partition)
+            .Select(nodes => TrackedRepositories.Of(nodes
+                .Select(Tracks)
+                .Where(c => c is { Direction: not SyncDirection.ExportOnly })
+                .Select(c => TrackedRepositories.Normalize(c!.RepositoryUrl, c.Subdirectory))));
+
     /// <summary>The source's configuration when it names a repository, else null — one reading of
     /// the node for both questions, so they can never disagree about which sources exist.</summary>
     private GitHubSyncConfig? Tracks(MeshNode node)

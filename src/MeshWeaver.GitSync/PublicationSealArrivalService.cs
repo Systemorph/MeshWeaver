@@ -180,7 +180,16 @@ internal sealed class PublicationSealArrivalService(
                 .Do(sealedForThisIdentity => census?.RecordPublication(new SealedPublicationReading(
                     identity, publishedRoot, [.. sealedForThisIdentity], DateTimeOffset.UtcNow)))
                 .SelectMany(sealedForThisIdentity =>
-                    reconciler.Reconcile(identity, sealedForThisIdentity, [])))
+                    // 🚨 `null`, not `[]` (MeshWeaver#4620). An empty set is a MEASUREMENT — "I
+                    // compared the partition against the commit's tree and nothing had drifted" —
+                    // and the reconciler reads it as the steady state and moves nothing. This
+                    // trigger measures nothing of the kind: the declined set is a by-product of the
+                    // boot sweep's bundle-adoption walk, which does not run here. Passing `[]`
+                    // therefore asserted a clean partition on no evidence, and it was the ONLY
+                    // post-boot path into the drift detector — so after boot the detector could
+                    // never fire. Null says "I did not look", and the reconciler takes the
+                    // measurement itself, where the bundle inventory already is.
+                    reconciler.Reconcile(identity, sealedForThisIdentity, declinedTypePaths: null)))
             .Do(
                 dispatched =>
                 {
