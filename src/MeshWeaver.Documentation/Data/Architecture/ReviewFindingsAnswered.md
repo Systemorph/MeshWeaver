@@ -225,6 +225,22 @@ To replay a pull request yourself:
 python3 .github/scripts/check-review-answered.py --repo Systemorph/MeshWeaver --pr 4310 --as-of 2026-09-14T14:04:21Z
 ```
 
+### Observed end to end on #4575
+
+The check's own pull request, in order, with the run that did the work:
+
+| When | Event | What happened |
+|---|---|---|
+| 08:01Z | `pull_request` opened | RED — *"the automatic review has not landed"*; check-run on the PR head, beside `Consolidate test results` |
+| 08:05Z | the reviewer's review (2 findings) | run `35197843933` created and **`action_required`, zero jobs** — no evaluation |
+| 11:09Z | a push, then two replies | the `synchronize` run and the person's `pull_request_review_comment` run both executed and read **2 threads, 2 answered** → GREEN |
+| 11:09Z | the same burst | three sibling runs `cancelled` by the concurrency group, exactly as intended: one evaluation ran and it read last |
+
+The review that counts was submitted on the **previous** head (`c496a0bffb`) and the check is green on
+the new one (`bf37e92a09`): condition 1 asks whether the review landed, never whether it landed on the
+head, because the reviewer reviews once. And the 15-minute wait was exercised against #645 — three
+polls, then RED naming the quota refusal.
+
 ## Rollout
 
 The check lands **non-required**. The context to add to ruleset 2128472, beside
