@@ -72,9 +72,70 @@ public class BundleTransferIsStreamedAndMeasuredTest
         // completion option downloads the whole body before it returns, putting the archive's size
         // back inside the 120 s attempt budget.
         Assert.DoesNotContain("_http.SendAsync(request, ct)", download, StringComparison.Ordinal);
-        // And it streams what the headers opened, rather than materialising the body in one call.
-        Assert.Contains("CopyToAsync", download, StringComparison.Ordinal);
+        // And it streams what the headers opened, through the STALL-bounded copy rather than a
+        // plain CopyToAsync — see the hang guard below.
+        Assert.Contains("CopyStallBounded", download, StringComparison.Ordinal);
         Assert.DoesNotContain("ReadAsByteArrayAsync", download, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 THE HANG GUARD (#4549 review). Reading headers first takes the body outside the attempt
+    /// policy — and two callers have no operation deadline of their own
+    /// (<c>CatalogLayoutAreas.InstallPackage</c>, <c>InstanceAutoRegistrationService</c>), so a
+    /// registry that sends headers and then stops would hang them indefinitely. A hang is worse
+    /// than a failure, so trading the timeout for one would be no fix at all.
+    ///
+    /// <para>The bound is on SILENCE, not on total duration: every chunk that arrives resets the
+    /// deadline, so a large transfer still making progress is never cut off — which is the defect
+    /// being removed — while a dead transfer fails and says so. Both `CancelAfter` calls matter:
+    /// the first arms it, the second is the reset, and losing the reset would silently restore a
+    /// total-duration bound.</para>
+    /// </summary>
+    [Fact]
+    public void TheStreamedBody_IsBoundedBySILENCE_NotByTotalDuration()
+    {
+        var source = BundleClientSource();
+
+        Assert.Contains("TransferStallBudget", source, StringComparison.Ordinal);
+        Assert.Contains("CancellationTokenSource.CreateLinkedTokenSource(ct)", source, StringComparison.Ordinal);
+        // Armed once, then reset on every chunk that arrived.
+        Assert.Equal(2, CountOccurrences(source, "stall.CancelAfter(TransferStallBudget)"));
+        // A stall is reported as a stall, never as somebody else's cancellation.
+        Assert.Contains("when (!ct.IsCancellationRequested)", source, StringComparison.Ordinal);
+        Assert.Contains("the registry sent no data for", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 The measurement must cover the HEADER stage, where nothing has arrived yet (#4549 review).
+    /// A clock started after <c>SendAsync</c> returns cannot see "the registry never answered" —
+    /// which is exactly the diagnosis this change exists to make possible — so the timestamp is
+    /// taken BEFORE the request and the whole request is inside the try.
+    /// </summary>
+    [Fact]
+    public void TheMeasurement_StartsBeforeTheRequest_SoAZeroByteFailureIsStillReported()
+    {
+        var download = DownloadOverHttpBody();
+
+        var timing = download.IndexOf("Stopwatch.GetTimestamp()", StringComparison.Ordinal);
+        // 🚨 The CALL, not the word: the comment above it also says "SendAsync", and matching prose
+        // made this assertion compare the clock against a sentence rather than against the request.
+        var send = download.IndexOf(".SendAsync(request,", StringComparison.Ordinal);
+        Assert.True(timing >= 0, "the transfer no longer takes a timestamp");
+        Assert.True(send >= 0, "the transfer no longer sends a request");
+        Assert.True(
+            timing < send,
+            "the clock must start BEFORE the request, or a header-stage timeout reports nothing — "
+            + "the exact evidence gap #4528 is about");
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        var count = 0;
+        for (var i = haystack.IndexOf(needle, StringComparison.Ordinal);
+             i >= 0;
+             i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal))
+            count++;
+        return count;
     }
 
     /// <summary>
@@ -89,8 +150,13 @@ public class BundleTransferIsStreamedAndMeasuredTest
 
         Assert.Contains("byte(s) over HTTP from {Registry}", source, StringComparison.Ordinal);
         Assert.Contains("{Throughput} KiB/s", source, StringComparison.Ordinal);
-        Assert.Contains("did NOT complete after {Elapsed} ms", source, StringComparison.Ordinal);
+        Assert.Contains("did NOT complete after", source, StringComparison.Ordinal);
         Assert.Contains("{Received} of {Declared} byte(s) had arrived", source, StringComparison.Ordinal);
+        // 🚨 The incomplete line names the REGISTRY too (#4549 review): an instance may have several
+        // configured, and a byte count that cannot be attributed to an endpoint does not say which
+        // one needs fixing.
+        Assert.Contains(
+            "over HTTP from {Registry} did NOT complete", source, StringComparison.Ordinal);
     }
 
     /// <summary>A rate over a real interval is the bytes divided by the seconds.</summary>

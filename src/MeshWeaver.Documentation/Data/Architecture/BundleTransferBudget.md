@@ -46,8 +46,18 @@ timeout.
 
 Its sibling in the same assembly never had this problem: `OciRegistryClient` reads with
 `ResponseHeadersRead` and streams the blob. The HTTP route now does the same — headers bound the
-attempt, the body streams outside it, and the operation as a whole stays bounded by the caller's own
-budget. That trades no hang for no timeout.
+attempt, and the body streams outside it.
+
+🚨 **That alone would have traded a timeout for a HANG, and the body carries its own bound because
+of it.** Taking the body outside the attempt leaves it bounded by nothing on the callers that have no
+operation deadline: `RegistryUpdateReconciler` wraps its adopt in `PerPackageAdoptBudget`, but
+`CatalogLayoutAreas.InstallPackage` (the manual click) and `InstanceAutoRegistrationService` (the
+default install) do **not**, so a registry that sends headers and then stops would hang them
+indefinitely — and a hang is worse than a failure (Plugins#959). So the read is bounded **here**, by
+a STALL budget: every chunk that arrives resets the deadline, so a transfer still making progress is
+never cut off however large it is — the whole point — while one that goes silent for
+`TransferStallBudget` fails, names itself as a stall rather than someone else's cancellation, and
+reports the byte count it reached. **It bounds silence, never total size.**
 
 🚨 **Every transfer in the fleet takes this route.** The OCI path runs only when a catalog entry
 carries an `artifact`, and the platform default `IPublicationArtifacts` records none, so the
