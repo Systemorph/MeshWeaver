@@ -204,19 +204,43 @@ into a partition it does not own, which no later pass takes back.
 - **A proven ref is not held.** The seal named the commit, so the two writers land the same tree —
   #4259's design, untouched, and the reason the gate keys on provenance rather than on "this
   partition has a second writer".
-- **A hold is loud.** Nothing is fetched and no module is adopted; the package is recorded as a
-  SKIP with its reason on the seed ledger and said once at Warning. It is never a failure — no retry
-  can make a ref provable — and nothing polls: the next boot re-derives it.
+- **A hold is loud, and it is not spelt like a skip.** Nothing is fetched and no module is adopted;
+  the package is recorded as **HELD** — its own list on the summary and the seed ledger
+  (`DefaultInstallHold`), said once at Warning. A `DefaultInstallSkip` is an authorization this lane
+  can never obtain, and the summary renders those *"authorization, not retried"*; a hold is a fact
+  about THIS boot's ref and THIS partition's writer, re-derived from scratch on the next pass. One
+  list for both would advertise a permanent refusal where there is a transient one.
 - **The declared access is still re-asserted.** It is create-only and writes nothing in the steady
   state, so withholding it would trade a content defect for an access one.
 - **Nothing is left without content.** The partition's own writer delivers it, at the commit sealed
   for this instance, and a human's Update click remains the documented escape.
 
-🚨 **The residue this leaves, named:** a source that is a **local checkout** keeps today's behaviour
-([#3359](../SyncRefContract) — there is no commit to pin and the operator IS the authority), so an
-operator who mirrors a working tree into a partition they also connected to git still has two
-writers. That is a configuration a person chose twice, like a human's Update click; it is not an
-unattended lane landing a tree nobody asked for.
+#### Only a writer counts as a writer
+
+The question the installer asks is narrower than the compile control plane's, and the two are
+separate members of the same seam:
+
+| question | member | an `ExportOnly` source |
+|---|---|---|
+| *does this partition's content track an external source?* (#3583 — may I compile the live source?) | `IPartitionSourceTracking.IsTracked` | **yes** — the mesh IS the truth, so its live source is current and the type must compile rather than park |
+| *does anything else WRITE this partition's content?* (#4588 — may I install here?) | `IPartitionSourceTracking.ImportsContent` | **no** — `mesh → repo` rejects imports, so it can neither revert nor prune what an installer wrote |
+
+`ImportsContent` defaults to `IsTracked`, so a provider that cannot tell the directions apart keeps
+the conservative answer; the shipped GitHub provider overrides it and excludes `ExportOnly` alone.
+Collapsing them back into one bit would either hold an install for a writer that cannot write, or
+park a type whose sources are current.
+
+🚨 **The residues this leaves, both named:**
+
+- A source that is a **local checkout** keeps today's behaviour ([#3359](../SyncRefContract) — there
+  is no commit to pin and the operator IS the authority), so an operator who mirrors a working tree
+  into a partition they also connected to git still has two writers. That is a configuration a
+  person chose twice, like a human's Update click; it is not an unattended lane landing a tree
+  nobody asked for.
+- A **proven** ref is not compared against the repository the partition's own writer syncs. #4259's
+  design assumes they are the same repository — which is the fleet's shape — but a package whose
+  target partition is connected to a DIFFERENT repository would still get two writers with two
+  trees. Closing that needs a seam that can name the tracked repository, not just answer a bit.
 
 ### Gate 2 — a delta is never diffed against a baseline the installer does not own
 

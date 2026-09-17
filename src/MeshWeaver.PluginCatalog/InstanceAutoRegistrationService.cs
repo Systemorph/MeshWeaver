@@ -953,7 +953,10 @@ public sealed class InstanceAutoRegistrationService(
         // erase the record of a genuinely missing one — the ledger would then be at its most
         // optimistic exactly when the instance is least healthy. A skip-only pass, by contrast,
         // DID read a listing (skips are derived from listed manifests), so it may write.
-        if (summary.Packages.Count == 0 && summary.Skipped.Count == 0)
+        // A HELD-only pass counts with the skips: a hold is derived from a listed candidate and a
+        // partition this pass actually asked about, so it KNOWS something — and a hold that lifted
+        // has to be able to disappear from the ledger.
+        if (summary.Packages.Count == 0 && summary.Skipped.Count == 0 && summary.Held.Count == 0)
             return Observable.Return(Unit.Default);
 
         var already = ledger.Seeded.ToImmutableHashSet(StringComparer.Ordinal);
@@ -971,6 +974,15 @@ public sealed class InstanceAutoRegistrationService(
             .GroupBy(s => s.Package, StringComparer.Ordinal)
             .Select(g => g.First())
             .OrderBy(s => s.Package, StringComparer.Ordinal)
+            .ToImmutableList();
+
+        // Same snapshot semantics, one list over (MeshWeaver#4588): what THIS pass held. It is
+        // deliberately NOT merged with the ledger's previous holds — a hold that has lifted must
+        // vanish, and the next pass re-derives every one of them from scratch.
+        var held = summary.Held
+            .GroupBy(h => h.Package, StringComparer.Ordinal)
+            .Select(g => g.First())
+            .OrderBy(h => h.Package, StringComparer.Ordinal)
             .ToImmutableList();
 
         // 🚨 #4097 — a pass in which SOME source did not answer knows only what it saw. The
@@ -1013,6 +1025,7 @@ public sealed class InstanceAutoRegistrationService(
         if (delivered.Count == 0
             && failures.SequenceEqual(ledger.Failed, StringComparer.Ordinal)
             && skipped.SequenceEqual(ledger.Skipped)
+            && held.SequenceEqual(ledger.Held)
             && tierRefused.SequenceEqual(ledger.TierRefused))
             return Observable.Return(Unit.Default);
 
@@ -1039,6 +1052,7 @@ public sealed class InstanceAutoRegistrationService(
                 Seeded = already.Union(delivered).OrderBy(x => x, StringComparer.Ordinal).ToImmutableList(),
                 Failed = failures,
                 Skipped = skipped,
+                Held = held,
                 TierRefused = tierRefused,
                 UpdatedAt = DateTimeOffset.UtcNow,
             },
@@ -1791,7 +1805,10 @@ public sealed class InstanceAutoRegistrationService(
         // installs that were never in question.
         return candidate.RefIsProven
             ? Land(candidate, partition)
-            : PartitionContentOwnership.Observe(hub, partition, candidate.Package.Id, logger)
+            // The NON-logging overload: HoldForThePartitionsOwnWriter says the whole thing once,
+            // with the verdict's reason inside it. The logging overload here would warn a second
+            // time about the same hold, and a contract that says "said once" has to mean it.
+            : PartitionContentOwnership.Observe(hub, partition)
                 .SelectMany(ownership =>
                     UnprovenRefHold(ownership, candidate.Source.GitRef) is { } reason
                         ? HoldForThePartitionsOwnWriter(candidate, partition, reason)
@@ -1885,7 +1902,7 @@ public sealed class InstanceAutoRegistrationService(
             })
             .Select(_ => DefaultInstallSummary.Empty with
             {
-                Skipped = [new DefaultInstallSkip(package.Id, reason)],
+                Held = [new DefaultInstallHold(package.Id, reason)],
             });
     }
 
@@ -1901,9 +1918,15 @@ public sealed class InstanceAutoRegistrationService(
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var package = candidate.Package;
 
-        return Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => CatalogLayoutAreas
+        // 🚨 RunAsSystem, not Observable.Using(ImpersonateAsSystem) (#1790). Rx disposes a Using's
+        // resource on whichever thread TERMINATES the inner sequence — for a cross-hub install that
+        // is the owning hub's response thread — so the store and the restore land on different
+        // threads and the boot subscriber is left running as system-security. RunAsSystem opens the
+        // scope at Subscribe and closes it on the way out of that same Subscribe; the whole cold
+        // pipeline is composed inside the factory, so what is ISSUED is still issued impersonated
+        // and the emission-time behaviour is unchanged.
+        return accessService
+            .RunAsSystem(() => CatalogLayoutAreas
                     .InstallOrUpdate(hub, candidate.Source.Source, candidate.Source.GitRef, package, logger)
                     .Take(1)
                     .Do(result => logger.LogInformation(
@@ -2121,6 +2144,16 @@ public record DefaultInstallLedger
         ImmutableList<DefaultInstallSkip>.Empty;
 
     /// <summary>
+    /// The packages the last pass HELD, with the reason each (MeshWeaver#4588) — another writer
+    /// keeps that partition's content current and the pass could prove no commit for the ref it
+    /// resolved. A SNAPSHOT, like <see cref="Skipped"/>, but of a transient fact rather than a
+    /// standing one: the next boot re-derives it from the seal and the partition, so an entry
+    /// disappears by itself the moment either changes. Kept apart from <see cref="Skipped"/> so a
+    /// reader is never told "authorization, not retried" about a hold that lifts on its own.
+    /// </summary>
+    public ImmutableList<DefaultInstallHold> Held { get; init; } = ImmutableList<DefaultInstallHold>.Empty;
+
+    /// <summary>
     /// The default-set packages the registry refused to this instance's PLAN on the last pass
     /// (#4097), typed. A snapshot with <see cref="Skipped"/>'s semantics: an entry drops off the
     /// moment the registry stops refusing the package (a plan upgrade) or stops declaring it in
@@ -2170,6 +2203,21 @@ public readonly record struct DefaultInstallSummary(
         ImmutableList<DefaultInstallSkip>.Empty;
 
     /// <summary>
+    /// The packages this pass HELD, with the reason each (MeshWeaver#4588) — it may not write that
+    /// partition at the ref it could resolve, because another writer keeps the content current.
+    ///
+    /// <para>🚨 Deliberately NOT <see cref="Skipped"/>, and the difference is the whole point of
+    /// keeping two lists: a skip is a STANDING decision about an authorization this lane can never
+    /// hold, and the summary says so ("authorization, not retried"); a hold is a fact about THIS
+    /// boot's ref and this partition's writer, re-derived from scratch on the next one. A seal that
+    /// names this source, or a partition that stops being written by anything else, lifts it with
+    /// no retry and no human. Spelling the two the same way would advertise a permanent refusal
+    /// where there is a transient one — the mirror of the #2536 mistake that made this lane say
+    /// "failed" about a standing decision.</para>
+    /// </summary>
+    public ImmutableList<DefaultInstallHold> Held { get; init; } = ImmutableList<DefaultInstallHold>.Empty;
+
+    /// <summary>
     /// The default-set packages the registry REFUSED to this instance's plan tier this pass
     /// (#4097), typed — package, module, required tier, instance plan. Every one is also in
     /// <see cref="Skipped"/> with the same sentence as its reason; this is the data the ledger
@@ -2208,6 +2256,8 @@ public readonly record struct DefaultInstallSummary(
             .AddRange(other.Failures ?? ImmutableList<string>.Empty),
         Skipped = (Skipped ?? ImmutableList<DefaultInstallSkip>.Empty)
             .AddRange(other.Skipped ?? ImmutableList<DefaultInstallSkip>.Empty),
+        Held = (Held ?? ImmutableList<DefaultInstallHold>.Empty)
+            .AddRange(other.Held ?? ImmutableList<DefaultInstallHold>.Empty),
         TierRefused = (TierRefused ?? ImmutableList<PlanTierRefusal>.Empty)
             .AddRange(other.TierRefused ?? ImmutableList<PlanTierRefusal>.Empty),
         ListingIncomplete = ListingIncomplete || other.ListingIncomplete,
@@ -2220,8 +2270,29 @@ public readonly record struct DefaultInstallSummary(
         + (Failures is { Count: > 0 } f ? $" — FAILED: [{string.Join(", ", f)}]" : "")
         + (Skipped is { Count: > 0 } s
             ? $" — SKIPPED (authorization, not retried): [{string.Join(", ", s.Select(x => x.Package))}]"
+            : "")
+        + (Held is { Count: > 0 } h
+            ? " — HELD (another writer owns the partition; re-derived next boot): "
+              + $"[{string.Join(", ", h.Select(x => x.Package))}]"
             : "");
 }
+
+/// <summary>
+/// One package this unattended pass did not write, because it may not write that partition at the
+/// ref it could resolve (MeshWeaver#4588): another writer keeps the content current and this boot
+/// could prove no commit. Recorded on the <see cref="DefaultInstallLedger"/> beside the skips so
+/// the decision is diagnosable without grepping a boot log.
+///
+/// <para>🚨 A hold is NOT a <see cref="DefaultInstallSkip"/>. A skip is an authorization this lane
+/// can never obtain — standing, and nothing but an event outside it changes the answer. A hold is
+/// about THIS boot's ref and THIS partition's writer: it is re-derived from scratch every pass, so
+/// a seal that names the source, or a partition that stops being written by anything else, lifts it
+/// with no retry and nobody's intervention. Nor is it a failure: retrying cannot prove a ref.</para>
+/// </summary>
+/// <param name="Package">The package id.</param>
+/// <param name="Reason">Why it was held — who owns the partition's content, and which ref this boot
+/// could resolve.</param>
+public sealed record DefaultInstallHold(string Package, string Reason);
 
 /// <summary>
 /// One package the unattended default install deliberately does not act on, and why (#2536): the

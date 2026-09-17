@@ -211,7 +211,7 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
         var first = await Installer.Completed.FirstAsync().Timeout(TimeSpan.FromSeconds(180))
             .Await(TestContext.Current.CancellationToken);
         first.Packages.Should().Equal(new[] { Package });
-        first.Skipped.Should().BeEmpty(
+        first.Held.Should().BeEmpty(
             "nothing else writes this partition, so there is nothing to hold — a hold here would "
             + "make every assertion below pass for the wrong reason");
         (await Record())!.InstalledFromRef.Should().Be("main");
@@ -251,9 +251,13 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
         second.Failed.Should().Be(0,
             "a hold is not a failure — no retry can prove a ref, and advertising a defect where "
             + "there is a standing decision is the #2536 mistake one lane over");
-        var held = second.Skipped.Should().ContainSingle(s => s.Package == Package,
+        var held = second.Held.Should().ContainSingle(h => h.Package == Package,
             "the hold is RECORDED, once, with its reason — an install that will never land here is "
             + "exactly the quiet 'my plugin never updates' this lane must not become").Subject;
+        second.Skipped.Should().BeEmpty(
+            "and it is NOT spelt as a terminal authorization skip: the summary renders those "
+            + "'authorization, not retried', while this one lifts by itself the moment a seal names "
+            + "the source or the partition stops being written by anything else");
         held.Reason.Should().Contain(Package,
             "the reason names the partition it is about, or nobody can act on it");
         held.Reason.Should().Contain("MeshWeaver#4588");
@@ -262,10 +266,16 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
             + "delta computed against a claim nothing wrote");
 
         // ── The control: the SAME sync-owned partition, once the ref IS proven. ────────────────
+        // 🚨 What this control does and does not say. It pins that the gate keys on PROVENANCE —
+        // a seal-named commit installs, which is #4259'''s lane and must not be held. It does NOT say
+        // that installing a proven tree of THIS repository into a partition synced from ANOTHER one
+        // is safe: nothing compares the two repositories, and that gap is MeshWeaver#4625. The
+        // partition here is connected to a different repository precisely so the sync cannot fetch
+        // through this transport and pollute the witness; the arm is about the ref, not the repo.
         StageSeal(RepoFullName, SealedSha, complete: true);
         var third = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120))
             .Await(TestContext.Current.CancellationToken);
-        third.Skipped.Should().BeEmpty(
+        third.Held.Should().BeEmpty(
             "the control: a PROVEN ref lands the same tree the partition's own writer is held to, "
             + "so the two agree and nothing is held — the gate must not read 'this partition has a "
             + "second writer' as 'never install here again'");
