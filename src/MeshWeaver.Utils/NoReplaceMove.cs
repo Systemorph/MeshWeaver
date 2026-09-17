@@ -154,26 +154,48 @@ internal sealed record NoReplaceMoveOps(
             _ => { },
             error => $"platform error {error}");
 
+    /// <summary>
+    /// The Windows step: <c>MoveFileExW</c> with <b>no flags at all</b>.
+    ///
+    /// <para>🚨 Deliberately NOT <see cref="File.Move(string,string,bool)"/> (Copilot's review of
+    /// #4547). The BCL passes <c>MOVEFILE_COPY_ALLOWED</c>, so across volumes it COPIES — the very
+    /// thing this primitive exists to remove — and a path-root comparison does not catch the case
+    /// that matters: a volume mounted INTO a folder shares its root with the volume it is mounted
+    /// on. With the flag absent the call cannot copy — a cross-volume move is refused with
+    /// <c>ERROR_NOT_SAME_DEVICE</c>, and an existing target answers
+    /// <c>ERROR_ALREADY_EXISTS</c>/<c>ERROR_FILE_EXISTS</c>, which is the "another writer published
+    /// it first" outcome.</para>
+    /// </summary>
     private static NoReplaceMoveOps WindowsOps() => new(
         (source, destination) =>
         {
-            // MoveFileEx without MOVEFILE_REPLACE_EXISTING is a rename on one volume — but .NET passes
-            // MOVEFILE_COPY_ALLOWED, so across volumes it would COPY. Refused before it can.
-            if (!string.Equals(Path.GetPathRoot(source), Path.GetPathRoot(destination), StringComparison.OrdinalIgnoreCase))
-                return new MoveStepResult(MoveStepOutcome.Failed, 17 /* ERROR_NOT_SAME_DEVICE */);
-            try
-            {
-                File.Move(source, destination, overwrite: false);
+            const int errorFileExists = 80;
+            const int errorAlreadyExists = 183;
+            if (WindowsNative.MoveFileExW(source, destination, 0))
                 return MoveStepResult.Done;
-            }
-            catch (IOException e) when (File.Exists(destination))
-            {
-                return new MoveStepResult(MoveStepOutcome.Exists, e.HResult);
-            }
+            var error = Marshal.GetLastPInvokeError();
+            return new MoveStepResult(
+                error is errorFileExists or errorAlreadyExists
+                    ? MoveStepOutcome.Exists
+                    : MoveStepOutcome.Failed,
+                error);
         },
+        // NTFS has hard links, but the step above never answers Unsupported: a rename it cannot make
+        // is REFUSED, and without MOVEFILE_COPY_ALLOWED it cannot have copied anything on the way.
         (_, _) => new MoveStepResult(MoveStepOutcome.Unsupported, 0),
         _ => { },
-        error => $"Windows error {error}");
+        Marshal.GetPInvokeErrorMessage);
+
+    private static class WindowsNative
+    {
+        [DllImport("kernel32.dll", EntryPoint = "MoveFileExW", SetLastError = true,
+            CharSet = CharSet.Unicode, BestFitMapping = false)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool MoveFileExW(
+            [MarshalAs(UnmanagedType.LPWStr)] string existingFileName,
+            [MarshalAs(UnmanagedType.LPWStr)] string newFileName,
+            uint flags);
+    }
 
     /// <summary>The POSIX steps, parameterised by the one platform difference that matters here: the
     /// error numbers and the no-replace rename call.</summary>
