@@ -1803,8 +1803,39 @@ public sealed class InstanceAutoRegistrationService(
         // the branch tip, and that is what may not be written into a partition somebody else keeps
         // current. Asking the seam for every candidate would put a bounded read in front of
         // installs that were never in question.
+        // 🚨 GATE 1d (MeshWeaver#4625) — a PROVEN ref still has to be the partition's OWN
+        // repository. #4259 pins both writers to a commit, which makes them agree only if the two
+        // commits are trees of the same repository; where a package's `targetPartition` is
+        // connected to a different repository — or a different SUBDIRECTORY of one — both writers
+        // are pinned, both are "proven", and they still land two different trees. Nothing verified
+        // that until now, and Copilot's review of #4619 spotted that the PR's own control arm
+        // configured exactly this mismatch.
+        //
+        // 🚨 It holds ONLY on a DEFINITE disagreement. "Unknown" is the default answer of every
+        // provider that has not implemented the identity seam, so treating it as a mismatch would
+        // hold every proven install on the fleet's normal shape — which is the stated cost that
+        // kept #4625 open rather than folded into #4619. See
+        // PartitionContentOwnership.ImportedFromAnotherRepository for the full asymmetry.
         return candidate.RefIsProven
-            ? Land(candidate, partition)
+            // 🚨 The folder is the SOURCE's configured prefix PLUS the module's own, through the one
+            // implementation provisioning uses (review on #4649). A package listing stores
+            // `SourceFolder` relative to `Subdir`, so passing it alone would compare `repo#module`
+            // with the real `repo#prefix/module` and FALSELY HOLD the normal same-tree shape.
+            //
+            // 🚨 …and RunAsSystem, because this gate READS. The boot pass is subscribed on the task
+            // pool with no system scope, and `_GitSync` nodes are RLS-filtered: without it the read
+            // sees no config, answers "no mismatch", and gate 1d is INERT on exactly the deployed
+            // instances it exists for — a gate that cannot fail, which is the one shape this whole
+            // family of fixes is about. The publication-arrival path takes the same precaution.
+            ? hub.ServiceProvider.GetRequiredService<AccessService>()
+                .RunAsSystem(() => PartitionContentOwnership.ImportedFromAnotherRepository(
+                    hub, partition, candidate.Source.RepoPath,
+                    ModuleDiscoveryService.Subdirectory(
+                        candidate.Source.Subdir,
+                        candidate.Package.SourceFolder ?? candidate.Package.Id)))
+                .SelectMany(mismatch => mismatch is { } reason
+                    ? HoldForThePartitionsOwnWriter(candidate, partition, reason)
+                    : Land(candidate, partition))
             // The NON-logging overload: HoldForThePartitionsOwnWriter says the whole thing once,
             // with the verdict's reason inside it. The logging overload here would warn a second
             // time about the same hold, and a contract that says "said once" has to mean it.
