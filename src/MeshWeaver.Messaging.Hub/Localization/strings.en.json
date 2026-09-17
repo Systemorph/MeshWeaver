@@ -449,6 +449,8 @@
   "menu.skillsTooltip": "Reusable skills — global, space, and user",
   "menu.providers": "Providers",
   "menu.providersTooltip": "AI providers — endpoints + keys",
+  "providers.harnessesTitle": "Execution harnesses",
+  "providers.harnessesIntro": "Install a harness into **your** thread picker, then use that package's own connection flow. Your account is never shared with this mesh.",
   "menu.viewPublicProfileTooltip": "Preview your public profile as visitors see it",
   "menu.editProfileTooltip": "Edit your bio, links, and showcase",
   "menu.editHomePageTooltip": "Edit this home page's markdown",
