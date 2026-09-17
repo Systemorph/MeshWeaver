@@ -225,8 +225,18 @@ public sealed class IoPool : IIoPool, IDisposable
     // an admitted leaf's cancellation already costs on the same path. Under a fully saturated
     // ThreadPool it is queued like any other pool work — 41 of 50 refusals inside 500 ms, max
     // 291 ms — and that is the honest trade: a refusal now waits for the pool the way the work it
-    // refuses would have, rather than borrowing the caller's stack. Nothing joins on it (a refused
-    // leg holds no permit and no admission region), so a delayed refusal cannot hold teardown.
+    // refuses would have, rather than borrowing the caller's stack.
+    //
+    // 🚨 THE POOL joins nothing on a refusal — it holds no permit and no admission region, so
+    // Drain()/Dispose() neither wait for it nor report it. A CONSUMER can: RoutingGrain.Dispatch
+    // releases its RoutingQuiescence slot from the leg's `.Finally`, and
+    // RoutingQuiescenceSiloParticipant holds the silo stop until that count reaches zero. So under a
+    // saturated ThreadPool a refusal delays that hold — bounded by the hold's own 30 s budget, after
+    // which it names the residual and the silo proceeds. That bound is the trade this makes: a
+    // bounded delay under saturation, against an unbounded stack (the DrainNext recursion above) and
+    // downstream teardown on a hub turn. A dedicated thread would dodge the ThreadPool and
+    // reintroduce the worse half — every refusal's downstream teardown serialised behind the slowest
+    // one, which is the shape #2394 was about.
     private static IObservable<T> Cancelled<T>() =>
         Observable.Throw<T>(new OperationCanceledException(DisposedMessage), TaskPoolScheduler.Default);
 

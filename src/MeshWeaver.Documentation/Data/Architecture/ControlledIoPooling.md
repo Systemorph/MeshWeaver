@@ -889,9 +889,18 @@ thread at 7–12 µs, and the recursion test's spread collapses.
 **What it costs, measured rather than asserted.** A refusal takes 4.4 µs at the median instead of
 0.5 µs (p95 9.8 µs) — inside the 13–30 µs an admitted leaf's cancellation already costs. With every
 ThreadPool worker deliberately saturated, 41 of 50 refusals arrived within 500 ms and the slowest took
-291 ms: a refusal now queues for the pool the way the work it refuses would have. Nothing joins on it
-— a refused leg holds no permit and no admission region — so a delayed refusal cannot hold teardown;
-what it delays is the caller's own `.Finally` bookkeeping.
+291 ms: a refusal now queues for the pool the way the work it refuses would have.
+
+🚨 **And a delayed refusal is not free at teardown, which is worth stating precisely.** The POOL joins
+nothing on it — no permit, no admission region, so `Drain()`/`Dispose()` neither wait for it nor report
+it. A CONSUMER does: `RoutingGrain.Dispatch` releases its `RoutingQuiescence` slot from the leg's
+`.Finally`, and `RoutingQuiescenceSiloParticipant` holds the silo stop until that count reaches zero.
+So under a saturated ThreadPool a refusal can delay that hold, bounded by the hold's own 30 s budget,
+after which it names the residual and the silo proceeds. That is the trade: a *bounded* delay under
+saturation, against an *unbounded* stack and downstream teardown on a hub turn. A dedicated thread
+would dodge the ThreadPool and buy back the worse half — every refusal's downstream teardown
+serialised behind the slowest one, which is the shape #2394 is about — so the shared pool is the
+deliberate choice, not the convenient one.
 
 🚨 **One cell in that matrix is a different defect and is NOT fixed here:** `InvokeBlocking` built
 before a `Drain()` and subscribed after delivers **nothing at all** — 0 terminals in 50 subscribes.

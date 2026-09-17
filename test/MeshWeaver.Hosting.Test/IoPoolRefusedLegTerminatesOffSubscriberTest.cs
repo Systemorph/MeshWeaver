@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -83,14 +84,14 @@ public class IoPoolRefusedLegTerminatesOffSubscriberTest
     [Fact]
     public async Task ARefusedLeg_NeverTerminatesOnTheSubscribersThread()
     {
-        var violations = new List<string>();
+        var violations = ImmutableArray<string>.Empty;
 
         foreach (var cell in Cells())
         {
             var outcome = await Refuse(cell);
 
             if (outcome.Kind == "none")
-                violations.Add($"{cell.Name}: no terminal at all");
+                violations = violations.Add($"{cell.Name}: no terminal at all");
             // 🚨 THE THREAD IS THE PROPERTY — not "was the subscriber still inside Subscribe()".
             // A pool thread delivering CONCURRENTLY with the subscriber's call is the correct
             // behaviour and sets that flag whenever it wins the handful of instructions between
@@ -100,7 +101,7 @@ public class IoPoolRefusedLegTerminatesOffSubscriberTest
             // (`onSubscriberThread=True, insideSubscribe=True`, the pre-fix reading, 50/50) from a
             // late delivery on the same thread.
             else if (outcome.OnSubscriberThread)
-                violations.Add($"{cell.Name}: {outcome.Kind} on the subscriber's thread "
+                violations = violations.Add($"{cell.Name}: {outcome.Kind} on the subscriber's thread "
                     + $"(insideSubscribe={outcome.InsideSubscribe})");
         }
 
