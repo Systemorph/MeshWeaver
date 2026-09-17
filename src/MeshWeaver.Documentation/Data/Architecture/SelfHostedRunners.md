@@ -253,6 +253,25 @@ gh api --paginate "repos/Systemorph/<repo>/actions/runs/<id>/jobs?per_page=100" 
   --jq '.jobs[] | [.name, .conclusion, .runner_name] | @tsv'
 ```
 
+Measured before the switch merged, on two private callers pinned to the change's commit (both probe
+pull requests closed unmerged). Every reusable-lane job that started ran on ARC, zero on
+`GitHub Actions <n>`, with the conclusions of the same jobs on each repository's green `main`:
+
+| Caller run | Job (lane) | Runner | Resolved through |
+|---|---|---|---|
+| MeshWeaver.Manufacturing 35193445367 | `validate / Validate node repos` | `aks-silos-jk2g2-…` | `MW_RUNNER` |
+| | `compile-check / Compile every NodeType (vs core)` | `aks-silos-dind-hgcc6-…` | `MW_RUNNER_DOCKER` |
+| | `test-repos / Plan the gate's shards`, `… / Compile + render node repos` | `aks-silos-jk2g2-…` | `MW_RUNNER` |
+| | `test-repos / Gate shard 1/1` — the call passed **no** `runner:` | `aks-silos-dind-hgcc6-…` | the input DEFAULT → `MW_RUNNER_DOCKER` |
+| MeshWeaver.SocialMedia 35194455552 | `Module bundle / Select the affected bundles`, `… / All selected bundles built` | `aks-silos-jk2g2-…` | `MW_RUNNER` |
+| | `Module bundle / Warm the shared build environment (once)` (+ the zstd step) | `aks-silos-dind-hgcc6-…` | `MW_RUNNER_DOCKER` |
+| | `Module bundle / Build the workspace (one global build)` — no `workspace-runner:` passed | `aks-silos-dind-hgcc6-…` | the input DEFAULT → `MW_RUNNER_DOCKER` |
+
+The gate-shard row is the decisive one: `MW_RUNNER_DOCKER` is `private`, so core — where the
+default expression is written — cannot see it; only the caller's `vars` context can have resolved it.
+The push/schedule-only jobs (`supersede`, `publish-bake`, `tag-modules`, `ci-failure`,
+`resolve-locks`) do not run on a pull request and are proven on the first `main` run after merge.
+
 ## Moving a job family onto it
 
 **One family at a time, behind a variable, hosted as the fallback.** The first candidate is the
