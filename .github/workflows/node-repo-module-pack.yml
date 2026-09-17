@@ -2637,7 +2637,7 @@ jobs:
       # The global workspace build's outputs — every container entry's assemblies, closure
       # manifests and the one build log. Container packs consume THIS; sdk entries ignore it.
       - name: Fetch the global workspace build
-        if: ${{ steps.plan.outputs.fetch_workspace == 'true' }} && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
+        if: steps.plan.outputs.fetch_workspace == 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         uses: actions/download-artifact@v8
         with:
           name: workspace-build-${{ needs.select.outputs.lane }}
