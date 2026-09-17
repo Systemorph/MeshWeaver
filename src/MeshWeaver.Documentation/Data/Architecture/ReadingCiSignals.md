@@ -1186,8 +1186,8 @@ and MeshWeaver, deliberately not one payload:
 | `404` *"The specified blob does not exist"* | 1 | the job uploaded no log at all |
 | `410 Gone` | 6 | the log outlived its retention |
 
-So there was never anything exotic to parse. Two rules follow, and both are now in every fixed
-steward:
+So there was never anything exotic to parse. **Three** rules follow — and read the next paragraph
+before assuming any given steward keeps them:
 
 - 🚨 **Three outcomes, not one.** `404` and `410` are **facts about the job** — nothing was uploaded
   (what a runner that died before writing one looks like), or the log expired — and they *decline*,
@@ -1202,6 +1202,23 @@ steward:
   the same defect shape as a scheduled lane whose honest red goes into an empty room. The decision
   belongs in the job **summary**, and a job judged without a log should raise a `::warning::` — which
   is visible on the run without pretending the steward itself failed.
+
+🚨 **WHICH STEWARD KEEPS WHICH — do not read the three rules as a description of the fleet.** They are
+what the four stewards fixed on 2026-09-17 do (MeshWeaver.Plugins and the three satellites). **Core's
+`#4554` fix implements the READ and none of the three**, verified against
+`.github/scripts/retry-known-transients.py` on `main`:
+
+| | core (`#4554`) | Plugins + the three satellites |
+|---|---|---|
+| reads the log at all | ✅ REST, no `gh` | ✅ REST / `curl`, no `gh` |
+| `404`/`410` distinguished from a blind read | ❌ `read_job_log` maps **every** `HTTPError` to one `LogUnreadable` → RED | ✅ they decline, naming which |
+| BOM and escapes stripped before matching | ❌ the raw decoded body is matched directly | ✅ |
+| the decision reaches the summary / a `::warning::` | ❌ neither appears in the script | ✅ |
+
+Core's choice is defensible on its own terms — its contract is *"I cannot see my input ⇒ RED"* and it
+has no annotation path to fall back on — but it means a **runner death in core reds the steward job**,
+because a job that uploaded no log is indistinguishable there from an API failure. That is named
+follow-up, not a claim about today.
 
 > **Fixed in core, 2026-09-17 (#4534).** Core's steward is now
 > `.github/scripts/retry-known-transients.py`: it reads the logs endpoint over plain REST — no `gh`,
@@ -1230,11 +1247,14 @@ steward:
 >   disabled**: its annotation path — runner death, budget refusal — reads no log at all, so
 >   `rerun-failed-jobs` has been reachable there throughout. The log fix adds a second proof shape
 >   to a lane that already acts.
-> * **Crm / Reinsurance / SocialMedia** (Crm#125, Reinsurance#218, SocialMedia#202) *are* held —
->   their shell stewards could retry **nothing**, so merging is the moment retries begin. They are
->   parked as **drafts**, because each of those repos runs `auto-arm.yml` and would otherwise merge
->   them on green with that call never made. Draft is the documented opt-out; weakening the change
->   to hold it would not be.
+> * **Crm / Reinsurance / SocialMedia** (Crm#125, Reinsurance#218, SocialMedia#202) were the ones the
+>   hold applied to — their shell stewards could retry **nothing**, so merging is the moment retries
+>   begin there. They were parked as **drafts** while that call was open, because each of those
+>   repos runs `auto-arm.yml` and would otherwise have merged them on green with the call never
+>   made. **The maintainer took the call on 2026-09-17 and it is MERGE**, on this reasoning: humans
+>   press re-run today *because* the steward is blind, so an evidence-gated automatic retry is
+>   narrower than the status quo. The `#4491`/`#4493` wave that closes the annotation erasure is
+>   being landed separately.
 >
 > 🚨 **And the hazard belongs to `rerun-failed-jobs`, not to the steward.** #4491's own measurement
 > is a re-run of an infrastructure death — *the ordinary response* — and a human pressing the same
