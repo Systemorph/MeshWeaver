@@ -309,6 +309,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Deploying a plugin change — merging is not shipping](DeployingPluginChanges)
 - [Module Activation Head Ownership](ModuleActivationHeadOwnership) — which generation a deployment runs is a decision every replica writes to ONE shared file and replaces unconditionally; why the same-content case is already benign, why the regression propagates into the proposed module set rather than being bounded by it, why routing the write to an owning hub is a cycle (boot reads the record before the mesh exists), and what deriving the head costs measured rather than estimated
 - [Module Adoption Policy](ModuleAdoptionPolicy)
+- [Publishing A File On A Shared Volume](AtomicFilePublication) — a name readers watch must appear holding the whole file or not appear at all, and `File.Move(…, overwrite: false)` does not promise that: on a volume without hard links (Azure Files) its failed rename COPIES into the final name, which is then incomplete and exclusively locked for the length of the copy (measured: 21,573 sharing violations, 52,619 incomplete reads, ZERO "absent"). The primitive that replaces it, what it refuses rather than copies, and what is still not atomic
 - [Module Build Architecture](ModuleBuildArchitecture)
 - [Module Closure Accounting](ModuleClosureAccounting)
 - [The Module Identity Anchor](ModuleIdentityAnchor)
