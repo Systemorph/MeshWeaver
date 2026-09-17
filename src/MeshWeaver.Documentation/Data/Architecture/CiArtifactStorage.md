@@ -38,6 +38,64 @@ SocialMedia's 11.38 GB of cache sits beside a *9 GB* average storage charge, whi
 only if cache is outside it. Cache is a capacity question (an idle entry pushes a live one out), not
 a cost one.
 
+## 🚨 You pay for retention PLUS a deletion lag of 2–6 days
+
+The artifact inventory and the invoice disagreed by 2.4x, and the explanation is not compression and
+not logs. **An artifact keeps costing money after it expires, until GitHub actually deletes it**, and
+that lag is days.
+
+Integrating every artifact's bytes over 2026-09-16 — alive from `created_at` to `expires_at` — gives
+9,044 GB-hours for Plugins against 21,904 billed. Re-integrating with a deletion lag added to each
+expiry, and fitting the lag per repository, reconciles **every repo to within 1%**:
+
+| repository | best-fit lag | modelled GBh | billed GBh |
+|---|--:|--:|--:|
+| MeshWeaver.Plugins | 2.8 d | 21,885 | 21,904 |
+| MeshWeaver.Reinsurance | 5.0 d | 1,183 | 1,189 |
+| MeshWeaver.Crm | 5.8 d | 730 | 729 |
+| MeshWeaver.Manufacturing | 4.0 d | 228 | 228 |
+| MeshWeaver.Education | 4.8 d | 1,249 | 1,259 |
+| MeshWeaver.SocialMedia | 2.2 d | 584 | 573 |
+
+The artifacts API corroborates it directly: **1,070 GB of Plugins artifacts are listed `expired:
+true` and have not been deleted**, 506 GB of them expired within the last two days.
+
+Three consequences, and they reorder what is worth doing:
+
+1. **A 1-day artifact is billed for four to seven days.** The scratch families — `platform-refs-*`,
+   `workspace-build-*`, `compile-check-refs`, `portal-hosts-bin-*` — are consumed inside a 40-minute
+   run and declare the shortest retention GitHub allows, and they are still **52% of the fleet's
+   daily storage cost**.
+2. **Explicit deletion beats shortening `retention-days`.** `DELETE
+   /repos/{o}/{r}/actions/artifacts/{id}` is immediate; expiry is followed by days of billed limbo.
+   That is the argument for the fleet cleanup job (Memex `actions-cleanup.yml`), not just for
+   smaller retention numbers.
+3. **Moving the bytes off GitHub avoids both**, which is what the rest of this page is about.
+
+### And the declared retention is capped at 7 days anyway
+
+Measured off `expires_at`: `publication-inputs` declares `retention-days: 30` and is created with a
+**7**-day expiry; so are `teardown-stragglers` (14) and `test-evidence` (14). The repositories'
+"Artifact and log retention" setting is 7 days and silently clamps four declarations in the fleet —
+`gate-coredumps` (15) among them, so the SIGSEGV evidence everyone reaches for lives a week, not a
+fortnight, whatever the YAML says.
+
+### What each family actually costs, per day, fleet-wide
+
+With the lag included, the model totals **$8.78/day against $8.70 billed**:
+
+| family | $/day | share |
+|---|--:|--:|
+| `module-bundle-*` | $2.40 | 27.3% |
+| `bake-*` | $1.51 | 17.2% |
+| `workspace-build-*` | $1.38 | 15.7% |
+| `platform-refs-*` | $1.28 | 14.6% |
+| `compile-check-refs` | $1.10 | 12.5% |
+| `portal-hosts-bin-*` | $0.78 | 8.8% |
+| `e2e-*` (Education) | $0.19 | 2.2% |
+| `module-pack-tool-*` | $0.13 | 1.4% |
+| everything else | $0.03 | 0.3% |
+
 ## What the 381.5 GB in Plugins actually is
 
 | bytes | artifact family | retention | who reads it |
