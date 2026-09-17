@@ -91,9 +91,12 @@ paths and include closures. Two consequences:
   fingerprint does not cover, so importing a new configuration over held sources would compile a
   combination neither the bake nor this mesh has ever seen.
 - **Sharing closes over the hold.** A source node shared by a held type and an unheld one is held, so
-  the unheld type's input cannot move either — and it is held too, transitively to a fixed point,
-  with the reason naming the type it shares with. Holding one side only would move the sharer's
-  fingerprint onto a fold no bundle carries, which is the very thing this gate exists to prevent.
+  the unheld type's input cannot move either — and an unheld type that is itself ADOPTED is therefore
+  held too, transitively to a fixed point, with the reason naming the source it shares. Holding one
+  side only would move the sharer's fingerprint onto a fold made of the held node's old text beside
+  the tree's new siblings, which no bundle carries either — the very thing this gate exists to
+  prevent. A sharer that is NOT adopted takes no record: its input is held as a consequence, and it
+  simply recompiles from the text that is there, which is what a locally compiled type does anyway.
 
 ## What a partially-held Space is — the scope call
 
