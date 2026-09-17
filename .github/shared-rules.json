@@ -172,7 +172,15 @@
     {
       "id": "dispose-to-serve-new-state",
       "hub": "Systemorph/MeshWeaver",
-      "required-in": ["Systemorph/MeshWeaver"],
+      "required-in": [
+        "Systemorph/MeshWeaver",
+        "Systemorph/MeshWeaver.Plugins",
+        "Systemorph/MeshWeaver.Education",
+        "Systemorph/MeshWeaver.Reinsurance",
+        "Systemorph/MeshWeaver.SocialMedia",
+        "Systemorph/MeshWeaver.Manufacturing",
+        "Systemorph/Memex"
+      ],
       "slots": ["reference"],
       "why": [
         "Maintainer directive, 2026-09-17, verbatim across three messages: 'the grain keeps serving",
@@ -195,6 +203,10 @@
         "Landed hub-first in three steps, per SharedRuleBlocks.md: (1) core wraps its copy and",
         "registers the block with `required-in` naming only the hub — green on its own, and the id",
         "becomes known; (2) the six spoke copies; (3) `required-in` widened to all seven.",
+        "",
+        "Landed: step 1 core#4641; step 2 Plugins#2050, Education#351, Reinsurance#220,",
+        "SocialMedia#205, Manufacturing#101, Memex#409; step 3 this entry's widening. Crm#127",
+        "carries the same text, unregistered — see the paragraph above.",
         "",
         "Systemorph/MeshWeaver.Crm is deliberately NOT here. It is absent from `repos` above, so this",
         "gate never reads it, and adding it is a separate change: it would require the read-only",
