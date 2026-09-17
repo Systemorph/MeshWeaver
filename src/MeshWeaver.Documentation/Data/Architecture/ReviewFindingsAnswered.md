@@ -49,6 +49,47 @@ gh api "repos/Systemorph/MeshWeaver/pulls/<n>/comments/<comment-id>/replies" -f 
 🚨 Quote the path. Unquoted, the shell reads `<n>` as a redirection and the command fails
 before `gh` runs — which looks like a broken instruction rather than a quoting mistake.
 
+### 🚨 Answering the threads is NECESSARY AND NOT SUFFICIENT — re-run the `pull_request` run
+
+This is the part that will cost you an hour if nobody says it, and it did.
+
+`review-answered.yml` runs on several events. Replying to a thread fires it on
+`pull_request_review_comment`, and that run goes GREEN and publishes a check-run named
+`Automatic review answered` — **in its own check suite**. The check-run the ruleset actually counts
+is the one from the **`pull_request`** event, which already ran, before your replies existed, and
+FAILED. Nothing re-runs it for you.
+
+So the steady state after answering every thread correctly is:
+
+* the newest `Automatic review answered` check-run says **success**,
+* `check-review-answered`'s own log says `GREEN — threads opened by the automatic reviewer: 5,
+  answered by a person: 5`,
+* and `statusCheckRollup` — which is what branch protection reads — still says **FAILURE**, citing
+  the older run,
+* so `mergeStateStatus` is **BLOCKED**, the pull request never enters the queue, and REST's
+  `mergeable_state: blocked` is indistinguishable from waiting a turn.
+
+**The remedy is to re-run the run that counts**, which re-evaluates live GitHub state and lands green
+in the suite branch protection reads:
+
+```bash
+# the check-run the rollup cites → its workflow run → re-run that
+gh api graphql -f query='{repository(owner:"Systemorph",name:"MeshWeaver"){
+  pullRequest(number:<n>){commits(last:1){nodes{commit{statusCheckRollup{
+  contexts(last:100){nodes{... on CheckRun{name conclusion databaseId}}}}}}}}}}'
+gh api "repos/Systemorph/MeshWeaver/check-runs/<databaseId>" --jq .details_url
+gh run rerun <run-id> --repo Systemorph/MeshWeaver
+```
+
+Measured 2026-09-17 on #4652: `BLOCKED` / rollup `FAILURE` → `CLEAN` / rollup `SUCCESS` /
+`isInMergeQueue: true`, within a minute of the re-run. Re-arming auto-merge first did **not** clear
+it — the rollup is not stale in the usual sense, it is citing a real, still-current failure from
+another suite.
+
+🚨 This is a legitimate re-run, not a "re-run and see": the check reads live GitHub state, and
+that state CHANGED when the replies landed. It is not the merge-queue re-run the steward forbids,
+and it is not `rerun-failed-jobs` on a test job reading a previous attempt's artefact.
+
 A PR-level issue comment does NOT count, however thorough — that mistake cost the same session
 another round-trip — and neither does resolving the thread. The check's own log names each
 unanswered thread with its URL, its file and line, and the finding's first line, so it tells you
