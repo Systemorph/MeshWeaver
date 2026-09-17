@@ -183,8 +183,12 @@ multiplier from every fan-out that survives, and it is independent of anchoring.
 
 Rows 8 and 9 came from a sweep of the NODE CONTENT of the six satellite repositories plus
 MeshWeaver.Plugins: every `nodeType:` string literal in a NodeType's `Source/*.cs` and in an
-executable `Code` node's `content.code`, judged by the same predicate the planner uses (a concrete
-`path:`/`namespace:` first segment, `partitions:all`, or a registered `QueryRoutingRule`). Content
+executable `Code` node's `content.code`, judged by the same predicate the planner uses. That
+predicate is `PostgreSqlPartitionedMeshQuery.Judge` over `ParsedQuery.IsSufficientlySpecified`, and
+it SERVES a query on any of four grounds — a concrete `path:`/`namespace:` first segment, several
+`path:`s (`ParsedQuery.Paths`), a wildcard-namespace filter (`ExtractNamespacePatterns`), or
+`partitions:all` — plus a fifth outside it, a registered `QueryRoutingRule` that names the partition
+the text does not (`nodeType:User` → `Auth`). Content
 is the blind spot rows 6 and 7 named: it compiles at RUNTIME, so `dotnet build` never sees it and
 `UnanchoredQueryAllowFileTest`, which scans `src/`, never read it.
 
