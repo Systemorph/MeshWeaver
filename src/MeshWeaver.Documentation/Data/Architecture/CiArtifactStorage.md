@@ -171,7 +171,7 @@ did. That is the degrade rule doing its job, and it is why the seam can land fir
 
 ## See also
 
-- [ArtifactRetentionInterlock](ArtifactRetentionInterlock) — the same sentence for the container
+- [ArtifactRetentionInterlock](../ArtifactRetentionInterlock) — the same sentence for the container
   registry: a cleanup whose protection set is stale deletes something still in use.
-- [ModuleBuildArchitecture](ModuleBuildArchitecture) — the lane this seam sits inside.
-- [BuildCoordination](BuildCoordination) — the ledger that decides what is rebuilt at all.
+- [ModuleBuildArchitecture](../ModuleBuildArchitecture) — the lane this seam sits inside.
+- [BuildCoordination](../BuildCoordination) — the ledger that decides what is rebuilt at all.
