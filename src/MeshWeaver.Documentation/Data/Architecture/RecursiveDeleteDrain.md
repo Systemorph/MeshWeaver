@@ -262,6 +262,24 @@ unmeasured pool comes to look like an idle one. `IoPoolRegistry.Snapshot()` enum
 that EXIST and mints none, for the same reason: `Get` is a resolver, and a readout built on it
 answers a wrong name by creating that pool and reporting it, brand new, as idle.
 
+🚨 **And the verdict is only as wide as the word "waiting", which had a hole in it.** Both halves of
+the clean sentence are computed from `CurrentlyWaiting` and the `QueueWait` buckets, and both used to
+start counting **at the gate**. Since the admission moved to the subscriber's thread (#4555), three
+of the four entry points reach that gate one ThreadPool hop later — so a leaf the pool had ACCEPTED,
+and that `Drain()` was already waiting for, counted in neither number. Measured on `main`: one leaf
+parked in that interval read `InFlight=0 Waiting=0` and the report returned the CONCLUSIVE sentence
+over it; and with the ThreadPool saturated, eight leaves waited up to **7,850 ms** from accepted to
+running while the distribution's maximum read **0.2 ms**. An exoneration computed from a number that
+cannot see the wait is precisely the instrument failure this issue is named after — one level inside
+the instrument built to settle it.
+
+The clock now starts where the admission is taken, which is what `InvokeBlocking` always did, so
+"waiting" means **accepted and not yet running** on every entry point and the verdict covers the
+latency an operator reads it as covering. The reading it changes is the pool's, not this drain's: a
+`pg:` write pool whose leaf is queued behind ThreadPool starvation now says so instead of reading
+innocent. Pinned by `IoPoolQueueReadingCoversAcceptedWorkTest`, whose fourth case is `InvokeBlocking`
+— green before and after, because it is the precedent the other three now follow.
+
 ## Where this is pinned
 
 `test/MeshWeaver.Graph.Test/DeleteDrainCompletionTest.cs` drives both symptoms on a real Monolith
