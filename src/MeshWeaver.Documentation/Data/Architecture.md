@@ -155,7 +155,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Storage Adapter Implementation](StorageAdapterImplementation)
 - [Change-Feed Isolation](ChangeFeedIsolation) — one throwing subscriber must never starve the others
 - [In-Memory Child Index Consistency](InMemoryChildIndexConsistency) — a listing taken while the in-memory store re-indexed came back short, a synced query cached it for good, and one NodeType's compile then failed on files that were there; the three rules that keep a reader from ever seeing a half-built index, and how it composes with the mid-install judgement race (#4280)
-- [A Container Registry in Memex](ContainerRegistryInMemex) — PROPOSAL: serving OCI images from the mesh, and the bootstrap circularity that keeps the boot image on ACR
+- [A Container Registry in Memex](ContainerRegistryInMemex) — the fleet's own registry at cr.meshweaver.cloud (a separate distribution + docker_auth service), the bootstrap circularity that keeps the hosting instance's boot image off it, and the in-portal mirror that was built, never wired, and deleted (#4066)
 - [Static Repo Import](StaticRepoImport)
 - [The Prune Requires a Complete Listing](PruneRequiresACompleteListing) — an import prunes on "absent from the source ⇒ deleted"; a truncated GitHub tree arrives as HTTP 200 and turns every unread file into a deletion
 - [Import Write Ordering](ImportWriteOrdering) — a NodeType lands before the instances that name it

@@ -8,6 +8,13 @@ Order: -20260906
 
 # You can see what is inside a container image, without pulling it
 
+> **Superseded (2026-09-17).** The in-portal image mirror this entry describes was never
+> switched on in any portal, and it has since been removed. The fleet's images are served by
+> `cr.meshweaver.cloud`, a separate registry service — see
+> [The container image mirror settings that did nothing are gone](/Doc/WhatsNew/2026-09-17-the-container-image-mirror-settings-that-did-nothing-are-gone).
+> No portal ever recorded an image this way, so the closure of an image is still not queryable
+> mesh data; that remains open as its own piece of work.
+
 Until now, a container image was opaque. The only way to find out what it contained was to download
 it, unpack it, and look — which meant that questions like *"which version of this did the build
 actually use?"* or *"did these two builds ship the same thing?"* were answered by hand, slowly, by
