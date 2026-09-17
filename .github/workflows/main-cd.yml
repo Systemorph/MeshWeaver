@@ -2852,8 +2852,16 @@ jobs:
     #     wrong — it is a precondition, not a schedule.
     # `always()` is required because `promote` is SKIPPED on the reconcile path — without it this
     # job inherits the skip and the fix is inert, which is the exact shape it is fixing.
+    #
+    # 🚨 AND `always()` MUST BE PAID FOR: it also stops this job inheriting the skip of a need that
+    # FAILED, so every need whose OUTPUT this job consumes has to be asserted by hand. Without the
+    # `plugins-bake-image` clause a failed digest resolution would run this job with EMPTY
+    # `platform-image-digest` / `tester-image-digest` — and those are OPTIONAL inputs of the lane,
+    # which resolves the platform ITSELF when they are empty. So it would not fail loudly; it would
+    # quietly pack the bundles against a set this run did not promote.
     if: >-
       always() && needs.gate.result == 'success' &&
+      needs.plugins-bake-image.result == 'success' &&
       ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||
        needs.gate.outputs.plugins_seal_due == 'true')
     permissions:

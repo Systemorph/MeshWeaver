@@ -894,6 +894,21 @@ def plugins_leg_problems(workflow_text: str) -> list[str]:
             problems.append(
                 f"{name}'s `if:` does not start with `always()`, so it inherits `promote`'s skip on "
                 "the reconcile path and the repair is inert — the exact shape it is fixing.")
+        # 🚨 `always()` HAS TO BE PAID FOR. It stops a job inheriting a SKIP — and a skip is also
+        # what GitHub gives a job whose need FAILED. So once a job carries `always()`, every need
+        # whose OUTPUT it consumes must be asserted `== 'success'` by hand, or the job runs with
+        # that output EMPTY. For these legs that is not a loud failure: `platform-image-digest` and
+        # `tester-image-digest` are OPTIONAL inputs of the bake lane, which resolves the platform
+        # ITSELF when they are empty — so the bundles would be packed, quietly, against a set this
+        # run did not promote.
+        if cond.startswith("always()"):
+            consumed = {m for m in re.findall(r"needs\.([A-Za-z0-9_-]+)\.outputs\.", json.dumps(job))}
+            for dep in sorted(consumed):
+                if f"needs.{dep}.result == 'success'" not in cond:
+                    problems.append(
+                        f"{name} carries `always()` and consumes `needs.{dep}.outputs.*`, but its "
+                        f"`if:` never asserts `needs.{dep}.result == 'success'` — so a failed "
+                        f"`{dep}` lets this job run with that output empty instead of skipping.")
     return problems
 
 
@@ -1061,6 +1076,19 @@ def main() -> int:
     case("...and the guard catches a leg losing its reconcile arm",
          any("plugins_seal_due" in p for p in plugins_leg_problems(reverted_if)),
          "the mutation passed with a leg that can never repair a half-sealed set")
+    unpaid_always = workflow_text.replace(
+        "      needs.plugins-bake-image.result == 'success' &&\n"
+        "      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||\n"
+        "       needs.gate.outputs.plugins_seal_due == 'true')\n"
+        "    permissions:",
+        "      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||\n"
+        "       needs.gate.outputs.plugins_seal_due == 'true')\n"
+        "    permissions:", 1)
+    case("...and the guard catches `always()` that does not assert a consumed need succeeded",
+         any("result == 'success'" in p and "plugins-bake-image" in p
+             for p in plugins_leg_problems(unpaid_always)),
+         "the mutation passed with a leg that runs on an EMPTY image digest — which the bake lane "
+         "silently replaces by resolving the platform itself")
 
     base = {"RELEASE_VERSION": "", "BAKE_ONLY": "true", "SHORT_SHA": SHORT_SHA,
             "RECOVERED": VERSION}
