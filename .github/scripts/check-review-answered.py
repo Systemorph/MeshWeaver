@@ -175,16 +175,7 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
     by_id = {c.get("id"): c for c in comments}
 
     def root_of(c: dict) -> int | None:
-        seen = set()
-        while c.get("in_reply_to_id") is not None:
-            if c["id"] in seen:
-                return None
-            seen.add(c["id"])
-            parent = by_id.get(c["in_reply_to_id"])
-            if parent is None:
-                return c["in_reply_to_id"]
-            c = parent
-        return c.get("id")
+        return root_id_of(c, by_id)
 
     visible = [c for c in comments if not_after(c.get("created_at"), as_of)]
     roots = [c for c in visible if c.get("in_reply_to_id") is None and is_reviewer(c.get("user"))]
@@ -242,14 +233,41 @@ def waiting_would_help(verdict: Verdict) -> bool:
 UNANSWERED_REASON = "no reply from a person"
 
 
-def newest_person_reply(comments: list, as_of: str | None = None) -> str | None:
-    """The ISO-8601 stamp of the most recent REPLY written by a person, or None if there is none.
+def root_id_of(c: dict, by_id: dict) -> int | None:
+    """The id of the comment at the top of `c`'s thread. Cycle-safe (a malformed chain returns
+    None rather than spinning), and it returns the missing parent's id when the chain leaves the
+    listing — the ONE implementation, used by the answered-threads rule and by the settle
+    predicate, so the two can never disagree about what thread a reply belongs to."""
+    seen: set = set()
+    while c.get("in_reply_to_id") is not None:
+        if c["id"] in seen:
+            return None
+        seen.add(c["id"])
+        parent = by_id.get(c["in_reply_to_id"])
+        if parent is None:
+            return c["in_reply_to_id"]
+        c = parent
+    return c.get("id")
 
-    A reply, not any comment: the reviewer's own root comments are the findings, and their arrival
-    is not evidence that anybody is answering."""
+
+def newest_person_reply(comments: list, as_of: str | None = None) -> str | None:
+    """The ISO-8601 stamp of the most recent reply by a person ON A THREAD THE AUTOMATIC REVIEWER
+    OPENED, or None if there is none.
+
+    🚨 All three qualifiers are load-bearing, and the third was a review finding on this very
+    change. A reply, not any comment: the reviewer's own root comments are the findings, and their
+    arrival is no evidence that anybody is answering. By a PERSON: the reviewer replying to itself
+    answers nothing. And on the REVIEWER'S thread: a conversation between two humans on some other
+    thread is not evidence that a finding is being answered, and counting it would let an unrelated
+    discussion hold the required check for the whole settle window while the finding sat untouched.
+    """
+    by_id = {c.get("id"): c for c in comments}
+    reviewer_roots = {c.get("id") for c in comments
+                      if c.get("in_reply_to_id") is None and is_reviewer(c.get("user"))}
     stamps = [c.get("created_at") for c in comments
               if c.get("in_reply_to_id") is not None
               and is_person(c.get("user"))
+              and root_id_of(c, by_id) in reviewer_roots
               and not_after(c.get("created_at"), as_of)]
     stamps = [s for s in stamps if s]
     return max(stamps) if stamps else None
@@ -670,6 +688,18 @@ def self_test() -> int:
         # A reviewer comment is not an answer — only a person's REPLY counts as activity.
         ("no wait: the reviewer posted, not a person", False,
          _pr(3), [_review()], [_comment(1), _comment(2), _comment(3, reply_to=2, at=RECENT)], 60),
+        # 🚨 …and the reply must be on a thread the REVIEWER opened. A busy conversation between two
+        # people on somebody else's thread is not somebody answering a finding, and counting it
+        # would hold the required check for the whole window while the finding sat untouched.
+        # (Review finding on this change.)
+        ("no wait: the recent reply is on a thread a PERSON opened, not the reviewer's", False,
+         _pr(4), [_review()],
+         [_comment(1), _comment(2, user=PERSON), _comment(3, user=PERSON, reply_to=2, at=RECENT),
+          _comment(4, user=PERSON, reply_to=3, at=RECENT)], 60),
+        # The positive twin, so the case above cannot pass by the predicate simply never waiting.
+        ("wait: the same reply, but on the REVIEWER's thread", True,
+         _pr(3), [_review()],
+         [_comment(1), _comment(2), _comment(3, user=PERSON, reply_to=1, at=RECENT)], 60),
     ]:
         got = replies_still_landing(evaluate(pr_, reviews_, comments_, NO_WAIVER), comments_, settle_, now=NOW)
         ok = got == expect

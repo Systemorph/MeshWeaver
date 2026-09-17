@@ -29,10 +29,18 @@
 #   * the self-test runs first, so a predicate that can no longer say no fails here before its
 #     verdict on the real pull request is believed.
 #
-# 🚨 NOT A REQUIRED CHECK YET. It lands observed-only; the maintainer adds the context
+# 🚨 THIS IS A REQUIRED CHECK. Measured on ruleset 2128472 (`main pr protection`, active) on
+# 2026-09-17: it requires TWO contexts, `Consolidate test results` AND `Automatic review answered`.
+# So an edit here changes whether every pull request into main can merge — this file is no longer
+# advisory, and the rollout note below is kept only as the record of how it got here.
+#
+# (Superseded, kept for the history: "NOT A REQUIRED CHECK YET. It lands observed-only; the
+# maintainer adds the context
 # `Automatic review answered` to ruleset 2128472 beside `Consolidate test results` once it has
-# been watched on live pull requests. Doc/Architecture/ReviewFindingsAnswered lists what to confirm
-# first (including the merge-queue steward's reading of an ejection this check causes).
+# been watched on live pull requests." That happened on 2026-09-17.)
+# Doc/Architecture/ReviewFindingsAnswered carries the operating notes, including the merge-queue
+# steward's reading of an ejection this check causes, and what to do when its log says GREEN while
+# the pull request still reads BLOCKED.
 name: Review answered
 
 on:
@@ -64,8 +72,40 @@ permissions:
 # inline comment, and the evaluation that runs LAST must be the one that read LAST. GitHub keeps one
 # pending run per group, so a burst of fourteen comments collapses to the running evaluation plus
 # the newest pending one. Cancelling would also eject a merge-queue entry rather than retry it.
+# 🚨 AND IT IS SPLIT BY EVENT, because branch protection does not read all of them. Measured on
+# #4649, head 94fc73b4fdaa — fifteen runs of this workflow, eight of which published a check-run,
+# and the rollup that branch protection consumes carried exactly THREE:
+#
+#   105349138004  pull_request                 failure   IN the rollup
+#   105356428131  pull_request_review          failure   IN the rollup
+#   105356609073  pull_request_review          failure   IN the rollup
+#   105356478806  pull_request_review_comment  failure   absent
+#   105356544187  pull_request_review_comment  failure   absent
+#   105356665266  pull_request_review_comment  failure   absent
+#   105356708655  pull_request_review_comment  SUCCESS   absent
+#   105356763402  pull_request_review_comment  SUCCESS   absent
+#
+# So a `pull_request_review_comment` run's verdict is INVISIBLE to branch protection — both
+# successes were, by construction, not by latching — while `pull_request` and `pull_request_review`
+# runs are read. A reply to a review thread fires BOTH events (measured 7 replies → 7 of each), so a
+# read-eligible evaluation is always available; what went wrong is that the read-eligible runs
+# arriving AFTER the replies (19:48:19Z, 19:48:28Z) were EVICTED — one pending slot shared with the
+# comment-driven runs — so the last read-eligible check-run on that sha stayed an early failure
+# while the newest check-run overall read success. That is the state that reads as "green in the log,
+# BLOCKED on the PR", and no amount of re-arming auto-merge clears it.
+#
+# Splitting the group by event class fixes the eviction deterministically: the survivor of the
+# `gate` lane is always a run whose verdict is READ, and the settle wait above means it judges a
+# state that has stopped moving. The `feedback` lane keeps the comment-driven runs — they still give
+# the author a fast reading on the PR page — without letting them take the gate lane's slot.
+#
+# 🚨 This does NOT make the comment-driven green mean anything to branch protection. Nothing here
+# can: which contexts the rollup carries is GitHub's choice, not this file's. The only shape that
+# would be correct BY CONSTRUCTION is reporting the verdict as a commit STATUS against the head sha
+# (last write per context wins, whatever produced it), and that is a required-context rename and a
+# ruleset edit — the maintainer's call, recorded in Doc/Architecture/ReviewFindingsAnswered.
 concurrency:
-  group: review-answered-${{ github.event.pull_request.number || github.event.merge_group.head_ref }}
+  group: review-answered-${{ github.event.pull_request.number || github.event.merge_group.head_ref }}-${{ github.event_name == 'pull_request_review_comment' && 'feedback' || 'gate' }}
   cancel-in-progress: false
 
 jobs:
