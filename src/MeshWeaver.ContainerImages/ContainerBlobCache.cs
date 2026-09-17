@@ -353,10 +353,16 @@ public sealed class ContainerBlobCache
         {
             if (!string.IsNullOrEmpty(mediaType))
                 File.WriteAllText(typePath, mediaType);
-            // overwrite: false — a concurrent fill of the same digest may have won the race. Its
-            // bytes are ours by definition (both were verified against the same hash), so losing
-            // the race is a success, not a conflict.
-            File.Move(temporary, blobPath, overwrite: false);
+            // No replace — a concurrent fill of the same digest may have won the race. Its bytes
+            // are ours by definition (both were verified against the same hash), so losing the race
+            // is a success, not a conflict. A RENAME, never File.Move(overwrite: false): that call
+            // COPIES into the blob path when its rename fails, and a pull reading the blob during
+            // the copy streams an incomplete layer (#2190).
+            if (!MeshWeaver.Utils.NoReplaceMove.TryMove(temporary, blobPath))
+            {
+                Delete(temporary);
+                return true;
+            }
         }
         catch (IOException) when (File.Exists(blobPath))
         {
