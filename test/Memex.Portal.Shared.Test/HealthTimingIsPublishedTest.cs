@@ -1,7 +1,9 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.ServiceDefaults;
@@ -68,7 +70,17 @@ public class HealthTimingIsPublishedTest
 
         var timing = TimingLineOf(body);
 
-        Assert.Contains("slow_and_healthy", timing, StringComparison.Ordinal);
+        // 🚨 The NAME alone would pass over a line that published the identity and dropped the
+        // number, which is the one thing this change exists to add. Pin the published shape, and
+        // read the cost back out of it: a named check is named BECAUSE it reached the floor, so a
+        // smaller number would mean the line and the rule disagree.
+        var named = Regex.Match(timing, @"\bslow_and_healthy (\d+)ms\b");
+        Assert.True(named.Success,
+            "the timing line did not publish 'slow_and_healthy <n>ms'. Naming the check without its "
+            + $"cost is the defect this change removes, not the fix. Line was:\n{timing}");
+        Assert.True(double.Parse(named.Groups[1].Value, CultureInfo.InvariantCulture) >= 10,
+            $"a check was named below the 10ms naming floor. Line was:\n{timing}");
+
         Assert.DoesNotContain("slow_and_healthy", string.Join('\n', body.Split('\n').Skip(2)),
             StringComparison.Ordinal);
     }

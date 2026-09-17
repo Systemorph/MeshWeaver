@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
@@ -297,11 +298,15 @@ public static class ServiceDefaults
     }
 
     /// <summary>
-    /// A check slower than this is NAMED on <see cref="ProbeEndpoints.Health"/>; the rest are
-    /// counted. 10 ms is a five-hundredth of the 5 s <c>timeoutSeconds</c> the chart gives this
-    /// endpoint, so nothing under it can be part of an explanation for a probe that timed out — and
-    /// leaving the cheap ones unnamed is what keeps the line from growing with every check that
-    /// costs nothing.
+    /// A check slower than this is NAMED individually on <see cref="ProbeEndpoints.Health"/>; the
+    /// rest are counted, not dropped.
+    ///
+    /// <para>🚨 It is a NAMING threshold, not a claim about what can explain a timeout. Enough
+    /// checks just below it would consume the budget between them, and that is exactly why the
+    /// TOTAL is published first and unconditionally: the aggregate always includes them, so the
+    /// reading "total 9412ms, nothing named" is itself an answer — the cost is spread, look at the
+    /// count, not for one culprit. What the threshold buys is that the line does not grow with
+    /// every check that costs nothing.</para>
     /// </summary>
     internal const double TimingNamedAboveMs = 10;
 
@@ -360,9 +365,9 @@ public static class ServiceDefaults
             .Select(e => (e.Key, Ms: e.Value.Duration.TotalMilliseconds))
             .Where(e => e.Ms >= TimingNamedAboveMs)
             .OrderByDescending(e => e.Ms)
-            .ToList();
-        var rest = report.Entries.Count - named.Count;
-        if (named.Count == 0)
+            .ToImmutableArray();
+        var rest = report.Entries.Count - named.Length;
+        if (named.Length == 0)
             return $"{header} — all {rest} under {floor}ms";
 
         var slowest = string.Join("; ",

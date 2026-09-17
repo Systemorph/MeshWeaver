@@ -105,9 +105,11 @@ content-types: Degraded — …
 ```
 
 - The **total** is the number the probe's `timeoutSeconds` has to cover.
-- Checks at or above 10 ms are **named**, slowest first. Ten milliseconds is a five-hundredth of the
-  5 s these instances give the endpoint, so nothing below it can be part of an explanation for a
-  probe that timed out.
+- Checks at or above 10 ms are **named**, slowest first. That is a threshold for NAMING, not a
+  claim about blame: enough checks just below it would consume the budget between them. Which is
+  why the total comes first and unconditionally — it always includes them, so *"total 9412ms,
+  nothing named"* is itself an answer: the cost is spread, read the count rather than hunting for
+  one culprit.
 - The rest are **counted**, not dropped — the line states its own denominator, so "nothing else was
   slow" and "I stopped listing" are different sentences. Same rule as the census entries
   ([A Census That Counts Must Name](../ACensusThatCountsMustName)).
