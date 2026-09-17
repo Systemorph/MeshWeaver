@@ -463,6 +463,33 @@ of 2026-09-06 were already two-fifths stale a day later (see below).
 |---|---|---|---|
 | 1 | a **digest** pinned in CI | every repository's `.github/workflows` | 20 sites, 6 repositories, 5 distinct manifests |
 | 2 | an image **TAG** pinned in a deployment overlay | `values*.y{a}ml` under a `deploy/` or `deployments/` path | 11 sites, 2 repositories, 7 distinct manifests |
+| 2b | the image a **Hosting/Deployment RECORD** pins | `…/Deployments/<name>.json` | 5 records, 1 repository; **1 reference set no overlay carries** (2026-09-17) |
+
+### 🚨 Axis 2b: the record is the pin that is APPLIED, and it was invisible twice over (Memex#219)
+
+`helm-release.yml` applies the **committed record's** pin when its `image` input is empty, so a
+purged record tag is a broken deploy. Those records are `Systemorph/Memex`'s
+`mesh/Deployments/<name>.json`, and until 2026-09-17 the sweep could not see them **for two
+independent reasons**:
+
+1. **not an overlay PATH** — no `deploy`/`deployments` segment and not a `values*.y{a}ml` name, so
+   `is_overlay_path` answered `False` and the file was never opened. Everything in it went
+   unprotected, *including* the ordinary `repo:tag`-shaped `operator.image`, `gates[].image` and
+   `portalNext.image` that the existing extractor would have read on sight; and
+2. **a SPLIT pin no `repo:tag` rule can match** — the portal's own pin is two keys,
+   `imageRepository` + `pinnedImageTag`.
+
+🚨 **And the gap is narrower than it first looks, which is why it was measured before it was
+fixed.** Four of the five records pin a tag that a committed overlay *also* pins, so axis 2 already
+covered them. **`pearl` is the exception, and it is the one #219's own table names** — its overlay
+pins the **fleet registry** (`cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8080`), which this
+ACR-locking lane correctly sees as foreign, while its **record** pins
+`meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8080` plus `hosting-operator:1979979` — in scope,
+and protected by nothing. `pearl` has never been installed, so axis 3's running-set protection
+cannot cover it either: it would seed from exactly the tag a purge is free to take.
+
+An **empty** `pinnedImageTag` is reported as FLOATING, not as a pin — `memex-cloud` is that today,
+and asking the registry to lock a tag that does not exist would turn a correct reading into a red.
 
 A lock set built from axis 1 alone leaves every overlay-pinned manifest unprotected — and
 **Memex#122's victim was pinned exactly that way**. Axis 2 reads two shapes, because both occur:
