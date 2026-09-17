@@ -742,6 +742,12 @@ public sealed class PendingModuleActivations(string moduleRoot)
                 if (entry is not { Enabled: true } || string.IsNullOrWhiteSpace(entry.Name)
                     || !ImageShippedModules.Contains(entry.Name))
                     continue;
+                // 🚨 The SAME order the boot applies: the DLL's existence is decided FIRST, and an
+                // entry whose landed bytes are gone is skipped as MISSING before the identity is
+                // looked at at all (#2093's state, whose remedy is a re-install). Classifying it
+                // here as declined would put one entry in two buckets with two different remedies.
+                if (!LandedDllExists(entry))
+                    continue;
                 var identity = ModuleFrameworkIdentity.Compare(entry.FrameworkMvid, PlatformIdentities);
                 if (!identity.IsNotThisPlatform)
                     continue;
