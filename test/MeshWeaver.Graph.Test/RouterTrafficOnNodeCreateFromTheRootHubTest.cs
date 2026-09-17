@@ -380,9 +380,7 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
     /// teach the next reader to widen it rather than read it.
     /// </summary>
     private RouterTrafficRecord[] SubscriptionOrigins() =>
-        Origins().Where(r => r.MessageType is nameof(SubscribeRequest) or nameof(SubscribeAck)
-                        or nameof(DataChangedEvent) or nameof(StreamEndedEvent)
-                        or nameof(UnsubscribeRequest)).ToArray();
+        Origins().Where(r => IsSubscriptionFamily(r.MessageType)).ToArray();
 
     /// <summary>
     /// The same family at the RECEIVER site, plus <c>RawJson</c> — which is what a routed delivery
@@ -391,9 +389,20 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
     /// test method, so the only traffic in this record set is the seed create and this one render.
     /// </summary>
     private RouterTrafficRecord[] SubscriptionReports() =>
-        Reports().Where(r => r.MessageType is nameof(SubscribeRequest) or nameof(SubscribeAck)
-                        or nameof(DataChangedEvent) or nameof(StreamEndedEvent)
-                        or nameof(UnsubscribeRequest) or "RawJson").ToArray();
+        Reports().Where(r => IsSubscriptionFamily(r.MessageType) || r.MessageType == "RawJson")
+            .ToArray();
+
+    /// <summary>
+    /// 🚨 EVERY message the owner addresses at <c>request.Subscriber</c>, in one place so the two
+    /// filters above cannot drift apart. <c>StreamErrorEvent</c> is in the list although this
+    /// render's happy path never emits one: the owner posts it to the same address as the rest
+    /// (<c>JsonSynchronizationStream.cs:1604</c>), so a regression that left only the error leg
+    /// pointed at the router would otherwise pass unseen (Copilot on #4622).
+    /// </summary>
+    private static bool IsSubscriptionFamily(string messageType) =>
+        messageType is nameof(SubscribeRequest) or nameof(SubscribeAck)
+            or nameof(DataChangedEvent) or nameof(StreamEndedEvent)
+            or nameof(StreamErrorEvent) or nameof(UnsubscribeRequest);
 
     /// <summary>The node the recycle targets has to exist before it can be torn down.</summary>
     private async Task<string> SeedNode(string id)

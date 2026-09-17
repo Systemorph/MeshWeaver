@@ -514,11 +514,21 @@ public static class MeshExtensions
     /// guard in a storm), carries <c>AddData()</c> for the workspace and the stream route, and
     /// registers itself with the ROUTING SERVICE so the fan-out lands on it cross-silo.</para>
     ///
-    /// <para>Returns <c>null</c> only when the hub cannot be materialised (the mesh is already
-    /// tearing down); callers then fall back to their own hub.</para>
+    /// <para>🚨 <b>Returns <c>null</c> for a TEARDOWN RACE ONLY, and that is why it asks
+    /// <see cref="IMessageHub.TryGetHostedHub"/> rather than the plain overload.</b>
+    /// <c>GetHostedHub</c> answers null for conditions that belong at opposite log levels (#3243),
+    /// and here they call for opposite BEHAVIOUR: a mesh going down means the subscription is being
+    /// abandoned anyway, so falling back to the caller's own hub costs nothing — while a
+    /// configuration that THREW would, under the same <c>?? hub</c>, silently put the subscription
+    /// back on the router, which is the exact defect this seam exists to prevent, with the real
+    /// error swallowed. So a fault is THROWN: <c>RenderResolvedArea</c> builds the stream inside an
+    /// <c>Observable.Defer</c>, so the throw surfaces as the render's own <c>"Error: …"</c> instead
+    /// of a silently-degraded success. (Copilot on #4622.)</para>
     /// </summary>
     /// <param name="hub">Any hub in the mesh; the stream hub is resolved from its mesh root.</param>
     /// <returns>The shared stream-subscribing hub, or <c>null</c> while the mesh is disposing.</returns>
+    /// <exception cref="InvalidOperationException">The hub could not be constructed for a reason
+    /// that is NOT a shutdown race — a faulted configuration, or an unclassified null.</exception>
     public static IMessageHub? MeshStreamHub(this IMessageHub hub)
     {
         var mesh = hub.GetMeshHub();
@@ -530,7 +540,7 @@ public static class MeshExtensions
 
         var routingService = mesh.ServiceProvider.GetService<IRoutingService>();
         var permissionEvaluator = mesh.Configuration.Get<EffectivePermissionsDelegate>();
-        return mesh.GetHostedHub(
+        var result = mesh.TryGetHostedHub(
             StreamHubAddress(mesh),
             config =>
             {
@@ -548,6 +558,17 @@ public static class MeshExtensions
                     : config.WithPermissionEvaluator(permissionEvaluator);
             },
             HostedHubCreation.Always);
+
+        if (result.Hub is not null)
+            return result.Hub;
+        if (result.IsShutdownRace)
+            return null;
+        throw new InvalidOperationException(
+            $"The mesh's stream-subscribing hub ({StreamHubAddress(mesh)}) could not be created "
+            + $"({result.Outcome}). Falling back to the caller's hub would put the subscription on "
+            + "the ROUTER — the defect this seam exists to prevent — so the subscription is "
+            + "refused instead.",
+            result.Error);
     }
 
     /// <summary>

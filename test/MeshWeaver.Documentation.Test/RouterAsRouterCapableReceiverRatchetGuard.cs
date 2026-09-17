@@ -252,10 +252,18 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
 
                 void Hopped(IMessageHub hub) => hub.ReadIssuingHub().Observe(new C(), o => o.WithTarget(other));
 
+                void HoppedStream(IMessageHub hub) => hub.StreamSubscribingHub().Post(new H(), o => o.WithTarget(other));
+
                 void ViaAlias(IMessageHub hub)
                 {
                     var issuing = hub.NodeOperationIssuingHub();
                     issuing.Post(new D(), o => o.WithTarget(other));
+                }
+
+                void ViaStreamAlias(IMessageHub hub)
+                {
+                    var streams = hub.StreamSubscribingHub();
+                    streams.Post(new I(), o => o.WithTarget(other));
                 }
 
                 void SelfDirected(IMessageHub hub) => hub.Post(new E(), o => o.WithTarget(hub.Address));
@@ -269,18 +277,22 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
 
         var sites = SitesIn("planted.cs", planted);
         // Every TARGETED call in a declaring file is a site; the target-less one is not.
-        Assert.Equal(6, sites.Count);
+        Assert.Equal(8, sites.Count);
         // The BARE declared reference — the violation shape and the self-directed one.
         Assert.Equal(2, sites.Count(s => s.Declared));
-        // The three seam spellings: the call itself, the other seam, and a local bound to one.
-        Assert.Equal(3, sites.Count(s => s.OffRouter));
+        // 🚨 ALL THREE seams, in BOTH spellings the scan supports — the direct call and a local
+        // bound to one. Each alternative is planted individually, so dropping one from SeamCall /
+        // SeamCallMarker / SeamAlias reds HERE rather than silently shrinking the denominator the
+        // ratchet measures. StreamSubscribingHub (#4614) was added with no planted case and this
+        // is that gap closed (Copilot on #4622).
+        Assert.Equal(5, sites.Count(s => s.OffRouter));
         Assert.Equal(1, sites.Count(s => s.SelfDirected));
         // A post on an unrelated receiver says nothing about the router and stays OUT of scope.
         Assert.Equal(1, sites.Count(s => !s.InScope));
         var counted = sites.Where(InDenominator).ToList();
-        Assert.Equal(4, counted.Count);
+        Assert.Equal(6, counted.Count);
         Assert.Equal(1, counted.Count(s => !s.OffRouter));
-        Assert.Equal(3, counted.Count(s => s.OffRouter));
+        Assert.Equal(5, counted.Count(s => s.OffRouter));
 
         // 🚨 THE TWO SITES THIS GUARD WAS WRITTEN FROM, in their pre-fix spelling. Pinning the
         // SHAPE rather than a count is what makes a regression name the defect: if either of these
