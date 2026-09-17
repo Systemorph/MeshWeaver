@@ -135,6 +135,62 @@ entry whose owner is the **reference set** rather than the content: `System.Reac
 against .NET 8 and runs on .NET 10. No content author can fix it and no `#pragma` belongs in their
 source, so the honest outcome is that the bake RECORDS it.
 
+## 🚨 The parity list: what the in-mesh compile does NOT report
+
+*Added 2026-09-17, on the maintainer's direction: "warn == error", everywhere, including the in-mesh
+NodeType compile — so `plugin-gate-warnings.allow` goes to **zero**, not merely shrinks.*
+
+Driving a baseline to zero means fixing what is broken. It also meant noticing that two of the
+families in it were never the content's to fix, because **a raw `CSharpCompilation` applies no
+`NoWarn` at all**. The premise of this whole standard is that in-mesh C# is held to the standard
+`src/` C# is held to under `-warnaserror` — and it was being held to a *stricter* one, in exactly two
+families. `CompileWarning.NotReported`, applied at `EmitPipeline.Collect`, is the in-mesh compile's
+`NoWarn`:
+
+| Family | Codes | Suppressed for `src/` by | Entries this retired in MeshWeaver.Plugins |
+|---|---|---|---|
+| **Reference-set skew** | `CS1701`, `CS1702` | the .NET SDK itself — `Microsoft.NET.Sdk.CSharp.props`: `<NoWarn Condition=" '$(NoWarn)' == '' ">1701;1702</NoWarn>` | **95** |
+| **Doc COMPLETENESS** | `CS1591`, `CS1573`, `CS1712` | core's own `Directory.Build.props`, mirrored in `MeshWeaver.Plugins/src/` and `MeshWeaver.SocialMedia/src/` | **115** |
+
+`CS1701` is *"assuming assembly reference 'System.Linq.Expressions, Version=8.0.0.0' used by
+'System.Reactive' matches identity '…Version=10.0.0.0'"* — `System.Reactive` is built against .NET 8
+and runs on .NET 10, so every NodeType that touches Rx earned one. It is a property of the REFERENCE
+SET, not of the content: no author could fix it, no `#pragma` belonged in their source, and a
+platform bump could add or remove 95 baseline lines with no content change at all. **This codebase
+had already made exactly this call one lane over** — `ProjectFile` seeds `NoWarn = 1701;1702` for the
+`build-project` verb, because omitting it *"turned five otherwise-clean projects red on warnings the
+SDK does not report"*. The in-mesh compile was simply the last compiler in the fleet still reporting
+them.
+
+> 🚨 **This is a PARITY list, not an escape hatch.** A code that is NOT suppressed for `src/` must
+> never be added to it; it gets fixed, or it is recorded as debt in a baseline. In particular the doc
+> comments that EXIST and are WRONG stay reported and are now ERRORS — `CS1574`/`CS1584`/`CS0419` (a
+> `cref` resolving to nothing, or to two things), `CS1570` (malformed XML), `CS1571`/`CS1572`/`CS1734`
+> (a tag naming a parameter that is not there), `CS1587` (a doc comment on something that cannot
+> carry one). `TheRuntimeCompileStaysLenientTest` pins both halves: each suppressed code is produced
+> by the compiler and dropped by `Collect`, and each unsuppressed one still reaches the gate.
+
+**Why at `Collect` and not through `WithSpecificDiagnosticOptions`.** The compilation options are
+REFLECTED into `GeneratedInputIdentity.OptionsFingerprint`, so suppressing there would change the
+content key of every NodeType in the fleet and force one global recompile — a rollout cost for a
+reporting decision. `Collect` is the single point every consumer reads warnings through, so the
+runtime activity log gets the same quietening for free.
+
+### A baseline line naming a suppressed code is INERT, never STALE
+
+Retiring a code must not be able to red a repo that has not trimmed its file yet. The moment
+`CS1701` and `CS1591` stopped being reported, MeshWeaver.Plugins' 210 such lines would otherwise all
+have become STALE in one platform roll — a hard bake failure, on an image whose timing that repo does
+not control, with no pull request in flight having touched anything related. So `WarningBaseline.For`
+skips them and `WarningBaseline.Inert` names them: the run prints one line saying how many there are
+and which codes, and fails nothing. They tolerate nothing and can hide nothing, because nothing can
+produce them.
+
+> `WarningClass.DocComment` and the `doc-comments` ratchet are RETAINED and are now vacuous by
+> policy — `CS1591` is its only member and `CS1591` is suppressed. Keeping the (generic) mechanism
+> costs one log line and leaves the door open for a tree that chooses to enforce doc completeness;
+> removing it would be a separate change across six repos' lane inputs.
+
 ## Quietening the log
 
 The second half of the report. Raw, the samples bake carries 375 warning occurrences; the runtime's

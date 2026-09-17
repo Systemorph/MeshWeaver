@@ -21,15 +21,16 @@ namespace MeshWeaver.PluginTester.Test;
 /// <para>These cases are the CONTROL for the fix, run end-to-end through the real bake
 /// (<see cref="TreeBake.Run"/>) rather than against the ratchet's arithmetic alone:</para>
 /// <list type="number">
-///   <item>an EMPTY baseline over source carrying one deliberate <c>CS0219</c> and one deliberate
-///     <c>CS1591</c> goes RED, and each ratchet names its own;</item>
-///   <item>the SAME source with both pairs baselined goes GREEN — so the red above is the ratchet
+///   <item>an EMPTY baseline over source carrying a deliberate <c>CS0219</c> goes RED, and the
+///     ratchet names the exact line to add;</item>
+///   <item>the SAME source with that pair baselined goes GREEN — so the red above is the ratchet
 ///     and not something incidental about the fixture;</item>
 ///   <item>a baseline entry whose type compiles CLEAN goes RED as STALE — the shrink-only half,
 ///     which is what stops the debt from being carried after it is paid;</item>
-///   <item>the two ratchets are INDEPENDENT: a stale doc-comment entry reds the run while the
-///     warnings ratchet stays green, so a missing doc comment can never be reported as a latent
-///     bug and vice versa.</item>
+///   <item>doc COMPLETENESS is centrally suppressed (<see cref="CompileWarning.NotReported"/>), so
+///     the fixture's undocumented record measures nothing and can red nothing — and a baseline
+///     line naming a suppressed code is INERT rather than stale, which is what stops retiring a
+///     code from redding a repo that has not trimmed its file yet.</item>
 /// </list>
 ///
 /// <para>🚨 <b>The negative control is <c>Ctrl/Clean</c></b>, and it is what makes the rest
@@ -86,6 +87,15 @@ public class InMeshWarningRatchetTest(ITestOutputHelper output)
                 int neverUsed = 43;
                 return 2;
             }
+
+            /// <summary>
+            /// A deliberate CS1574 — a doc comment that EXISTS and is WRONG. It is the second
+            /// distinct code the per-code table needs, and it is deliberately a DOC diagnostic:
+            /// doc COMPLETENESS is centrally suppressed, a broken <c>cref</c> is not, and the
+            /// fixture has to be able to tell those two apart.
+            /// </summary>
+            /// <returns>See <see cref="NoSuchMember"/>.</returns>
+            public int Broken() => 3;
         }
 
         public record Undocumented
@@ -106,18 +116,64 @@ public class InMeshWarningRatchetTest(ITestOutputHelper output)
         // The fixture actually produced what the experiment needs — otherwise everything below is
         // a statement about nothing.
         Assert.Contains(bake.Report.Warnings.Sites, s => s.Code == "CS0219");
-        Assert.Contains(bake.Report.Warnings.Sites, s => s.Code == "CS1591");
 
         Assert.False(bake.Report.WarningsAccepted);
         Assert.Equal(1, bake.Report.ExitCode);
 
         var real = Ratchet(bake.Report, WarningClass.Real);
-        var docs = Ratchet(bake.Report, WarningClass.DocComment);
-        Assert.Equal([(DebtPath, "CS0219")], real.New);
-        Assert.Equal([(DebtPath, "CS1591")], docs.New);
+        Assert.Equal([(DebtPath, "CS0219"), (DebtPath, "CS1574")], real.New);
         // The log tells the reader the exact line to add — a verdict nobody can act on is not one.
         Assert.Contains($"warnings NEW {DebtPath} CS0219", bake.Log, StringComparison.Ordinal);
-        Assert.Contains($"doc-comments NEW {DebtPath} CS1591", bake.Log, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 DOC COMPLETENESS IS CENTRALLY SUPPRESSED, and this is the control for it. The fixture's
+    /// <c>Undocumented</c> record is public with a public property and no doc comment anywhere, so
+    /// it produced <c>CS1591</c> — twice — on every bake before
+    /// <see cref="CompileWarning.NotReported"/>. The in-mesh compile now carries the same
+    /// <c>NoWarn</c> core carries for <c>src/</c> (<c>CS1591;CS1573;CS1712</c>), so a missing doc
+    /// comment is measured by nobody and can red nothing.
+    ///
+    /// <para>This is NOT a warning being ignored: the doc comments that EXIST and are WRONG —
+    /// <c>CS1574</c>/<c>CS1584</c>/<c>CS0419</c> (a <c>cref</c> resolving to nothing, or to two
+    /// things), <c>CS1570</c> (malformed XML), <c>CS1571</c>/<c>CS1572</c>/<c>CS1734</c> (a tag
+    /// naming a parameter that is not there) — stay in the <c>warnings</c> ratchet, where the
+    /// tolerated set is now empty.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public void DocCompletenessIsCentrallySuppressed_SoAMissingDocCommentMeasuresNothing()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var bake = Bake(WarningBaseline.Parse([$"{DebtPath} CS0219", $"{DebtPath} CS1574"]));
+
+        // The undocumented record compiled — "no CS1591" must not be "it never ran".
+        Assert.Contains(DebtPath, bake.Report.Warnings.CompiledTypes);
+        Assert.DoesNotContain(bake.Report.Warnings.Sites, s => s.Code == "CS1591");
+        Assert.Empty(Ratchet(bake.Report, WarningClass.DocComment).New);
+        Assert.True(bake.Report.WarningsAccepted, bake.Log);
+    }
+
+    /// <summary>
+    /// 🚨 A baseline line naming a centrally-suppressed code is INERT — never STALE. Retiring a
+    /// code must not be able to red a repo that has not trimmed its file yet: the moment
+    /// <c>CS1701</c> and <c>CS1591</c> stopped being reported, MeshWeaver.Plugins' 210 such lines
+    /// would otherwise have become stale in one platform roll, on a bake whose image timing that
+    /// repo does not control, with no pull request in flight having touched anything related.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public void ABaselineLineNamingASuppressedCode_IsInert_NeverStale()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var bake = Bake(WarningBaseline.Parse(
+            [$"{DebtPath} CS0219", $"{DebtPath} CS1574", $"{DebtPath} CS1591", $"{CleanPath} CS1701"]));
+
+        Assert.True(bake.Report.WarningsAccepted, bake.Log);
+        Assert.Equal(0, bake.Report.ExitCode);
+        Assert.Empty(Ratchet(bake.Report, WarningClass.DocComment).Stale);
+        Assert.Empty(Ratchet(bake.Report, WarningClass.Real).Stale);
+        // …and it says so, naming the codes, so the dead lines get deleted rather than kept.
+        Assert.Contains("INERT baseline entr(ies) naming CS1591, CS1701",
+            bake.Log, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -142,12 +198,12 @@ public class InMeshWarningRatchetTest(ITestOutputHelper output)
     public void TheSameSource_WithBothPairsBaselined_IsGreen()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var bake = Bake(WarningBaseline.Parse([$"{DebtPath} CS0219", $"{DebtPath} CS1591"]));
+        var bake = Bake(WarningBaseline.Parse([$"{DebtPath} CS0219", $"{DebtPath} CS1574"]));
 
         Assert.True(bake.Report.WarningsAccepted, bake.Log);
         Assert.Equal(0, bake.Report.ExitCode);
-        Assert.Equal([(DebtPath, "CS0219")], Ratchet(bake.Report, WarningClass.Real).Known);
-        Assert.Equal([(DebtPath, "CS1591")], Ratchet(bake.Report, WarningClass.DocComment).Known);
+        Assert.Equal([(DebtPath, "CS0219"), (DebtPath, "CS1574")],
+            Ratchet(bake.Report, WarningClass.Real).Known);
     }
 
     /// <summary>
@@ -155,25 +211,26 @@ public class InMeshWarningRatchetTest(ITestOutputHelper output)
     /// debt already paid, and carrying the line anyway is how a ratchet quietly stops ratcheting —
     /// so it fails the run until the line goes.
     ///
-    /// <para>🚨 It also pins the INDEPENDENCE of the two ratchets: the stale entry is a CS1591 one,
-    /// the doc-comments verdict goes red, and the warnings verdict stays green. A combined gate
-    /// could not distinguish these and a missing doc comment would read as a latent bug.</para>
+    /// <para>🚨 The stale entry names <c>Ctrl/Clean</c> — the negative control, which compiles and
+    /// produces nothing. That is what makes this a statement about the ratchet rather than about
+    /// the fixture: the type was MEASURED and was clean, which is the only condition under which a
+    /// line may be deleted.</para>
     /// </summary>
     [Fact(Timeout = 300_000)]
-    public void ABaselineEntryWhoseTypeCompilesClean_IsStale_AndRedsOnlyItsOwnRatchet()
+    public void ABaselineEntryWhoseTypeCompilesClean_IsStale_AndRedsTheBake()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var bake = Bake(WarningBaseline.Parse(
-            [$"{DebtPath} CS0219", $"{DebtPath} CS1591", $"{CleanPath} CS1591"]));
+            [$"{DebtPath} CS0219", $"{DebtPath} CS1574", $"{CleanPath} CS0219"]));
 
         Assert.False(bake.Report.WarningsAccepted);
         Assert.Equal(1, bake.Report.ExitCode);
 
-        var docs = Ratchet(bake.Report, WarningClass.DocComment);
-        Assert.Equal(CleanPath, Assert.Single(docs.Stale).Scope);
-        Assert.False(docs.Success);
-        // The OTHER ratchet is untouched — that is the whole point of there being two.
-        Assert.True(Ratchet(bake.Report, WarningClass.Real).Success);
+        var real = Ratchet(bake.Report, WarningClass.Real);
+        Assert.Equal(CleanPath, Assert.Single(real.Stale).Scope);
+        Assert.False(real.Success);
+        // The debt that is still real stays KNOWN — a stale line must not swallow a live one.
+        Assert.Equal([(DebtPath, "CS0219"), (DebtPath, "CS1574")], real.Known);
         Assert.Contains($"STALE baseline entry", bake.Log, StringComparison.Ordinal);
     }
 
@@ -188,11 +245,11 @@ public class InMeshWarningRatchetTest(ITestOutputHelper output)
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var bake = Bake(WarningBaseline.Parse(
-            [$"{DebtPath} CS0219", $"{DebtPath} CS1591", "Ctrl/NotInThisTree CS1591"]));
+            [$"{DebtPath} CS0219", $"{DebtPath} CS1574", "Ctrl/NotInThisTree CS0219"]));
 
-        var docs = Ratchet(bake.Report, WarningClass.DocComment);
-        Assert.Empty(docs.Stale);
-        Assert.Equal("Ctrl/NotInThisTree", Assert.Single(docs.Unverifiable).Scope);
+        var real = Ratchet(bake.Report, WarningClass.Real);
+        Assert.Empty(real.Stale);
+        Assert.Equal("Ctrl/NotInThisTree", Assert.Single(real.Unverifiable).Scope);
         // Warned, never failed.
         Assert.True(bake.Report.WarningsAccepted, bake.Log);
         Assert.Equal(0, bake.Report.ExitCode);
@@ -227,7 +284,7 @@ public class InMeshWarningRatchetTest(ITestOutputHelper output)
     public void TheReportIsFolded_NotOneLinePerOccurrence()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var bake = Bake(WarningBaseline.Parse([$"{DebtPath} CS0219", $"{DebtPath} CS1591"]));
+        var bake = Bake(WarningBaseline.Parse([$"{DebtPath} CS0219", $"{DebtPath} CS1574"]));
 
         var lines = bake.Log.ReplaceLineEndings("\n").Split('\n')
             .Where(l => l.StartsWith(WarningReportWriter.Prefix, StringComparison.Ordinal))

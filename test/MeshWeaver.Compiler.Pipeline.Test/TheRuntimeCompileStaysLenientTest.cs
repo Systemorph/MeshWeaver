@@ -41,10 +41,41 @@ public class TheRuntimeCompileStaysLenientTest
             + string.Join("; ", result.Diagnostics
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .Select(d => d.ToString())));
-        // …and it IS produced as a warning, so the gate has something to ratchet on. A green emit
-        // with no diagnostic at all would mean the standard has nothing to measure.
-        Assert.Contains(EmitPipelineAccess.Collect(result.Diagnostics),
+        // …and it is not REPORTED either: doc completeness is centrally suppressed for in-mesh C#
+        // exactly as core suppresses it for src/ (CompileWarning.NotReported — CS1591;CS1573;CS1712
+        // there, CS1591;CS1573;CS1712 in Directory.Build.props here).
+        Assert.DoesNotContain(EmitPipelineAccess.Collect(result.Diagnostics),
             w => w.Id == CompileWarning.MissingDocComment);
+    }
+
+    /// <summary>
+    /// 🚨 The suppression is a PARITY list, not a blanket. The two families the fleet's own
+    /// <c>NoWarn</c>s carry are dropped; every other warning still reaches the gate, or the
+    /// standard would be a tick over nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("CS1591", "public class P { public int V; }")]
+    [InlineData("CS1573", "/// <summary>S.</summary>\n/// <param name=\"a\">A.</param>\n"
+                          + "public class P { /// <summary>M.</summary>\n"
+                          + "/// <param name=\"a\">A.</param>\npublic void M(int a, int b) { } }")]
+    public void ACentrallySuppressedCode_IsNotReported(string code, string source)
+    {
+        var result = Emit(source);
+
+        Assert.True(result.Success);
+        Assert.Contains(result.Diagnostics, d => d.Id == code);          // the compiler produced it
+        Assert.DoesNotContain(EmitPipelineAccess.Collect(result.Diagnostics), w => w.Id == code);
+    }
+
+    /// <summary>The control for the case above: a code NOT on the parity list still reaches the
+    /// gate, so "nothing was reported" can never mean "nothing is reported".</summary>
+    [Theory]
+    [InlineData("CS0219", "public class P { public int Go() { int unused = 42; return 1; } }")]
+    [InlineData("CS1574", "/// <summary>See <see cref=\"Nope\"/>.</summary>\npublic class P { }")]
+    [InlineData("CS1570", "/// <summary>A &euro; entity.</summary>\npublic class P { }")]
+    public void ACodeThatIsNotSuppressed_StillReachesTheGate(string code, string source)
+    {
+        Assert.Contains(EmitPipelineAccess.Collect(Emit(source).Diagnostics), w => w.Id == code);
     }
 
     /// <summary>The other codes the gate ratchets on are warnings too — never errors.</summary>
