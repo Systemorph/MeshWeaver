@@ -272,10 +272,6 @@ NEVER_BLANK_CONFIG = {
         "read as an Int32 — empty fails the binder. Emit \"0\", never \"\".",
     "AzureAIS__Order":
         "read as an Int32 — empty fails the binder. Emit \"0\", never \"\".",
-    "ContainerImages__CacheMaxBytes":
-        "binds to a long (ContainerImageOptions.CacheMaxBytes, the read-through cache's byte "
-        "budget). Absent leaves the image default (20 GiB); an empty string fails the binder at "
-        "startup. Rendered only when containerImages.cacheMaxBytes is set.",
     "SelfUpdate__Registry":
         "binds to SelfUpdateOptions.Registry, whose default is the upstream ACR and whose value "
         "names the host of EVERY image the self-updater rolls to. Blank is not inert here — it is "
