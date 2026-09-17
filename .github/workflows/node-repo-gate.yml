@@ -506,6 +506,27 @@ on:
         required: false
         type: boolean
         default: false
+      upload-bake:
+        description: >-
+          Upload the bake this gate produced as `bake-<sha>` (folded) and
+          `bake-<sha>-shard-<n>`, for a job in the SAME run to download.
+
+          🚨 OFF by default, and it must stay off unless a reader exists. Both artifacts shipped
+          unconditionally until 2026-09-17 "for publish-bake to reuse (bake-run-id)" — a reuse that
+          was never built — and cost 66.8 GB of live Actions storage across the fleet, two copies of
+          identical bytes because every shard bakes the whole mount. `publish-bake` bakes its own
+          mount and uploads nothing, so for six of the seven callers this is pure bill.
+
+          MeshWeaver.Education is the one real reader: its disposable-mesh jobs (`e2e-install`,
+          `e2e-mesh`) download `bake-<sha>` into the portal's prebuilt mount so the mesh under test
+          does not Roslyn-compile the repo's own NodeTypes at boot — and `e2e/mesh/bundle-coverage.sh`
+          FAILS when no bundle reaches the mesh, so the download is load-bearing, not an optimisation.
+          Removing the upload took all five of that repo's mesh jobs down with
+          `Artifact not found for name: bake-<sha>` (run 35212656116). Hence an opt-in rather than a
+          restore: the saving stays for everyone who was never reading it.
+        required: false
+        type: boolean
+        default: false
       runner:
         description: >-
           The `runs-on` label for the gate SHARDS (`gate`) and nothing else — `plan` and `verify`
@@ -2190,30 +2211,37 @@ jobs:
       # below from the folded evidence. With `shards: 1` there is exactly one here and the fold is a
       # copy, so the contract is identical either way.
       #
-      # 🚨 THE BAKE IS NOT UPLOADED (removed 2026-09-17). Until today this step also shipped
-      # `bake-<sha>-shard-<n>`, and the aggregate job below downloaded every shard's copy and
-      # re-uploaded the union as `bake-<sha>` "for publish-bake to reuse (bake-run-id)". That reuse
-      # was never built: `bake-run-id` exists in no workflow, no script and no input in any repo of
-      # the fleet — an exhaustive search over MeshWeaver{,.Plugins,.Education,.Reinsurance,
-      # .SocialMedia,.Manufacturing,.Crm} and Memex finds the two uploads and the one download that
-      # feeds the second upload, and no other reference. publish-bake bakes its own mount
-      # (node-repo-publish-bake.yml uploads no artifact at all), so both copies were written, billed
-      # for three days, and read by nothing.
-      # Measured the day they were removed: 66.8 GB live across the fleet — Plugins 36.7,
-      # Reinsurance 10.2, Manufacturing 6.1, Crm 6.0, SocialMedia 4.0, Education 3.8 — which is
-      # ~100% of four satellites' entire Actions-storage bill. Two copies of identical bytes, because
-      # every shard bakes the whole mount and the fold is a union of duplicates.
-      # Nothing is lost by dropping them: the gate ASSERTS its own bake in-job (the
-      # `framework-mvid.txt` check in the tester step above is what proves the bake stage ran), so
-      # the upload's `if-no-files-found: error` was never the thing that caught a missing bake.
-      # If a cross-run bake reuse is ever actually built, it must land WITH its consumer — an upload
-      # whose reader does not exist is not a contract, it is a bill.
+      # 🚨 THE BAKE IS UPLOADED ONLY WHEN A READER ASKS FOR IT (`upload-bake`, default false).
+      # Until 2026-09-17 this step shipped `bake-<sha>-shard-<n>` unconditionally and the aggregate
+      # job below folded them into `bake-<sha>`, "for publish-bake to reuse (bake-run-id)" — a reuse
+      # that was never built, and 66.8 GB of live Actions storage across the fleet (Plugins 36.7,
+      # Reinsurance 10.2, Manufacturing 6.1, Crm 6.0, SocialMedia 4.0, Education 3.8), two copies of
+      # identical bytes because every shard bakes the whole mount. Dropping it cost those six repos
+      # nothing: the gate ASSERTS its own bake in-job (the `framework-mvid.txt` check in the tester
+      # step above), so `if-no-files-found: error` was never what caught a missing bake.
+      #
+      # 🚨 It cost the SEVENTH everything. MeshWeaver.Education's disposable-mesh jobs download
+      # `bake-<sha>` into the portal's prebuilt mount, and `e2e/mesh/bundle-coverage.sh` fails when
+      # no bundle reaches the mesh — so all five of them died on `Artifact not found for name:
+      # bake-<sha>` (run 35212656116), taking `Disposable-mesh gate`, a required context, with them.
+      # The search that preceded the removal looked for `bake-run-id` and for the uploads; it did
+      # not look for `name: bake-${{ github.sha }}` under `download-artifact`, which is where the
+      # reader was. So: opt-in, so the saving stays for the six who were never reading it, and the
+      # one who is says so at the call.
       - name: Upload this shard's gate log (the tester's stdout)
         if: always() && env.GATE_LOG != ''
         uses: actions/upload-artifact@v7
         with:
           name: gate-log-${{ github.sha }}-shard-${{ matrix.shard }}
           path: ${{ env.GATE_LOG }}
+          retention-days: 3
+          if-no-files-found: error
+      - name: Upload this shard's bake (only when the caller asked for it)
+        if: always() && inputs.upload-bake && env.OWN_BAKE != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: bake-${{ github.sha }}-shard-${{ matrix.shard }}
+          path: ${{ env.OWN_BAKE }}
           retention-days: 3
           if-no-files-found: error
       - name: Make core dumps readable by the uploader
@@ -2355,10 +2383,26 @@ jobs:
           path: ${{ runner.temp }}/gate.log
           retention-days: 3
           if-no-files-found: error
-      # (The bake used to be re-emitted here as `bake-<sha>`, folded from `bake-<sha>-shard-*`.
-      # Both are gone — see the long note beside the shard's gate-log upload above: the reader they
-      # were written for was never built, and the two copies cost 66.8 GB of live Actions storage
-      # across the fleet.)
+      # The bake, re-emitted under its canonical name — ONLY when the caller asked for it
+      # (`upload-bake`; see the long note beside the shard's upload above). Every shard bakes the
+      # whole mount (`compile` takes no --shard — it is 70 s and its output is what the gate then
+      # consumes), so merge-multiple overwrites identical bundles and the union is the complete bake
+      # either way.
+      - name: Collect every shard's bake
+        if: inputs.upload-bake && steps.expect.outputs.fold == 'true' && needs.gate.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: bake-${{ github.sha }}-shard-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/bake
+      - name: Upload the merged bake under its canonical name
+        if: inputs.upload-bake && steps.expect.outputs.fold == 'true' && needs.gate.result == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: bake-${{ github.sha }}
+          path: ${{ runner.temp }}/bake
+          retention-days: 3
+          if-no-files-found: error
       # 🚨 LAST, and unconditional on the fan-out's result: the fold above NAMES which shard broke,
       # and this is what makes that naming a RED rather than a note. Placed after the uploads so a
       # red gate still hands its evidence to the caller's ratchet — the same reason the shard job
