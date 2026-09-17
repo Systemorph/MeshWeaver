@@ -216,6 +216,12 @@ public sealed class DynamicTypePreWarmerHostedService(
         // the gate's own level-triggered read cannot supply, and it is what releases the stamps a
         // passing sweep held and discards the ones a failing sweep produced.
         var admission = mesh.ServiceProvider.GetService<Mesh.Services.MeshPublicationGate>();
+        // 🚨 #4645 — THE OUTCOME CENSUS, off the SAME provider as the admission gate and for
+        // the same reason: it must be the instance the bake report was published into, or /health
+        // would carry a plan from one object and an outcome from another. This is the only reader
+        // of the sweep's verdicts that is neither the readiness gate nor a log line, and it is the
+        // only one an operator can reach with `curl` and no credential.
+        var census = mesh.ServiceProvider.GetService<NodeTypeBakeReportRegistry>();
         if (sweepEnabled)
             gate?.MarkRunning("enumerating dynamic NodeTypes");
         if (gate is { GatesReadiness: true })
@@ -417,6 +423,12 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // activating its hub at all, and one broken upstream would otherwise activate
                     // its whole fan-out and hold it for the pod's lifetime. Those are retracted
                     // through their blocker instead (NodeTypeBakeGateState.RetractRegression).
+                    // 🚨 #4645 — the census records the SAME object the gate judges, so the
+                    // two can never disagree, and it costs no I/O: the verdict is already here.
+                    // The gate decides whether this pod may serve; the census says, on a public
+                    // body, WHICH types it cannot serve — including on a pod the gate lets
+                    // through, which is exactly the case nobody could see before.
+                    census?.RecordOutcome(outcome);
                     var gated = gate?.MarkOutcome(outcome) == true;
                     // 🚨 #3478 — act on the verdict the moment it turns, mid-sweep. The first
                     // regression makes this process Refused, so every stamp it has HELD so far is
@@ -526,6 +538,7 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // saturated, and whoever sequenced on the bake may proceed (#1114) — now able
                     // to see THAT it was a fault they proceeded past.
                     bake?.MarkSettled(PreWarmSettlement.Faulted);
+                    census?.RecordSettlement("faulted");
                 },
                 () =>
                 {
@@ -595,6 +608,7 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // stays refused regardless; the default install proceeding is deliberate —
                     // installs repair content, and the broken type is already terminal.
                     bake?.MarkSettled(PreWarmSettlement.Completed);
+                    census?.RecordSettlement("completed");
                 });
     }
 

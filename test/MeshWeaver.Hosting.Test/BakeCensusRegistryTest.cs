@@ -234,6 +234,215 @@ public class BakeCensusRegistryTest
         registry.Widest!.Settled.Should().Be(1145);
     }
 
+
+    // ── the OUTCOME census (#4645): the post-bytes-win verdict, as opposed to the plan ──────────
+
+    private static NodeTypeBakeReportRegistry Swept(params (string Path, PreWarmStatus Status)[] verdicts)
+    {
+        var registry = new NodeTypeBakeReportRegistry();
+        registry.Record(Reading(fromLocalAdoption: 0, stamps: 78));
+        foreach (var (path, status) in verdicts)
+            registry.RecordOutcome(new PreWarmOutcome(path, status));
+        registry.RecordSettlement("completed");
+        return registry;
+    }
+
+    /// <summary>
+    /// 🚨 <b>The reading that must exist for the census to be worth anything.</b> A bake report can
+    /// be published, clean and complete while the sweep that would say whether this replica can
+    /// SERVE those types never ran at all. Those are two different facts, so they are two different
+    /// printed sentences — and the absent one may never read as the clean one.
+    /// </summary>
+    [Fact]
+    public void NoSweepOutcome_IsNotACleanReplica_AndSaysSoInWords()
+    {
+        var registry = new NodeTypeBakeReportRegistry();
+        registry.Record(Reading(fromLocalAdoption: 0, stamps: 78));
+
+        var reading = registry.Latest!;
+        reading.OutcomesReached.Should().Be(0);
+        reading.SweepSettlement.Should().BeEmpty();
+
+        NodeTypeBakeReportRegistry.Describe(reading).Should()
+            .Contain("OUTCOME CENSUS: NO sweep has reported an outcome on this replica")
+            .And.Contain("a PLAN, not an outcome")
+            .And.Contain("NOT a clean replica",
+                "the whole publication is a sentence, so the refusal has to be IN the sentence");
+    }
+
+    /// <summary>
+    /// The other half of the pair, and the one that makes the assertion above falsifiable: a sweep
+    /// that ran and found everything servable prints a DIFFERENT sentence, with its denominator.
+    /// </summary>
+    [Fact]
+    public void ASweepThatFoundEverythingServable_PrintsACleanReadingWithItsDenominator()
+    {
+        var sentence = NodeTypeBakeReportRegistry.Describe(
+            Swept(("Edu/Course", PreWarmStatus.Compiled),
+                  ("Store/Item", PreWarmStatus.AlreadyBaked)).Latest);
+
+        sentence.Should()
+            .Contain("OUTCOME CENSUS (sweep completed)")
+            .And.Contain("every one of the 2 type(s) that reached a verdict has a usable assembly")
+            .And.Contain("Denominator: 2 of 209 enumerated type(s) reached a verdict",
+                "a zero that does not state what it is a zero OF could equally mean 'I could not "
+                + "look' — the defect class this census belongs to")
+            .And.NotContain("NO sweep has reported",
+                "the positive control: the clean reading must not carry the absent one's words, or "
+                + "the test above could never fail")
+            .And.NotContain("NO usable assembly",
+                "nor the indictment");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The verdict that is never benign</b>, and the reason the census exists: a type this
+    /// replica has no assembly for renders the area-not-found frame on every page that asks for one
+    /// — the symptom a maintainer reported on 2026-09-17 with no instrument that could name it.
+    /// </summary>
+    [Fact]
+    public void TypesWithNoUsableAssembly_AreNamedByPartition_NeverByNode()
+    {
+        var registry = Swept(
+            ("Approvals/Desk", PreWarmStatus.CompileError),
+            ("Approvals/Workspace", PreWarmStatus.UpstreamFailed),
+            ("Edu/Course", PreWarmStatus.Compiled));
+
+        var reading = registry.Latest!;
+        reading.NoUsableAssembly.Should().Be(2);
+        reading.UsableHere.Should().Be(1);
+
+        NodeTypeBakeReportRegistry.Describe(reading).Should()
+            .Contain("2 NodeType(s) have NO usable assembly on this replica")
+            .And.Contain("area-not-found frame",
+                "the sentence has to connect the verdict to the symptom a human actually sees, or "
+                + "nobody reading /health will link the two")
+            .And.Contain("in Approvals")
+            .And.NotContain("Approvals/Desk",
+                "this body is PUBLIC and unauthenticated: the partition routes the finding to an "
+                + "owner, the node's own title is the surface #3890 closed");
+    }
+
+    /// <summary>
+    /// 🚨 <b>"I did not find out" is a third answer</b>, and folding it into either of the other two
+    /// is the defect this census is built against. A timed-out type is not healthy and is not
+    /// broken.
+    /// </summary>
+    [Fact]
+    public void AnUnknownVerdict_IsNeitherUsableNorUnusable()
+    {
+        var reading = Swept(
+            ("Edu/Course", PreWarmStatus.Compiled),
+            ("Store/Item", PreWarmStatus.TimedOut),
+            ("Lib/Shared", PreWarmStatus.UpstreamUnevaluated)).Latest!;
+
+        reading.UsableHere.Should().Be(1);
+        reading.NoUsableAssembly.Should().Be(0);
+        reading.Unknown.Should().Be(2);
+
+        NodeTypeBakeReportRegistry.Describe(reading).Should()
+            .Contain("2 reached none (timed out, or waiting on something that did)",
+                "an unmeasured type must be VISIBLE in the sentence, not absorbed into the clean "
+                + "count — otherwise a sweep that measured almost nothing reads as a pass");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The cry-wolf control.</b> A type its own repository withdrew is not a defect on this
+    /// replica, and counting it as one would make the census fire on every completed retirement —
+    /// which is exactly how a detector stops being read. It is still COUNTED, so the denominator
+    /// reconciles and a reader can tell a retirement wave from breakage.
+    /// </summary>
+    [Fact]
+    public void AWithdrawnType_IsCountedButNotAsBreakage()
+    {
+        var reading = Swept(
+            ("Crm/Mail", PreWarmStatus.Removed),
+            ("Legacy/Thing", PreWarmStatus.Retired),
+            ("Edu/Course", PreWarmStatus.Compiled)).Latest!;
+
+        reading.NoUsableAssembly.Should().Be(0);
+        reading.Withdrawn.Should().Be(2);
+        reading.OutcomesReached.Should().Be(3);
+
+        NodeTypeBakeReportRegistry.Describe(reading).Should()
+            .Contain("2 were withdrawn by their own repository")
+            .And.NotContain("NO usable assembly on this replica",
+                "a retirement is not breakage, and a census that says it is will be ignored the "
+                + "next time it is right");
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE EXHAUSTIVE CONTROL.</b> Every member of <see cref="PreWarmStatus"/> is classified,
+    /// the four buckets partition the population exactly, and — the property that matters — a
+    /// status nobody classified counts as NO USABLE ASSEMBLY rather than joining the healthy count.
+    /// A new status added without a thought must surface as something to look at; an unclassified
+    /// outcome reading as a pass is the failure this whole census is built against.
+    /// </summary>
+    [Fact]
+    public void EveryStatusIsClassified_AndTheBucketsPartitionThePopulation()
+    {
+        var statuses = Enum.GetValues<PreWarmStatus>();
+        var registry = new NodeTypeBakeReportRegistry();
+        registry.Record(Reading(fromLocalAdoption: 0, stamps: 78));
+        foreach (var status in statuses)
+            registry.RecordOutcome(new PreWarmOutcome($"P{(int)status}/Type", status));
+
+        var reading = registry.Latest!;
+        reading.OutcomesReached.Should().Be(statuses.Length);
+        (reading.UsableHere + reading.NoUsableAssembly + reading.Unknown + reading.Withdrawn)
+            .Should().Be(statuses.Length,
+                "the four buckets must partition the population — a status falling through every "
+                + "arm would be counted nowhere and the denominator would stop reconciling");
+
+        reading.UsableHere.Should().Be(2,
+            "and ONLY Compiled and AlreadyBaked are usable: a gate that insisted on a fresh "
+            + "compile would fail every pod that inherited a good cache, and anything else "
+            + "counted usable would be a silent pass");
+    }
+
+    /// <summary>
+    /// The census folds onto whichever reading the host prints, whenever the verdicts arrive — the
+    /// sweep publishes its report before it emits a single outcome, so a census held in a second
+    /// object would print a plan from one instant and an outcome from another.
+    /// </summary>
+    [Fact]
+    public void TheCensusFoldsOntoTheReadingTheHostPrints_WhicheverOrderTheyArriveIn()
+    {
+        var registry = new NodeTypeBakeReportRegistry();
+        registry.RecordOutcome(new PreWarmOutcome("Approvals/Desk", PreWarmStatus.CompileError));
+        registry.Latest.Should().BeNull(
+            "no report has been published yet, so there is no reading to fold onto — and the "
+            + "registry must not invent one");
+
+        registry.Record(Reading(fromLocalAdoption: 0, stamps: 78));
+        registry.Latest!.NoUsableAssembly.Should().Be(1,
+            "a verdict that arrived before the report must not be lost: the host prints ONE "
+            + "reading, and both halves have to be on it");
+
+        registry.RecordOutcome(new PreWarmOutcome("Edu/Course", PreWarmStatus.Compiled));
+        registry.Latest!.OutcomesReached.Should().Be(2);
+        registry.Latest!.UsableHere.Should().Be(1);
+    }
+
+    /// <summary>
+    /// A sweep that FAULTED is neither clean nor a verdict — the sentence names the settlement, so
+    /// "it finished and found nothing" and "it died partway" cannot read the same.
+    /// </summary>
+    [Fact]
+    public void AFaultedSweep_SaysSo_RatherThanReadingAsAFinishedOne()
+    {
+        var registry = new NodeTypeBakeReportRegistry();
+        registry.Record(Reading(fromLocalAdoption: 0, stamps: 78));
+        registry.RecordOutcome(new PreWarmOutcome("Edu/Course", PreWarmStatus.Compiled));
+        registry.RecordSettlement("faulted");
+
+        NodeTypeBakeReportRegistry.Describe(registry.Latest).Should()
+            .Contain("OUTCOME CENSUS (sweep faulted)")
+            .And.NotContain("(sweep completed)",
+                "a sweep that died partway through its population has measured a PREFIX of it, and "
+                + "printing that as a finished census is the same lie as a skipped gate painted "
+                + "green");
+    }
+
     [Fact]
     public void TheLogWarningAndTheHealthVerdict_ShareOneThreshold()
         => SourceDiscoveryRegistry.GapShareWarnPercent.Should().Be(50,
