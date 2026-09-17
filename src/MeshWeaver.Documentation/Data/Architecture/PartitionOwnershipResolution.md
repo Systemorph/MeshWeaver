@@ -1,7 +1,7 @@
 ---
 Name: Partition Ownership Resolution
 Category: Architecture
-Description: How a create learns whether its NodeType owns a partition — one resolution per operation, what that shares and what it deliberately does not, and why the nested-instance refusal is not paid for.
+Description: How a create learns whether its NodeType owns a partition — one resolution per operation on the top-level path, what that shares and what it deliberately does not, and how a nested instance is refused from the definition's durable row without activating the type's hub.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5a9 3 0 0 0 18 0a9 3 0 0 0-18 0"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
 ---
 
@@ -9,11 +9,13 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 A NodeType declares `ownsPartition: true` and every instance of it is then a **partition root**: a
 top-level node whose path is just its id, with its own backing schema, its own `Admin/Partition`
-record and its creator as its Admin. Four checks on the create path need that one fact, and
+record and its creator as its Admin. Four checks on the TOP-LEVEL create path need that one fact, and
 `PartitionOwningTypes.OwnsPartition` is the one RESOLVER all four use — for a type registered in
 `src/` and for one declared in mesh content (`Crm/Client`), which is compiled live and is invisible
 to the static registry. Three of the four also share one ANSWER; the fourth resolves again after the
-write, on purpose. Which is which, and why, is the rest of this page.
+write, on purpose. A NESTED create needs the same fact for the opposite reason — to refuse an owning
+type below the root — and answers it through a second resolver that never activates the type's hub.
+Which is which, and why, is the rest of this page.
 
 ## What one resolution costs
 
@@ -78,54 +80,143 @@ The memo is a per-operation record, not a cache: nothing in it is keyed by anyth
 operation wrote, and it dies with the context — the rule [No Static State](/Doc/Architecture/NoStaticState)
 states for everything else that would otherwise outlive its mesh.
 
-## Nested instances of an in-mesh owning type are not refused
+## Nested instances of an in-mesh owning type are refused — from the definition's ROW
 
-`OwnsPartitionProvisioningValidator.Provision` refuses a nested instance of a partition-owning type
-— *"A 'Space' owns its partition, so it must be top-level"* — but only for a type the static
-registry can see. For a type declared in mesh content the validator returns `Valid()` before it ever
-resolves the declaration, so `acme/somewhere/myclient` typed `Crm/Client` is created as an ordinary
-child node.
+`OwnsPartitionProvisioningValidator` refuses a nested instance of a partition-owning type: an owning
+instance IS a partition root, so its path is just its id. Until #4449 item 1 it did so only for a
+type the static registry can see. For a type declared in mesh content it returned `Valid()` before
+resolving anything, so `acme/somewhere/myclient` typed `Crm/Client` was created as an ordinary child
+node — not a privilege escalation (the node landed inside a partition the caller already held
+`Create` on, `PartitionDefinition.IsPartitionRoot` was false, so no schema, no grant and no teardown
+followed it) but a **data-shape inconsistency**: the type author said instances own their partition,
+and here was one that did not. It is now refused for both, with the same keyed sentence
+(`access.partitionCreate.nestedOwningType`) in the caller's language and the same
+`NodeRejectionReason.InvalidPath` — which the importer already classifies as a content VERDICT, so a
+repository carrying such a node is not re-imported at the same fingerprint.
 
-**What that costs today.** The node is not a partition root: `PartitionDefinition.IsPartitionRoot`
-is false, so no post-creation handler makes it one, no schema is provisioned, no grant is written,
-and the partition-teardown handler will not fire for it on delete. It lands inside a partition the
-caller already holds `Create` on, so this is a **data-shape inconsistency** — the type author said
-instances of this type own their partition, and here is one that does not — and not a privilege
-escalation.
+What makes this hard is not the refusal. It is answering "does this type own its partition?" on the
+ORDINARY content path — every nested create of every non-static type — without putting an
+intermittent refusal in front of it.
 
-**What closing it would cost, measured.** The cheap option would be for some step already on the
-NESTED create path to have materialised the type's definition. Nothing does:
+### Why the top-level resolution cannot be reused
+
+Nothing already on the nested path materialises the created node's own definition:
 
 - `NodeTypeResolution.Resolves`, the NodeType-registration check every create runs, probes
-  `IStorageAdapter.Exists(nodeType)` and yields a **`bool`**. It establishes that the definition
-  exists; it never hands back its content.
-- `CreatableTypesCreationValidator` is the one create-path validator that DOES materialise a
-  `NodeTypeDefinition` on a nested create — but the **parent's** type, for its
-  [CreatableTypes](/Doc/Architecture/CreatableTypes) whitelist, not the created node's own.
-- No other validator in the Create chain reads the created node's type definition at all; the ones
-  that touch `NodeTypeDefinition` read the node's OWN content, which is a different thing.
+  `IStorageAdapter.Exists(nodeType)` and yields a **`bool`**.
+- `CreatableTypesCreationValidator` materialises a `NodeTypeDefinition` on a nested create — but the
+  **parent's**, for its [CreatableTypes](/Doc/Architecture/CreatableTypes) whitelist.
 
-So the cheap option collapses into the expensive one: one full resolution — two round trips — on
-every nested create of every in-mesh type, fleet-wide, for every non-platform writer.
+So the question needs a read of its own, and the top-level resolver's read is the wrong one. Its
+second half is `GetMeshNodeStream(<type>)`, and for a per-node hub *the read IS the activation*. A
+cold NodeType activation compiles; the create path's control-plane activation budget puts that at
+5–45 s in CI, against `PartitionOwningTypes.ProbeTimeout` of 10 s, and a timeout answers `null`,
+which fails closed. The top-level path accepts that because a top-level create of an owning type IS a
+partition-creation act and is rare. On the nested path it would refuse routine content creation
+whenever the type's hub happened to be cold.
 
-🚨 **And the cost is not only reads.** The second half is `GetMeshNodeStream(<type>)`, and for a
-per-node hub *the read IS the activation*. A cold NodeType activation compiles; the create path's
-own control-plane activation budget puts that at 5–45 s in CI, against
-`PartitionOwningTypes.ProbeTimeout` of 10 s — and a timeout answers `null`, which every caller turns
-into a fail-closed refusal. Paying it on every nested create would put an intermittent refusal,
-triggered by whether the type's hub happened to be warm, in front of routine content creation. The
-top-level path accepts that risk because a top-level create of an owning type IS a
-partition-creation act and is rare; a nested create of a package-declared type is the ordinary
-content path.
+### Why a hub-fed projection cannot be the answer either
 
-**The decision.** Not paid for as framed. What would make it cheap is a projection that answers
-"does this type own its partition?" without activating the type's hub — the shape
-`NodeTypeInstanceLocations` already has for `instanceLocations`, fed by each definition's own hub.
-That projection is deliberately **fail-open** (a type whose hub is not live on this process is
-simply unknown, and the query fans out in full), which is exactly right for narrowing a query and
-exactly wrong for deciding a refusal: enforcement that varies with which hubs happen to be warm is
-worse than enforcement that is honestly absent. Closing this properly means giving that lane a
-fail-closed denominator first.
+`NodeTypeInstanceLocations` answers `instanceLocations` with no read: each definition's OWN hub
+publishes its declaration into a mesh singleton while it is live on this process. Copying that shape
+for `ownsPartition` fails on the DENOMINATOR, whatever the unknown case is made to do. Its denominator
+is "the types whose hubs are warm on this process" — a type is unknown whenever its hub is cold, lives
+on another silo, or was recycled — and each of the three possible answers for unknown is wrong for a
+refusal:
+
+| Unknown answers… | Consequence |
+|---|---|
+| allow | enforcement varies with which hubs are warm — worse than enforcement that is honestly absent |
+| refuse | ordinary content is refused whenever a type's hub is cold — the intermittent refusal above |
+| activate, then answer | the activation cost above, paid per create |
+
+Completing the denominator by warming every owning type's hub up front pays the activation per
+process instead of per create, and still misses a type installed after the warm-up. That projection
+is **fail-open** by design, which is exactly right for narrowing a query (unknown fans out — slow,
+never partial) and exactly wrong for deciding a refusal.
+
+### The resolution: the durable row, whose denominator is complete by construction
+
+A nested create resolves ownership through `PartitionOwningTypes.OwnsPartitionWithoutActivating`,
+from exactly the two sources the create's own existence rule consults — and in the same order:
+
+| The type is… | The resolution |
+|---|---|
+| registered in `src/` | the static registry, synchronously, **no read** |
+| anything else | `IStorageAdapter.Read(<type>)` — ONE point read of the definition's durable row. No hub is addressed, so none is activated; no index is consulted |
+
+**Why nothing is "not known on this process".** The set of types a create can proceed with at all is
+*static ∪ stored*: a type in neither is refused as `NodeType '…' is not registered` by
+`NodeTypeResolution.Resolves`, which runs right after the validators and reads the same store. The
+resolver reads exactly that set, so every type the create could land with has a row this read
+reaches — from every process, whichever hubs are warm, cold or on another silo. The denominator is
+the store, not the process.
+
+**The three answers, and what a nested create does with each:**
+
+| Answer | When | The nested create |
+|---|---|---|
+| owns | the static or the stored definition declares `ownsPartition: true` | **refused** — `InvalidPath`, `access.partitionCreate.nestedOwningType` |
+| does not own | the declaration says `false`; the row is not a NodeType definition; the row is ABSENT; the host has no storage adapter | **proceeds** |
+| could not be established | the store faulted, or did not answer within `ProbeTimeout` | **refused** — `Unavailable`, `access.partitionCreate.undetermined`: retryable, not a verdict |
+
+🚨 **An absent row answers "does not own", not "unknown", on purpose.** Absent is a verdict the store
+gave, and the create does not land on it: the existence check that follows refuses the type as
+unregistered, which is the TRUE reason. Answering unknown would replace that message with "could not
+be established" for every mistyped type. The one window where it matters is a definition created
+between this read and that probe — the same microseconds-wide shape as a declaration edited mid-create,
+and it yields exactly the pre-change behaviour for that one create.
+
+🚨 **Measured while proving it: the top-level resolver is not even fail-closed here.** With the
+store made to fault the definition's row read, the listing half of `OwnsPartition` — served by the
+in-memory query provider, which drops a row whose read faults so the rest of a listing survives —
+answered "absent", i.e. "does not own", and a nested instance wired to that resolver was CREATED.
+On the nested path "absent" means "allow", so a query-backed existence check turns a store fault
+into the fail-open direction. The durable read has no such layer between the fault and the answer.
+
+**Why refusing the unknown case costs availability nothing new.** A store that cannot answer this read
+cannot answer the existence probe a moment later either, and the create fails on that. So "unknown"
+arises only when the create could not have succeeded anyway, and never because of a hub. That is the
+property the thread asked for: the refusal is **fail-closed**, and enforcement does **not** vary with
+which hubs happen to be warm.
+
+**Why reading the row is not a CQRS violation.** The [CQRS](/Doc/Architecture/CqrsAndContentAccess)
+rule forbids reading `Content` off a QUERY row, whose index trails the store; the durable row is what
+the index trails. The same page already names `IStorageAdapter.Read(path, options)` as the read that
+decides what a node IS for a lifecycle operation, and this create path already probes the same store
+(`Exists`, the write guard's durable probes). An absent row answers `null`; it cannot
+open the storm-breaker the way a routed point read of an absent node does. The row does trail an
+UPDATE of the definition by the owner's save debounce, so a declaration flipped within that window is
+judged by its previous value — identically on every process, which the warm-hub alternative cannot
+say.
+
+**Cost.** Static types — every platform type, which is nearly every nested create — pay nothing. A
+nested create of a type declared in mesh content pays one primary-key read. No hub activation, no
+query, no fan-out.
+
+**Proved on a real mesh** by `InMeshPartitionOwnerNestedCreateTest`: a nested create of an in-mesh
+owning type is refused with the keyed sentence and the owning type's hub is still not hosted
+afterwards (`GetHostedHub(…, HostedHubCreation.Never)`); a top-level create of the same type still
+works; a nested create of a non-owning in-mesh type still lands; and with the store made to fault the
+one definition read, the nested create is refused as unavailable — while a create of a platform type
+under the same parent, which needs no read, is untouched.
+
+### The create FORM, which authored the inconsistency itself
+
+`CreateLayoutArea` forced the namespace to root for a partition-owning type only when `FindStaticNode`
+answered, so the form placed an instance of an in-mesh owning type under whatever namespace the field
+held. `CreatableTypesProvider` already materialises every offered type's definition to build the
+picker, so `CreatableTypeInfo.OwnsPartition` now carries the declaration at no extra read, and the
+form forces root for any offered type that owns its partition. That is a convenience that keeps a
+person from meeting the refusal — never the boundary. A caller posting `CreateNodeRequest` directly
+never sees the form, which is why the validator above is the rule.
+
+### Not changed: the top-level resolver
+
+The four top-level checks still resolve through the listing plus `GetMeshNodeStream`, and so still
+carry the cold-activation exposure measured above. The durable row would serve them too. That is a
+behaviour change on a separate, security-adjacent path — including the post-creation handler's
+independent re-establishment — and is argued on its own rather than folded into this one.
 
 ## See also
 

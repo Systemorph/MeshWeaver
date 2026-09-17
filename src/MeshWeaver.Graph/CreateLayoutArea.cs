@@ -436,6 +436,15 @@ public static class CreateLayoutArea
         });
         var dataContext = LayoutAreaReference.GetDataPointer(formId);
 
+        // The offered types whose definition declares ownsPartition — published by the type field
+        // (section 6) from ICreatableTypesProvider's answer, which already materialised each
+        // definition, and read by the namespace field and the Create button. It is the only way
+        // this form learns that a type declared in MESH CONTENT (Crm/Client) owns its partition:
+        // FindStaticNode cannot see one (#4449). SEEDED here because an id that was never written
+        // emits nothing, and a Create click reading it would then never run.
+        var partitionOwningTypesId = $"{formId}_partitionOwningTypes";
+        host.UpdateData(partitionOwningTypesId, Array.Empty<string>());
+
         // 4. Name field (required) — primary input, Id auto-derives from it.
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("name"))
         {
@@ -495,6 +504,10 @@ public static class CreateLayoutArea
                 // only its declared types while a user who never touched it still created the
                 // stale default. The restriction has to hold on the path that WRITES.
                 AlignSeededTypeWithOffer(h, formId, offered);
+                h.UpdateData(partitionOwningTypesId, offered
+                    .Where(t => t.OwnsPartition)
+                    .Select(t => t.NodeTypePath)
+                    .ToArray());
 
                 // A pinned type the parent ALLOWS needs no picker — show it and move on. When the
                 // parent does not allow it, `offered` is empty and the picker below renders with
@@ -527,17 +540,25 @@ public static class CreateLayoutArea
         //    user/space namespace — whether the type was preset or picked from the dropdown.
         //    Keyed on the TYPE value only (DistinctUntilChanged) so it does NOT re-render while
         //    the user types Name/Description.
+        //    A type that OWNS its partition locks to root too, whatever else restricts it — static
+        //    or declared in mesh content — because the Create button places it there regardless.
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<Dictionary<string, object?>>(formId)
             .Select(form => form?.GetValueOrDefault("type")?.ToString() ?? "")
+            .CombineLatest(h.Stream.GetDataStream<string[]>(partitionOwningTypesId),
+                (selectedType, owning) => (SelectedType: selectedType,
+                    OwnsPartition: OwnsPartition(host, selectedType, owning)))
             .DistinctUntilChanged()
-            .Select(selectedType =>
+            .Select(selection =>
             {
+                if (selection.OwnsPartition)
+                    return (UiControl)BuildNamespaceControl([""], dataContext, locale: host.ViewerLocale());
                 // URL-param restriction wins; otherwise derive it from the SELECTED type.
                 var effective = urlRestrictedNamespaces;
-                if (effective == null && !string.IsNullOrEmpty(selectedType)
-                    && host.Hub.ServiceProvider.FindStaticNode(selectedType)?.Content is NodeTypeDefinition selDef
-                    && selDef.RestrictedToNamespaces is { Count: > 0 } r)
-                    effective = r.ToArray();
+                if (effective == null && !string.IsNullOrEmpty(selection.SelectedType)
+                    && host.Hub.ServiceProvider.FindStaticNode(selection.SelectedType)
+                        .ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions)
+                        is { RestrictedToNamespaces.Count: > 0 } selDef)
+                    effective = selDef.RestrictedToNamespaces.ToArray();
                 return (UiControl)BuildNamespaceControl(effective, dataContext, locale: host.ViewerLocale());
             }));
 
@@ -616,16 +637,18 @@ public static class CreateLayoutArea
                 // (AsynchronousCalls.md).
                 actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                     .Take(1)
-                    .Subscribe(formValues =>
+                    .Zip(actx.Host.Stream.GetDataStream<string[]>(partitionOwningTypesId).Take(1),
+                        (form, owning) => (Form: form, Owning: owning))
+                    .Subscribe(submitted =>
                     {
+                        var formValues = submitted.Form;
                         var ns = formValues.GetValueOrDefault("namespace")?.ToString()?.Trim() ?? "";
                         var selectedType = formValues.GetValueOrDefault("type")?.ToString()?.Trim();
-                        // Partition objects (Space, User) live ONLY at root — force "" no matter
-                        // what the namespace field held. Mirrors OwnsPartitionProvisioningValidator,
-                        // which rejects a partition-owning create with a non-empty namespace.
-                        if (!string.IsNullOrEmpty(selectedType)
-                            && host.Hub.ServiceProvider.FindStaticNode(selectedType)?.Content is NodeTypeDefinition stDef
-                            && stDef.OwnsPartition)
+                        // Partition objects (Space, User, Crm/Client) live ONLY at root — force ""
+                        // no matter what the namespace field held. A convenience that spares the
+                        // person OwnsPartitionProvisioningValidator's refusal of a nested owning
+                        // instance; the validator, not this, is the rule (#4449).
+                        if (OwnsPartition(host, selectedType, submitted.Owning))
                             ns = "";
                         var name = formValues.GetValueOrDefault("name")?.ToString()?.Trim();
                         var id = formValues.GetValueOrDefault("id")?.ToString()?.Trim();
@@ -713,6 +736,18 @@ public static class CreateLayoutArea
         stack = stack.WithView(buttonRow);
         return stack;
     }
+
+    /// <summary>
+    /// Whether <paramref name="selectedType"/> owns its partition, as far as this form can tell with
+    /// no read: a static definition that says so, or an offered type whose
+    /// <see cref="CreatableTypeInfo.OwnsPartition"/> did (<paramref name="offeredOwning"/>) — the
+    /// latter is the only route by which a type declared in mesh content is known here.
+    /// </summary>
+    private static bool OwnsPartition(LayoutAreaHost host, string? selectedType, string[]? offeredOwning) =>
+        !string.IsNullOrEmpty(selectedType)
+        && (host.Hub.ServiceProvider.FindStaticNode(selectedType)
+                .ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions) is { OwnsPartition: true }
+            || (offeredOwning ?? []).Contains(selectedType, StringComparer.OrdinalIgnoreCase));
 
     /// <summary>
     /// Builds the namespace input for the create form given an optional restriction:
