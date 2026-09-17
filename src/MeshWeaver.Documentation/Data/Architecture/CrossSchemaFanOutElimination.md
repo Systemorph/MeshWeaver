@@ -183,8 +183,12 @@ multiplier from every fan-out that survives, and it is independent of anchoring.
 
 Rows 8 and 9 came from a sweep of the NODE CONTENT of the six satellite repositories plus
 MeshWeaver.Plugins: every `nodeType:` string literal in a NodeType's `Source/*.cs` and in an
-executable `Code` node's `content.code`, judged by the same predicate the planner uses (a concrete
-`path:`/`namespace:` first segment, `partitions:all`, or a registered `QueryRoutingRule`). Content
+executable `Code` node's `content.code`, judged by the same predicate the planner uses. That
+predicate is `PostgreSqlPartitionedMeshQuery.Judge` over `ParsedQuery.IsSufficientlySpecified`, and
+it SERVES a query on any of four grounds — a concrete `path:`/`namespace:` first segment, several
+`path:`s (`ParsedQuery.Paths`), a wildcard-namespace filter (`ExtractNamespacePatterns`), or
+`partitions:all` — plus a fifth outside it, a registered `QueryRoutingRule` that names the partition
+the text does not (`nodeType:User` → `Auth`). Content
 is the blind spot rows 6 and 7 named: it compiles at RUNTIME, so `dotnet build` never sees it and
 `UnanchoredQueryAllowFileTest`, which scans `src/`, never read it.
 
@@ -201,6 +205,7 @@ anchored, declared and rule-pinned forms are not.
 | MeshWeaver.Plugins `ProviderSetupAreas` (2 reads) | `nodeType:ModelProvider sort:name limit:100`, `nodeType:LanguageModel sort:name limit:400`, per render of the Providers page | **Open, censused.** The page's own text names two homes (`Provider/{Name}`, `{you}/_Memex/{Name}`) while `ChatClientCredentialResolver.BuildModelQueries` also reads `{space}/Provider` — which set the page MEANS is a product decision, not a mechanical anchor |
 | MeshWeaver.Plugins `CouponEditArea.PackageQuery` | `nodeType:Store/Plugin` as a picker's `Queries` | **Open, censused** — the picker class below |
 | MeshWeaver.Crm `CrmQueries.AllClients` / `.OpenPipeline` / `.AllOpportunities` / `.AllInteractions` | `nodeType:Crm/{Client,Opportunity,Interaction} scope:subtree`, the board's roster and pipeline | **Open.** Genuinely mesh-wide (a client IS a partition) and the code says so in prose — but it does not DECLARE it, so a CI mesh refuses it and production reports it at Error. The fix is `partitions:all`, not an anchor |
+| MeshWeaver.Reinsurance `RecordSupport.Scope` (`ILS/Source/RecordSupport.cs`) | `IlsQueries.DealQueries("")` when a record page's path is not under a deal — `IlsPaths.DealOfTranche` answers null and the empty string is passed on, so the legs carry `namespace:` with no first segment | **Open, an edge case.** Every shipped record hub sits under `…/Deals/{deal}/{tranche}/`, so it should not arise — but the failure mode if it does is a mesh-wide union from a render path, where refusing to read at all is the honest answer. A guard on an empty deal path closes it |
 | `[MeshNode("nodeType:X")]` picker attributes — 191 lines in MeshWeaver.Reinsurance, 19 in MeshWeaver.Crm, 15 in MeshWeaver.Manufacturing, 2 in MeshWeaver.Education, plus multi-line ones in MeshWeaver.Plugins | the attribute's query, sent verbatim by `MeshNodePickerView` (plus the typed text) on every dropdown open | **Open, and NOT a per-attribute fix.** The picker names no partition, so every `[MeshNode(…)]` in the fleet is unanchored. `{node.namespace}` does not help (it resolves to the edited node's own path). The fix belongs in the picker — let it name the partitions it searches — or in `NodeTypeDefinition.InstanceLocations` for types that have a home |
 
 **Two blind spots of the content census, stated rather than hidden.** The predicate is a line
