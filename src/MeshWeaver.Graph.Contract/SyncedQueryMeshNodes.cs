@@ -121,14 +121,29 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         BehaviorSubject<ImmutableHashSet<string>> pathSet,
         Subject<QueryResultChange<MeshNode>> externalChanges,
         string? collectionName
+    ) : this(workspace, dataSourceId, queries, userIdentity, pathSet, externalChanges,
+        new Subject<IReadOnlyList<string>>(), collectionName)
+    {
+    }
+
+    private SyncedQueryMeshNodes(
+        IWorkspace workspace,
+        object dataSourceId,
+        IReadOnlyList<string> queries,
+        string userIdentity,
+        BehaviorSubject<ImmutableHashSet<string>> pathSet,
+        Subject<QueryResultChange<MeshNode>> externalChanges,
+        Subject<IReadOnlyList<string>> unanswered,
+        string? collectionName
     ) : base(workspace, dataSourceId,
-            ws => BuildReadStream(ws, queries, userIdentity, pathSet, externalChanges),
+            ws => BuildReadStream(ws, queries, userIdentity, pathSet, externalChanges, unanswered),
             collectionName)
     {
         Queries = queries;
         UserIdentity = userIdentity;
         _pathSet = pathSet;
         _externalChanges = externalChanges;
+        _unanswered = unanswered;
     }
 
     /// <summary>User identity used to open the upstream query. Cache key
@@ -136,6 +151,24 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
     public string UserIdentity { get; }
 
     private readonly BehaviorSubject<ImmutableHashSet<string>> _pathSet;
+
+    // The providers named on a snapshot frame that nobody answered — see Unanswered.
+    private readonly Subject<IReadOnlyList<string>> _unanswered;
+
+    /// <summary>
+    /// Emits the providers NAMED on a complete-snapshot frame this collection just folded —
+    /// <see cref="QueryResultChange{T}.SilentProviders"/>, the ones that completed without an
+    /// Initial and were counted as empty.
+    ///
+    /// <para>🚨 It exists because the SNAPSHOT this collection emits cannot carry the fact: its
+    /// element type is a node collection, and "the set is empty" and "nobody said what the set is"
+    /// are the same value there. A consumer that CACHES the snapshot needs the difference —
+    /// <c>MeshNodeStreamCache</c> replays the first frame for the life of the process, so caching a
+    /// frame nobody answered makes a durably present node read absent forever (MeshWeaver#4557).
+    /// The snapshot is still emitted: delivering it is what keeps a silent provider from hanging
+    /// every consumer, which is the outage the counted-as-empty rule was introduced for.</para>
+    /// </summary>
+    public IObservable<IReadOnlyList<string>> Unanswered => _unanswered;
 
     // Synchronous side-channel for synthetic Removed events pushed by the
     // delete handler (see <see cref="NotifyDeleted"/>). Merged into the per-query
@@ -229,7 +262,8 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         IReadOnlyList<string> queries,
         string userIdentity,
         BehaviorSubject<ImmutableHashSet<string>> pathSet,
-        Subject<QueryResultChange<MeshNode>> externalChanges)
+        Subject<QueryResultChange<MeshNode>> externalChanges,
+        Subject<IReadOnlyList<string>> unanswered)
     {
         // Defer everything to subscribe-time: any DI resolution failure
         // (missing IMeshQueryCore registration on this hub, etc.) becomes an
@@ -238,7 +272,8 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         // (e.g. AccessControlPipeline's permission-check try/catch) sees it,
         // never the StreamUpdates() / GetQuery() call site that triggered
         // the build.
-        return Observable.Defer(() => BuildReadStreamCore(workspace, queries, userIdentity, pathSet, externalChanges));
+        return Observable.Defer(() => BuildReadStreamCore(
+            workspace, queries, userIdentity, pathSet, externalChanges, unanswered));
     }
 
     private static IObservable<IEnumerable<MeshNode>> BuildReadStreamCore(
@@ -246,7 +281,8 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         IReadOnlyList<string> queries,
         string userIdentity,
         BehaviorSubject<ImmutableHashSet<string>> pathSet,
-        Subject<QueryResultChange<MeshNode>> externalChanges)
+        Subject<QueryResultChange<MeshNode>> externalChanges,
+        Subject<IReadOnlyList<string>> unanswered)
     {
         // Single IMeshQueryCore — the unsecured query surface. Has no
         // SecurityService dependency, so SecurityService can consume a
@@ -339,7 +375,18 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
                     : legacyFeed!.Subscribe(Removed, MeshChangeKind.Deleted);
             });
 
-        var allChanges = upstream.Merge(externalChanges).Merge(feedRemovals);
+        // 🚨 The snapshot frames' own verdict on themselves, forwarded BEFORE the fold sees them:
+        // a frame naming providers that never answered is a floor, not an answer, and the consumer
+        // that caches what this collection emits has to be told (see Unanswered). Empty/absent is
+        // the normal case and says "every provider answered".
+        var allChanges = upstream
+            .Do(change =>
+            {
+                if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                    unanswered.OnNext(change.SilentProviders ?? Array.Empty<string>());
+            })
+            .Merge(externalChanges)
+            .Merge(feedRemovals);
 
         // Fold change deltas into a path → MeshNode dictionary. The engine
         // already unions across all queries, so a single Initial seeds the
