@@ -248,6 +248,56 @@ public class ContentSchemaValidationTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
+    /// 🚨 The same exemption on the UPDATE path — which is the surface the CD red was actually
+    /// measured on (`MeshPlugin.Update` -> `MeshOperations.Update` -> `mesh.UpdateNode`). Update
+    /// reaches the guard with a different <see cref="NodeValidationContext"/> (it carries
+    /// <c>ExistingNode</c>, and runs the byte-identical shortcut first), so a create-only
+    /// regression suite would stay green while the update path reintroduced the failure
+    /// (automatic review on #4657).
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task Update_OmittingARequiredMember_StillLands_AndChangesTheNode()
+    {
+        var id = NewId();
+        var path = $"{TestPartition}/{id}";
+
+        await MeshService.CreateNode(Of(RequiredType, id, """{"body":"before","label":"before"}"""))
+            .Take(1).Should().Within(60.Seconds()).Emit(
+                "the node to update must exist first",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        // The caller sends only what it is changing — `body` is `required` and absent, which is the
+        // whole-document bind failure. The content also DIFFERS from what is stored, so the
+        // byte-identical shortcut cannot be what carries this case.
+        await MeshService.UpdateNode(Of(RequiredType, id, """{"label":"after"}"""))
+            .Take(1).Should().Within(60.Seconds()).Emit(
+                "an update that omits a `required` member is the partial-content shape the guard "
+                + "declines to judge — on main the JsonException escaped and failed it, which is "
+                + "exactly what red MeshPluginTest's two update cases in CD (#4648)",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        // Terminal state, and it discriminates: BEFORE the update the stored content binds
+        // (Label == "before"); after it, `body` is gone and it cannot bind at all. Waiting for the
+        // bind to STOP succeeding is therefore waiting for this specific write, not for any write.
+        // That it no longer binds is the exemption's documented cost, not a surprise — see
+        // Doc/Architecture/ContentSchemaOnWrite, "What the exemption costs".
+        var after = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null
+                        && n.ContentAs<RequiredMemberContent>(Mesh.JsonSerializerOptions) is null)
+            .FirstAsync().Timeout(60.Seconds())
+            .Await(TestContext.Current.CancellationToken);
+
+        // Serialise rather than cast: the stored value's representation is not this test's business
+        // (AGENTS.md — never cast an object payload), and this reads the same either way.
+        var stored = JsonSerializer.SerializeToElement(after.Content, Mesh.JsonSerializerOptions);
+        stored.GetProperty("label").GetString().Should().Be("after",
+            "the caller's value must be what landed");
+        stored.TryGetProperty("body", out _).Should().BeFalse(
+            "a full-replacement update writes what the caller sent — the omitted member is not "
+            + "silently re-filled from the previous version");
+    }
+
+    /// <summary>
     /// The counterpart, and the reason the whole-document failure FALLS THROUGH rather than
     /// returning Valid: a declared type with a <c>required</c> member throws before
     /// <see cref="JsonUnmappedMemberHandling.Skip"/> can apply, so returning Valid on <c>$</c>
