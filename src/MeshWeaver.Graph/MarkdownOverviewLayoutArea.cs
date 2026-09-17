@@ -294,8 +294,19 @@ public static class MarkdownOverviewLayoutArea
 
     /// <summary>
     /// The document's signatures, rendered by the e-Signature package when that package is on the
-    /// mesh — an empty stack otherwise, never an "area not found" card. The document path rides as
-    /// the layout-area REFERENCE, exactly as the approvals section hands it over.
+    /// mesh — an empty stack when the desk node is ABSENT. The document path rides as the
+    /// layout-area REFERENCE, exactly as the approvals section hands it over.
+    ///
+    /// <para>🚨 <b>"Never an area-not-found card" is what this guard aims at and NOT what it
+    /// guarantees</b>, and the same is true of the approvals section above. The probe asks the mesh
+    /// INDEX whether the desk NODE exists; whether the replica that ends up answering can RENDER its
+    /// areas is a different question, and a mid-roll makes the two disagree — the desk's NodeType
+    /// assembly can be stamped with a framework identity the serving replica does not run, so its
+    /// areas are never registered there while the shared <c>compilationStatus</c> still reads
+    /// <c>Ok</c> (Systemorph/MeshWeaver#4632). Measured 2026-09-17: the approvals section put the
+    /// framework's diagnostic, and sixty area names, inside a customer letter. The frame itself is
+    /// now a localized sentence with the diagnostic folded away, so the failure is survivable where
+    /// it lands — but do not read this line as a promise that it cannot land.</para>
     /// </summary>
     private static IObservable<UiControl?> SignaturesSection(LayoutAreaHost host, string nodePath)
         => PluginSurfaceProbe
