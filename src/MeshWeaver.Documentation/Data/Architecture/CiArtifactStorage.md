@@ -8,12 +8,24 @@ Icon: CloudArchive
 # CI artifact storage — the bytes, the bill, and where they belong
 
 **Compute left GitHub; storage has not.** Every private-repo job now runs on our ARC scale sets
-(`aks-silos` / `aks-silos-dind`) and the org's Actions budget is **$0 with
-`prevent_further_usage`** — nothing in a private repo can start a GitHub-hosted runner any more.
-What is still billed is **Actions storage**, and it is the whole of the remaining Actions line.
+(`aks-silos` / `aks-silos-dind`) and the org's Actions budget carries `prevent_further_usage` —
+nothing in a private repo can start a GitHub-hosted runner any more. What is still billed is
+**Actions storage**, and it is the whole of the remaining Actions line.
 
 > Maintainer, 2026-09-17: *"we still incur cost for github actions … please see that it goes to 0"*
 > · *"disable for any private repo"* · *"and when free capacity gone => defer to our infra"*.
+
+🚨 **READ THE BUDGET, NEVER REMEMBER IT — the amount moves within the day, and the whole fleet's CI
+hangs off it.** `GET /organizations/Systemorph/settings/billing/budgets` (the classic
+`/orgs/{org}/settings/billing/actions` endpoint answers **410 Moved**) returns each budget's
+`budget_amount` and `prevent_further_usage`. Measured at **$0** on 2026-09-17 morning and at
+**$6,000** the same day at 16:18Z — and the difference between those two numbers is whether any
+private repo in the fleet can upload an artifact at all. At $0 the first upload of every
+MeshWeaver.Plugins run failed from ~08:29Z with *"Artifact storage quota has been hit"*, every gate
+behind it reddened for want of its input, and nothing published
+([MeshWeaver.Plugins#2016](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2016)). A
+storage-quota refusal is therefore **a budget event, not a capacity event**, and deleting artifacts
+does not lift it until GitHub recalculates (every 6–12 h).
 
 ## The measurement (2026-09-17, REST only)
 
@@ -72,6 +84,82 @@ Three consequences, and they reorder what is worth doing:
    smaller retention numbers.
 3. **Moving the bytes off GitHub avoids both**, which is what the rest of this page is about.
 
+### 🚨 An EXPIRED artifact is deletable, and the sweeper used to skip every one of them
+
+The lag above is not GitHub's to end on its schedule — it is ours to end with a request. **Measured
+2026-09-17T16:22Z:** `DELETE /repos/Systemorph/MeshWeaver.Plugins/actions/artifacts/10455640297`,
+on an artifact whose `expired` field already read `true`, answered **204 No Content**, and a `GET`
+of the same id then answered **404**. So the 1,070 GB sitting `expired: true` and undeleted is a
+pool a sweep can reclaim.
+
+**The size of that pool, read straight off the invoice:** MeshWeaver.Plugins was billed **21,904
+GB-hours on 2026-09-16 — an average of 913 GB standing** — against a **381.5 GB** live inventory.
+The **531 GB difference is the lag**. It is the majority of what that repository pays for, and it is
+not live artifacts at all.
+
+Memex's `scripts/actions-cleanup.py` skipped it, on the premise — written into its own docstring —
+that *"expired artifacts hold no storage"*. That premise is the exact opposite of the fit above, and
+what it cost was **structural, not marginal**: its live rule selects an artifact that is *live* AND
+older than `--artifact-days` (2), and a **1-day-retention** artifact is `expired: true` before it is
+two days old. So the four families that are only a handoff between the jobs of one run —
+`platform-refs-*`, `workspace-build-*`, `compile-check-refs`, `module-pack-tool-*` — **could never be
+selected at all, by construction**, and those are the families the table below prices at 44% of the
+fleet's daily cost. The two rules, dry-run over the same repositories on 2026-09-17:
+
+| repository | the live rule alone | live + *expired within 7 days* |
+|---|--:|--:|
+| MeshWeaver.Manufacturing (40 pages) | 108 artifacts / 1.71 GB | **616 / 9.22 GB** |
+| MeshWeaver.Plugins (its newest 1.2 days) | **0** | **194 / 7.97 GiB** |
+
+🚨 **Expiry is the EARLIEST safe moment to delete a handoff — and deleting one before it is NOT
+safe.** A download of an expired artifact already fails, so deleting it cannot break a re-run that
+would otherwise have worked. Deleting a *live* handoff at the end of its own run — the tempting
+"it has been consumed, drop it" — **would**: `POST …/rerun-failed-jobs` re-runs the failed job but
+not the succeeded producer behind it, so the consumer comes back looking for bytes nobody
+re-uploaded. That is a live shape, not a hypothetical: see the misdirection below.
+
+🚨 **And a budgeted sweep must spend its budget on BYTES.** The invoice is GB-hours; the sweeper's
+budget is REQUESTS (`--max-deletes`, because GitHub wants ≥1 s between mutative requests and the
+caller is capped at 45 minutes). Measured over MeshWeaver.Plugins' newest 120 artifact pages —
+10,800 artifacts, 2026-09-16T11:37Z → 2026-09-17T16:16Z, **163.5 GiB uploaded in 29 hours** — **595
+rows (5.5%) carry 102 GiB (62%)**. Deleting in page order spends the budget on 300-byte receipts, so
+the sweeper orders candidates by size, descending.
+
+#### What one repository uploads in a day, by family
+
+The live-inventory table further down is a *stock*; this is the *flow* that refills it, and the two
+answer different questions. MeshWeaver.Plugins, the same 29-hour window:
+
+| family | GiB | rows | retention | read by |
+|---|--:|--:|--:|---|
+| `platform-refs-catalog-*` | 34.25 | 164 | 1 d | this run's `pack` legs, only when `/opt/platform` misses |
+| `workspace-build-catalog-*` | 33.81 | 143 | 1 d | this run's `pack` legs |
+| `compile-check-refs` | 31.11 | 130 | 1 d | this run's compile-check units and lanes |
+| `bake-<sha>[-shard-*]` | 11.58 | 542 | 3 d | the fold, in this run — **nothing in this repo** |
+| `portal-hosts-bin-*` | 6.69 | 45 | 1 d | this run's `portal-hosts-test` shards |
+| `module-pack-tool-catalog-*` | 3.07 | 158 | 1 d | this run's `pack` legs |
+| `module-bundle-*` (60 modules) | ~35 | ~5,700 | 7 d | this run's gates **and** a later run's ledger |
+
+### 🚨 A quota refusal surfaces one hop downstream, wearing no quota in its message
+
+When the org's Actions budget refused uploads on 2026-09-17 (08:29Z onward), the *producer* job
+failed at `Run actions/upload-artifact@v7` with GitHub's own sentence — and every consumer behind it
+failed with:
+
+```
+##[error]Unable to download artifact(s): Artifact not found for name: portal-hosts-bin-network-133-…
+  Please ensure that your artifact is not expired and the artifact was uploaded using a compatible
+  version of toolkit/upload-artifact.
+```
+
+Sixteen legs, one run, and not one of those messages names a quota, a budget or the producing job.
+The author of a documentation-link PR reads *"artifact not found"* and goes looking in their own
+diff. The steward's verdict on the producer was worse — *"step 'Run actions/upload-artifact@v7'
+failed and NO named signature matched — this is (or may be) a real red"*. MeshWeaver.Plugins#2017
+adds a third class for it (`INFRA`: a **named** condition that is provably not the change under test
+and that no retry can clear, reported with its cause and never retried), which is the right shape
+and the one to copy into core's steward rather than adding the quota to a list that means *retry*.
+
 ### And the declared retention is capped at 7 days anyway
 
 Measured off `expires_at`: `publication-inputs` declares `retention-days: 30` and is created with a
@@ -101,7 +189,7 @@ With the lag included, the model totals **$8.78/day against $8.70 billed**:
 | bytes | artifact family | retention | who reads it |
 |--:|---|--:|---|
 | 247.1 GB | `module-bundle-<module>` | 7 d | **both**: this run's gate / compile-check / publish-bake, **and** a LATER run through the build ledger |
-| 36.7 GB | `bake-<sha>[-shard-*]` | 3 d | **nobody** — removed 2026-09-17 |
+| 36.7 GB | `bake-<sha>[-shard-*]` | 3 d | the fold, in this run; `bake-<sha>` by MeshWeaver.Education's e2e jobs. **Opt-out per caller** (`upload-bake`); 3 d is a floor, not a habit — see below |
 | 28.2 GB | `platform-refs-<lane>` | 1 d | this run's `pack` legs, only when the `/opt/platform` mount misses |
 | 28.2 GB | `workspace-build-<lane>` | 1 d | this run's `pack` legs |
 | 24.4 GB | `compile-check-refs` | 1 d | this run's compile-check units and lanes |
@@ -121,17 +209,58 @@ Two facts decide the design:
    consumers read the artifact from *this* run. 754 live copies of one module's bundle were
    measured at once, at 8 MB each.
 
-## What was removed outright
+## What became OPT-OUT — and why it is not "removed outright"
 
-`node-repo-gate.yml` uploaded the gate's bake twice — per shard, then folded — *"for publish-bake to
+`node-repo-gate.yml` uploads the gate's bake twice — per shard, then folded — *"for publish-bake to
 reuse (`bake-run-id`)"*. **That reuse was never built**: `bake-run-id` exists in no workflow, script
 or input anywhere in the fleet, and `node-repo-publish-bake.yml` uploads no artifact at all and
 bakes its own mount. Two copies of identical bytes (every shard bakes the whole mount, so the fold
-is a union of duplicates), held three days, read by nothing — **66.8 GB across the fleet**, and
-~100% of the Reinsurance, Manufacturing, Crm and Education bills.
+is a union of duplicates), held three days — **66.8 GB across the fleet**, and ~100% of the
+Reinsurance, Manufacturing, Crm and Education bills.
+
+🚨 **But "read by nothing" was WRONG, and the correction is the lesson.** #4578 deleted both uploads
+on a fleet-wide search that found no consumer; the search read **local checkouts**, and
+MeshWeaver.Education's was eight commits stale. Its `main` downloads `bake-<sha>` **twice** — in
+`e2e-install` and in the four-shard `e2e-mesh`, neither with `continue-on-error`, both feeding the
+blocking `mesh-gate` — and it calls the lane at `@main`, so the removal would have reddened its next
+run on an artifact that had simply stopped being produced. #4585 restored the uploads behind an
+`upload-bake` input **defaulting TRUE**; Reinsurance, SocialMedia, Crm and Manufacturing pass
+`false` (verified 2026-09-17 against each repo's REMOTE default-branch workflows), Plugins' opt-out
+is MeshWeaver.Plugins#2024, and Education keeps it. That holds ~64.9 GB of the 66.8 and costs
+Education nothing.
+
+> 🚨 **Never conclude "nothing reads this" from a working tree.** `git rev-parse HEAD` against
+> `gh api repos/<o>/<r>/commits/main --jq .sha` first, or read the file through the API. An absent
+> consumer and a stale checkout are byte-identical from here.
 
 > 🚨 **An upload whose reader does not exist is not a contract, it is a bill.** If a cross-run bake
 > reuse is ever wanted, it lands *with* its consumer.
+
+### 🚨 A same-run handoff's retention floor is NOT 1 day — it is the QUEUE, twice
+
+The per-shard bake looks like the ideal candidate for GitHub's 1-day minimum: `bake-<sha>-shard-<n>`
+has exactly one consumer, `Collect every shard's bake`, and nothing outside `node-repo-gate.yml`
+names the sharded form. It was shortened to 1 on 2026-09-17 and **reverted the same hour**, because
+"the consumer runs minutes later" is a description of the *happy path*, not a bound.
+
+The fold `needs: [plan, gate]`, so it cannot start until the **last** shard has finished — and
+GitHub's usage limit lets a job sit **QUEUED for 24 hours** before it is terminated.
+`timeout-minutes` bounds execution and never the wait, so that bound applies **twice**:
+
+```
+first shard uploads → last shard queued ≤24 h + runs ≤45 min → fold queued ≤24 h
+```
+
+≈ **48.8 h** maximum age at the moment the fold downloads it. **1 day and 2 days are both below
+that**; 3 is the smallest whole-day value above it, with ~23 h of margin. Shortening it converts a
+gate whose shards all passed into `Artifact not found` in the fold — a red manufactured by the
+retention.
+
+**The general rule, and it applies to every `retention-days` on this page:** the floor for a
+*same-run* handoff is *(the consumer's worst-case queue wait) + (the producer's worst-case wait and
+run)*, not "how long a human thinks the run takes". The bytes are better recovered by the sweeper,
+which deletes at **expiry** — the one moment that provably cannot break a consumer that could still
+have run.
 
 ## The seam: `ci-artifact-store.py`
 
@@ -244,6 +373,12 @@ Neither of these is a repository change, so neither is in this design's PRs:
 
 Until both land, every caller leaves `artifact-store` unset and the lanes behave exactly as they
 did. That is the degrade rule doing its job, and it is why the seam can land first.
+
+3. **Arm the nightly sweeper.** Memex's `actions-cleanup.yml` is fixed, self-tested and still a dry
+   run on every scheduled night until the repository variable says otherwise:
+   `gh variable set MW_ACTIONS_CLEANUP --body arm --repo Systemorph/Memex`. It is the only lever on
+   this page that needs no credential and no container — it deletes what already exists, and it is
+   what ends the deletion lag.
 
 ## See also
 

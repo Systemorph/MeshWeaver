@@ -2255,6 +2255,25 @@ jobs:
           path: ${{ env.GATE_LOG }}
           retention-days: 3
           if-no-files-found: error
+      # 🚨 RETENTION 3 IS A FLOOR, NOT A ROUND NUMBER — do not "tidy" it down to GitHub's 1-day
+      # minimum. This artifact's only consumer is `Collect every shard's bake` below, and that job
+      # `needs: [plan, gate]`, so it cannot start until the LAST shard has finished. GitHub's own
+      # usage limit lets a job sit QUEUED for 24 hours before it is terminated (`timeout-minutes`
+      # bounds execution, never the wait), and that bound applies twice here:
+      #
+      #   first shard uploads  →  last shard queued ≤ 24 h + runs ≤ 45 min  →  fold queued ≤ 24 h
+      #
+      # ≈ 48.8 h maximum age when the fold downloads it. 1 day and 2 days both sit BELOW that;
+      # 3 days is the smallest whole-day value above it, with ~23 h of margin. Shortening it would
+      # turn a gate that ran green into `Artifact not found` in the fold — a red produced by the
+      # retention, on a run whose shards all passed. (Considered and rejected 2026-09-17: the saving
+      # is real — you pay retention PLUS a 2-6 day deletion lag, Doc/Architecture/CiArtifactStorage
+      # — but the bytes come back through the fleet sweeper, which deletes at EXPIRY and cannot
+      # break a consumer that could still have run.)
+      #
+      # Nothing outside this file names `bake-<sha>-shard-*`: verified 2026-09-17 against every
+      # satellite's REMOTE default-branch workflows, not a local checkout — an absent consumer and a
+      # stale checkout look identical, which is the mistake #4578 made and #4585 had to undo.
       - name: Upload this shard's bake
         if: always() && inputs.upload-bake && env.OWN_BAKE != ''
         uses: actions/upload-artifact@v7
