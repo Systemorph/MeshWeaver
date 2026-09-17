@@ -143,7 +143,26 @@ from exactly the two sources the create's own existence rule consults — and in
 | The type is… | The resolution |
 |---|---|
 | registered in `src/` | the static registry, synchronously, **no read** |
-| anything else | `IStorageAdapter.Read(<type>)` — ONE point read of the definition's durable row. No hub is addressed, so none is activated; no index is consulted |
+| anything else | `IStorageAdapter.ReadMany([<type>])` — ONE read of the definition's durable row. The type's own hub is never addressed, so the NodeType is never compiled to answer this; no index is consulted |
+
+🚨 **Two things about that read are worth stating exactly, because both were review findings and
+both are about what the seam really does.**
+
+**It is `ReadMany`, not `Read`, because `Read` can WRITE.** Where partition storage hubs are
+configured `IStorageAdapter` is `RoutingProxyAdapter`, and its `Read` is wrapped in
+`LegacyUserPartitionRepair`: for a bare, partition-root-shaped path an absent row triggers a
+legacy-twin probe and can durably write a repaired root. An ownership CHECK may not write anything.
+Both that proxy and `PersistenceService` override `ReadMany` precisely to route around the repair
+("the repair is for a bare partition-ROOT point read"), so it asks the store the same question with
+no side effect and answers a path the store does not hold by simply omitting it.
+
+**"Without activating" is a claim about the TYPE's hub, not about locality.** In that same
+configuration the store is reached by a routed request to the PARTITION's storage hub, which may
+itself be cold. That is the hub `NodeTypeResolution.Resolves` asks moments later, through the same
+adapter, for the very same create — so this check adds no activation and no availability dependency
+the create did not already have. What it never touches is the type's own per-node hub, whose
+activation compiles the NodeType; that is the 5–45 s cost, and it is the one this design exists to
+avoid.
 
 **Why nothing is "not known on this process".** The set of types a create can proceed with at all is
 *static ∪ stored*: a type in neither is refused as `NodeType '…' is not registered` by
@@ -157,7 +176,7 @@ the store, not the process.
 | Answer | When | The nested create |
 |---|---|---|
 | owns | the static or the stored definition declares `ownsPartition: true` | **refused** — `InvalidPath`, `access.partitionCreate.nestedOwningType` |
-| does not own | the declaration says `false`; the row is not a NodeType definition; the row is ABSENT; the host has no storage adapter | **proceeds** |
+| does not own | the declaration says `false`; the row is not a NodeType definition; the row is ABSENT (the store's verdict, not a missing answer); the host has no storage adapter | **proceeds** |
 | could not be established | the store faulted, or did not answer within `ProbeTimeout` | **refused** — `Unavailable`, `access.partitionCreate.undetermined`: retryable, not a verdict |
 
 🚨 **An absent row answers "does not own", not "unknown", on purpose.** Absent is a verdict the store

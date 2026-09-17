@@ -459,6 +459,69 @@ def _leading_modifiers(declaration: str) -> tuple[set[str], str]:
     return modifiers, " ".join(tokens)
 
 
+def _code_without_literals(text: str) -> str:
+    """`text` with COMMENT and string/char-literal content blanked out, everything else in place.
+
+    🚨 Only braces that are CODE decide where a type's body is. Two shapes made the raw text lie
+    about that, both of them valid C# a reviewer would call ordinary (#4449 review):
+
+      * `public interface IMarker { /* marker */ }` — an empty inline body whose comment made the
+        "one line WITH members" refusal fire, so a perfectly scannable type ended the whole scan.
+      * a brace inside a literal on the declaration's own line (`$"{{"`, `'{'`, `@"a { b"`), which
+        counts toward the brace balance and can read as a body opening where none does.
+
+    Blanking preserves offsets, so `index`/`rindex` on the sanitized line still address the same
+    columns as the raw one. It is deliberately LINE-local and used only where the type declaration's
+    own body is classified: a comment or literal that runs past the line reads as "no code after
+    here", which is the conservative direction — the scan then looks at the next line rather than
+    inventing a body.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            break  # a line comment: nothing after it is code
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            end = text.find("*/", i + 2)
+            if end == -1:
+                break  # the comment runs past this line
+            out.append(" " * (end + 2 - i))
+            i = end + 2
+            continue
+        if ch in "\"'":
+            # `@` makes a string VERBATIM (`""` is the escape, `\\` is not); `$` only interpolates.
+            verbatim = False
+            k = i - 1
+            while k >= 0 and text[k] in "@$":
+                verbatim = verbatim or text[k] == "@"
+                k -= 1
+            j = i + 1
+            while j < n:
+                c = text[j]
+                if verbatim and ch == '"':
+                    if c == '"':
+                        if j + 1 < n and text[j + 1] == '"':
+                            j += 2
+                            continue
+                        break
+                    j += 1
+                    continue
+                if c == "\\":
+                    j += 2
+                    continue
+                if c == ch:
+                    break
+                j += 1
+            out.append(" " * (min(j, n - 1) - i + 1))
+            i = j + 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _brace_delta(text: str) -> int:
     return text.count("{") - text.count("}")
 
@@ -769,15 +832,19 @@ def parse_members(path: str, text: str) -> FileSurface:
         for i in range(line_no, min(line_no + 60, len(lines))):
             statement_lines.append(lines[i])
             stripped = lines[i].strip()
-            if _brace_delta(stripped) > 0:
+            # 🚨 Braces inside a COMMENT or a LITERAL are not braces (#4449 review): `{ /* marker */ }`
+            # is an empty inline body, and `$"{{"` / `'{'` / `@"a { b"` open nothing at all.
+            # `_code_without_literals` preserves offsets, so the column arithmetic below is unchanged.
+            code = _code_without_literals(stripped)
+            if _brace_delta(code) > 0:
                 body_open = i
                 break
             # 🚨 Only on the DECLARATION's own line. A balanced `{…}` on a CONTINUATION line is an
             # interpolated string or an attribute, never a body — `NodeTypeParkedException`'s base
             # call carries `$"NodeType '{path}' is PARKED …"` three lines below its declaration,
             # and treating that as a body would refuse a perfectly ordinary type.
-            if i == line_no and "{" in stripped:
-                inner = stripped[stripped.index("{") + 1 : stripped.rindex("}")]
+            if i == line_no and "{" in code and "}" in code:
+                inner = code[code.index("{") + 1 : code.rindex("}")]
                 if inner.strip():
                     # 🚨 A body written entirely on one line, WITH members. Nothing here reads it,
                     # and reporting the type as memberless would spell "not checked" exactly like
@@ -2437,6 +2504,35 @@ MARKER_INLINE_BODY_NEXT_TYPE_GROWS = (
     "}\n"
 )
 
+# 🚨 #4449 (review): the same shape with a COMMENT in the body, and a brace inside a LITERAL on the
+# declaration's own line. Both are ordinary C#; before `_code_without_literals` the first ended the
+# whole scan with "declares its whole body on one line with members in it" (a false positive no
+# author could fix on the code side) and the second could read a literal's brace as a body opening.
+MARKER_COMMENTED_INLINE_BODY = (
+    "namespace N;\n"
+    "public interface IMarker { /* nothing to implement */ }\n"
+    "\n"
+    "public record Ctx\n"
+    "{\n"
+    "    public int Existing { get; init; }\n"
+    "}\n"
+)
+MARKER_COMMENTED_INLINE_BODY_NEXT_TYPE_GROWS = MARKER_COMMENTED_INLINE_BODY.replace(
+    "    public int Existing { get; init; }\n",
+    "    public int Existing { get; init; }\n    public int Added { get; init; }\n",
+)
+BRACE_IN_LITERAL_DECLARATION = (
+    "namespace N;\n"
+    "public class Holder : Base($\"a {{ literal brace\")\n"
+    "{\n"
+    "    public int Existing { get; init; }\n"
+    "}\n"
+)
+BRACE_IN_LITERAL_DECLARATION_GROWS = BRACE_IN_LITERAL_DECLARATION.replace(
+    "    public int Existing { get; init; }\n",
+    "    public int Existing { get; init; }\n    public int Added { get; init; }\n",
+)
+
 SURFACE_TESTS += [
     (
         "🚨 #4449: an EMPTY inline body (`interface IMarker { }`) does not adopt the next type's "
@@ -2445,6 +2541,22 @@ SURFACE_TESTS += [
         {"src/A/Ctx.cs": MARKER_INLINE_BODY_NEXT_TYPE_GROWS, "src/A/Keep.cs": KEEP_A},
         {},
         {"A:N.Ctx::Added": "member-added"},
+    ),
+    (
+        "🚨 #4449 review: an inline body holding only a COMMENT is EMPTY — the scan neither refuses "
+        "the file nor adopts the next type's members",
+        {"src/A/Ctx.cs": MARKER_COMMENTED_INLINE_BODY, "src/A/Keep.cs": KEEP_A},
+        {"src/A/Ctx.cs": MARKER_COMMENTED_INLINE_BODY_NEXT_TYPE_GROWS, "src/A/Keep.cs": KEEP_A},
+        {},
+        {"A:N.Ctx::Added": "member-added"},
+    ),
+    (
+        "🚨 #4449 review: a brace inside a LITERAL on the declaration's own line opens no body — "
+        "the type's real body on the next line is still the one scanned",
+        {"src/A/Holder.cs": BRACE_IN_LITERAL_DECLARATION, "src/A/Keep.cs": KEEP_A},
+        {"src/A/Holder.cs": BRACE_IN_LITERAL_DECLARATION_GROWS, "src/A/Keep.cs": KEEP_A},
+        {},
+        {"A:N.Holder::Added": "member-added"},
     ),
 ]
 

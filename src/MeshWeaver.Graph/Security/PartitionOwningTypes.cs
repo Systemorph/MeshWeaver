@@ -146,11 +146,20 @@ public static class PartitionOwningTypes
     /// <para>🚨 <b>The denominator is complete by construction, which is what makes this fail-closed
     /// without being fail-intermittent.</b> The answer comes from exactly the two sources
     /// <see cref="NodeTypeResolution.Resolves"/> consults, in the same order: the static registry,
-    /// then the DURABLE row (<see cref="IStorageAdapter.Read"/>). A type in neither is refused as
-    /// unregistered by the create's existence check, so every type a create can land with has a row
-    /// this read reaches — from every process, whichever hubs are warm. A hub-fed projection (the
-    /// <see cref="NodeTypeInstanceLocations"/> shape) cannot say that: its denominator is the hubs live
-    /// on this process. See <c>Doc/Architecture/PartitionOwnershipResolution</c>.</para>
+    /// then the DURABLE row (<see cref="IStorageAdapter.ReadMany"/>, the repair-free read seam). A
+    /// type in neither is refused as unregistered by the create's existence check, so every type a
+    /// create can land with has a row this read reaches — from every process, whichever hubs are
+    /// warm. A hub-fed projection (the <see cref="NodeTypeInstanceLocations"/> shape) cannot say
+    /// that: its denominator is the hubs live on this process. See
+    /// <c>Doc/Architecture/PartitionOwnershipResolution</c>.</para>
+    ///
+    /// <para>🚨 <b>What "without activating" does and does not claim</b> (review on #4589). It
+    /// claims the TYPE's own per-node hub — the one whose activation COMPILES the NodeType — is
+    /// never addressed. It does not claim the read is process-local: where partition storage hubs
+    /// are configured the store itself is reached by a routed request to the partition's storage
+    /// hub. That hub is the one <see cref="NodeTypeResolution.Resolves"/> asks moments later through
+    /// the same adapter, so this check adds no activation and no availability dependency the create
+    /// did not already have.</para>
     ///
     /// <list type="bullet">
     ///   <item><c>true</c> — the static or stored definition declares <c>ownsPartition</c>.</item>
@@ -186,12 +195,20 @@ public static class PartitionOwningTypes
         if (storage is null)
             return Observable.Return<bool?>(false);
 
-        return Observable.Defer(() => storage.Read(nodeType, options))
+        // 🚨 ReadMany, NOT Read — the seam that carries no repair (review on #4589). Where partition
+        // storage hubs are configured, IStorageAdapter is RoutingProxyAdapter and its `Read` is
+        // wrapped in LegacyUserPartitionRepair: an absent row at a partition-root-shaped path
+        // triggers a legacy-twin probe and can durably WRITE a repaired root. An ownership CHECK may
+        // not write anything. Both that proxy and PersistenceService override `ReadMany` for exactly
+        // that reason ("the repair is for a bare partition-ROOT point read"), so this asks the store
+        // the same question with no side effect; a path the store does not hold is simply absent.
+        return Observable.Defer(() => storage.ReadMany([nodeType], options))
             .Take(1)
             .Select(row => (bool?)DeclaresOwnership(row, options))
-            // A read that completes WITHOUT an answer broke the adapter's "emits the node (or null)"
-            // contract — that is not a verdict, so it is not "does not own" either.
-            .DefaultIfEmpty((bool?)null)
+            // ABSENT is the store's verdict, not a missing answer: there is no row, so nothing
+            // declares ownership, and the create's own existence check refuses an unregistered type
+            // next — with the true reason. A FAULT is the other case and is caught below.
+            .DefaultIfEmpty(false)
             .Timeout(ProbeTimeout, Observable.Return<bool?>(null))
             .Catch<bool?, Exception>(_ => Observable.Return<bool?>(null));
     }

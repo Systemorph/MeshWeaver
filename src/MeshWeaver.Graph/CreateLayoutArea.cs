@@ -438,12 +438,15 @@ public static class CreateLayoutArea
 
         // The offered types whose definition declares ownsPartition — published by the type field
         // (section 6) from ICreatableTypesProvider's answer, which already materialised each
-        // definition, and read by the namespace field and the Create button. It is the only way
-        // this form learns that a type declared in MESH CONTENT (Crm/Client) owns its partition:
-        // FindStaticNode cannot see one (#4449). SEEDED here because an id that was never written
-        // emits nothing, and a Create click reading it would then never run.
+        // definition. It is the only way this form learns that a type declared in MESH CONTENT
+        // (Crm/Client) owns its partition: FindStaticNode cannot see one (#4449).
+        //
+        // 🚨 NOT seeded, deliberately (review on #4589). A seeded empty array is indistinguishable
+        // from "the provider answered and nothing it offers owns a partition", and the Create
+        // button would have consumed the placeholder on a click that beat the provider — placing an
+        // in-mesh owning instance under a namespace again. The namespace FIELD defaults to the
+        // picker until the answer arrives (a display that corrects itself); the SUBMIT waits for it.
         var partitionOwningTypesId = $"{formId}_partitionOwningTypes";
-        host.UpdateData(partitionOwningTypesId, Array.Empty<string>());
 
         // 4. Name field (required) — primary input, Id auto-derives from it.
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("name"))
@@ -544,7 +547,10 @@ public static class CreateLayoutArea
         //    or declared in mesh content — because the Create button places it there regardless.
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<Dictionary<string, object?>>(formId)
             .Select(form => form?.GetValueOrDefault("type")?.ToString() ?? "")
-            .CombineLatest(h.Stream.GetDataStream<string[]>(partitionOwningTypesId),
+            .CombineLatest(
+                // StartWith, because the field must render before the provider answers; it
+                // re-renders — and locks — the moment it does.
+                h.Stream.GetDataStream<string[]>(partitionOwningTypesId).StartWith([]),
                 (selectedType, owning) => (SelectedType: selectedType,
                     OwnsPartition: OwnsPartition(host, selectedType, owning)))
             .DistinctUntilChanged()
@@ -637,7 +643,14 @@ public static class CreateLayoutArea
                 // (AsynchronousCalls.md).
                 actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                     .Take(1)
-                    .Zip(actx.Host.Stream.GetDataStream<string[]>(partitionOwningTypesId).Take(1),
+                    // 🚨 WAITS for the offered set's ownership answer rather than reading a
+                    // placeholder: a click that beats the provider must not place an in-mesh owning
+                    // instance under a namespace. On the bound it proceeds with "nothing owns",
+                    // which is the pre-#4449 behaviour and where OwnsPartitionProvisioningValidator
+                    // refuses the nested path with a speaking message — never a silent dead button.
+                    .Zip(actx.Host.Stream.GetDataStream<string[]>(partitionOwningTypesId)
+                            .Take(1)
+                            .Timeout(OfferedTypesBudget, Observable.Return(Array.Empty<string>())),
                         (form, owning) => (Form: form, Owning: owning))
                     .Subscribe(submitted =>
                     {
@@ -736,6 +749,14 @@ public static class CreateLayoutArea
         stack = stack.WithView(buttonRow);
         return stack;
     }
+
+    /// <summary>
+    /// How long the Create button waits for <see cref="ICreatableTypesProvider"/>'s answer about the
+    /// offered types before submitting without it. Matched to the provider's own single-lookup bound
+    /// (<c>CreatableTypesProvider</c>), so the form does not give up while its source is still
+    /// allowed to answer.
+    /// </summary>
+    private static readonly TimeSpan OfferedTypesBudget = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Whether <paramref name="selectedType"/> owns its partition, as far as this form can tell with
