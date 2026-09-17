@@ -418,12 +418,37 @@ public static class DeploymentPortalConfig
     /// neither. Until it does, both are pinned here and reach no deploy — stated so the next reader
     /// does not mistake a defined surface for an enforced one.</para>
     ///
+    /// <para>🚨 It also reports a slot BELOW ZERO, and that half is NOT gated on the claim: an
+    /// array has no index -1 on either route, so such an entry renders a key that binds to nothing
+    /// and the module is required by nobody however complete the record's set is. The ceiling
+    /// check reads only the upper bound, so this is the only surface that sees it.</para>
+    ///
     /// <para>Pure.</para>
     /// </summary>
     public static ImmutableList<string> PositionalModuleSlotProblems(DeploymentContent? record)
     {
-        if (record is null || record.RequiredModuleSlots.IsEmpty || record.RequiredModulesAuthoritative)
+        if (record is null || record.RequiredModuleSlots.IsEmpty)
             return ImmutableList<string>.Empty;
+
+        var problems = ImmutableList.CreateBuilder<string>();
+
+        // 🚨 A slot BELOW ZERO first, and NOT gated on the authority claim: the record's index
+        // space is the array's, and an array has no index -1. The key renders on both routes and
+        // binds to nothing — the chart does not template it and the Aspire route injects a name no
+        // array element can take — so the module is silently not required, whatever the record
+        // claims. The ceiling check sees only the upper bound, so without this the one malformed
+        // index that can be written by hand escapes every surface.
+        foreach (var (slot, assembly) in record.RequiredModuleSlots)
+            if (slot < 0 && !string.IsNullOrWhiteSpace(assembly))
+                problems.Add(
+                    $"required module '{WithDllSuffix(assembly)}' is declared at slot {slot} — an "
+                    + "index no configuration array has. The key is rendered and binds to nothing "
+                    + "on every route, so the module is required by nobody and nothing reports it. "
+                    + "Move the entry into the contiguous requiredModules list, or give it a slot "
+                    + "at or above zero.");
+
+        if (record.RequiredModulesAuthoritative)
+            return problems.ToImmutable();
 
         // 🚨 The RENDERED slots, never the raw map. <see cref="ModuleSlots"/> drops a blank entry
         // and drops an explicit slot the contiguous list already occupies, so the raw map contains
@@ -432,7 +457,6 @@ public static class DeploymentPortalConfig
         // reports this. Above the contiguous count is exactly the explicit half that survived: the
         // list's own entries occupy 0..count-1 and nothing else.
         var contiguous = ModuleEntries(record.RequiredModules).Count;
-        var problems = ImmutableList.CreateBuilder<string>();
         foreach (var (slot, assembly) in ModuleSlots(record).Where(entry => entry.Key >= contiguous))
             problems.Add(
                 $"required module '{WithDllSuffix(assembly)}' is declared at SLOT {slot}, and this record "
