@@ -1460,7 +1460,15 @@ public sealed class InstanceAutoRegistrationService(
             // dependency that is neither pre-installed nor pattern-matched exists only here.
             .Select(packages => (Candidates: packages
                 .Select(p => string.IsNullOrEmpty(p.Source) ? p with { Source = source.Name } : p)
-                .Select(p => new InstallCandidate(source, p))
+                .Select(p => new InstallCandidate(source, p)
+                {
+                    // PROVEN means the seal named the commit — ApplyPlan re-refs the source, so it
+                    // is a different instance, which is exactly how "pinned" is told from "as
+                    // configured" without comparing refs — or the operator's own mirrored working
+                    // tree. Anything else is the branch this boot happened to resolve, and
+                    // UnprovenRefHold decides what that may be written into.
+                    RefIsProven = !ReferenceEquals(source, configured) || configured.LocalCheckout,
+                })
                 .ToList(), Failed: false))
             .Catch((Exception exception) =>
             {
@@ -1755,7 +1763,9 @@ public sealed class InstanceAutoRegistrationService(
     }
 
     /// <summary>
-    /// Installs (or re-reconciles) ONE package and re-asserts its public read.
+    /// Installs (or re-reconciles) ONE package and re-asserts its public read — unless this lane
+    /// may not write that partition at the ref it resolved, in which case it HOLDS
+    /// (<see cref="UnprovenRefHold"/>, MeshWeaver#4588).
     ///
     /// <para>SYSTEM for the whole lifetime, for the same reason the catalog click is (which wraps
     /// this same <c>InstallOrUpdate</c> in <c>ImpersonateAsSystem</c>): an install is PROVISIONING
@@ -1769,11 +1779,127 @@ public sealed class InstanceAutoRegistrationService(
     /// </summary>
     private IObservable<DefaultInstallSummary> Install(InstallCandidate candidate)
     {
+        var partition = string.IsNullOrWhiteSpace(candidate.Package.TargetPartition)
+            ? candidate.Package.Id
+            : candidate.Package.TargetPartition!;
+
+        // 🚨 GATE 1c (MeshWeaver#4588) — the ownership question is asked ONLY where this boot could
+        // not prove its ref. A seal-pinned install lands the same tree the partition's own writer
+        // is held to, which is #4259's whole design and is left exactly as it is; the residue is
+        // the branch tip, and that is what may not be written into a partition somebody else keeps
+        // current. Asking the seam for every candidate would put a bounded read in front of
+        // installs that were never in question.
+        return candidate.RefIsProven
+            ? Land(candidate, partition)
+            : PartitionContentOwnership.Observe(hub, partition, candidate.Package.Id, logger)
+                .SelectMany(ownership =>
+                    UnprovenRefHold(ownership, candidate.Source.GitRef) is { } reason
+                        ? HoldForThePartitionsOwnWriter(candidate, partition, reason)
+                        : Land(candidate, partition));
+    }
+
+    /// <summary>
+    /// 🚨 <b>An unattended install never lands an UNPROVEN ref in a partition another writer keeps
+    /// current</b> — Systemorph/MeshWeaver#4588. Pure, so every arm is drivable without a mesh.
+    ///
+    /// <para><b>Measured on memex.systemorph.com, 2026-09-17.</b> The control instance's plugin
+    /// source is a registry — no <c>RepoPath</c>, so <see cref="ProvenRef"/> answers "no repository
+    /// to attribute a seal to" and the lane lists at the configured ref. At 14:34:30Z it installed
+    /// <c>Plugins/Hosting</c> 1.22.1 from <c>HEAD</c> into <c>Hosting</c>, a partition whose
+    /// <c>Hosting/_GitSync</c> re-imports the same subdirectory at the commit sealed for the
+    /// running framework — then <c>061976bc</c> (2026-09-15), which does not carry
+    /// <c>Hosting/Issue/Source/FleetWatchCadence.cs</c>. Thirteen minutes later the install record
+    /// claimed that file and the node was gone, and three Hosting NodeTypes could not compile. At
+    /// 16:03Z the seal advanced to <c>d98fc2ac</c> and its import — a delta from the PREVIOUS seal —
+    /// wrote <c>IssueLayoutAreas.cs</c> (changed between the two seals) and left
+    /// <c>Test/IssueTests.cs</c> alone (unchanged between them), so the mesh kept the installer's
+    /// <c>main</c> copy of the test beside the seal's copy of the view:
+    /// <c>CS0117 'IssueLayoutAreas' does not contain a definition for 'Facts'</c>. The mix is the
+    /// one <c>Doc/Architecture/OnePartitionOneBookkeeping</c> describes, with the two writers'
+    /// roles reversed — which is why making only the INSTALLER's delta full cannot close the class:
+    /// the other writer's delta has the identical blind spot.</para>
+    ///
+    /// <para><b>Why a hold and not a repair.</b> A rewrite cannot hold: the partition's own writer
+    /// runs again minutes later and prunes or reverts whatever the sealed tree does not carry, and
+    /// the next boot detects the same shortfall and rewrites it — the loop
+    /// <c>CatalogLayoutAreas.SkipOrHeal</c> names ("a detection that REPEATS at an unchanged module
+    /// version is a repair that did not hold"). The only non-thrashing remedy the invariant admits
+    /// is one writer, and here the other writer is the one with the proven tree.</para>
+    ///
+    /// <para><b><see cref="PartitionContentOwner.Undetermined"/> holds too</b>, and the two
+    /// directions are asymmetric on purpose: a hold that was wrong is re-derived and lifted at the
+    /// next boot, while an install that was wrong has already put a tree into a partition it does
+    /// not own — which no later pass can take back. "I could not tell" is never "clear to write".</para>
+    /// </summary>
+    /// <param name="ownership">Who keeps this package's target partition current.</param>
+    /// <param name="gitRef">The ref this boot resolved — log copy, so the hold names what it held.</param>
+    /// <returns>The speaking hold reason, or <c>null</c> when the install may proceed.</returns>
+    internal static string? UnprovenRefHold(PartitionContentOwnershipVerdict ownership, string gitRef)
+    {
+        ArgumentNullException.ThrowIfNull(ownership);
+        return ownership.InstallerOwnsTheContent
+            ? null
+            : $"{ownership.Because}. This boot could only resolve '{gitRef}', which no publication "
+              + "sealed for this instance names, so landing it would put a tree that partition's "
+              + "own writer does not carry into a partition it keeps current — the mix that parked "
+              + "three Hosting NodeTypes on memex.systemorph.com (MeshWeaver#4588)";
+    }
+
+    /// <summary>
+    /// The hold: nothing is fetched, no content is written and no module is adopted — but the
+    /// package's DECLARED ACCESS is still re-asserted, because that is create-only, writes nothing
+    /// in the steady state, and is what heals a partition left unreadable; withholding it would
+    /// trade a content defect for an access one. Reported as a SKIP with its reason, never as a
+    /// failure (a retry cannot change a seal) and never in silence.
+    /// </summary>
+    /// <param name="candidate">The held candidate.</param>
+    /// <param name="partition">Its target partition.</param>
+    /// <param name="reason">Why it is held — <see cref="UnprovenRefHold"/>'s sentence.</param>
+    /// <returns>A cold observable emitting the one-skip summary exactly once.</returns>
+    private IObservable<DefaultInstallSummary> HoldForThePartitionsOwnWriter(
+        InstallCandidate candidate, string partition, string reason)
+    {
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var package = candidate.Package;
-        var partition = string.IsNullOrWhiteSpace(package.TargetPartition)
-            ? package.Id
-            : package.TargetPartition!;
+        logger.LogWarning(
+            "[DefaultInstall] {Id} → {Partition} is HELD, not installed — {Reason}. That partition's "
+            + "content is delivered by its own writer at the commit sealed for this instance, and a "
+            + "human's Update click stays the documented escape. Recorded as SKIPPED on {Ledger}; "
+            + "nothing retries it, and the next boot re-derives this — a seal that names this "
+            + "source, or a partition that stops tracking one, lifts it.",
+            package.Id, partition, reason, SeedLedgerPath);
+        // 🚨 RunAsSystem, never Observable.Using(ImpersonateAsSystem) (#1790): the scope opens at
+        // Subscribe and closes on the way out of that same Subscribe, so the impersonation cannot
+        // be left latched on whichever thread the access write happens to terminate on.
+        return accessService
+            .RunAsSystem(() => PackageInstaller.EnsureDeclaredAccess(hub, package, partition, logger))
+            .Catch((Exception exception) =>
+            {
+                // A hold is not an install, so an access re-assert that could not run must not turn
+                // it into a FAILED one — it is said, at Warning, and the hold stands.
+                logger.LogWarning(exception,
+                    "[DefaultInstall] {Id} is held, and its declared access could not be "
+                    + "re-asserted: {Cause}. The hold stands; this is not a failed install.",
+                    package.Id, exception.Message);
+                return Observable.Return(Unit.Default);
+            })
+            .Select(_ => DefaultInstallSummary.Empty with
+            {
+                Skipped = [new DefaultInstallSkip(package.Id, reason)],
+            });
+    }
+
+    /// <summary>
+    /// The install itself, once <see cref="Install"/> has established that this lane may write this
+    /// partition at this ref.
+    /// </summary>
+    /// <param name="candidate">The candidate to land.</param>
+    /// <param name="partition">Its target partition.</param>
+    /// <returns>A cold observable emitting this package's summary exactly once.</returns>
+    private IObservable<DefaultInstallSummary> Land(InstallCandidate candidate, string partition)
+    {
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var package = candidate.Package;
 
         return Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
@@ -1898,6 +2024,20 @@ public sealed class InstanceAutoRegistrationService(
         /// (or a mirrored working tree) and a seed.
         /// </summary>
         public bool Reconciled { get; init; }
+
+        /// <summary>
+        /// Whether the ref this candidate would be installed at was PROVEN for this instance: the
+        /// seal named a commit (<see cref="ApplyPlan"/> re-reffed the source, so it is a different
+        /// instance), or the source is a working tree the operator mirrors — MeshWeaver#3359, where
+        /// the operator IS the authority and there is no commit to pin.
+        ///
+        /// <para>🚨 <c>false</c> is the residue the Sync-Ref Contract names and does not remove: a
+        /// source no seal can be attributed to — a remote registry, a registered
+        /// <see cref="IPackageSource"/>, a repository this instance publishes nothing of — listed
+        /// at its configured branch. <see cref="UnprovenRefHold"/> is what that residue may not do
+        /// to a partition somebody else keeps current.</para>
+        /// </summary>
+        public bool RefIsProven { get; init; }
     }
 
     /// <summary>

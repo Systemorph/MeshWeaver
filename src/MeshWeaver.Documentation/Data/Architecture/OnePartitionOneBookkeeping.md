@@ -1,7 +1,7 @@
 ---
 Name: One Partition, One Bookkeeping
 Category: Architecture
-Description: A partition written by both a GitSync source and the registry installer keeps two independent records of one mesh, and the second delta is computed against a record that stopped describing it — the measured Store mix of 1.10.3 and 1.11.1, the invariant, and the two gates that hold it.
+Description: A partition written by both a GitSync source and the registry installer keeps two independent records of one mesh, and whichever writer diffs second lands a mix — the measured Store mix of 1.10.3 and 1.11.1, the Hosting mix that blocked a roll, the invariant, and the gates that hold it.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5a1 1 0 0 1 1-1h6l2 2h6a1 1 0 0 1 1 1v2"/><path d="M3 10h18v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M9 15h6"/></svg>
 ---
 
@@ -11,7 +11,7 @@ A mesh partition can have **two writers that keep separate books about it**, and
 other's. When that happens the partition does not go wrong loudly — it ends up holding a MIX of two
 content identities that no CI ever compiled together, and every instrument involved reads as healthy.
 
-This page states the invariant, the measured case it was learned from, and the two gates that hold it.
+This page states the invariant, the two measured cases it was learned from, and the gates that hold it.
 
 ## The invariant
 
@@ -90,7 +90,7 @@ Three fixes suggest themselves. Two of them produce a consistent partition and a
 So the ownership question comes first, and the bookkeeping repair is what covers the lanes that still
 write such a partition *by design*.
 
-## The two gates
+## The gates
 
 ### `PartitionContentOwnership` — who owns this partition's content
 
@@ -154,6 +154,70 @@ answer.
 Such a partition is not left without a module: it has a delivery path already — the sealed
 publication its content is held to — and a human's manual Update lands both halves together.
 
+### Gate 1c — an unattended install never lands an UNPROVEN ref in such a partition
+
+Gates 1 and 1b hold the unattended *update*. The **boot default install** was left as a lane that
+writes such a partition *by design*, because [#4259](../DeclaredIsNotLanded) had pinned it to the
+sealed commit: two writers landing the SAME tree do not mix. That design has a residue, and the
+residue is where this class came back.
+
+`InstanceAutoRegistrationService.ProvenRef` can only attribute a seal to a **repository**. A source
+with no `RepoPath` — a remote registry, a registered `IPackageSource` — names no repository, so it
+answers *"no repository to attribute a seal to"* and the lane lists at the configured ref. The
+control instance's plugin source is exactly that, and its configured ref is the default, `HEAD`.
+
+#### What it cost the second time (measured, memex.systemorph.com, 2026-09-17, [#4588](https://github.com/Systemorph/MeshWeaver/issues/4588))
+
+1. **14:34:30Z** — the boot install stamped `Plugins/Hosting` 1.22.1 with **`installedFromRef: HEAD`**
+   and a 222-file map, having written `main`'s tree into `Hosting`.
+2. `Hosting/_GitSync` re-imports that same subdirectory every few minutes at the commit sealed for
+   the running framework — then `061976bc` (2026-09-15), which does not carry the five files only
+   `main` had, among them `Hosting/Issue/Source/FleetWatchCadence.cs`.
+3. Thirteen minutes later the record **claimed** that file and the node was **absent**;
+   `Hosting/DeploymentStatus` and `Hosting/InstanceAction` reported
+   `MISSING SOURCES: 1 of N declared source queries … matched NO nodes` and `CS0246`. The roll onto
+   the 3.0.0 candidate could not converge: the new replica's readiness refuses a type that regressed
+   on its image.
+4. **16:03Z** — the seal advanced to `d98fc2ac`. Its import is a delta **from the previous seal**,
+   so it wrote `Issue/Source/IssueLayoutAreas.cs` (changed between the two seals) and left
+   `Issue/Test/IssueTests.cs` alone (unchanged between them) — where the installer's `main` copy was
+   still sitting. The partition kept one file from each tree:
+
+```text
+CS0117 Error: 'IssueLayoutAreas' does not contain a definition for 'Facts'
+CS0117 Error: 'IssueLayoutAreas' does not contain a definition for 'StatusBadge'
+```
+
+🚨 **That step 4 is the reason gate 2 alone cannot close this class.** Gate 2 makes the INSTALLER's
+delta full; the mix here was produced by the OTHER writer's delta, which has the identical blind
+spot — it diffs its own baseline, not the mesh. Whichever writer diffs second lands a mix, so the
+remedy has to be the one the table above already names: **one writer**.
+
+#### The gate
+
+`InstanceAutoRegistrationService.Install` asks the ownership question for a candidate whose ref this
+boot could NOT prove, and holds where the installer does not own the content
+(`UnprovenRefHold`). `Undetermined` holds too, and the asymmetry is the point: a hold that was wrong
+is re-derived and lifted at the next boot, while an install that was wrong has already put a tree
+into a partition it does not own, which no later pass takes back.
+
+- **A proven ref is not held.** The seal named the commit, so the two writers land the same tree —
+  #4259's design, untouched, and the reason the gate keys on provenance rather than on "this
+  partition has a second writer".
+- **A hold is loud.** Nothing is fetched and no module is adopted; the package is recorded as a
+  SKIP with its reason on the seed ledger and said once at Warning. It is never a failure — no retry
+  can make a ref provable — and nothing polls: the next boot re-derives it.
+- **The declared access is still re-asserted.** It is create-only and writes nothing in the steady
+  state, so withholding it would trade a content defect for an access one.
+- **Nothing is left without content.** The partition's own writer delivers it, at the commit sealed
+  for this instance, and a human's Update click remains the documented escape.
+
+🚨 **The residue this leaves, named:** a source that is a **local checkout** keeps today's behaviour
+([#3359](../SyncRefContract) — there is no commit to pin and the operator IS the authority), so an
+operator who mirrors a working tree into a partition they also connected to git still has two
+writers. That is a configuration a person chose twice, like a human's Update click; it is not an
+unattended lane landing a tree nobody asked for.
+
 ### Gate 2 — a delta is never diffed against a baseline the installer does not own
 
 `CatalogLayoutAreas.InstallOrUpdateCore` consults the same verdict before choosing the incremental
@@ -162,8 +226,8 @@ incremental path is **not available**: a FULL install writes every file the pack
 a record that is true of the mesh again.
 
 This is what covers the lanes that still write such a partition by design — the seal-pinned boot
-install and a human's Update click — so no lane can diff against a record that has stopped describing
-the partition. The cost is one full package fetch, paid only when an update is actually landing (the
+install (gate 1c holds the UNPINNED one) and a human's Update click — so no lane can diff against a
+record that has stopped describing the partition. The cost is one full package fetch, paid only when an update is actually landing (the
 hash-equal skip path is untouched) and only on a synced partition.
 
 ## What the fix deliberately does not do
