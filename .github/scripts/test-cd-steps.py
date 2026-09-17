@@ -50,6 +50,9 @@ SEAL_STEP_ID = "seal"
 DECIDE_STEP_ID = "decide"
 VERDICT_STEP_ID = "verdict"
 HEAL_STEP_ID = "heal"
+# The step that discharges a deferral instead of promising one (MeshWeaver#4652): when a run lets
+# go of the delivery lane it asks whether main's HEAD still has a publisher, and creates one if not.
+HANDOFF_STEP_ID = "handoff"
 
 SHORT_SHA = "aaf95af"
 VERSION = "3.0.0-rc8.ci.6360"
@@ -179,6 +182,47 @@ case "$*" in
   # `gh issue create` prints the new issue's URL; the step takes the number off its tail.
   *"issue create"*) printf '%s\n' "${GH_CREATE_RESULT:-https://github.com/o/r/issues/4242}" ;;
   *"label create"*) ;;
+  # `gh workflow run` — the ONLY mutating call the `handoff` step makes (MeshWeaver#4652). Matched
+  # before the reads so a dispatch can never be answered by a run-list fixture, and recorded in
+  # GH_CALLS like everything else: "did this step actually ask GitHub to create a publisher" is the
+  # whole subject of its cases, and it is invisible in stdout. GH_DISPATCH_FAIL drives the arm where
+  # the dispatch is refused — the one state where the step must go RED rather than warn.
+  *"workflow run"*)
+    if [ -n "${GH_DISPATCH_FAIL:-}" ]; then
+      echo "gh: HTTP 403 (https://api.github.com/repos/x/y/actions/workflows/main-cd.yml/dispatches)" >&2
+      exit 1
+    fi ;;
+  # `commits/<sha>/check-runs` — HEAD's required check, which decides whether HEAD is publishable
+  # at all. Matched BEFORE `*commits/main*`: the handoff reads it by SHA, and a future edit that
+  # read it by ref would otherwise be answered by the tip stub and test nothing.
+  #
+  # 🚨 THERE IS NO PRE-COMPUTED ANSWER HERE, for the same reason GH_RUNS_FIXTURE exists: the whole
+  # discriminator is the step's own `--jq` — select by NAME, sort by `started_at`, take the LAST —
+  # and handing the step a ready-made "completed success" would leave every one of those decisions
+  # untested. A re-run appends a check run, so "take the last" is what stops an old red from
+  # shadowing a green (and an old green from shadowing a red, which is the direction that publishes
+  # an untested tree). Refuse rather than default: a stub that can answer without the filter is the
+  # defect. (Caught in review.)
+  *check-runs*)
+    if [ -n "${GH_CHECK_FAIL:-}" ]; then
+      echo "gh: HTTP 502 (https://api.github.com/repos/x/y/commits/abc/check-runs)" >&2
+      exit 1
+    fi
+    if [ -z "${GH_CHECKS_FIXTURE:-}" ]; then
+      echo "stub gh: a check-runs call with no GH_CHECKS_FIXTURE — the harness models the filter, not a verdict" >&2
+      exit 97
+    fi
+    prog=""
+    while [ $# -gt 0 ]; do
+      [ "$1" = "--jq" ] && prog="$2"
+      shift
+    done
+    if [ -z "$prog" ]; then
+      echo "stub gh: a check-runs call with no --jq — the harness models the filter, not the payload" >&2
+      exit 97
+    fi
+    jq -r "$prog" < "$GH_CHECKS_FIXTURE"
+    exit 0 ;;
   # Matched explicitly and BEFORE the reads below: a heal comment quotes a run URL, and a body
   # containing `actions/runs` would otherwise fall into the run-list arm and answer a fixture.
   # GH_COMMENT_FAIL makes the comment write FAIL (Copilot on #4565): the seal step's attempt marker is
@@ -253,7 +297,7 @@ def die(msg: str):
 # ── running one case ────────────────────────────────────────────────────────────────────────
 def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: bool = False,
              runs: list[dict] | None = None, calls_out: list[str] | None = None,
-             cwd: str | None = None):
+             cwd: str | None = None, checks: list[dict] | None = None):
     """Execute one extracted step. `cwd` runs it in a prepared tree — the seal step invokes
     `.github/scripts/check-release-availability.sh` BY PATH, so a case that wants to drive the
     probe's three outcomes puts its own script there. Nothing else about the step is rewritten;
@@ -300,7 +344,8 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
         e.pop("GH_ISSUE_RESULT", None)
         e.pop("GH_CLOSE_FAIL", None)
         for knob in ("GH_SEAL_COUNT", "GH_STOPPED_COUNT", "GH_VIEW_RESULT", "GH_CREATE_RESULT",
-                     "GH_VIEW_FAIL", "GH_LIST_FAIL", "GH_COMMENT_FAIL", "GH_SEAL_RANK"):
+                     "GH_VIEW_FAIL", "GH_LIST_FAIL", "GH_COMMENT_FAIL", "GH_SEAL_RANK",
+                     "GH_DISPATCH_FAIL", "GH_CHECK_FAIL", "GH_CHECKS_FIXTURE"):
             e.pop(knob, None)
         # `RUNNER_TEMP` is where the seal step writes the probe's log. The runner always provides
         # it; inherited from a developer's shell it would be absent and the step would fall back to
@@ -320,6 +365,11 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
             rf = tmp / "runs.json"
             rf.write_text(json.dumps({"workflow_runs": runs}))
             e["GH_RUNS_FIXTURE"] = str(rf)
+        # Same discipline as `runs`: a real `check_runs` payload the step's OWN `--jq` reduces.
+        if checks is not None:
+            cf = tmp / "checks.json"
+            cf.write_text(json.dumps({"check_runs": checks}))
+            e["GH_CHECKS_FIXTURE"] = str(cf)
         e.update(env)
 
         p = subprocess.run(["bash", "-c", body], env=e, cwd=cwd, capture_output=True, text=True)
@@ -620,6 +670,243 @@ def run_verdict_cases(root, case) -> None:
 
 
 # ── the HEAL step: the one that told a human to close an issue and then never closed one ─────
+def run_handoff_cases(root, case) -> None:
+    """
+    🚨 <b>MeshWeaver#4652 — the deferral nobody ever discharged.</b>
+
+    The push lane keeps ONE run in flight and ONE pending, and every arrival REPLACES the pending
+    one. That supersede rule is correct — measured over the 21.7 h to 2026-09-17T19:29Z, 77 push
+    arrivals against 14 runs that executed (35–107 min each, median ~67): not discarding would
+    serialize ~86 h of lane time into a 21.7 h window and delivery would fall behind without bound.
+
+    What the discard broke is the two liveness probes. A `pending` run has executed nothing
+    (`jobs.total_count == 0`) and GitHub may delete it, yet `gate` DEFERS to it and `verdict`
+    SUPPRESSES the stuck-delivery alarm on it — and neither ever learns it was discarded. Measured
+    on three consecutive hourly reconciles on 2026-09-17 (16:31Z, 17:26Z, 18:35Z): every one
+    deferred to a run cancelled minutes later with zero jobs, so the only backstop stood down on
+    every tick.
+
+    Narrowing the probe is not the fix — `pending` genuinely means "will build" when the run
+    survives (2026-09-10), and nothing observable AT PROBE TIME separates the two. The `handoff`
+    step moves the question to the one moment it IS answerable: when a run lets go of the lane, it
+    asks whether main's HEAD still has a publisher and creates one if not.
+
+    These cases pin the two things that make it worth anything — it must FIRE in the hole (a green
+    HEAD nobody is publishing) and it must NOT fire anywhere else, above all not on itself — plus
+    the two mutation controls that prove the cases could have failed.
+    """
+    body = extract_step(root, HANDOFF_STEP_ID)
+
+    # A stub is only evidence about what it stubs. If the step stops dispatching, stops probing for
+    # a successor, or stops reading HEAD's check, every case below would pass having tested nothing.
+    for needle, why in (
+        ("workflow run", "no longer dispatches, so the hole-closing arm tests nothing"),
+        ("actions/runs", "no longer probes for a successor, so the cost control tests nothing"),
+        ("check-runs", "no longer reads HEAD's required check, so the not-green arm tests nothing"),
+        ("sort_by(.started_at)", "no longer takes the LATEST check run, so a re-run reads as its first attempt"),
+        ("DELIVERY_LEGS", "no longer reads the shipping legs, so a run that promoted and then failed tests nothing"),
+        ("HANDOFF_ELIGIBLE", "lost the one-hop bound, so a deterministic failure loops forever"),
+    ):
+        if needle not in body:
+            die(f"step `{HANDOFF_STEP_ID}` {why} (missing `{needle}`). Update the harness with the step.")
+
+    HEAD = "aaaa111" + "0" * 33          # main's tip in every case below
+    BUILT = "bbbb222" + "0" * 33         # what the terminating run targeted
+    ME = 9000
+    REQUIRED = "Consolidate test results"
+    CLEAN_LEGS = "success skipped skipped skipped success success success success success success"
+
+    def chk(status: str, concl, started: str, name: str = REQUIRED) -> dict:
+        return {"name": name, "status": status, "conclusion": concl, "started_at": started}
+
+    GREEN = [chk("completed", "success", "2026-09-17T18:00:00Z")]
+
+    def handoff(**over):
+        """The shape of a run that has just let go of the lane without publishing HEAD."""
+        env = {
+            "SHA": BUILT, "PUBLISH": "false", "COMPLETE": "false", "PROMOTE_RESULT": "failure",
+            "DELIVERY_LEGS": CLEAN_LEGS,
+            "HANDOFF_ELIGIBLE": "true", "RUN_ID": str(ME), "REPO": "Systemorph/MeshWeaver",
+            "WORKFLOW_NAME": CD, "WORKFLOW_FILE": "main-cd.yml", "GH_TOKEN": "",
+            "GH_TIP_RESULT": HEAD,
+        }
+        env.update(over)
+        return env
+
+    def drive(env, runs, mutate=None, checks=None):
+        calls: list[str] = []
+        b = body
+        if mutate is not None:
+            needle, repl = mutate
+            if needle not in b:
+                die(f"the mutation control for `{HANDOFF_STEP_ID}` cannot apply: `{needle}` is no "
+                    "longer in the step. A control that cannot mutate proves nothing — re-point it.")
+            b = b.replace(needle, repl)
+        rc, log, outputs = run_step(b, env, None, runs=runs, calls_out=calls,
+                                    checks=GREEN if checks is None else checks)
+        dispatched = any("workflow run" in c for c in calls)
+        return rc, log, dispatched, calls
+
+    me = wf_run(ME, "in_progress", "2026-09-17T19:00:00Z")
+
+    # ── ARM 1: THE HOLE IT EXISTS TO CLOSE ───────────────────────────────────────────────────
+    # 2026-09-17T19:25:49Z, run 35261268480: it FAILED, main's HEAD was green, and the hourly tick
+    # would not have healed it — it defers whenever anything is queued. Nothing is queued here.
+    rc, log, dispatched, calls = drive(handoff(), [me])
+    case("a green HEAD with NO run queued or running gets a publisher dispatched",
+         rc == 0 and dispatched and "HANDED ON" in log, f"rc={rc} dispatched={dispatched} log={log}")
+    case("...and the dispatch names this workflow and main, not a guess",
+         any("workflow run main-cd.yml" in c and "--ref main" in c for c in calls), f"calls={calls}")
+
+    # 🚨 THE SELF-EXCLUSION CASE, and it is the one that would disable the drain forever. The
+    # terminating run is itself non-completed in the very list it reads (it is still running THIS
+    # step). Drop `.id != $RUN_ID` and every run finds itself a successor, hands nothing on, and
+    # the step becomes a green no-op in every state — strictly worse than not existing.
+    rc, log, dispatched, _ = drive(handoff(), [me], mutate=(".id != $RUN_ID and ", ""))
+    case("MUTATION CONTROL: without `.id != $RUN_ID` the step finds ITSELF and dispatches nothing",
+         not dispatched, f"dispatched={dispatched} log={log}")
+
+    # ── ARM 2: THE COST CONTROL — an inherited obligation is not a missing one ────────────────
+    # A queued run counts, and deliberately so: whichever run finally executes runs THIS step when
+    # it terminates. This is what keeps the common, saturated case at zero extra runs.
+    for status in ("pending", "queued", "in_progress"):
+        rc, log, dispatched, _ = drive(handoff(), [me, wf_run(9100, status, "2026-09-17T19:20:00Z")])
+        case(f"a {status} run on HEAD inherits the obligation — nothing is dispatched",
+             rc == 0 and not dispatched and "9100" in log, f"rc={rc} dispatched={dispatched} log={log}")
+
+    # A COMPLETED run on HEAD is not a successor — without the status filter every commit that ever
+    # had a CD run would read as covered.
+    rc, log, dispatched, _ = drive(handoff(), [me, wf_run(9100, "completed", "2026-09-17T18:00:00Z")])
+    case("a COMPLETED run on HEAD is not a successor", dispatched, f"dispatched={dispatched} log={log}")
+
+    # A live run of a DIFFERENT workflow on HEAD is not a publisher either — a Build-and-Test
+    # re-run must never be mistaken for one.
+    rc, log, dispatched, _ = drive(
+        handoff(), [me, wf_run(9100, "in_progress", "x", name="MeshWeaver Build and Test")])
+    case("a live run of ANOTHER workflow on HEAD is not a publisher",
+         dispatched, f"dispatched={dispatched} log={log}")
+
+    # ── ARM 3: NOTHING IS OWED WHEN THIS RUN IS HEAD'S PUBLICATION ───────────────────────────
+    rc, log, dispatched, _ = drive(
+        handoff(SHA=HEAD, PUBLISH="true", PROMOTE_RESULT="success"), [me])
+    case("a run that PUBLISHED main's HEAD hands nothing on",
+         rc == 0 and not dispatched, f"rc={rc} dispatched={dispatched} log={log}")
+
+    # 🚨 PROMOTE IS ONLY PHASE A. Run 35257430439 tagged nothing wrong and then died in
+    # `plugins-modules`; keyed on promote alone this step would have called that HEAD's publication
+    # and handed nothing on, in the exact case it exists for.
+    for leg, why in ((4, "plugins-modules"), (6, "publish-bake"), (5, "verify-images")):
+        legs = CLEAN_LEGS.split()
+        legs[leg] = "failure"
+        rc, log, dispatched, _ = drive(
+            handoff(SHA=HEAD, PUBLISH="true", PROMOTE_RESULT="success",
+                    DELIVERY_LEGS=" ".join(legs)), [me])
+        case(f"a run that promoted and then FAILED a later shipping leg still hands HEAD on ({why})",
+             rc == 0 and dispatched, f"rc={rc} dispatched={dispatched} log={log}")
+
+    # A CANCELLED shipping leg is the same fact as a failed one — the set was not finished.
+    legs = CLEAN_LEGS.split(); legs[0] = "cancelled"
+    rc, log, dispatched, _ = drive(
+        handoff(SHA=HEAD, PUBLISH="true", PROMOTE_RESULT="success", DELIVERY_LEGS=" ".join(legs)), [me])
+    case("a CANCELLED shipping leg counts as incomplete too", dispatched, f"log={log}")
+
+    # 🚨 …and `skipped` must NOT. Most legs skip on a bake-only or no-publish run; reading that as a
+    # failure would dispatch a publisher after every ordinary quiet tick.
+    rc, log, dispatched, _ = drive(
+        handoff(SHA=HEAD, PUBLISH="true", PROMOTE_RESULT="success",
+                DELIVERY_LEGS="success skipped skipped skipped success success skipped skipped skipped skipped"), [me])
+    case("a SKIPPED leg is not a failure — an ordinary publication still hands nothing on",
+         not dispatched, f"dispatched={dispatched} log={log}")
+
+    # 🚨 THE ANTI-LOOP ARM. A reconcile that found the set already complete takes the bake-only
+    # branch: publish=false, promote=skipped, complete=true, target == HEAD. Without the
+    # `COMPLETE` arm it would hand ITSELF on, and the dispatched run would do the same, forever.
+    rc, log, dispatched, _ = drive(
+        handoff(SHA=HEAD, PUBLISH="false", COMPLETE="true", PROMOTE_RESULT="skipped",
+                DELIVERY_LEGS="skipped skipped skipped skipped skipped skipped skipped skipped skipped skipped"),
+        [me])
+    case("a BAKE-ONLY run on HEAD hands nothing on (it would otherwise dispatch itself forever)",
+         rc == 0 and not dispatched, f"rc={rc} dispatched={dispatched} log={log}")
+
+    # ── ARM 4: THE ONE-HOP BOUND ────────────────────────────────────────────────────────────
+    # Exactly ARM 1's state, but this run arrived BY a handoff. A deterministic promote failure
+    # would otherwise dispatch a successor that fails the same way, without end.
+    rc, log, dispatched, _ = drive(handoff(HANDOFF_ELIGIBLE="false"), [me])
+    case("a run that was ITSELF dispatched never dispatches again (the chain is bounded at one hop)",
+         rc == 0 and not dispatched and "one hop" in log, f"rc={rc} dispatched={dispatched} log={log}")
+
+    rc, log, dispatched, _ = drive(handoff(HANDOFF_ELIGIBLE="false"), [me],
+                                   mutate=('if [ "$HANDOFF_ELIGIBLE" != "true" ]; then', "if false; then"))
+    case("MUTATION CONTROL: without the one-hop bound that same run DOES dispatch again",
+         dispatched, f"dispatched={dispatched} log={log}")
+
+    # ── ARM 5: ONLY A GREEN HEAD IS OWED ANYTHING — and the step's OWN --jq decides ──────────
+    # Every case here drives the real filter over a real `check_runs` payload: select by NAME,
+    # sort by `started_at`, take the LAST. A pre-computed verdict would test none of those.
+    for payload, why, want in (
+        ([chk("in_progress", None, "2026-09-17T18:00:00Z")], "still testing", False),
+        ([chk("completed", "failure", "2026-09-17T18:00:00Z")], "settled red", False),
+        ([], "no check run at all", False),
+        ([chk("completed", "success", "2026-09-17T18:00:00Z", name="Some other gate")],
+         "only ANOTHER check exists — the required one is absent", False),
+        ([chk("completed", "success", "2026-09-17T18:00:00Z"),
+          chk("completed", "failure", "2026-09-17T17:00:00Z", name="Some other gate")],
+         "an unrelated check is red but the required one is green", True),
+    ):
+        rc, log, dispatched, _ = drive(handoff(), [me], checks=payload)
+        case(f"HEAD with {why}: {'dispatches' if want else 'is not owed a publisher'}",
+             rc == 0 and dispatched == want, f"rc={rc} dispatched={dispatched} log={log}")
+
+    # 🚨 A RE-RUN APPENDS A CHECK RUN, so "take the LAST by started_at" is the whole of the
+    # re-run story. Both directions, because both are wrong in a way that matters: reading the
+    # older GREEN would publish a tree whose re-run went red.
+    rerun_green = [chk("completed", "failure", "2026-09-17T17:00:00Z"),
+                   chk("completed", "success", "2026-09-17T18:00:00Z")]
+    rerun_red = [chk("completed", "success", "2026-09-17T17:00:00Z"),
+                 chk("completed", "failure", "2026-09-17T18:00:00Z")]
+    rc, log, dispatched, _ = drive(handoff(), [me], checks=rerun_green)
+    case("a red check RE-RUN green is green — the LATEST run decides", dispatched, f"log={log}")
+    rc, log, dispatched, _ = drive(handoff(), [me], checks=rerun_red)
+    case("a green check RE-RUN red is RED — the latest decides in that direction too",
+         not dispatched, f"dispatched={dispatched} log={log}")
+    rc, log, dispatched, _ = drive(handoff(), [me], checks=rerun_red,
+                                   mutate=("sort_by(.started_at) | last", "sort_by(.started_at) | first"))
+    case("MUTATION CONTROL: taking the FIRST check run instead publishes a tree whose re-run went red",
+         dispatched, f"dispatched={dispatched} log={log}")
+
+    # ── ARM 6: AN UNANSWERED PROBE NEVER DISPATCHES, AND IS NEVER SILENT ────────────────────
+    # The opposite posture to `verdict`'s fail-closed, and for a reason worth stating: this step
+    # CREATES work. Guessing on an unanswered probe would cost a duplicate image set (#3376), and
+    # not dispatching degrades to the hourly reconcile — where delivery stood before it existed —
+    # rather than to silence. So: warn loudly, name the unanswered question, create nothing.
+    for knob, needle in (("GH_TIP_RESULT", "main's tip"),
+                         ("GH_CHECK_FAIL", "required check"),
+                         ("GH_RUNS_FAIL", "successor probe")):
+        env = handoff()
+        env[knob] = "" if knob == "GH_TIP_RESULT" else "1"
+        rc, log, dispatched, _ = drive(env, [me])
+        case(f"an unanswered {needle} dispatches nothing",
+             not dispatched, f"dispatched={dispatched} log={log}")
+        case(f"...and says so as a warning naming what went unanswered ({needle})",
+             "::warning::" in log and needle.split()[-1] in log, f"log={log}")
+
+    # ── ARM 7: A FAILED DISPATCH IS RED, NEVER A SHRUG ──────────────────────────────────────
+    # It only fires in the state where HEAD is green and nobody is publishing it, so a dispatch
+    # that could not be made leaves delivery with no producer. That is the stuck state, and it must
+    # page rather than decorate a green run.
+    rc, log, dispatched, _ = drive(handoff(GH_DISPATCH_FAIL="1"), [me])
+    case("a dispatch that FAILS reds the run rather than passing quietly",
+         rc != 0 and "::error::" in log, f"rc={rc} log={log}")
+    case("...and it names the permission to check and the manual remedy",
+         "actions: write" in log and "by hand" in log, f"log={log}")
+
+    # ── ARM 8: A RUN THAT NEVER HELD THE LANE OWES NOTHING ──────────────────────────────────
+    # A PR-triggered workflow_run, or a gate that died before resolving a target.
+    rc, log, dispatched, _ = drive(handoff(SHA=""), [me])
+    case("a run whose gate resolved no target hands nothing on",
+         rc == 0 and not dispatched, f"rc={rc} dispatched={dispatched} log={log}")
+
+
 def run_heal_cases(root, case) -> None:
     """
     🚨 <b>MeshWeaver#3176 — an alert that cannot be resolved stops being an alert.</b>
@@ -1242,6 +1529,10 @@ def main() -> int:
     run_verdict_cases(root, case)
 
     print()
+    print(f"── step `{HANDOFF_STEP_ID}` ──")
+    run_handoff_cases(root, case)
+
+    print()
     print(f"── step `{HEAL_STEP_ID}` ──")
     run_heal_cases(root, case)
 
@@ -1251,7 +1542,8 @@ def main() -> int:
         return 1
     print(f"all cases passed against {WORKFLOW} steps `{STEP_ID}` + `{BAKE_VERSION_STEP_ID}` "
           f"+ `{SEAL_STEP_ID}` + `{DECIDE_STEP_ID}` "
-          f"+ `{VERDICT_STEP_ID}` + `{HEAL_STEP_ID}` (extracted, not copied)")
+          f"+ `{VERDICT_STEP_ID}` + `{HANDOFF_STEP_ID}` + `{HEAL_STEP_ID}` "
+          f"(extracted, not copied)")
     return 0
 
 

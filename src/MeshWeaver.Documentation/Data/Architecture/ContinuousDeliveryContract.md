@@ -214,13 +214,75 @@ the **carrier**, and both halves were checked on 2026-09-17:
   run is `completed`, so `.status != "completed"` already stops deferring and the tick publishes.
   That is the "a quiet hour heals it" path, and it already works.
 
-So the repair is a **durable, run-id-keyed** record of the deferral, revisited on a later tick
-whatever its target — and the contract's healing ledger is deliberately *"the `ci-failure` issue …
-no new state store"*, so which carrier to use is a decision, not a detail.
+That reads like a call for a **durable, run-id-keyed** record of the deferral, revisited on a later
+tick whatever its target — and the contract's healing ledger is deliberately *"the `ci-failure`
+issue … no new state store"*, so the carrier looked like a decision rather than a detail.
 
-🚨 **And the root is one level below that: the ambiguity exists only because a pending run can be
-evicted.** If the push lane did not discard queued runs, `pending` would always mean "will build",
-every existing case would stay correct, and no revisiting would be needed at all.
+**It is neither: no carrier is needed, because the question does not have to be asked at the next
+tick.** See the section below — the run that HOLDS the lane can answer it, and it answers it at the
+one moment the answer is free.
+
+### The answer is DISCHARGED at release time, not carried to the next tick (#4652)
+
+Two shapes were weighed against the measured lane. The measurement, over the 21.7 h to
+2026-09-17T19:29Z, is the whole argument:
+
+| | measured |
+|---|---|
+| push-lane arrivals | **77** (median gap 8.3 min) |
+| of those, **discarded** by the one-pending-slot rule | **61** |
+| runs that actually executed | **14** — 12 success, 2 failure |
+| wall clock of an executing run | **35–107 min**, median ~67 |
+| lane busy | **16.1 h of 21.7 h — 74 % saturated** |
+
+**Shape A — "stop discarding queued work" — is wrong, and the numbers say so without appeal to
+taste.** The lane is one group with `cancel-in-progress: false`, so *not* discarding means every
+arrival executes in turn: 77 × ~67 min ≈ **86 h of lane time inside a 21.7 h window**. The lane
+would fall behind without bound and every publication would ship a commit hours stale — the
+opposite of continuous delivery. Runner minutes are the lesser objection; latency growing without
+bound is the fatal one. (Two runs publishing one framework identity concurrently is separately
+forbidden — see #3461.) **The supersede rule is correct and stays.** Discarding queued work is the
+only reason the lane keeps up at all.
+
+**Shape B — "hand off on completion" — is right, with one correction.** The run holding the lane is
+the only party that can see both *what it built* and *what HEAD is now*, and it sees it at the exact
+moment the lane frees. So `delivery-verdict` ends with a `handoff` step: if main's HEAD is green,
+this run is not its publication, and **no run of this workflow is queued or running on HEAD**, it
+dispatches one. The correction shape B needed: a dispatch used to land in the **push** lane, where
+GitHub can discard it — reproducing the defect one level along. `workflow_dispatch` now shares the
+**reconcile** lane, which the file had already wanted for an unrelated reason (the seal step's
+claim-then-rank workaround exists because the two lanes could overlap; they no longer can).
+
+Why it does not become a retry loop, and why it costs almost nothing:
+
+- **Bounded at one hop, by construction.** A run that was itself dispatched does not dispatch again,
+  so one terminating lane holder produces at most one extra run. Without that, a deterministic
+  promote failure would hand itself on forever. The dispatched run also consumes the ordinary
+  per-commit heal budget.
+- **A queued successor counts as covered** — not because queuing is a promise, but because whichever
+  run finally executes runs this same step when *it* terminates. That is what closes the loop the
+  discard used to open, and it is why the saturated case dispatches nothing at all.
+- **It is gated on a GREEN head**, so it never invents a run the gate would decline. A green HEAD
+  normally already has its own `workflow_run` run; the step therefore fires in precisely the two
+  holes — HEAD's run was **discarded**, or it **executed and failed**.
+- **An unanswered probe dispatches nothing** and says so as a warning naming the unanswered
+  question. This step *creates* work, so guessing would cost a duplicate image set (#3376); not
+  dispatching degrades to the hourly reconcile, which is where delivery stood before it existed. A
+  dispatch that is *refused*, by contrast, is RED — that is the state where HEAD is green and nobody
+  at all is publishing it.
+
+🚨 **The root, stated plainly: the ambiguity exists only because a pending run can be evicted, and it
+is irreducible AT PROBE TIME** — `pending` genuinely means "will build" whenever the run survives
+(2026-09-10), and a pending run has no job count to tell the two apart. It is *not* irreducible at
+RELEASE time, which is why the fix lives there and why narrowing either probe was the wrong move.
+
+🚨 **And do not read the eviction as the cause of every stall.** On the night this was diagnosed the
+2-hour gap was **two consecutive executed runs failing** — 35257430439 on a real test failure in the
+module-pack leg, 35261268480 on an `azure/login` OIDC token-fetch timeout — each with a queued
+successor that started immediately. The deferral defect was live and measured on all three ticks,
+but what cost the two hours was that a single failed leg costs a whole ~67-minute publication.
+Measure which of the two you have before fixing either: `gh api …/actions/runs/<id>/jobs
+--jq .total_count` is `0` for a discarded run and non-zero for one that failed.
 
 > 🚨 **The registry was never the problem, and this is how to tell.** The same night produced
 > `az exit 3` / *"the registry did not answer"* reports, which read like a credential outage. Run
