@@ -472,55 +472,93 @@ public sealed class IoPool : IIoPool, IDisposable
         => (_disposed || _draining) ? Cancelled<T>() : InvokeCore(io);
 
     private IObservable<T> InvokeCore<T>(Func<CancellationToken, Task<T>> io)
-        // SubscribeOn moves the whole subscribe — including the gate wait and the
-        // synchronous prologue of `io` — onto a ThreadPool thread, so the work
-        // never runs on the calling hub/grain scheduler. (FromAsync's own
-        // scheduler arg only affects notification delivery, not where the
-        // function is invoked — hence the SubscribeOn, matching MeshQuery.)
-        => Observable.FromAsync(async subscriberCt =>
+        // Two halves, deliberately on two threads. The ADMISSION is synchronous, on the subscriber's
+        // thread (#4555, below). The WORK is not: SubscribeOn moves the inner subscribe — the gate
+        // wait and the synchronous prologue of `io` — onto a ThreadPool thread, so nothing of the
+        // leaf itself runs on the calling hub/grain scheduler. (FromAsync's own scheduler arg only
+        // affects notification delivery, not where the function is invoked — hence the SubscribeOn,
+        // matching MeshQuery.)
+        => Observable.Create<T>(observer =>
         {
-            // 🚨 The region opens BEFORE the first touch of _poolCts/_gate — see TryEnterGateRegion.
-            // The `_disposed` fast path above ran when this cold observable was BUILT; disposal can
-            // land in the whole interval between that and this subscribe.
+            // 🚨 THE ADMISSION IS TAKEN HERE, ON THE SUBSCRIBER'S THREAD — issue #4555.
+            //
+            // It used to be taken inside the body below, which `SubscribeOn` defers to the
+            // ThreadPool. Between a caller's Subscribe() returning and that body running, the leaf was
+            // counted by NOTHING — not _gateUsers, not _inFlight, not CurrentlyWaiting — so a Drain()
+            // whose outstanding count reached zero in that interval ended its grace (or never entered
+            // it), cancelled the pool token, and the leaf then arrived to find itself cancelled: too
+            // late even to be counted in LeavesCancelledAfterGrace, which is captured before the
+            // cancel. Accepted work discarded in silence, which is what #3291 exists to forbid.
+            // Measured on main: 50 of 50 subscribes drained that way lost their work and reported 0.
+            //
+            // Taken here, "accepted" means the same thing on every entry point — InvokeBlocking has
+            // always taken its region on the subscriber's thread — and a leaf whose Subscribe()
+            // returned before the drain is either run to completion or counted as cancelled.
+            //
+            // 🚨 A REFUSAL still leaves on a pool thread (#4530): the region is the only thing this
+            // takes on the caller's thread, never a terminal.
             if (!TryEnterGateRegion())
-                throw new OperationCanceledException(DisposedMessage);
-            try
+                return RefuseOffSubscriber(observer);
+
+            // Who releases the region. The leaf claims it when its prologue starts; an unsubscribe
+            // claims it only if the leaf never did — because a leaf that HAS started still touches
+            // _gate and _poolCts, and releasing the region under it is exactly the hole #2146 closed.
+            // Whoever loses the CAS does nothing: the winner's path releases exactly once.
+            var regionOwner = 0;
+
+            var leaf = Observable.FromAsync(async subscriberCt =>
             {
-                // Link the subscriber's token with the pool-wide token so Drain()/Dispose()
-                // cancels this leaf too — the teardown join relies on every running leaf
-                // unwinding and releasing its gate permit once the pool is cancelled.
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
-                var ct = linked.Token;
-                // WaitAsync(ct) makes acquisition itself cancellable — a dispose
-                // before the slot is granted throws here, before the increment, so
-                // no slot is ever leaked. The ThreadPool thread is released during
-                // the inner await, so the gate caps in-flight ops, not threads.
-                var queuedAt = Stopwatch.GetTimestamp();
-                // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
-                // what lets a test synchronise on arrival instead of guessing with a duration.
-                Interlocked.Increment(ref _waiting);
-                try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
-                finally { Interlocked.Decrement(ref _waiting); }
-                RecordWait(queuedAt);
-                Interlocked.Increment(ref _inFlight);
-                var leaf = EnterLeaf(io);
+                OnLeafPrologueStarting?.Invoke();
+                if (Interlocked.CompareExchange(ref regionOwner, 1, 0) != 0)
+                    // The subscription was disposed before this prologue ran, so the region — and with
+                    // it the right to touch the primitives — is already gone.
+                    throw new OperationCanceledException(DisposedMessage);
                 try
                 {
-                    return await io(ct).ConfigureAwait(false);
+                    // Link the subscriber's token with the pool-wide token so Drain()/Dispose()
+                    // cancels this leaf too — the teardown join relies on every running leaf
+                    // unwinding and releasing its gate permit once the pool is cancelled.
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
+                    var ct = linked.Token;
+                    // WaitAsync(ct) makes acquisition itself cancellable — a dispose
+                    // before the slot is granted throws here, before the increment, so
+                    // no slot is ever leaked. The ThreadPool thread is released during
+                    // the inner await, so the gate caps in-flight ops, not threads.
+                    var queuedAt = Stopwatch.GetTimestamp();
+                    // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
+                    // what lets a test synchronise on arrival instead of guessing with a duration.
+                    Interlocked.Increment(ref _waiting);
+                    try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
+                    finally { Interlocked.Decrement(ref _waiting); }
+                    RecordWait(queuedAt);
+                    Interlocked.Increment(ref _inFlight);
+                    var gated = EnterLeaf(io);
+                    try
+                    {
+                        return await io(ct).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        LeaveLeaf(gated);
+                        // The permit is the LAST thing this leaf publishes — see ReleaseGate, where the
+                        // ordering and the reason it inverted since #2135 are written down once.
+                        ReleaseGate();
+                    }
                 }
                 finally
                 {
-                    LeaveLeaf(leaf);
-                    // The permit is the LAST thing this leaf publishes — see ReleaseGate, where the
-                    // ordering and the reason it inverted since #2135 are written down once.
-                    ReleaseGate();
+                    LeaveGateRegion();
                 }
-            }
-            finally
-            {
-                LeaveGateRegion();
-            }
-        }).SubscribeOn(TaskPoolScheduler.Default);
+            }).SubscribeOn(TaskPoolScheduler.Default);
+
+            return new CompositeDisposable(
+                leaf.Subscribe(observer),
+                Disposable.Create(() =>
+                {
+                    if (Interlocked.CompareExchange(ref regionOwner, 2, 0) == 0)
+                        LeaveGateRegion();
+                }));
+        });
 
     /// <summary>
     /// The exit path every gated leaf shares: settle the accounting, THEN hand the permit back.
@@ -635,40 +673,59 @@ public sealed class IoPool : IIoPool, IDisposable
         => (_disposed || _draining) ? Cancelled<T>() : InvokeStreamCore(source);
 
     private IObservable<T> InvokeStreamCore<T>(Func<CancellationToken, IAsyncEnumerable<T>> source)
-        => Observable.Create<T>(async (observer, subscriberCt) =>
+        // The admission is synchronous and the enumeration is not — see InvokeCore, which this
+        // mirrors exactly (#4555).
+        => Observable.Create<T>(observer =>
         {
             if (!TryEnterGateRegion())
-                throw new OperationCanceledException(DisposedMessage);
-            try
+                return RefuseOffSubscriber(observer);
+
+            var regionOwner = 0;
+
+            var leaf = Observable.Create<T>(async (inner, subscriberCt) =>
             {
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
-                var ct = linked.Token;
-                var queuedAt = Stopwatch.GetTimestamp();
-                // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
-                // what lets a test synchronise on arrival instead of guessing with a duration.
-                Interlocked.Increment(ref _waiting);
-                try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
-                finally { Interlocked.Decrement(ref _waiting); }
-                RecordWait(queuedAt);
-                Interlocked.Increment(ref _inFlight);
-                var leaf = EnterLeaf(source);
+                OnLeafPrologueStarting?.Invoke();
+                if (Interlocked.CompareExchange(ref regionOwner, 1, 0) != 0)
+                    throw new OperationCanceledException(DisposedMessage);
                 try
                 {
-                    await foreach (var item in source(ct).WithCancellation(ct).ConfigureAwait(false))
-                        observer.OnNext(item);
-                    observer.OnCompleted();
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
+                    var ct = linked.Token;
+                    var queuedAt = Stopwatch.GetTimestamp();
+                    // Visible as CurrentlyWaiting from the moment the leaf REACHES the gate, which is
+                    // what lets a test synchronise on arrival instead of guessing with a duration.
+                    Interlocked.Increment(ref _waiting);
+                    try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
+                    finally { Interlocked.Decrement(ref _waiting); }
+                    RecordWait(queuedAt);
+                    Interlocked.Increment(ref _inFlight);
+                    var gated = EnterLeaf(source);
+                    try
+                    {
+                        await foreach (var item in source(ct).WithCancellation(ct).ConfigureAwait(false))
+                            inner.OnNext(item);
+                        inner.OnCompleted();
+                    }
+                    finally
+                    {
+                        LeaveLeaf(gated);
+                        ReleaseGate();
+                    }
                 }
                 finally
                 {
-                    LeaveLeaf(leaf);
-                    ReleaseGate();
+                    LeaveGateRegion();
                 }
-            }
-            finally
-            {
-                LeaveGateRegion();
-            }
-        }).SubscribeOn(TaskPoolScheduler.Default);
+            }).SubscribeOn(TaskPoolScheduler.Default);
+
+            return new CompositeDisposable(
+                leaf.Subscribe(observer),
+                Disposable.Create(() =>
+                {
+                    if (Interlocked.CompareExchange(ref regionOwner, 2, 0) == 0)
+                        LeaveGateRegion();
+                }));
+        });
 
     /// <summary>
     /// Runs a synchronous, blocking or CPU-bound leaf on the pool's limited-concurrency scheduler
@@ -913,6 +970,18 @@ public sealed class IoPool : IIoPool, IDisposable
     internal Action? OnSubscribeSetupLeafStarting { get; set; }
 
     /// <summary>
+    /// Test seam (InternalsVisibleTo) — issue #4555. Runs on the POOL thread at the very top of an
+    /// <see cref="Invoke{T}"/> / <see cref="InvokeStream{T}"/> leaf's prologue, before it touches the
+    /// gate or the pool token. Null in production.
+    ///
+    /// <para>The subject is the interval between a caller's <c>Subscribe()</c> returning and that
+    /// prologue running: work the caller believes is queued. A test parks here to hold a leaf in that
+    /// interval and ask what the pool knows about it — an ordering the ThreadPool would otherwise
+    /// decide, which is a coin toss no assertion can pin.</para>
+    /// </summary>
+    internal Action? OnLeafPrologueStarting { get; set; }
+
+    /// <summary>
     /// Test seam (InternalsVisibleTo) — issue #4541. Runs on the DRAIN's own thread the instant
     /// <see cref="Drain"/> has taken the baseline its grace measures progress against, and before
     /// the grace clock starts. Null in production.
@@ -939,6 +1008,13 @@ public sealed class IoPool : IIoPool, IDisposable
             // pool can die in the interval before anyone subscribes.
             if (!TryEnterGateRegion())
                 return RefuseOffSubscriber(observer);   // #4530 — never on the subscriber's thread
+
+            // Who releases the region this subscribe just took: the setup leaf when its prologue
+            // starts, or an unsubscribe if the leaf never got that far (#4555). Never both, and never
+            // the unsubscribe while the leaf is running — a leaf that has started still touches _gate
+            // and _poolCts, which is the hole #2146 closed. Declared outside the try because the
+            // catch below is one of the three paths that can own it.
+            var regionOwner = 0;
 
             try
             {
@@ -1025,7 +1101,13 @@ public sealed class IoPool : IIoPool, IDisposable
                 var setup = Observable.FromAsync(async subscriberCt =>
                     {
                         OnSubscribeSetupLeafStarting?.Invoke();
-                        if (!TryEnterGateRegion())
+                        // 🚨 CLAIMS the region the SUBSCRIBE took, rather than taking one of its own
+                        // (#4555). The subscribe's region used to end with the synchronous subscribe,
+                        // so between it and this prologue the setup leaf was outstanding to nothing and
+                        // a drain could end its grace without ever seeing it. Handed over here, the
+                        // window is closed; an unsubscribe that got here first has already released it,
+                        // and then this leaf may touch none of the primitives.
+                        if (Interlocked.CompareExchange(ref regionOwner, 1, 0) != 0)
                             throw new OperationCanceledException(DisposedMessage);
                         try
                         {
@@ -1054,6 +1136,9 @@ public sealed class IoPool : IIoPool, IDisposable
                         }
                         finally
                         {
+                            // Ends with the SETUP LEAF, never with the subscription: holding it for a
+                            // live change feed would park disposal behind every feed routed through
+                            // this pool. The window this closes is the one BEFORE the leaf, not after.
                             LeaveGateRegion();
                         }
                         return System.Reactive.Unit.Default;
@@ -1110,17 +1195,25 @@ public sealed class IoPool : IIoPool, IDisposable
                 // removed (the consumer left, nothing to terminate); one that IS running finishes on
                 // its own — `inner.Dispose()` is idempotent and the observer's terminal is
                 // exactly-once through the `terminated` latch — and nobody waits for it.
-                return new CompositeDisposable(setup, inner, Disposable.Create(() => drainReg.Unregister()));
+                return new CompositeDisposable(
+                    setup,
+                    inner,
+                    Disposable.Create(() => drainReg.Unregister()),
+                    // Releases the region ONLY if the setup leaf never claimed it. The leaf's own
+                    // finally does it otherwise — see regionOwner.
+                    Disposable.Create(() =>
+                    {
+                        if (Interlocked.CompareExchange(ref regionOwner, 2, 0) == 0)
+                            LeaveGateRegion();
+                    }));
             }
-            finally
+            catch
             {
-                // The synchronous subscribe is done — it cannot touch _poolCts again. The
-                // registration deliberately OUTLIVES this region: Dispose cancels the token while
-                // holding a region of its own, so the callback has already run before anything
-                // disposes the source, and disposing a registration whose source is gone is a
-                // no-op. Holding the region for the whole SUBSCRIPTION instead would park
-                // disposal behind every long-lived change feed routed through this pool.
-                LeaveGateRegion();
+                // The synchronous subscribe threw, so neither the setup leaf nor the disposable above
+                // will ever run: this is the only path that must undo the region itself.
+                if (Interlocked.CompareExchange(ref regionOwner, 2, 0) == 0)
+                    LeaveGateRegion();
+                throw;
             }
         });
 
