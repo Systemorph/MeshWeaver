@@ -176,6 +176,24 @@ compile* turns into *sometimes compiles, nobody knows*.
   record's word); otherwise it downloads the artifact exactly as it always has, and past that it
   rebuilds.
 
+### The same-run handoffs go too — `runs/`, keyed by run AND attempt
+
+`platform-refs-<lane>`, `workspace-build-<lane>` and `module-pack-tool-<lane>` exist only to cross a
+job boundary inside one run. They declare the shortest retention GitHub allows and are still **30% of
+the fleet's storage bill**, because of the deletion lag above. Each has exactly one producer and one
+consumer, so each now has two paths: the GitHub artifact when no store is named, the store when one
+is — guarded by the same expression, so exactly one runs.
+
+Their key needs no plumbing: `runs/<repo>/<run id>/<attempt>/<name>.tar` is derivable by both ends.
+🚨 **The ATTEMPT is part of it**: a re-run that read the previous attempt's handoff would compile
+against bytes this attempt did not produce. `ModuleBuildLedgerLaneGuard` holds all three pairs and
+the key shape — a producer that lost its store path would send the consumer looking for bytes nobody
+wrote, and one that lost its artifact path would break every caller without our infra, and neither
+shows up in a green run of the other mode.
+
+The `platform-refs` fetch keeps its fallback semantics exactly: the runner's `/opt/platform` mount
+first, then whichever handoff this run used, and a refusal that now names both.
+
 🚨 **One expression, two readers.** The `retention-days:` on the ten upload slots and the
 `--retention-days` the ledger record states were two independent literals until 2026-09-17. They now
 read one expression, so **a record can never outlive the artifact it names**.
