@@ -98,8 +98,12 @@ public sealed record PrebuiltBundleInventory(
     public static PrebuiltBundleInventory Read(
         string? imageDirectory, string? publishedRoot, string? identity, ILogger? logger = null)
     {
+        // Every reading is scoped to ONE framework identity — the shelf is read as the adopter
+        // reads it — so no identity means there is nothing this reading could be about.
+        if (string.IsNullOrWhiteSpace(identity))
+            return NotConfigured;
         var hasImage = !string.IsNullOrWhiteSpace(imageDirectory) && Directory.Exists(imageDirectory);
-        var hasPublished = !string.IsNullOrWhiteSpace(publishedRoot) && !string.IsNullOrWhiteSpace(identity);
+        var hasPublished = !string.IsNullOrWhiteSpace(publishedRoot);
         if (!hasImage && !hasPublished)
             return NotConfigured;
 
@@ -124,6 +128,21 @@ public sealed record PrebuiltBundleInventory(
                         "PrebuiltBundleInventory: {Bundle} could not be read — this reading is "
                         + "UNREADABLE, not short", archive);
                     unreadable = true;
+                    continue;
+                }
+                // 🚨 THE IDENTITY GATE THE ADOPTER APPLIES, APPLIED HERE TOO (review on #4595).
+                // `SeedBundles` declines a whole archive whose manifest names another framework
+                // identity — or names none — BEFORE it considers a single assembly. The published
+                // root is identity-scoped by path, but the IMAGE's prebuilt directory is not, and a
+                // legacy archive records no identity at all. Folding such an entry in would let
+                // `Carries` answer "those bytes are on the shelf" for bytes the seeding pass
+                // refuses, which releases a hold onto a bundle that will never adopt.
+                if (!string.Equals(manifest?.FrameworkMvid, identity, StringComparison.Ordinal))
+                {
+                    logger?.LogDebug(
+                        "PrebuiltBundleInventory: {Bundle} is stamped for framework identity {Stamped}, "
+                        + "not {Identity} — not folded into the inventory (the seeding pass declines it "
+                        + "for the same reason)", archive, manifest?.FrameworkMvid ?? "(none)", identity);
                     continue;
                 }
                 bundles++;

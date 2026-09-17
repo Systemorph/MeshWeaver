@@ -54,8 +54,13 @@ internal static class BundleKeyedHoldReading
                 ? configured
                 : ShippedPrebuiltBundles.DefaultDirectory;
             var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
-            if (string.IsNullOrWhiteSpace(publishedRoot) && !Directory.Exists(imageDirectory))
-                // No shelf: every type here compiles from source, so there is nothing to keep in step.
+            // 🚨 NO FILESYSTEM PROBE HERE (review on #4595). Whether a directory exists is I/O, and
+            // this runs on whichever hub turn subscribed the import; the published root is a mounted
+            // share, so a probe of it can block that turn. The only question answered off the pool is
+            // one about CONFIGURATION — and when neither key names a shelf there is nothing to keep
+            // in step, because every type compiles here. Everything else is decided by the pooled
+            // read below, which answers NotConfigured when nothing is on disk.
+            if (string.IsNullOrWhiteSpace(publishedRoot) && string.IsNullOrWhiteSpace(imageDirectory))
                 return Observable.Return(BundleHoldDecision.Nothing);
 
             var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
@@ -63,6 +68,15 @@ internal static class BundleKeyedHoldReading
             // listing does not return is simply not judged (the safe direction), but an unpinned read
             // that inherits a bound from anywhere would silently turn "every type" into "the first
             // page" — the same declaration the importer's own prune snapshot makes.
+            // 🚨 The RESIDUAL, stated where the assumption is made (review on #4595): this listing is
+            // the read model's, and the read model is eventually consistent. A NodeType it does not
+            // return is not judged, so its sources move as they did before this gate and the type can
+            // report StaleAdopted — the pre-#3845 behaviour, never a new harm, and self-healing on
+            // the next import. The alternative — refusing to import until completeness is PROVEN —
+            // cannot be built on this instrument: `.Complete()` pins the read against a paging limit
+            // (which is what silently turns "every type" into "the first page"), and nothing in the
+            // mesh offers an authoritative enumeration of a partition. The importer's own prune
+            // snapshot declares the same read for the same reason.
             return meshService
                 .Query<MeshNode>(MeshQueryRequest
                     .FromQuery($"path:{partition} scope:descendants nodeType:{MeshNode.NodeTypePath}")

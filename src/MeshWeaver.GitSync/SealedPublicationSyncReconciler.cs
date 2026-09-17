@@ -194,6 +194,12 @@ public static class SealedSyncReconcile
     /// rolled, so the judgement is about bytes it no longer runs and must be taken again rather than
     /// trusted. An UNREADABLE inventory releases nothing: "cannot tell" is never "clear to proceed",
     /// and a re-attempt taken from it would be taken from a measurement that was not made.</para>
+    ///
+    /// <para>🚨 A hold taken by SHARING is not a trigger (review on #4595). Its own wanted
+    /// fingerprint can already be on the shelf while the type it shares a source with is still
+    /// waiting — releasing on it would re-import, re-hold the identical set, and do it again on
+    /// every later publication. Only an independently held entry releases; a sharer is re-judged by
+    /// the import the root's own release dispatches.</para>
     /// </summary>
     /// <param name="config">The source's configuration.</param>
     /// <param name="inventory">What bundles for this identity carry, per type.</param>
@@ -210,7 +216,8 @@ public static class SealedSyncReconcile
                    + $"instance no longer runs — the judgement is re-taken against {identity}";
         if (!inventory.IsUsable)
             return null;
-        return held.FirstOrDefault(h => inventory.Carries(h.Path, h.WantedFingerprint)) is { } arrived
+        return held.FirstOrDefault(h => !h.HeldBySharing
+                                        && inventory.Carries(h.Path, h.WantedFingerprint)) is { } arrived
             ? $"'{arrived.Path}' waits for source fingerprint {arrived.WantedFingerprint}, which a "
               + $"bundle for framework identity {identity} now records"
             : null;
@@ -255,15 +262,27 @@ internal sealed class SealedPublicationSyncReconciler(
                 return Observable.Return(0);
 
             // 🚨 #3845 hole 4 — the inventory is read ONCE per reconcile, on the FileSystem pool,
-            // and ONLY when some source actually holds NodeTypes for a bundle: it is the one fact
-            // that can release such a hold, and a publication announcement that releases nothing
-            // must cost nothing. The read is shared by every source this pass touches, so the
-            // decisions cannot disagree about what the shelf carries.
-            return Inventory(identity).SelectMany(inventory => attributable
+            // and ONLY when a matched config actually holds NodeTypes for a bundle: it is the one
+            // fact that can release such a hold, and a publication announcement that releases
+            // nothing must cost nothing (review on #4595 — reading it up front enumerated and
+            // parsed the whole shelf on every announcement, contrary to this contract). DEFERRED and
+            // shared: the first source that needs it triggers the read, every later source in the
+            // pass sees the same reading, so two decisions cannot disagree about what is on the
+            // shelf.
+            //
+            // 🚨 The connection is OWNED by the hub, never `RefCount()`
+            // (`RootedRxConnectionRatchetGuard`): the chain resolves this hub's `IoPoolRegistry`
+            // inside a `Defer`, so a connect queued on the pool an instant before the hub's ShutDown
+            // would otherwise run against a closed scope. `AutoConnect(1)` keeps it LAZY — an
+            // announcement where nothing is held never subscribes, so the shelf is never read — and
+            // the handle is dropped as the one-shot terminates, so a pass leaves nothing behind.
+            var inventory = Observable.Defer(() => Inventory(identity)).Replay(1)
+                .AutoConnectOwnedBy(hub, nameof(SealedPublicationSyncReconciler));
+            return attributable
                 .Select(s => ReconcileSource(
                     s, identity, sealedForThisIdentity, declinedTypePaths, inventory))
                 .Concat()
-                .Sum());
+                .Sum();
         })
         .Catch<int, Exception>(ex =>
         {
@@ -306,7 +325,7 @@ internal sealed class SealedPublicationSyncReconciler(
     private IObservable<int> ReconcileSource(
         SealedSource sealedSource, string identity,
         IReadOnlyList<SealedSource> sealedForThisIdentity, IReadOnlyCollection<string> declinedTypePaths,
-        PrebuiltBundleInventory inventory)
+        IObservable<PrebuiltBundleInventory> inventory)
     {
         var repo = SealedSyncGate.Parse(sealedSource.Repository!);
         if (!repo.IsComplete)
@@ -314,8 +333,17 @@ internal sealed class SealedPublicationSyncReconciler(
         var commit = sealedSource.SourceCommit!;
         return webhooks
             .ConfigsTargeting(repo, $"seal of '{sealedSource.Source}' at {commit[..Math.Min(8, commit.Length)]}")
-            .Select(match =>
+            // 🚨 The shelf is read only when a config this seal matches is actually HOLDING NodeTypes
+            // for a bundle (review on #4595): the inventory is the one fact that can release such a
+            // hold, so an announcement that can release nothing must not enumerate and parse it. The
+            // reading is deferred and shared across the whole pass, so the first source that needs it
+            // pays for it once.
+            .SelectMany(match => (HoldsAnyBundleHeldType(match) ? inventory
+                    : Observable.Return(PrebuiltBundleInventory.NotConfigured))
+                .Select(inventoryReading => (Match: match, Inventory: inventoryReading)))
+            .Select(read =>
             {
+                var match = read.Match;
                 var dispatched = 0;
                 // 🚨 The census records a HOLD, so it must record the RELEASE from the same
                 // evidence (#4063). The hold is a statement about the GATE's verdict — "this
@@ -335,7 +363,7 @@ internal sealed class SealedPublicationSyncReconciler(
                     var config = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger);
                     var plan = SealedSyncReconcile.DecideWithInventory(
                         sealedSource, repo, target.SpacePath, config, sealedForThisIdentity, identity,
-                        declinedTypePaths, inventory);
+                        declinedTypePaths, read.Inventory);
                     switch (plan.Action)
                     {
                         case SealedSyncReconcile.Action.ImportAtSealedCommit:
@@ -379,6 +407,18 @@ internal sealed class SealedPublicationSyncReconciler(
                 return dispatched;
             });
     }
+
+    /// <summary>
+    /// Whether any config this seal matched is holding NodeTypes for a bundle — the question that
+    /// decides whether the shelf is read at all (review on #4595). Read off the config nodes the
+    /// match already carries, so it costs no I/O of its own.
+    /// </summary>
+    /// <param name="match">The configs this seal's repository matched.</param>
+    /// <returns>True when a bundle inventory could release something.</returns>
+    private bool HoldsAnyBundleHeldType(GitHubWebhookProcessor.RepoMatch match)
+        => match.Configs.Any(node =>
+            node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)
+                is { BundleHeldNodeTypes: { IsEmpty: false } });
 
     /// <summary>A hold is written onto the config and said ONCE at Warning per reason; a source
     /// that is simply at the seal with nothing declined is neither (it is the steady state); a

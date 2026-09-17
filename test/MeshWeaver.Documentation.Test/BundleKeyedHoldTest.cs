@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Text.Json;
 using MeshWeaver.Compiler;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -79,7 +80,14 @@ public class BundleKeyedHoldTest
         IReadOnlyDictionary<string, NodeTypeDefinition> live, PrebuiltBundleInventory shelf)
         => BundleKeyedHold.Decide(
             Space, incoming, current, live,
-            node => node.Content as NodeTypeDefinition, shelf, Identity);
+            // The TYPED read production uses, never a cast: a definition that arrived as untyped
+            // JSON reads as absent through `ContentAs`, and a test that cast would pass for a reason
+            // the production path does not share (review on #4595).
+            node => node.ContentAs<NodeTypeDefinition>(SerializerOptions), shelf, Identity);
+
+    /// <summary>Serializer options for the typed content read — the fast path for content that is
+    /// already a CLR instance, and a real deserialization for anything else.</summary>
+    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
     // ══════════════════════════════════════════════════════════════════════════
     //  HELD — the one case the issue's acceptance criterion is about
@@ -257,6 +265,49 @@ public class BundleKeyedHoldTest
         Decide(incoming, current, live, Shelf()).Holds.Should().BeFalse(
             "a type the repository no longer carries is the importer's RETIREMENT decision "
             + "(StaticRepoImportResult.HeldNodeTypePaths), which asks whether instances still exist");
+    }
+
+    [Fact]
+    public void AnUnreadableShelf_HoldsNothing_BecauseNothingCouldReleaseIt()
+    {
+        var current = new[] { TypeNode(), Source("class V { }") };
+        var incoming = new[] { TypeNode(), Source("class V { int n; }") };
+        var live = new Dictionary<string, NodeTypeDefinition>
+        {
+            [TypePath] = Adopted(Fingerprint([current[1]])),
+        };
+        var unreadable = new PrebuiltBundleInventory(
+            ImmutableDictionary<string, ImmutableHashSet<string>>.Empty, 0, SealedReadOutcome.Unreadable);
+
+        Decide(incoming, current, live, unreadable).Holds.Should().BeFalse(
+            "the rule that cannot-tell is never clear-to-proceed applies where a hold can be RELEASED, "
+            + "and this one cannot: the release predicate reads the SAME shelf, so one unreadable archive "
+            + "would wedge every changed adopted type with nothing able to clear it. Holding needs "
+            + "evidence that the bytes are absent, and an unreadable shelf is not that evidence");
+    }
+
+    [Fact]
+    public void ASharersHold_IsMarkedAsSuch_SoItIsNotItsOwnReleaseTrigger()
+    {
+        const string SharerPath = $"{Space}/Sharer";
+        var shared = new[] { $"namespace:{TypePath}/Source scope:subtree" };
+        var current = new[] { TypeNode(), Source("class V { }"), TypeNode(SharerPath, shared) };
+        var incoming = new[] { TypeNode(), Source("class V { int n; }"), TypeNode(SharerPath, shared) };
+        var live = new Dictionary<string, NodeTypeDefinition>
+        {
+            [TypePath] = Adopted(Fingerprint([current[1]])),
+            [SharerPath] = Adopted(Fingerprint([current[1]], SharerPath), shared),
+        };
+
+        var decision = Decide(incoming, current, live,
+            Shelf((SharerPath, Fingerprint([incoming[1]], SharerPath))));
+
+        decision.Held.Single(h => h.Path == SharerPath).HeldBySharing.Should().BeTrue(
+            "its own wanted fingerprint IS on the shelf, so a release predicate that did not know "
+            + "this would re-import, re-hold the same set — the root is still missing — and repeat "
+            + "that on every later publication");
+        decision.Held.Single(h => h.Path == TypePath).HeldBySharing.Should().BeFalse(
+            "the root is held on its own reading and IS a release trigger");
     }
 
     [Fact]
