@@ -87,6 +87,32 @@ keep digging in the bulk run.**
    | `SubscribeAck` then silence until a heartbeat | Initial `Full` dropped | owner-side echo filter / `ChangedBy` (see doc §"never sent the initial Full") |
    | `type … is not registered in this hub's TypeRegistry` | Type-registry mismatch | `WithType(typeof(T), nameof(T))` on **every** hub the message transits |
 
+## 🚨 First, on a LIVE portal: is it even the new code? The grain serves what it activated with
+
+Before tracing anything against a running mesh, rule out the cheapest cause there is. **"The grain
+keeps serving old state until we send a dispose request"** (maintainer, 2026-09-17): a per-node hub
+binds its configuration ONCE while activating and is then pinned by address — routing never resolves
+that path again. Merging, sealing, rolling the image and restarting the pod all change what the NEXT
+activation would load; an address that is already up answers from what it bound, promptly and
+wrongly, with **no error, no log line and nothing to grep**.
+
+So a fix that "did not take" on a live portal is as likely to be an un-recycled activation as a
+defect. Recycle the address — `hub.RecycleNode(path, reason: "…")`, or the `recycle` verb (MCP tool,
+the node's **Recycle** menu entry, `mw recycle <path>`) — and exercise it again *before* you spend an
+hour on a trace.
+
+🚨 **But a recycle makes the activation RE-READ; it does not change what the re-read FINDS.** If the
+second attempt answers the same way, the activation was never the problem and a third recycle will
+find nothing: the assembly store is keyed `(nodeTypePath, version)` and the recompile adopts before
+it compiles, so the same local copy or the same prebuilt bundle lands the identical bytes again
+(#2471 — measured over 30+ minutes and six recycles, every surface reporting success). At that point
+go and read what the pod actually loaded (`[ModuleLoad] … (written=…)`), not the message flow. Full
+reference:
+[StaleStateUntilRecycle.md](../../../src/MeshWeaver.Documentation/Data/Architecture/StaleStateUntilRecycle.md).
+
+**None of this applies to a TEST**, where the mesh is built fresh per fixture — there, go straight to
+the procedure above.
+
 ## Read the DURATION first — it separates a hang from a real failure
 
 Before any tracing, look at how long the failing case took. This is the cheapest signal there is and

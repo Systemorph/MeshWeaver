@@ -148,6 +148,37 @@ az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
 .github/scripts/check-image-set.sh <short-sha>   # the exact assertion CD itself makes
 ```
 
+## 🚨 …and the RIGHT IMAGE is still not the right ANSWER — the grain serves what it activated with
+
+**"The grain keeps serving old state until we send a dispose request"** (maintainer, 2026-09-17).
+A per-node hub binds its configuration ONCE while activating and is then pinned by address —
+routing never resolves that path again. So a `Roll` moves the image, a `Restart` gives you new pods,
+and **an address that comes up on the new pod and is then never torn down keeps answering from what
+it bound**. The rolled tag is necessary and not sufficient.
+
+Concretely, after a roll or a package publish:
+
+- **`Modules:AutoRecycleOnStaleBuild` is OFF by default.** The stale-build watcher publishes a
+  *banner offering* a recycle instead of converging, so a portal is a mixture of old and new
+  assemblies **for as long as viewers do not click**. That is a deliberate default (the
+  unconditional self-recycle it replaced made publication frequency equal restart frequency), and it
+  is the operative fact when you are asked "is the fix live?". The 2026-08-25 Store outage is the
+  worked example.
+- **Verify by EXERCISING the feature at the running address**, not by the tag, the install record or
+  the green tick. Then, if it still answers the old way, recycle that address — the `recycle` verb
+  (MCP tool, the node's **Recycle** menu entry, `mw recycle <path>`) or `hub.RecycleNode(path,
+  reason: "…")` in code — and exercise it again.
+- 🚨 **A recycle makes the activation RE-READ; it does not change what the re-read FINDS.** A third
+  recycle finds nothing a second did not: the assembly store is keyed `(nodeTypePath, version)` and
+  the recompile adopts-before-compiling, so the same local copy / the same prebuilt bundle lands the
+  identical bytes again (#2471 — measured over 30+ minutes and six recycles). The remedy there is a
+  rebake and republish for THIS framework identity, or a forced recompile of the live source. And a
+  recycle cannot fix a package that never reached the pod — read the
+  `[ModuleLoad] <Assembly> ← … (written=…)` line before recycling anything.
+
+Full reference:
+[StaleStateUntilRecycle.md](../../../src/MeshWeaver.Documentation/Data/Architecture/StaleStateUntilRecycle.md).
+
 ## Running the portal locally (not a deploy route)
 
 `dotnet watch --project ../MeshWeaver.Plugins/src/Memex.AppHost` restarts only the affected Aspire
@@ -167,3 +198,5 @@ wiring itself — a full restart costs 30–60 s and loses the dashboard auth to
 - [ ] No `deploy.sh` re-run for a code update.
 - [ ] The migration Job's log shows `Database migration completed. Version: N`.
 - [ ] The RUNNING image tag was read back off the deployment — not inferred from a green CI tick.
+- [ ] The feature was EXERCISED at the running address, and any address still serving the old state
+      was recycled (and named in the write-up) — a rolled image is not a re-read activation.

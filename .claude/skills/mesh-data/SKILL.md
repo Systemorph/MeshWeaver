@@ -174,6 +174,36 @@ per DEPLOYMENT rather than per user, and only someone shipping a `DbVersion` bum
 Full reference: [LogonActions.md](../../../src/MeshWeaver.Documentation/Data/Architecture/LogonActions.md)
 · the `/logon-action` skill (a Skill node shipped by the AI engine in MeshWeaver.Plugins).
 
+### 🚨 CONTENT is live; the hub's BINDING is not — the grain serves old state until a `DisposeRequest`
+
+**"The grain keeps serving old state until we send a dispose request"** (maintainer, 2026-09-17), and
+the line between the two halves is exactly the line this skill draws.
+
+**Live, by construction:** everything `stream.Update` writes. The patch routes to the owning
+activation, which applies it on its own turn and publishes it to every mirror, and `MeshDataSource`
+holds a long-standing own-node subscription — activation only *seeds* the workspace. So no read, no
+view and no test ever needs a recycle to see a write. **If you are reaching for a recycle to make a
+write visible, the bug is the write** (an unsubscribed cold observable, a query used where a stream
+was needed), not the activation.
+
+**Pinned for the activation's lifetime, and re-read by nothing:** the `HubConfiguration` the hub was
+born with — its NodeType binding, the compiled assembly and collectible load context that closure
+captured, the streams it composed — plus anything read from outside the mesh. Routing short-circuits
+on an already-hosted address and never resolves the path again, so a node that *changes its type*,
+or a NodeType that *publishes a new build*, reaches a live instance through nothing at all. The
+framework's own words: *"the hub keeps serving the configuration it was born with for the rest of its
+lifetime"* (`NodeTypeRebindWatcher`, #1104).
+
+**The one surface that makes an activation re-read** is `hub.RecycleNode(path, reason: "…")` — cold
+(posts on Subscribe), the wait is the framework's own READ rather than a poll, and it defers while a
+package install holds that root. The caller's hub must OUTLIVE the target. As an operator it is the
+`recycle` verb (MCP tool / **Recycle** menu entry / `mw recycle`), which additionally checks `Update`
+and stamps a release request *before* the dispose. Always carry a `Reason`.
+
+🚨 **A dispose makes the activation RE-READ; it does not change what the re-read FINDS**, so it is
+never itself a fix and a second recycle proves nothing the first did not. Full reference:
+[StaleStateUntilRecycle.md](../../../src/MeshWeaver.Documentation/Data/Architecture/StaleStateUntilRecycle.md).
+
 ### The data-access table
 
 Never use `IMeshStorage` or `IMeshCatalog` directly — internal infrastructure only.

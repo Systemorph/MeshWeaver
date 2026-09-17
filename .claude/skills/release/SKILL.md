@@ -287,6 +287,16 @@ against the run's "Resolve the target commit" job output — never against the r
 - `Admin/UpdatePolicy.heldReason` is empty: a hold names an unsealed bundle, and that is a delivery
   incident, not a release.
 
+🚨 **And the running IMAGE is still not the served ANSWER.** *"The grain keeps serving old state
+until we send a dispose request"* (maintainer, 2026-09-17): a per-node hub binds its configuration
+once at activation and is pinned by address, so an address already up after the roll keeps answering
+from what it bound — and `Modules:AutoRecycleOnStaleBuild` is OFF by default, so a portal is a
+mixture of old and new assemblies for as long as viewers do not click the stale-build banner.
+Exercise the feature at the running address; recycle the addresses that still answer the old way and
+name them. A recycle makes the activation re-read, it does not change what the re-read finds — so a
+second one that answers the same is a delivery question, not an activation one. Full reference:
+[StaleStateUntilRecycle.md](../../../src/MeshWeaver.Documentation/Data/Architecture/StaleStateUntilRecycle.md).
+
 ## Pipeline files (edit here to change the pipeline)
 
 - `.github/workflows/main-cd.yml` — continuous: multi-arch build + ACR promote + bake/seal + CD deploy.
