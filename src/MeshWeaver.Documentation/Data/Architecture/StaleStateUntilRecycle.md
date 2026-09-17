@@ -196,6 +196,21 @@ verb or the Compile button do — both force. Where it bites is the unforced lan
 watcher's own trigger), and on a `Modules:RequirePrebuilt` mesh, where there is no local compile to
 fall back to at all.
 
+🚨 **And in that unforced shape NO INSTRUMENT REPORTS IT, which is what makes it expensive.**
+Measured on memex, 2026-09-17: `Approvals/Desk` was recompiled at 17:35 (v844 → v846) by a pod of the
+*other* generation while the deployment was split across two images. It came out with the **same
+MVID**, still stamped the foreign framework identity, and recorded
+`buildProvenance: AdoptedVerified`. Nobody ran the `recycle` verb, so nothing was forced — a
+boot-time compile re-adopted a prebuilt bundle, exactly the clause above. Neither of the two
+instruments a reader would reach for said so: `/health`'s `content-types` records a degradation only
+when a content read **degrades**, and `bake-report` reads the **shared record**, which said `Ok`. All
+the reader had was a blank area and `No renderer is registered for area …` — and two hours. The
+question none of them answers is *"is there a NodeType this replica cannot **serve**?"*, and the
+census built to answer it — per-type outcome, with its denominator stated, and with "no sweep has
+reported here" printed as its own sentence rather than as a clean one — is
+[#4647](https://github.com/Systemorph/MeshWeaver/pull/4647)'s addition to `bake-report`. **Read the
+outcome, not the plan, when a page is blank and the record says `Ok`.**
+
 The remedies there, none of which is another dispose-only recycle:
 
 - **force the rebuild** — the `recycle` verb or the Compile button on the NodeType, which skips
