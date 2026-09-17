@@ -203,7 +203,7 @@ anchored, declared and rule-pinned forms are not.
 | Where | Shape | Verdict |
 |---|---|---|
 | MeshWeaver.Plugins `ProviderSetupAreas` (2 reads) | `nodeType:ModelProvider sort:name limit:100`, `nodeType:LanguageModel sort:name limit:400`, per render of the Providers page | **Open — needs a product call.** The page's own text names two homes (`Provider/{Name}`, `{you}/_Memex/{Name}`) while `ChatClientCredentialResolver.BuildModelQueries` also reads `{space}/Provider` for the context partitions. RECOMMENDATION: reuse `BuildModelQueries`' shape — the global `Provider` catalog + `{viewer}/_Memex` + `{context}/Provider` — so the settings page and the resolver answer the same question; the call the maintainer owns is whether an ADMIN's page should also list providers in spaces they administer but are not in (a fourth leg, or a deliberate "no") |
-| MeshWeaver.Plugins `CouponEditArea.PackageQuery` | `nodeType:Store/Plugin` as a picker's `Queries` | **Anchored at issue time 2026-09-17** by the picker's reach (below). The literal stays censused because the SOURCE still names no partition — and the RECOMMENDATION is to leave it that way: a coupon names packages, a package root IS a partition, so the honest declaration is `partitions:all` on the picker's own query the day someone wants the full catalog offered. Until then the reach (the coupon's own space, plus `Store` when the type is `Store/Plugin`) is what a coupon editor means |
+| MeshWeaver.Plugins `CouponEditArea.PackageQuery` | `nodeType:Store/Plugin` as a picker's `Queries` | **Declared 2026-09-17** (MeshWeaver.Plugins#2023) — and the reasoning is worth keeping, because the reach would have made this picker WORSE: a package root IS a partition, so the reach's two grounds (the coupon's own space, the `Store` partition the type id names) are exactly the two places a package root never lives. `partitions:all`, the same statement `StoreCatalogLayoutAreas.PluginFeedQuery` makes about the same set, is the honest one. Its census row went stale and was deleted — the ratchet working as designed |
 | MeshWeaver.Crm `CrmQueries.AllClients` / `.OpenPipeline` / `.AllOpportunities` / `.AllInteractions` | `nodeType:Crm/{Client,Opportunity,Interaction} scope:subtree`, the board's roster and pipeline | **Open.** Genuinely mesh-wide (a client IS a partition) and the code says so in prose — but it does not DECLARE it, so a CI mesh refuses it and production reports it at Error. The fix is `partitions:all`, not an anchor |
 | MeshWeaver.Reinsurance `RecordSupport.Scope` (`ILS/Source/RecordSupport.cs`) | `IlsQueries.DealQueries("")` when a record page's path is not under a deal — `IlsPaths.DealOfTranche` answers null and the empty string is passed on, so the legs carry `namespace:` with no first segment | **Open, an edge case.** Every shipped record hub sits under `…/Deals/{deal}/{tranche}/`, so it should not arise — but the failure mode if it does is a mesh-wide union from a render path, where refusing to read at all is the honest answer. A guard on an empty deal path closes it |
 | `[MeshNode("nodeType:X")]` picker attributes — 191 lines in MeshWeaver.Reinsurance, 19 in MeshWeaver.Crm, 15 in MeshWeaver.Manufacturing, 2 in MeshWeaver.Education, plus the `WithQueries(…)` pickers in MeshWeaver.Plugins | the attribute's query, sent verbatim by `MeshNodePickerView` (plus the typed text) on every dropdown open | **Resolved 2026-09-17 in the PICKER** (MeshWeaver.Plugins#2011) — see "The picker resolves its own reach" below |
@@ -242,6 +242,15 @@ that list is keeping the silent fan-out, because a dropdown is a render path. Ch
 measured homes: `Reinsurance/Currency`, `LineOfBusiness` and `Ifrs17/AocType` live in the module
 partition (reach 3), `ILS/Tranche` under `ILS/Deals` (3), `Reinsurance/Broker` in
 `ReinsuranceDemo/Brokers` (reach 2 while editing there) and `Reinsurance/Samples` (3).
+
+🚨 **It narrows only a query that NAMES a type, and the copy/move picker is why.** A destination
+picker asks `context:create` — no type, no anchor — and *somewhere else* is precisely what a
+destination means; narrowing it to the partition being edited would have broken the one picker whose
+purpose is to leave it. So the resolution rewrites only the declaration class it exists for, and the
+three destination pickers (`CopyViews`, `MoveViews`, `MeshDataSourceLayoutAreas`) now DECLARE
+`partitions:all` instead of being unanchored — which also takes them out of the refuse-at-runtime
+class they were in before any of this. A wildcard or alternation type (`nodeType:*Post`,
+`nodeType:(A OR B)`) names no one type either, so the reach stays out of it rather than guessing.
 
 The guards are `PickerQueryReachTest` (the project that owns the picker; every leg asserted against
 the planner's own predicate, the pre-fix shapes as the negative control) and, in the content census,
