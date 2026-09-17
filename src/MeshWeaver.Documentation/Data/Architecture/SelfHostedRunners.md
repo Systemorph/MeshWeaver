@@ -178,6 +178,81 @@ In order of preference. **Re-derive the table above before any of them.**
 Never raise a cap to make a queue shorter without re-reading the reserve. The reserve is what keeps
 a portal scale-out from having to preempt anything.
 
+## Where jobs run — GitHub Actions cost is zero
+
+Maintainer, 2026-09-17: *"we still incur cost for github actions. wtf? please see that it goes to
+0"* · *"disable for any private repo"* · *"and when free capacity gone => defer to our infra"*.
+
+**The switch is two ORG variables of visibility `private`:**
+
+| Variable | Value | Every job that… |
+|---|---|---|
+| `MW_RUNNER` | `aks-silos` | does **not** need a Docker daemon |
+| `MW_RUNNER_DOCKER` | `aks-silos-dind` | needs one — `docker build/run/pull/cp/login`, buildx, `services:`, `container:`, Testcontainers. Unsure ⇒ this one (a superset) |
+
+**Why core's reusable lanes carry it, although core is public.** GitHub bills a called workflow's
+hosted minutes to the CALLER (*"Billing for GitHub-hosted runners is always associated with the
+caller"*). Core's own runs are free, but every `node-repo-*.yml` lane and `auto-arm.yml` is called by
+MeshWeaver.Plugins and the private satellites, so a `runs-on: ubuntu-latest` inside one is paid by
+whichever private repository called it. Measured 2026-09-17: $4,174 of Actions cost for September
+1–17, the residual being thousands of short jobs on `ubuntu-latest`, each billed a whole minute.
+
+**The fallback semantics — one expression, two answers.** A called workflow's `vars` context is the
+CALLER's, and a `private` org variable is invisible to a public repository. So core writes:
+
+- a job: `runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}` (or `MW_RUNNER_DOCKER`). A private
+  caller resolves the self-hosted set; core's own calls (`main-cd.yml`, `dotnet-test.yml`,
+  `auto-arm.yml` on core's pull requests) resolve `ubuntu-latest`, which is free there.
+- a `runner` / `workspace-runner` input: the SAME expression as its `default:` — a
+  `workflow_call` input default may read `github`, `inputs` and `vars` — so a caller that passes
+  nothing is covered too, and every `inputs.runner` consumer (`runs-on`, `DOTNET_INSTALL_DIR`, the
+  browser step's `if:`) sees the resolved label. `node-repo-gate.yml`'s shards default to
+  `MW_RUNNER_DOCKER`; module-pack's `pack`/`tests` to `MW_RUNNER`, its `build-workspace` to
+  `MW_RUNNER_DOCKER`.
+- 🚨 **Never a `selected`-visibility variable inside a core lane** (`MW_RUNNER_GATE`,
+  `MW_RUNNER_HEAVY`): adding core to its selection would move core's own runs onto self-hosted
+  runners. A caller may pass those as `with: runner:`.
+
+A PRIVATE repository's own workflows use the same variables with the opposite fallback —
+`runs-on: ${{ vars.MW_RUNNER || 'aks-silos' }}` — because there an unset variable must not cost
+money; the same holds for a `with: runner:` it passes to a core lane.
+
+🚨 **A REPOSITORY variable of the same name overrides the org one.** Measured 2026-09-17:
+MeshWeaver.Plugins carries a repo-level `MW_RUNNER_GATE=ubuntu-latest`, which is why its gate shards
+and global workspace build still ran hosted after the org value said `aks-silos-dind`. Read
+`gh api repos/Systemorph/<repo>/actions/variables` before concluding the org switch applies.
+
+**Rolling back or "free minutes first" is a variable flip, not a workflow edit** — set `MW_RUNNER`
+/ `MW_RUNNER_DOCKER` to `ubuntu-latest` at org level. That only helps while the Actions budget
+allows hosted minutes at all: with the budget at $0, a hosted job in a private repository does not
+start.
+
+**The gate.** `check-reusable-workflow-runners.py` runs in core's `CI's own shell` job and refuses,
+in any `workflow_call` workflow, a literal label (`ubuntu-latest`, `aks-silos`, a list), a
+selected-visibility variable, a fallback other than `'ubuntu-latest'`, and an input whose default
+does not reach `MW_RUNNER`/`MW_RUNNER_DOCKER`. Its self-test takes `--root` and mutates every real
+runner expression back to `ubuntu-latest`, demanding a fire for each.
+
+**What a job needs when it moves.** The runner image (Systemorph/Memex
+`deployments/aks/ci-runners/runner-image/Dockerfile`) is not GitHub's hosted image. It carries git,
+`gh`, `az`, jq, python3 (no pip — `actions/setup-python` brings one), curl, unzip, sqlite3, .NET 10
+at `/usr/share/dotnet` (writable by `runner`, `DOTNET_INSTALL_DIR=/home/runner/.dotnet` in the pod
+env), kubectl/helm/kubelogin and the docker CLI with buildx. It carries **no** node/npm, pwsh, zip,
+yq, **zstd**, make, rsync, nor the hosted toolcache. A lane that needs one installs it idempotently
+and names the image as the real fix (module-pack's `prepare` and `build-workspace` do this for
+`zstd`); a "free disk space" step that removes `/usr/share/dotnet` must be gated on
+`runner.environment == 'github-hosted'`. `runner.temp` is `/home/runner/_work/_temp` under ARC and
+`/home/runner/work/_temp` on hosted, so an `actions/cache` entry whose path embeds it misses across
+runner kinds — harmless, but expected.
+
+**Proof is the jobs API, not the colour of the wall** — `runner_name` is `aks-silos-…` /
+`aks-silos-dind-…` on ARC and `GitHub Actions <n>` on hosted:
+
+```bash
+gh api --paginate "repos/Systemorph/<repo>/actions/runs/<id>/jobs?per_page=100" \
+  --jq '.jobs[] | [.name, .conclusion, .runner_name] | @tsv'
+```
+
 ## Moving a job family onto it
 
 **One family at a time, behind a variable, hosted as the fallback.** The first candidate is the
@@ -188,9 +263,9 @@ The mechanism is **cross-repo**, which is the part worth knowing before starting
 
 - `modules-floor` and `modules-rest` in the plugins repo do **not** carry a `runs-on`. They are
   `uses:` calls into **core's** reusable `node-repo-module-pack.yml`, pinned by full sha.
-- That reusable hard-codes `runs-on: ubuntu-latest` in **six** jobs — `select`, `prepare`,
-  `build-workspace`, `pack`, `tests`, `verify`. `pack` and `tests` are the matrix ones and carry
-  almost all of the minutes.
+- That reusable hard-coded `runs-on: ubuntu-latest` in **six** jobs — `select`, `prepare`,
+  `build-workspace`, `pack`, `tests`, `verify` — when this section was written. Since 2026-09-17
+  none does; see "Where jobs run — GitHub Actions cost is zero" above.
 
 So the change is: add a `runs-on` **input with a default of `ubuntu-latest`** to the reusable, use
 it on the matrix jobs, then pass it from the caller as
@@ -244,7 +319,8 @@ CRs, and removing it first leaves them stuck deleting. Nothing in the portal nam
 any of these objects, so a teardown cannot affect a portal.
 
 Any workflow pointing at the self-hosted label must go back to `ubuntu-latest` **first**, or its
-jobs queue forever against a label nothing serves.
+jobs queue forever against a label nothing serves — for the fleet that is the org variables
+`MW_RUNNER` / `MW_RUNNER_DOCKER` (above), plus every private repository's own `aks-silos` fallback.
 
 ## The credential
 
