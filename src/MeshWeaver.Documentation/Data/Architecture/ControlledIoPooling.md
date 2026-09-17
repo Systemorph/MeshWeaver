@@ -849,15 +849,56 @@ it the test would pass whenever the pool thread happened to win the race. Agains
 (seam only) it fails every run with `Did not expect value to be 10` — the subscriber's own thread id; with
 the fix it passes, and reverting the fix lines and **rebuilding** turns it red again.
 
-**What this does not cover — measured, and left open.** The two *refusals* still terminate inline:
-a leg **built** after `Drain()` gets `Cancelled<T>()` (`Observable.Throw` on the immediate scheduler),
-and one subscribed after `Dispose()` is refused by the admission region with an explicit
-`observer.OnError(...)`. A probe measured both as `OnError: OperationCanceledException` on the
-subscriber's thread, inside `Subscribe()`. That is a refusal at the door rather than a late
-registration, and it runs through every entry point, not only `SubscribeThroughPool`. But
-`OrderedRouteDispatcher.DrainNext` states that a leg "can never complete inside its own subscribe call",
-so after a drain each refused leg's `.Finally` re-enters `DrainNext` on the same stack — recursion as
-deep as that destination's queue (read from the code, not measured). Tracked in #4530.
+**What this did not cover** was the other way a terminal reaches the caller's thread: a leg the pool
+*refuses*. That was filed as #4530 and is the section below.
+
+### 🚨 A REFUSED leg terminates off the subscriber's thread as well
+
+A refusal is what every entry point answers once the pool is terminal — `Cancelled<T>()` for a leg
+**built** after `Drain()`/`Dispose()`, and the admission region's own `observer.OnError(...)` for one
+built while the pool was alive and **subscribed** after disposal began. Both ran on Rx's *immediate*
+scheduler, so the terminal was delivered inside the caller's `Subscribe()` call, on the caller's
+thread. Measured on `main`, 50 subscribes per cell from a dedicated thread:
+
+| entry point | refusal | terminal | on the subscriber's thread | median |
+|---|---|---|---|---|
+| `Invoke` · `InvokeStream` · `InvokeBlocking` · `SubscribeThroughPool` | built after `Drain()` / after `Dispose()` | `OnError(OperationCanceled)` | **50/50, inside `Subscribe()`** | 0.3–1.2 µs |
+| `InvokeBlocking` · `SubscribeThroughPool` | built before `Dispose()`, subscribed after | `OnError(OperationCanceled)` | **50/50, inside `Subscribe()`** | 0.5–1.0 µs |
+| `Invoke` · `InvokeStream` | built before `Drain()`/`Dispose()`, subscribed after | `OnError(TaskCanceled)` | 0/50 — already off-thread | 13–30 µs |
+| `SubscribeThroughPool` | built before `Drain()`, subscribed after | `OnCompleted` | 0/50 — the #4524 fix | 27 µs |
+
+So **an admitted leaf's terminal already came from a pool thread and only the refusal was handed back
+to the caller** — the one thread this pool exists to keep work off.
+
+**The consequence is not symmetry, it is stack depth.** `OrderedRouteDispatcher.DrainNext` subscribes
+the next leg for a destination from the previous leg's terminal, and says why that is safe: *"No
+recursion depth to worry about: every leg is subscribed through the pool, which hops to a thread-pool
+thread, so a leg can never complete inside its own subscribe call."* Once refusals are inline that
+premise is false, and the drain walks the destination's whole backlog by recursion. Measured
+(`OrderedRouteDispatcherDrainRecursionTest`, 32 legs queued behind an in-flight head): completions ran
+at stack depths **31 → 248**, about 7 frames per leg, 65 `DrainNext`/`Enqueue` frames under the last
+one — all on the pool's single `IoPool-cancel` thread, inside `_poolCts.Cancel()`. A destination's
+backlog is deepest exactly when a saturated silo goes down, which is when this path runs.
+
+**The fix is the scheduler, not a gate.** `Cancelled<T>()` throws on `TaskPoolScheduler.Default`, and
+the admission region's refusal is scheduled there too (`RefuseOffSubscriber`, whose returned disposable
+is the scheduled item, so an unsubscribe cancels it). That is the same scheduler every admitted leaf
+already terminates on. After the change the first two rows above read **0/50** on the subscriber's
+thread at 7–12 µs, and the recursion test's spread collapses.
+
+**What it costs, measured rather than asserted.** A refusal takes 4.4 µs at the median instead of
+0.5 µs (p95 9.8 µs) — inside the 13–30 µs an admitted leaf's cancellation already costs. With every
+ThreadPool worker deliberately saturated, 41 of 50 refusals arrived within 500 ms and the slowest took
+291 ms: a refusal now queues for the pool the way the work it refuses would have. Nothing joins on it
+— a refused leg holds no permit and no admission region — so a delayed refusal cannot hold teardown;
+what it delays is the caller's own `.Finally` bookkeeping.
+
+🚨 **One cell in that matrix is a different defect and is NOT fixed here:** `InvokeBlocking` built
+before a `Drain()` and subscribed after delivers **nothing at all** — 0 terminals in 50 subscribes.
+Its task is created with an already-cancelled token, so the delegate never runs and the continuation's
+`IsCanceled` arm is silent by construction. That is the #1789 shape (a leg that terminates in neither
+direction), tracked as #4545; `IoPoolRefusedLegTerminatesOffSubscriberTest` names the cell it leaves
+out rather than dropping it silently.
 
 ---
 
