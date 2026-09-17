@@ -158,6 +158,23 @@ on.
   pair resets it. The ledger is marker comments on an issue labelled `cd-plugins-seal` — its **own**
   label, because the `ci-failure` ledger closes itself when an image heal succeeds (#3176) and an
   image heal says nothing about a publication.
+* **The budget is atomic: claim, then rank.** Reading the count and then appending a marker is not:
+  `schedule` runs in the `reconcile` concurrency group but `workflow_dispatch` in the ref-based one,
+  so two reconciles can overlap, both read `2`, and both launch "3/3". So a run writes its claim
+  **first**, then re-reads every claim for the pair in the order GitHub recorded them and proceeds only
+  if its own falls inside the budget. Both racers compute the same order, so at most three proceed,
+  under any overlap and without changing the workflow's concurrency model. A losing claim still counts.
+* **The ledger fails closed.** The step runs with `set -e`. Without it, a failed `gh issue list` read as
+  "no ledger yet" and created a second ledger at count zero every hour, and a failed marker write
+  launched a repair that consumed no attempt — either way the bound was gone, silently.
+* **A failed `preflight` stops the legs.** The three `plugins-*` jobs carry `always()` so they are not
+  skipped behind `promote` on the reconcile path. `always()` also stops them inheriting a *failed*
+  need's skip, so each asserts `needs.preflight.result == 'success'` — though nothing reads
+  `preflight`'s outputs, it is the gate that proves the run's external inputs exist.
+
+`.github/scripts/test-cd-steps.py` pins all of the above, and each case was shown to fail against the
+defect it names: read-then-append, a rank read placed before the claim write, a seal step without
+`-e`, and a leg whose `if:` lost the `preflight` check.
 
 ### And the reconcile is now judged
 

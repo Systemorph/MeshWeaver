@@ -142,7 +142,14 @@ echo "gh $*" >> "$GH_CALLS"
 #    can drive the "a failed close must not red a run that delivered" arm without also breaking
 #    the comment that has to survive it.
 case "$*" in
-  *"issue list"*) printf '%s' "${GH_ISSUE_RESULT:-}" ;;
+  # GH_LIST_FAIL makes the listing FAIL (Copilot on #4565): without `-e` an empty `$(gh issue list)`
+  # read as "no ledger yet", so the seal step CREATED a second ledger at count zero every hour.
+  *"issue list"*)
+    if [ -n "${GH_LIST_FAIL:-}" ]; then
+      echo "gh: HTTP 502 (https://api.github.com/repos/x/y/issues)" >&2
+      exit 1
+    fi
+    printf '%s' "${GH_ISSUE_RESULT:-}" ;;
   # The seal step's attempt ledger (MeshWeaver#4539): `issue view --json comments --jq "[…] | length"`
   # counts its marker comments. A case supplies the number the real `--jq` would have produced.
   # Two markers are counted with two different needles, so the answers are separate: GH_SEAL_COUNT
@@ -159,6 +166,11 @@ case "$*" in
       exit 1
     fi
     case "$*" in
+      # The seal step's RANK read (claim-then-rank, Copilot on #4565): where this run's claim sits among
+      # the pair's claims. Matched BEFORE `*cd-seal*`, whose needle the rank query also contains.
+      # Defaults to the count — "my claim is the newest" — and `${VAR-…}` keeps set-but-empty EMPTY, so
+      # a case can drive the unrankable arm.
+      *"index(true)"*)   printf '%s' "${GH_SEAL_RANK-${GH_SEAL_COUNT-0}}" ;;
       *cd-seal-stopped*) printf '%s' "${GH_STOPPED_COUNT-0}" ;;
       *cd-seal*)         printf '%s' "${GH_SEAL_COUNT-0}" ;;
       *)                 printf '%s' "${GH_VIEW_RESULT-}" ;;
@@ -169,7 +181,14 @@ case "$*" in
   *"label create"*) ;;
   # Matched explicitly and BEFORE the reads below: a heal comment quotes a run URL, and a body
   # containing `actions/runs` would otherwise fall into the run-list arm and answer a fixture.
-  *"issue comment"*) ;;
+  # GH_COMMENT_FAIL makes the comment write FAIL (Copilot on #4565): the seal step's attempt marker is
+  # its budget, and an unwritten marker must stop the repair — never launch it uncounted.
+  *"issue comment"*)
+    if [ -n "${GH_COMMENT_FAIL:-}" ]; then
+      echo "gh: HTTP 403 (https://api.github.com/repos/x/y/issues/1/comments)" >&2
+      exit 1
+    fi
+    ;;
   *"issue close"*)
     if [ -n "${GH_CLOSE_FAIL:-}" ]; then
       echo "gh: HTTP 403 (https://api.github.com/repos/x/y/issues/1)" >&2
@@ -281,7 +300,7 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
         e.pop("GH_ISSUE_RESULT", None)
         e.pop("GH_CLOSE_FAIL", None)
         for knob in ("GH_SEAL_COUNT", "GH_STOPPED_COUNT", "GH_VIEW_RESULT", "GH_CREATE_RESULT",
-                     "GH_VIEW_FAIL"):
+                     "GH_VIEW_FAIL", "GH_LIST_FAIL", "GH_COMMENT_FAIL", "GH_SEAL_RANK"):
             e.pop(knob, None)
         # `RUNNER_TEMP` is where the seal step writes the probe's log. The runner always provides
         # it; inherited from a developer's shell it would be absent and the step would fall back to
@@ -841,6 +860,42 @@ def run_seal_cases(root, case) -> None:
     case("an absence with NO resolved identity refuses rather than acting",
          rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
 
+    # ── 3b. THE LEDGER FAILS CLOSED (Copilot on #4565) ──
+    # The attempt ledger IS the budget. A failed read must not look like "no ledger yet", and a failed
+    # write must not launch a repair that consumed no attempt — either way the three-per-pair bound is
+    # gone, silently, for as long as the API is unhappy. `set -e` is what enforces both.
+    rc, log, outputs, calls = seal("absent", GH_LIST_FAIL="1")
+    case("a FAILED ledger listing stops the step instead of reading as 'no ledger yet'",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it creates no second ledger issue",
+         "issue create" not in calls, f"a failed listing still created a ledger; gh calls were:\n{calls}")
+    rc, log, outputs, calls = seal("absent", GH_COMMENT_FAIL="1")
+    case("a FAILED attempt-marker write stops the repair — it never launches uncounted",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # ── 3c. THE BUDGET IS ATOMIC: claim, then rank (Copilot on #4565) ──
+    # Two overlapping reconciles both read a count of 2. Read-then-append let BOTH launch "3/3".
+    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="2", GH_SEAL_RANK="3")
+    case("a reconcile whose claim ranks PAST the budget stands down, though it read a count under it",
+         rc == 0 and "plugins_seal_due=false" in outputs and "standing down" in log,
+         f"rc={rc} out={outputs!r} log={log}")
+    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="2", GH_SEAL_RANK="2")
+    case("...while the reconcile whose claim ranks inside it proceeds as 3/3",
+         rc == 0 and "plugins_seal_due=true" in outputs and "3/3" in log, f"rc={rc} out={outputs!r} log={log}")
+    rc, log, outputs, calls = seal("absent", GH_SEAL_RANK="")
+    case("a claim that cannot be RANKED refuses rather than proceeding unbounded",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+    rc, log, outputs, calls = seal("absent")
+    # Split the log into CALLS, not lines: a `--body` spans several lines, so `issue comment` and its
+    # `cd-seal-run:` claim sit on DIFFERENT lines and a line-based search never finds the write.
+    records = re.split(r"\n(?=gh )", calls)
+    claim_at = next((i for i, r in enumerate(records)
+                     if r.startswith("gh issue comment") and "cd-seal-run:" in r), -1)
+    rank_at = next((i for i, r in enumerate(records)
+                    if r.startswith("gh issue view") and "index(true)" in r), -1)
+    case("...and the claim is WRITTEN before it is RANKED — read-then-write is the race itself",
+         0 <= claim_at < rank_at, f"claim at {claim_at}, rank read at {rank_at}; gh calls were:\n{calls}")
+
     # ── 4. BOUNDED. The budget stops the re-attempt; it does not stop the reporting ──
     rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="3")
     case("a spent re-attempt budget stops re-attempting",
@@ -944,6 +999,17 @@ def plugins_leg_problems(workflow_text: str) -> list[str]:
                         f"{name} carries `always()` and consumes `needs.{dep}.outputs.*`, but its "
                         f"`if:` never asserts `needs.{dep}.result == 'success'` — so a failed "
                         f"`{dep}` lets this job run with that output empty instead of skipping.")
+        # `preflight` gates the run — it proves the external inputs exist — but exposes no output
+        # these legs READ, so the consumed-output rule above never saw it: an unasserted preflight
+        # stayed green while a FAILED preflight no longer stopped the leg (Copilot on #4565).
+        if cond.startswith("always()"):
+            needs = job.get("needs") or []
+            needs = [needs] if isinstance(needs, str) else needs
+            if "preflight" in needs and "needs.preflight.result == 'success'" not in cond:
+                problems.append(
+                    f"{name} carries `always()` and needs `preflight`, but its `if:` never asserts "
+                    "`needs.preflight.result == 'success'` — so a FAILED preflight (the inputs this run "
+                    "was never proven to have) no longer stops the leg.")
     return problems
 
 
@@ -1124,6 +1190,13 @@ def main() -> int:
              for p in plugins_leg_problems(unpaid_always)),
          "the mutation passed with a leg that runs on an EMPTY image digest — which the bake lane "
          "silently replaces by resolving the platform itself")
+
+    unguarded_preflight = workflow_text.replace(
+        "      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&",
+        "      always() && needs.gate.result == 'success' &&", 1)
+    case("...and the guard catches `always()` that no longer stops on a FAILED preflight",
+         any("needs.preflight.result" in p for p in plugins_leg_problems(unguarded_preflight)),
+         "the mutation passed with a leg that runs after preflight failed — inputs never asserted")
 
     base = {"RELEASE_VERSION": "", "BAKE_ONLY": "true", "SHORT_SHA": SHORT_SHA,
             "RECOVERED": VERSION}

@@ -1291,11 +1291,30 @@ jobs:
             verdict false "🛑 \`plugins\` is NOT sealed for \`$identity\` (release \`$RELEASE_VERSION\`) and the re-attempt budget for \`$key\` is spent ($MAX_SEAL_ATTEMPTS) — not retrying. See the \`cd-plugins-seal\` issue."
             exit 0
           fi
-          n=$((attempts + 1))
-          gh issue comment "$issue" --repo "$REPO" --body "$(printf '%s\n\n%s\n\n%s' \
-            "<!-- cd-seal:$key -->" \
-            "🔁 **Re-attempt $n/$MAX_SEAL_ATTEMPTS of the Plugins seal for \`$key\`** ([run]($RUN_URL))." \
+          # 🚨 CLAIM, THEN RANK (Copilot on #4565). Reading the count and then appending is not atomic:
+          # `schedule` runs in the `reconcile` concurrency group but `workflow_dispatch` in the ref-based
+          # one, so two reconciles can overlap, both read 2 and both launch "3/3". So this run writes its
+          # claim FIRST, then re-reads every claim for the pair in the order the SERVER recorded them and
+          # proceeds only if its own falls inside the budget. GitHub assigns that order, so both racers
+          # compute the same answer and at most $MAX_SEAL_ATTEMPTS ever proceed — under any overlap,
+          # without touching the workflow's concurrency model. A losing claim still counts afterwards.
+          claim="<!-- cd-seal-run:${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1} -->"
+          gh issue comment "$issue" --repo "$REPO" --body "$(printf '%s\n%s\n\n%s\n\n%s' \
+            "<!-- cd-seal:$key -->" "$claim" \
+            "🔁 **Re-attempt claim for the Plugins seal for \`$key\`** ([run]($RUN_URL)) — its rank among this pair's claims decides whether it proceeds." \
             "The platform set for \`$SHORT\` is sealed, but the artifact store holds no sealed \`plugins\` publication for its framework identity \`$identity\` (release \`$RELEASE_VERSION\`). This run re-bakes and re-seals that one leg; no image is rebuilt and no tag moves.")"
+          rank=$(gh issue view "$issue" --repo "$REPO" --json comments \
+            --jq "[.comments[] | select(.body | contains(\"<!-- cd-seal:$key -->\"))] | map(.body | contains(\"$claim\")) | index(true)")
+          case "${rank:-}" in
+            ''|*[!0-9]*)
+              echo "::error::wrote this run's seal claim on issue #$issue but could not rank it among the pair's claims (got '${rank:-<nothing>}'). A claim that cannot be ranked cannot be bounded, so this refuses rather than proceeding."
+              exit 1 ;;
+          esac
+          n=$((rank + 1))
+          if [ "$n" -gt "$MAX_SEAL_ATTEMPTS" ]; then
+            verdict false "🛑 another reconcile claimed the last attempt for \`$key\` first (this run's claim ranked $n against a budget of $MAX_SEAL_ATTEMPTS) — standing down, not retrying."
+            exit 0
+          fi
           verdict true "🔁 re-attempt $n/$MAX_SEAL_ATTEMPTS — \`plugins\` is NOT sealed for \`$identity\` (release \`$RELEASE_VERSION\`), so this reconcile bakes and seals it."
 
   portal-image:
@@ -2868,6 +2887,10 @@ jobs:
     # `always()` is required because `promote` is SKIPPED on the reconcile path — without it this
     # job inherits the skip and the fix is inert, which is the exact shape it is fixing.
     #
+    # 🚨 `preflight` is asserted too, though nothing reads its outputs: it is the GATE that proves this
+    # run's external inputs exist. `always()` stops a job inheriting a failed need's skip, so without
+    # this a FAILED preflight no longer stopped the Plugins legs — on the reconcile path they baked
+    # with inputs nobody had asserted (Copilot on #4565). A gating need is paid for like a consumed one.
     # 🚨 AND `always()` MUST BE PAID FOR: it also stops this job inheriting the skip of a need that
     # FAILED, so every need whose OUTPUT this job consumes has to be asserted by hand. Without the
     # `plugins-bake-image` clause a failed digest resolution would run this job with EMPTY
@@ -2875,7 +2898,7 @@ jobs:
     # which resolves the platform ITSELF when they are empty. So it would not fail loudly; it would
     # quietly pack the bundles against a set this run did not promote.
     if: >-
-      always() && needs.gate.result == 'success' &&
+      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&
       needs.plugins-bake-image.result == 'success' &&
       ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||
        needs.gate.outputs.plugins_seal_due == 'true')
@@ -2941,7 +2964,7 @@ jobs:
     needs: [preflight, gate, plugin-test-image, promote]
     # Same two ways in as `plugins-modules` above (MeshWeaver#4539), same `always()`, same reason.
     if: >-
-      always() && needs.gate.result == 'success' &&
+      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&
       ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||
        needs.gate.outputs.plugins_seal_due == 'true')
     runs-on: ubuntu-latest
@@ -3010,7 +3033,7 @@ jobs:
     # plus the ordinary requirement that its own inputs actually ran: on the reconcile path
     # `plugins-modules` and `plugins-bake-image` are what `always()` no longer waits for implicitly.
     if: >-
-      always() && needs.gate.result == 'success' &&
+      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&
       needs.plugins-modules.result == 'success' && needs.plugins-bake-image.result == 'success' &&
       ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||
        needs.gate.outputs.plugins_seal_due == 'true')
