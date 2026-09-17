@@ -1052,6 +1052,73 @@ this diff changed**, not a whole-tree index, so it publishes no denominator that
 blindness shows up as a missed finding on one file, which a differential over a fixed corpus cannot
 see. Giving it a whole-tree index would be a real change to that gate, not a wrapper around it.
 
+### 🚨 An empty inline body made a MARKER interface adopt the next type's members (#4449)
+
+The detector located a type's body by testing the declaration line for a **trailing** `{`. A body
+written as `{ }` on the declaration line matches neither that nor the `;` terminator, so the scan
+walked *past* it and adopted the **next type's** brace as its own:
+
+```csharp
+public interface IOwnerEnforcedNodeValidator { }   // ← body opens and closes here; not seen
+
+public record NodeValidationContext                 // ← its body was indexed as the INTERFACE's
+{
+    public required NodeOperation Operation { get; init; }
+    …
+}
+```
+
+Every member of `NodeValidationContext` was therefore indexed under
+`IOwnerEnforcedNodeValidator` — where members are public-by-default and **oblige an implementer** —
+so adding one ordinary property to the record reported
+`IOwnerEnforcedNodeValidator.PartitionOwnership` as an implementer-obliging addition and failed
+`Interface additions (implementers declared)` on a member that is not on an interface at all. The
+same mistake pointed the other way too: the record scanned as carrying six members it did not own,
+and a marker interface as carrying six obligations that do not exist.
+
+**Why it is worth writing down rather than just fixing.** This is the failure direction a gate
+cannot survive twice. A false NEGATIVE lets one break through; a false POSITIVE that **no author
+can fix on the code side** teaches everybody that the gate is noise, and the next real finding is
+read as noise too. The documented escape — `Implementers: IFoo.Bar — …` — would have been a *true
+sentence about a member that does not exist*, and the phantom attribution would have stayed.
+
+The body is now located by the line's **brace BALANCE**: `> 0` opens a body that stays open, `== 0`
+with a brace present is a body that already closed. Two guards keep the fix honest:
+
+- an empty inline body is scanned correctly (there is nothing in it), while one written on a single
+  line **with members in it** is REFUSED, naming the file and line — the scanner cannot read those
+  members, and reporting the type as memberless would spell "not checked" exactly like "clean".
+  Measured 2026-09-16: **four** empty inline bodies under `src/` and **zero** with members (three
+  after #4572 moved the marker's body onto its own lines — see below).
+- the inline-body test applies to the **declaration's own line only**. A balanced `{…}` on a
+  continuation line is an interpolated string or an attribute, never a body —
+  `NodeTypeParkedException`'s base call carries one three lines below its declaration, and the
+  first cut of the fix refused that perfectly ordinary type.
+
+**The differential control is what measured it.** `check-parser-delta.py` scored the fix at
+`publicMembersAtBase` **−6** and `implementerObligationsAtBase` **−6** over an identical tree, and
+required both to be declared in the pull-request body. Those six are exactly
+`NodeValidationContext`'s members at the merge base — the phantoms, counted. A control designed to
+catch a detector *losing* sight of something proved equally good at pricing one that had been
+*double-counting*, and the declaration it demands is what keeps the two apart in the record.
+
+**How it landed: through the queue, on a ZERO delta — by removing the construct first.** A declared
+decrease is honoured on `pull_request` and refused on `merge_group`, where the rule is strict because a
+queue entry has no single pull request to read a declaration from. So the fix, green on its own run,
+could not pass the queue while the merge base still held the construct the OLD detector misreads.
+The −6 was irreducible over *that* tree, not over every tree: #4572 wrote
+`IOwnerEnforcedNodeValidator`'s empty body on its own lines — formatting only, and invisible to this
+control because the detector did not change — after which both detector versions agree on main's tree
+and the fix measured **+0** on all four counters. The phantoms left the index with the construct, the
+detector fix then landed through the queue with no change to the rule and no one-time exception, and
+its self-test still pins the inline shape, so the fix stays guarded.
+
+That is the general recipe for a parser tightening the queue refuses: when the shrink is phantoms a
+SOURCE construct causes, land the source change first (the surface gates see the phantoms leave and ask
+for a `Pairs-with: none` reason, which is honest), then land the detector change over a corpus on which
+old and new agree. When no source construct can be moved — a detector genuinely seeing less of a tree
+that cannot change — the strict rule is doing its job.
+
 ### 🚨 A gate added to `main` reaches NEITHER build of a pull request already green (#3508)
 
 The control above landed correct and non-vacuous, and then **did not run on the one pull request
