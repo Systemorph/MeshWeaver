@@ -220,7 +220,8 @@ is handed to https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds; the 
 1. **Core (this change).** The poller hands over; the chart's default renders no Role and
    `SelfUpdate__CanPatch=false`; the Updates tab hands over on the button; the verdicts, the policy
    node's `HandedOver*` fields and the boot line say which of the three states an install is in.
-2. **MeshWeaver.Plugins — the router.** `PlatformBuildInboxWatcher.PlanFor` gains a route for
+2. **MeshWeaver.Plugins — the router. ✅ LANDED** (Plugins#1845, and the routed-action rule in
+   Plugins#2038). `PlatformBuildInboxWatcher.PlanFor` gained a route for
    `self-update-available` → a `Hosting/InstanceAction` `Roll` on `Deployments/<deployment>` with
    `imageTag = newVersion` (refusing a `deployment` that names no record; idempotent on
    `(deployment, newImage)` against open or done actions), and for `self-update-restart-pending` →
