@@ -1,9 +1,13 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
@@ -270,7 +274,7 @@ internal sealed class SealedPublicationSyncReconciler(
     public IObservable<int> Reconcile(
         string identity,
         IReadOnlyList<SealedSource> sealedForThisIdentity,
-        IReadOnlyCollection<string> declinedTypePaths)
+        IReadOnlyCollection<string>? declinedTypePaths)
         => Observable.Defer(() =>
         {
             var attributable = sealedForThisIdentity
@@ -342,7 +346,7 @@ internal sealed class SealedPublicationSyncReconciler(
 
     private IObservable<int> ReconcileSource(
         SealedSource sealedSource, string identity,
-        IReadOnlyList<SealedSource> sealedForThisIdentity, IReadOnlyCollection<string> declinedTypePaths,
+        IReadOnlyList<SealedSource> sealedForThisIdentity, IReadOnlyCollection<string>? declinedTypePaths,
         IObservable<PrebuiltBundleInventory> inventory)
     {
         var repo = SealedSyncGate.Parse(sealedSource.Repository!);
@@ -356,9 +360,17 @@ internal sealed class SealedPublicationSyncReconciler(
             // hold, so an announcement that can release nothing must not enumerate and parse it. The
             // reading is deferred and shared across the whole pass, so the first source that needs it
             // pays for it once.
-            .SelectMany(match => (HoldsAnyBundleHeldType(match) ? inventory
+            // 🚨 The shelf is ALSO needed when this pass has to measure drift itself (#4620): a
+            // caller that passed `null` did not compare the partition against the commit's tree, and
+            // the comparison is exactly `PrebuiltBundleInventory` against each type's live
+            // `CurrentSourceFingerprint`. Reading it stays LAZY and shared for the whole pass, so a
+            // boot sweep — which hands its own measurement in — still never triggers the read.
+            .SelectMany(match => (HoldsAnyBundleHeldType(match) || declinedTypePaths is null
+                    ? inventory
                     : Observable.Return(PrebuiltBundleInventory.NotConfigured))
                 .Select(inventoryReading => (Match: match, Inventory: inventoryReading)))
+            .SelectMany(read => DriftReadings(read.Match, read.Inventory, declinedTypePaths)
+                .Select(drift => (read.Match, read.Inventory, Drift: drift)))
             .Select(read =>
             {
                 var match = read.Match;
@@ -379,9 +391,16 @@ internal sealed class SealedPublicationSyncReconciler(
                     if (GitHubWebhookProcessor.ToPushTarget(node) is not { } target)
                         continue;
                     var config = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger);
+                    // 🚨 The caller's measurement, or THIS pass's own (#4620). `declinedTypePaths`
+                    // null means the caller did not compare the partition against the commit's
+                    // tree; `read.Drift` is that comparison, taken above. Either way what reaches
+                    // the pure decision is a MEASURED set — never an empty one standing in for a
+                    // measurement nobody took, which is what made the detector unreachable.
+                    var declinedForThisSpace = declinedTypePaths
+                        ?? DriftedOf(read.Drift, target.SpacePath, repo, sealedSource, identity);
                     var plan = SealedSyncReconcile.DecideWithInventory(
                         sealedSource, repo, target.SpacePath, config, sealedForThisIdentity, identity,
-                        declinedTypePaths, read.Inventory);
+                        declinedForThisSpace, read.Inventory);
                     switch (plan.Action)
                     {
                         case SealedSyncReconcile.Action.ImportAtSealedCommit:
@@ -437,6 +456,213 @@ internal sealed class SealedPublicationSyncReconciler(
         => match.Configs.Any(node =>
             node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)
                 is { BundleHeldNodeTypes: { IsEmpty: false } });
+
+    /// <summary>
+    /// This pass's OWN drift measurement, per Space the seal matched — empty (and costing nothing)
+    /// when the caller handed one in (MeshWeaver#4620).
+    ///
+    /// <para>🚨 Only for a caller that passed <see langword="null"/>. The boot sweep measures drift
+    /// as a by-product of its bundle-adoption walk and passes what it found, so it must not pay for
+    /// a second reading; the publication-seal trigger measures nothing, and before this its empty
+    /// set read as "the partition is clean".</para>
+    /// </summary>
+    /// <param name="match">The configs this seal's repository matched.</param>
+    /// <param name="inventory">What bundles for this identity carry, per type.</param>
+    /// <param name="declinedTypePaths">The caller's measurement, or null when it took none.</param>
+    /// <returns>Space path → its reading; empty when the caller measured.</returns>
+    private IObservable<ImmutableDictionary<string, SyncedPartitionDrift.Reading>> DriftReadings(
+        GitHubWebhookProcessor.RepoMatch match,
+        PrebuiltBundleInventory inventory,
+        IReadOnlyCollection<string>? declinedTypePaths)
+    {
+        if (declinedTypePaths is not null)
+            return Observable.Return(
+                ImmutableDictionary<string, SyncedPartitionDrift.Reading>.Empty);
+
+        var spaces = match.Configs
+            .Select(GitHubWebhookProcessor.ToPushTarget)
+            .Where(t => t is not null)
+            .Select(t => t!.SpacePath)
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Distinct(StringComparer.Ordinal)
+            .ToImmutableArray();
+        if (spaces.IsEmpty)
+            return Observable.Return(
+                ImmutableDictionary<string, SyncedPartitionDrift.Reading>.Empty);
+
+        return Observable
+            .Zip(spaces.Select(space => LiveDefinitions(space)
+                .Select(live => (Space: space, Reading: SyncedPartitionDrift.Measure(live, inventory)))))
+            .Take(1)
+            .Select(readings => readings.ToImmutableDictionary(
+                r => r.Space, r => r.Reading, StringComparer.Ordinal))
+            .Catch((Exception exception) =>
+            {
+                // "Could not measure" must never arrive as "measured, clean": an empty dictionary
+                // makes DriftedOf report NOT MEASURED for every Space, which is the abstain
+                // direction and is said out loud there.
+                logger?.LogWarning(exception,
+                    "[SealedSync] the drift of {Count} synced partition(s) could not be measured — "
+                    + "their sources are left where they are", spaces.Length);
+                return Observable.Return(
+                    ImmutableDictionary<string, SyncedPartitionDrift.Reading>.Empty);
+            });
+    }
+
+    /// <summary>
+    /// One partition's NodeType path → its LIVE definition.
+    ///
+    /// <para>🚨 The listing answers EXISTENCE and each node's own stream answers CONTENT — the
+    /// same split <c>BundleKeyedHoldReading</c> makes, and for the same reason: a query answer can
+    /// be minutes old (CQRS), and this decides whether content moves. <c>.Complete()</c> because it
+    /// is an ENUMERATION that gates a decision, not a search.</para>
+    ///
+    /// <para><b>The residual, stated where the assumption is made:</b> the listing is the read
+    /// model's, so a NodeType it does not return is simply not compared. That is the abstain
+    /// direction — it can only ever under-report drift, never invent it — and the next announcement
+    /// re-measures. The importer's own prune snapshot declares the same read for the same reason.</para>
+    /// </summary>
+    /// <param name="space">The Space (partition) to read.</param>
+    /// <returns>Path → definition, for every NodeType whose content could be typed.</returns>
+    private IObservable<ImmutableDictionary<string, NodeTypeDefinition>> LiveDefinitions(string space)
+    {
+        if (hub.ServiceProvider.GetService<IMeshService>() is not { } meshService)
+            return Observable.Return(ImmutableDictionary<string, NodeTypeDefinition>.Empty);
+        return meshService
+            .Query<MeshNode>(MeshQueryRequest
+                .FromQuery($"path:{space} scope:descendants nodeType:{MeshNode.NodeTypePath}")
+                .Complete())
+            // 🚨 `Initial`, not merely the first emission (review on #4649). `.Complete()` removes
+            // the paging limit; it does NOT promise that what arrives first is the snapshot. A
+            // pre-initial empty emission would make this report "no type could be compared", the
+            // measurement would ABSTAIN, and the mixed partition would go unseen — a clean-looking
+            // answer from a read that never happened, which is the whole subject of #4620. Same
+            // filter GitHubSyncService's own descendant read makes, for the same reason.
+            .Where(change => change.ChangeType == QueryChangeType.Initial)
+            .Take(1)
+            .Timeout(ReadBudget)
+            .SelectMany(types =>
+            {
+                var paths = types.Items
+                    .Select(n => n.Path)
+                    .Where(p => !string.IsNullOrEmpty(p))
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(p => p, StringComparer.Ordinal)
+                    .ToImmutableArray();
+                if (paths.IsEmpty)
+                    return Observable.Return(ImmutableDictionary<string, NodeTypeDefinition>.Empty);
+                // 🚨 EVERY per-node read is BOUNDED, and a read that does not answer degrades to
+                // "this type has no definition" rather than hanging (review on #4649). These zips
+                // run inside PublicationSealArrivalService's single serialized pump, whose
+                // `Concat()` means one pending reconcile blocks every later seal announcement —
+                // and an outer `Catch` cannot rescue a stream that is merely still waiting. A
+                // point read of a path the (eventually consistent) listing named can also find
+                // nothing there and terminate on a routing NotFound, which is the storm-breaker
+                // shape AGENTS.md names. Both degrade the same way: fewer types compared, a
+                // smaller denominator, and `Measure` abstains rather than inventing drift.
+                return Observable
+                    .Zip(paths.Select(path => hub.GetWorkspace().GetMeshNodeStream(path)
+                        .Take(1)
+                        .Select(node => (Path: path,
+                            Definition: node?.ContentAs<NodeTypeDefinition>(
+                                hub.JsonSerializerOptions, logger)))
+                        .Timeout(ReadBudget)
+                        .Catch((Exception exception) =>
+                        {
+                            logger?.LogDebug(exception,
+                                "[SealedSync] {Path}: its definition could not be read in time — "
+                                + "not compared", path);
+                            return Observable.Return((Path: path, Definition: (NodeTypeDefinition?)null));
+                        })))
+                    .Take(1)
+                    .Select(pairs => pairs
+                        .Where(p => p.Definition is not null)
+                        .ToImmutableDictionary(p => p.Path, p => p.Definition!, StringComparer.Ordinal));
+            });
+    }
+
+    /// <summary>
+    /// The declined set for one Space out of this pass's own readings — and the one place the mix is
+    /// NAMED (MeshWeaver#4620).
+    ///
+    /// <para>🚨 A mix nobody can detect is the worst of the three outcomes this issue weighed, so
+    /// when drift is found the line names the PARTITION, the repository and commit its sync claims,
+    /// the types whose live sources no bundle records, and — where the mesh can say so — the OTHER
+    /// writer, which is the package whose install targets this partition and the ref it installed
+    /// from. An operator reading it should not have to join three clocks by hand, which is what
+    /// #4588 cost.</para>
+    /// </summary>
+    /// <param name="readings">This pass's readings, per Space.</param>
+    /// <param name="space">The Space being decided.</param>
+    /// <param name="repo">The repository the seal attributes to.</param>
+    /// <param name="sealedSource">The sealed publication.</param>
+    /// <param name="identity">This instance's framework identity.</param>
+    /// <returns>The drifted type paths — empty when there are none OR when none could be measured,
+    /// the latter said out loud.</returns>
+    private IReadOnlyCollection<string> DriftedOf(
+        ImmutableDictionary<string, SyncedPartitionDrift.Reading> readings, string space,
+        RepoIdentity repo, SealedSource sealedSource, string identity)
+    {
+        if (!readings.TryGetValue(space, out var reading) || !reading.Measured)
+        {
+            // 🚨 Said at DEBUG, not Warning: "I could not compare" is the normal answer on a mesh
+            // with no bundles for this identity, and a Warning on every announcement would be noise
+            // that teaches operators to skim. It is still SAID, because an absent reading and a
+            // clean one must not look the same in a log either.
+            logger?.LogDebug(
+                "[SealedSync] {Space}: drift NOT MEASURED against {Repo}@{Commit} — {Reason}",
+                space, $"{repo.Owner}/{repo.Repo}", Short(sealedSource.SourceCommit),
+                reading?.Reason ?? "no reading was taken for this Space");
+            return [];
+        }
+        if (reading.Drifted.IsEmpty)
+        {
+            logger?.LogDebug(
+                "[SealedSync] {Space}: agrees with {Repo}@{Commit} — {Reason}",
+                space, $"{repo.Owner}/{repo.Repo}", Short(sealedSource.SourceCommit), reading.Reason);
+            return reading.Drifted;
+        }
+        // 🚨 NAME THE PARTITION AND BOTH WRITERS — a mix nobody can detect is the worst of the
+        // three outcomes #4620 weighed, and #4588 cost a session precisely because all three clocks
+        // (the install record, the sync commit, the mesh content) read correct on their own and
+        // nothing joined them.
+        //
+        // Writer ONE is named in full here, because the sync layer IS it: the repository, the
+        // commit, the sealed publication and the framework identity.
+        //
+        // Writer TWO is named by WHERE TO READ IT, not by a guess. The installer's record —
+        // `Plugins/<package>.installedFromRef` / `installedAtUtc` — is the only place that says
+        // which ref another writer landed, and it lives in `MeshWeaver.PluginCatalog`. That
+        // assembly is deliberately NOT referenced from here: the one-bit ownership seam
+        // (`IPartitionSourceTracking`) exists so the layers below need no reference to this one,
+        // and reaching the other way for a log line would trade a documented layering for a
+        // sentence. Reading the manifest untyped instead would be the `.As<T>()` trap. So the line
+        // says where the answer is and the operator reads one node.
+        logger?.LogWarning(
+            "[SealedSync] {Space}: TWO WRITERS, ONE PARTITION. This sync is one of them and claims "
+            + "{Repo}@{Commit} (sealed publication '{Source}', framework identity {Identity}); "
+            + "{Reason}. Those sources are therefore NOT that commit's, so something else wrote "
+            + "them — the other writer and its ref are recorded on the package whose "
+            + "`targetPartition` is '{Space}' (`Plugins/<package>` → `installedFromRef`, "
+            + "`installedAtUtc`). Re-importing at the sealed commit; see "
+            + "Doc/Architecture/OnePartitionOneBookkeeping.",
+            space, $"{repo.Owner}/{repo.Repo}", Short(sealedSource.SourceCommit),
+            sealedSource.Source, identity, reading.Reason, space);
+        return reading.Drifted;
+    }
+
+    /// <summary>How long any ONE read this pass makes may take. It exists because these
+    /// reads run inside the seal-arrival pump, whose Concat means a pending reconcile
+    /// blocks every later announcement — so the point is that a bound EXISTS, not its
+    /// value. Over it, the read is "not compared", never "nothing drifted".</summary>
+    private static readonly TimeSpan ReadBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>A commit for log copy — the same eight characters every other line in
+    /// this file shows, so two lines about one commit read as one commit.</summary>
+    /// <param name="sha">The commit, or null.</param>
+    /// <returns>The short form, or "(none)".</returns>
+    private static string Short(string? sha) =>
+        string.IsNullOrEmpty(sha) ? "(none)" : sha[..Math.Min(8, sha.Length)];
 
     /// <summary>A hold is written onto the config and said ONCE at Warning per reason; a source
     /// that is simply at the seal with nothing declined is neither (it is the steady state); a
