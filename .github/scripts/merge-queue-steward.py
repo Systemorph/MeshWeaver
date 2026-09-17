@@ -175,6 +175,10 @@ class Context:
     own_run_green: bool | None         # did this PR's own latest pull_request run pass the required check?
     attempts: dict                     # kind -> count of steward re-queues already spent on this head sha
     today: dt.date
+    # Names of OTHER workflows that failed on this PR's queue branch — anything on `merge_group`
+    # that is not `MeshWeaver Build and Test`. See `classify`: a failure there is never a flake, and
+    # reading it off the test workflow's run is how the steward would classify the wrong thing.
+    gate_failures: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -328,6 +332,29 @@ def classify(ctx: Context, evidence: RunEvidence | None, catalogue: tuple[FlakeE
         return Decision("comment", "comment",
                         f"removed from the queue with reason `{reason}` — the steward takes no action for this reason")
 
+    # 🚨 ANOTHER WORKFLOW FAILED IN THE QUEUE — decide on THAT, before looking at the test run.
+    # This steward reads exactly one workflow (`MeshWeaver Build and Test`) under the queue prefix,
+    # which was sound while that was the only thing the queue ran. It no longer is: `Review answered`
+    # evaluates on `merge_group` too (MeshWeaver#4299), and the moment its context is required, an
+    # ejection it causes reaches here with BOTH outcomes wrong —
+    #
+    #   * the PR has no failed test run under the prefix   → "unclassifiable", naming the wrong
+    #     workflow, so the reader is sent to look for a build failure that does not exist; or
+    #   * the PR has an OLDER failed test run under the prefix (an earlier ejection) → the steward
+    #     reads THAT run and classifies a failure that is not why the queue removed the entry. If
+    #     the older run's failure is a catalogued flake, it RE-QUEUES a pull request whose review
+    #     findings are unanswered — defeating the gate it knows nothing about.
+    #
+    # Keyed on "not the test workflow" rather than on `Review answered` by name, so a gate added
+    # later is covered the day it runs on `merge_group` instead of the day somebody remembers this
+    # file. A gate failure is never a flake, so this rejects and never re-queues.
+    if ctx.gate_failures:
+        return Decision("reject", "gate",
+                        "a workflow other than the test suite failed on this pull request's queue "
+                        "branch, so the queue did not remove the entry for a test failure — the "
+                        "steward re-queues nothing here",
+                        details=tuple(f"failed queue workflow: `{name}`" for name in ctx.gate_failures))
+
     if evidence is None:
         return Decision("reject", "unclassifiable",
                         "no merge_group run of 'MeshWeaver Build and Test' was found for this pull request's queue branch, so the steward cannot read what failed")
@@ -459,6 +486,25 @@ class Gh:
                 and r.get("name") == "MeshWeaver Build and Test"
                 and r.get("status") == "completed" and r.get("conclusion") == "failure"]
         return max(mine, key=lambda r: r["created_at"]) if mine else None
+
+    def failed_queue_gates(self, number: int) -> tuple[str, ...]:
+        """Names of OTHER workflows that FAILED on this pull request's queue branch.
+
+        🚨 Deliberately "not the test workflow" rather than a list of known gate names: a gate that
+        starts running on `merge_group` later is covered the day it runs, not the day somebody
+        remembers this file. `Review answered` (MeshWeaver#4299) is the first, and the reason this
+        exists — see `classify`.
+        """
+        prefix = f"gh-readonly-queue/{QUEUE_BRANCH}/pr-{number}-"
+        runs = []
+        for page in (1, 2):
+            data = self.api(f"actions/runs?event=merge_group&per_page=100&page={page}")
+            runs += (data or {}).get("workflow_runs", [])
+        names = {r.get("name") for r in runs
+                 if (r.get("head_branch") or "").startswith(prefix)
+                 and r.get("name") != "MeshWeaver Build and Test"
+                 and r.get("status") == "completed" and r.get("conclusion") == "failure"}
+        return tuple(sorted(n for n in names if n))
 
     def run_evidence(self, run: dict, workdir: Path) -> RunEvidence:
         jobs = (self.api(f"actions/runs/{run['id']}/jobs?per_page=100") or {}).get("jobs", [])
@@ -659,7 +705,11 @@ def act(args) -> int:
     evidence = None
     group: tuple[int, ...] = (args.pr,)
     own_green: bool | None = None
+    gate_failures: tuple[str, ...] = ()
     if reason == "CI_FAILURE":
+        # Read the OTHER queue workflows first: if one of them failed, that is why the entry was
+        # removed, and the test run — present or absent, fresh or stale — is not the evidence.
+        gate_failures = gh.failed_queue_gates(args.pr)
         run = gh.latest_failed_merge_group_run(args.pr)
         if run:
             with tempfile.TemporaryDirectory(prefix="steward-") as tmp:
@@ -667,7 +717,7 @@ def act(args) -> int:
             group = gh.group_pull_requests(run, args.pr)
             own_green = gh.own_run_green(head_sha)
 
-    ctx = Context(reason, args.pr, head_sha, group, own_green, attempts, today)
+    ctx = Context(reason, args.pr, head_sha, group, own_green, attempts, today, gate_failures)
     decision = classify(ctx, evidence, catalogue)
 
     print(f"PR #{args.pr} head {head_sha[:9]} reason {reason} → {decision.action} ({decision.kind}): {decision.summary}")
@@ -755,8 +805,9 @@ def self_test() -> int:
     cat = (entry(r"TimeoutException : The operation has timed out"),)
     no_attempts = {k: 0 for k in CAPS}
 
-    def ctx(reason="CI_FAILURE", group=(7,), own=None, attempts=None, pr=7):
-        return Context(reason, pr, "abc123abc123", group, own, dict(attempts or no_attempts), today)
+    def ctx(reason="CI_FAILURE", group=(7,), own=None, attempts=None, pr=7, gates=()):
+        return Context(reason, pr, "abc123abc123", group, own, dict(attempts or no_attempts), today,
+                       tuple(gates))
 
     def ev(failed_jobs=(), shards=()):
         return RunEvidence(1, "https://github.com/Systemorph/MeshWeaver/actions/runs/1", tuple(failed_jobs), tuple(shards))
@@ -776,6 +827,27 @@ def self_test() -> int:
     print("classify:")
     d = classify(ctx(), ev(failed_jobs=("Build solution (once)",)), cat)
     check(d.action == "reject" and d.kind == "build", "build error ⇒ rejected")
+
+    # 🚨 ANOTHER QUEUE WORKFLOW FAILED (MeshWeaver#4299). `Review answered` runs on `merge_group`
+    # too, so once its context is required an ejection it causes arrives here — and the steward
+    # reads only the TEST workflow's run. Both untreated outcomes are wrong, and the second is the
+    # dangerous one: it re-queues on a stale run's catalogued flake while the real cause — an
+    # unanswered review finding — is untouched. These four rows pin the treatment.
+    d = classify(ctx(gates=("Review answered",)), None, cat)
+    check(d.action == "reject" and d.kind == "gate",
+          "a failed queue GATE with no test run ⇒ rejected as a gate, not 'unclassifiable'")
+    check(any("Review answered" in x for x in d.details),
+          "…and the rejection NAMES the workflow that failed")
+    # The dangerous one: a STALE failed test run whose failure IS catalogued. Without the gate
+    # branch this re-queues a pull request whose review findings are unanswered.
+    d = classify(ctx(gates=("Review answered",)), ev(shards=(shard(flaky),)), cat)
+    check(d.action == "reject" and d.kind == "gate",
+          "a failed queue GATE beside a stale CATALOGUED test failure ⇒ still rejected, never requeued")
+    # Control: with no gate failure the catalogued flake is still a re-queue, so the new branch
+    # narrows nothing it should not.
+    d = classify(ctx(gates=()), ev(shards=(shard(flaky),)), cat)
+    check(d.action == "requeue" and d.kind == "flake",
+          "…and with NO gate failure the catalogued flake still re-queues (the branch is not a blanket)")
     d = classify(ctx(), ev(shards=(shard(flaky),)), cat)
     check(d.action == "requeue" and d.kind == "flake", "catalogued assertion ⇒ requeue (flake)")
     d = classify(ctx(), ev(shards=(shard(honest),)), cat)
