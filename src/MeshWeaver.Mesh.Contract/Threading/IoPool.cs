@@ -658,6 +658,11 @@ public sealed class IoPool : IIoPool, IDisposable
             // disposable writes it.
             var unsubscribed = 0;
 
+            // Whoever is subscribing. The cancelled arm compares against it to decide whether it may
+            // deliver the terminal INSIDE this leaf's region — see there; a task already cancelled
+            // when the continuation is attached runs that continuation on this very thread.
+            var subscriberThreadId = Environment.CurrentManagedThreadId;
+
             // 🚨 Blocking work does NOT pass through _gate — it queues on the limited-concurrency
             // scheduler instead — so its wait is timed at THAT grant point. Instrumenting only the
             // async gate would have left a whole admission path out of a reading that looks total.
@@ -771,11 +776,28 @@ public sealed class IoPool : IIoPool, IDisposable
                                 // carries no value — nobody reads a result out of it, its job is to run
                                 // the .Finally bookkeeping (#1789).
                                 //
-                                // Delivered off the subscriber's thread (#4530): when the token is
-                                // already cancelled at ContinueWith time this continuation runs INLINE
-                                // on whoever subscribed.
+                                // 🚨 AND IT IS DELIVERED INSIDE THIS LEAF'S REGION WHENEVER IT CAN BE.
+                                // This continuation runs before its own `finally` hands the region
+                                // back, and TryFinishDisposal refuses to complete disposal while any
+                                // region is open — so an inline delivery here happens strictly BEFORE
+                                // `Disposed` fires, i.e. before the caller that waits on it releases
+                                // the mesh and unloads collectible ALCs. Scheduling it away would put
+                                // the subscriber's own teardown after that join, which is the one
+                                // thing this pool's drain exists to rule out (Copilot review).
+                                //
+                                // The exception is the case that cannot be delivered here at all: a
+                                // token already cancelled when the continuation was ATTACHED runs it
+                                // inline on whoever subscribed, and a terminal must never run on that
+                                // thread (#4530). Nothing of this leaf ever ran in that case — no
+                                // delegate, no slot — so it is a refusal in all but name, and it
+                                // travels the refusal's path, with the refusal's stated trade.
                                 if (Volatile.Read(ref unsubscribed) == 0)
-                                    RefuseOffSubscriber(observer, DrainedMessage);
+                                {
+                                    if (Environment.CurrentManagedThreadId == subscriberThreadId)
+                                        RefuseOffSubscriber(observer, DrainedMessage);
+                                    else
+                                        observer.OnError(new OperationCanceledException(DrainedMessage));
+                                }
                             }
                             else if (t.IsFaulted)
                             {

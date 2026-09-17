@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -54,13 +55,19 @@ public class IoPoolCancelledBlockingLeafTest
         var releaseHead = 0;
         var queuedRan = 0;
 
-        var head = pool.InvokeBlocking(_ =>
+        // 🚨 The head parks until the POOL cancels it — not until the test says so. That single
+        // choice makes the whole scenario deterministic: when this returns, the pool token is
+        // provably cancelled (so the queued leaf behind it can never run) AND the slot is free (so
+        // the limited-concurrency scheduler reaches that cancelled task, whose continuation is the
+        // only place its terminal can come from — measured). The release flag remains only as the
+        // finally-safety, so a failing assertion cannot strand a pool thread.
+        var head = pool.InvokeBlocking(ct =>
         {
             headRunning.OnNext(Unit.Default);
             headRunning.OnCompleted();
-            // Parked deliberately — the park IS the subject, so it is a bounded spin on a volatile
-            // flag the test releases in its finally.
-            SpinWait.SpinUntil(() => Volatile.Read(ref releaseHead) == 1, TestTimeouts.Quick);
+            SpinWait.SpinUntil(
+                () => ct.IsCancellationRequested || Volatile.Read(ref releaseHead) == 1,
+                TestTimeouts.Quick);
             return 1;
         }).Subscribe(_ => { }, _ => { });
 
@@ -109,8 +116,8 @@ public class IoPoolCancelledBlockingLeafTest
                 "precondition: the second leaf is QUEUED on the scheduler — the state whose "
                 + "cancellation this test is about");
 
-            // The drain cancels the pool token while that leaf is still queued: its task goes
-            // straight to Canceled and its delegate never runs.
+            // The drain cancels the pool token while that leaf is still queued: its task goes to
+            // Canceled and its delegate never runs.
             var drain = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
 
             await terminal.Should().Within(TestTimeouts.Quick).Emit(
@@ -130,13 +137,99 @@ public class IoPoolCancelledBlockingLeafTest
                 "the queued leaf was cancelled before it ran — this is the arm where the work itself "
                 + "can report nothing");
 
-            Volatile.Write(ref releaseHead, 1);
             (await drain.WaitAsync(TestTimeouts.Quick, TestContext.Current.CancellationToken))
                 .Should().Be(0, "the head leaf was released, so the drain joins clean");
         }
         finally
         {
             // A failing assertion above must not strand the parked head leaf on a pool thread.
+            Volatile.Write(ref releaseHead, 1);
+            head.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// 🚨 THE ORDERING, because a terminal that arrives after the join is not bookkeeping the join
+    /// covered (Copilot review on #4563). <see cref="IoPool.Disposed"/> is what a caller waits on
+    /// before releasing the mesh and unloading collectible node ALCs — it means "no pool thread is
+    /// running any more". A cancelled leaf's terminal runs the SUBSCRIBER's teardown, so it has to
+    /// happen inside that window, not after it.
+    ///
+    /// <para>It does, by construction rather than by luck: the continuation delivers the terminal
+    /// before its own <c>finally</c> hands the leaf's region back, and <c>TryFinishDisposal</c>
+    /// refuses to complete disposal while any region is open. This measures the two instants and
+    /// compares them.</para>
+    /// </summary>
+    [Fact]
+    public async Task ACancelledBlockingLeafsTerminal_RunsBeforeDisposedReportsTheJoin()
+    {
+        var pool = new IoPool(1);
+        var headRunning = new AsyncSubject<Unit>();
+        var releaseHead = 0;
+        var terminal = new AsyncSubject<Unit>();
+        long terminalAt = 0;
+        long disposedAt = 0;
+
+        var disposed = pool.Disposed.Take(1).Do(_ => Volatile.Write(ref disposedAt, Stopwatch.GetTimestamp())).Replay(1);
+        using var disposedConnection = disposed.Connect();
+
+        var head = pool.InvokeBlocking(_ =>
+        {
+            headRunning.OnNext(Unit.Default);
+            headRunning.OnCompleted();
+            SpinWait.SpinUntil(() => Volatile.Read(ref releaseHead) == 1, TestTimeouts.Quick);
+            return 1;
+        }).Subscribe(_ => { }, _ => { });
+
+        try
+        {
+            await headRunning.Should().Within(TestTimeouts.Quick).Emit(
+                "precondition: the head leaf holds the only slot, so the next one queues behind it",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            using var queued = pool.InvokeBlocking(_ => 2).Subscribe(
+                _ => { },
+                _ =>
+                {
+                    Volatile.Write(ref terminalAt, Stopwatch.GetTimestamp());
+                    terminal.OnNext(Unit.Default);
+                    terminal.OnCompleted();
+                },
+                () =>
+                {
+                    Volatile.Write(ref terminalAt, Stopwatch.GetTimestamp());
+                    terminal.OnNext(Unit.Default);
+                    terminal.OnCompleted();
+                });
+
+            Assert.True(SpinWait.SpinUntil(() => pool.CurrentlyWaiting >= 1, TestTimeouts.Quick),
+                "precondition: the second leaf is queued when the pool is disposed");
+
+            pool.Dispose();
+
+            // 🚨 RELEASED BEFORE THE WAIT, and that is not a detail. The limited-concurrency
+            // scheduler only reaches the cancelled task — and therefore its continuation, the one
+            // place a terminal can come from — once the head leaf frees the slot (measured). Waiting
+            // for the terminal first would pass by letting the head's park EXPIRE, i.e. on a timeout
+            // rather than on the signal, and both instants would then be pushed past the assertion's
+            // reach. Released here, the two orderings are what the test compares.
+            Volatile.Write(ref releaseHead, 1);
+
+            await terminal.Should().Within(TestTimeouts.Quick).Emit(
+                "the queued leaf is cancelled by the disposal and must terminate",
+                cancellationToken: TestContext.Current.CancellationToken);
+            await disposed.Should().Within(TestTimeouts.Quick).Emit(
+                "disposal completes once the head leaf has unwound",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            Volatile.Read(ref terminalAt).Should().BeLessThan(Volatile.Read(ref disposedAt),
+                "the subscriber's terminal — and every .Finally hanging off it — must run INSIDE the "
+                + "window Disposed closes: that signal is what lets a caller release the mesh and "
+                + "unload collectible ALCs, so bookkeeping scheduled after it would be running on a "
+                + "scope the caller has already torn down");
+        }
+        finally
+        {
             Volatile.Write(ref releaseHead, 1);
             head.Dispose();
         }

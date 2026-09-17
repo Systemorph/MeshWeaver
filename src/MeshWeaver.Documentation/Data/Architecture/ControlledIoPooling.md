@@ -941,9 +941,26 @@ a change feed's terminal carries no value, nobody reads a result out of it, and 
 **The discrimination is explicit, because the task cannot tell you.** The subscription's disposable
 publishes `unsubscribed` before it cancels, and the arm reads it: the subscriber's own cancellation
 stays silent (after a dispose nothing may be delivered), the pool's gets
-`OperationCanceledException`, scheduled off the subscriber's thread through the same
-`RefuseOffSubscriber` — necessary, not decorative, because when the token is already cancelled at
-`ContinueWith` time that continuation runs INLINE on whoever subscribed.
+`OperationCanceledException`.
+
+🚨 **And WHERE that terminal is delivered decides whether the drain covers it.** The continuation runs
+before its own `finally` hands the leaf's region back, and `TryFinishDisposal` refuses to complete
+disposal while any region is open — so delivering **inline there** puts the subscriber's teardown
+strictly inside the window `Disposed` closes, which is the window a caller waits on before releasing
+the mesh and unloading collectible ALCs. Scheduling it away would put it *after* that join. Measured,
+same scenario both ways (a leaf queued behind a parked head, then `Dispose()`):
+
+```
+always scheduled:  head released → Disposed fired → queued OnError      (terminal ~200 µs AFTER the join)
+delivered inline:  head released → queued OnError → Disposed fired      (terminal INSIDE the join)
+```
+
+So the arm delivers inline, and schedules only in the one case that cannot be delivered there: a token
+already cancelled when the continuation was ATTACHED runs it on whoever subscribed, and a terminal must
+never run on that thread (#4530). Nothing of that leaf ever ran — no delegate, no slot — so it is a
+refusal in all but name and takes the refusal's path, with the refusal's stated trade.
+`IoPoolCancelledBlockingLeafTest.ACancelledBlockingLeafsTerminal_RunsBeforeDisposedReportsTheJoin`
+pins the ordering, and fails on the always-scheduled shape by the microseconds above.
 
 **The whole matrix, measured after the change** (50 subscribes per cell, from a dedicated thread):
 16 of 16 cells deliver a terminal, **0 of 16 on the subscriber's thread**, medians 7–17 µs. The

@@ -44,9 +44,14 @@ namespace MeshWeaver.Hosting.Test;
 /// </summary>
 public class IoPoolRefusedLegTerminatesOffSubscriberTest
 {
-    private sealed record Cell(string Name, Func<IIoPool, IObservable<int>> Build, Action<IoPool> Kill, bool BuildBeforeKill);
+    private sealed record Cell(
+        string Name,
+        Func<IIoPool, IObservable<int>> Build,
+        Action<IoPool> Kill,
+        bool BuildBeforeKill,
+        bool ExpectsCancellationFault = true);
 
-    private sealed record Outcome(string Kind, bool OnSubscriberThread, bool InsideSubscribe);
+    private sealed record Outcome(string Kind, bool IsCancellationFault, bool OnSubscriberThread, bool InsideSubscribe);
 
     private static async IAsyncEnumerable<int> OneItem([EnumeratorCancellation] CancellationToken ct)
     {
@@ -84,7 +89,17 @@ public class IoPoolRefusedLegTerminatesOffSubscriberTest
             yield return new Cell($"{name} built before Dispose(), subscribed after", build, pool => pool.Dispose(), BuildBeforeKill: true);
             // Built while the pool was alive, subscribed after the DRAIN — admitted, then ended by
             // the pool. InvokeBlocking is the cell that delivered nothing until #4545.
-            yield return new Cell($"{name} built before Drain(), subscribed after", build, pool => pool.Drain(), BuildBeforeKill: true);
+            yield return new Cell(
+                $"{name} built before Drain(), subscribed after",
+                build,
+                pool => pool.Drain(),
+                BuildBeforeKill: true,
+                // 🚨 The ONE cell that must COMPLETE. SubscribeThroughPool is a subscription surface:
+                // its terminal carries no value, so a drain ends the feed (#1789). Every other cell
+                // is a value surface, where an empty completion is read as "the IO produced nothing"
+                // and folded into a value by callers (DefaultIfEmpty → Undeclared / present) — so it
+                // must FAULT with a cancellation (#4545).
+                ExpectsCancellationFault: name != "SubscribeThroughPool");
         }
     }
 
@@ -110,6 +125,14 @@ public class IoPoolRefusedLegTerminatesOffSubscriberTest
             else if (outcome.OnSubscriberThread)
                 violations = violations.Add($"{cell.Name}: {outcome.Kind} on the subscriber's thread "
                     + $"(insideSubscribe={outcome.InsideSubscribe})");
+            // 🚨 THE KIND IS PART OF THE CONTRACT, not decoration: a regression from the cancellation
+            // fault to OnCompleted is exactly what callers fold into a VALUE through DefaultIfEmpty,
+            // and a matrix that only asked "did something arrive" would pass straight over it
+            // (Copilot review).
+            else if (outcome.IsCancellationFault != cell.ExpectsCancellationFault)
+                violations = violations.Add(
+                    $"{cell.Name}: terminal was {outcome.Kind}, expected "
+                    + (cell.ExpectsCancellationFault ? "a cancellation fault" : "OnCompleted"));
         }
 
         violations.Should().BeEmpty(
@@ -135,9 +158,12 @@ public class IoPoolRefusedLegTerminatesOffSubscriberTest
         var insideSubscribe = 0;
         var insideAtTerminal = 0;
 
-        void Terminal(string what)
+        var isCancellationFault = false;
+
+        void Terminal(string what, Exception? error = null)
         {
             kind = what;
+            isCancellationFault = error is OperationCanceledException;
             terminalThread = Environment.CurrentManagedThreadId;
             insideAtTerminal = Volatile.Read(ref insideSubscribe);
             terminal.OnNext(Unit.Default);
@@ -151,7 +177,10 @@ public class IoPoolRefusedLegTerminatesOffSubscriberTest
         {
             subscriberThread = Environment.CurrentManagedThreadId;
             Volatile.Write(ref insideSubscribe, 1);
-            subscription = leg.Subscribe(_ => { }, ex => Terminal("OnError:" + ex.GetType().Name), () => Terminal("OnCompleted"));
+            subscription = leg.Subscribe(
+                _ => { },
+                ex => Terminal("OnError:" + ex.GetType().Name, ex),
+                () => Terminal("OnCompleted"));
             Volatile.Write(ref insideSubscribe, 0);
         })
         {
@@ -171,7 +200,7 @@ public class IoPoolRefusedLegTerminatesOffSubscriberTest
         {
             // A cell that never terminates is reported as a violation by the caller, with its name,
             // rather than as an anonymous timeout from inside this helper.
-            return new Outcome("none", OnSubscriberThread: false, InsideSubscribe: false);
+            return new Outcome("none", IsCancellationFault: false, OnSubscriberThread: false, InsideSubscribe: false);
         }
         finally
         {
@@ -179,6 +208,6 @@ public class IoPoolRefusedLegTerminatesOffSubscriberTest
             subscription?.Dispose();
         }
 
-        return new Outcome(kind, terminalThread == subscriberThread, insideAtTerminal == 1);
+        return new Outcome(kind, isCancellationFault, terminalThread == subscriberThread, insideAtTerminal == 1);
     }
 }
