@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.Extensions.Configuration;
 
 namespace MeshWeaver.Mesh;
@@ -21,6 +22,9 @@ public static class MeshBuilderModuleActivation
     /// about where a module's bytes are (#1949), so it lives once, here, beside the key.</para>
     /// </summary>
     /// <param name="configuration">The host configuration carrying <see cref="AssembliesKey"/>.</param>
+    /// <remarks>IMMUTABLE, not a <see cref="HashSet{T}"/> behind the interface: the answer is held
+    /// by a mesh-scoped singleton for the life of the process, and the collections policy exists so
+    /// a snapshot cannot be mutated by anyone who is handed it.</remarks>
     public static IReadOnlySet<string> BaselineModuleNames(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -29,7 +33,7 @@ public static class MeshBuilderModuleActivation
             .Where(entry => !string.IsNullOrWhiteSpace(entry))
             .Select(entry => Path.GetFileNameWithoutExtension(entry!))
             .Where(name => !string.IsNullOrWhiteSpace(name))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
