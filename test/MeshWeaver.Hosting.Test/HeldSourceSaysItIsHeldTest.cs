@@ -15,6 +15,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive.Assertions;
 using Microsoft.Extensions.Configuration;
@@ -193,6 +194,59 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
             "the built commit is not sealed for this identity; its sources would run ahead of the bytes");
     }
 
+    /// <summary>
+    /// 🚨 <b>A source sitting on an UNSEALED tip is rolled back by the next build OF THAT SAME
+    /// COMMIT</b> — and the activity says which commit landed and why (review on #4576).
+    ///
+    /// <para>Two defects in one shape. <c>SkipReason</c> asked "already at this commit" about
+    /// <c>head_sha</c> BEFORE the seal gate, so a Space a pre-gate tip import had put on the built
+    /// commit was skipped and never rolled back to the sealed one — the per-landing checks after the
+    /// gate were unreachable. And the landing ran the PROVEN-commit activity, whose title calls the
+    /// commit it lands on "the built commit": for this lane's redirect that is the one thing that is
+    /// not true, and the only explanation lived in the server log.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ASourceOnAnUnsealedTip_IsRolledBackAndTheActivitySaysSo()
+    {
+        var space = await ArmedSpace("Rollback", TestContext.Current.CancellationToken);
+
+        // Put the Space on the UNSEALED commit the way a person's pre-gate tip import did: the
+        // service level, which never consults the gate.
+        await Sync.ReimportAtCommit(space, UnsealedSha, UserId)
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        var onTheTip = await ConfigWhen(space,
+            c => string.Equals(c.LastSyncCommitSha, UnsealedSha, StringComparison.OrdinalIgnoreCase),
+            TestContext.Current.CancellationToken);
+        onTheTip.LastSyncCommitSha.Should().Be(UnsealedSha, "the premise: the Space holds an unsealed tree");
+
+        var rolledBack = repoClient.FetchedRefs.Where(r => r == SealedSha)
+            .Should().Within(TestTimeouts.Convergence * 2)
+            .Emit("a build OF the commit the Space already holds is exactly the delivery that used to "
+                  + "be skipped before the gate could roll it back",
+                TestContext.Current.CancellationToken);
+
+        await Deliver(UnsealedSha, TestContext.Current.CancellationToken);
+        (await rolledBack).Should().Be(SealedSha);
+
+        var afterRollback = await ConfigWhen(space,
+            c => string.Equals(c.LastSyncCommitSha, SealedSha, StringComparison.OrdinalIgnoreCase),
+            TestContext.Current.CancellationToken);
+        afterRollback.LastSyncCommitSha.Should().Be(SealedSha);
+
+        // …and the ACTIVITY — the artefact a person reads — names the sealed commit as such and
+        // carries the gate's own explanation, in the viewer's language. Waited for on its TERMINAL
+        // status: an activity's lines are appended as it runs, so a predicate on the title alone
+        // matches a transcript that is still being written.
+        var landing = await ActivityWhen(space,
+            log => log.Status != ActivityStatus.Running
+                   && log.Messages.Any(m => m.MessageKey == "activity.gitsync.updateToSealedCommit.title"),
+            TestContext.Current.CancellationToken);
+        landing.Messages.Select(m => m.MessageKey).Should().Contain("activity.gitsync.seal.landsOnSeal",
+            "the proven-commit surface would have called the sealed commit 'the built commit', which "
+            + "is what did NOT arrive");
+        landing.Messages.Select(m => m.MessageKey).Should().Contain("activity.gitsync.seal.fetching");
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task SealHeldSource_RecordsTheHoldOnItsConfig_SoItCannotReadAsSettled()
     {
@@ -264,6 +318,28 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
         afterImport.LastSyncNote.Should().BeNullOrEmpty(
             "the note describes the LAST attempt only — a stale hold reason surviving a successful "
             + "import is the same false reading in the opposite direction");
+    }
+
+    /// <summary>
+    /// The Space's first activity satisfying <paramref name="predicate"/>. An activity is created
+    /// mid-import, so the listing is re-asked until one matches — through the sanctioned
+    /// re-query shape (a query source has no stream to wait on), never a delay.
+    /// </summary>
+    private async Task<ActivityLog> ActivityWhen(
+        string space, Func<ActivityLog, bool> predicate, CancellationToken cancellationToken)
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        return await Observable.Interval(50.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => meshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{space}/_Activity scope:descendants").Complete().AsSystem())
+                .Take(1))
+            .SelectMany(change => change.Items
+                .Select(n => n.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions))
+                .Where(log => log is not null && predicate(log)))
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(cancellationToken)
+            ?? throw new InvalidOperationException("the predicate matched a null activity log");
     }
 
     /// <summary>A Space with a sync config for this repository and a credential for whoever the

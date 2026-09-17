@@ -70,12 +70,46 @@ public class SealedSyncGateLandsOnTheSealTest
     [Fact]
     public void Reimport_AtTheSealedCommitItself_RunsAsAsked()
     {
-        var plan = Requested(Sealed[..10], Source("plugins", "Systemorph/MeshWeaver.Plugins", Sealed));
+        var plan = Requested(Sealed, Source("plugins", "Systemorph/MeshWeaver.Plugins", Sealed));
         plan.Proceed.Should().BeTrue();
-        plan.Redirected.Should().BeFalse("a prefix of seven or more characters names the sealed commit");
-        plan.Commit.Should().Be(Sealed[..10]);
+        plan.Redirected.Should().BeFalse("the full sealed sha is exactly what this instance runs");
+        plan.Commit.Should().Be(Sealed);
         plan.Notice.Should().BeEmpty();
     }
+
+    // 🚨 Review on #4576: a ref a PERSON typed is compared to the seal only at FULL length.
+    // SameCommit matches seven-character prefixes — right for two machine-produced shas, wrong for a
+    // typed ref, because a branch name may legally be hex. Below full length the two are
+    // indistinguishable by shape, so both cases redirect onto the sealed commit: the same tree for a
+    // shortened sha, and the protection kept for a branch.
+
+    [Fact]
+    public void AHexBranchNameIsNeverReadAsTheSealedCommit()
+    {
+        var plan = Requested(Sealed[..7], Source("plugins", "Systemorph/MeshWeaver.Plugins", Sealed));
+        plan.Redirected.Should().BeTrue(
+            "'abcdef12' can be a BRANCH, and fetching it would resolve a pointer this gate exists to "
+            + "refuse — it would also attribute a marker-less seal on a prefix match");
+        plan.Commit.Should().Be(Sealed, "the sealed commit is a coordinate; the typed prefix is not");
+    }
+
+    [Fact]
+    public void AShortenedSealedSha_LandsOnTheFullSealedCommit_AndSaysSo()
+    {
+        var plan = Requested(Sealed[..12], Source("plugins", "Systemorph/MeshWeaver.Plugins", Sealed));
+        plan.Commit.Should().Be(Sealed);
+        plan.Notice.Select(n => n.MessageKey).Should().Contain("activity.gitsync.seal.landsOnSeal",
+            "the person asked for a ref this gate will not resolve; the line names both");
+    }
+
+    [Fact]
+    public void ASealThatPredatesTheMarker_IsNotAttributedByATypedPrefix()
+        => SealedSyncGate.DecideRequestedImport(
+                Plugins, Sealed[..8], null, SealedReadOutcome.Read,
+                [Source("plugins", null, Sealed)], Identity, null)
+            .Commit.Should().Be(Sealed[..8],
+                "attribution by commit needs a commit — a typed prefix could be a branch, and "
+                + "attributing another repository's marker-less seal on it is the fail-open in reverse");
 
     [Fact]
     public void Reimport_AtAnotherCommit_OfASealedRepository_LandsOnTheSeal()
@@ -118,7 +152,23 @@ public class SealedSyncGateLandsOnTheSealTest
         plan.Proceed.Should().BeFalse(
             "an unreadable index produces the same empty list as 'nothing sealed' — cannot tell is never "
             + "clear to proceed (#3461)");
-        plan.Notice.Single().MessageKey.Should().Be("activity.gitsync.seal.heldUnreadable");
+        plan.Notice.Select(n => n.MessageKey).Should().Equal(
+            "activity.gitsync.seal.heldUnreadable", "activity.gitsync.seal.advanceBySeal");
+    }
+
+    [Fact]
+    public void AnUnreadableIndexHold_StillNamesTheDirection()
+    {
+        // Review on #4576: the unreadable branch used to carry ONE line and drop the direction the
+        // caller had already computed — the one hold of the four that said nothing about what
+        // releases it, in the case (readable release markers, unreadable identity directory) where
+        // the roll is the actionable half.
+        var plan = SealedSyncGate.DecideRequestedImport(
+            Plugins, "main", null, SealedReadOutcome.Unreadable, [], Identity, Newer);
+        plan.Proceed.Should().BeFalse();
+        plan.Notice.Select(n => n.MessageKey).Should().Equal(
+            "activity.gitsync.seal.heldUnreadable", "activity.gitsync.seal.advanceByRoll");
+        plan.HoldReason.Should().Contain("advances when this instance's IMAGE does (a roll)");
     }
 
     [Fact]
