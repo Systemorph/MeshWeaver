@@ -194,7 +194,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Unanchored Security Reads](UnanchoredSecurityReads) — why the permission fold reads mesh-wide, and why pinning it to the viewer's partition is a silent revocation-fails-open bug
 - [A Denial Is an Answer](DenialIsAnAnswer) — a check on a hub with no evaluator grants Permission.All, and a refusal the mesh decided is rendered, never raised
 - [Who Owns a Partition's Access Shape](PartitionAccessOwnership)
-- [Partition Ownership Resolution](PartitionOwnershipResolution) — the four create-path checks that ask whether a NodeType owns its partition, what one resolution costs for a type declared in mesh content, which of them share ONE view and which deliberately keeps its own, and why a nested instance of such a type is still not refused
+- [Partition Ownership Resolution](PartitionOwnershipResolution) — the four create-path checks that ask whether a NodeType owns its partition, what one resolution costs for a type declared in mesh content, which of them share ONE view and which deliberately keeps its own, and how a nested instance of such a type is refused from the definition's durable row without activating the type's hub
 - [OWASP ZAP Scan — 3.0.0 (6 September 2026)](SecurityScan_3_0_0)
 - [OWASP ZAP Scan — Every Release](SecurityScanning)
 
