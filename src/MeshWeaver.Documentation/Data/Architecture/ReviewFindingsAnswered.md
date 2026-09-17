@@ -19,7 +19,9 @@ maintainer's visible waiver. It is the build of option B on #4299, decided by th
 
 - Workflow: `.github/workflows/review-answered.yml`
 - Predicate and self-test: `.github/scripts/check-review-answered.py`
-- Status: **observed, not required** — see Rollout below.
+- Status: **REQUIRED** on `main` since 2026-09-17. Measured on ruleset 2128472 that day: it requires
+  **two** contexts, `Consolidate test results` **and** `Automatic review answered`. The Rollout
+  section below is now the record of how it got here, not a plan.
 
 ## Why: a review was advisory
 
@@ -241,16 +243,18 @@ the new one (`bf37e92a09`): condition 1 asks whether the review landed, never wh
 head, because the reviewer reviews once. And the 15-minute wait was exercised against #645 — three
 polls, then RED naming the quota refusal.
 
-## Rollout
+## Rollout — done; kept as the record
 
-The check lands **non-required**. The context to add to ruleset 2128472, beside
-`Consolidate test results`, is:
+🚨 **This section is history, not instructions.** The context **was** added to ruleset 2128472
+beside `Consolidate test results` on 2026-09-17, and the check is required today (see Status above).
+Read the steps below as what was confirmed before the switch was thrown — do not re-run them as a
+plan, and do not read "the check lands non-required" as the current state.
 
 ```text
 Automatic review answered
 ```
 
-Before adding it:
+What was confirmed before adding it:
 
 1. **Decide the approval policy for `Copilot`-triggered runs.** Today they are `action_required`
    with zero jobs (measured, above), so the bounded wait is what makes the check self-sufficient. If
@@ -302,6 +306,90 @@ gh api -X POST "repos/Systemorph/MeshWeaver/pulls/<PR>/comments/<comment id>/rep
 ```
 
 Never hand-request the review to turn the check green, and never apply `review-waived` yourself.
+
+### 🚨 The check's log says GREEN and the pull request is still BLOCKED
+
+**The remedy first, because this is found under pressure. Re-run the check's `pull_request` run:**
+
+```bash
+# the run whose verdict branch protection actually reads
+gh api "repos/Systemorph/MeshWeaver/actions/workflows/review-answered.yml/runs?head_sha=<HEAD SHA>" \
+  --jq '.workflow_runs[] | select(.event=="pull_request") | .id'
+gh api -X POST "repos/Systemorph/MeshWeaver/actions/runs/<ID>/rerun"
+```
+
+An empty commit does the same thing by a longer road — it gives the check a head sha it has never
+judged — but 🚨 **`--allow-empty` does not mean "empty"**: it means "allow a commit that *would* be
+empty", and anything already staged rides along. Under pressure, with a half-staged tree, that
+pushes an unreviewed change while you are trying to repair a check. Refuse a dirty index first:
+
+```bash
+git diff --cached --quiet || { echo "REFUSING: the index is not empty — this would commit staged work"; exit 1; }
+git commit --allow-empty -m "chore: one clean head for the review gate"
+git push
+```
+
+Prefer the re-run above: it changes no history and cannot carry anything with it.
+
+🚨 **This re-run is legitimate, and it is not "re-run and see".** The check reads LIVE state, and
+that state genuinely changed when the replies landed: the first evaluation was correct when it ran,
+and so is the second. This is the one case where re-running a red is the right response rather than
+a way of hiding one — and it is safe to write down because **if a thread is genuinely unanswered the
+re-run is red too.** (Every other red in this repository still means investigate, not re-run.)
+
+**What is actually happening** (measured on #4649, head `94fc73b4fdaa`, 2026-09-17). Answering a
+thread fires **both** a `pull_request_review` and a `pull_request_review_comment` event. Fifteen runs
+of this workflow resulted; eight published a check-run; and the `statusCheckRollup` that branch
+protection consumes carried exactly **three**:
+
+| check-run | triggering event | conclusion | in the rollup? |
+|---|---|---|---|
+| 105349138004 | `pull_request` | failure | **yes** |
+| 105356428131 | `pull_request_review` | failure | **yes** |
+| 105356609073 | `pull_request_review` | failure | **yes** |
+| 105356478806 | `pull_request_review_comment` | failure | no |
+| 105356544187 | `pull_request_review_comment` | failure | no |
+| 105356665266 | `pull_request_review_comment` | failure | no |
+| 105356708655 | `pull_request_review_comment` | **success** | no |
+| 105356763402 | `pull_request_review_comment` | **success** | no |
+
+So the mechanism is **not** a latched rollup and **not** "the newest run loses":
+
+1. **A `pull_request_review_comment` run's verdict is invisible to branch protection.** Both
+   successes were from that event, so they were never candidates — by construction, not by timing.
+2. **The read-eligible runs that arrived after the replies were EVICTED.** `pull_request_review`
+   runs at 19:48:19Z and 19:48:28Z were cancelled in the one pending slot they shared with the
+   comment-driven runs, so they published nothing and the last *read* verdict on that sha stayed an
+   early failure.
+3. **Hence the symptom:** the newest check-run reads success, the check's own log says
+   "GREEN — 5 of 5 answered by a person", and the rollup correctly reports a real failure in a suite
+   nobody was looking at. Re-arming auto-merge does nothing, because the rollup is not stale.
+4. **It is invisible in REST**, because `mergeable_state: blocked` is also what a PR waiting its
+   turn reports. The rollup is the only place the difference shows.
+
+**What was done about it.** Two changes, and one option that is not ours to take:
+
+- **The concurrency group is split by event class** (`gate` for `pull_request` /
+  `pull_request_review` / `merge_group`, `feedback` for `pull_request_review_comment`), so the
+  survivor of the gate lane is always a run whose verdict is read. That removes cause 2
+  deterministically.
+- **`--settle-replies 60`** makes that surviving run judge a state that has stopped moving, so it
+  publishes the settled verdict rather than a snapshot taken mid-answer. Every gap measured *inside*
+  an answering burst was 1–11 s (#4649, #4656, #4646); 60 s is ~5×, and the one 954 s gap in that
+  sample was a separate later round that rightly gets its own evaluation. It softens no verdict — an
+  unanswered thread that stays unanswered is still red when the wait ends — and it waits only while
+  unanswered threads are the whole complaint, never for a missing review or an incomplete listing.
+- **Not taken, because it needs the maintainer:** reporting the verdict as a commit **status**
+  against the head sha (`POST /repos/{o}/{r}/statuses/{sha}`) instead of as a job's check-run. That
+  is the only shape correct *by construction* — one context, last write wins, whatever event
+  produced it — but it is a required-context rename plus a ruleset edit on `2128472`, i.e. a change
+  to how everything merges. Until that is decided, the two changes above plus the re-run remedy are
+  what stands.
+
+🚨 **And a reply must be ON THE THREAD.** A pull-request-level comment does not answer anything: the
+check counts replies whose `in_reply_to_id` is the reviewer's root comment, and its log names every
+thread it still considers unanswered. If the log disagrees with what you think you answered, read
+that list before reaching for the re-run.
 
 ## Related
 

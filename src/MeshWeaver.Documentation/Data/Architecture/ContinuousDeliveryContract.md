@@ -642,6 +642,54 @@ read. **The number of images promoted was never the question.** The operator-fac
 choosing a target is [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall) →
 "What makes a tag a safe target".
 
+### 🚨 …and a GREEN `main-cd` run can have sealed nothing at all
+
+The section above is the case where the seal **failed**. The commoner and nastier one is where it
+never ran: **a `main-cd` run concludes `success` with every publishing job `skipped`.** That is the
+skipped-reads-as-passed trap sitting on the seal signal itself, and lifting a hold on it sends
+someone to merge against a platform set that never existed.
+
+Measured, with a positive control:
+
+| run | conclusion | Promote | Verify | Bake platform | Plugins seal | sealed? |
+|---|---|---|---|---|---|---|
+| **#8860** (`35259738026`, 18:35Z) | **success** | skipped | skipped | skipped | skipped | **NO** |
+| **#8844** (`35250215485`, 17:01Z) | success | success | success | success | success | yes |
+
+**So the test for "a set was sealed carrying commit X" is those four job conclusions, never the
+run's** — each `success`, none `skipped`:
+
+```text
+Promote: tag the full set (all-or-nothing)
+Verify every image shipped
+Bake platform content in the shipped image + publish (…)
+Plugins: bake + seal the publication for this identity
+```
+
+Two reading tells, both from the measurement:
+
+- the bake job's name renders the **literal** `${{ matrix.arch }}` when it was skipped (no matrix to
+  expand) and a real arch — `linux-x64` — when it ran, so the name itself distinguishes them;
+- the seal is **two** nested jobs when it actually runs (`… / Bake + publish NodeType assemblies to
+  portal storage` and `… / Register the publication with memex`), so match on the prefix.
+
+🚨 **The green is CORRECT, and that is the point.** #8860 was a scheduled reconcile that deferred —
+its gate log reads `⏳ An older run of this workflow is still publishing cfa87e9 … deferring`, and
+not publishing was the right answer. Nothing in the run misbehaved. What is wrong is reading its
+conclusion as *"a set was sealed"*. (Worse, in that instance the run it deferred to was then
+discarded with zero jobs — see "The answer is DISCHARGED at release time" above — so nothing
+published for that commit at all.)
+
+**The run's conclusion answers neither question, in either direction.** A green run can have shipped
+nothing, as here; and a **red** run can have shipped everything — that is the `satellite-compat`
+case this page already describes, where delivery completed and the colour is about compatibility.
+Read the jobs.
+
+**Downstream, this explains a satellite red that has nothing wrong with the satellite.** A persistent
+`no sealed publication for source 'plugins' under framework identity <id>` in a dependent repo is
+exactly what a green CD run that skipped the Plugins seal produces. Check the four jobs on the
+sealing run **before** concluding anything about the dependent repo.
+
 ### A set is named by its RUN — and the pending slot cancels runs under commits that stay valid
 
 A sealed set's name is `<PlatformVersion>-ci.<run number>`, and the run number is the one thing about
