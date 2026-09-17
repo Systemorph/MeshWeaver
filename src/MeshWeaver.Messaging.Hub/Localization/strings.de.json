@@ -449,6 +449,8 @@
   "menu.skillsTooltip": "Wiederverwendbare Skills — global, Space und Benutzer",
   "menu.providers": "Provider",
   "menu.providersTooltip": "AI-Provider — Endpunkte und Schlüssel",
+  "providers.harnessesTitle": "Ausführungs-Harnesses",
+  "providers.harnessesIntro": "Installiere ein Harness in deiner eigenen Thread-Auswahl und nutze dann den Verbindungsablauf dieses Pakets. Dein Konto wird niemals mit diesem Mesh geteilt.",
   "menu.viewPublicProfileTooltip": "Das öffentliche Profil so ansehen, wie Besucher es sehen",
   "menu.editProfileTooltip": "Biografie, Links und Showcase bearbeiten",
   "menu.editHomePageTooltip": "Das Markdown dieser Startseite bearbeiten",
