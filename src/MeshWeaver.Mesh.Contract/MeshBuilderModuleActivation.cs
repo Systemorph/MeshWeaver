@@ -12,6 +12,27 @@ public static class MeshBuilderModuleActivation
     public const string AssembliesKey = "Modules:Assemblies";
 
     /// <summary>
+    /// The module SIMPLE NAMES this image ships its own copy of — the <see cref="AssembliesKey"/>
+    /// baseline, read the way the boot loader reads it, with the <c>.dll</c> dropped.
+    ///
+    /// <para>🚨 It answers exactly one question — "does the image carry a copy of this module?" —
+    /// and it is the question the identity discriminator and the activation report both have to
+    /// ask (MeshWeaver#4550). Deriving it twice is how a gate and a resolver came to disagree
+    /// about where a module's bytes are (#1949), so it lives once, here, beside the key.</para>
+    /// </summary>
+    /// <param name="configuration">The host configuration carrying <see cref="AssembliesKey"/>.</param>
+    public static IReadOnlySet<string> BaselineModuleNames(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        return configuration.GetSection(AssembliesKey).GetChildren()
+            .Select(child => child.Value)
+            .Where(entry => !string.IsNullOrWhiteSpace(entry))
+            .Select(entry => Path.GetFileNameWithoutExtension(entry!))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// The modules this deployment cannot correctly serve without — the loud half of
     /// <see cref="AssembliesKey"/>.
     ///
