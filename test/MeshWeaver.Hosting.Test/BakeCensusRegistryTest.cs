@@ -495,6 +495,44 @@ public class BakeCensusRegistryTest
                 "the contradictory phrasing must not come back");
     }
 
+
+    /// <summary>
+    /// 🚨 <b>A LATER verdict replaces the earlier one — "the last verdict wins" has to be true.</b>
+    ///
+    /// <para>The sweep's recovery watch retracts a regression when a condemned type is seen to
+    /// build on this image, and retires one whose definition has since been pruned. Recording only
+    /// what the SWEEP emitted left <c>/health</c> naming a type as having no usable assembly long
+    /// after this process had watched it build — a stale census, which is worse than no census: it
+    /// sends an operator after a type that is fine, and the third time that happens nobody reads
+    /// the instrument again.</para>
+    /// </summary>
+    [Fact]
+    public void ARecoveredType_StopsBeingNamed_AndARetiredOneMovesToWithdrawn()
+    {
+        var registry = new NodeTypeBakeReportRegistry();
+        registry.Record(Reading(fromLocalAdoption: 0, stamps: 78));
+        registry.RecordOutcome(new PreWarmOutcome("Approvals/Desk", PreWarmStatus.CompileError));
+        registry.RecordOutcome(new PreWarmOutcome("Crm/Mail", PreWarmStatus.CompileError));
+        registry.Latest!.NoUsableAssembly.Should().Be(2, "the sweep's own verdicts land first");
+
+        // the recovery watch's two witnesses, arriving later
+        registry.RecordOutcome(new PreWarmOutcome("Approvals/Desk", PreWarmStatus.Compiled));
+        registry.RecordOutcome(new PreWarmOutcome("Crm/Mail", PreWarmStatus.Removed));
+
+        var reading = registry.Latest!;
+        reading.OutcomesReached.Should().Be(2, "a later verdict REPLACES the earlier one for a type "
+            + "— it is not a second entry, or the denominator would inflate every retraction");
+        reading.NoUsableAssembly.Should().Be(0);
+        reading.UsableHere.Should().Be(1);
+        reading.Withdrawn.Should().Be(1);
+
+        NodeTypeBakeReportRegistry.Describe(reading).Should()
+            .NotContain("NO usable assembly on this replica",
+                "the whole point: a type this replica was watched to build must stop being named, "
+                + "or the census is telling an operator to chase something that is fine")
+            .And.NotContain("in Approvals");
+    }
+
     [Fact]
     public void TheLogWarningAndTheHealthVerdict_ShareOneThreshold()
         => SourceDiscoveryRegistry.GapShareWarnPercent.Should().Be(50,

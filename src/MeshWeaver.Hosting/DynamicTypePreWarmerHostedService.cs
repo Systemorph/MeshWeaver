@@ -393,8 +393,10 @@ public sealed class DynamicTypePreWarmerHostedService(
                             + "Adoption itself already ran; every type still compiles on first "
                             + "access, so the pod stays correct — it just cannot tell you how much "
                             + "of its content arrived pre-built.");
-                        bake?.MarkSettled(PreWarmSettlement.Faulted);
+                        // The census first, then the barrier — see the note at the sweep's
+                        // terminals: MarkSettled releases readers that can ask /health.
                         census?.RecordSettlement("faulted");
+                        bake?.MarkSettled(PreWarmSettlement.Faulted);
                     },
                     // NotApplicable, deliberately: adoption ran but no BAKE did, and completion was
                     // only ever a claim about a sweep. Consumers sequenced behind the barrier (the
@@ -402,14 +404,15 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // once the seeding has landed, and learn that nothing was compiled.
                     () =>
                     {
-                        bake?.MarkSettled(PreWarmSettlement.NotApplicable);
-                        // 🚨 #4645 — and the census says the SAME thing in its own words. This
-                        // path publishes an adopt-only bake report, so without this the reading
-                        // would carry a plan and an empty settlement, which is the sentence
-                        // reserved for "no sweep reported here". "Nothing was compiled, on
-                        // purpose" and "I do not know whether anything was" must not collapse
-                        // into one reading — that is the ambiguity this census exists to refuse.
+                        // 🚨 #4645 — the census says the SAME thing in its own words, and says
+                        // it BEFORE the barrier is released (readers behind the bake can ask
+                        // /health). This path publishes an adopt-only bake report, so without
+                        // this the reading would carry a plan and an empty settlement, which is
+                        // the sentence reserved for "no sweep reported here". "Nothing was
+                        // compiled, on purpose" and "I do not know whether anything was" must not
+                        // collapse into one reading — the ambiguity this census exists to refuse.
                         census?.RecordSettlement("not applicable");
+                        bake?.MarkSettled(PreWarmSettlement.NotApplicable);
                     });
             return;
         }
@@ -548,8 +551,13 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // A fault is a terminal too: the sweep is over, the compile queue is no longer
                     // saturated, and whoever sequenced on the bake may proceed (#1114) — now able
                     // to see THAT it was a fault they proceeded past.
-                    bake?.MarkSettled(PreWarmSettlement.Faulted);
+                    // 🚨 THE CENSUS IS SET BEFORE THE BARRIER IS RELEASED. MarkSettled publishes the
+                    // terminal value to everything sequenced behind the bake, and one of those things
+                    // can read /health. Released first, a subscriber could see the barrier settled while
+                    // SweepSettlement was still empty and print the false "NO sweep has reported"
+                    // reading — the signal a join waits on must be published LAST.
                     census?.RecordSettlement("faulted");
+                    bake?.MarkSettled(PreWarmSettlement.Faulted);
                 },
                 () =>
                 {
@@ -618,8 +626,13 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // flows sequenced on the bake (#1114). On a Regressed+armed pod readiness
                     // stays refused regardless; the default install proceeding is deliberate —
                     // installs repair content, and the broken type is already terminal.
-                    bake?.MarkSettled(PreWarmSettlement.Completed);
+                    // 🚨 THE CENSUS IS SET BEFORE THE BARRIER IS RELEASED. MarkSettled publishes the
+                    // terminal value to everything sequenced behind the bake, and one of those things
+                    // can read /health. Released first, a subscriber could see the barrier settled while
+                    // SweepSettlement was still empty and print the false "NO sweep has reported"
+                    // reading — the signal a join waits on must be published LAST.
                     census?.RecordSettlement("completed");
+                    bake?.MarkSettled(PreWarmSettlement.Completed);
                 });
     }
 

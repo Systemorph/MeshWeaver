@@ -1657,8 +1657,15 @@ public static class DynamicTypePreWarmer
             .Subscribe(
                 witness =>
                 {
+                    // 🚨 #4645 — THE CENSUS LEARNS THE LATER VERDICT TOO. Recording only what
+                    // the sweep emitted made "the last verdict wins" false the moment a recovery
+                    // watch fired: /health would keep naming a type as having no usable assembly
+                    // long after this process had watched it build. A stale census is worse than
+                    // none — it sends an operator after a type that is fine.
+                    var census = mesh.ServiceProvider.GetService<NodeTypeBakeReportRegistry>();
                     if (string.Equals(witness, RemovedWitness, StringComparison.Ordinal))
                     {
+                        census?.RecordOutcome(new PreWarmOutcome(typePath, PreWarmStatus.Removed));
                         if (gate.RetireRegression(
                                 typePath,
                                 "the NodeType definition no longer exists — pruned by its repository "
@@ -1675,6 +1682,10 @@ public static class DynamicTypePreWarmer
                         }
                         return;
                     }
+                    // Recorded on the WITNESS, not on the gate's answer: the gate returns true
+                    // only where a regression was actually held, while the census's question is
+                    // simply "can this replica serve the type now" — and the witness says it can.
+                    census?.RecordOutcome(new PreWarmOutcome(typePath, PreWarmStatus.Compiled));
                     if (gate.RetractRegression(
                             typePath,
                             $"rebuilt to a usable build on this image after the bake ({witness})"))

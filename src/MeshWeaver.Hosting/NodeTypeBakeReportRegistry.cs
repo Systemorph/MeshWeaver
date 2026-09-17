@@ -77,8 +77,11 @@ public sealed record BakeReportReading(
     public string SweepSettlement { get; init; } = string.Empty;
 
     /// <summary>
-    /// 🚨 <b>THE DENOMINATOR of the outcome census.</b> How many NodeTypes reached a TERMINAL
-    /// verdict on this replica. Read every other outcome count against this one and against
+    /// 🚨 <b>THE DENOMINATOR of the outcome census.</b> How many NodeTypes REPORTED a terminal
+    /// outcome on this replica — which is not the same as how many were DECIDED: the unknown and
+    /// the withdrawn are inside this number, and only <see cref="UsableHere"/> plus
+    /// <see cref="NoUsableAssembly"/> are verdicts. Calling it "reached a verdict" is what made the
+    /// printed denominator contradict itself. Read every other outcome count against this one and against
     /// <see cref="Total"/>: a zero in <see cref="NoUsableAssembly"/> means "nothing to see" only
     /// when this number accounts for the population, and means "I could not look" otherwise.
     /// </summary>

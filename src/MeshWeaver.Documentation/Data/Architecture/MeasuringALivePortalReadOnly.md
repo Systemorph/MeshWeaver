@@ -140,9 +140,14 @@ Three properties are deliberate, and each of them is a lesson from a census that
   indicting one, so a `PreWarmStatus` added later and not thought about surfaces as something to
   look at instead of quietly joining the healthy count.
 
-🚨 It says nothing about a type the sweep never reached — a replica with the compiling sweep off
-reports `OUTCOME CENSUS: NO sweep has reported an outcome on this replica`, which is an absence of
-measurement and says so. That is the honest reading, not a gap to work around.
+🚨 **It says nothing about a type the sweep never reached, and the three ways that happens are
+three different sentences.** A replica that ran the adopt-only pass — adoption ran, the compiling
+sweep deliberately did not — reports `OUTCOME CENSUS (sweep not applicable)`: *nothing was compiled,
+on purpose*, which is a measurement with a known answer. A sweep that died partway reports
+`(sweep faulted)`, and has measured a PREFIX of its population. Only a replica where nothing
+reported at all gets `OUTCOME CENSUS: NO sweep has reported an outcome on this replica`, the absence
+of measurement. Collapsing the first into the third is the bug the census would otherwise have
+reintroduced in itself — these are honest readings, not gaps to work around.
 
 🚨 **Read a census line's SENTENCE, not just its status.** `bake-report: Degraded — NO bake report on
 this replica` and `bake-report: Degraded — the NodeType enumeration snapshot PREDATED …` are two
