@@ -1022,6 +1022,12 @@ publish_release_marker() { # <account> <share> <base>
   echo "release marker: $account/$share/$dir/$RELEASE_VERSION → $IDENTITY"
 }
 
+# How `publish_one_target` below ended — `sealed` (this run wrote the sentinel) or `converged` (a
+# sibling had already published this exact content, proved on the bytes). A GLOBAL and not a return
+# code, because a function on the left of `||` runs with `set -e` SUSPENDED for its whole body: the
+# `|| rc=$?` its caller needed for `return 3` is what made every "fatal by set -e" inside it a no-op.
+ONE_TARGET_VERDICT=""
+
 publish_one_target() { # <account> <share> <dest-dir> <resealing>
   local account="$1" share="$2" dest="$3" resealing="$4"
   # Republishing OVER a sealed directory: UNSEAL first. Readers must never seed a mid-replace
@@ -1073,7 +1079,6 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
   ONE_TARGET_VERDICT=sealed
   echo "sealed: $account/$share/$dest/$SENTINEL (${#BUNDLES[@]} bundle(s), source ${SOURCE_SHA:-unknown}, platform surface: $HAS_SURFACE)"
 }
-ONE_TARGET_VERDICT=""
 
 # Moves the pointer that says which generation applies. The LAST write of a generation publication,
 # and the only one a reader has to see for the new publication to become live.
