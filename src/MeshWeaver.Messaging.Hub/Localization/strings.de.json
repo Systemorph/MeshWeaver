@@ -1433,6 +1433,7 @@
   "activity.gitsync.updateToProvenCommit.fetching": "{sha} — der vom Build geprüfte Commit — wird von GitHub geholt und die Änderungen werden importiert…",
   "activity.gitsync.reconcileAtProvenCommit.title": "{space} mit dem versiegelten Commit {sha} abgleichen",
   "activity.gitsync.reconcileAtProvenCommit.fetching": "{sha} — der Commit, aus dem die Bundles dieser Instanz gebaut wurden — wird geholt und die Partition damit abgeglichen…",
+  "activity.gitsync.updateToSealedCommit.title": "{space} auf den versiegelten Commit {sha} bringen",
   "activity.gitsync.seal.fetching": "{sha} — der Commit, aus dem die Bundles dieser Instanz gebaut wurden — wird von GitHub geholt und die Änderungen werden importiert…",
   "activity.gitsync.seal.landsOnSeal": "{repo} ist für diese Instanz bei {sealed} versiegelt (Framework-Identität {identity}) — statt {requested} wird dieser Commit importiert, damit die Quellen des Space zu den Bundles passen, die diese Instanz ausführt.",
   "activity.gitsync.seal.heldUnreadable": "Nichts importiert: Der Publikationsindex für die Framework-Identität {identity} dieser Instanz konnte nicht gelesen werden, daher ist unbekannt, aus welchem Commit ihre Bundles gebaut wurden.",

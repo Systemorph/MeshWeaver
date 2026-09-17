@@ -196,7 +196,13 @@ public sealed class GitHubWebhookProcessor
     /// <param name="LandsOnSeal">True when <paramref name="Commit"/> is the sealed commit rather
     /// than the built one.</param>
     /// <param name="Reason">Log copy: why this commit.</param>
-    internal sealed record BuildImport(PushTarget Target, string Commit, bool LandsOnSeal, string Reason);
+    /// <param name="Notice">🚨 The gate's statement as VIEWER-LOCALIZED lines, carried onto the
+    /// import's own activity (review on #4576). Without it the only explanation of why a commit no
+    /// build named had landed was a server log line, while the activity — the artefact a person
+    /// reads — called that commit "the built commit".</param>
+    internal sealed record BuildImport(
+        PushTarget Target, string Commit, bool LandsOnSeal, string Reason,
+        ImmutableList<LogMessage> Notice);
 
     /// <summary>
     /// Parses a <c>push</c> payload. False for non-branch refs (tag pushes) and branch
@@ -311,12 +317,13 @@ public sealed class GitHubWebhookProcessor
                 repo, branch, headSha, targets.Count,
                 targets.Count(t => !t.LandsOnSeal), targets.Count(t => t.LandsOnSeal));
             var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-            foreach (var (t, commit, landsOnSeal, reason) in targets)
+            foreach (var (t, commit, landsOnSeal, reason, notice) in targets)
             {
                 if (landsOnSeal)
-                    // Its own line: the build's commit is NOT what lands, and an operator reading the
-                    // import activity ("Update … to the built commit C") must be able to find why the
-                    // commit it names is not the one that went green (#3845).
+                    // Its own line: the build's commit is NOT what lands. The ACTIVITY says so too —
+                    // see the import call below, which for a landing runs the sealed-commit surface
+                    // and carries `notice` onto the activity (review on #4576); this line is the
+                    // operator's grep in the server log, not the only record.
                     logger?.LogInformation(
                         "Green build of {Repo} at {Sha}: {Space} lands on the sealed commit {Sealed} — {Reason}.",
                         repo, headSha, t.SpacePath, commit, reason);
@@ -333,8 +340,15 @@ public sealed class GitHubWebhookProcessor
                         // against headSha and the gate decided which commit each may land on
                         // (headSha, or the sealed one); resolving the branch here would mean the
                         // selection and the import disagree about which tree was proved (#1430).
-                        () => hub.UpdateToProvenCommitFromGitHub(
-                            t.SpacePath, t.UserId, commit, sourceId: t.SourceId))
+                        //
+                        // 🚨 …and a landing on the SEALED commit runs its own activity surface: the
+                        // proven-commit one titles the commit "the built commit", which for this
+                        // lane's redirect is exactly the thing that is not true (review on #4576).
+                        () => landsOnSeal
+                            ? hub.UpdateToSealedCommitFromGitHub(
+                                t.SpacePath, t.UserId, commit, notice, sourceId: t.SourceId)
+                            : hub.UpdateToProvenCommitFromGitHub(
+                                t.SpacePath, t.UserId, commit, sourceId: t.SourceId))
                     .Subscribe(
                         activity => logger?.LogInformation(
                             "Build-triggered import of {Space} at {Sha} completed ({Activity}).",
@@ -403,7 +417,9 @@ public sealed class GitHubWebhookProcessor
                 foreach (var node in match.Configs)
                 {
                     var cfg = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger);
-                    if (SkipReason(cfg, branch, headSha) is { } reason)
+                    // 🚨 Only the CONFIGURATION half here; the per-commit skips are asked about the
+                    // commit that would LAND, after the gate has named it (review on #4576).
+                    if (ConfigurationSkipReason(cfg, branch) is { } reason)
                     {
                         skipped.Add($"{node.Path} ({reason})");
                         continue;
@@ -433,32 +449,40 @@ public sealed class GitHubWebhookProcessor
                         continue;
                     }
                     if (plan.Redirected)
-                    {
                         // The BUILD is held either way — its commit is not what this source receives —
                         // so the census and the Warning below count it; what differs is whether there
                         // is anything to import.
                         held++;
+                    // 🚨 The per-commit skips, asked about the commit that LANDS (review on #4576).
+                    // For an ordinary delivery that is head_sha and this is byte-for-byte the old
+                    // behaviour; for a redirect it is the sealed commit, so a source already holding
+                    // that tree imports nothing — and a source that cannot converge at it is not
+                    // re-fetched on every green build of its repository (#4499's storm, one commit
+                    // over). A source ALREADY at the sealed commit must still say why the build did
+                    // not arrive (#4063); a final verdict is deliberately NOT recorded as a hold,
+                    // because a hold clears the attempt pair that licences this very skip.
+                    if (CommitSkipReason(cfg, plan.Commit!) is { } landingReason)
+                    {
+                        if (plan.Redirected)
+                        {
+                            heldReason ??= plan.Reason;
+                            // 🚨 The two skips are recorded DIFFERENTLY, and which one fired decides
+                            // it. A source already ON the sealed commit imports nothing, and its node
+                            // must still say why the build did not arrive (#4063/#4065) — that hold is
+                            // the only trace of the delivery. A FINAL-VERDICT skip is deliberately
+                            // NOT recorded: a hold clears the attempt pair that licences this very
+                            // skip, so writing one would turn a refusal per commit back into one per
+                            // delivery (#4499).
+                            if (IsAlreadyAt(cfg, plan.Commit!))
+                                RecordSealHold(node, cfg, plan.Reason);
+                        }
+                        skipped.Add($"{node.Path} ({landingReason}"
+                            + (plan.Redirected ? $" — {plan.Reason})" : ")"));
+                        continue;
+                    }
+                    if (plan.Redirected)
+                    {
                         heldReason ??= plan.Reason;
-                        if (SealedSyncGate.SameCommit(cfg?.LastSyncCommitSha, plan.Commit))
-                        {
-                            // Already on the sealed commit: nothing to import, and the node must say
-                            // why the build did not arrive (#4063) — the note names the sealed commit.
-                            skipped.Add($"{node.Path} (already at the sealed commit — {plan.Reason})");
-                            RecordSealHold(node, cfg, plan.Reason);
-                            continue;
-                        }
-                        if (GitHubSyncService.HasFinalVerdictAt(cfg, plan.Commit))
-                        {
-                            // 🚨 #4499's predicate at the commit that WOULD land. Without it a source
-                            // that cannot converge at the sealed commit is re-fetched on every green
-                            // build of its repository — the storm SkipReason exists to stop, moved
-                            // one commit over. Not recorded as a hold: a hold clears the attempt pair,
-                            // which would licence exactly the re-attempt this skips.
-                            skipped.Add(
-                                $"{node.Path} (the sealed commit already carries a final verdict "
-                                + $"('{cfg?.LastSyncOutcome}') — {plan.Reason})");
-                            continue;
-                        }
                         landed++;
                     }
                     if (ToPushTarget(node) is not { } pushTarget)
@@ -466,7 +490,8 @@ public sealed class GitHubWebhookProcessor
                         skipped.Add($"{node.Path} (path carries no '{GitHubSyncService.ConfigId}' segment)");
                         continue;
                     }
-                    picked.Add(new BuildImport(pushTarget, plan.Commit!, plan.Redirected, plan.Reason));
+                    picked.Add(new BuildImport(
+                        pushTarget, plan.Commit!, plan.Redirected, plan.Reason, plan.Notice));
                 }
 
                 var targets = (IReadOnlyList<BuildImport>)picked
@@ -611,11 +636,34 @@ public sealed class GitHubWebhookProcessor
     /// (<c>GitHubSyncService.ReimportAtCommit</c>) never consults this predicate at all.</para>
     /// </summary>
     private static string? SkipReason(GitHubSyncConfig? cfg, string branch, string headSha)
+        => ConfigurationSkipReason(cfg, branch) ?? CommitSkipReason(cfg, headSha);
+
+    /// <summary>
+    /// The half of <see cref="SkipReason"/> that is about the CONFIGURATION and no commit — asked
+    /// BEFORE the seal gate, because none of these answers can change with the commit that lands.
+    /// </summary>
+    private static string? ConfigurationSkipReason(GitHubSyncConfig? cfg, string branch)
         => cfg is null ? "config content could not be read"
             : cfg.Direction == SyncDirection.ExportOnly ? "direction is ExportOnly"
             : !string.Equals(cfg.Branch, branch, StringComparison.OrdinalIgnoreCase)
                 ? $"branch '{cfg.Branch}' != built branch '{branch}'"
-            : string.Equals(cfg.LastSyncCommitSha, headSha, StringComparison.OrdinalIgnoreCase)
+            : null;
+
+    /// <summary>
+    /// 🚨 The half of <see cref="SkipReason"/> that is about ONE COMMIT — and it is asked about the
+    /// commit that would actually LAND, which since MeshWeaver#3845 is not always the built one.
+    ///
+    /// <para><b>Why the order matters</b> (review on #4576). Asked about <c>head_sha</c> BEFORE
+    /// <see cref="SealedSyncGate.DecideBuild"/>, "already at this commit" skipped a source sitting on
+    /// an UNSEALED tip — a Space a person's tip import had put there before the gate existed — so the
+    /// delivery that should have brought it back to the sealed commit never reached the gate at all,
+    /// and the later per-landing check was unreachable. Asked about <see cref="BuildImport.Commit"/>
+    /// instead, the two skips mean what they say: the source already holds the tree that would land,
+    /// or it has a final verdict on it.</para>
+    /// </summary>
+    private static string? CommitSkipReason(GitHubSyncConfig? cfg, string commit)
+        => cfg is null ? "config content could not be read"
+            : IsAlreadyAt(cfg, commit)
                 ? "already at this commit"
             // 🚨 Ordered AFTER "already at this commit" on purpose: a converged source keeps
             // reporting the reason it has always reported, so this arm's appearance in a log is
@@ -623,11 +671,19 @@ public sealed class GitHubWebhookProcessor
             // 🚨 #4499 — the SAME predicate the seal reconciler asks, so the two unattended triggers
             // cannot disagree; it also requires the verdict to have been reached under the source's
             // CURRENT configuration, so an operator's correction re-attempts at the same commit.
-            : GitHubSyncService.HasFinalVerdictAt(cfg, headSha)
+            : GitHubSyncService.HasFinalVerdictAt(cfg, commit)
                 ? $"already attempted at this commit with a final verdict ('{cfg.LastSyncOutcome}') — "
                   + "re-reading the same bytes under the same configuration re-derives it; a new "
                   + "commit or an edit of the source re-attempts"
             : null;
+
+    /// <summary>Whether a source already holds the content of <paramref name="commit"/> — the
+    /// "already at this commit" half of <see cref="CommitSkipReason"/>, named so the loop can ask the
+    /// same question when it decides whether a skip is a HOLD to record.</summary>
+    private static bool IsAlreadyAt(GitHubSyncConfig? cfg, string commit)
+        => cfg is not null
+           && (SealedSyncGate.SameCommit(cfg.LastSyncCommitSha, commit)
+               || string.Equals(cfg.LastSyncCommitSha, commit, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Maps a config node path (<c>{space}/_GitSync</c> or <c>{space}/_GitSync/{sourceId}</c>)
     /// to the Space + source id it configures.</summary>

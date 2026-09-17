@@ -1433,6 +1433,7 @@
   "activity.gitsync.updateToProvenCommit.fetching": "Fetching {sha} — the commit the build proved — from GitHub and importing the deltas…",
   "activity.gitsync.reconcileAtProvenCommit.title": "Reconcile {space} with the sealed commit {sha}",
   "activity.gitsync.reconcileAtProvenCommit.fetching": "Fetching {sha} — the commit this instance's bundles were baked from — and reconciling the partition against it…",
+  "activity.gitsync.updateToSealedCommit.title": "Update {space} to the sealed commit {sha}",
   "activity.gitsync.seal.fetching": "Fetching {sha} — the commit this instance's bundles were baked from — from GitHub and importing the deltas…",
   "activity.gitsync.seal.landsOnSeal": "{repo} is sealed at {sealed} for this instance (framework identity {identity}) — importing that commit instead of {requested}, so the Space's sources match the bundles this instance runs.",
   "activity.gitsync.seal.heldUnreadable": "Nothing was imported: the publication index for this instance's framework identity {identity} could not be read, so the commit its bundles were baked from is unknown.",
