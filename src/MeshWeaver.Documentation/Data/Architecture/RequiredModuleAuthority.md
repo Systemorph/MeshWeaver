@@ -54,6 +54,24 @@ v85, 2026-09-16; tracked as Systemorph/Memex#378). A free slot is not a property
 it is a property of an image the deployment cannot see, and an answer that expires silently is not
 an answer.
 
+**So the advice is retired, and the rule that replaces it is a REFUSAL, not a better index.**
+`DeploymentPortalConfig.PositionalModuleSlotProblems(record)` reports every `requiredModuleSlots`
+entry on a record that does not claim the complete set — naming the slot, the module and the
+restatement — because no index such a record can pick is safe: its meaning is whatever the image
+shipped that day. Under the claim the same slot is reported by nothing, and that is the whole
+difference: the image's list does not apply at any index, so a slot can shadow nothing. The rule is
+route-neutral (a shadow is a shadow under Aspire too), which is why it is its own surface rather
+than folded into the chart-scoped ceiling check beside it — a record can hit one, both or neither,
+and `ThePositionalRuleAndTheChartCeiling_AreIndependent` pins all four combinations.
+
+🚨 **Two guards, no caller — read this before trusting either.** Neither
+`PositionalModuleSlotProblems` nor `ChartModuleSlotProblems` is asked by anything that deploys. The
+one renderer that asks a record *"why can you not be deployed"* is `HelmValues.Problems`
+(MeshWeaver.Plugins, `Hosting/Deployment/Source`), and it asks only its own slot-collides-with-the-list
+check — which compares the slot against the RECORD's list, the half that was never the problem. So
+today both rules are pinned in core and reach no deploy. Making the renderer ask them is the
+satellite half, and it needs a pin bump that carries this change: MeshWeaver.Plugins#2045.
+
 ## The claim
 
 A record states that its own entries are the complete set:
@@ -157,7 +175,7 @@ Fluent: `record.WithRequiredModules(…).WithRequiredModulesAuthoritative()`.
 | Test | Holds |
 |---|---|
 | `ConfiguredModuleActivationTest` (`test/MeshWeaver.Compiler.Pipeline.Test`) | the reading, over a real two-provider configuration — the short list, the empty claim, the explicit slot, blanking, the no-claim default, the non-root section |
-| `RequiredModuleAuthorityTest` (`test/MeshWeaver.Deployment.Contract.Test`) | the rendering — both routes agreeing slot for slot, never-`false`, the JSON round-trip, the ceiling read back out of the chart, and a slot above it reported rather than dropped — scoped to the chart, since the Aspire route delivers it |
+| `RequiredModuleAuthorityTest` (`test/MeshWeaver.Deployment.Contract.Test`) | the rendering — both routes agreeing slot for slot, never-`false`, the JSON round-trip, the ceiling read back out of the chart, and a slot above it reported rather than dropped — scoped to the chart, since the Aspire route delivers it — plus the POSITIONAL rule on the live `memex-cloud` shape (slot 7, no claim → reported; the same record with the claim → silent), the two surfaces' independence, and one normalization across entries and problems |
 
 🚨 **The cross-assembly key assertion is in the FIRST of those, not the second, and deliberately.**
 The record renders from `MeshWeaver.Deployment.Contract` (zero MeshWeaver references by design — it
@@ -182,6 +200,17 @@ And no fleet record states a complete set yet: `memex`, `memex-cloud` and `pearl
 against the image's nine, and `memex-cloud` additionally shadows one. Restating them is an operator
 change on the records in `Systemorph/Memex`, tracked as Systemorph/Memex#378 — the claim makes it
 expressible; it does not make it happen.
+
+🚨 **The restatement is safe BEFORE the instance runs an image that reads the claim, and that is
+what makes it the one edit to make.** Re-measured 2026-09-17: `Deployments/memex-cloud` is at v92
+with the same slot 7, and the instance runs `3.0.0-ci.8411` — an image from before this change, so
+it has no reader for the claim and its deployed chart has the old ceiling. A record that restates
+the image's nine entries at their own indices and adds MCP at 9 renders `Modules__Required__0..9`,
+which the old chart carries (its ceiling was 9) and the old image index-merges to exactly the
+intended set; `Modules__RequiredIsAuthoritative` rides along inert until the pods roll onto an image
+that reads it, and then says the same thing the entries already do. The alternative interim — moving
+the slot from 7 to 9 — fixes this instance for as long as the image's list is nine entries, which is
+the property that has already expired twice.
 
 ## See also
 
