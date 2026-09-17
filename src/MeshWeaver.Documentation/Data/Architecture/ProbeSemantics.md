@@ -126,7 +126,7 @@ Two, because they can fail for different reasons and neither can see what the ot
 | `ProbeSeparationTest` | `test/Memex.Portal.Shared.Test` | drives the paths the **chart** names over real HTTP through the real `MapDefaultEndpoints`, with a `live`-tagged check reporting Unhealthy: liveness must answer 503 *and* readiness 200 |
 | invariant 9 | `deploy/aks/scripts/check-chart-invariants.py` | the same separation on the **rendered** manifest, per values combination — where an overlay could re-merge what the template separates |
 
-Both C# guards run inside `Consolidate test results`, the one required check. Both read the paths out
+Both C# guards run inside `Consolidate test results`, the required check for TESTS (it is no longer the ONLY required context — `Automatic review answered` is required too since 2026-09-17; see AGENTS.md). Both read the paths out
 of the chart rather than restating them: a restatement would agree with itself while the deployment
 probed something else.
 
