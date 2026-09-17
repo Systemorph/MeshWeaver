@@ -92,6 +92,11 @@ on an artifact whose `expired` field already read `true`, answered **204 No Cont
 of the same id then answered **404**. So the 1,070 GB sitting `expired: true` and undeleted is a
 pool a sweep can reclaim.
 
+**The size of that pool, read straight off the invoice:** MeshWeaver.Plugins was billed **21,904
+GB-hours on 2026-09-16 — an average of 913 GB standing** — against a **381.5 GB** live inventory.
+The **531 GB difference is the lag**. It is the majority of what that repository pays for, and it is
+not live artifacts at all.
+
 Memex's `scripts/actions-cleanup.py` skipped it, on the premise — written into its own docstring —
 that *"expired artifacts hold no storage"*. That premise is the exact opposite of the fit above, and
 what it cost was **structural, not marginal**: its live rule selects an artifact that is *live* AND
@@ -130,7 +135,7 @@ answer different questions. MeshWeaver.Plugins, the same 29-hour window:
 | `platform-refs-catalog-*` | 34.25 | 164 | 1 d | this run's `pack` legs, only when `/opt/platform` misses |
 | `workspace-build-catalog-*` | 33.81 | 143 | 1 d | this run's `pack` legs |
 | `compile-check-refs` | 31.11 | 130 | 1 d | this run's compile-check units and lanes |
-| `bake-<sha>[-shard-*]` | 11.58 | 542 | 3 d → 1 d | the fold, in this run — **nothing in this repo** |
+| `bake-<sha>[-shard-*]` | 11.58 | 542 | 3 d | the fold, in this run — **nothing in this repo** |
 | `portal-hosts-bin-*` | 6.69 | 45 | 1 d | this run's `portal-hosts-test` shards |
 | `module-pack-tool-catalog-*` | 3.07 | 158 | 1 d | this run's `pack` legs |
 | `module-bundle-*` (60 modules) | ~35 | ~5,700 | 7 d | this run's gates **and** a later run's ledger |
@@ -184,7 +189,7 @@ With the lag included, the model totals **$8.78/day against $8.70 billed**:
 | bytes | artifact family | retention | who reads it |
 |--:|---|--:|---|
 | 247.1 GB | `module-bundle-<module>` | 7 d | **both**: this run's gate / compile-check / publish-bake, **and** a LATER run through the build ledger |
-| 36.7 GB | `bake-<sha>[-shard-*]` | 1 d / 3 d | the fold, in this run; `bake-<sha>` by MeshWeaver.Education's e2e jobs. **Opt-out per caller** (`upload-bake`) — see below |
+| 36.7 GB | `bake-<sha>[-shard-*]` | 3 d | the fold, in this run; `bake-<sha>` by MeshWeaver.Education's e2e jobs. **Opt-out per caller** (`upload-bake`); 3 d is a floor, not a habit — see below |
 | 28.2 GB | `platform-refs-<lane>` | 1 d | this run's `pack` legs, only when the `/opt/platform` mount misses |
 | 28.2 GB | `workspace-build-<lane>` | 1 d | this run's `pack` legs |
 | 24.4 GB | `compile-check-refs` | 1 d | this run's compile-check units and lanes |
@@ -231,11 +236,31 @@ Education nothing.
 > 🚨 **An upload whose reader does not exist is not a contract, it is a bill.** If a cross-run bake
 > reuse is ever wanted, it lands *with* its consumer.
 
-**The per-shard bake dropped to 1-day retention** (2026-09-17). `bake-<sha>-shard-<n>` has exactly
-one consumer — `Collect every shard's bake`, which folds it into `bake-<sha>` minutes later in the
-same run — and nothing outside `node-repo-gate.yml` names the sharded form. The folded name is the
-caller-facing one and keeps 3 days. With the deletion lag, three days for a pure intermediate is ~5
-days billed.
+### 🚨 A same-run handoff's retention floor is NOT 1 day — it is the QUEUE, twice
+
+The per-shard bake looks like the ideal candidate for GitHub's 1-day minimum: `bake-<sha>-shard-<n>`
+has exactly one consumer, `Collect every shard's bake`, and nothing outside `node-repo-gate.yml`
+names the sharded form. It was shortened to 1 on 2026-09-17 and **reverted the same hour**, because
+"the consumer runs minutes later" is a description of the *happy path*, not a bound.
+
+The fold `needs: [plan, gate]`, so it cannot start until the **last** shard has finished — and
+GitHub's usage limit lets a job sit **QUEUED for 24 hours** before it is terminated.
+`timeout-minutes` bounds execution and never the wait, so that bound applies **twice**:
+
+```
+first shard uploads → last shard queued ≤24 h + runs ≤45 min → fold queued ≤24 h
+```
+
+≈ **48.8 h** maximum age at the moment the fold downloads it. **1 day and 2 days are both below
+that**; 3 is the smallest whole-day value above it, with ~23 h of margin. Shortening it converts a
+gate whose shards all passed into `Artifact not found` in the fold — a red manufactured by the
+retention.
+
+**The general rule, and it applies to every `retention-days` on this page:** the floor for a
+*same-run* handoff is *(the consumer's worst-case queue wait) + (the producer's worst-case wait and
+run)*, not "how long a human thinks the run takes". The bytes are better recovered by the sweeper,
+which deletes at **expiry** — the one moment that provably cannot break a consumer that could still
+have run.
 
 ## The seam: `ci-artifact-store.py`
 
