@@ -37,8 +37,10 @@ namespace MeshWeaver.Graph.Security;
 /// <c>path:</c> term, where a wildcard or alternation could select some other type's definition.</para>
 ///
 /// <para><b>Cost.</b> A static type answers synchronously, with no read. An in-mesh type costs a
-/// listing and a stream read, and every caller asks only for a TOP-LEVEL create — the only create
-/// that can root a partition.</para>
+/// listing and a stream read, and every caller of <see cref="OwnsPartition"/> asks only for a
+/// TOP-LEVEL create — the only create that can root a partition. A NESTED create asks
+/// <see cref="OwnsPartitionWithoutActivating"/> instead: one read of the definition's durable row,
+/// never an activation of the type's hub.</para>
 /// </summary>
 public static class PartitionOwningTypes
 {
@@ -96,6 +98,125 @@ public static class PartitionOwningTypes
             .Timeout(ProbeTimeout, Observable.Return<bool?>(null))
             .Catch<bool?, Exception>(_ => Observable.Return<bool?>(null));
     }
+
+    /// <summary>
+    /// <see cref="OwnsPartition"/> resolved ONCE for the whole operation
+    /// (<see cref="NodeValidationContext.PartitionOwnership"/>) — the form every VALIDATOR uses.
+    ///
+    /// <para>The three create-path validators (<see cref="RlsNodeValidator"/>,
+    /// <see cref="PartitionWriteGuardValidator"/>, <see cref="OwnsPartitionProvisioningValidator"/>)
+    /// run back to back on ONE context, so asking three times cost three resolutions — six reads for
+    /// an in-mesh type — of a fact that cannot meaningfully change between them. They now share one.
+    /// The answer is the same tri-state, <c>null</c> included, so every caller still fails closed via
+    /// <see cref="Undetermined"/>.</para>
+    ///
+    /// <para>🚨 <b><see cref="InMeshPartitionOwnerPostCreationHandler"/> deliberately does NOT use
+    /// this.</b> It runs after the row is written, and its job is to re-establish ownership
+    /// POSITIVELY before granting the creator Admin — across the one window in a create that is
+    /// actually wide. Sharing the pre-write view with it would remove the only disagreement check
+    /// worth keeping. See <c>Doc/Architecture/PartitionOwnershipResolution</c>.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose services resolve the declaration.</param>
+    /// <param name="context">The operation's validation context, which carries the memo.</param>
+    /// <returns>The tri-state: owns / does not own / could not be established.</returns>
+    public static IObservable<bool?> OwnsPartitionOnce(IMessageHub hub, NodeValidationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var nodeType = context.Node.NodeType;
+        // An empty type answers synchronously with no read — nothing to share, and nothing a later
+        // check could observe differently.
+        return string.IsNullOrEmpty(nodeType)
+            ? OwnsPartition(hub, nodeType)
+            : context.PartitionOwnership.Once(nodeType, () => OwnsPartition(hub, nodeType));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="nodeType"/> declares <see cref="NodeTypeDefinition.OwnsPartition"/>,
+    /// answered WITHOUT activating the type's hub — the resolution a NESTED create uses to refuse an
+    /// instance of an owning type below the root (#4449 item 1).
+    ///
+    /// <para>🚨 <b>Why not <see cref="OwnsPartition"/>.</b> Its second half is
+    /// <c>GetMeshNodeStream(&lt;type&gt;)</c>, and for a per-node hub the read IS the activation: a cold
+    /// NodeType compiles, which can outlast <see cref="ProbeTimeout"/>, and a timeout fails closed.
+    /// The top-level path accepts that — a top-level create of an owning type is a rare
+    /// partition-creation act. A nested create of a type declared in mesh content is the ordinary
+    /// content path, where it would put an intermittent refusal, triggered by whether a hub happened
+    /// to be warm, in front of routine work.</para>
+    ///
+    /// <para>🚨 <b>The denominator is complete by construction, which is what makes this fail-closed
+    /// without being fail-intermittent.</b> The answer comes from exactly the two sources
+    /// <see cref="NodeTypeResolution.Resolves"/> consults, in the same order: the static registry,
+    /// then the DURABLE row (<see cref="IStorageAdapter.Read"/>). A type in neither is refused as
+    /// unregistered by the create's existence check, so every type a create can land with has a row
+    /// this read reaches — from every process, whichever hubs are warm. A hub-fed projection (the
+    /// <see cref="NodeTypeInstanceLocations"/> shape) cannot say that: its denominator is the hubs live
+    /// on this process. See <c>Doc/Architecture/PartitionOwnershipResolution</c>.</para>
+    ///
+    /// <list type="bullet">
+    ///   <item><c>true</c> — the static or stored definition declares <c>ownsPartition</c>.</item>
+    ///   <item><c>false</c> — it declares otherwise; the row is not a NodeType definition; the row is
+    ///     ABSENT (a verdict the store gave — the existence check then refuses the type as
+    ///     unregistered, which is the true reason); or the host has no storage adapter (a
+    ///     configuration fact: such a host persists nothing, and refuses every non-static type).</item>
+    ///   <item><c>null</c> — the store faulted or did not answer within <see cref="ProbeTimeout"/>.
+    ///     The caller refuses as <see cref="Undetermined"/>: the same store answers the existence
+    ///     probe a moment later, so this adds no availability dependency the create did not have.</item>
+    /// </list>
+    ///
+    /// <para>Unlike <see cref="OwnsPartition"/> the type is never matched against
+    /// <see cref="IsLiteralTypePath"/>: it is not interpolated into a query here, only handed to the
+    /// store as a key, and answering <c>false</c> for a non-literal type would let a nested instance
+    /// of such a type through — the fail-OPEN direction.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose services resolve the declaration.</param>
+    /// <param name="nodeType">The created node's NodeType.</param>
+    /// <returns>The tri-state: owns / does not own / could not be established.</returns>
+    public static IObservable<bool?> OwnsPartitionWithoutActivating(IMessageHub hub, string? nodeType)
+    {
+        if (string.IsNullOrEmpty(nodeType)
+            || string.Equals(nodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
+            return Observable.Return<bool?>(false);
+
+        var options = hub.JsonSerializerOptions;
+        if (hub.ServiceProvider.FindStaticNode(nodeType) is { } staticType)
+            return Observable.Return<bool?>(
+                staticType.ContentAs<NodeTypeDefinition>(options) is { OwnsPartition: true });
+
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (storage is null)
+            return Observable.Return<bool?>(false);
+
+        return Observable.Defer(() => storage.Read(nodeType, options))
+            .Take(1)
+            .Select(row => (bool?)DeclaresOwnership(row, options))
+            // A read that completes WITHOUT an answer broke the adapter's "emits the node (or null)"
+            // contract — that is not a verdict, so it is not "does not own" either.
+            .DefaultIfEmpty((bool?)null)
+            .Timeout(ProbeTimeout, Observable.Return<bool?>(null))
+            .Catch<bool?, Exception>(_ => Observable.Return<bool?>(null));
+    }
+
+    /// <summary>Whether a durable row is a NodeType definition that declares ownership. Pure.</summary>
+    private static bool DeclaresOwnership(MeshNode? row, System.Text.Json.JsonSerializerOptions options) =>
+        row is not null
+        && string.Equals(row.NodeType, MeshNode.NodeTypePath, StringComparison.OrdinalIgnoreCase)
+        && row.ContentAs<NodeTypeDefinition>(options) is { OwnsPartition: true };
+
+    /// <summary>
+    /// The refusal of a NESTED instance of a partition-owning type — registered in <c>src/</c> or
+    /// declared in mesh content. An owning instance IS a partition root, so its path is just its id.
+    /// <see cref="NodeRejectionReason.InvalidPath"/>, which the importer classifies as a verdict about
+    /// the content (the same bytes break it on every pass). Worded in the CALLER's language
+    /// (<see cref="AccessContext.Locale"/>).
+    /// </summary>
+    /// <param name="context">The create being refused.</param>
+    /// <returns>The refusal.</returns>
+    public static NodeValidationResult NestedInstanceRefused(NodeValidationContext context) =>
+        NodeValidationResult.Invalid(
+            LocalizationCatalog.Get(
+                "access.partitionCreate.nestedOwningType", context.AccessContext?.Locale,
+                context.Node.Path, context.Node.NodeType, context.Node.Id, context.Node.Namespace),
+            NodeRejectionReason.InvalidPath);
 
     /// <summary>A literal NodeType path: ASCII letters, digits, <c>. _ -</c> and single inner
     /// slashes — nothing a query parser could read as a wildcard, alternation or separator. Pure.</summary>
