@@ -92,6 +92,18 @@ public static class MemexConfiguration
             // #3649 — the modules it loaded from their PREVIOUS generation: present, one version
             // behind, and never "restart required".
             FallbackModules = [.. app.Services.GetServices<FallbackModule>()],
+            // 🚨 #4550 — the two inputs that tell the boot's #4161 DECLINE from a pending update.
+            // Both are the SAME values the boot decided on a few seconds earlier (the
+            // Modules:Assemblies names, and the two readings this platform states about itself), so
+            // this log line and that decision cannot tell different stories. Without them a
+            // declined generation reads as "landed but not loaded … until a restart" — which is the
+            // line this pod printed, every boot, for eight modules no restart could activate.
+            ImageShippedModules = MeshBuilderModuleActivation.BaselineModuleNames(app.Configuration),
+            PlatformIdentities =
+            [
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedIdentity,
+            ],
         }.Read();
 
         if (report.IsUndetermined)
@@ -124,6 +136,18 @@ public static class MemexConfiguration
                 "{Count} activated module(s) are landed but not loaded in this process — whatever "
                 + "they contribute (endpoints included) is absent until a restart: {Detail}",
                 report.Pending.Count, ModuleActivationStatus.Describe(report.Pending));
+
+        // 🚨 #4550 — the landed generations this boot DECLINED in favour of the copy the image
+        // ships. A Warning, not an Error, and deliberately not the line above: the module IS
+        // running — from the image's own copy — so nothing it contributes is absent, and no
+        // restart and no re-install changes which generation runs. The line an operator's log
+        // query finds when /health names the same modules.
+        if (report.HasDeclined)
+            logger.LogWarning(
+                "{Count} landed module generation(s) are DECLINED in favour of the copy this image "
+                + "ships — the modules run, one generation is not in effect, and neither a restart "
+                + "nor a re-install changes that: {Detail}",
+                report.Declined.Count, ModuleActivationReport.DescribeDeclined(report.Declined));
 
         // 🚨 #3649 — once per boot, on the logger: the loader already said it on stderr before the
         // pipeline was up, and this is the line an operator's log query finds. A Warning, not an
@@ -288,7 +312,7 @@ public static class MemexConfiguration
                 entry => ModuleActivationBoot.LandedModuleDllExists(moduleRoot, entry),
                 (module, reason) => Console.Error.WriteLine(
                     $"[ModuleSet] DEGRADED module '{module}': {reason}"));
-            var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+            var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntriesForPlatform(
                 moduleAssemblies,
                 activationOnMeshSet,
                 // The ONE wording of the declared floor (ModulePlatformFloor) — ADVISORY since
@@ -313,12 +337,27 @@ public static class MemexConfiguration
                     $"[ModuleActivation] store-installed module '{module}' {advisory}"),
                 // 🚨 #4161 — the framework identity THIS image was built with, which is what
                 // decides between the image's copy of a module and a store copy of the same name.
-                // The ONE public reading of the live identity, so this gate and every other
-                // consumer of it (the bundle client, the bake, the deployment report) can never
-                // disagree about what "the framework identity" is. Declines nothing on its own:
-                // only a store copy that STATES a different identity AND is shadowing a module
-                // this image ships, in which case the image's copy runs and the line above says so.
-                PrebuiltAssemblySeeder.LiveFrameworkMvid);
+                // Declines nothing on its own: only a store copy that STATES a different identity
+                // AND is shadowing a module this image ships, in which case the image's copy runs
+                // and the line above says so.
+                //
+                // 🚨 #4550 — BOTH readings, because a platform states its build in two schemes and
+                // a bundle can only ever state ONE. LiveFrameworkMvid is the API-SURFACE identity
+                // (s<hash>) this image compiles content against — the reading every other consumer
+                // shares (the bundle client, the bake, the deployment report). Every module-pack
+                // lane instead states the PRODUCER reading of the platform it packed against
+                // (g<sha>, read off that platform's MeshWeaver.Compiler.dll), which is
+                // FrameworkBuildIdentity.ProducerStatedIdentity here. Handing this gate the surface
+                // identity ALONE made the comparison unequal for every pair that exists in the
+                // fleet: measured on memex.systemorph.com 2026-09-16, eight modules declined
+                // against s4b2836… while stating a core commit, re-landed by every reconcile,
+                // re-declined by every boot, and reported as "a restart activates them" across a
+                // restart that could not clear one of them. With both stated, a bundle packed by
+                // the build that produced this image MATCHES and is adopted.
+                [
+                    PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                    MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedIdentity,
+                ]);
             // 🚨 A LISTED-BUT-ABSENT module must never crash boot. `InstallAssemblies` does
             // `Assembly.LoadFrom`, which throws FileNotFoundException, so one stale line in
             // `Modules:Assemblies` takes the whole portal down before anything is serving —
