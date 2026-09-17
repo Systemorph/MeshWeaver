@@ -514,7 +514,7 @@ on:
           removed outright, on a fleet-wide search that found no consumer — 66.8 GB of live
           artifacts across six repos, "two copies of identical bytes read by nothing". The search
           was run against a LOCAL checkout of each satellite, and MeshWeaver.Education's was eight
-          commits stale: its `main` downloads `bake-${{ github.sha }}` TWICE, in `e2e-install` and
+          commits stale: its `main` downloads `bake-<sha>` TWICE, in `e2e-install` and
           in the four-shard `e2e-mesh`, neither with `continue-on-error`, and both feed the blocking
           `mesh-gate`. Education calls this lane at `@main`, so the removal would have reddened its
           next run with "artifact not found" — a caller this lane never heard of, broken by a
