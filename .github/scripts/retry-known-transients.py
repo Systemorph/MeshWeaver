@@ -147,7 +147,15 @@ def github_fetch_with(token: str):
                 except UnicodeDecodeError as error:
                     raise LogUnreadable("job log is not UTF-8 text") from error
             body = response.read()
-            return json.loads(body) if body else {}
+            if not body:
+                return {}
+            try:
+                return json.loads(body)
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                # A 200 carrying unparseable bytes is an input this steward cannot read. Without
+                # this it escaped as a bare traceback — loud, but unnamed, and contradicting the
+                # contract the module docstring states.
+                raise LogUnreadable(f"{path} answered unparseable JSON: {error}") from error
 
     return fetch
 
@@ -196,6 +204,7 @@ def failed_job_ids(repo: str, run_id: str, fetch) -> list[int]:
     a run whose real failure sits on page two would be retried as if it were all transients.
     """
     ids: list[int] = []
+    seen = 0
     page = 1
     while True:
         # The job LIST is an input too. An HTTP/transport failure here must arrive as the same
@@ -208,12 +217,28 @@ def failed_job_ids(repo: str, run_id: str, fetch) -> list[int]:
                 f"listing the jobs of run {run_id} answered HTTP {error.code} {error.reason}") from error
         except urllib.error.URLError as error:
             raise LogUnreadable(f"listing the jobs of run {run_id} failed: {error.reason}") from error
-        jobs = payload.get("jobs", []) if isinstance(payload, dict) else []
+        # 🚨 VALIDATE THE ENVELOPE. A malformed or short page must not read as "the end of the
+        # list": that would hand `decide` a TRUNCATED population, and the EVERY-job rule over a
+        # truncated population can retry a run whose real failure it never saw — or, when the
+        # first page is empty, report the documented "no failed jobs listed" no-op over a read
+        # that failed. Both are #4534 again, one exit code apart.
+        if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
+            raise LogUnreadable(
+                f"listing the jobs of run {run_id} returned an envelope with no jobs list")
+        total = payload.get("total_count")
+        if not isinstance(total, int) or total < 0:
+            raise LogUnreadable(
+                f"listing the jobs of run {run_id} returned no usable total_count")
+        jobs = payload["jobs"]
         if not jobs:
+            if seen < total:
+                raise LogUnreadable(
+                    f"listing the jobs of run {run_id} stopped at {seen} of {total} job records — "
+                    "an incomplete job set cannot support the every-job rule")
             break
+        seen += len(jobs)
         ids.extend(job["id"] for job in jobs if job.get("conclusion") == "failure")
-        total = payload.get("total_count", 0) if isinstance(payload, dict) else 0
-        if page * 100 >= total:
+        if seen >= total:
             break
         page += 1
     return ids
@@ -252,10 +277,11 @@ def run(repo: str, run_id: str, fetch, dry_run: bool) -> int:
         return 0
     try:
         fetch(f"/repos/{repo}/actions/runs/{run_id}/rerun-failed-jobs", method="POST")
-    except (urllib.error.HTTPError, urllib.error.URLError) as error:
+    except (urllib.error.HTTPError, urllib.error.URLError, LogUnreadable) as error:
         # The decision was sound and the retry did not happen. Say both, by name — a run left
         # un-retried because the POST was refused must not look like a run we chose not to retry.
-        reason = f"HTTP {error.code} {error.reason}" if isinstance(error, urllib.error.HTTPError) else error.reason
+        reason = (f"HTTP {error.code} {error.reason}" if isinstance(error, urllib.error.HTTPError)
+                  else getattr(error, "reason", error))
         print(f"::error title=Retry steward could not rerun::run {run_id} in {repo} matched named "
               f"transients, but POST rerun-failed-jobs was refused: {reason}.")
         return 1
@@ -271,8 +297,13 @@ REAL_LOG_HEAD = (
 )
 
 
-def _fake(logs: dict[int, object], total: int | None = None):
-    """A fetch double. `logs` maps job id → log text, or an Exception to raise."""
+def _fake(logs: dict[int, object], total: int | None = None,
+          pages: list[list[int]] | None = None):
+    """A fetch double. `logs` maps job id → log text, or an Exception to raise.
+
+    `pages` (a list of job-id lists) serves a DIFFERENT set of job records per page, so a test can
+    prove that page two's records are USED and not merely requested.
+    """
     calls: list[str] = []
 
     def fetch(path: str, method: str = "GET"):
@@ -280,6 +311,13 @@ def _fake(logs: dict[int, object], total: int | None = None):
         if path.endswith("/rerun-failed-jobs"):
             return {}
         if "/jobs?" in path:
+            if pages is not None:
+                index = int(path.split("&page=")[1]) - 1
+                served = pages[index] if 0 <= index < len(pages) else []
+                return {
+                    "total_count": sum(len(p) for p in pages),
+                    "jobs": [{"id": job_id, "conclusion": "failure"} for job_id in served],
+                }
             return {
                 "total_count": total if total is not None else len(logs),
                 "jobs": [{"id": job_id, "conclusion": "failure"} for job_id in logs],
@@ -409,19 +447,150 @@ def self_test() -> int:
     check("a refused rerun POST exits 1, not a quiet non-retry",
           run("o/r", "9", refuses_post, dry_run=False) == 1)
 
-    # ── Pagination: a failure on page two is still seen. ──
-    # 150 jobs over two pages; the fake serves the same body for every id, so the assertion is that
-    # the second page is REQUESTED at all.
-    fetch = _fake({1: escaped}, total=150)
-    decide("o/r", "9", fetch)
-    check("a run with >100 jobs reads page 2",
-          any("page=2" in call for call in fetch.calls))  # type: ignore[attr-defined]
+    # ── Pagination: a failure on page two is READ AND USED, not merely requested. ──
+    # Page 1 is all transient, page 2 carries a compile red. Asserting only "page=2 was requested"
+    # would still pass if page-2 records were ignored or duplicated, so the assertion is on the
+    # DECISION: the page-2 red must block the retry.
+    fetch = _fake({1: escaped, 2: escaped, 3: real_red}, pages=[[1, 2], [3]])
+    decision = decide("o/r", "9", fetch)
+    check("page 2 is requested at all", any("page=2" in call for call in fetch.calls))  # type: ignore[attr-defined]
+    check("a NON-transient on page 2 blocks the retry (page-2 records are USED)", not decision.retry)
+    check("...and the blocking job named is the page-2 one", "job 3:" in decision.reason)
+    # The mirror case: both pages transient ⇒ retry. Without it the case above could pass for a
+    # reader that treats any second page as a refusal.
+    all_transient = _fake({1: escaped, 2: escaped, 3: escaped}, pages=[[1, 2], [3]])
+    check("both pages transient ⇒ still one retry", decide("o/r", "9", all_transient).retry)
+
+    # ── An INCOMPLETE job listing is a red, not a quiet "no failed jobs". ──
+    short = _fake({1: escaped}, pages=[[1], []])  # total_count says 1, page 2 empty ⇒ consistent
+    check("a listing that completes is fine", decide("o/r", "9", short) is not None)
+    truncated = _fake({}, total=150, pages=None)  # total_count 150, page 1 serves 0 records
+    code = run("o/r", "9", truncated, dry_run=False)
+    check("a listing truncated before total_count exits 1, not a no-op", code == 1)
+    for broken in ({"total_count": 5}, {"jobs": "nope", "total_count": 1}, []):
+        check(f"a malformed jobs envelope {broken!r} is a red",
+              run("o/r", "9", lambda p, method="GET", b=broken: b, dry_run=False) == 1)
+
+    # ── An unparseable 200 is a NAMED red, not a traceback. ──
+    def bad_json(path: str, method: str = "GET"):
+        raise LogUnreadable(f"{path} answered unparseable JSON: expecting value")
+
+    check("an unparseable API response exits 1, LOUDLY", run("o/r", "9", bad_json, dry_run=False) == 1)
 
     # ── No failed jobs listed: a documented no-op, not a retry. ──
     check("a run with no failed jobs does nothing", not decide("o/r", "9", _fake({})).retry)
 
+    # ══ THE REAL ADAPTER, end to end. ══════════════════════════════════════════════════════════
+    # 🚨 Every case above injects a DOUBLE, so none of them executes `github_fetch_with` — the
+    # component that actually broke in #4534. A regression there would make the live steward blind
+    # again while every case above stayed green, which is the exact failure mode this file exists
+    # to prevent. So the adapter is driven against a loopback server (offline, no network) over
+    # the shape that broke: a 302 to signed storage, answering an escape-bearing log.
+    failures.extend(_self_test_adapter(check))
+
     print(f"{'FAILED: ' + ', '.join(failures) if failures else 'all cases passed'}")
     return 1 if failures else 0
+
+
+def _self_test_adapter(check) -> list[str]:
+    import http.server
+    import threading
+
+    global GITHUB_API
+    seen_auth: dict[str, str | None] = {}
+    log_body = (REAL_LOG_HEAD + "2026-09-17T04:35:33.0Z dial tcp 51.12.25.82:443: connect: "
+                "connection refused\n").encode("utf-8")
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):  # keep the self-test output clean
+            pass
+
+        def _record(self):
+            seen_auth[self.path] = self.headers.get("Authorization")
+
+        def do_GET(self):
+            self._record()
+            if self.path.endswith("/logs"):
+                # The shape that matters: a redirect to SIGNED storage on the same server.
+                self.send_response(302)
+                self.send_header("Location", "/signed-storage/log.txt")
+                self.end_headers()
+            elif self.path.startswith("/signed-storage/"):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(log_body)))
+                self.end_headers()
+                self.wfile.write(log_body)
+            elif self.path.startswith("/bad-json"):
+                payload = b"{not json at all"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            else:
+                payload = b'{"total_count": 1, "jobs": [{"id": 1, "conclusion": "failure"}]}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        def do_POST(self):
+            self._record()
+            self.send_response(201)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    original, GITHUB_API = GITHUB_API, f"http://127.0.0.1:{server.server_address[1]}"
+    local: list[str] = []
+
+    def adapter_check(name: str, condition: bool) -> None:
+        print(f"  {'ok  ' if condition else 'FAIL'}  {name}")
+        if not condition:
+            local.append(name)
+
+    try:
+        fetch = github_fetch_with("secret-token")
+
+        # THE #4534 REGRESSION, through the real reader: a redirected, escape-bearing log.
+        body = read_job_log("o/r", 1, fetch)
+        adapter_check("the real adapter follows the 302 and returns the log", "connection refused" in body)
+        adapter_check("...and the log it returned really carries ESC", "\x1b[" in body)
+        adapter_check("...and the classifier matches it", classify(body) is not None)
+
+        # 🚨 The token must NOT cross to the storage host. `add_unredirected_header` is what stops
+        # it; a reader rewritten with a plain header would leak it and nothing else would notice.
+        adapter_check("the API request carried the token",
+                      seen_auth.get("/repos/o/r/actions/jobs/1/logs") == "Bearer secret-token")
+        adapter_check("the REDIRECT target received NO Authorization header",
+                      seen_auth.get("/signed-storage/log.txt") is None)
+
+        adapter_check("a JSON endpoint decodes to a dict", isinstance(fetch("/repos/o/r/x"), dict))
+        adapter_check("a POST returns without raising", fetch("/repos/o/r/y", method="POST") == {})
+        try:
+            fetch("/bad-json")
+            adapter_check("an unparseable 200 raises LogUnreadable", False)
+        except LogUnreadable as error:
+            adapter_check("an unparseable 200 raises LogUnreadable", "unparseable JSON" in str(error))
+
+        # The byte cap refuses rather than truncating: a half log can only produce a false decline.
+        global MAX_LOG_BYTES
+        cap, MAX_LOG_BYTES = MAX_LOG_BYTES, 10
+        try:
+            fetch("/repos/o/r/actions/jobs/1/logs")
+            adapter_check("a log over the byte cap is REFUSED, not truncated", False)
+        except LogUnreadable as error:
+            adapter_check("a log over the byte cap is REFUSED, not truncated", "exceeds" in str(error))
+        finally:
+            MAX_LOG_BYTES = cap
+    finally:
+        GITHUB_API = original
+        server.shutdown()
+        server.server_close()
+    return local
 
 
 def main() -> int:
