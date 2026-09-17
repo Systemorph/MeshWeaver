@@ -1088,7 +1088,8 @@ with a brace present is a body that already closed. Two guards keep the fix hone
 - an empty inline body is scanned correctly (there is nothing in it), while one written on a single
   line **with members in it** is REFUSED, naming the file and line — the scanner cannot read those
   members, and reporting the type as memberless would spell "not checked" exactly like "clean".
-  Measured 2026-09-16: **four** empty inline bodies under `src/` and **zero** with members.
+  Measured 2026-09-16: **four** empty inline bodies under `src/` and **zero** with members (three
+  after #4572 moved the marker's body onto its own lines — see below).
 - the inline-body test applies to the **declaration's own line only**. A balanced `{…}` on a
   continuation line is an interpolated string or an attribute, never a body —
   `NodeTypeParkedException`'s base call carries one three lines below its declaration, and the
@@ -1100,6 +1101,23 @@ required both to be declared in the pull-request body. Those six are exactly
 `NodeValidationContext`'s members at the merge base — the phantoms, counted. A control designed to
 catch a detector *losing* sight of something proved equally good at pricing one that had been
 *double-counting*, and the declaration it demands is what keeps the two apart in the record.
+
+**How it landed: through the queue, on a ZERO delta — by removing the construct first.** A declared
+decrease is honoured on `pull_request` and refused on `merge_group`, where the rule is strict because a
+queue entry has no single pull request to read a declaration from. So the fix, green on its own run,
+could not pass the queue while the merge base still held the construct the OLD detector misreads.
+The −6 was irreducible over *that* tree, not over every tree: #4572 wrote
+`IOwnerEnforcedNodeValidator`'s empty body on its own lines — formatting only, and invisible to this
+control because the detector did not change — after which both detector versions agree on main's tree
+and the fix measured **+0** on all four counters. The phantoms left the index with the construct, the
+detector fix then landed through the queue with no change to the rule and no one-time exception, and
+its self-test still pins the inline shape, so the fix stays guarded.
+
+That is the general recipe for a parser tightening the queue refuses: when the shrink is phantoms a
+SOURCE construct causes, land the source change first (the surface gates see the phantoms leave and ask
+for a `Pairs-with: none` reason, which is honest), then land the detector change over a corpus on which
+old and new agree. When no source construct can be moved — a detector genuinely seeing less of a tree
+that cannot change — the strict rule is doing its job.
 
 ### 🚨 A gate added to `main` reaches NEITHER build of a pull request already green (#3508)
 
