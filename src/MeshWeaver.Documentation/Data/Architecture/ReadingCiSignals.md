@@ -1143,10 +1143,18 @@ newer identity. That is how a Plugins publication for 8760 produced four reds ab
 2026-09-16 both publications arrived by coincidence. MeshWeaver.Plugins merged, so core's hourly
 reconcile saw a missing pair tag and rebuilt the set (#8767, Plugins seal at 21:30:24Z). Plugins'
 next main run also resolved 8765 and published for `s5ec352bb…`. The runs they woke went green at
-21:52–21:58Z. **The reconciler does not re-attempt a failed core Plugins seal on its own.** Its
-`bake_only` path re-runs only the platform bake (#4539), so without a Plugins merge the red would
-have lasted until core merged again. Do not re-run the satellites' failed jobs: the resolver reads
-the same set again and the registry still answers 404.
+21:52–21:58Z. **The reconciler did not re-attempt a failed core Plugins seal on its own.** Its
+`bake_only` path re-ran only the platform bake, so without a Plugins merge the red would have lasted
+until core merged again. Do not re-run the satellites' failed jobs: the resolver reads the same set
+again and the registry still answers 404.
+
+**Since MeshWeaver#4539 it does.** On every `bake_only` tick `gate` asks
+`check-release-availability.sh <version> plugins` — naming the set's framework identity, resolved
+from the `_releases/<version>` marker — and re-runs the three `plugins-*` legs when, and only when,
+that answer is a definite absence. It is bounded at three attempts per (core sha, plugins sha) pair
+and it refuses rather than acts when the store cannot be read. The hold on the satellite side is
+unchanged and still correct; what changed is that something now clears it. See
+[CD Reconciles the Plugins Seal](../CdReconcilesThePluginsSeal).
 
 **A second red can follow a satellite that has two upstreams.** Reinsurance declares `plugins crm`.
 Its 21:19Z run passed every gate, then its `publish-bake` went red: `crm — no sealed publication
