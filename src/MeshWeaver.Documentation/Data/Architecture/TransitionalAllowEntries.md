@@ -104,7 +104,7 @@ whether the change has landed.
 `pull_request` event. A `merge_group` build has no single pull request (the queue ref can carry
 several), so the weaker rule applies there, and nothing reaches the queue without this job having
 been green on the `pull_request` event first: it is a `needs:` of `Consolidate test results`, the
-one required check.
+the required check for TESTS (it is no longer the ONLY required context — `Automatic review answered` is required too since 2026-09-17; see AGENTS.md).
 
 ## "Could not tell" never renders as "allowed"
 
