@@ -847,6 +847,18 @@ public static class CatalogLayoutAreas
                 .WithStyle("color: var(--error-foreground, #a4262c); font-size: 12px; "
                            + "display: block; margin-top: 6px;"));
 
+        // 🚨 MeshWeaver#4550 — the SEVENTH state, and the one that used to wear the restart prompt
+        // above. The landed generation was DECLINED in favour of the copy this image ships (#4161),
+        // so the module RUNS — from the image's copy — and the version this card says is installed
+        // is not the one in effect. Neither "restart required" (the next boot re-runs the same
+        // comparison) nor "not running here" (it is running). Localized like every other line on
+        // this card: platform-owned chrome follows the VIEWER.
+        else if (activation.DeclineForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}") is { } decline)
+            card = card.WithView(Controls.Body(
+                    $"ℹ️ {host.Localize("ui.moduleRunsImageCopy", decline.Version ?? "?")}")
+                .WithStyle("color: var(--warning-foreground, #9d5d00); font-size: 12px; "
+                           + "display: block; margin-top: 6px;"));
+
         // 🚨 #3649 — the FIFTH state, and the first that is not a fault: the newest generation
         // does not load on this platform, so this installation runs the previous one. The module
         // works; the line says which version that is and that the newer one is waiting on a

@@ -652,6 +652,7 @@
   "ui.restartRequiredToActivate": "Restart required to finish activating this package",
   "ui.moduleBuiltForNewerPlatform": "Not running here: this version was built for a newer platform. It activates when this installation updates.",
   "ui.moduleDeclaresNewerPlatform": "Declares platform ≥ {0}; this installation runs {1}. Advisory only — whether it loads is measured, not declared.",
+  "ui.moduleRunsImageCopy": "Running the copy this deployment's image ships: the installed version {0} was built against a different platform build, so it is not in effect. Neither a restart nor a re-install changes that \u2014 it starts running once it is published built against this platform.",
   "ui.moduleRunsPreviousVersion": "Running the previous version {0}: version {1} is installed but does not load on this platform. It activates once a build that loads here ships.",
   "ui.moduleHeldAtLanding": "Not installed on this platform: it needs {0}, this platform provides {1}. It installs when this installation updates to a platform that provides it.",
   "ui.moduleHeldAtLandingTypes": "Not installed on this platform: it references {0}, which this platform does not have. It installs when this installation updates.",
