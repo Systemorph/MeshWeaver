@@ -279,10 +279,17 @@ numbers say so:
 | reviewer latency (open → first review submitted) | **4.1 min** | 7.8 | 17.2 |
 | required gate (open → `Consolidate test results`) | **17.9 min** | 53.8 | 1074.5 |
 
-**The required gate finished before the reviewer submitted on 0 of 37.** The reviewer is reliably
-*first*. So what merges past a finding today is not a race — it is that the review **lands, and
-nothing requires it to be read**. That is precisely what this check asserts, and it is why the
-remaining step is the ruleset edit rather than any further engineering.
+**The required gate finished before the reviewer submitted on 0 of 37.** The denominator is 37 of the
+39 because **two merged pull requests carry no automatic review at all** — #4584 and #4582, both with
+**zero** reviews of any kind, checked rather than inferred from the gap in the counts. With no review
+there is no submission time to compare against, so they are excluded from the comparison rather than
+counted as a win for either side. They are also exactly the pull requests this check would hold: no
+review landed, condition 1 unmet — so the two numbers disagreeing is itself a measurement, not an
+inconsistency.
+
+The reviewer is reliably *first*. So what merges past a finding today is not a race — it is that the
+review **lands, and nothing requires it to be read**. That is precisely what this check asserts, and
+it is why the remaining step is the ruleset edit rather than any further engineering.
 
 ## What an author does
 

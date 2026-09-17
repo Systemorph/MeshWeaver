@@ -349,10 +349,15 @@ def classify(ctx: Context, evidence: RunEvidence | None, catalogue: tuple[FlakeE
     # later is covered the day it runs on `merge_group` instead of the day somebody remembers this
     # file. A gate failure is never a flake, so this rejects and never re-queues.
     if ctx.gate_failures:
+        # 🚨 States the FACT, not a root cause. A non-test workflow can fail BESIDE a real test
+        # failure on the same queue branch (review on MeshWeaver#4646) — rejecting is still right,
+        # but "the entry was not removed for a test failure" would be an inference this reader
+        # cannot make, and a wrong one sends the next reader past a genuine red.
         return Decision("reject", "gate",
-                        "a workflow other than the test suite failed on this pull request's queue "
-                        "branch, so the queue did not remove the entry for a test failure — the "
-                        "steward re-queues nothing here",
+                        "a merge_group workflow other than the test suite failed on this pull "
+                        "request's queue branch; a gate failure is never a flake, so the steward "
+                        "re-queues nothing here — read the named workflow, and the test run too if "
+                        "it also failed",
                         details=tuple(f"failed queue workflow: `{name}`" for name in ctx.gate_failures))
 
     if evidence is None:
@@ -477,15 +482,32 @@ class Gh:
         """The newest FAILED queue build of this PR. Not merely the newest: after an ejection the
         queue may already be rebuilding the entry (a run in progress), and a PR that landed earlier
         through the queue has a green run under the same prefix — neither is the failure to read."""
-        prefix = f"gh-readonly-queue/{QUEUE_BRANCH}/pr-{number}-"
-        runs = []
-        for page in (1, 2):
-            data = self.api(f"actions/runs?event=merge_group&per_page=100&page={page}")
-            runs += (data or {}).get("workflow_runs", [])
-        mine = [r for r in runs if (r.get("head_branch") or "").startswith(prefix)
-                and r.get("name") == "MeshWeaver Build and Test"
+        mine = [r for r in self.queue_runs(number)
+                if r.get("name") == "MeshWeaver Build and Test"
                 and r.get("status") == "completed" and r.get("conclusion") == "failure"]
         return max(mine, key=lambda r: r["created_at"]) if mine else None
+
+    def queue_runs(self, number: int) -> list[dict]:
+        """EVERY `merge_group` run on this pull request's queue branch, read completely and once.
+
+        🚨 PAGINATED IN FULL, not two pages. The first two pages are 200 `merge_group` runs across
+        the WHOLE repository, and on a busy day that window can end before this pull request's own
+        entry — so a bounded read would silently answer "no gate failed" and reintroduce exactly the
+        misclassification this reader exists to prevent (review on MeshWeaver#4646). A partial read
+        here is indistinguishable from a clean one, which is the shape that must never be bounded.
+
+        Both callers share this walk, so they can never disagree about the same pull request: one
+        asks for the newest failed TEST run, the other for the names of every other failed workflow.
+        """
+        prefix = f"gh-readonly-queue/{QUEUE_BRANCH}/pr-{number}-"
+        pages = self.api("actions/runs?event=merge_group&per_page=100", paginate=True)
+        runs: list[dict] = []
+        for page in (pages if isinstance(pages, list) else [pages]):
+            if isinstance(page, dict):
+                runs += page.get("workflow_runs") or []
+            elif isinstance(page, list):
+                runs += [r for r in page if isinstance(r, dict)]
+        return [r for r in runs if (r.get("head_branch") or "").startswith(prefix)]
 
     def failed_queue_gates(self, number: int) -> tuple[str, ...]:
         """Names of OTHER workflows that FAILED on this pull request's queue branch.
@@ -495,14 +517,8 @@ class Gh:
         remembers this file. `Review answered` (MeshWeaver#4299) is the first, and the reason this
         exists — see `classify`.
         """
-        prefix = f"gh-readonly-queue/{QUEUE_BRANCH}/pr-{number}-"
-        runs = []
-        for page in (1, 2):
-            data = self.api(f"actions/runs?event=merge_group&per_page=100&page={page}")
-            runs += (data or {}).get("workflow_runs", [])
-        names = {r.get("name") for r in runs
-                 if (r.get("head_branch") or "").startswith(prefix)
-                 and r.get("name") != "MeshWeaver Build and Test"
+        names = {r.get("name") for r in self.queue_runs(number)
+                 if r.get("name") != "MeshWeaver Build and Test"
                  and r.get("status") == "completed" and r.get("conclusion") == "failure"}
         return tuple(sorted(n for n in names if n))
 
