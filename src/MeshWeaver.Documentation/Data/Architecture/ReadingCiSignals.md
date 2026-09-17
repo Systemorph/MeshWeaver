@@ -1151,6 +1151,27 @@ transient`. The hosted runner's `gh` refuses any response body with escape seque
 Actions log has them. Crm, Reinsurance and SocialMedia make the same `gh api …/logs` call but were
 not sampled (#4534).
 
+> **Fixed in core, 2026-09-17 (#4534).** Core's steward is now
+> `.github/scripts/retry-known-transients.py`: it reads the logs endpoint over plain REST — no `gh`,
+> so no dependency on a CLI *output* policy — and an unreadable log is a LOUD exit 1, never a
+> decline. Measured while fixing it: a plain REST GET of the identical URL answers HTTP 200 with
+> 7,251 bytes over 46 escape-bearing lines, so the refusal was never the API's. `--allow-escape-sequences`
+> was rejected as the fix because the flag does not exist on older `gh` (the local 2.95.0 has
+> neither the refusal nor the flag), which would have traded one silent breakage for another.
+>
+> 🚨 **The other four copies are STILL BLIND, on purpose.** Crm, Reinsurance and SocialMedia carry
+> the inline shell; MeshWeaver.Plugins has its own `scripts/retry-known-transients.py`. Nothing
+> propagates a core change to them and nothing reds if they drift — `check-resolver-copy.py` covers
+> exactly `scripts/resolve-platform.py` (one constant, and it parses Python, so it cannot see a
+> workflow), no `uses:` couples them to core, and no copy is fetched at a pin. The proof is
+> historical: core's `block_signatures` clause, added 2026-09-13, reached no satellite and reddened
+> nobody. Reviving them is **not** a mechanical re-copy, because `POST …/rerun-failed-jobs` on a
+> SATELLITE's `main` run erases the `Platform for this run` annotation its PR ceiling reads
+> (#4491, open) — so a satellite steward that works again would silently freeze that repo's
+> platform ceiling until the next merge. Core has no such ceiling (it only ever runs the resolver's
+> `--self-test`), which is why core could be fixed first and alone. Fix #4491, then re-enable the
+> satellites.
+
 ## 🚨 A check that is red on EVERY pull request is not telling you about any of them
 
 A signal carries information only to the extent that it *varies*. A check that fails on every open

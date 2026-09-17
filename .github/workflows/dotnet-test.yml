@@ -2120,6 +2120,18 @@ jobs:
     - name: "The host-crash recorder writes a dead host into its trx, directory and all (self-test)"
       run: python3 .github/scripts/record-host-crash.py --self-test
 
+    # 🚨 THE STEWARD THAT SPENT A WEEK DECIDING WITHOUT READING ANYTHING (#4534). Its `gh api …/logs`
+    # read failed on every run from at least 2026-09-10, because the hosted runner's `gh` refuses a
+    # body carrying terminal escape sequences and every Actions log has them — and it reported that
+    # as "cannot prove a transient, no retry" over a GREEN job. It now reads the API directly and
+    # REDS when it cannot see its input. This self-test is why the recurrence cannot be silent: it
+    # drives a log with real ESC sequences through the reader, drives every unreadable shape to a
+    # loud exit 1, and drives a compile error and a 403-on-the-mint-URL to a refusal — so "the
+    # steward went blind again" and "the steward retried a real red" both arrive as a red here,
+    # on the pull request, instead of as a week of quiet green.
+    - name: "The transient steward reads its input, or reds (self-test)"
+      run: python3 .github/scripts/retry-known-transients.py --self-test
+
     # 🚨 Every job in every workflow carries a LITERAL `timeout-minutes` <= 45 (maintainer, 2026-09-02:
     # "hard cut CI runs after 45min — we pay all this"). GitHub's default is 360; one uncapped job in
     # the module-pack lane held a runner for six hours per run across 19 concurrent Plugins runs and
