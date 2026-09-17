@@ -109,6 +109,14 @@ Whenever a guard has a documented case it declines to judge, the test for that c
 LANDS — an assertion that the caller sees no error is the only one that can tell "said nothing" from
 "threw".
 
+**What the exemption costs, stated plainly.** Content that omits a `required` member is stored, and a
+reader's `ContentAs<T>` cannot materialise it — the same silent-empty outcome
+[#4600](https://github.com/Systemorph/MeshWeaver/issues/4600) describes, reached by a different road.
+That is a deliberate trade, not an oversight: refusing it would make every partial write to a type
+with a `required` member fail, across every writer in the fleet, which is the schema-strictness change
+this guard was explicitly scoped away from. Narrowing it later is a decision about which writers may
+send partial content — not a bug fix — and it needs the producer side enumerated first.
+
 ## Where it deliberately says nothing
 
 Each of these answers Valid, and each is a decision rather than an omission:
