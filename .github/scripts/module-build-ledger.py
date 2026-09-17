@@ -55,7 +55,7 @@ USAGE (the lane's steps; every command reads the run identity from GITHUB_* and 
 MW_LEDGER_URL / MW_LEDGER_TOKEN)
   decide    --keys @keys.json --matrix @matrix.json --publish true|false --lane L --out-matrix F --out-build F
   heartbeat --key K
-  record    --key K --status Built --bundle FILE --artifact-name N --retention-days 7 [--version V] [--platform-identity I]
+  record    --key K --status Built --bundle FILE --artifact-name N --retention-days 7 [--bundle-locator L] [--version V] [--platform-identity I]
   record    --key K --status Tested [--trx FILE]
   record    --key K --status Published
   record    --key K --status Failed --phase compile|pack|test|publish|workspace [--failure-file F]
@@ -320,13 +320,47 @@ def heartbeat_age_s(rec: dict) -> float:
 def summary_of(rec: dict) -> dict:
     """What a re-claim keeps of the previous holder: evidence, not authority."""
     keep = ("status", "phase", "blocking", "attempts", "run", "claimedAt", "heartbeatAt", "finishedAt",
-            "failure", "tests", "bundleSha256", "version", "platformIdentity")
+            "failure", "tests", "bundleSha256", "bundleStore", "version", "platformIdentity")
     return {k: rec.get(k) for k in keep if rec.get(k) is not None}
 
 
+def store_fetchable(rec: dict, say) -> tuple[bool, str]:
+    """Can THIS run fetch the record's bundle from the object store on our own infra?
+
+    Only when the run resolved the SAME store the record names (MW_ARTIFACT_STORE, set by the lane
+    from `select`'s one resolution) — a locator from another account or another mount is not
+    something to guess at — and only when the object is actually there, asked of the store, never
+    assumed from the record. A `False` here is not an error: the caller falls through to the GitHub
+    artifact, and past that to a rebuild."""
+    st = rec.get("bundleStore")
+    if not isinstance(st, dict) or not st.get("locator"):
+        return False, "the record names no object-store copy"
+    mine = (os.environ.get("MW_ARTIFACT_STORE") or "").strip()
+    if not mine or mine in ("gha", "none"):
+        return False, "this run resolved no object store, so it cannot read the record's copy"
+    if not str(st["locator"]).startswith(mine + "/"):
+        return False, f"the record's copy is in {str(st['locator']).split('#')[0]}, and this run resolved {mine}"
+    helper = str(Path(__file__).with_name("ci-artifact-store.py"))
+    try:
+        proc = subprocess.run([sys.executable, helper, "probe", "--store", mine, "--locator", st["locator"]],
+                              capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"the store probe could not run: {exc}"
+    if proc.returncode != 0:
+        return False, f"{st['locator'].split('#')[0]} is not in the store ({(proc.stderr or proc.stdout).strip()[:200]})"
+    return True, f"the object store copy {st['locator'].split('#')[0]}"
+
+
 def artifact_fetchable(rec: dict, me: dict, say) -> tuple[bool, str]:
-    """Can THIS run download the record's bundle artifact? Same repo (GITHUB_TOKEN is repo-scoped) and
-    the artifact still exists and is not expired — asked of the API, never assumed from a date."""
+    """Can THIS run get the record's bundle bytes? The object store on our own infra first — that is
+    where the durable copy lives once a lane names a store — then the GitHub artifact: same repo
+    (GITHUB_TOKEN is repo-scoped) and still present and unexpired, asked of the API, never assumed
+    from a date. Either answer is a reuse; neither is a rebuild, loudly."""
+    ok, why = store_fetchable(rec, say)
+    if ok:
+        return True, why
+    if rec.get("bundleStore"):
+        say(f"  store: {why} — falling through to the GitHub artifact")
     art = rec.get("bundleArtifact")
     if not isinstance(art, dict) or not art.get("name") or not art.get("runId"):
         return False, "the record names no bundle artifact"
@@ -361,7 +395,7 @@ def claim_content(entry: dict, key_info: dict, me: dict, attempts: int, previous
         "testerDigest": inputs.get("testerDigest") or None, "platformDigest": inputs.get("platformDigest") or None,
         "status": "Claimed", "phase": None, "blocking": False, "attempts": attempts, "run": me,
         "claimedAt": iso(now_utc()), "heartbeatAt": iso(now_utc()), "finishedAt": None,
-        "bundleSha256": None, "bundleArtifact": None, "tests": None, "failure": None,
+        "bundleSha256": None, "bundleArtifact": None, "bundleStore": None, "tests": None, "failure": None,
         "previous": previous,
     }
     return content
@@ -405,6 +439,7 @@ def decide_one(ledger: Ledger, entry: dict, key_info: dict, me: dict, publishing
                     return "wait", {"holder": holder, "status": st, "heartbeatAgeS": 0}
             return "reuse", {"holder": holder, "status": st, "needTest": more_test, "needPublish": more_publish,
                              "artifact": rec.get("bundleArtifact"), "bundleSha256": rec.get("bundleSha256"),
+                             "store": rec.get("bundleStore"),
                              "platformIdentity": rec.get("platformIdentity"), "source": why}
         say(f"  {entry['module']}: {st} record at {holder} is not reusable — {why}")
     # stale claim, non-blocking failure, or a terminal record whose bundle is gone: take the key over
@@ -531,6 +566,14 @@ def record(ledger: Ledger, a: argparse.Namespace, me: dict, say) -> int:
         fields["bundleSha256"] = sha256_file(Path(a.bundle))
         fields["bundleArtifact"] = {"repo": me["repo"], "runId": me["runId"], "name": a.artifact_name,
                                     "expiresAt": iso(now_utc() + dt.timedelta(days=a.retention_days))}
+        # 🚨 THE DURABLE COPY, when the lane shelved one on our own infra (ci-artifact-store.py).
+        # The GitHub artifact above stays either way — the run's OWN consumers read it — but when a
+        # store holds the bytes, THAT is what a later run fetches and the artifact can expire in a
+        # day instead of seven. Recorded as a locator (`<store spec>/<key>#sha256=<hex>`), so a
+        # reader that resolved a DIFFERENT store refuses it rather than fetching the wrong bytes.
+        # Absent ⇒ exactly the pre-2026-09-17 record: the artifact is the only durable copy.
+        if getattr(a, "bundle_locator", ""):
+            fields["bundleStore"] = {"locator": a.bundle_locator}
         fields["phase"] = None
     elif a.status == "Tested":
         if a.trx and Path(a.trx).is_file():
@@ -787,7 +830,56 @@ def self_test() -> int:
             os.environ["STUB_GH_FAIL"] = "1"
             v, d = decide_one(L(), entry, kinfo, run(run_id="600"), False, quiet)
             check("a token that cannot read artifacts (403) means BUILD, loudly — never a silent reuse", v == "build" and d["takeover"], f"{v} {d}")
+
+            # ── THE OBJECT-STORE COPY (2026-09-17): the durable bundle on our own infra ──
+            # STUB_GH_FAIL is still set, so the GitHub artifact is UNREADABLE for all four cases
+            # below: anything that reuses here reused from the store and nothing else.
+            print("reuse from the object store (GitHub artifacts unreadable throughout):")
+            shelf = root / "ci-artifacts"
+            (shelf / "modules/Acme.Alpha/k1").mkdir(parents=True)
+            blob = shelf / "modules/Acme.Alpha/k1/bundle.nupkg"
+            blob.write_bytes(b"bundle-bytes")
+            spec = f"file:{shelf}"
+            loc = f"{spec}/modules/Acme.Alpha/k1/bundle.nupkg#sha256={hashlib.sha256(b'bundle-bytes').hexdigest()}"
+            def shelved(locator):
+                """Force a terminal record whose ONLY usable copy is the store one (the fake gh is
+                failing throughout this block), without going through the claim mutex."""
+                store(**{f"{ROOT}/{key}": {**L().get(key), "status": "Tested", "finishedAt": iso(now_utc()),
+                                           "bundleArtifact": {"repo": "Systemorph/Acme", "runId": "1", "name": "module-bundle-Acme.Alpha"},
+                                           "bundleStore": {"locator": locator}}})
+            shelved(loc)
+            os.environ["MW_ARTIFACT_STORE"] = spec
+            v, d = decide_one(L(), entry, kinfo, run(run_id="701"), False, quiet)
+            check("a record with a store copy is REUSED even when the GitHub artifact cannot be read",
+                  v == "reuse" and d["store"]["locator"] == loc, f"{v} {d}")
+            os.environ["MW_ARTIFACT_STORE"] = "gha"
+            v, d = decide_one(L(), entry, kinfo, run(run_id="702"), False, quiet)
+            check("a run that resolved NO store cannot use the store copy — it builds, loudly",
+                  v == "build" and d["takeover"], f"{v} {d}")
+            shelved(loc)
+            os.environ["MW_ARTIFACT_STORE"] = f"file:{shelf}-elsewhere"
+            v, d = decide_one(L(), entry, kinfo, run(run_id="704"), False, quiet)
+            check("a store copy in a DIFFERENT store is never guessed at — it builds",
+                  v == "build" and d["takeover"], f"{v} {d}")
+            shelved(loc.replace("bundle.nupkg", "gone.nupkg"))
+            os.environ["MW_ARTIFACT_STORE"] = spec
+            v, d = decide_one(L(), entry, kinfo, run(run_id="706"), False, quiet)
+            check("a store copy the store does not hold is not reused on the record's word alone",
+                  v == "build" and d["takeover"], f"{v} {d}")
+            os.environ.pop("MW_ARTIFACT_STORE", None)
             os.environ.pop("STUB_GH_FAIL", None)
+
+            # And the producer half: `record --status Built --bundle-locator` writes it.
+            builder = run(run_id="710")
+            store(**{f"{ROOT}/{key}": {**L().get(key), "status": "Claimed", "finishedAt": None, "run": builder}})
+            bfile = root / "b2.nupkg"
+            bfile.write_bytes(b"bundle-bytes")
+            record(L(), argparse.Namespace(key=key, status="Built", trx=None, version="1.2.3", platform_identity=None,
+                                           bundle=str(bfile), artifact_name="module-bundle-Acme.Alpha", retention_days=1,
+                                           bundle_locator=loc, phase=None, failure_file=None), builder, quiet)
+            rec2 = L().get(key)
+            check("record --bundle-locator stores the durable copy BESIDE the artifact, never instead of it",
+                  rec2["bundleStore"]["locator"] == loc and rec2["bundleArtifact"]["name"] == "module-bundle-Acme.Alpha", json.dumps(rec2)[:200])
             store(**{f"{ROOT}/{key}": {**L().get(key), "bundleArtifact": {"repo": "Systemorph/Other", "runId": "1", "name": "x"},
                                       "status": "Tested", "finishedAt": iso(now_utc())}})
             v, d = decide_one(L(), entry, kinfo, run(run_id="601"), False, quiet)
@@ -933,6 +1025,8 @@ def main() -> int:
     p.add_argument("--phase")
     p.add_argument("--bundle")
     p.add_argument("--artifact-name")
+    p.add_argument("--bundle-locator", default="",
+                   help="ci-artifact-store.py locator of the durable copy on our own infra, when the lane shelved one")
     p.add_argument("--retention-days", type=int, default=7)
     p.add_argument("--version")
     p.add_argument("--platform-identity")

@@ -679,6 +679,35 @@ on:
         required: false
         type: string
         default: ''
+      artifact-store:
+        description: >
+          Where the cross-run MODULE BUNDLE copy lives — the bytes a LATER run downloads when the
+          build ledger says a key is already built. Empty (the default) keeps them where they have
+          always been: a `module-bundle-<module>` GitHub artifact at 7-day retention, which is what
+          the public repo and any runner without our infra must keep using.
+
+            file:<dir>                              a writable share the runner pod mounts
+            azblob:<account>/<container>[/<prefix>]  Azure Blob via the ambient azure/login
+
+          🚨 WHY THIS INPUT EXISTS (maintainer, 2026-09-17: "we still incur cost for github actions
+          … please see that it goes to 0" · "when free capacity gone => defer to our infra"). Compute
+          already moved to our ARC runners and the org Actions budget is $0; storage is the last
+          billed line. Measured that day over the live artifact inventory: MeshWeaver.Plugins held
+          382 GB, of which 247 GB was `module-bundle-*` — and most of those bytes are DUPLICATES,
+          because a run that REUSES a bundle re-uploads the identical bytes under the same name for
+          its own consumers. 754 live copies of one module's bundle.
+
+          When a store is named, the durable copy goes there (content-addressed by the ledger's
+          build key, so identical bytes are written once) and the GitHub artifact stays — at
+          1-day retention, because it is then only a handoff between the jobs of ONE run. The
+          consumers (gate, compile-check, publish-bake) are untouched.
+
+          🚨 THE DEGRADE RULE: no store named ⇒ byte-for-byte today's behaviour. A store NAMED but
+          unusable on this runner is RED in the pack leg, never a quiet return to the old path —
+          see ci-artifact-store.py.
+        required: false
+        type: string
+        default: ''
       publication-run:
         description: Successful publishing run paired with publication-base and identical resolved toolchain inputs; permits reusing unchanged gate dependencies.
         required: false
@@ -875,6 +904,7 @@ jobs:
       # predates it fails ONE preflight by name, instead of failing every pack leg inside a
       # subshell whose recorded reason names neither the helper nor the ref.
       MODULE_SET_CENSUS: ${{ github.workspace }}/build-logic/.github/scripts/module-set-census.py
+      ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
       EXECUTING_WORKFLOW: ${{ github.workspace }}/lane-definition/.github/workflows/node-repo-module-pack.yml
     outputs:
       # The matrix the pack job expands: the scope's selection, each entry annotated by the ledger
@@ -903,6 +933,9 @@ jobs:
       # One concrete tooling identity for every downstream job. An explicit input wins; otherwise
       # use the exact reusable-workflow commit resolved from the job context below.
       build-logic-ref: ${{ inputs.build-logic-ref || steps.workflow.outputs.sha }}
+      # Where this call's DURABLE module-bundle copy lives — `gha` (today's artifact) or an object
+      # store spec. Resolved once here; every pack leg reads this rather than deciding again.
+      artifact-store: ${{ steps.store.outputs.store }}
       # The matrix as GIVEN, for the workflow's `declared` output — never the selection above, which a
       # narrowed run shrinks; the publication lane's set-aside check needs the whole catalog.
       declared: ${{ inputs.modules }}
@@ -1077,7 +1110,24 @@ jobs:
           python3 "$MODULE_SET_CENSUS" --self-test
           python3 build-logic/.github/scripts/module-build-key.py --self-test
           python3 build-logic/.github/scripts/module-build-ledger.py --self-test
+          # The object-store seam's rules — the degrade rule above all, which is the one that decides
+          # whether a repo without our infra still builds. Executed on every run of every caller,
+          # store or no store, because the mode this lane is NOT using is exactly the one nobody
+          # would notice rotting.
+          [ -f "$ARTIFACT_STORE_PY" ] || { echo "::error::the resolved build-logic ref carries no .github/scripts/ci-artifact-store.py. The artifact-store input needs it; when build-logic-ref is explicit, move it to a commit compatible with the loaded reusable workflow."; exit 1; }
+          python3 "$ARTIFACT_STORE_PY" --self-test
           python3 "$MODULE_PACK_BATCH" --self-test --workflow "$EXECUTING_WORKFLOW"
+      # ───────────── WHERE THIS RUN'S DURABLE BUNDLE COPY LIVES — decided ONCE ─────────────
+      # One answer for the whole call: `select` resolves it, every pack leg reads the output. Two
+      # legs resolving independently could disagree (a mount present on one node and not the next),
+      # and a ledger record written against one store and read against another is a reuse that
+      # fetches nothing. The resolution PRINTS its mode and why, into the job summary, so "it used
+      # GitHub artifacts" is never something you have to infer from an absence.
+      - name: Resolve the artifact store
+        id: store
+        env:
+          DECLARED: ${{ inputs.artifact-store }}
+        run: python3 "$ARTIFACT_STORE_PY" resolve --declared "$DECLARED"
       - name: Decide which module bundles this diff can reach
         id: scope
         env:
@@ -1135,6 +1185,11 @@ jobs:
           MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
           MW_LEDGER_LANE: ${{ steps.lane.outputs.id }}
           GH_TOKEN: ${{ github.token }}
+          # Which store THIS run resolved. The ledger only offers a record's object-store copy when
+          # it is in this store — a locator from another account or another mount is not something
+          # to guess at — and it probes the store rather than trusting the record, exactly as it
+          # already asks the API whether an artifact is still there.
+          MW_ARTIFACT_STORE: ${{ steps.store.outputs.store }}
           SCOPE_MODULES: ${{ steps.scope.outputs.modules }}
           COUNT: ${{ steps.scope.outputs.count }}
           PUBLISH: ${{ inputs.publish }}
@@ -1948,6 +2003,7 @@ jobs:
       # build logic, not platform source, and its two halves (here and in `verify`) must be the
       # same version or the receipt field and the reader disagree about its shape.
       MODULE_SET_CENSUS: ${{ github.workspace }}/build-logic/.github/scripts/module-set-census.py
+      ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
       # The per-file static-asset assertion (#2384). 🚨 build-logic-ref, NOT platform-ref, for the
       # reason stated two lines above: the platform checkout may deliberately predate this lane, so
       # reading a gate the lane itself introduced out of THAT tree is a file-not-found on every
@@ -2239,7 +2295,7 @@ jobs:
             RUN_TESTS=true; [ "$(bk get --module "$MODULE" test)" != "false" ] || RUN_TESTS=false
             set +e
             ( set -euo pipefail
-              decision=build; key=""; need_test="$RUN_TESTS"; need_publish="$PUBLISH"; art_run=""; art_name=""; sha=""; holder=""
+              decision=build; key=""; need_test="$RUN_TESTS"; need_publish="$PUBLISH"; art_run=""; art_name=""; sha=""; holder=""; store_loc=""
               if [ "$ENTRY_REUSE" != "null" ] && [ -n "$ENTRY_REUSE" ]; then
                 decision=reuse; need_test=false; need_publish=false
                 art_run=$(jq -er '.runId' <<< "$ENTRY_REUSE")
@@ -2256,6 +2312,11 @@ jobs:
                   art_name=$(jq -r '.artifact.name // ""' <<< "$ENTRY_LEDGER")
                   sha=$(jq -r '.bundleSha256 // ""' <<< "$ENTRY_LEDGER")
                   holder=$(jq -r '.holder // ""' <<< "$ENTRY_LEDGER")
+                  # The DURABLE copy on our own infra, when the record names one AND `select`
+                  # resolved the same store (module-build-ledger.py refuses a locator from another
+                  # store rather than guessing). Empty ⇒ the GitHub artifact is the only copy and
+                  # the reuse leg downloads it exactly as it always has.
+                  store_loc=$(jq -r '.store.locator // ""' <<< "$ENTRY_LEDGER")
                   [ -n "$art_run" ] && [ -n "$art_name" ] || { echo "::error::the ledger said REUSE for $MODULE but named no bundle artifact — nothing to reuse; this is a select-step defect, not a build failure"; exit 1; }
                   echo "plan: REUSE $MODULE from run $art_run ($art_name, sha256 ${sha:-unrecorded}; holder $holder) — tests: $need_test, publish: $need_publish"
                 else
@@ -2270,7 +2331,7 @@ jobs:
                 echo "plan: $MODULE is packed but NOT tested — test-modules does not name it (its suite is not owed by this change set)"
               fi
               bk set --module "$MODULE" "decision=$decision" "key=$key" "need_test=$need_test" "need_publish=$need_publish" \
-                "art_run=$art_run" "art_name=$art_name" "sha=$sha" "holder=$holder"
+                "art_run=$art_run" "art_name=$art_name" "sha=$sha" "holder=$holder" "store_loc=$store_loc"
             )
             rc=$?
             set -e
@@ -2771,6 +2832,7 @@ jobs:
         id: reused
         env:
           GH_TOKEN: ${{ github.token }}
+          ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
@@ -2783,11 +2845,23 @@ jobs:
             HOLDER="$(bk get --module "$MODULE" holder)"
             PACKAGE="$(bk get --module "$MODULE" package)"
             VERSION="$(bk get --module "$MODULE" version)"
+            STORE_LOC="$(bk get --module "$MODULE" store_loc --default '')"
             set +e
             ( set -euo pipefail
               mkdir -p "$RUNNER_TEMP/bundles/$MODULE"
-              gh run download "$ART_RUN" -R "$GITHUB_REPOSITORY" -n "$ART_NAME" -D "$RUNNER_TEMP/bundles/$MODULE"
               bundle="$RUNNER_TEMP/bundles/$MODULE/MeshWeaver.Plugin.$PACKAGE.$VERSION.module.nupkg"
+              # 🚨 THE DURABLE COPY FIRST, when there is one. `select` only put a locator here if
+              # the record's store is the store THIS run resolved and the object is actually in it
+              # (module-build-ledger.py asked), so a `get` that fails now is a fault to name, not a
+              # reason to go looking somewhere else: the GitHub artifact it would fall back to is
+              # the SAME bytes at 1-day retention, and quietly preferring it would hide a store
+              # that has started losing objects. `get` verifies the sha256 in the locator itself.
+              if [ -n "${STORE_LOC:-}" ] && [ -n "${ARTIFACT_STORE:-}" ] && [ "$ARTIFACT_STORE" != gha ]; then
+                echo "reuse: fetching $MODULE from the object store — ${STORE_LOC%%#*}"
+                python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" --locator "$STORE_LOC" --out "$bundle"
+              else
+                gh run download "$ART_RUN" -R "$GITHUB_REPOSITORY" -n "$ART_NAME" -D "$RUNNER_TEMP/bundles/$MODULE"
+              fi
               if [ ! -f "$bundle" ]; then
                 found=$(find "$RUNNER_TEMP/bundles/$MODULE" -name '*.module.nupkg' | head -1)
                 echo "::error::run $ART_RUN's artifact $ART_NAME carries no MeshWeaver.Plugin.$PACKAGE.$VERSION.module.nupkg (found: ${found:-nothing}) — the ledger record and this checkout's manifest.lock disagree about the version; the key should have differed. Not reusing."
@@ -3127,7 +3201,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s1 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s1 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 2)
         if: steps.bundles.outputs.s2 != ''
@@ -3135,7 +3209,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s2 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s2 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 3)
         if: steps.bundles.outputs.s3 != ''
@@ -3143,7 +3217,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s3 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s3 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 4)
         if: steps.bundles.outputs.s4 != ''
@@ -3151,7 +3225,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s4 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s4 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 5)
         if: steps.bundles.outputs.s5 != ''
@@ -3159,7 +3233,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s5 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s5 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 6)
         if: steps.bundles.outputs.s6 != ''
@@ -3167,7 +3241,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s6 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s6 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 7)
         if: steps.bundles.outputs.s7 != ''
@@ -3175,7 +3249,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s7 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s7 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 8)
         if: steps.bundles.outputs.s8 != ''
@@ -3183,7 +3257,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s8 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s8 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 9)
         if: steps.bundles.outputs.s9 != ''
@@ -3191,7 +3265,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s9 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s9 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 10)
         if: steps.bundles.outputs.s10 != ''
@@ -3199,13 +3273,53 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s10 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s10 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       # AFTER the uploads, never before: `Built` means "a later run can fetch this bundle", and the
       # record names the artifact the slot above just created — the uploads carry no
       # continue-on-error, so reaching this step means every slot that fired succeeded. Carries the
       # PLATFORM's identity as `prepare` resolved it (#931's producer half: the record says which
       # framework these bytes are for).
+      # ───────── THE DURABLE COPY — on OUR infra, when the caller named a store ─────────
+      # 🚨 WHY (maintainer, 2026-09-17: "we still incur cost for github actions … please see that it
+      # goes to 0"). The `module-bundle-<module>` artifact below is TWO things wearing one name: the
+      # handoff this run's own gate/compile-check/publish-bake read, and the copy a LATER run
+      # downloads when the ledger says the key is already built. Only the second needs to outlive
+      # the run — and it is the expensive one: measured over Plugins' live inventory that day, 247
+      # of 382 GB were `module-bundle-*`, most of them duplicates, because a run that REUSES a
+      # bundle re-uploads the identical bytes for its own consumers (754 live copies of one module).
+      # When a store is named the durable copy goes there, keyed by the ledger's BUILD KEY — a
+      # content address — so identical bytes are written once however many runs want them, and the
+      # artifact drops to 1-day retention because a handoff is all it still is.
+      # Skipped when the ledger is off: without a record nothing reuses across runs, so there is
+      # nothing for a durable copy to serve.
+      - name: Shelve the durable bundle copy (object store)
+        if: inputs.ledger == 'required' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        env:
+          ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
+        run: |
+          set -euo pipefail
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
+          mapfile -t modules < <(bk list --ok --where decision=build --where 'key!=' --where 'bundle!=')
+          [ "${#modules[@]}" -gt 0 ] || echo "no module in this batch has a freshly built bundle to shelve"
+          for MODULE in "${modules[@]}"; do
+            KEY="$(bk get --module "$MODULE" key)"
+            BUNDLE="$(bk get --module "$MODULE" bundle)"
+            set +e
+            ( set -euo pipefail
+              out="$RUNNER_TEMP/store-put-$MODULE.txt"
+              python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
+                --key "modules/${GITHUB_REPOSITORY//\//_}/$MODULE/$KEY/$(basename "$BUNDLE")" \
+                --file "$BUNDLE" | tee "$out"
+              loc=$(sed -n 's/^locator=//p' "$out" | tail -1)
+              [ -n "$loc" ] || { echo "::error::ci-artifact-store put printed no locator for $MODULE — the record would name no durable copy while the artifact drops to 1-day retention, which is how a reuse window disappears silently."; exit 1; }
+              bk set --module "$MODULE" "store_loc=$loc"
+            )
+            rc=$?
+            set -e
+            [ "$rc" -eq 0 ] || bk fail --module "$MODULE" --phase pack --reason "the bundle could not be shelved in $ARTIFACT_STORE (exit $rc; see above)"
+          done
+
       - name: Ledger — Built
         if: inputs.ledger == 'required'
         env:
@@ -3213,6 +3327,12 @@ jobs:
           MW_LEDGER_URL: ${{ inputs.registry-url }}
           MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+          # 🚨 ONE expression, two readers: the `retention-days:` on the ten upload slots below and
+          # the `--retention-days` this record states. They were two independent literals until
+          # 2026-09-17 and nothing related them; now both read ARTIFACT_RETENTION, so a record can
+          # never outlive the artifact it names. 7 days when the artifact IS the durable copy; 1 day
+          # when a store holds it and the artifact is only this run's handoff.
+          ART_RETENTION: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
@@ -3221,10 +3341,12 @@ jobs:
             KEY="$(bk get --module "$MODULE" key)"
             BUNDLE="$(bk get --module "$MODULE" bundle)"
             VERSION="$(bk get --module "$MODULE" version)"
+            STORE_LOC="$(bk get --module "$MODULE" store_loc --default '')"
             set +e
             ( set -euo pipefail
               python3 build-logic/.github/scripts/module-build-ledger.py record --key "$KEY" --status Built \
-                --bundle "$BUNDLE" --artifact-name "module-bundle-$MODULE" --retention-days 7 \
+                --bundle "$BUNDLE" --artifact-name "module-bundle-$MODULE" --retention-days "$ART_RETENTION" \
+                ${STORE_LOC:+--bundle-locator "$STORE_LOC"} \
                 --version "$VERSION" ${PLATFORM_IDENTITY:+--platform-identity "$PLATFORM_IDENTITY"}
             )
             rc=$?
