@@ -200,8 +200,55 @@ public sealed class IoPool : IIoPool, IDisposable
     private const string DisposedMessage =
         "The I/O pool has been disposed (mesh or silo teardown) — this leaf will not run.";
 
+    // 🚨 AND THE REFUSAL IS DELIVERED OFF THE SUBSCRIBER'S THREAD — issue #4530.
+    //
+    // `Observable.Throw(ex)` runs on the IMMEDIATE scheduler: the OnError is delivered inside the
+    // caller's own Subscribe() call, on the caller's own thread. Measured on main (50 subscribes per
+    // cell, from a dedicated thread): every entry point delivered its refusal on the subscriber's
+    // thread, inside Subscribe(), 50/50 — while every ADMITTED leaf terminates from a pool thread,
+    // because each one hangs off SubscribeOn(TaskPoolScheduler.Default). Refusals were the one
+    // terminal the pool handed back to the caller, and this pool exists to keep work off that thread.
+    //
+    // Two things go wrong when it is the caller's. The teardown a terminal triggers is arbitrary
+    // application code, and the caller can be a hub action block or a grain turn (#2394's whole
+    // point, and #4524's). And a consumer that subscribes the NEXT leg from the previous leg's
+    // terminal — OrderedRouteDispatcher.DrainNext, which states that "a leg can never complete
+    // inside its own subscribe call" and relies on it — walks its whole backlog by RECURSION once
+    // that premise fails. Measured: a destination with 32 legs queued behind an in-flight head ran
+    // its completions at stack depths 31 → 248, ~7 frames per leg, all on the pool's single
+    // IoPool-cancel thread inside _poolCts.Cancel(); a saturated destination at silo shutdown is
+    // exactly where that backlog is deepest.
+    //
+    // So the refusal is scheduled on the pool's own scheduler — the same TaskPoolScheduler every
+    // admitted leaf already uses, not a new thread and not a gate. The cost, measured: a refusal
+    // takes 4.4 µs at the median instead of 0.5 µs (p95 9.8 µs), which is well inside the 13-30 µs
+    // an admitted leaf's cancellation already costs on the same path. Under a fully saturated
+    // ThreadPool it is queued like any other pool work — 41 of 50 refusals inside 500 ms, max
+    // 291 ms — and that is the honest trade: a refusal now waits for the pool the way the work it
+    // refuses would have, rather than borrowing the caller's stack.
+    //
+    // 🚨 THE POOL joins nothing on a refusal — it holds no permit and no admission region, so
+    // Drain()/Dispose() neither wait for it nor report it. A CONSUMER can: RoutingGrain.Dispatch
+    // releases its RoutingQuiescence slot from the leg's `.Finally`, and
+    // RoutingQuiescenceSiloParticipant holds the silo stop until that count reaches zero. So under a
+    // saturated ThreadPool a refusal delays that hold — bounded by the hold's own 30 s budget, after
+    // which it names the residual and the silo proceeds. That bound is the trade this makes: a
+    // bounded delay under saturation, against an unbounded stack (the DrainNext recursion above) and
+    // downstream teardown on a hub turn. A dedicated thread would dodge the ThreadPool and
+    // reintroduce the worse half — every refusal's downstream teardown serialised behind the slowest
+    // one, which is the shape #2394 was about.
     private static IObservable<T> Cancelled<T>() =>
-        Observable.Throw<T>(new OperationCanceledException(DisposedMessage));
+        Observable.Throw<T>(new OperationCanceledException(DisposedMessage), TaskPoolScheduler.Default);
+
+    /// <summary>
+    /// Refuses a subscribe that is already INSIDE an entry point when disposal wins the race — the
+    /// admission region said no, so the terminal cannot come from a leaf that will never run.
+    /// Delivered on the pool's scheduler for the reason above (#4530), and the returned disposable is
+    /// the scheduled item, so an unsubscribe before it runs cancels it like any other pool work.
+    /// </summary>
+    private static IDisposable RefuseOffSubscriber<T>(IObserver<T> observer) =>
+        TaskPoolScheduler.Default.Schedule(() =>
+            observer.OnError(new OperationCanceledException(DisposedMessage)));
 
     /// <summary>
     /// Opens the region in which the caller may touch <see cref="_gate"/>, <see cref="_poolCts"/> or
@@ -577,10 +624,7 @@ public sealed class IoPool : IIoPool, IDisposable
             // finally grants the slot. Both must find their primitive alive, so the region is closed
             // by the ContinueWith below (which runs whether the work ran, faulted or never started).
             if (!TryEnterGateRegion())
-            {
-                observer.OnError(new OperationCanceledException(DisposedMessage));
-                return Disposable.Empty;
-            }
+                return RefuseOffSubscriber(observer);   // #4530 — never on the subscriber's thread
 
             // Exactly-once region exit. The region is normally closed by the ContinueWith, which is
             // NOT reached if the scheduling below throws — and a leaked region would park disposal
@@ -751,10 +795,7 @@ public sealed class IoPool : IIoPool, IDisposable
             // entry point here is a COLD observable: `_disposed` was read when it was BUILT, and the
             // pool can die in the interval before anyone subscribes.
             if (!TryEnterGateRegion())
-            {
-                observer.OnError(new OperationCanceledException(DisposedMessage));
-                return Disposable.Empty;
-            }
+                return RefuseOffSubscriber(observer);   // #4530 — never on the subscriber's thread
 
             try
             {
