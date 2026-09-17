@@ -53,9 +53,13 @@ public enum SealedReadOutcome
     /// yet, which is an ordinary state for a freshly-built framework.</summary>
     Read,
 
-    /// <summary>🚨 The root is configured and the enumeration FAILED. The empty list is the
-    /// absence of a measurement, never a clean one — "cannot tell" is never "clear to
-    /// proceed".</summary>
+    /// <summary>🚨 The root is configured and the reading FAILED — the enumeration threw, a FILE
+    /// sits where the identity directory should be, a seal could not be opened, or a source's
+    /// publication pointer EXISTS and could not be followed with no sealed publication behind it
+    /// (#3461 phase 5: the flat compatibility copy is disposed of once a generation is live, so
+    /// that fall-back now finds nothing). The list is the absence of a measurement, never a clean
+    /// one — "cannot tell" is never "clear to proceed", and here it is not even per repository: a
+    /// source nobody could attribute may be ANY repository's.</summary>
     Unreadable,
 }
 
@@ -234,29 +238,63 @@ public static class SealedPublicationIndex
         if (string.IsNullOrWhiteSpace(publishedRoot) || string.IsNullOrWhiteSpace(identity))
             return ([], SealedReadOutcome.NotConfigured);
         var identityDirectory = Path.Combine(publishedRoot, identity);
+        List<(SealedSource Source, string Directory, bool Unreadable)> readings;
         try
         {
-            if (!Directory.Exists(identityDirectory))
-                // 🚨 ABSENT and OCCUPIED-BY-SOMETHING-ELSE are different answers, and
-                // `Directory.Exists` returns false for both. Nothing at the path is the ordinary
-                // state of a framework identity that has not been published for yet — read it
-                // cleanly as empty, or every new platform line would hold every source. A FILE (or
-                // a broken link) at exactly that path is the opposite: something is there and it
-                // is not what this reader can enumerate, which is what a half-finished layout
-                // migration looks like from here (#3461 phase 5). Calling that "nothing sealed"
-                // is the very conflation this outcome exists to end.
-                return ([], File.Exists(identityDirectory)
-                    ? SealedReadOutcome.Unreadable
-                    : SealedReadOutcome.Read);
-            return (Directory.EnumerateDirectories(identityDirectory)
+            // 🚨 THE ENUMERATION DECIDES, not `Directory.Exists` — which answers false for THREE
+            // different worlds and only one of them is an answer (Copilot's review of #3461 phase
+            // 5). Nothing at the path is the ordinary state of a framework identity nobody has
+            // published for yet, and calling that a failure would hold every source on every new
+            // platform line. A FILE at exactly that path, or a directory this process may not
+            // enumerate (an ACL, a share that unmounted), is the opposite: something IS there and
+            // this reader cannot read it — the empty-list-as-licence case the outcome exists to
+            // end. So the walk is attempted and its own exception separates them:
+            // `DirectoryNotFoundException` is the absence, everything else lands in the catch
+            // below as UNREADABLE.
+            readings = [.. Directory.EnumerateDirectories(identityDirectory)
                 .OrderBy(d => d, StringComparer.Ordinal)
-                .Select(d => ReadSource(d, logger))
-                .ToList(), SealedReadOutcome.Read);
+                .Select(d => ReadSource(d, logger))];
+            // 🚨 A SOURCE WHOSE POINTER COULD NOT BE FOLLOWED MAKES THE WHOLE READING UNREADABLE
+            // (#3461 phase 5). Until the flat compatibility copy was disposed of, that fall-back
+            // landed on a sealed publication and the reading was merely a little stale; now it
+            // lands on a source directory holding nothing, so the source reads as unsealed AND
+            // unattributable — and an unattributable source is exactly what `SealedSyncGate` reads
+            // as "this instance runs no publication of that repository", i.e. as a licence to
+            // advance. The question is not per repository: a source nobody could attribute may be
+            // ANY repository's, so no per-repository verdict taken from this list is trustworthy.
+            var faulted = readings.Where(r => r.Unreadable).ToList();
+            if (faulted.Count == 0)
+                return (readings.Select(r => (r.Source, r.Directory)).ToList(), SealedReadOutcome.Read);
+            logger?.LogWarning(
+                "SealedPublicationIndex: {Faulted} of {Total} source(s) under {Directory} carry a "
+                + "publication pointer this reader could not follow, with no sealed publication "
+                + "behind it ({Sources}) — this reading is UNREADABLE, not empty; a caller that "
+                + "gates on it must HOLD rather than proceed (#3461)",
+                faulted.Count, readings.Count, identityDirectory,
+                string.Join(", ", faulted.Select(f => $"{f.Source.Source}: {f.Source.Refusal}")));
+            return (readings.Select(r => (r.Source, r.Directory)).ToList(), SealedReadOutcome.Unreadable);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // 🚨 "Not found" from the WALK still has two worlds, and this is where they part.
+            // Nothing at the path is the one absence that is an ANSWER: the ordinary state of a
+            // framework line nobody has published for yet, and holding on it would hold every
+            // source on every new platform line. But a FILE at exactly that path throws the same
+            // exception (measured on this host), and that is the opposite — something IS there and
+            // it is not what this reader can enumerate, which is what a half-finished layout
+            // migration looks like from here. `Path.Exists` asks the question that separates them:
+            // is there an entry, of any kind, at all?
+            return ([], Path.Exists(identityDirectory)
+                ? SealedReadOutcome.Unreadable
+                : SealedReadOutcome.Read);
         }
         catch (Exception ex)
         {
             // 🚨 The list is EMPTY and that is not a verdict. It used to be indistinguishable from
             // "nothing sealed", and the gate read that as a licence to advance every repository.
+            // Everything that reaches here is a read this process could not make: an ACL, an
+            // unmounted share, a FILE where the identity directory should be (enumerating one
+            // throws rather than answering), a path the OS refuses.
             logger?.LogWarning(ex,
                 "SealedPublicationIndex: could not read the publications under {Directory} — "
                 + "this reading is UNREADABLE, not empty; a caller that gates on it must HOLD "
@@ -276,7 +314,7 @@ public static class SealedPublicationIndex
         return ([.. sources.Select(r => r.Source)], outcome);
     }
 
-    private static (SealedSource Source, string Directory) ReadSource(
+    private static (SealedSource Source, string Directory, bool Unreadable) ReadSource(
         string sourceDirectory, ILogger? logger)
     {
         // 🚨 The SOURCE name is the directory's own, taken BEFORE resolution — a generation is
@@ -286,50 +324,108 @@ public static class SealedPublicationIndex
         // 🚨 …and every path below is composed under the RESOLVED directory (#3461, phase 3).
         // This reader is in the portal image and phase 1 missed it: SeedPublishedRoot already
         // reads the BUNDLES through PublicationDirectoryOf, so without this the index and the
-        // seeder would read two different publications of one source. While the flat
-        // compatibility copy exists that is merely inconsistent; once it is dropped (phase 5) this
-        // reader would find no sentinel at all, report every source unsealed, and SealedSyncGate
-        // would then see an EMPTY `mine` and return Go for every repository — silently removing
-        // the whole "advance only to the commit sealed for this instance" rule
-        // (MeshWeaver.Plugins#1430) at the moment it matters most.
-        var publication = ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory, logger);
-        var repository = ReadMarker(Path.Combine(publication, RepositoryMarkerFileName));
-        var commit = ReadMarker(Path.Combine(publication, SourceCommitMarkerFileName));
+        // seeder would read two different publications of one source.
+        var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, logger);
+        var publication = pointer.Directory;
+        // 🚨 A MARKER THAT COULD NOT BE READ IS NOT AN ABSENT ONE (Copilot's review of #3461 phase
+        // 5). `ReadMarker` used to answer null for both, and null means UNATTRIBUTABLE — which
+        // `SealedSyncGate` reads as "this instance runs no publication of that repository" and
+        // answers with Go. So an ACL or an IO fault on `repository.txt` could open the very gate a
+        // torn publication is meant to hold. The reading says which, and a failure makes the whole
+        // reading UNREADABLE below, exactly as a faulted pointer does.
+        var repository = ReadMarker(Path.Combine(publication, RepositoryMarkerFileName), out var repositoryFault);
+        var commit = ReadMarker(Path.Combine(publication, SourceCommitMarkerFileName), out var commitFault);
         if (string.Equals(commit, "unknown", StringComparison.OrdinalIgnoreCase))
             commit = null;
+        if (repositoryFault is not null || commitFault is not null)
+        {
+            var fault = repositoryFault ?? commitFault!;
+            logger?.LogWarning(
+                "SealedPublicationIndex: a marker of {Directory} could not be read ({Fault}) — this "
+                + "source cannot be attributed, and an unattributable source reads as 'not this "
+                + "gate's business'; reporting the reading as UNREADABLE instead (#3461)",
+                publication, fault);
+            return (new SealedSource(source, repository, commit, false,
+                $"a publication marker could not be read ({fault}) — this source cannot be "
+                + "attributed, so whether its seal applies to any repository is unknown"),
+                publication, true);
+        }
         var sentinel = Path.Combine(publication, ShippedPrebuiltBundles.CompletionSentinelFileName);
-        if (!File.Exists(sentinel))
-            return (new SealedSource(source, repository, commit, false, "no completion sentinel"), publication);
         try
         {
-            var missing = File.ReadAllLines(sentinel)
+            // 🚨 THE OPEN DECIDES ABSENCE, never a preceding `File.Exists` (#3876, and the same
+            // false-for-errors class as the enumeration above): the publisher removes the seal
+            // before it republishes, and an ACL or a share hiccup answers `File.Exists == false` as
+            // loudly as a real absence. `ReadSealLines` classifies absence AT THE OPEN and lets
+            // every other I/O failure surface — into the catch below, which reports the source as
+            // unreadable rather than as unsealed.
+            var seal = ShippedPrebuiltBundles.ReadSealLines(sentinel);
+            if (seal is null)
+            {
+                // 🚨 THE TWO ABSENCES, and phase 5 is what separated them. A pointer that is simply
+                // NOT THERE means the source directory IS the publication (the flat layout, and a
+                // prefix nothing has published for yet) — "no completion sentinel" is then a real
+                // statement about a real place. A pointer that EXISTS and could not be followed —
+                // read mid-replacement, blank, refused, or naming a generation that is not on disk
+                // — is the opposite: some producer of this prefix publishes generations, and WHICH
+                // one applies could not be read. Since the flat compatibility copy is disposed of
+                // once a generation is live (phase 5), the fall-back finds nothing sealed and
+                // nothing to attribute the source with, which `SealedSyncGate` would read as "not
+                // this gate's business" and answer with Go. So that reading is UNREADABLE, and the
+                // caller HOLDS.
+                var unreadable = pointer.Fault is not null;
+                return (new SealedSource(source, repository, commit, false, unreadable
+                    ? $"the publication pointer could not be followed ({pointer.Fault}) and no sealed "
+                      + "publication sits behind it — which publication applies could not be read"
+                    : "no completion sentinel"), publication, unreadable);
+            }
+            var missing = seal
                 .Select(l => l.Trim())
                 .Where(l => l.Length > 0)
                 .FirstOrDefault(name => !File.Exists(Path.Combine(publication, name)));
             return (missing is null
                 ? new SealedSource(source, repository, commit, true, null)
                 : new SealedSource(source, repository, commit, false,
-                    $"the seal lists '{missing}', which is not on disk"), publication);
+                    $"the seal lists '{missing}', which is not on disk"), publication, false);
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "SealedPublicationIndex: could not read the seal of {Directory}", publication);
             return (new SealedSource(source, repository, commit, false,
-                $"the seal could not be read: {ex.GetType().Name}"), publication);
+                $"the seal could not be read: {ex.GetType().Name}"), publication, true);
         }
     }
 
-    private static string? ReadMarker(string path)
+    /// <summary>
+    /// One marker file: its trimmed value, null when it is genuinely ABSENT or empty — and
+    /// <paramref name="fault"/> set when the read FAILED, which is a different fact.
+    ///
+    /// <para>🚨 It used to answer null for both and swallow the exception (#3461 phase 5, Copilot's
+    /// review). Null is what makes a source unattributable, and an unattributable source is exactly
+    /// what <c>SealedSyncGate</c> reads as "this instance runs no publication of that repository"
+    /// and answers with <c>Go</c> — so an ACL or an IO fault on <c>repository.txt</c> could open the
+    /// gate a torn publication is there to hold. The open decides absence, as everywhere else in
+    /// this file: <see cref="FileNotFoundException"/> / <see cref="DirectoryNotFoundException"/> is
+    /// the absence; anything else is a fault the caller must report.</para>
+    /// </summary>
+    private static string? ReadMarker(string path, out string? fault)
     {
+        fault = null;
         try
         {
-            if (!File.Exists(path)) return null;
             var value = File.ReadAllText(path).Trim();
             return value.Length == 0 ? null : value;
         }
-        catch
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
             return null;
         }
+        catch (Exception ex)
+        {
+            fault = $"{Path.GetFileName(path)}: {ex.GetType().Name}: {ex.Message}";
+            return null;
+        }
     }
+
+    private static string? ReadMarker(string path) => ReadMarker(path, out _);
 }

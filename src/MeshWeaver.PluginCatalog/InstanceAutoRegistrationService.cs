@@ -1512,10 +1512,15 @@ public sealed class InstanceAutoRegistrationService(
         }
         var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
         var repo = new RepoIdentity(owner, name);
+        // 🚨 `ReadingFor`, not `ReadFor`: a reading that FAILED holds this source instead of listing
+        // it at its configured ref (#3461). An unreadable index answers with the same empty list a
+        // repository this instance runs no publication of does, and only the repository marker can
+        // attribute a seal at a first import — so "I could not look" would install from the branch.
         return pools.Get(IoPoolNames.FileSystem)
-            .InvokeBlocking(_ => SealedPublicationIndex.ReadFor(publishedRoot, identity, logger))
-            .Select(sealedForThisIdentity =>
-                ApplyPlan(source, SealedSyncGate.DecideFirstImport(repo, sealedForThisIdentity, identity)));
+            .InvokeBlocking(_ => SealedPublicationIndex.ReadingFor(publishedRoot, identity, logger))
+            .Select(reading => ApplyPlan(source,
+                SealedSyncGate.RefusedFirstImportForUnreadableIndex(reading.Outcome, identity)
+                ?? SealedSyncGate.DecideFirstImport(repo, reading.Sources, identity)));
     }
 
     /// <summary>
