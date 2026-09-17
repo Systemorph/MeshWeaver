@@ -15,7 +15,7 @@ It only works while `/health` can answer inside the time the probe allows it.
 ## What went wrong
 
 On one instance `/health` had grown to **8–10 seconds**, measured on healthy, serving replicas. The
-probe allows **10**. `/alive` and `/ready` on the same pod answered in 0.12 s, so the seconds were
+probe waits **five**. `/alive` and `/ready` on the same pod answered in 0.12 s, so the seconds were
 entirely in the heavier checks that only `/health` runs.
 
 A replica in that state can never finish starting, whatever its actual health — and a startup
@@ -52,7 +52,7 @@ a reader who only sees the beginning of a truncated body sees the timing first.
 
 ## What it deliberately does not do
 
-It does not make `/health` faster and it does not give the probe a bigger budget. A bigger budget
+It does not make `/health` faster and it does not give the probe a bigger timeout. A bigger timeout
 moves the cliff rather than removing it, and the next instance to grow past the new number would
 fail the same way, just as silently. This makes the cost **attributable** — the fix it points at is
 the one worth making.

@@ -22,10 +22,11 @@ namespace Memex.Portal.Shared.Test;
 /// <para><b>The incident.</b> Measured 2026-09-17 from outside memex.systemorph.com, three
 /// consecutive reads: <c>/health</c> answered 200 in 8.12 s, 9.62 s and 9.52 s, while
 /// <c>/alive</c> and <c>/ready</c> on the same host and pod answered in 0.12 s — so the seconds were
-/// entirely in the untagged checks. The chart's <c>startupProbe</c> reads <c>/health</c> with
-/// <c>timeoutSeconds: 10</c>. A container that never records ONE startup success never leaves
-/// startup, is never Ready, and is killed when <c>periodSeconds × failureThreshold</c> runs out
-/// (10 s × 1080 = 3 h on that instance) — then starts over. The replica rolled onto
+/// entirely in the untagged checks. The chart's <c>startupProbe</c> reads <c>/health</c>, and that
+/// instance gives it <c>timeoutSeconds: 5</c> — so every probe ran out of time before the endpoint
+/// could answer. A container that never records ONE startup success never leaves startup, is never
+/// Ready, and is killed when <c>periodSeconds × failureThreshold</c> runs out (10 s × 1080 = 3 h
+/// there) — then starts over. The replica rolled onto
 /// <c>3.0.0-ci.8812</c> at 11:23:40Z was still not Ready at 14:51Z with <c>restarts: 1</c>, and the
 /// bake gate was GREEN across the reading at 14:38:15Z: the aggregate word on line one was
 /// <c>Degraded</c>, which is a 200, which means no registered check was Unhealthy.</para>

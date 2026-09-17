@@ -297,29 +297,32 @@ public static class ServiceDefaults
 
     /// <summary>
     /// A check slower than this is NAMED on <see cref="ProbeEndpoints.Health"/>; the rest are
-    /// counted. 10 ms is a hundredth of the smallest probe budget the fleet runs, so nothing under
-    /// it can be part of an explanation for a probe that timed out — and leaving the cheap ones
-    /// unnamed is what keeps the line from growing with every check that costs nothing.
+    /// counted. 10 ms is a five-hundredth of the 5 s <c>timeoutSeconds</c> the chart gives this
+    /// endpoint, so nothing under it can be part of an explanation for a probe that timed out — and
+    /// leaving the cheap ones unnamed is what keeps the line from growing with every check that
+    /// costs nothing.
     /// </summary>
     internal const double TimingNamedAboveMs = 10;
 
     /// <summary>
     /// 🚨 <b>What the probe's own endpoint SPENT, published on it</b> (MeshWeaver#4588).
     ///
-    /// <para>The chart reads <see cref="ProbeEndpoints.Health"/> as the <c>startupProbe</c> with a
-    /// <c>timeoutSeconds</c> budget, and that is the one probe whose failure is not recoverable: a
-    /// container that never records a success never leaves startup, is never Ready, and is killed
-    /// when <c>periodSeconds x failureThreshold</c> runs out — then repeats. So once this endpoint's
-    /// own LATENCY reaches the probe's timeout, the verdict stops mattering: the instrument, not the
-    /// health of the pod, decides the rollout.</para>
+    /// <para>The chart reads <see cref="ProbeEndpoints.Health"/> as the <c>startupProbe</c>, and that
+    /// is the one probe whose failure is not recoverable: a container that never records a success
+    /// never leaves startup, is never Ready, and is killed when
+    /// <c>periodSeconds x failureThreshold</c> runs out — then repeats. So once this endpoint's own
+    /// LATENCY passes the probe's <c>timeoutSeconds</c>, the verdict stops mattering: the
+    /// instrument, not the health of the pod, decides the rollout.</para>
     ///
     /// <para><b>Measured 2026-09-17 on memex.systemorph.com</b>, from outside, three consecutive
     /// reads: <c>/health</c> answered 200 in 8.12 s, 9.62 s and 9.52 s while <c>/alive</c> and
     /// <c>/ready</c> on the same host and pod answered in 0.12 s — so the seconds were entirely in
-    /// the untagged checks. The startup probe's budget is 10 s. The replica rolled onto
+    /// the untagged checks. That instance gives the startup probe <c>timeoutSeconds: 5</c>, so every
+    /// probe ran out of time before the endpoint could answer. The replica rolled onto
     /// 3.0.0-ci.8812 at 11:23:40Z was still not Ready at 14:51Z and had been killed once at almost
-    /// exactly its 3 h budget (10 s x 1080), with the bake gate GREEN throughout — the aggregate
-    /// word on line one was <c>Degraded</c>, which is a 200 and therefore a passing verdict.</para>
+    /// exactly its 3 h budget (<c>periodSeconds: 10</c> x <c>failureThreshold: 1080</c>), with the
+    /// bake gate GREEN throughout — the aggregate word on line one was <c>Degraded</c>, which is a
+    /// 200 and therefore a passing verdict.</para>
     ///
     /// <para>🚨 <b>And nothing could say WHICH check spent it.</b> The framework logs a per-check
     /// duration, but a check that answers <see cref="HealthStatus.Healthy"/> logs it at Information,
