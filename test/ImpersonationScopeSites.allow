@@ -70,4 +70,3 @@ src/MeshWeaver.PluginCatalog/PackageInstaller.cs	9
 src/MeshWeaver.PluginCatalog/PackageUpdateReconciler.cs	1
 src/MeshWeaver.PluginCatalog/PluginUpdateWatcher.cs	1
 src/MeshWeaver.PluginCatalog/RegistrationKeyService.cs	1
-tools/MeshWeaver.PluginTester/PluginGateRunner.cs	1

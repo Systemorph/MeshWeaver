@@ -129,6 +129,54 @@ The SDK lane's `--deps-closure` derives the same set from a publish folder. **Th
 by construction, and that is the point**: converting a module from `sdk` to `container` must not
 change what its bundle contains.
 
+## 🚨 What the closure deliberately does NOT carry — and the RID the finding forgets
+
+Two shapes a flat closure cannot express are reported rather than dropped, in one spelling shared by
+both lanes (`UncarriedAssetFindings`), because the arming decision for the container lane is a
+**grep across a full wave** and two lanes wording one finding two ways would let a wave read clean on
+one while the other said it in words nobody searched for:
+
+| finding | what it means |
+|---|---|
+| `declares a RID-specific MANAGED asset the bundle does not carry` | the package declares `assetType: "runtime"` under `runtimeTargets`; the flat closure has one slot per assembly name and no way to choose a RID at pack time |
+| `declares a native asset at '…', which is NOT the layout the module loader probes` | a native at anything but exactly `runtimes/<rid>/native/<file>` — bytes at a path nothing looks at read as shipped and behave as absent |
+
+**Neither finding is scoped to the RID the bundle actually targets**, and that is the whole reason
+the container lane's refusal is still unarmed (#4445).
+
+### The measurement — scheduled full waves, 2026-09-17
+
+| repo | run | modules with a derived closure | unprobed native | RID-specific managed |
+|---|---|---:|---:|---:|
+| MeshWeaver.Plugins | `35051691749`, job `104654803583` | **38** | 0 | **6** |
+| MeshWeaver.SocialMedia | `35178266255`, job `105065263652` (pin `3.0.0-ci.8767`) | 1 (7 closure lines) | 0 | 0 |
+
+All six are the **same package and the same file** —
+`System.Security.Cryptography.ProtectedData`, at
+`runtimes/win/lib/netstandard2.0/System.Security.Cryptography.ProtectedData.dll` — reached through
+six modules: `MeshWeaver.Blazor`, `MeshWeaver.Azure.Blob`, `MeshWeaver.SelfUpdate.Aks`,
+`MeshWeaver.AI.AzureFoundry`, `MeshWeaver.AI.OpenAI`, `MeshWeaver.Mail.MicrosoftGraph`.
+
+The only RID paths anywhere in that wave's log are those six `runtimes/win/` reports and the
+`runtimes/linux-x64/` assets the bundles **do** carry. So the flagged file is the Windows
+implementation of a package whose cross-platform façade under `lib/netstandard2.0/` is carried
+already, in bundles that only ever load inside a Linux container.
+
+### Why that blocks arming, rather than being six things to fix
+
+Omitting a Windows implementation from a Linux-only bundle is the **correct** outcome, not a drop.
+Arming the refusal against today's rule would red six modules over an asset whose absence is right.
+
+And the remedy #4445 prescribes for a victim — *move the module to `"build": "sdk"` and declare the
+carrier* — cannot lift these: the SDK lane derives the finding from the same unscoped rule, so it
+refuses the same file, and there is no carrier to name because a flat closure has neither a slot for
+a foreign-RID copy nor any need for one.
+
+**So the criterion has to be corrected before it can be met:** a RID-specific asset for a RID the
+bundle does not target is not an uncarried asset, and both lanes should say so — which needs a
+target RID to compare against, a value neither derivation is given today. That is a design change,
+deliberately not smuggled in with a bug fix.
+
 ## What this is not
 
 * **Not an allow-list.** Naming `Microsoft.Agents.AI` somewhere to quiet a gate leaves the bundle

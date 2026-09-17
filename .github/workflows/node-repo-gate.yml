@@ -128,8 +128,8 @@ name: Node repo gate (reusable)
 #     `DOTNET_INSTALL_DIR=/home/runner/.dotnet`. No daemon, no registry credential, no pull.
 #   * **container** — `/opt/platform` is absent (a GitHub-hosted `ubuntu-latest` runner: `/opt` is
 #     EMPTY in ghcr.io/actions/actions-runner and the GitHub image has no such mount). The shard
-#     takes the pre-#4113 path verbatim: login, pull both, `docker cp`, four `docker run`s. A
-#     caller that passes nothing is on `ubuntu-latest` and therefore in this mode, unchanged.
+#     takes the pre-#4113 path verbatim: login, pull both, `docker cp`, four `docker run`s. This
+#     repo's own calls (the org runner variables are invisible to a public repo) are in this mode.
 #
 # 🚨 THERE IS NO FALLBACK BETWEEN THE MODES. Once the mount is present, a set that is missing,
 # half-written or paired with another portal is RED and NAMES `ci-platform-refresh`; it never
@@ -171,7 +171,8 @@ name: Node repo gate (reusable)
 #   * `aks-silos-dind` — still works (it mounts the same volume, so it takes the same volume mode);
 #     its privileged sidecar is simply unused here. It remains the label for the lanes that
 #     genuinely build or push images (`publish-bake`, `compile-check`, module-pack's `prepare`).
-#   * `ubuntu-latest` — the default, GitHub-hosted, container mode, byte-identical to before.
+#   * `ubuntu-latest` — GitHub-hosted, container mode. What the default resolves to wherever the
+#     org variable `MW_RUNNER_DOCKER` is invisible — i.e. on this PUBLIC repo's own runs (below).
 #
 #   The runner container is `ghcr.io/actions/actions-runner:2.337.0`: NON-ROOT (`runner`, uid 1001,
 #   passwordless sudo), no .NET, no Node, NO `gh`, NO `az`. What it has that this job uses: bash,
@@ -186,19 +187,21 @@ name: Node repo gate (reusable)
 #   the runner is non-root and setup-dotnet cannot write /usr/share/dotnet there. EMPTY on
 #   ubuntu-latest, which setup-dotnet reads as unset, so the default path is untouched.
 #
-#   `plan` and `verify` stay on `ubuntu-latest` whatever the input says: seconds of orchestration,
-#   no platform, and `verify` is the required context.
+#   `plan` and `verify` ignore the input: seconds of orchestration, no platform, and `verify` is the
+#   required context. They run on `vars.MW_RUNNER || 'ubuntu-latest'`.
 #
-# A caller opts in PER REPOSITORY behind a repository variable — its OWN, never the module-pack
-# lane's `vars.MW_RUNNER_HEAVY`, so one job family moves at a time and the move is one edit to
-# revert:
+# 💸 WHERE EVERY JOB OF THIS LANE RUNS (2026-09-17, "GitHub Actions cost is zero"): a called
+# workflow's hosted minutes bill the CALLER, and every caller is private — so no job here names a
+# bare `ubuntu-latest`. Each resolves through an org variable of visibility `private`, read from
+# the CALLER's `vars` context: `MW_RUNNER` (aks-silos) for `plan`/`verify`, and `MW_RUNNER_DOCKER`
+# (aks-silos-dind) as the DEFAULT of `runner` for the shards. This public repo cannot see either
+# variable, so its own calls fall back to the free hosted `ubuntu-latest`.
+# `check-reusable-workflow-runners.py` refuses a literal label. A caller may still pass its own:
 #
 #     with:
-#       runner: ${{ vars.MW_RUNNER_GATE || 'ubuntu-latest' }}
+#       runner: ${{ vars.MW_RUNNER_GATE || 'aks-silos-dind' }}
 #
-# Unset, the variable resolves to `ubuntu-latest` and this lane behaves byte-for-byte as before
-# this input existed. Doc: Doc/Architecture/ModuleBuildArchitecture ("The pipeline, end to end",
-# the 2026-09-12 notes).
+# Doc: Doc/Architecture/SelfHostedRunners ("Where jobs run — GitHub Actions cost is zero").
 
 on:
   workflow_call:
@@ -503,11 +506,36 @@ on:
         required: false
         type: boolean
         default: false
+      upload-bake:
+        description: >-
+          Upload this gate's bake as `bake-<sha>-shard-<n>` and, folded, `bake-<sha>`.
+
+          🚨 DEFAULT TRUE, AND THAT DEFAULT IS THE WHOLE POINT. On 2026-09-17 these two uploads were
+          removed outright, on a fleet-wide search that found no consumer — 66.8 GB of live
+          artifacts across six repos, "two copies of identical bytes read by nothing". The search
+          was run against a LOCAL checkout of each satellite, and MeshWeaver.Education's was eight
+          commits stale: its `main` downloads `bake-<sha>` TWICE, in `e2e-install` and
+          in the four-shard `e2e-mesh`, neither with `continue-on-error`, and both feed the blocking
+          `mesh-gate`. Education calls this lane at `@main`, so the removal would have reddened its
+          next run with "artifact not found" — a caller this lane never heard of, broken by a
+          default. Hence: the upload is restored, ON by default, and a caller that has PROVEN it
+          does not read the bake turns it off explicitly.
+
+          The five that provably do not read it — Plugins, Reinsurance, SocialMedia, Manufacturing
+          and Crm, verified against REMOTE default-branch content, not a checkout — pass false and
+          keep the saving (~64.9 GB of the 66.8).
+        required: false
+        type: boolean
+        default: true
       runner:
         description: >-
           The `runs-on` label for the gate SHARDS (`gate`) and nothing else — `plan` and `verify`
-          stay on `ubuntu-latest`. `ubuntu-latest` (the default) is exactly today's behaviour: no
-          platform volume, so the shard pulls both images and runs the tester in a container.
+          run on vars.MW_RUNNER. Omitted, it DEFAULTS to the caller's org variable
+          vars.MW_RUNNER_DOCKER (aks-silos-dind — where every caller ran its shards when this
+          default was set, and the set with the larger memory limit), falling back to
+          `ubuntu-latest` where that variable is invisible: this public repo's own calls, which are
+          free. `ubuntu-latest` has no platform volume, so the shard pulls both images and runs the
+          tester in a container.
 
           `aks-silos` is the Systemorph org's PLAIN self-hosted scale set — no Docker daemon, no
           privileged sidecar — and since MeshWeaver#4113 it is the right label for this lane: its
@@ -522,12 +550,15 @@ on:
           A runner with neither the volume nor a Docker daemon is red naming both. See "Where the
           heavy legs run" in the header.
 
-          Wire it from a repository variable of its own (`vars.MW_RUNNER_GATE`, falling back to
-          `ubuntu-latest` when unset — the header shows the expression) so the move is one edit to
-          revert.
+          A caller that wires it from a variable of its own (vars.MW_RUNNER_GATE) falls back to a
+          self-hosted label, never to `ubuntu-latest`: a called workflow's hosted minutes bill the
+          CALLER (Doc/Architecture/SelfHostedRunners, "Where jobs run").
         required: false
         type: string
-        default: ubuntu-latest
+        # 🚨 An expression in a workflow_call input default may read `github`, `inputs` and `vars`
+        # — and `vars` is the CALLER's. The resolved label is what every `inputs.runner` below sees
+        # (runs-on, DOTNET_INSTALL_DIR, RUNNER_LABEL), so the default needs no second resolution.
+        default: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
     secrets:
       acr-username:
         description: Registry user able to pull the test image.
@@ -570,7 +601,7 @@ jobs:
   # green tick. This job is also the only one that needs the base commits (`fetch-depth: 0`).
   plan:
     name: Plan the gate's shards
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
@@ -591,7 +622,31 @@ jobs:
       - uses: actions/checkout@v7
         with:
           # The affected computation diffs against the PR base — it needs the base commits.
-          fetch-depth: 0
+          fetch-depth: 1
+      # 🚨 `fetch-depth: 0` writes ONE LOG LINE PER REF, and a content repo's refs are mostly TAGS:
+      # MeshWeaver.Plugins has 181 branches + 2,027 module-release tags, so this checkout alone printed
+      # ~2,208 `* [new branch]`/`* [new tag]` lines — measured 28.7% of every line that repo's CI wrote
+      # in a 73-job run. `actions/checkout` cannot be made quiet (`show-progress: false` drops
+      # `--progress`, which is the progress METER, not the ref-update TABLE; only `--quiet` drops that,
+      # and no input passes it). So: shallow checkout, then fetch exactly what `fetch-depth: 0` would
+      # have, quietly.
+      #
+      # 🚨 A NO-OP for every consumer, and that is the whole point — same objects, same branches, same
+      # tags, not shallow — so a tag read, a publication baseline and a merge-base all still resolve.
+      # Dropping `fetch-depth: 0` would NOT be a no-op; a verbosity change must not change a verdict.
+      # The shallow re-check afterwards is not ceremony: a quiet success and a fetch that quietly did
+      # nothing would otherwise read the same, and every selector here narrows silently when it cannot
+      # see history.
+      - name: Full history and tags, quietly
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --quiet --tags --prune --no-recurse-submodules --unshallow origin '+refs/heads/*:refs/remotes/origin/*'
+          else
+            git fetch --quiet --tags --prune --no-recurse-submodules origin '+refs/heads/*:refs/remotes/origin/*'
+          fi
+          [ "$(git rev-parse --is-shallow-repository)" = "false" ] || { echo "::error::the repository is still SHALLOW after the history fetch — every selector that reads a tag, a publication baseline or a merge-base would now narrow silently. Refusing to continue."; exit 1; }
+          echo "full history: $(git rev-list --count HEAD) commit(s), $(git tag | wc -l | tr -d ' ') tag(s)"
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -985,7 +1040,7 @@ jobs:
           # this job moved off `gh` for exactly that reason and this one was left behind, so an
           # unpinned caller on `aks-silos` / `aks-silos-dind` would have died here on a missing
           # binary. Same endpoint, same ref, same token; the raw media type returns the bytes
-          # without the base64 round-trip. (`plan`'s copy keeps `gh api` — it is on ubuntu-latest.)
+          # without the base64 round-trip. (`plan`'s copy keeps `gh api` — both runner kinds it lands on carry `gh`.)
           curl -fsSL --retry 3 --retry-delay 5 -o "$SCRIPT" \
             -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -1113,7 +1168,7 @@ jobs:
               # The pre-#4113 contract, and the daemon is its precondition. A runner that has
               # neither the mount nor a daemon is named for BOTH here, not for one of them later.
               if ! docker info >/dev/null 2>&1; then
-                echo "::error::runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL') has NEITHER the CI platform volume at $PLATFORM_VOLUME NOR a reachable Docker daemon, and a gate shard needs one or the other: the volume (every runner pod of the self-hosted 'aks-silos' / 'aks-silos-dind' scale sets mounts it — Systemorph/Memex deployments/aks/ci-runners/) or a daemon to pull the tester image with. Set the caller's runner variable to 'aks-silos', or unset it (ubuntu-latest, which has Docker)."
+                echo "::error::runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL') has NEITHER the CI platform volume at $PLATFORM_VOLUME NOR a reachable Docker daemon, and a gate shard needs one or the other: the volume (every runner pod of the self-hosted 'aks-silos' / 'aks-silos-dind' scale sets mounts it — Systemorph/Memex deployments/aks/ci-runners/) or a daemon to pull the tester image with. Pass runner 'aks-silos' or 'aks-silos-dind', or omit it (the default resolves through the org variable MW_RUNNER_DOCKER, and to ubuntu-latest — which has Docker — where that variable is invisible)."
                 docker info 2>&1 | tail -5 || true
                 exit 1
               fi
@@ -2171,16 +2226,27 @@ jobs:
       # (exit 139) it actually is.
       #
       # `if: always()` because the only runs with a dump are the ones where the gate FAILED.
-      # The bake this gate produced — publish-bake reuses it on merge (bake-run-id) so the same
-      # source is never compiled twice. Short retention: it is an intermediate, not a publication.
       # 🚨 always(), and RED if the log is missing while the gate ran: a caller's ratchet that finds no
       # artifact must fail on "no log", never pass on "nothing to check" — the same rule the gate
       # itself applies to a truncated log. Named per commit so a merge-group ref cannot pick up a
       # sibling run's log.
-      # 🚨 PER SHARD. Two artifacts of one name cannot coexist in a run, and the CANONICAL names —
-      # `gate-log-<sha>` and `bake-<sha>`, which is what a caller's ratchet and publish-bake know —
-      # are re-emitted by the aggregate job below from the folded evidence. With `shards: 1` there is
-      # exactly one of each here and the fold is a copy, so the contract is identical either way.
+      # 🚨 PER SHARD. Two artifacts of one name cannot coexist in a run, and the CANONICAL name —
+      # `gate-log-<sha>`, which is what a caller's ratchet knows — is re-emitted by the aggregate job
+      # below from the folded evidence. With `shards: 1` there is exactly one here and the fold is a
+      # copy, so the contract is identical either way.
+      #
+      # 🚨 THE BAKE UPLOAD IS OPT-OUT, NOT REMOVED (2026-09-17, twice). It was removed outright that
+      # morning on a fleet-wide search that found no consumer; the search read LOCAL checkouts and
+      # MeshWeaver.Education's was eight commits stale. Its `main` downloads `bake-<sha>` in
+      # `e2e-install` and in the four-shard `e2e-mesh`, neither with `continue-on-error`, both
+      # feeding the blocking `mesh-gate` — and it calls this lane at `@main`. The removal would have
+      # reddened its next run on an artifact that had simply stopped being produced.
+      # So the uploads are back, `upload-bake` defaults TRUE, and the five repos that provably do
+      # not read them (verified against REMOTE default-branch content) pass false. That keeps ~64.9
+      # GB of the 66.8 GB saving and costs Education nothing.
+      # 🚨 AND THE RULE UNDERNEATH: never conclude "nothing reads this" from a working tree.
+      # `git rev-parse HEAD` against `gh api repos/<o>/<r>/commits/main --jq .sha` first, or read
+      # the file through the API. An absent consumer and a stale checkout look identical.
       - name: Upload this shard's gate log (the tester's stdout)
         if: always() && env.GATE_LOG != ''
         uses: actions/upload-artifact@v7
@@ -2189,8 +2255,8 @@ jobs:
           path: ${{ env.GATE_LOG }}
           retention-days: 3
           if-no-files-found: error
-      - name: Upload this shard's bake for publish-bake to reuse
-        if: always() && env.OWN_BAKE != ''
+      - name: Upload this shard's bake
+        if: always() && inputs.upload-bake && env.OWN_BAKE != ''
         uses: actions/upload-artifact@v7
         with:
           name: bake-${{ github.sha }}-shard-${{ matrix.shard }}
@@ -2237,7 +2303,7 @@ jobs:
     # always(): a red or CANCELLED shard must still be folded and NAMED here, never leave this
     # context skipped — a skipped required check reads as satisfied (ReadingCiSignals).
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
     outputs:
       gate-log-artifact: ${{ steps.fold.outputs.artifact }}
@@ -2339,15 +2405,16 @@ jobs:
       # The bake, likewise re-emitted under its canonical name. Every shard bakes the whole mount
       # (`compile` takes no --shard — it is 70 s and its output is what the gate then consumes), so
       # merge-multiple overwrites identical bundles and the union is the complete bake either way.
+      # `bake-<sha>` is what MeshWeaver.Education's `e2e-install` and `e2e-mesh` download.
       - name: Collect every shard's bake
-        if: steps.expect.outputs.fold == 'true' && needs.gate.result == 'success'
+        if: inputs.upload-bake && steps.expect.outputs.fold == 'true' && needs.gate.result == 'success'
         uses: actions/download-artifact@v8
         with:
           pattern: bake-${{ github.sha }}-shard-*
           merge-multiple: true
           path: ${{ runner.temp }}/bake
-      - name: Upload the merged bake for publish-bake to reuse
-        if: steps.expect.outputs.fold == 'true' && needs.gate.result == 'success'
+      - name: Upload the merged bake
+        if: inputs.upload-bake && steps.expect.outputs.fold == 'true' && needs.gate.result == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: bake-${{ github.sha }}

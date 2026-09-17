@@ -62,7 +62,7 @@ concurrency:
 jobs:
   resolve:
     name: Merge main into lock-only-conflicting PRs
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     permissions:
       contents: write

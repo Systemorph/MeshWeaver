@@ -170,10 +170,27 @@ public sealed record WarningBaseline(
     public bool Allows(string scope, string code) =>
         Entries.Any(e => e.Matches(scope, code));
 
-    /// <summary>The entries belonging to one ratchet.</summary>
+    /// <summary>The entries belonging to one ratchet — <see cref="Inert"/> ones excluded.</summary>
     /// <param name="warningClass">Which ratchet.</param>
     public IEnumerable<WarningBaselineEntry> For(WarningClass warningClass) =>
-        Entries.Where(e => e.Class == warningClass);
+        Entries.Where(e => e.Class == warningClass && !CompileWarning.IsNotReported(e.Code));
+
+    /// <summary>
+    /// Baseline entries naming a code the compile no longer REPORTS
+    /// (<see cref="CompileWarning.NotReported"/>) — reported once, tolerated, and never failed in
+    /// either direction.
+    ///
+    /// <para>🚨 This exists so that retiring a code cannot red the fleet. The moment
+    /// <c>CS1701</c> stopped being reported, every one of MeshWeaver.Plugins' 95 <c>CS1701</c>
+    /// entries would have become STALE — a hard bake failure on a file no pull request in flight
+    /// had any reason to touch — and the repo would have been unable to go green until a trim
+    /// landed, on a platform image it does not control the timing of. An entry here is simply
+    /// INERT: not stale (nothing measured it), not known debt (nothing can produce it), just a line
+    /// with nothing left to say. The report names them so they get deleted, rather than sitting
+    /// unread for ever.</para>
+    /// </summary>
+    public IEnumerable<WarningBaselineEntry> Inert =>
+        Entries.Where(e => CompileWarning.IsNotReported(e.Code));
 
     private static string StripComment(string line) =>
         line.IndexOf('#') is var i && i >= 0 ? line[..i] : line;

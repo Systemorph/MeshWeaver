@@ -31,6 +31,22 @@ in the mesh**. So a `Continuous` policy means *one approval per release*, and a 
 `Systemorph/Memex` that moves `pinnedImageTag` is what makes a roll unattended. **A portal that
 cannot patch itself is the correct state, not a degraded one.**
 
+🚨 **A routed Roll carries no `confirmation`, and must not**
+([#4607](https://github.com/Systemorph/MeshWeaver/issues/4607)). The action node a person files must
+repeat the deployment id, because a person aims at a row and can aim at the wrong one. This lane
+never aims — the instance is RESOLVED from the announcement — so the id the router could type is the
+one it just resolved: a check that cannot fail, and indistinguishable from a person's answer to
+every later reader. Measured on the control instance 2026-09-17: **five routed runs on `memex`
+refused in one day** (rolls for 8816, 8820, 8831, 8834 and one activation Restart), each within
+seconds of being filed, for exactly that field — the lane detected, routed, and could never execute,
+with nothing but a terminal state on a node nobody reads to say so. The routed run therefore
+declares its LANE (`origin: "self-update"`), honoured only on a node the framework stamped
+`createdBy: system-security`; the record's `updatePolicy: None` refuses a routed roll outright; and
+the approval is armed **whatever the operator executor**, so a roll onto a tag the record does not
+pin parks at *awaiting approval* rather than running unattended on an installation that gates
+nothing. The rule, the rejected alternative and the instrument limits are in MeshWeaver.Plugins
+`Hosting/AksOperationsViaActions` → *"What a MACHINE puts in `confirmation` — nothing"*.
+
 ## Who applies — three states, one pure rule
 
 `SelfUpdateHandover.ApplyModeFor(chartCanPatch, updaterCanPatch, route)`:
@@ -204,13 +220,18 @@ is handed to https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds; the 
 1. **Core (this change).** The poller hands over; the chart's default renders no Role and
    `SelfUpdate__CanPatch=false`; the Updates tab hands over on the button; the verdicts, the policy
    node's `HandedOver*` fields and the boot line say which of the three states an install is in.
-2. **MeshWeaver.Plugins — the router.** `PlatformBuildInboxWatcher.PlanFor` gains a route for
+2. **MeshWeaver.Plugins — the router. ✅ LANDED** (Plugins#1845, and the routed-action rule in
+   Plugins#2038). `PlatformBuildInboxWatcher.PlanFor` gained a route for
    `self-update-available` → a `Hosting/InstanceAction` `Roll` on `Deployments/<deployment>` with
    `imageTag = newVersion` (refusing a `deployment` that names no record; idempotent on
    `(deployment, newImage)` against open or done actions), and for `self-update-restart-pending` →
-   `Restart`. Today the watcher verifies the event, logs `ignoring non-build event` and deletes it —
-   so **until the router is live on memex.systemorph.com, an instance switched to the control lane
-   detects and announces but nothing rolls**; visible on both ends, never silent. The Hosting
+   `Restart`. Before it, the watcher verified the event, logged `ignoring non-build event` and
+   deleted it — so an instance switched to the control lane detected and announced while nothing
+   rolled. 🚨 **"The router is live" turned out not to be sufficient, and the second failure was NOT
+   visible on both ends:** with the router shipped (Plugins#1845) every routed Roll was refused for
+   the missing `confirmation` (#4607, fixed in Plugins#2038) — an outcome that reads as a validation
+   working as intended and lives only on the action node. So when this lane is reported working, the
+   evidence is a run that reached `AwaitingApproval` or `Done`, never the presence of the route. The Hosting
    package's pre-install of `MeshWeaver.SelfUpdate.Aks` keeps the ACR tag lister (detection on an
    ACR-based instance needs it) and its `KubernetesDeploymentUpdater` becomes inert by the chart's
    declaration; retiring the patcher half is that repo's call.

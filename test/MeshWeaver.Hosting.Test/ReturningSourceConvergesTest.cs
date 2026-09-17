@@ -51,18 +51,18 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
         await Import(space, RevisionB, TestContext.Current.CancellationToken);
         var rollback = await Import(space, RevisionA, TestContext.Current.CancellationToken);
         if (rootOnly)
-            (await RootName(space, TestContext.Current.CancellationToken)).Should().Be("Root revision A");
+            await RootNameBecomes(space, "Root revision A", "", TestContext.Current.CancellationToken);
         else
         {
             rollback.PrunedPaths.Should().Contain($"{space}/Added");
-            (await Body($"{space}/Existing", TestContext.Current.CancellationToken)).Should().Contain("revision A");
+            await BodyBecomes($"{space}/Existing", "revision A", "", TestContext.Current.CancellationToken);
         }
 
         var restored = await Import(space, RevisionB, TestContext.Current.CancellationToken);
         restored.Outcome.Should().Be("Imported",
             "the historical B marker survived the A import, but the current manifest describes A");
         if (rootOnly)
-            (await RootName(space, TestContext.Current.CancellationToken)).Should().Be("Root revision B");
+            await RootNameBecomes(space, "Root revision B", "", TestContext.Current.CancellationToken);
         else
         {
             restored.WrittenPaths.Should().Contain($"{space}/Existing");
@@ -81,12 +81,12 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
         repoClient.ScopedRootChanges = true;
 
         await Import(space, RevisionA, TestContext.Current.CancellationToken);
-        (await RootName(space, TestContext.Current.CancellationToken)).Should().Be("Root revision A",
-            "the scoped import really refreshed the root before the return to B");
+        await RootNameBecomes(space, "Root revision A",
+            "the scoped import really refreshed the root before the return to B", TestContext.Current.CancellationToken);
 
         var restored = await Import(space, RevisionB, TestContext.Current.CancellationToken);
-        (await RootName(space, TestContext.Current.CancellationToken)).Should().Be("Root revision B",
-            "the A import evaluated its root even though Git's index.json path is outside the child scope");
+        await RootNameBecomes(space, "Root revision B",
+            "the A import evaluated its root even though Git's index.json path is outside the child scope", TestContext.Current.CancellationToken);
         restored.Outcome.Should().Be("Imported");
         await AssertUnchangedRepeat(space, TestContext.Current.CancellationToken);
     }
@@ -153,7 +153,8 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
                 Content = new MarkdownContent { Content = "System-written stale revision A" },
             });
         await write.Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
-        (await Body($"{space}/Existing", TestContext.Current.CancellationToken)).Should().Contain("revision A");
+        await BodyBecomes($"{space}/Existing", "revision A",
+            "the system-written drift must be observed before reconciliation is asked to repair it", TestContext.Current.CancellationToken);
 
         var result = await Sync.ReconcileAtCommit(space, RevisionB, UserId)
             .Should().Within(TestTimeouts.Convergence * 2).Emit(cancellationToken: TestContext.Current.CancellationToken);
@@ -265,8 +266,8 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
 
     private async Task AssertRevisionB(string space, CancellationToken cancellationToken)
     {
-        (await Body($"{space}/Existing", cancellationToken)).Should().Contain("revision B");
-        (await Body($"{space}/Added", cancellationToken)).Should().Contain("Only in B");
+        await BodyBecomes($"{space}/Existing", "revision B", "", cancellationToken);
+        await BodyBecomes($"{space}/Added", "Only in B", "", cancellationToken);
     }
 
     private async Task AssertUnchangedRepeat(string space, CancellationToken cancellationToken)
@@ -278,19 +279,37 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
         repeated.PrunedPaths.Should().BeEmpty();
     }
 
+    // Reads a SETTLED value — only where nothing was written that the assertion is waiting on. A
+    // "was PRESERVED" assertion belongs here, never in BodyBecomes: if the node had been wrongly
+    // overwritten, the stream can still replay the stale value first, and a wait for the expected
+    // content would pass on exactly that stale value.
     private async Task<string> Body(string path, CancellationToken cancellationToken)
     {
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path).Where(n => n is not null)
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: cancellationToken);
-        return node.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content ?? "";
+        return ContentOf(node);
     }
 
-    private async Task<string?> RootName(string space, CancellationToken cancellationToken)
-    {
-        var node = await Mesh.GetWorkspace().GetMeshNodeStream(space).Where(n => n is not null)
-            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: cancellationToken);
-        return node.Name;
-    }
+    // 🚨 A read that FOLLOWS a write waits for the WRITTEN state (#4559). GetMeshNodeStream(path)
+    // replays its current value on subscribe, and the write having emitted does not guarantee that a
+    // later subscription's FIRST value is already the new one — so taking the first emission can read
+    // the pre-write node and red a correct implementation. Use only where the stale value cannot
+    // satisfy the wait (see Body). Match reports the last value it saw, so a real failure still names
+    // what the node held.
+    private Task<MeshNode> BodyBecomes(string path, string fragment, string because,
+        CancellationToken cancellationToken)
+        => Mesh.GetWorkspace().GetMeshNodeStream(path).Where(n => n is not null)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(n => ContentOf(n).Contains(fragment, StringComparison.Ordinal), because, cancellationToken);
+
+    private Task<MeshNode> RootNameBecomes(string space, string name, string because,
+        CancellationToken cancellationToken)
+        => Mesh.GetWorkspace().GetMeshNodeStream(space).Where(n => n is not null)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Name == name, because, cancellationToken);
+
+    private string ContentOf(MeshNode node)
+        => node.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content ?? "";
 
     private async Task<GitHubSyncConfig> Config(string space, CancellationToken cancellationToken)
     {

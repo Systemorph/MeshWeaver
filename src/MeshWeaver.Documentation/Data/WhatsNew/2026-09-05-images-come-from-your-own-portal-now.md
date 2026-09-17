@@ -8,6 +8,11 @@ Order: -20260905
 
 # Pulling platform images no longer needs a registry credential of your own
 
+> **Superseded (2026-09-17).** The in-portal image mirror this entry describes was never
+> switched on in any portal, and it has since been removed. The fleet's images are served by
+> `cr.meshweaver.cloud`, a separate registry service — see
+> [The container image mirror settings that did nothing are gone](/Doc/WhatsNew/2026-09-17-the-container-image-mirror-settings-that-did-nothing-are-gone).
+
 Plugins already reach you this way. Your portal holds one credential for the place plugins come
 from, and everything downstream presents a portal token instead — nobody else needs the original.
 

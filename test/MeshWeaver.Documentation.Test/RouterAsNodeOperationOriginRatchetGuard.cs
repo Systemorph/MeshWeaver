@@ -112,7 +112,17 @@ namespace MeshWeaver.Documentation.Test;
 ///     <c>ClickedEvent</c>, <c>UnsubscribeRequest</c> and <c>PatchDataChangeRequest</c>; those have
 ///     no single seam to hop onto, and a marker that fired on the router's own routing duties is
 ///     the one that gets muted — the argument <see cref="RouterTrafficRule"/> itself makes for
-///     keying on the delivery's ends rather than the handling hub.</item>
+///     keying on the delivery's ends rather than the handling hub.
+///     <para>🚨 That gap is now HALF closed, and by a SIBLING rather than by widening this
+///     denominator: <see cref="RouterAsRouterCapableReceiverRatchetGuard"/> keys on the RECEIVER
+///     instead of the message, so once a file has declared a hub reference router-capable by
+///     hopping it once, every OTHER targeted post on that reference is guarded whatever it
+///     carries. It had to be a sibling because the seam is a property of the hub while this
+///     denominator is over messages — which is exactly how #4477 hopped
+///     <c>MeshOperations.RecycleCore</c>'s <c>DisposeRequest</c> and left seven non-lifecycle
+///     exchanges on the identical field posting as <c>mesh/{id}</c>. Both read <c>src/</c> through
+///     the same matcher (<see cref="RouterOriginScan"/>); what stays uncovered is a brand-new
+///     mesh-singleton that has never hopped anything.</para></item>
 /// </list></para>
 ///
 /// <para><b>The tolerances were measured, not guessed.</b> Over <c>src/</c> at the time of writing
@@ -161,41 +171,14 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
     private const string AllowFileName = "RouterNodeOperationOriginSites.allow";
 
     /// <summary>
-    /// The request/response and fire-and-forget entry points, tolerant of an explicit type argument
-    /// and of the line break C# style puts between the receiver and the call.
-    ///
-    /// <para>Group 1 is set only for <c>Post</c>, and group 2 carries the explicit type argument,
-    /// because the two entry points mean OPPOSITE things by it: <c>Post&lt;TMessage&gt;</c> names the
-    /// message — so <c>hub.Post&lt;DisposeRequest&gt;(new() { … })</c> is a lifecycle post whose
-    /// argument mentions no type at all — whereas <c>Observe&lt;TResponse&gt;</c> names the RESPONSE
-    /// (<c>Observe&lt;CreateNodeResponse&gt;(new CreateNodeRequest(…))</c>), and keying on that would
-    /// classify on the wrong half of the exchange.</para>
+    /// 🚨 The call matcher, the seam matcher, the receiver walker and the self-directed test all
+    /// live in <see cref="RouterOriginScan"/> and are SHARED with
+    /// <see cref="RouterAsRouterCapableReceiverRatchetGuard"/>. Two copies would be two sets of
+    /// evasion holes to find; the spellings there were measured on this guard's own review round.
     /// </summary>
-    private static readonly Regex CallMarker =
-        new(@"\.\s*(?:(Post)|Observe)\s*(?:<([^<>()]*)>\s*)?\(", RegexOptions.Compiled);
+    private static readonly Regex CallMarker = RouterOriginScan.CallMarker;
 
-    /// <summary>A call to either seam. Both count: a site that hops for reads is off the router.</summary>
-    private static readonly Regex SeamCall =
-        new(@"(?:NodeOperationIssuingHub|ReadIssuingHub)\s*\(\s*\)", RegexOptions.Compiled);
-
-    /// <summary>A name bound to a seam call — <c>var issuingHub = hub.NodeOperationIssuingHub();</c>
-    /// and the lazily-cached property spelling both land here.</summary>
-    /// <remarks>
-    /// The gap excludes parentheses as well as statement punctuation. Without that, a default
-    /// parameter value binds the alias to the wrong name: <c>Upsert(…, bool allow = false) =&gt;
-    /// AsSystem(hub, () =&gt; hub.NodeOperationIssuingHub()…)</c> reads as "<c>allow</c> is a seam".
-    /// Harmless in today's tree and exactly the sort of accident that blesses a site later.
-    /// </remarks>
-    private static readonly Regex SeamAlias =
-        new(@"\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:=>|\?\?=|=)\s*[^;{}()]*?"
-            + @"(?:NodeOperationIssuingHub|ReadIssuingHub)\s*\(\s*\)", RegexOptions.Compiled);
-
-    private static readonly Regex BareIdentifier =
-        new(@"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
-
-    /// <summary>The <c>o.WithTarget(<i>expr</i>)</c> inside a post's options lambda.</summary>
-    private static readonly Regex TargetOption =
-        new(@"\bWithTarget\s*\(", RegexOptions.Compiled);
+    private static readonly Regex BareIdentifier = RouterOriginScan.BareIdentifier;
 
     /// <summary>The hub's own constructor-time lifecycle registrations.</summary>
     private static readonly Regex HubRegistration =
@@ -625,15 +608,9 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
 
     private static IReadOnlyList<Site> Scan(string root, LifecycleVerbs verbs) =>
         SourceScan.SourceFiles(root, ScannedRoots)
-            .SelectMany(f => SitesIn(SourceScan.Relative(root, f), ReadOrEmpty(f), verbs))
+            .SelectMany(f => SitesIn(
+                SourceScan.Relative(root, f), RouterOriginScan.ReadOrEmpty(f), verbs))
             .ToList();
-
-    private static string ReadOrEmpty(string path)
-    {
-        // A file a concurrent build is writing is not evidence.
-        try { return File.ReadAllText(path); }
-        catch (IOException) { return string.Empty; }
-    }
 
     /// <summary>
     /// Every <c>.Observe</c>/<c>.Post</c> call in <paramref name="text"/> whose first argument is a
@@ -660,9 +637,7 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
             if (!requestLocals.TryGetValue(m.Groups[1].Value, out var already) || m.Index < already.At)
                 requestLocals[m.Groups[1].Value] = (m.Index, m.Groups[2].Value);
 
-        var seamAliases = SeamAlias.Matches(code)
-            .Select(m => m.Groups[1].Value)
-            .ToHashSet(StringComparer.Ordinal);
+        var seamAliases = RouterOriginScan.SeamAliasesIn(code);
 
         var sites = new List<Site>();
         foreach (Match call in CallMarker.Matches(code))
@@ -696,131 +671,14 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
                 verb = bound.Verb;
             }
 
-            var receiver = Receiver(code, call.Index);
-            var offRouter = SeamCall.IsMatch(receiver) || IsSeamAlias(receiver, seamAliases);
+            var receiver = RouterOriginScan.Receiver(code, call.Index);
+            var offRouter = RouterOriginScan.IsOffRouter(receiver, seamAliases);
             sites.Add(new Site(
-                file, LineOf(code, call.Index), offRouter, receiver, verb,
-                IsSelfDirected(code, openParen, receiver)));
+                file, RouterOriginScan.LineOf(code, call.Index), offRouter, receiver, verb,
+                RouterOriginScan.IsSelfDirected(code, openParen, receiver)));
         }
 
         return sites;
     }
 
-    /// <summary>
-    /// Whether the post names no target at all, or names only the RECEIVER's own address — the two
-    /// spellings of "this hub is telling itself", where the issuing seam has nothing to move and
-    /// adopting it would change which hub the message reaches.
-    /// </summary>
-    private static bool IsSelfDirected(string code, int openParen, string receiver)
-    {
-        var arguments = ArgumentList(code, openParen);
-        var targets = TargetOption.Matches(arguments)
-            .Select(m => Collapse(SourceScan.FirstArgument(arguments, m.Index + m.Length - 1)))
-            .ToList();
-        return targets.Count == 0
-               || targets.All(t => string.Equals(t, Collapse(receiver) + ".Address", StringComparison.Ordinal));
-    }
-
-    /// <summary>The whole argument list of the call whose open paren is at <paramref name="openParen"/>.</summary>
-    private static string ArgumentList(string code, int openParen)
-    {
-        var depth = 0;
-        for (var i = openParen; i < code.Length; i++)
-        {
-            if (code[i] is '(' or '[' or '{') depth++;
-            else if (code[i] is ')' or ']' or '}' && --depth == 0) return code[(openParen + 1)..i];
-        }
-
-        return code[(openParen + 1)..];
-    }
-
-    private static string Collapse(string expression) =>
-        string.Concat(expression.Where(c => !char.IsWhiteSpace(c)));
-
-    private static int LineOf(string code, int index) =>
-        code.AsSpan(0, index).Count('\n') + 1;
-
-    /// <summary>
-    /// The primary expression immediately left of the <c>.</c> at <paramref name="dot"/> — an
-    /// identifier, or a dotted chain whose links may carry argument lists
-    /// (<c>hub.NodeOperationIssuingHub()</c>). Whitespace is collapsed so a receiver wrapped across
-    /// lines compares equal to one that is not.
-    ///
-    /// <para>Walking the expression rather than taking the preceding text is what keeps the verdict
-    /// honest: a window back to the previous <c>;</c> picks up the tail of whatever lambda came
-    /// before, which on the copy helper's ternary read as a receiver of
-    /// <c>"…NodeCopyDisposition.Updated); }) : hub"</c>.</para>
-    /// </summary>
-    private static string Receiver(string code, int dot)
-    {
-        var i = dot;
-        while (true)
-        {
-            i = SkipWhitespaceBack(code, i);
-            if (i > 0 && code[i - 1] is ')' or ']')
-            {
-                i = SkipGroupBack(code, i);
-                i = SkipWhitespaceBack(code, i);
-            }
-
-            if (i > 0 && IsIdentifierChar(code[i - 1]))
-            {
-                while (i > 0 && IsIdentifierChar(code[i - 1])) i--;
-            }
-            else
-            {
-                break;
-            }
-
-            var beforeName = SkipWhitespaceBack(code, i);
-            // A single '.' continues the chain; '..' is a range and is not part of one.
-            if (beforeName > 0 && code[beforeName - 1] == '.'
-                               && !(beforeName > 1 && code[beforeName - 2] == '.'))
-            {
-                i = beforeName - 1;
-                continue;
-            }
-
-            break;
-        }
-
-        return string.Join(' ', code[i..dot].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-    }
-
-    /// <summary>
-    /// Whether <paramref name="receiver"/> names a hub bound to a seam call — the bare identifier
-    /// (<c>issuingHub</c>) or the last link of a qualified one (<c>this.issuingHub</c>). Qualified
-    /// links carrying an argument list are left to <see cref="SeamCall"/>.
-    /// </summary>
-    private static bool IsSeamAlias(string receiver, IReadOnlySet<string> aliases)
-    {
-        if (aliases.Contains(receiver)) return true;
-        var lastDot = receiver.LastIndexOf('.');
-        if (lastDot < 0) return false;
-        var tail = receiver[(lastDot + 1)..];
-        return !tail.Contains('(') && aliases.Contains(tail);
-    }
-
-    private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '_';
-
-    private static int SkipWhitespaceBack(string code, int i)
-    {
-        while (i > 0 && char.IsWhiteSpace(code[i - 1])) i--;
-        return i;
-    }
-
-    /// <summary>Index of the opener matching the closer at <c>code[i - 1]</c>.</summary>
-    private static int SkipGroupBack(string code, int i)
-    {
-        var close = code[i - 1];
-        var open = close == ')' ? '(' : '[';
-        var depth = 0;
-        for (var j = i; j > 0; j--)
-        {
-            if (code[j - 1] == close) depth++;
-            else if (code[j - 1] == open && --depth == 0) return j - 1;
-        }
-
-        return 0;
-    }
 }

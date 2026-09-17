@@ -325,9 +325,10 @@ on:
           into its OWN directory named by the publisher's run-unique token, sealed there, and a
           one-line `_current` pointer — written after the seal — says which one applies. Two
           publishers never write the same bytes, so a mix becomes unrepresentable rather than
-          merely detectable. The flat copy is still written for readers that predate pointer
-          resolution, and THAT copy still races: this layout closes the window for
-          pointer-following readers only.
+          merely detectable. Since MeshWeaver#3461 phase 5 the flat copy at the prefix is DISPOSED
+          OF once the pointer has moved and been read back — its `_complete` first, then the files
+          the publisher positively identifies — so nothing is written at the prefix in place any
+          more and the window is closed for every reader, not only pointer-following ones.
 
           `flat` (the historical layout): that directory IS the publication, replaced IN PLACE —
           unseal, upload over the live files, re-seal. Two publishers interleaved on one prefix can
@@ -361,9 +362,9 @@ on:
           which is the reason the default moved rather than five one-line PRs being opened.
 
           🚨 A flat caller on a migrated prefix NEVER takes the prefix back. Retiring or
-          re-pointing would move consumers backwards: the pointer is moved BEFORE the flat
-          compatibility copy is refreshed, so a run seeing an older flat copy could skip and
-          expose bytes older than the generation it displaced.
+          re-pointing would move consumers backwards: a run seeing an older flat copy — or, since
+          phase 5, none at all — could skip and expose bytes older than the generation it
+          displaced, or nothing.
 
           Retention is implemented (MeshWeaver#3959) and registered in the portal hosts, so
           generations under a retained identity are collected once nothing names them and they are
@@ -552,7 +553,7 @@ on:
 jobs:
   publish-bake:
     name: Bake + publish NodeType assemblies to portal storage
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
     # 🚨 A LITERAL, never an input: the fleet cap is 45 minutes for every job (check-workflow-timeouts.py
     # refuses an expression here because a caller-supplied bound cannot be proven by reading the file).
     # Measured 2026-09-02 the bake runs ~20 min; past 45 it is stuck, not slow.
@@ -1780,6 +1781,27 @@ jobs:
           "$BAKE_CARRY_TARGET"
           "${{ steps.identity.outputs.identity }}"
           "${{ inputs.bake-source }}"
+      # 🚨 A PYTHON WITH `venv` + `pip`, because publish-bake-bundles.sh builds its own venv and
+      # installs its PINNED Azure SDKs into it (the script owns that install on purpose — see its
+      # header: a workflow-side install would leave a satellite whose ref is newer than its pin
+      # running a script whose dependency nobody installed). The self-hosted ARC image ships
+      # python3 3.12 WITHOUT ensurepip/venv, so from the moment every private repo's jobs moved to
+      # `aks-silos*` (2026-09-17) this step died with "The virtual environment was not created
+      # successfully because ensurepip is not available … apt install python3.12-venv" and NO
+      # satellite could publish: MeshWeaver.Crm run 35199593887 and MeshWeaver.Manufacturing run
+      # 35205340142 both failed here while every other job in the run was green. `setup-python`
+      # brings its own interpreter WITH pip on any runner — hosted or ours — so the script's venv
+      # works everywhere; on a hosted runner the tool cache already carries it, so it costs nothing
+      # there. Not `sudo apt-get install python3-venv`: that needs root and the archive, and would
+      # silently be the only thing standing between the fleet and a failed publication.
+      # Delete this step when the runner image bakes python3-venv (Systemorph/Memex
+      # deployments/aks/ci-runners/runner-image/Dockerfile) — the script asserts its own pins
+      # afterwards (`sdk-check`), so a wrong interpreter is RED here, never a later "unreadable".
+      - name: Python with venv + pip for the publish script
+        if: steps.scope.outputs.scope != 'none'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
       - name: Publish bundles to every portal target
         id: publish
         if: steps.scope.outputs.scope != 'none'
@@ -1926,7 +1948,7 @@ jobs:
     name: Register the publication with memex
     needs: publish-bake
     if: needs.publish-bake.result == 'success' && needs.publish-bake.outputs.published == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read

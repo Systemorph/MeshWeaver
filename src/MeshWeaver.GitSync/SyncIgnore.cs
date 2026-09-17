@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -33,9 +34,29 @@ public sealed class SyncIgnore
 
     private readonly List<(Regex Pattern, bool Negated)> _rules;
 
+    /// <summary>
+    /// 🚨 Node paths this import must neither write nor prune for a reason that is NOT a pattern —
+    /// the NodeTypes whose sources are held because no bundle for this instance's framework identity
+    /// carries the fingerprint they would produce (MeshWeaver#3845 hole 4,
+    /// <see cref="BundleKeyedHold"/>). Exact Space-relative paths and their subtrees.
+    ///
+    /// <para>They ride HERE rather than as patterns because a node id is not a glob: a path carrying
+    /// <c>*</c>, <c>?</c> or <c>[</c> would be compiled into a matcher that holds more than the one
+    /// type, and a hold that is wider than its reason is drift of its own. Kept as a set, matched by
+    /// equality and prefix, so what is held is exactly what the decision named.</para>
+    /// </summary>
+    private readonly ImmutableHashSet<string> _heldPaths;
+
     /// <summary>Builds the matcher from gitignore-style patterns; null → <see cref="Default"/>.</summary>
     public SyncIgnore(IEnumerable<string>? patterns)
-        => _rules = (patterns ?? Default)
+        : this(patterns, ImmutableHashSet<string>.Empty)
+    {
+    }
+
+    private SyncIgnore(IEnumerable<string>? patterns, ImmutableHashSet<string> heldPaths)
+    {
+        _heldPaths = heldPaths;
+        _rules = (patterns ?? Default)
             .Select(p => p.Trim())
             .Where(p => p.Length > 0 && !p.StartsWith('#'))
             .Select(p =>
@@ -44,24 +65,69 @@ public sealed class SyncIgnore
                 return (ToRegex(negated ? p[1..] : p), negated);
             })
             .ToList();
+        _patterns = patterns is null ? null : [.. patterns];
+    }
+
+    /// <summary>The patterns this matcher was built from, so a derived matcher keeps them exactly
+    /// (null = <see cref="Default"/>, which is NOT the same as an explicit empty list).</summary>
+    private readonly ImmutableArray<string>? _patterns;
 
     /// <summary>The matcher for a Space's sync config — unset config/patterns → <see cref="Default"/>.</summary>
     public static SyncIgnore For(GitHubSyncConfig? config) => new(config?.Ignore);
 
     /// <summary>
+    /// The same rules PLUS the held node paths of <paramref name="heldPaths"/> — the import's
+    /// bundle-keyed hold (MeshWeaver#3845 hole 4). The Space's own configured patterns are carried
+    /// over verbatim, so an unset list still means <see cref="Default"/> and an explicit empty one
+    /// still syncs everything; the held set is additive and cannot be negated by a <c>!</c> rule.
+    /// </summary>
+    /// <param name="heldPaths">Space-relative node paths to hold, or empty for this instance.</param>
+    /// <returns>This instance when nothing is held, otherwise a new matcher.</returns>
+    public SyncIgnore WithHeldPaths(IEnumerable<string>? heldPaths)
+    {
+        var held = heldPaths is null
+            ? ImmutableHashSet<string>.Empty
+            : heldPaths.Where(p => !string.IsNullOrWhiteSpace(p))
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        return held.IsEmpty && _heldPaths.IsEmpty
+            ? this
+            : new SyncIgnore(_patterns, _heldPaths.Union(held));
+    }
+
+    /// <summary>
     /// True when <paramref name="relativePath"/> ('/'-separated, relative to the Space root /
     /// mirrored subdirectory, no leading slash) is ignored. Last matching rule wins; no matching
     /// rule → not ignored. The empty path (the Space root itself) is never ignored.
+    ///
+    /// <para>🚨 A HELD path (<see cref="WithHeldPaths"/>) is ignored whatever the rules say,
+    /// including a <c>!</c> re-include: a hold exists because this instance has no bytes for that
+    /// type's sources, which no configured pattern is expressing an opinion about.</para>
     /// </summary>
     public bool IsIgnored(string relativePath)
     {
         if (string.IsNullOrEmpty(relativePath))
             return false;
+        if (!_heldPaths.IsEmpty && IsHeld(relativePath))
+            return true;
         var ignored = false;
         foreach (var (pattern, negated) in _rules)
             if (pattern.IsMatch(relativePath))
                 ignored = !negated;
         return ignored;
+    }
+
+    /// <summary>A held path itself, or anything beneath one — node paths do not distinguish files
+    /// from directories, so a hold covers its subtree exactly as a pattern match does.</summary>
+    private bool IsHeld(string relativePath)
+    {
+        if (_heldPaths.Contains(relativePath))
+            return true;
+        foreach (var held in _heldPaths)
+            if (relativePath.Length > held.Length + 1
+                && relativePath[held.Length] == '/'
+                && relativePath.StartsWith(held, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
     }
 
     // Translates one gitignore-style glob into an anchored regex over relative paths.

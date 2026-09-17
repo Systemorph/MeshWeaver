@@ -629,6 +629,44 @@ public class PrebuiltBundleRetentionTest : IDisposable
             reason.Should().Contain("licenses no deletion"));
     }
 
+    /// <summary>
+    /// 🚨 …and the IDENTITY that holds them is kept too, which phase 5 made load-bearing (#3461).
+    /// The identity rules reach a source through "the newest SEALED publication of this source",
+    /// and once the flat compatibility copy is disposed of, a source whose pointer cannot be
+    /// followed reads as UNSEALED — so that rule would stop protecting this identity on a reading
+    /// that established nothing, and the whole directory (generations included) would be
+    /// collected on age. Unreadable is never unreferenced, at both levels.
+    /// </summary>
+    [Fact]
+    public void APointerThatCannotBeFollowed_KeepsTheWholeIdentity()
+    {
+        Generation("s-old", "plugins", "gen-a", DaysAgo(400));
+        Pointer("s-old", "plugins", "gen-gone", DaysAgo(400));
+
+        var plan = PlanNow();
+
+        Ids(plan).Should().BeEmpty(
+            "an identity whose live publication cannot be established is not shown to be "
+            + "unreferenced — and nothing else keeps this one: it is 400 days old, on no release "
+            + "marker, not pinned, not stamped, and not the identity this process runs");
+        plan.Protected["s-old"].Should().Contain("licenses no deletion");
+    }
+
+    /// <summary>
+    /// The control: the SAME 400-day-old identity, its pointer RESOLVING, is collected. Without it
+    /// the case above could pass because nothing is ever collectable in this fixture.
+    /// </summary>
+    [Fact]
+    public void TheSameIdentity_WithAPointerThatResolves_IsCollected()
+    {
+        Generation("s-old", "plugins", "gen-a", DaysAgo(400));
+        Pointer("s-old", "plugins", "gen-a", DaysAgo(400));
+
+        var plan = PlanNow();
+
+        Ids(plan).Should().Equal("s-old");
+    }
+
     /// <summary>An EMPTY pointer is a pointer being replaced right now — the same fail-closed answer.</summary>
     [Fact]
     public void AnEmptyPointer_ProtectsEveryGenerationOfItsSource()

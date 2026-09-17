@@ -18,7 +18,23 @@ public record CreatableTypeInfo(
     string? Description = null,
     int Order = 0,
     Type? ContentType = null,
-    string? SubNamespace = null);
+    string? SubNamespace = null)
+{
+    /// <summary>
+    /// Whether the type's definition declares <c>ownsPartition</c> — an instance of it is a partition
+    /// root, so its path is just its id and the create form must place it at the top level.
+    ///
+    /// <para>Carried here because the provider already materialises each offered type's definition
+    /// to build this record, so the form learns it at no extra read — including for a type declared
+    /// in mesh content, which the static registry cannot see (#4449). 🚨 A UI convenience only: the
+    /// boundary refusal of a nested instance is <c>OwnsPartitionProvisioningValidator</c>, which a
+    /// caller posting a create directly meets whatever this says.</para>
+    ///
+    /// <para>An <c>init</c> property rather than a positional parameter, so the record's primary
+    /// constructor — and every caller binding it — is unchanged.</para>
+    /// </summary>
+    public bool OwnsPartition { get; init; }
+}
 
 /// <summary>
 /// Snapshot of creatable types emitted by the observable.

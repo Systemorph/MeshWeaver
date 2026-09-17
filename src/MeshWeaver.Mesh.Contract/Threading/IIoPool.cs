@@ -132,6 +132,13 @@ public interface IIoPool
     /// <para>Defaulted to <see cref="IoPoolWaitStats.Empty"/> so an implementation that does not
     /// instrument is not obliged to — an empty reading is honest ("this pool reports nothing"),
     /// and the caller can tell it from a busy pool by <see cref="IoPoolWaitStats.Samples"/>.</para>
+    ///
+    /// <para>🚨 <b>Read a pool through <see cref="IoPoolRegistry.Snapshot"/>, never by resolving it
+    /// by name.</b> <see cref="IoPoolRegistry.Get"/> is a RESOLVER: handed a name no pool carries it
+    /// MINTS one, which then honestly reports nothing — so a readout built on it answers a typo or
+    /// an unwired backend with a clean, empty distribution that cannot be told from a real idle
+    /// pool. <see cref="IoPoolQueueReport"/> is the formatter that keeps those two apart, and a
+    /// third state ("no registry — nothing was asked") with them.</para>
     /// </summary>
     IoPoolWaitStats QueueWait => IoPoolWaitStats.Empty;
 
@@ -140,9 +147,15 @@ public interface IIoPool
     /// gauge to <see cref="QueueWait"/>'s history, and the other half of the picture
     /// <see cref="CurrentInFlight"/> starts: running, waiting, and what the waiting has cost.
     ///
-    /// <para>Counted from the moment a leaf arrives at the gate (or, for blocking work, is handed
-    /// to the scheduler) until it is granted or cancelled — so a depth that stays high while
-    /// <see cref="CurrentInFlight"/> sits at the cap is a pool whose cap is the constraint.</para>
+    /// <para>🚨 Counted from the moment the pool ACCEPTS the work — the caller's <c>Subscribe()</c>,
+    /// where the admission region is taken — until it is granted a slot or cancelled. Not from the
+    /// gate: three of the four entry points reach the gate one ThreadPool hop later, and a leaf in
+    /// that interval used to count in neither this gauge nor <see cref="QueueWait"/> while
+    /// <c>Drain()</c> was already waiting for it. The readout that decides a cap is built from these
+    /// two numbers (MeshWeaver#1198), so "waiting" means the same thing on every entry point:
+    /// accepted, and not yet running. A depth that stays high while <see cref="CurrentInFlight"/>
+    /// sits at the cap is a pool whose cap is the constraint; a depth that stays high while it does
+    /// NOT is work that has not reached the gate — a thread shortage, not a slot shortage.</para>
     ///
     /// <para>Defaulted to 0 so an implementation that does not instrument is not obliged to.</para>
     /// </summary>

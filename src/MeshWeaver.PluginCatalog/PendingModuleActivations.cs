@@ -125,6 +125,43 @@ public sealed record ModuleActivationReport(
     /// <summary>Whether any module's package is refused by the instance's plan.</summary>
     public bool HasTierRefused => !IsUndetermined && !TierRefused.IsEmpty;
 
+    /// <summary>
+    /// 🚨 The landed generations this boot DECLINED in favour of the image's own copy (#4161,
+    /// reported as its own state by MeshWeaver#4550) — a SEVENTH state, and the one that was
+    /// wearing <see cref="Pending"/>'s clothes.
+    ///
+    /// <para>A declined entry is enabled, its landed DLL is on the volume, and the process is
+    /// running a DIFFERENT copy of that module — which is exactly the shape
+    /// <c>ModuleActivationStatus.NotYetLoaded</c> reads as "landed but not yet loaded", so
+    /// every surface promised that a restart would activate it. It cannot: the next boot re-runs
+    /// the same comparison on the same bytes and declines again. Measured on memex.systemorph.com
+    /// 2026-09-16 — eight modules named on <c>/health</c> as pending, a restart at 21:17Z, and all
+    /// eight still named at 21:33Z on the new pods. Two operators restarted the deployment for
+    /// nothing.</para>
+    ///
+    /// <para>Nothing is missing here: the module RUNS, from the copy the image ships, which is the
+    /// copy that is correct for this platform by construction. What the row carries is the fact
+    /// that the LANDED generation is not the one in effect, and the only thing that changes it —
+    /// a build of this module that states an identity this platform also states. Init-only, for
+    /// the same binary-compatibility reason as the rows above.</para>
+    /// </summary>
+    public ImmutableList<ModuleDecline> Declined { get; init; } = [];
+
+    /// <summary>True when the state is KNOWN and a landed generation was declined in favour of the
+    /// image's copy.</summary>
+    public bool HasDeclined => !IsUndetermined && !Declined.IsEmpty;
+
+    /// <summary>
+    /// The decline row for the module the install record at <paramref name="packagePath"/> landed,
+    /// or null when its landed generation is the one in effect (or the state is undetermined).
+    /// Blank matches nothing — never a wildcard.
+    /// </summary>
+    public ModuleDecline? DeclineForPackage(string? packagePath) =>
+        IsUndetermined || string.IsNullOrWhiteSpace(packagePath)
+            ? null
+            : Declined.FirstOrDefault(d => string.Equals(
+                d.PackagePath?.Trim('/'), packagePath.Trim('/'), StringComparison.OrdinalIgnoreCase));
+
     /// <summary>The refusal row for the module the install record at <paramref name="packagePath"/>
     /// asked to land, or null.</summary>
     public ModuleRefusal? RefusalForPackage(string? packagePath) =>
@@ -217,6 +254,7 @@ public sealed record ModuleActivationReport(
                     + (HasPending ? "; " + ModuleActivationStatus.Describe(Pending) : string.Empty)
                 : ModuleActivationStatus.Describe(Pending))
               + (HasDeferred ? "; " + DescribeDeferred(Deferred) : string.Empty)
+              + (HasDeclined ? "; " + DescribeDeclined(Declined) : string.Empty)
               + (HasQuarantined ? "; " + DescribeQuarantined(Quarantined) : string.Empty)
               + (HasFallbacks ? "; " + DescribeFallbacks(Fallbacks) : string.Empty)
               + (HasFloorAdvisories ? "; " + DescribeFloorAdvisories(FloorAdvisories) : string.Empty)
@@ -247,6 +285,39 @@ public sealed record ModuleActivationReport(
         return $"{rows.Length} module(s) run a PREVIOUS generation or the image-shipped baseline "
             + "because the one the mesh's set activates does not load on this platform — present "
             + "and working, behind the set; no restart changes that, a build that loads here does: "
+            + string.Join("; ", rows.Take(Math.Max(1, maxNamed)))
+            + (rows.Length > maxNamed ? $"; …(+{rows.Length - maxNamed})" : string.Empty);
+    }
+
+    /// <summary>
+    /// 🚨 The sentence for a landed generation the boot DECLINED in favour of the image's own copy
+    /// — the one that replaces "a restart activates them" for these modules, because a restart
+    /// measures the same bytes and declines again (MeshWeaver#4550).
+    ///
+    /// <para>It names the remedy that actually clears the state and NOTHING an operator could do
+    /// on this pod, deliberately: re-installing lands the same bytes and re-declines, and a
+    /// restart re-runs the same comparison. What clears it is a published build of the module
+    /// stating an identity this platform also states.</para>
+    /// </summary>
+    /// <param name="declined">The declined rows.</param>
+    /// <param name="maxNamed">How many are named before the line truncates.</param>
+    public static string DescribeDeclined(
+        IReadOnlyCollection<ModuleDecline> declined, int maxNamed = 10)
+    {
+        ArgumentNullException.ThrowIfNull(declined);
+        if (declined.Count == 0)
+            return "no landed module was declined in favour of the image's copy";
+        var rows = declined
+            .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(d => $"{d.Name}{(string.IsNullOrWhiteSpace(d.Version) ? "" : $" v{d.Version}")} "
+                + $"({d.Generation}): {d.Reason}")
+            .ToArray();
+        return $"{rows.Length} landed module generation(s) are DECLINED in favour of the copy this "
+            + "image ships — the module RUNS, from the image's own copy, and the landed generation "
+            + "is not in effect. 🚨 A RESTART DOES NOT CHANGE THIS and neither does re-installing: "
+            + "both measure the same bytes and reach the same verdict. It clears when the module is "
+            + "published built against this platform build, which the platform's own build states "
+            + "for every module it packs: "
             + string.Join("; ", rows.Take(Math.Max(1, maxNamed)))
             + (rows.Length > maxNamed ? $"; …(+{rows.Length - maxNamed})" : string.Empty);
     }
@@ -354,6 +425,26 @@ public sealed record ModuleActivationReport(
     }
 }
 
+/// <summary>
+/// One landed generation DECLINED in favour of the image's own copy of the same module (#4161 /
+/// MeshWeaver#4550) — what landed, what runs instead, and why, so no surface has to say "restart"
+/// about a state no restart reaches.
+/// </summary>
+/// <param name="Name">The module's assembly simple name.</param>
+/// <param name="PackagePath">The mesh path of the install record that landed it, when recorded.</param>
+/// <param name="Version">The landed package version, when recorded.</param>
+/// <param name="Generation">The landed generation directory leaf that is NOT in effect.</param>
+/// <param name="StatedIdentity">The framework identity the landed bundle states.</param>
+/// <param name="Reason">The comparison, in words
+/// (<see cref="ModuleIdentityMatch.Describe(string)"/>).</param>
+public sealed record ModuleDecline(
+    string Name,
+    string? PackagePath,
+    string? Version,
+    string Generation,
+    string? StatedIdentity,
+    string Reason);
+
 /// <summary>One module whose last landing was refused here (#4083) — the row the package card
 /// and <c>/health</c> render from the refusal marker.</summary>
 /// <param name="Name">The module's assembly simple name.</param>
@@ -453,6 +544,65 @@ public sealed class PendingModuleActivations(string moduleRoot)
     public IReadOnlyCollection<Mesh.FallbackModule> FallbackModules { get; init; } = [];
 
     /// <summary>
+    /// 🚨 The module names the IMAGE ships its own copy of — the <c>Modules:Assemblies</c> baseline,
+    /// which production supplies from the same configuration key the boot loader reads
+    /// (<c>MeshBuilderModuleActivation.BaselineModuleNames</c>).
+    ///
+    /// <para>Without it this reader cannot tell the boot's #4161 DECLINE from an ordinary pending
+    /// update, because the two look identical from the volume: an enabled entry whose landed DLL
+    /// exists, and a process running another generation. That is why eight declined modules on
+    /// memex.systemorph.com were reported as "landed but not yet loaded — a restart activates
+    /// them" across two restarts that could never clear them. The names are the SAME input the
+    /// decline itself is decided on, not a second opinion about it. Init-only, for the same
+    /// binary-compatibility reason as the sets above.</para>
+    /// </summary>
+    public IReadOnlySet<string> ImageShippedModules { get; init; } =
+        ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Every identity this platform states about itself — the surface identity it compiles content
+    /// against and the producer reading a module packer takes off its anchor. Production supplies
+    /// both (see <c>PluginCatalogConfigurationExtensions</c>); a test states what its scenario
+    /// needs. Empty states nothing and classifies nothing as declined, exactly as the boot rule
+    /// decides nothing without a reading.
+    /// </summary>
+    public IReadOnlyCollection<string> PlatformIdentities { get; init; } = [];
+
+    /// <summary>
+    /// 🚨 <b>The disk-derived inputs a REQUIRED-modules probe hands
+    /// <c>RequiredModuleStatus.Classify</c> — read ONCE per CHANGE of the on-disk activation state,
+    /// never once per probe</b> (MeshWeaver#4608, the sibling of #3664).
+    ///
+    /// <para>#3664 found <see cref="Read()"/> walking the module volume on every startup and
+    /// readiness probe and memoised it behind <see cref="DiskFingerprint"/>. The REQUIRED-modules
+    /// probe asks the volume the same three questions — the activation sidecar, one existence
+    /// probe per landed DLL, and one per declared entry — and it was left doing all of them per
+    /// call, against the same share, for the same reason. Measured on memex.systemorph.com
+    /// 2026-09-17, on all three replicas: <b>6.5–10.1 s per probe</b>, against a
+    /// <c>startupProbe</c> that waits 5 s. No replica rolled onto the candidate image could ever
+    /// record a startup success; each was killed at its three-hour budget and started over.</para>
+    ///
+    /// <para>This hands out the SAME snapshot <see cref="Read()"/> uses rather than a second one:
+    /// a probe that memoised its own copy would be free to disagree with this one about the same
+    /// volume, which is the shape every defect in this file has in common. The cheap half — which
+    /// assemblies THIS process has loaded — stays the caller's to read fresh per call.</para>
+    /// </summary>
+    /// <returns>The inputs, valid until the next change of the on-disk activation state.</returns>
+    public ModuleProbeInputs ReadProbeInputs()
+    {
+        var disk = ReadDisk();
+        return new ModuleProbeInputs(
+            disk.Activation,
+            disk.OpenFailure is { } failure
+                ? disk.Corruptions.Add(
+                    $"the activation sidecar under '{ModuleRootPath}' could not be opened "
+                    + $"({failure.GetType().Name}: {failure.Message})")
+                : disk.Corruptions,
+            disk.ModuleFileResolves,
+            disk.LandedDllExists);
+    }
+
+    /// <summary>
     /// The current report. Recomputed per call — the state changes underneath a running process
     /// (that is the whole point), so a cached answer would be wrong exactly when it matters.
     /// </summary>
@@ -496,7 +646,9 @@ public sealed class PendingModuleActivations(string moduleRoot)
         Exception? OpenFailure,
         ModuleSetIndex Sets,
         ImmutableList<string> SetNotes,
-        Func<ModuleActivationEntry, bool> LandedDllExists);
+        Func<ModuleActivationEntry, bool> LandedDllExists,
+        ImmutableList<string> Corruptions,
+        Func<string, bool> ModuleFileResolves);
 
     /// <summary>
     /// The last-write times of the three directories every activation writer renames into. PURE
@@ -523,6 +675,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
 
         Interlocked.Increment(ref diskReads);
         string? corrupt = null;
+        var corruptions = ImmutableList.CreateBuilder<string>();
         ModuleActivationList? activation = null;
         Exception? openFailure = null;
         try
@@ -531,7 +684,16 @@ public sealed class PendingModuleActivations(string moduleRoot)
             // swallows an unparseable file into the EMPTY list, so a surface that ignores the
             // callback reports a corrupt sidecar as "nothing pending" — cheerfully, forever. That
             // is the shape this whole cluster of defects has in common.
-            activation = ModuleActivationSidecar.Read(ModuleRootPath, reason => corrupt = reason);
+            //
+            // EVERY reason is kept, and `corrupt` still holds the LAST one so this type's own
+            // report is byte-identical to what it said before: the required-modules probe names
+            // each unreadable file separately (its `unreadable` list), and folding them to one
+            // would lose a file name an operator needs.
+            activation = ModuleActivationSidecar.Read(ModuleRootPath, reason =>
+            {
+                corrupt = reason;
+                corruptions.Add(reason);
+            });
         }
         catch (Exception exception)
         {
@@ -544,13 +706,41 @@ public sealed class PendingModuleActivations(string moduleRoot)
         // One existence probe per landed DLL for the life of this snapshot: the three projection
         // passes below ask about the same entries, and the answer cannot change while the
         // fingerprint stands (a landing renames into activation.d, which moves it).
-        var landed = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
+        //
+        // 🚨 Lazy, not a bare bool: ConcurrentDictionary.GetOrAdd guarantees that ONE VALUE is
+        // stored, never that the factory runs once — so under concurrent probes a bare bool let the
+        // same path be stat-ed several times inside one snapshot, and "asked once per change" was
+        // true only by luck. Lazy's default mode is ExecutionAndPublication, so at-most-once is now
+        // a property of the type rather than of the timing.
+        var landed = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<bool>>(StringComparer.Ordinal);
         bool LandedDllExists(ModuleActivationEntry entry) =>
             landed.GetOrAdd(
                 ModuleActivationBoot.LandedDllPath(ModuleRootPath, entry),
-                path => File.Exists(path));
+                path => new Lazy<bool>(() => File.Exists(path))).Value;
+        // 🚨 The SECOND per-entry volume question, memoised on the same fingerprint. The
+        // required-modules probe asks `File.Exists(MeshBuilder.ResolveModulePath(entry))` for every
+        // declared entry on EVERY probe — and the resolution itself probes the image's modules/
+        // tree before falling back to the app closure, so one entry costs several metadata round
+        // trips. Same Lazy as above, for the same reason.
+        //
+        // 🚨 The ONE-ARGUMENT overload, deliberately, and this is not an oversight to tidy up:
+        // the root-aware overload probes the LANDED tree first, and that is the OTHER predicate's
+        // question. RequiredModuleStatus.Classify asks this one first and answers Present — "present
+        // on this deployment; it loads at the next restart" — then falls through to the store
+        // branches, where LandedDllExists and the activation record produce the far more useful
+        // "landed on the volume, not yet loaded", "its landed assembly is ABSENT — the landing did
+        // not complete" and the plan-tier refusal. Passing ModuleRootPath here would make the first
+        // question swallow all three: every landed module would classify as Present and no operator
+        // would ever be told that a landing did not finish. The split is the contract, and this
+        // reproduces exactly the resolution the probe (and the boot loader before it) already used.
+        var resolved = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<bool>>(
+            StringComparer.OrdinalIgnoreCase);
+        bool ModuleFileResolves(string entry) =>
+            resolved.GetOrAdd(
+                entry, e => new Lazy<bool>(() => File.Exists(Mesh.MeshBuilder.ResolveModulePath(e)))).Value;
         var fresh = new DiskSnapshot(
-            fingerprint, activation, corrupt, openFailure, sets, setNotes.ToImmutable(), LandedDllExists);
+            fingerprint, activation, corrupt, openFailure, sets, setNotes.ToImmutable(), LandedDllExists,
+            corruptions.ToImmutable(), ModuleFileResolves);
         snapshot = fresh;
         return fresh;
     }
@@ -610,6 +800,42 @@ public sealed class PendingModuleActivations(string moduleRoot)
         var notYetLoaded = ModuleActivationStatus.NotYetLoaded(
             onMeshSet, loadedAssemblyNames, loadedModuleGenerations,
             ModulePlatformFloor.DeclineReason, LandedDllExists);
+
+        // 🚨 MeshWeaver#4550 — a generation the BOOT declined in favour of the image's own copy
+        // (#4161) is not pending either, and this is the state that produced the false promise: its
+        // entry is enabled, its landed DLL exists, and the process runs another copy, which is
+        // letter-for-letter what "landed but not yet loaded" tests for. The rule is re-applied
+        // here from the SAME inputs the boot decided on — the entry's stated identity, what this
+        // platform states about itself, and whether the image ships this module — so the report and
+        // the boot cannot reach different verdicts about one entry.
+        var declined = ImmutableList.CreateBuilder<ModuleDecline>();
+        if (ImageShippedModules.Count > 0 && PlatformIdentities.Count > 0)
+        {
+            foreach (var entry in onMeshSet.Entries)
+            {
+                if (entry is not { Enabled: true } || string.IsNullOrWhiteSpace(entry.Name)
+                    || !ImageShippedModules.Contains(entry.Name))
+                    continue;
+                // 🚨 The SAME order the boot applies: the DLL's existence is decided FIRST, and an
+                // entry whose landed bytes are gone is skipped as MISSING before the identity is
+                // looked at at all (#2093's state, whose remedy is a re-install). Classifying it
+                // here as declined would put one entry in two buckets with two different remedies.
+                if (!LandedDllExists(entry))
+                    continue;
+                var identity = ModuleFrameworkIdentity.Compare(entry.FrameworkMvid, PlatformIdentities);
+                if (!identity.IsNotThisPlatform)
+                    continue;
+                declined.Add(new ModuleDecline(
+                    entry.Name, entry.PackagePath, entry.Version,
+                    string.IsNullOrWhiteSpace(entry.Directory) ? entry.Name : entry.Directory!,
+                    entry.FrameworkMvid, identity.Describe(entry.FrameworkMvid)));
+            }
+        }
+        if (declined.Count > 0)
+        {
+            var declinedNames = declined.Select(d => d.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            notYetLoaded = [.. notYetLoaded.Where(p => !declinedNames.Contains(p.Name))];
+        }
 
         // 🚨 #3538 — a module this process REFUSED to load is not pending, it is quarantined. Its
         // assembly is genuinely absent from the loaded set, so the pending derivation above finds
@@ -671,6 +897,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
                 ModulePlatformFloor.DeclineReason, LandedDllExists))
         {
             Deferred = deferred.ToImmutable(),
+            Declined = declined.ToImmutable(),
             Quarantined = quarantined,
             Fallbacks = fallbackRows.ToImmutable(),
             FloorAdvisories = floorAdvisories,

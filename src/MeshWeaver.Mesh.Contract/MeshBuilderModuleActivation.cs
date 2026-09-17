@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.Extensions.Configuration;
 
 namespace MeshWeaver.Mesh;
@@ -10,6 +11,30 @@ public static class MeshBuilderModuleActivation
 {
     /// <summary>The configuration key every host reads its module baseline from.</summary>
     public const string AssembliesKey = "Modules:Assemblies";
+
+    /// <summary>
+    /// The module SIMPLE NAMES this image ships its own copy of — the <see cref="AssembliesKey"/>
+    /// baseline, read the way the boot loader reads it, with the <c>.dll</c> dropped.
+    ///
+    /// <para>🚨 It answers exactly one question — "does the image carry a copy of this module?" —
+    /// and it is the question the identity discriminator and the activation report both have to
+    /// ask (MeshWeaver#4550). Deriving it twice is how a gate and a resolver came to disagree
+    /// about where a module's bytes are (#1949), so it lives once, here, beside the key.</para>
+    /// </summary>
+    /// <param name="configuration">The host configuration carrying <see cref="AssembliesKey"/>.</param>
+    /// <remarks>IMMUTABLE, not a <see cref="HashSet{T}"/> behind the interface: the answer is held
+    /// by a mesh-scoped singleton for the life of the process, and the collections policy exists so
+    /// a snapshot cannot be mutated by anyone who is handed it.</remarks>
+    public static IReadOnlySet<string> BaselineModuleNames(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        return configuration.GetSection(AssembliesKey).GetChildren()
+            .Select(child => child.Value)
+            .Where(entry => !string.IsNullOrWhiteSpace(entry))
+            .Select(entry => Path.GetFileNameWithoutExtension(entry!))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// The modules this deployment cannot correctly serve without — the loud half of
@@ -90,8 +115,10 @@ public static class MeshBuilderModuleActivation
     /// list shorter than the image's leaves the image's tail standing, so the instance requires
     /// modules its record does not name — and nothing is missing, nothing is shadowed, the deploy
     /// succeeds and the record is simply not a description of what the instance requires. Measured
-    /// on pearl.meshweaver.cloud, 2026-09-16 (#4476): a record naming five, an image naming six,
-    /// and a missing-module report that named the sixth.</para>
+    /// on pearl.meshweaver.cloud, 2026-09-16 (#4476): a record naming FIVE modules and never naming
+    /// <c>Social</c>, and a missing-module report that demanded <c>Social</c> anyway — the image's
+    /// index 5, which the record's five entries never reached. The image's list is NINE entries
+    /// today, so that record inherits four.</para>
     ///
     /// <para>Empty when the deployment states <see cref="RequiredIsAuthoritativeKey"/> (it stated
     /// the whole set, so nothing is unstated) and empty when only ONE provider supplies entries at

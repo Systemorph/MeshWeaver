@@ -418,6 +418,40 @@ public sealed class GitHubSyncService
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath,
                         SyncIgnore.For(config), progress, policy,
                         baseSha: force ? null : config.LastSyncCommitSha)
+                    // 🚨 A REFUSAL IS A CONCLUSION, AND EVERY CONCLUSION RECORDS ITSELF (#3581).
+                    // The empty-subdirectory refusal below was the one branch that escaped that
+                    // rule: it logged, it threw, and it wrote NOTHING to the config node — so from
+                    // outside, a source refusing on every single pass is indistinguishable from one
+                    // that is working. Measured on memex.systemorph.com (#4499): two Spaces refusing
+                    // ~32×/hour, for an unbounded duration, visible only as a log line, and by
+                    // design it can never resolve on its own — the subdirectory does not exist in
+                    // the repository and no amount of retrying will create it.
+                    //
+                    // Recorded and then RE-THROWN: the caller's error contract is unchanged, and
+                    // this is not a swallow — the fault still propagates exactly as it did.
+                    .Catch<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold), SyncSubdirectoryEmptyException>(
+                        refusal => RecordSyncResult(
+                                spacePath, RefusedOutcome,
+                                // Nothing landed: the SEEN pointer and the horizon stay where they
+                                // are — this refusal imported nothing at this commit.
+                                seenCommitSha: null, advanceHorizon: false, sourceId,
+                                note: refusal.Message,
+                                // 🚨 …but the refusal IS an attempt, with a verdict about exactly
+                                // these bytes as this source reads them, and it is FINAL: the same
+                                // commit under the same subdirectory yields the same empty listing,
+                                // every time. Recording it that way is what stops the loop #4499
+                                // measured — ~32 refusals/hour, each a full fetch of the repository
+                                // and an Activity node, at ONE unchanged sealed commit — because
+                                // both unattended triggers skip a final verdict
+                                // (HasFinalVerdictAt). Scoped to the configuration it read under,
+                                // so correcting the subdirectory re-attempts at once; and final
+                                // only when the listing was complete — an empty answer from a
+                                // truncated tree says nothing about the repository.
+                                attemptedCommitSha: refusal.CommitSha,
+                                attemptWasFinal: refusal.ListingIsComplete,
+                                attemptedConfig: config)
+                            .SelectMany(_ => Observable
+                                .Throw<(StaticRepoImportResult, string, BundleHoldDecision)>(refusal)))
                     // 🚨 RECOMPILE WHAT THE SYNC CHANGED — part of the sync transaction, not a
                     // follow-up human step. Importing new Source/Code nodes and walking away leaves
                     // every affected NodeType serving its STALE assembly (the "assembly is the
@@ -471,7 +505,15 @@ public sealed class GitHubSyncService
                     // which is exactly why they can be stamped where the horizon must not be.
                     .SelectMany(x =>
                     {
-                        var mayAdvance = MayAdvanceBaseline(x.Result);
+                        // 🚨 A partially-held Space does NOT hold this commit, so the baseline stays
+                        // where it is — the same rule a two-way import that preserved server-newer
+                        // nodes (#675/#677) and one whose nodes did not all land (#2229 item C) have
+                        // always followed, with a third member: sources this instance deliberately
+                        // did not take. Every consumer of LastSyncCommitSha keeps meaning what it
+                        // means — one commit the mesh genuinely holds — and the held files stay in
+                        // the next diff, so the import is cumulative and self-healing. See
+                        // Doc/Architecture/AdoptThenSyncPerNodeType → "What a partially-held Space is".
+                        var mayAdvance = MayAdvanceBaseline(x.Result) && !x.Hold.Holds;
                         var skipped = string.Equals(x.Result.Outcome, "Skipped",
                             StringComparison.OrdinalIgnoreCase);
                         return RecordSyncResult(spacePath, x.Result.Outcome,
@@ -487,7 +529,11 @@ public sealed class GitHubSyncService
                                 // while the mesh still has instances) is drift the sync cannot close
                                 // by itself — it is stated on the config, where the settings tab and
                                 // the status surface read it, not only in the activity log.
-                                note: HeldNote(x.Result),
+                                // A retirement the import HELD, and/or the NodeTypes whose sources
+                                // wait for their bundle — both are drift the sync cannot close by
+                                // itself, stated where the settings tab and the status surface read
+                                // it rather than only in the activity log.
+                                note: Notes(HeldNote(x.Result), BundleHeldNote(x.Hold)),
                                 // 🚨 #3945 — the SECOND, weaker pointer, and the whole reason it is
                                 // a second one. "We have already looked at exactly these bytes" is
                                 // not "the mesh holds this commit", and one field answering both is
@@ -496,7 +542,13 @@ public sealed class GitHubSyncService
                                 // is stamped whatever the outcome; whether it may LICENCE a skip is
                                 // the flag beside it, never this sha alone.
                                 attemptedCommitSha: x.CommitSha,
-                                attemptWasFinal: x.Result.VerdictIsFinal)
+                                attemptWasFinal: x.Result.VerdictIsFinal,
+                                attemptedConfig: config,
+                                // 🚨 The hold is on the RECORD, not only in the log (#4063's lesson
+                                // one level down): a held source that says nothing is
+                                // indistinguishable from one that is up to date, and this list is
+                                // what the seal reconciler asks before it re-fetches anything.
+                                bundleHeld: x.Hold.Held)
                             .Select(_ => x.Result);
                     });
             });
@@ -549,6 +601,69 @@ public sealed class GitHubSyncService
            && !string.Equals(result.Outcome, "Failed", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
+    /// 🚨 <b>Whether this source already holds a FINAL verdict on <paramref name="commitSha"/> AS IT
+    /// IS CONFIGURED NOW</b> — the one predicate every unattended trigger asks before it fetches
+    /// (the green-build webhook's <c>SkipReason</c> and the seal reconciler), so the two can never
+    /// disagree about whether an attempt could change anything (#3945, #4499).
+    ///
+    /// <para>Three conditions, all recorded by the attempt itself in one patch: the attempt read
+    /// this commit, its verdict was final (<see cref="GitHubSyncConfig.LastAttemptWasFinal"/>), and
+    /// it read it under the configuration the source carries NOW
+    /// (<see cref="GitHubSyncConfig.LastAttemptedConfigFingerprint"/> ==
+    /// <see cref="SourceFingerprint"/>). The last one is what lets an operator's correction take
+    /// effect at the same commit: before it, a refused source whose subdirectory was fixed stayed
+    /// skipped until the repository happened to move.</para>
+    ///
+    /// <para>Commits compare by prefix (at least 7 hex characters), because a seal marker and a
+    /// webhook payload do not always carry the same length of the same sha.</para>
+    /// </summary>
+    /// <param name="config">The source's config, or null when unreadable (never settled).</param>
+    /// <param name="commitSha">The commit a trigger is about to import.</param>
+    /// <returns><c>true</c> when re-reading that commit under this configuration re-derives the
+    /// recorded verdict, so the fetch can accomplish nothing.</returns>
+    internal static bool HasFinalVerdictAt(GitHubSyncConfig? config, string? commitSha)
+        => config is { LastAttemptWasFinal: true, LastAttemptedCommitSha: { Length: > 0 } attempted }
+           && commitSha is { Length: > 0 }
+           && Math.Min(attempted.Length, commitSha.Length) >= 7
+           && (attempted.StartsWith(commitSha, StringComparison.OrdinalIgnoreCase)
+               || commitSha.StartsWith(attempted, StringComparison.OrdinalIgnoreCase))
+           && string.Equals(config.LastAttemptedConfigFingerprint, SourceFingerprint(config),
+               StringComparison.Ordinal);
+
+    /// <summary>
+    /// The fingerprint of everything in a source's configuration that decides what an import at a
+    /// given commit READS and how it WRITES: repository, branch, subdirectory, ignore patterns,
+    /// direction and the two-way switch. The recorded last-sync fields are deliberately excluded —
+    /// they are the verdict, not its input. Pure and stable across processes (SHA-256 of a
+    /// canonical text), so a replica that did not make the attempt reaches the same answer.
+    ///
+    /// <para>Normalised the way the import itself reads each value: the subdirectory as
+    /// <c>FetchAndImport</c> trims it (and case-SENSITIVE, because git paths are), an unset ignore
+    /// list as <see cref="SyncIgnore.Default"/>, a blank branch as <c>main</c>. An edit that changes
+    /// nothing the import reads therefore does not disturb a settled source.</para>
+    /// </summary>
+    /// <param name="config">The source configuration.</param>
+    /// <returns>A short hex fingerprint.</returns>
+    internal static string SourceFingerprint(GitHubSyncConfig config)
+    {
+        var canonical = string.Join("\n",
+            (config.RepositoryUrl ?? "").Trim().TrimEnd('/').ToLowerInvariant(),
+            string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch.Trim(),
+            (config.Subdirectory ?? "").Trim().Trim('/'),
+            // Exactly as SyncIgnore reads them: trimmed, blank and '#' comment lines dropped, and
+            // case-folded because the matcher is case-INSENSITIVE. Unset means the default rules;
+            // an explicit empty list stays distinct from it (it syncs Release/ too).
+            string.Join("", (config.Ignore ?? SyncIgnore.Default)
+                .Select(p => p.Trim())
+                .Where(p => p.Length > 0 && !p.StartsWith('#'))
+                .Select(p => p.ToLowerInvariant())),
+            config.Direction.ToString(),
+            config.TwoWay ? "two-way" : "git-first");
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonical));
+        return Convert.ToHexStringLower(hash)[..16];
+    }
+
+    /// <summary>
     /// The <see cref="GitHubSyncConfig.LastSyncNote"/> an import earns when it HELD a NodeType the
     /// repository retired while the mesh still holds instances of it
     /// (<see cref="StaticRepoImportResult.HeldNodeTypePaths"/>) — the in-mesh content the
@@ -565,6 +680,32 @@ public sealed class GitHubSyncService
               + string.Join(", ", result.HeldNodeTypePaths)
               + ". Retype or delete the instances in the mesh, or restore the type in the repository; "
               + "the next sync completes whichever you chose.";
+
+    /// <summary>
+    /// The <see cref="GitHubSyncConfig.LastSyncNote"/> an import earns when it HELD one or more
+    /// NodeTypes' sources for their bundle (MeshWeaver#3845 hole 4) — what is held, what each waits
+    /// for, and what releases it. <c>null</c> when nothing was held, which also clears an older note.
+    /// Pure.
+    /// </summary>
+    /// <param name="hold">The import's hold decision.</param>
+    internal static string? BundleHeldNote(BundleHoldDecision hold)
+        => hold is null || !hold.Holds
+            ? null
+            : $"{hold.Held.Count} NodeType(s) are held at the sources their adopted bytes were built "
+              + "from, because no bundle for this instance's framework identity carries the "
+              + "fingerprint the repository's sources would produce: "
+              + string.Join(", ", hold.Held.Select(h => $"{h.Path} (has {h.HeldFingerprint}, waits for {h.WantedFingerprint})"))
+              + ". The rest of the Space is at this commit; these advance when a publication carrying "
+              + "that fingerprint lands, when the repository produces a new commit whose bundle is "
+              + "here, or when this instance rolls onto a platform that has one.";
+
+    /// <summary>Joins the notes an attempt earned into the one field that carries them — a note
+    /// describes the LAST attempt, and two holds of different kinds are two sentences about it, not a
+    /// reason to drop one. Null when there is nothing to say.</summary>
+    private static string? Notes(params string?[] notes)
+        => notes.Where(n => !string.IsNullOrWhiteSpace(n)).ToArray() is { Length: > 0 } present
+            ? string.Join(" ", present)
+            : null;
 
     /// <summary>
     /// Asks GitHub — LIVE, nothing stored — for the configured branch's current HEAD commit,
@@ -613,7 +754,7 @@ public sealed class GitHubSyncService
                         "Connect your GitHub account first (GitHub Sync settings → Connect), or configure the " +
                         "GitHub App identity (GitHub:App:ClientId + GitHub:App:PrivateKey).")));
 
-    private IObservable<(StaticRepoImportResult Result, string CommitSha)> FetchAndImport(
+    private IObservable<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold)> FetchAndImport(
         string repoUrl, string commitish, string? subdirectory, string token, string spaceId,
         SyncIgnore ignore, Action<string, LogLevel>? progress = null, ImportConflictPolicy? policy = null,
         string? baseSha = null)
@@ -637,8 +778,17 @@ public sealed class GitHubSyncService
                     + "capitalisation — git paths are case-sensitive) on the sync source.";
                 logger?.LogWarning("[GitSync] {Space}: {Message}", spaceId, message);
                 progress?.Invoke(message, LogLevel.Error);
-                return Observable.Throw<(StaticRepoImportResult, string)>(
-                    new InvalidOperationException(message));
+                // 🚨 TYPED so the caller can RECORD this conclusion without matching on the message
+                // text (#4499). It derives from InvalidOperationException, so anything that already
+                // catches that keeps behaving exactly as before.
+                return Observable.Throw<(StaticRepoImportResult, string, BundleHoldDecision)>(
+                    new SyncSubdirectoryEmptyException(message)
+                    {
+                        // The commit the listing was READ at, and whether that listing was whole —
+                        // together what makes the recorded refusal a final verdict (#4499).
+                        CommitSha = snapshot.CommitSha,
+                        ListingIsComplete = snapshot.ListingIsComplete,
+                    });
             }
             // Git-diff scope: when we know the last SUCCESSFULLY-synced commit (a routine
             // webhook/update — not a force, not a first import), ask GitHub what changed between it
@@ -654,27 +804,58 @@ public sealed class GitHubSyncService
                 : repoClient.GetChangedPaths(repoUrl, baseSha!, snapshot.CommitSha, subdirectory, token);
             return diff.SelectMany(changedFiles =>
                 ParseSnapshot(snapshot, spaceId, ignore, readmePolicy, progress).SelectMany(parsed =>
-                {
-                    // 🚨 The ignore rules travel WITH the source (issue #1326): the importer's prune
-                    // needs them to tell "the repo dropped this node" from "this node never syncs".
-                    // 🚨 So does the fetch's COMPLETENESS verdict (issue #3589): a truncated GitHub
-                    // tree arrives as HTTP 200 with a partial file list, and the prune's inference
-                    // ("absent from the source ⇒ deleted from the source") is unsound on one. The
-                    // import still upserts everything it did read — only the deletion half is
-                    // withheld, because a stale extra is recoverable and a silent delete is not.
-                    var source = new InMemoryStaticRepoSource(
-                        spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs, ignore,
-                        listingIsComplete: snapshot.ListingIsComplete,
-                        ownsReadme: readmePolicy.IsPackage);
-                    var changedNodePaths = ChangedNodePaths(changedFiles, spaceId);
-                    if (changedNodePaths is not null)
-                        logger?.LogInformation(
-                            "[GitSync] {Space}: git-diff {Base}..{Head} → {Count} changed node(s) — "
-                            + "importing only those (full partition left untouched).",
-                            spaceId, Short(baseSha), Short(snapshot.CommitSha), changedNodePaths.Count);
-                    return StaticRepoImporter.ImportSource(hub, source, logger, policy, changedNodePaths)
-                        .Select(result => (result, snapshot.CommitSha));
-                }));
+                    // 🚨 ADOPT, THEN SYNC, PER NODETYPE (MeshWeaver#3845 hole 4). The seal got this
+                    // tree onto the commit this instance's bundles were baked from — a REPOSITORY
+                    // fact. Whether one NodeType's sources may move is a per-TYPE fact, and a
+                    // publication can be sealed, at the right commit, under the right identity, and
+                    // still not carry the bundle a given type needs. So an adopted type whose compile
+                    // input would move onto a fingerprint no bundle for this identity records is HELD:
+                    // its sources are neither written nor pruned, and the rest of the Space imports.
+                    // See Doc/Architecture/AdoptThenSyncPerNodeType.
+                    BundleKeyedHoldReading.Decide(hub, spaceId, parsed.Children, logger)
+                        .SelectMany(hold =>
+                        {
+                            var children = hold.Holds
+                                ? parsed.Children.Where(n => !hold.HoldsNode(spaceId, n.Path)).ToList()
+                                : parsed.Children;
+                            // 🚨 The ignore rules travel WITH the source (issue #1326): the importer's prune
+                            // needs them to tell "the repo dropped this node" from "this node never syncs".
+                            // The HELD paths ride the same way — a held node is absent from `children`
+                            // above, and without telling the prune it would read that absence as a
+                            // deletion and remove the very sources this hold exists to keep.
+                            // 🚨 So does the fetch's COMPLETENESS verdict (issue #3589): a truncated GitHub
+                            // tree arrives as HTTP 200 with a partial file list, and the prune's inference
+                            // ("absent from the source ⇒ deleted from the source") is unsound on one. The
+                            // import still upserts everything it did read — only the deletion half is
+                            // withheld, because a stale extra is recoverable and a silent delete is not.
+                            var source = new InMemoryStaticRepoSource(
+                                spaceId, children, parsed.Root, parsed.ContentSyncs,
+                                ignore.WithHeldPaths(hold.HeldPaths),
+                                listingIsComplete: snapshot.ListingIsComplete,
+                                ownsReadme: readmePolicy.IsPackage);
+                            var changedNodePaths = ChangedNodePaths(changedFiles, spaceId);
+                            if (changedNodePaths is not null)
+                                logger?.LogInformation(
+                                    "[GitSync] {Space}: git-diff {Base}..{Head} → {Count} changed node(s) — "
+                                    + "importing only those (full partition left untouched).",
+                                    spaceId, Short(baseSha), Short(snapshot.CommitSha), changedNodePaths.Count);
+                            foreach (var abstained in hold.Abstained)
+                                logger?.LogInformation(
+                                    "[BundleHold] {Space}: not judged — {Reason}", spaceId, abstained);
+                            // 🚨 NOT through `progress` (review on #4595): that sink persists the
+                            // sentence as English with no catalog key, and the held types are already
+                            // named on the activity by the KEYED line every import path logs at the
+                            // end (`LogImportOutcome` → `BundleHeldLine`, en + de). Two writers of
+                            // one fact, one of them untranslatable, is the #3236 shape.
+                            return StaticRepoImporter.ImportSource(hub, source, logger, policy, changedNodePaths)
+                                // The held types travel ON the result, so the one activity line every
+                                // import path logs can name them and the baseline decision below can
+                                // see them without a second channel.
+                                .Select(result => (
+                                    result with { BundleHeldNodeTypePaths = [.. hold.Held.Select(h => h.Path)] },
+                                    snapshot.CommitSha,
+                                    Hold: hold));
+                        })));
         });
     }
 
@@ -1035,10 +1216,16 @@ public sealed class GitHubSyncService
     /// <param name="attemptWasFinal">Whether that attempt's verdict is final at that commit
     /// (<see cref="StaticRepoImportResult.VerdictIsFinal"/>). Meaningless without
     /// <paramref name="attemptedCommitSha"/>, and written in the same patch as it.</param>
+    /// <param name="attemptedConfig">The configuration the attempt READ UNDER — the one it was
+    /// dispatched with, never the one current at write time: an edit made while the import ran must
+    /// not be recorded as already judged (#4499). Meaningless without
+    /// <paramref name="attemptedCommitSha"/>.</param>
     private IObservable<MeshNode> RecordSyncResult(
         string spacePath, string outcome, string? seenCommitSha, bool advanceHorizon,
         string? sourceId = null, string? note = null,
-        string? attemptedCommitSha = null, bool attemptWasFinal = false)
+        string? attemptedCommitSha = null, bool attemptWasFinal = false,
+        GitHubSyncConfig? attemptedConfig = null,
+        ImmutableList<BundleHeldNodeType>? bundleHeld = null)
     {
         var now = DateTimeOffset.UtcNow;
         return hub.GetWorkspace().GetMeshNodeStream(ConfigPath(spacePath, sourceId)).Update(node =>
@@ -1066,6 +1253,18 @@ public sealed class GitHubSyncService
                     // Never true on its own: the flag is only ever read beside the sha, and a true
                     // with no sha would be a licence attached to no commit.
                     LastAttemptWasFinal = attemptedCommitSha is { Length: > 0 } && attemptWasFinal,
+                    // 🚨 #4499 — the scope of that verdict, cleared with the pair: a fingerprint
+                    // attached to no attempt would describe nothing.
+                    LastAttemptedConfigFingerprint =
+                        attemptedCommitSha is { Length: > 0 } && attemptedConfig is not null
+                            ? SourceFingerprint(attemptedConfig)
+                            : null,
+                    // 🚨 #3845 hole 4 — the NodeTypes whose sources this attempt held back, with the
+                    // fingerprint each waits for. Written on EVERY conclusion like the attempt pair
+                    // above (null clears it), because it describes the LAST attempt: a stale entry
+                    // would make the seal reconciler re-fetch for a hold that no longer exists, and a
+                    // missing one would leave a hold nothing asks about.
+                    BundleHeldNodeTypes = bundleHeld is { IsEmpty: false } held ? held : null,
                 },
             };
         });
@@ -1074,6 +1273,20 @@ public sealed class GitHubSyncService
     /// <summary>The outcome literal recorded when a source is held back from a commit (by the
     /// sealed-publication gate, or the reconciler) rather than attempted.</summary>
     public const string HeldOutcome = "Held";
+
+    /// <summary>
+    /// A source that REFUSED to import — the fetch succeeded and the import was declined, so the
+    /// Space is not merely behind, it is not being synced at all and will not recover on its own.
+    ///
+    /// <para>🚨 Distinct from <see cref="HeldOutcome"/>, which is a source waiting for a seal it
+    /// will eventually get. A refusal is a CONFIGURATION fault: re-reading the same commit under the
+    /// same configuration re-derives it identically, so it is recorded as a FINAL verdict and the
+    /// unattended triggers stop re-attempting it (<see cref="HasFinalVerdictAt"/>) until the source
+    /// is edited or the repository produces a new commit (#4499 — measured at ~32 refusals/hour
+    /// across two Spaces on memex.systemorph.com, each a full fetch at one unchanged sealed commit,
+    /// for an unbounded duration, with nothing but a log line to show for it).</para>
+    /// </summary>
+    public const string RefusedOutcome = "Refused";
 
     /// <summary>
     /// Records that this source was HELD from advancing, and why — onto the config, so the reason
@@ -1125,4 +1338,29 @@ public sealed class GitHubSyncService
     // no-op'd GitHub sync on a degraded config node.
     private T? Extract<T>(MeshNode? node) where T : class
         => node.ContentAs<T>(hub.JsonSerializerOptions, logger);
+}
+
+/// <summary>
+/// A sync source whose configured subdirectory matches NOTHING in the named repository at the
+/// commit being synced. The fetch succeeded; the import is declined because an empty snapshot
+/// under <c>FullReplace</c> would mirror the whole Space away (#1326).
+///
+/// <para>🚨 It exists as a TYPE so the conclusion can be RECORDED on the sync config without
+/// matching on message text (#4499). Derived from <see cref="InvalidOperationException"/>, which
+/// is what this path threw before, so every existing catch behaves identically.</para>
+///
+/// <para>This is a CONFIGURATION fault, not a transient: it repeats identically on every pass and
+/// clears only when someone edits the source. That is precisely why it has to be visible on the
+/// node — a retry will never fix it, and a log line is not a state.</para>
+/// </summary>
+public sealed class SyncSubdirectoryEmptyException(string message) : InvalidOperationException(message)
+{
+    /// <summary>The commit whose listing matched nothing — the commit the refusal is a verdict
+    /// about. Null only when the thrower did not know it.</summary>
+    public string? CommitSha { get; init; }
+
+    /// <summary>Whether that listing was the repository's COMPLETE tree at <see cref="CommitSha"/>
+    /// (<see cref="RepoSnapshot.ListingIsComplete"/>). Only a complete listing makes "nothing under
+    /// this subdirectory" a verdict that re-reading cannot change.</summary>
+    public bool ListingIsComplete { get; init; }
 }

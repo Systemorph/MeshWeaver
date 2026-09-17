@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
@@ -546,6 +546,25 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// The refusal keys the SINGULAR and the BULK create leg BOTH use, named here rather than
+    /// spelled twice (#4507). A key that exists in no catalog renders as a raw
+    /// <c>activity.node.…</c> token, which <c>LocalizationTest</c> cannot see — it compares the two
+    /// catalogs against each other and is silent about a key that is in neither — so a typo in one
+    /// of two copies would reach a reader. Every key used on exactly one leg stays inline at its
+    /// site, where the sentence is.
+    /// </summary>
+    private const string NodeTypeNotRegisteredKey = "activity.node.create.nodeTypeNotRegistered";
+
+    /// <inheritdoc cref="NodeTypeNotRegisteredKey"/>
+    private const string ValidationFailedKey = "activity.node.create.validationFailed";
+
+    /// <inheritdoc cref="NodeTypeNotRegisteredKey"/>
+    private const string UnexpectedErrorKey = "activity.node.create.unexpectedError";
+
+    /// <inheritdoc cref="NodeTypeNotRegisteredKey"/>
+    private const string NoMeshConfigurationKey = "activity.node.create.noMeshConfiguration";
+
+    /// <summary>
     /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
     /// Its storage / change-feed leaves are ALREADY <see cref="IObservable{T}"/> (or reach the I/O
     /// boundary through <c>IIoPool</c>) and are composed via <c>SelectMany</c>/<c>Subscribe</c>; the
@@ -634,7 +653,9 @@ public static class MeshExtensions
 
         if (meshConfig == null)
         {
-            Respond(CreateNodeResponse.Fail("MeshConfiguration not available", NodeCreationRejectionReason.Unknown));
+            Respond(CreateNodeResponse.FailWith(
+                LocalizableText.Keyed("MeshConfiguration not available", NoMeshConfigurationKey),
+                NodeCreationRejectionReason.Unknown));
             return request.Processed();
         }
 
@@ -650,8 +671,11 @@ public static class MeshExtensions
                 "[CreateNode] REFUSED {Path}: no IStorageAdapter on hub {Hub} — the create would be acked but never persisted. " +
                 "Register persistence (AddPartitioned*Persistence / AddInMemoryPersistence) on this hub's service provider.",
                 request.Message.Node.Path, hub.Address);
-            Respond(CreateNodeResponse.Fail(
-                $"No storage adapter on hub '{hub.Address}' — refusing to create '{request.Message.Node.Path}' because it could not be persisted.",
+            Respond(CreateNodeResponse.FailWith(
+                LocalizableText.Keyed(
+                    $"No storage adapter on hub '{hub.Address}' — refusing to create '{request.Message.Node.Path}' because it could not be persisted.",
+                    "activity.node.create.noStorageAdapter",
+                    ("hub", hub.Address.ToString()), ("path", request.Message.Node.Path)),
                 NodeCreationRejectionReason.Unknown));
             return request.Processed();
         }
@@ -680,7 +704,9 @@ public static class MeshExtensions
         // 0. Path validation (sync — fail-fast).
         if (string.IsNullOrWhiteSpace(node.Id) || string.IsNullOrWhiteSpace(node.Path))
         {
-            Respond(CreateNodeResponse.Fail("Node path and Id must not be empty",
+            Respond(CreateNodeResponse.FailWith(
+                LocalizableText.Keyed("Node path and Id must not be empty",
+                    CreateNodesRequest.EmptyPathOrIdKey),
                 NodeCreationRejectionReason.ValidationFailed));
             return request.Processed();
         }
@@ -690,8 +716,10 @@ public static class MeshExtensions
         // means no AddMeshDataSource / GetDataRequest handler), so it's always a caller bug.
         if (string.IsNullOrWhiteSpace(node.NodeType) && node.Content == null)
         {
-            Respond(CreateNodeResponse.Fail(
-                "Node must have a NodeType or Content set; bare nodes are not allowed.",
+            Respond(CreateNodeResponse.FailWith(
+                LocalizableText.Keyed(
+                    "Node must have a NodeType or Content set; bare nodes are not allowed.",
+                    "activity.node.create.bareNode"),
                 NodeCreationRejectionReason.ValidationFailed));
             return request.Processed();
         }
@@ -706,10 +734,11 @@ public static class MeshExtensions
         // System bypass inside those validators) because this is a STRUCTURAL invariant that holds
         // for every identity, including System-driven compile/import/startup activities. Covers all
         // creators: CreateNode AND CreateOrUpdateNode (whose inner create funnels through here).
-        if (ActivityNodeGuard.IsOwnerless(node, out var ownerlessReason))
+        if (ActivityNodeGuard.OwnerlessRefusal(node) is { } ownerlessRefusal)
         {
-            logger.LogError("[CreateNode] REFUSED ownerless Activity {Path}: {Reason}", node.Path, ownerlessReason);
-            Respond(CreateNodeResponse.Fail(ownerlessReason, NodeCreationRejectionReason.InvalidPath));
+            logger.LogError("[CreateNode] REFUSED ownerless Activity {Path}: {Reason}",
+                node.Path, ownerlessRefusal.English);
+            Respond(CreateNodeResponse.FailWith(ownerlessRefusal, NodeCreationRejectionReason.InvalidPath));
             return request.Processed();
         }
 
@@ -731,10 +760,11 @@ public static class MeshExtensions
         // on the auto-derivation this method has always performed.
         node = NormalizeSatelliteMainNode(node, meshConfig);
 
-        if (AccessAssignmentGuard.IsScopeInvalid(node, out var scopeReason))
+        if (AccessAssignmentGuard.ScopeRefusal(node) is { } scopeRefusal)
         {
-            logger.LogError("[CreateNode] REFUSED mis-scoped AccessAssignment {Path}: {Reason}", node.Path, scopeReason);
-            Respond(CreateNodeResponse.Fail(scopeReason, NodeCreationRejectionReason.InvalidPath));
+            logger.LogError("[CreateNode] REFUSED mis-scoped AccessAssignment {Path}: {Reason}",
+                node.Path, scopeRefusal.English);
+            Respond(CreateNodeResponse.FailWith(scopeRefusal, NodeCreationRejectionReason.InvalidPath));
             return request.Processed();
         }
 
@@ -815,8 +845,15 @@ public static class MeshExtensions
                         logger.LogWarning(
                             "[CreateNode] REFUSED {Path}: static/durable claim collision. {Detail}",
                             node.Path, collision);
-                    Respond(CreateNodeResponse.Fail(
-                        collision ?? $"Node already exists at path: {node.Path}",
+                    Respond(CreateNodeResponse.FailWith(
+                        collision is not null
+                            // Verbatim on purpose: DescribeStaticServeCollision composes an
+                            // inventory of the claiming providers and the cure, which no catalog
+                            // template can carry — the case LocalizableText.Verbatim exists for.
+                            // The plain duplicate below IS our sentence, so it is keyed.
+                            ? LocalizableText.Verbatim(collision)
+                            : LocalizableText.Keyed($"Node already exists at path: {node.Path}",
+                                "activity.node.create.alreadyExists", ("path", node.Path)),
                         NodeCreationRejectionReason.NodeAlreadyExists));
                     return Observable.Empty<(string mode, MeshNode node)>();
                 }
@@ -867,13 +904,14 @@ public static class MeshExtensions
                     //     validators, and folded into the same rejection tuple so the failure is
                     //     posted by the one code path that already knows how.
                     .SelectMany(_ => SystemOwnedGrantRejection(hub, node))
+                    // 🚨 The key now travels the whole way (#4507). This used to hand on
+                    // `grantRejection.English` and throw the key away at this frame, because
+                    // CreateNodeResponse.Fail had no keyed surface to render into; it now carries
+                    // the ActivityLog MeshWeaver#3917 named as the follow-up, so the refusal a
+                    // guard composed is the refusal a viewer reads in their own language.
                     .SelectMany(grantRejection => grantRejection is not null
-                        // 🚨 English only, and NOT an oversight: CreateNodeResponse.Fail carries no
-                        // ActivityLog, so this path has no keyed surface to render into. Giving the
-                        // create leg a transcript is the follow-up MeshWeaver#3917 names; until then
-                        // the refusal's key travels no further than here.
-                        ? Observable.Return<(string? ErrorMessage, NodeCreationRejectionReason Reason)?>(
-                            (grantRejection.English, NodeCreationRejectionReason.ValidationFailed))
+                        ? Observable.Return<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?>(
+                            (grantRejection, NodeCreationRejectionReason.ValidationFailed))
                         : RunCreationValidatorsObs(hub, node, capturedRequest))
                     .SelectMany(validationError =>
                     {
@@ -881,9 +919,10 @@ public static class MeshExtensions
                         {
                             logger.LogWarning(
                                 "Validator rejected node creation at {Path}: {Error}",
-                                node.Path, validationError.Value.ErrorMessage);
-                            Respond(CreateNodeResponse.Fail(
-                                validationError.Value.ErrorMessage ?? "Validation failed",
+                                node.Path, validationError.Value.Refusal?.English);
+                            Respond(CreateNodeResponse.FailWith(
+                                validationError.Value.Refusal
+                                ?? LocalizableText.Keyed("Validation failed", ValidationFailedKey),
                                 validationError.Value.Reason));
                             return Observable.Empty<(string mode, MeshNode node)>();
                         }
@@ -904,8 +943,10 @@ public static class MeshExtensions
                         {
                             if (!typeExists)
                             {
-                                Respond(CreateNodeResponse.Fail(
-                                    $"NodeType '{node.NodeType}' is not registered",
+                                Respond(CreateNodeResponse.FailWith(
+                                    LocalizableText.Keyed(
+                                        $"NodeType '{node.NodeType}' is not registered",
+                                        NodeTypeNotRegisteredKey, ("nodeType", node.NodeType ?? "")),
                                     NodeCreationRejectionReason.InvalidNodeType));
                                 return Observable.Empty<(string mode, MeshNode node)>();
                             }
@@ -913,14 +954,26 @@ public static class MeshExtensions
                             // 4. Active state + creation stamps (Created/LastModified + identity).
                             //    Always stamp CreatedDate so the UI never has to guess a creation
                             //    time; if the caller pre-set it (import flow) we preserve it.
-                            var now = DateTimeOffset.UtcNow;
+                            //
+                            // 🚨 STORAGE-STABLE, INCLUDING THE CALLER'S OWN VALUE (#4506). The stamp
+                            // is minted through MeshNode.StorageStableNow and a caller-supplied one
+                            // is floored the same way, because BOTH end up in the same
+                            // microsecond-resolution column and the node this create EMITS is what
+                            // CompensateFailedCreate later compares the durable row against. An
+                            // unfloored stamp makes the rollback disown the very row it wrote — see
+                            // MeshNode.StorageStable for the measurement.
+                            var now = MeshNode.StorageStableNow();
                             var identity = capturedRequest.CreatedBy;
                             var newNode = node with
                             {
                                 State = MeshNodeState.Active,
-                                CreatedDate = node.CreatedDate == default ? now : node.CreatedDate,
+                                CreatedDate = node.CreatedDate == default
+                                    ? now
+                                    : MeshNode.StorageStable(node.CreatedDate),
                                 CreatedBy = string.IsNullOrEmpty(node.CreatedBy) ? identity : node.CreatedBy,
-                                LastModified = node.LastModified == default ? now : node.LastModified,
+                                LastModified = node.LastModified == default
+                                    ? now
+                                    : MeshNode.StorageStable(node.LastModified),
                                 LastModifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? identity : node.LastModifiedBy,
                                 // Stamp an initial Version of 1 so the post-save JSON includes the
                                 // field (the hub's JsonSerializerOptions has
@@ -985,7 +1038,14 @@ public static class MeshExtensions
                     {
                         // Workspace fan-out for transient confirmation (fire-and-forget — same
                         // semantics as the previous code).
-                        hub.Post(DataChangeRequest.Update([resultNode]),
+                        // 🚨 ISSUED OFF THE ROUTER (#1140). `hub` here is whichever hub is HANDLING
+                        // the CreateNodeRequest, and the mesh hub registers these handlers too
+                        // (MeshBuilder.AddMesh → WithNodeOperationHandlers), so a create addressed
+                        // at the mesh runs this line on the ROUTER and the fan-out leaves stamped
+                        // `Sender = mesh/{id}`. NodeOperationIssuingHub is the identity function
+                        // for the node-operation hub that normally handles this, so the ordinary
+                        // path is byte-for-byte unchanged.
+                        hub.NodeOperationIssuingHub().Post(DataChangeRequest.Update([resultNode]),
                             o => o.WithTarget(new Address(resultNode.Path)));
                     }
 
@@ -1006,7 +1066,12 @@ public static class MeshExtensions
                             "[ArgFwd] Forwarding {ArgType} to {NodePath} (accessCtx={AccessCtx})",
                             arg.GetType().Name, resultNode.Path,
                             request.AccessContext?.ObjectId ?? "(null)");
-                        var argDelivery = hub.Post(arg, o =>
+                        // 🚨 ISSUED OFF THE ROUTER (#1140) — same reason as the confirm fan-out
+                        // above. The forwarded Argument keeps carrying the ORIGINAL requester's
+                        // AccessContext as a stamped VALUE, so the target hub's permission check is
+                        // unaffected by which hub the delivery leaves from.
+                        var argIssuingHub = hub.NodeOperationIssuingHub();
+                        var argDelivery = argIssuingHub.Post(arg, o =>
                         {
                             o = o.WithTarget(nodeAddress);
                             return request.AccessContext is { } accessCtx
@@ -1046,17 +1111,30 @@ public static class MeshExtensions
                                     resultNode.Path);
                                 CompensateFailedCreate(hub, resultNode, mode, logger)
                                     .Subscribe(
-                                        outcome => Respond(CreateNodeResponse.Fail(
-                                            $"Create failed in a post-creation step: {ex.Message} {outcome}",
+                                        // 🚨 {error} and {outcome} stay as the upstream fault's
+                                        // and the compensation's own English. A named argument
+                                        // carries a VALUE, not a second catalog key, so a nested
+                                        // sentence cannot resolve in the reader's language through
+                                        // it — the shape activity.node.upsert.addressRecycling
+                                        // already uses for its "Underlying report: {error}" clause.
+                                        outcome => Respond(CreateNodeResponse.FailWith(
+                                            LocalizableText.Keyed(
+                                                $"Create failed in a post-creation step: {ex.Message} {outcome.Message}",
+                                                "activity.node.create.postCreationFailed",
+                                                ("error", ex.Message), ("outcome", outcome.Message)),
                                             NodeCreationRejectionReason.Unknown)),
                                         // The compensation itself already converts its own faults into
                                         // an outcome string; this branch exists so a response goes out
                                         // even if it faults on a path we did not foresee — never a
                                         // silent swallow, never a caller left waiting.
-                                        compensationEx => Respond(CreateNodeResponse.Fail(
-                                            $"Create failed in a post-creation step: {ex.Message} "
-                                            + $"Rolling back '{resultNode.Path}' FAILED ({compensationEx.Message}) — "
-                                            + "the partially-created node is still present and must be removed manually.",
+                                        compensationEx => Respond(CreateNodeResponse.FailWith(
+                                            LocalizableText.Keyed(
+                                                $"Create failed in a post-creation step: {ex.Message} "
+                                                + $"Rolling back '{resultNode.Path}' FAILED ({compensationEx.Message}) — "
+                                                + "the partially-created node is still present and must be removed manually.",
+                                                "activity.node.create.postCreationRollbackFailed",
+                                                ("error", ex.Message), ("path", resultNode.Path),
+                                                ("rollbackError", compensationEx.Message)),
                                             NodeCreationRejectionReason.Unknown)));
                             },
                             () =>
@@ -1106,14 +1184,19 @@ public static class MeshExtensions
                             + "store, not this create; the caller is answered Unavailable, so a retry with "
                             + "the same node id is meaningful.",
                             node.Path, ex.GetType().Name, ex.Message);
-                        Respond(CreateNodeResponse.Fail(
-                            StoreReachability.DescribeNotAttempted($"Node creation at '{node.Path}'"),
+                        Respond(CreateNodeResponse.FailWith(
+                            StoreReachability.NodeCreationNotAttempted(node.Path),
                             NodeCreationRejectionReason.Unavailable));
                     }
                     else if (ex is InvalidOperationException)
                     {
                         logger.LogWarning(ex, "Node creation failed for path {Path}", node.Path);
-                        Respond(CreateNodeResponse.Fail(ex.Message, NodeCreationRejectionReason.ValidationFailed));
+                        // Verbatim: the sentence is the faulting component's own — a storage
+                        // adapter's "no writable storage provider accepted the node", a validator's
+                        // throw. No catalog can carry text this process did not author.
+                        Respond(CreateNodeResponse.FailWith(
+                            LocalizableText.Verbatim(ex.Message),
+                            NodeCreationRejectionReason.ValidationFailed));
                     }
                     else if (CancellationClassifier.IsCooperativeCancellation(ex))
                     {
@@ -1135,8 +1218,10 @@ public static class MeshExtensions
                             "[CreateNode] cancelled path={Path} — {Cancellation}. The create was cut "
                             + "short before it completed; nothing was written and nothing failed.",
                             node.Path, CancellationClassifier.Describe(ex));
-                        Respond(CreateNodeResponse.Fail(
-                            $"Node creation at '{node.Path}' was cancelled before it completed.",
+                        Respond(CreateNodeResponse.FailWith(
+                            LocalizableText.Keyed(
+                                $"Node creation at '{node.Path}' was cancelled before it completed.",
+                                "activity.node.create.cancelled", ("path", node.Path)),
                             NodeCreationRejectionReason.Unavailable));
                     }
                     else
@@ -1150,7 +1235,9 @@ public static class MeshExtensions
                         logger.LogError(ex,
                             "Unexpected error during node creation at {Path}: {ExceptionType}: {ExceptionMessage}",
                             node.Path, ex.GetType().Name, ex.Message);
-                        Respond(CreateNodeResponse.Fail($"Unexpected error: {ex.Message}",
+                        Respond(CreateNodeResponse.FailWith(
+                            LocalizableText.Keyed($"Unexpected error: {ex.Message}",
+                                UnexpectedErrorKey, ("error", ex.Message)),
                             NodeCreationRejectionReason.Unknown));
                     }
                 },
@@ -1190,10 +1277,12 @@ public static class MeshExtensions
                         + "completed empty (a Where that dropped the only element, an Observable.Empty branch, or "
                         + "a storage leaf that completed without emitting).",
                         node.Path);
-                    Respond(CreateNodeResponse.Fail(
-                        $"Could not create '{node.Path}': the create pipeline terminated without producing a node "
-                        + "and without reporting a reason. This is a defect in the create chain, not a rejection of "
-                        + "the request — retrying is unlikely to help until it is fixed.",
+                    Respond(CreateNodeResponse.FailWith(
+                        LocalizableText.Keyed(
+                            $"Could not create '{node.Path}': the create pipeline terminated without producing a node "
+                            + "and without reporting a reason. This is a defect in the create chain, not a rejection of "
+                            + "the request — retrying is unlikely to help until it is fixed.",
+                            "activity.node.create.chainTerminatedWithoutResult", ("path", node.Path)),
                         NodeCreationRejectionReason.Unknown));
                 });
 
@@ -1373,17 +1462,20 @@ public static class MeshExtensions
         {
             if (!tryClaimResponse())
                 return;
-            var nodeErr = new MeshNodeError(
-                MeshNodeErrorCode.OwnerDisposing,
-                hubPath,
+            // Composed ONCE and used for both halves, so MeshNodeError.Message and the keyed
+            // refusal cannot drift into two differently-worded reports of one teardown.
+            var disposalRefusal = LocalizableText.Keyed(
                 $"the activation '{hubPath}' handling this create was disposed before the create "
                 + "chain reached a verdict — the create was NOT completed by that activation; "
                 + "re-drive it against the fresh one (a row that did land answers "
                 + "NodeAlreadyExists). 🚨 The hub is NAMED in the sentence, not only in the "
                 + "structured payload: the requester is usually in another process and sees none of "
                 + "this hub's log, so an unnamed teardown leaves the next occurrence unattributable "
-                + "from the only side that can see it.");
-            var resp = CreateNodeResponse.Fail(nodeErr.Message, NodeCreationRejectionReason.Unavailable)
+                + "from the only side that can see it.",
+                "activity.node.create.ownerDisposing", ("hub", hubPath));
+            var nodeErr = new MeshNodeError(
+                MeshNodeErrorCode.OwnerDisposing, hubPath, disposalRefusal.English);
+            var resp = CreateNodeResponse.FailWith(disposalRefusal, NodeCreationRejectionReason.Unavailable)
                 with { NodeError = nodeErr };
             hub.NoteRequestStage(request.Id, "CREATE_OWNER_DISPOSING_NACK");
             // 🚨 This hub's OWN Post is gated closed in the ShutDown phase, so the NACK travels
@@ -1420,7 +1512,8 @@ public static class MeshExtensions
     ///
     /// <para>The fault is an <see cref="InvalidOperationException"/> for the same reason: that is what
     /// <c>PersistenceService</c> throws, so both paths now produce a byte-identically-shaped
-    /// <c>CreateNodeResponse.Fail(…, ValidationFailed)</c> from the one <c>onError</c> arm.</para>
+    /// <c>CreateNodeResponse.FailWith(Verbatim(ex.Message), ValidationFailed)</c> from the one
+    /// <c>onError</c> arm.</para>
     /// </summary>
     /// <param name="save">The adapter write (already composed with its change-feed publish).</param>
     /// <param name="hub">The hub handling the request — used to record the ledger stage.</param>
@@ -1463,9 +1556,32 @@ public static class MeshExtensions
     ///   <item>A lineage check against the durable row: only a row whose
     ///     <see cref="MeshNode.CreatedDate"/> is still the stamp this create wrote is removed. A
     ///     different stamp means the path is no longer "our" node (a concurrent recreate), and
-    ///     the rollback stands down and says so rather than destroying someone else's state.</item>
+    ///     the rollback stands down and says so rather than destroying someone else's state. A row
+    ///     the store returns with NO stamp establishes neither and is reported
+    ///     <see cref="RollbackDisposition.Undetermined"/>.</item>
     /// </list>
     /// Re-running it is harmless: an already-absent row reports "nothing to roll back".</para>
+    ///
+    /// <para>🚨 <b>The check only works because the stamp is STORAGE-STABLE</b>
+    /// (<see cref="MeshNode.StorageStable"/>, #4506). It compares an in-memory value against the
+    /// same value after a round trip through a column, so a stamp the column cannot hold exactly
+    /// makes the rollback disown the row it just wrote. That is not hypothetical — it is what a raw
+    /// <c>DateTimeOffset.UtcNow</c> (100 ns) does against PostgreSQL <c>timestamptz</c>
+    /// (microseconds), and the failure mode is silent and in the WORSE direction: the ghost row
+    /// survives and the caller is told to clean up by hand. Both create paths therefore mint and
+    /// floor through <see cref="MeshNode.StorageStableNow"/>; do not reintroduce a bare
+    /// <c>UtcNow</c> stamp on a node.</para>
+    ///
+    /// <para>🚨 <b>It is a lineage check, NOT a transactional guarantee, and the gap is the read.</b>
+    /// The read and <c>DeleteAndPublish</c> are two separate storage turns with nothing holding the
+    /// row between them, and nothing serialises the path either — the create handler returns
+    /// <c>Processed()</c> immediately and this chain runs on the IO pool, not inside a hub turn. So
+    /// a delete-then-recreate that lands in the gap has its REPLACEMENT deleted. Closing that needs
+    /// a conditional delete in the <see cref="IStorageAdapter"/> contract (the DELETE-side twin of
+    /// <see cref="IStorageAdapter.WriteIfVersion"/>) implemented by every backend, which is tracked
+    /// on #4506 — it is deliberately not worked around here. See
+    /// <c>Doc/Architecture/BulkCreateCompensation</c> for exactly which interleavings the check does
+    /// and does not exclude.</para>
     ///
     /// <para><b>Partition artifacts are deliberately NOT dropped.</b> A top-level create may have
     /// provisioned the partition's backing store (schema + tables) through
@@ -1479,19 +1595,21 @@ public static class MeshExtensions
     /// AFTER its <c>Handle</c> succeeded (the <c>Concat</c> in the runner), so a failed critical
     /// handler leaves none behind.</para>
     ///
-    /// <para>Emits exactly one human-readable outcome sentence, which the caller appends to the
-    /// original failure — a rollback that could not run is REPORTED, never swallowed.</para>
+    /// <para>Emits exactly one <see cref="RollbackOutcome"/> — a human-readable sentence, which the
+    /// caller appends to the original failure, plus whether a row is still there. A rollback that
+    /// could not run is REPORTED, never swallowed.</para>
     /// </summary>
-    private static IObservable<string> CompensateFailedCreate(
+    private static IObservable<RollbackOutcome> CompensateFailedCreate(
         IMessageHub hub, MeshNode created, string mode, ILogger logger)
     {
         if (!string.Equals(mode, "create", StringComparison.Ordinal))
-            return Observable.Return(
-                $"The node at '{created.Path}' existed before this request, so nothing was rolled back.");
+            return Observable.Return(new RollbackOutcome(RollbackDisposition.NothingToRemove,
+                $"The node at '{created.Path}' existed before this request, so nothing was rolled back."));
 
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence is null)
-            return Observable.Return("Nothing was persisted (no storage adapter), so there was nothing to roll back.");
+            return Observable.Return(new RollbackOutcome(RollbackDisposition.NothingToRemove,
+                "Nothing was persisted (no storage adapter), so there was nothing to roll back."));
 
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -1502,7 +1620,33 @@ public static class MeshExtensions
             .SelectMany(stored =>
             {
                 if (stored is null)
-                    return Observable.Return($"No row remains at '{created.Path}' — nothing to roll back.");
+                    return Observable.Return(new RollbackOutcome(RollbackDisposition.NothingToRemove,
+                        $"No row remains at '{created.Path}' — nothing to roll back."));
+
+                // 🚨 NO STAMP AT ALL IS NOT "SOMEBODY ELSE'S ROW" (#4506). The create path always
+                // stamps CreatedDate, so `created.CreatedDate` is never default here — but the
+                // STORED value can be, and then the lineage check has established NOTHING rather
+                // than established a mismatch. It happens for real: on Postgres the authorship
+                // columns live only on `mesh_nodes`, and every satellite table (`_Access`,
+                // `_Thread`, `_Activity`, `_Comment`, `Source`, …) is read with
+                // `NULL::timestamptz AS created_date`, so a rollback aimed at a satellite path
+                // reads `default` for EVERY row, ours included. Answering LeftInPlace there told
+                // the operator a specific, false thing — "the stored row is no longer the one this
+                // request wrote" — about a row nothing was compared on. Undetermined is the state
+                // that says what actually happened, and it is quoted for a human exactly the same
+                // way; neither state deletes anything.
+                if (stored.CreatedDate == default)
+                {
+                    logger.LogError(
+                        "[CreateNode] rollback UNDETERMINED at {Path}: the store returned a row carrying NO creation "
+                        + "stamp, so it could not be compared with this create's ({OurCreated:O}) — not deleting a row "
+                        + "whose lineage was never established",
+                        created.Path, created.CreatedDate);
+                    return Observable.Return(new RollbackOutcome(RollbackDisposition.Undetermined,
+                        $"The node at '{created.Path}' was NOT rolled back: the store returned the row without a "
+                        + "creation stamp, so whether it is the one this request wrote could NOT be established. "
+                        + "Check it manually before retrying."));
+                }
 
                 if (stored.CreatedDate != created.CreatedDate)
                 {
@@ -1510,9 +1654,9 @@ public static class MeshExtensions
                         "[CreateNode] rollback STOOD DOWN at {Path}: the stored row (created {StoredCreated:O}) is not "
                         + "the one this create wrote (created {OurCreated:O}) — refusing to delete a node we did not create",
                         created.Path, stored.CreatedDate, created.CreatedDate);
-                    return Observable.Return(
+                    return Observable.Return(new RollbackOutcome(RollbackDisposition.LeftInPlace,
                         $"The node at '{created.Path}' was NOT rolled back: the stored row is no longer the one this "
-                        + "request wrote. Remove it manually before retrying.");
+                        + "request wrote. Remove it manually before retrying."));
                 }
 
                 // The rollback is infrastructure repairing its OWN half-finished write, on a node
@@ -1523,19 +1667,65 @@ public static class MeshExtensions
                     .Do(_ => logger.LogWarning(
                         "[CreateNode] rolled back partially-created node at {Path} — the create is all-or-nothing (#638)",
                         created.Path))
-                    .Select(_ => $"The partially-created node at '{created.Path}' was rolled back; the create can be retried.");
+                    .Select(_ => new RollbackOutcome(RollbackDisposition.Removed,
+                        $"The partially-created node at '{created.Path}' was rolled back; the create can be retried."));
             })
-            .Catch<string, Exception>(ex =>
+            .Catch<RollbackOutcome, Exception>(ex =>
             {
+                // 🚨 UNDETERMINED, not "still present". The fault may be the READ that would have
+                // established presence, so asserting a row is there is a claim this branch never
+                // made — and on a batch it would be counted as a surviving row.
                 logger.LogError(ex,
-                    "[CreateNode] ROLLBACK FAILED at {Path} — the partially-created node is still present",
+                    "[CreateNode] ROLLBACK FAILED at {Path} — whether the partially-created node remains is undetermined",
                     created.Path);
-                return Observable.Return(
-                    $"Rolling back '{created.Path}' FAILED ({ex.Message}) — the partially-created node is still "
-                    + "present and must be removed manually.");
+                return Observable.Return(new RollbackOutcome(RollbackDisposition.Undetermined,
+                    $"Rolling back '{created.Path}' FAILED ({ex.Message}) — whether a row remains there could NOT be "
+                    + "established; check it manually before retrying."));
             })
             .Take(1);
     }
+
+    /// <summary>
+    /// What ONE <see cref="CompensateFailedCreate"/> established about the path it was pointed at.
+    ///
+    /// <para>🚨 FOUR states, not a boolean. A batch rollback reports a COUNT, and a count built from
+    /// "removed, or anything else" says things that were never established: an already-absent row is
+    /// not one this rollback removed, and a rollback whose READ failed has not established that a
+    /// row is still there. Those are three different sentences and two different consequences —
+    /// which is <see cref="Undetermined"/>'s whole reason for existing, the same distinction
+    /// <c>Doc/Architecture/UndeterminedIsNotNo</c> draws for a gate.</para>
+    /// </summary>
+    private enum RollbackDisposition
+    {
+        /// <summary>This rollback deleted the row this create wrote. It is gone, by our hand.</summary>
+        Removed,
+
+        /// <summary>There was no row of ours to remove — none was written (the confirm path, or no
+        /// storage adapter), or none remained. Nothing is left behind, and nobody did it here.</summary>
+        NothingToRemove,
+
+        /// <summary>A row was READ and deliberately NOT removed, because it is no longer the one
+        /// this request wrote. Something IS there, and only a human can decide about it.</summary>
+        LeftInPlace,
+
+        /// <summary>Neither was established: the read or the delete failed. Whether a row remains is
+        /// UNKNOWN — never report it as either.</summary>
+        Undetermined,
+    }
+
+    /// <summary>
+    /// The outcome of ONE <see cref="CompensateFailedCreate"/>: what it established, plus the
+    /// sentence the caller appends to the original cause.
+    ///
+    /// <para>The singular create rolls back exactly one node and can simply quote the sentence. A
+    /// BULK create rolls back the failed node plus every node whose post-creation handlers never
+    /// ran (#4449), so the outcome has to be readable WITHOUT parsing prose: the batch counts what
+    /// it actually removed, says separately how many had nothing left to remove, and quotes verbatim
+    /// every path a human has to look at.</para>
+    /// </summary>
+    /// <param name="Disposition">What this rollback established about the path.</param>
+    /// <param name="Message">The human-readable outcome sentence.</param>
+    private readonly record struct RollbackOutcome(RollbackDisposition Disposition, string Message);
 
     /// <summary>
     /// Handles <see cref="CreateNodesRequest"/> — the BULK sibling of
@@ -1562,14 +1752,19 @@ public static class MeshExtensions
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
 
-        void PostFail(string error, NodeCreationRejectionReason reason, string? failedPath = null,
+        // 🚨 LocalizableText, not string (#4507). CreateNodesResponse.Error is the ENGLISH wire
+        // value services fold into logs and exception messages; the refusal a viewer reads travels
+        // KEYED on the response's ActivityLog, which this overload attaches. Text this process did
+        // not author reaches it as LocalizableText.Verbatim, and that name is the review signal.
+        void PostFail(LocalizableText refusal, NodeCreationRejectionReason reason, string? failedPath = null,
             ImmutableList<MeshNode>? created = null)
-            => hub.Post(CreateNodesResponse.Fail(error, reason, failedPath, created),
+            => hub.Post(CreateNodesResponse.FailWith(refusal, reason, failedPath, created),
                 o => o.ResponseFor(request));
 
         if (meshConfig == null)
         {
-            PostFail("MeshConfiguration not available", NodeCreationRejectionReason.Unknown);
+            PostFail(LocalizableText.Keyed("MeshConfiguration not available", NoMeshConfigurationKey),
+                NodeCreationRejectionReason.Unknown);
             return request.Processed();
         }
         // FAIL CLOSED on missing storage — same contract as the singular create (a create that
@@ -1580,7 +1775,9 @@ public static class MeshExtensions
                 "[CreateNodes] REFUSED batch of {Count}: no IStorageAdapter on hub {Hub} — the creates would be acked but never persisted.",
                 request.Message.Nodes?.Count ?? 0, hub.Address);
             PostFail(
-                $"No storage adapter on hub '{hub.Address}' — refusing the batch because it could not be persisted.",
+                LocalizableText.Keyed(
+                    $"No storage adapter on hub '{hub.Address}' — refusing the batch because it could not be persisted.",
+                    "activity.node.bulkCreate.noStorageAdapter", ("hub", hub.Address.ToString())),
                 NodeCreationRejectionReason.Unknown);
             return request.Processed();
         }
@@ -1606,7 +1803,9 @@ public static class MeshExtensions
             // structured response, never surface as a NullReferenceException.
             if (candidate is null)
             {
-                PostFail("Batch contains a null node entry",
+                PostFail(
+                    LocalizableText.Keyed("Batch contains a null node entry",
+                        "activity.node.bulkCreate.nullEntry"),
                     NodeCreationRejectionReason.ValidationFailed);
                 return request.Processed();
             }
@@ -1615,14 +1814,16 @@ public static class MeshExtensions
             // into "batchable" and "not" (StaticRepoImporter, per write stage) asks the same function
             // instead of re-deriving it. Only the BATCH-level rules stay here: a null entry and a
             // duplicate path are properties of the list, not of any node in it.
-            if (CreateNodesRequest.BulkRefusal(candidate) is { } refusal)
+            if (CreateNodesRequest.BulkRefusalText(candidate) is { } refusal)
             {
                 PostFail(refusal.Error, refusal.Reason, candidate.Path);
                 return request.Processed();
             }
             if (!seenPaths.Add(candidate.Path))
             {
-                PostFail($"Duplicate path in batch: '{candidate.Path}'",
+                PostFail(
+                    LocalizableText.Keyed($"Duplicate path in batch: '{candidate.Path}'",
+                        "activity.node.bulkCreate.duplicatePath", ("path", candidate.Path)),
                     NodeCreationRejectionReason.InvalidPath, candidate.Path);
                 return request.Processed();
             }
@@ -1695,7 +1896,7 @@ public static class MeshExtensions
                     .Concat()
                     .Where(t => t.Error != null)
                     .Take(1)
-                    .Select(t => ((MeshNode Node, (string? ErrorMessage, NodeCreationRejectionReason Reason)? Error)?)t)
+                    .Select(t => ((MeshNode Node, (LocalizableText? Refusal, NodeCreationRejectionReason Reason)? Error)?)t)
                     .DefaultIfEmpty(null);
 
                 // ——— Phase 4: type existence per DISTINCT NodeType (static provider, else
@@ -1724,8 +1925,10 @@ public static class MeshExtensions
                         {
                             logger.LogWarning(
                                 "[CreateNodes] validator rejected {Path}: {Error} — batch of {Count} refused, nothing written",
-                                failure.Node.Path, failure.Error!.Value.ErrorMessage, toCreate.Count);
-                            PostFail(failure.Error.Value.ErrorMessage ?? "Validation failed",
+                                failure.Node.Path, failure.Error!.Value.Refusal?.English, toCreate.Count);
+                            PostFail(
+                                failure.Error.Value.Refusal
+                                ?? LocalizableText.Keyed("Validation failed", ValidationFailedKey),
                                 failure.Error.Value.Reason, failure.Node.Path);
                             return Observable.Empty<(ImmutableList<MeshNode>, ImmutableList<string>)>();
                         }
@@ -1736,19 +1939,28 @@ public static class MeshExtensions
                             {
                                 var offender = toCreate.First(n => string.Equals(
                                     n.NodeType, missing.Type, StringComparison.Ordinal));
-                                PostFail($"NodeType '{missing.Type}' is not registered",
+                                PostFail(
+                                    LocalizableText.Keyed($"NodeType '{missing.Type}' is not registered",
+                                        NodeTypeNotRegisteredKey, ("nodeType", missing.Type)),
                                     NodeCreationRejectionReason.InvalidNodeType, offender.Path);
                                 return Observable.Empty<(ImmutableList<MeshNode>, ImmutableList<string>)>();
                             }
 
-                            // ——— Phase 5: stamps — identical to the singular create. ———
-                            var now = DateTimeOffset.UtcNow;
+                            // ——— Phase 5: stamps — identical to the singular create, INCLUDING the
+                            // storage-stable mint (#4506): every node this batch emits carries a
+                            // timestamp its own row can hold exactly, because the rollback compares
+                            // these values against the durable ones. ———
+                            var now = MeshNode.StorageStableNow();
                             var stamped = toCreate.Select(n => n with
                             {
                                 State = MeshNodeState.Active,
-                                CreatedDate = n.CreatedDate == default ? now : n.CreatedDate,
+                                CreatedDate = n.CreatedDate == default
+                                    ? now
+                                    : MeshNode.StorageStable(n.CreatedDate),
                                 CreatedBy = string.IsNullOrEmpty(n.CreatedBy) ? capturedBy : n.CreatedBy,
-                                LastModified = n.LastModified == default ? now : n.LastModified,
+                                LastModified = n.LastModified == default
+                                    ? now
+                                    : MeshNode.StorageStable(n.LastModified),
                                 LastModifiedBy = string.IsNullOrEmpty(n.LastModifiedBy) ? capturedBy : n.LastModifiedBy,
                                 Version = n.Version > 0 ? n.Version : 1,
                             }).ToImmutableList();
@@ -1770,20 +1982,20 @@ public static class MeshExtensions
                                     if (list.Count != stamped.Count)
                                     {
                                         PostFail(
-                                            $"Storage accepted {list.Count} of {stamped.Count} nodes — the batch did not land completely.",
+                                            LocalizableText.Keyed(
+                                                $"Storage accepted {list.Count} of {stamped.Count} nodes — the batch did not land completely.",
+                                                "activity.node.bulkCreate.incompleteLanding",
+                                                ("accepted", list.Count), ("total", stamped.Count)),
                                             NodeCreationRejectionReason.Unknown, created: list);
                                         return Observable.Empty<(ImmutableList<MeshNode>, ImmutableList<string>)>();
                                     }
 
                                     // ——— Phase 7: post-creation handlers per created node,
-                                    // sequential — same semantics as the singular create
-                                    // (FailsCreateOnError propagates; best-effort handlers
+                                    // sequential, with the singular create's COMPENSATING
+                                    // ROLLBACK on a critical failure (best-effort handlers
                                     // log-and-continue inside the runner). ———
-                                    return list
-                                        .Select(saved => RunPostCreationHandlersObs(hub, saved, capturedBy, logger))
-                                        .Concat()
-                                        .ToList()
-                                        .Select(_ => (list, existingPaths));
+                                    return RunBulkPostCreationHandlers(
+                                        hub, list, existingPaths, capturedBy, logger, PostFail);
                                 });
                         });
                     });
@@ -1806,7 +2018,9 @@ public static class MeshExtensions
                             logger.LogError(ex,
                                 "[CreateNodes] failed AFTER {Written} node(s) were persisted — reporting the partial landing",
                                 written.Count);
-                            PostFail($"Nodes persisted but a later step failed: {ex.Message}",
+                            PostFail(
+                                LocalizableText.Keyed($"Nodes persisted but a later step failed: {ex.Message}",
+                                    "activity.node.bulkCreate.laterStepFailed", ("error", ex.Message)),
                                 NodeCreationRejectionReason.Unknown, created: written);
                         }
                         else if (StoreReachability.IsStoreUnreachable(ex))
@@ -1844,21 +2058,24 @@ public static class MeshExtensions
                             // whatever did land.
                             PostFail(
                                 attemptedPaths is { Length: > 0 }
-                                    ? StoreReachability.DescribeMayHavePartiallyLanded(
-                                        $"Bulk creation of {nodes.Count} node(s)")
-                                    : StoreReachability.DescribeNotAttempted(
-                                        $"Bulk creation of {nodes.Count} node(s)"),
+                                    ? StoreReachability.BulkCreationMayHavePartiallyLanded(nodes.Count)
+                                    : StoreReachability.BulkCreationNotAttempted(nodes.Count),
                                 NodeCreationRejectionReason.Unavailable);
                         }
                         else if (ex is InvalidOperationException)
                         {
                             logger.LogWarning(ex, "[CreateNodes] batch refused");
-                            PostFail(ex.Message, NodeCreationRejectionReason.ValidationFailed);
+                            // Verbatim — the faulting component's own words, as on the singular leg.
+                            PostFail(LocalizableText.Verbatim(ex.Message),
+                                NodeCreationRejectionReason.ValidationFailed);
                         }
                         else
                         {
                             logger.LogError(ex, "[CreateNodes] unexpected error");
-                            PostFail($"Unexpected error: {ex.Message}", NodeCreationRejectionReason.Unknown);
+                            PostFail(
+                                LocalizableText.Keyed($"Unexpected error: {ex.Message}",
+                                    UnexpectedErrorKey, ("error", ex.Message)),
+                                NodeCreationRejectionReason.Unknown);
                         }
                     }
 
@@ -1887,6 +2104,157 @@ public static class MeshExtensions
                 });
 
         return request.Processed();
+    }
+
+    /// <summary>
+    /// PHASE 7 of the bulk create: the post-creation handlers, per created node, in caller order —
+    /// WITH the compensating rollback the singular create has had since #638. Emits the created +
+    /// existing pair when every node's handlers completed, and NOTHING (having posted the failure
+    /// itself, like every other refusal in this handler) when a critical one did not.
+    ///
+    /// <para>🚨 <b>A bulk create leaves TWO populations of ghost rows, not one</b> (#4449). Storage
+    /// writes ALL rows in phase 6 before any handler runs, and the handlers then run sequentially,
+    /// so a <c>FailsCreateOnError</c> fault at index <i>k</i> leaves: node <i>k</i>, whose critical
+    /// handler failed — the singular path's case — AND nodes <i>k+1…n</i>, whose handlers NEVER RAN.
+    /// The second population is the larger hazard because it is invisible: those rows are
+    /// indistinguishable from successfully-created ones by inspection, yet nothing ever granted
+    /// their owner, announced their partition, or ran whatever else their type's contract requires.
+    /// Both are compensated here; nodes <i>0…k-1</i> completed and are KEPT.</para>
+    ///
+    /// <para>🚨 <b>In REVERSE order (n … k).</b> Caller order is the bulk create's contract —
+    /// parents before children — so the rollback walks it backwards and a child is removed before
+    /// its parent.</para>
+    ///
+    /// <para>🚨 <b>The first fault must STOP the chain, and only a fault does that reliably.</b> The
+    /// obvious shape — catch per index into a failure element, then <c>Take(1)</c> — was MEASURED
+    /// not to stop it: <c>Observable.Concat(IEnumerable&lt;IObservable&lt;T&gt;&gt;)</c> went on to
+    /// subscribe every later node although the downstream had already disposed, so nodes
+    /// <i>k+1…n</i> ran their handlers after all. That is not merely wasted work: those handlers
+    /// write side effects (a creator grant, an <c>Admin/Partition</c> definition) for rows this
+    /// request is about to remove, and the rollback would leave them orphaned. So the per-index
+    /// <c>Catch</c> RE-THROWS, tagged with the index — a fault terminates a <c>Concat</c> by
+    /// construction — and the single <c>Catch</c> that turns it into a decision sits DOWNSTREAM,
+    /// where it can run at most once per batch because there is no later node left to fault.</para>
+    ///
+    /// <para><b>Why deleting rows is safe here.</b> Two independent facts, both load-bearing:
+    /// everything in <paramref name="created"/> is by construction this request's OWN (phase 1
+    /// filters out every pre-existing path into <c>existingPaths</c>, which is reported and never
+    /// touched); and <see cref="CompensateFailedCreate"/> re-reads each row and compares
+    /// <see cref="MeshNode.CreatedDate"/> before deleting, so a path a concurrent writer has
+    /// re-created is left alone and SAID SO rather than destroyed. Additional nodes a handler emits
+    /// are written only after its <c>Handle</c> succeeded, so a failed critical handler leaves
+    /// none — the same reasoning as the singular path.</para>
+    /// </summary>
+    private static IObservable<(ImmutableList<MeshNode>, ImmutableList<string>)>
+        RunBulkPostCreationHandlers(
+            IMessageHub hub,
+            ImmutableList<MeshNode> created,
+            ImmutableList<string> existingPaths,
+            string? createdBy,
+            ILogger logger,
+            Action<LocalizableText, NodeCreationRejectionReason, string?, ImmutableList<MeshNode>?> postFail)
+    {
+        // The FIRST critical failure with the index it happened at, or null when all completed.
+        var firstFailure = created
+            // 🚨 Defer FIRST. RunPostCreationHandlersObs does real work on the way to returning its
+            // observable — it resolves the handlers and asks each one's Matches — and that runs
+            // while the Concat ENUMERATES, which is outside the observable the Catch below is
+            // attached to. A handler whose Matches throws would therefore reach the outer error arm
+            // UNTAGGED, and the batch would report a partial landing having compensated nothing.
+            // Deferring moves the call inside the subscription, so a synchronous throw and a
+            // reactive fault take the SAME rollback path.
+            .Select((node, index) => Observable
+                .Defer(() => RunPostCreationHandlersObs(hub, node, createdBy, logger))
+                // TAG AND RE-THROW — never swallow into an element here (see the remarks): the
+                // fault is what stops the Concat before the next node's handlers run.
+                .Catch<System.Reactive.Unit, Exception>(
+                    ex => Observable.Throw<System.Reactive.Unit>(new BulkPostCreationFault(index, ex))))
+            .Concat()
+            // The runner's Unit values carry nothing: only COMPLETION (every node's handlers are
+            // done) and the tagged FAULT are information.
+            .IgnoreElements()
+            .Select(_ => (BulkPostCreationFault?)null)
+            .Catch<BulkPostCreationFault?, Exception>(ex => ex is BulkPostCreationFault tagged
+                ? Observable.Return<BulkPostCreationFault?>(tagged)
+                // Anything untagged did not come from a handler chain and is not this method's to
+                // decide — it belongs to the outer error arm, which probes the store and reports
+                // what actually landed. Never swallowed.
+                : Observable.Throw<BulkPostCreationFault?>(ex))
+            .DefaultIfEmpty(null);
+
+        return firstFailure.SelectMany(failure =>
+        {
+            if (failure is not { } f)
+                return Observable.Return<(ImmutableList<MeshNode>, ImmutableList<string>)>(
+                    (created, existingPaths));
+
+            var survivors = created.Take(f.Index).ToImmutableList();
+            var ghosts = created.Skip(f.Index).ToImmutableList();
+            var failedPath = created[f.Index].Path;
+
+            logger.LogError(f.Cause,
+                "[CreateNodes] critical post-creation handler failed at {Path} ({Position} of {Count}) — "
+                + "rolling back that node and the {NeverRan} node(s) whose handlers never ran; "
+                + "{Kept} node(s) created before it are kept",
+                failedPath, f.Index + 1, created.Count, ghosts.Count - 1, survivors.Count);
+
+            // REVERSE: index n down to k, spelled as an index walk so it cannot be read as (or
+            // silently become) an in-place reversal of the batch's caller order.
+            return Enumerable.Range(0, ghosts.Count)
+                .Select(i => CompensateFailedCreate(hub, ghosts[ghosts.Count - 1 - i], "create", logger))
+                .Concat()
+                .ToList()
+                .SelectMany(outcomes =>
+                {
+                    // 🚨 Each number says ONLY what was established (see RollbackDisposition): rows
+                    // this rollback deleted, rows that had nothing left to delete, and the paths a
+                    // human has to look at — a row deliberately left in place, or one whose state
+                    // could not be determined. Never one count standing for all four.
+                    var removed = outcomes.Count(o => o.Disposition == RollbackDisposition.Removed);
+                    var nothingToRemove = outcomes.Count(o => o.Disposition == RollbackDisposition.NothingToRemove);
+                    var needsAHuman = outcomes
+                        .Where(o => o.Disposition is RollbackDisposition.LeftInPlace or RollbackDisposition.Undetermined)
+                        .Select(o => o.Message)
+                        .ToImmutableList();
+                    postFail(
+                        // 🚨 Verbatim, and the one refusal on either create leg that stays so by
+                        // DESIGN rather than by provenance. This sentence is ASSEMBLED — four
+                        // counts, two clauses that appear only sometimes, and a variable-length
+                        // tail of per-node rollback outcomes. A catalog template cannot carry a
+                        // shape that changes per occurrence; keying it would mint one {detail}
+                        // placeholder holding the whole report and translate nothing, which is the
+                        // pretence LocalizableText.Verbatim exists to keep visible.
+                        LocalizableText.Verbatim(
+                        $"Create failed in a post-creation step for '{failedPath}': {f.Cause.Message} "
+                        + $"Rolled back {removed} of the {ghosts.Count} node(s) this batch wrote — that node, and the "
+                        + $"{ghosts.Count - 1} whose post-creation handlers never ran"
+                        + (nothingToRemove > 0 ? $" ({nothingToRemove} had no row left to remove)" : string.Empty)
+                        + $"; the {survivors.Count} node(s) created before it completed and were kept."
+                        + (needsAHuman.IsEmpty ? string.Empty : " " + string.Join(" ", needsAHuman))),
+                        NodeCreationRejectionReason.Unknown,
+                        failedPath,
+                        survivors);
+                    return Observable.Empty<(ImmutableList<MeshNode>, ImmutableList<string>)>();
+                });
+        });
+    }
+
+    /// <summary>
+    /// A critical post-creation handler's failure, carrying the INDEX of the batch entry it happened
+    /// on. It exists so the fault can do two jobs at once: TERMINATE the sequential handler chain —
+    /// which is the only reliable way to keep a later node's handlers from running — and still say
+    /// WHICH node failed, so the rollback knows where to cut. Never leaves
+    /// <see cref="RunBulkPostCreationHandlers"/>: the caller is answered with
+    /// <see cref="Cause"/>'s message, not with this wrapper.
+    /// </summary>
+    private sealed class BulkPostCreationFault(int index, Exception cause)
+        : Exception($"Post-creation handlers failed for batch entry {index}: {cause.Message}", cause)
+    {
+        /// <summary>The failing node's position in the batch's caller order.</summary>
+        public int Index { get; } = index;
+
+        /// <summary>The handler's own failure — the ORIGINAL cause the caller is told about.</summary>
+        public Exception Cause { get; } = cause;
     }
 
     /// <summary>
@@ -3137,6 +3505,16 @@ public static class MeshExtensions
                                         // NO-PROGRESS watchdog. A drain that keeps removing rows keeps
                                         // resetting the clock; one that stops removing for `budget`
                                         // still fails, and MaxDeleteDrainPasses still bounds the passes.
+                                        // 🚨 The baseline for the queue reading below, taken as the
+                                        // stage OPENS. A depth sampled once at the timeout cannot
+                                        // exonerate a cap: a leaf can wait most of the budget for a
+                                        // slot, be granted it, and only then stall — by which time
+                                        // the depth is zero. Differencing the wait buckets against
+                                        // this makes the reading cover the WINDOW, which is the
+                                        // only thing the watchdog's verdict is about.
+                                        var ioPools = hub.ServiceProvider.GetService<IoPoolRegistry>();
+                                        var poolsAtStageStart = ioPools?.Snapshot();
+
                                         var drainProgress = new Subject<string>();
                                         return drainProgress
                                             .Select(_ => (IReadOnlyList<string>?)null)
@@ -3173,6 +3551,32 @@ public static class MeshExtensions
                                                     .Except(done, StringComparer.OrdinalIgnoreCase)
                                                     .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                                                     .ToArray();
+                                                // 🚨 WAS THE DRAIN STUCK, OR WAS IT NEVER ADMITTED?
+                                                // (#1198, the last item this issue stayed open on.)
+                                                // "Made no progress" has two causes that the
+                                                // watchdog cannot tell apart on its own: the store
+                                                // took the call and went silent, or the next leaf
+                                                // removal never got an I/O pool slot because
+                                                // unrelated writes from every other partition were
+                                                // ahead of it — the cap-1 `pg:{provider}` write
+                                                // pool is ONE process-wide gate, not one per
+                                                // partition. Those call for opposite responses and
+                                                // the line named neither, which is why the
+                                                // 2026-09-06 `0 of 1 planned` and 2026-09-14
+                                                // `3 of 9 planned` occurrences were both
+                                                // undecidable from the report they produced.
+                                                //
+                                                // The reading is free here — IoPoolRegistry is
+                                                // mesh-scoped and every counter is lock-free — and
+                                                // its two answers are not symmetric. Nothing queued
+                                                // at the end AND nothing admitted during the stage
+                                                // waiting a second rules out THE POOL GATES: no cap
+                                                // held this drain up. It does not say where the
+                                                // drain WAS stuck, only where it was not. The other
+                                                // answer is a lead, so the sentence says "had work
+                                                // queued", never "caused".
+                                                var queueing = IoPoolQueueReport.Describe(
+                                                    ioPools, poolsAtStageStart);
                                                 var ex = DeleteStageTimeout(
                                                     DeleteStage.Commit,
                                                     $"the bottom-up delete of '{path}' made no progress for "
@@ -3184,7 +3588,8 @@ public static class MeshExtensions
                                                         : $"; still owed by the plan: {string.Join(", ", stuck.Take(10))}"
                                                           + (stuck.Length > 10
                                                               ? $" (+{stuck.Length - 10} more)"
-                                                              : string.Empty)));
+                                                              : string.Empty))
+                                                    + $". At the timeout: {queueing}");
                                                 // Carry the REAL progress: the timeout discards the fan-out's
                                                 // own bookkeeping, and reporting 0 here is what made #1198 look
                                                 // like a pre-commit failure.
@@ -4397,7 +4802,7 @@ public static class MeshExtensions
     /// stops at the first failure), emits the first failure as a tuple or <c>null</c>
     /// if all pass. Consumers compose via <c>SelectMany</c>; no <c>await</c>.
     /// </summary>
-    private static IObservable<(string? ErrorMessage, NodeCreationRejectionReason Reason)?> RunCreationValidatorsObs(
+    private static IObservable<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?> RunCreationValidatorsObs(
         IMessageHub hub,
         MeshNode node,
         CreateNodeRequest request)
@@ -4417,7 +4822,7 @@ public static class MeshExtensions
             .ToList();
 
         if (validators.Count == 0)
-            return Observable.Return<(string?, NodeCreationRejectionReason)?>(null);
+            return Observable.Return<(LocalizableText?, NodeCreationRejectionReason)?>(null);
 
         return validators
             .Select(v => v.Validate(context))
@@ -4436,7 +4841,17 @@ public static class MeshExtensions
                     NodeRejectionReason.Unavailable => NodeCreationRejectionReason.Unavailable,
                     _ => NodeCreationRejectionReason.ValidationFailed
                 };
-                return ((string?, NodeCreationRejectionReason)?)(result.ErrorMessage, reason);
+                // 🚨 Verbatim, and that is the honest classification. INodeValidator hands back a
+                // plain string, and its implementers are RLS, the app-integrity validators and
+                // plugin-contributed ones outside this repo — so this frame knows the sentence but
+                // never the key. Minting a template with one {detail} placeholder would translate
+                // nothing; keying a validator's refusal is that validator's change to make, and
+                // this carrier is ready for it the day it does.
+                return ((LocalizableText?, NodeCreationRejectionReason)?)(
+                    result.ErrorMessage is { Length: > 0 } message
+                        ? LocalizableText.Verbatim(message)
+                        : null,
+                    reason);
             })
             .Take(1)
             .DefaultIfEmpty(null);
@@ -4673,7 +5088,11 @@ public static class MeshExtensions
                             // the caller nothing: the row is already written either way, and the
                             // additional nodes come from an INodePostCreationHandler registered in
                             // src/, never from the request.
-                            hub.Post(DataChangeRequest.Update([saved]),
+                            // 🚨 ISSUED OFF THE ROUTER (#1140). The identity above is carried as a
+                            // stamped VALUE and is therefore independent of the issuing hub — which
+                            // is exactly why the hop is safe here: it moves where the delivery comes
+                            // FROM, never whose permissions decide it.
+                            hub.NodeOperationIssuingHub().Post(DataChangeRequest.Update([saved]),
                                 o => o.WithTarget(new Address(saved.Path))
                                     .WithAccessContext(WellKnownUsers.SystemContext));
                             logger.LogInformation(
@@ -5565,14 +5984,32 @@ public static class MeshExtensions
                             }
                             if (outcome.Error is { } ex)
                             {
+                                var reason = NodeUpsertRejection.Classify(ex);
                                 logger.LogWarning(ex,
-                                    "[CreateOrUpdate] inner UpdateNode faulted for {Path}", node.Path);
+                                    "[CreateOrUpdate] inner UpdateNode faulted for {Path} ({Reason})",
+                                    node.Path, reason);
+                                // 🚨 A RECYCLE IS NOT A VERDICT ABOUT THE WRITE (MeshWeaver#4484).
+                                // The owner refusing an intake because it is restarting says nothing
+                                // about the node, the payload or the caller — and flattening it to
+                                // Unknown told a caller who had done everything right that something
+                                // unnameable had gone wrong. It matters most for the one route that
+                                // CAUSES the recycle: retyping a stranded node is the sanctioned
+                                // repair (#2993), the retype makes the rebind watcher recycle the
+                                // owner, and a second repair moments later races the first. The
+                                // caller is told which condition it hit and that the address comes
+                                // back, so "retry" is a decision rather than a guess.
                                 PostFail(
-                                    LocalizableText.Keyed($"Inner UpdateNode faulted: {ex.Message}",
-                                        "activity.node.upsert.innerUpdateFaulted", ("error", ex.Message)),
-                                    ex is UnauthorizedAccessException
-                                        ? NodeUpsertRejectionReason.Unauthorized
-                                        : NodeUpsertRejectionReason.Unknown);
+                                    reason == NodeUpsertRejectionReason.AddressRecycling
+                                        ? LocalizableText.Keyed(
+                                            $"The owner of '{node.Path}' is recycling, so the write "
+                                            + "was refused on arrival and NOTHING was written — the "
+                                            + "address reactivates, so this is worth retrying. "
+                                            + $"Underlying report: {ex.Message}",
+                                            "activity.node.upsert.addressRecycling",
+                                            ("path", node.Path), ("error", ex.Message))
+                                        : LocalizableText.Keyed($"Inner UpdateNode faulted: {ex.Message}",
+                                            "activity.node.upsert.innerUpdateFaulted", ("error", ex.Message)),
+                                    reason);
                                 return;
                             }
                             hub.NoteRequestStage(request.Id, "UPSERT_UPDATE_COMPLETED_EMPTY");

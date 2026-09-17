@@ -35,7 +35,9 @@ namespace MeshWeaver.Graph.Security;
 /// <list type="number">
 ///   <item><b>Top-level only.</b> A partition-owning instance IS a partition root, so its path
 ///     is just its id (empty namespace). A non-empty namespace is rejected up front — a nested
-///     partition root would leave a half-registered split state.</item>
+///     partition root would leave a half-registered split state. This holds for a type declared in
+///     mesh content too, resolved from the definition's durable row so the refusal never activates
+///     the type's hub (<see cref="PartitionOwningTypes.OwnsPartitionWithoutActivating"/>).</item>
 ///   <item><b>Eagerly provisioned.</b> Every <see cref="IPartitionStorageProvider.EnsurePartitionProvisioned"/>
 ///     runs (the Postgres provider routes to <c>public.ensure_partition_schema</c>; the async DB
 ///     edge is sealed inside <c>IIoPool</c> — no <c>await</c>, no <c>Observable.FromAsync</c> here).
@@ -81,20 +83,34 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
             return Observable.Return(NodeValidationResult.Valid());
 
         // A type registered in src/ answers from the static registry, synchronously — and for it
-        // the nested-create refusal inside Provision still applies to every create.
+        // the nested-create refusal inside Provision applies to every create.
         if (_hub.ServiceProvider.FindStaticNode(context.Node.NodeType) is { } staticType)
             return staticType.ContentAs<NodeTypeDefinition>(_hub.JsonSerializerOptions) is { OwnsPartition: true }
                 ? Provision(context)
                 : Observable.Return(NodeValidationResult.Valid());
 
         // 🚨 A type declared in MESH CONTENT (Crm/Client) is invisible to FindStaticNode, and asking
-        // only the static registry is why its top-level create was never provisioned. Only a
-        // TOP-LEVEL create can root a partition, so the declaration is read (one anchored query)
-        // only then — nested creates of in-mesh types stay free of the read.
+        // only the static registry is why its top-level create was never provisioned — and why a
+        // NESTED instance of it was never refused (#4449 item 1).
+        //
+        // A nested create is the ordinary content path, so it must not ask the way the top-level
+        // path does: that resolver ends in GetMeshNodeStream(<type>), and for a per-node hub the read
+        // IS the activation — a cold compile that can outlast the probe budget and fail closed,
+        // i.e. an intermittent refusal of routine content. It reads the definition's DURABLE row
+        // instead: the same store the create's existence check reads next, so the answer never
+        // depends on which hubs are warm, and a store that cannot answer refuses as Unavailable
+        // (retryable) exactly where the existence check would have failed the create anyway.
+        // Doc/Architecture/PartitionOwnershipResolution.
         if (!string.IsNullOrEmpty(context.Node.Namespace))
-            return Observable.Return(NodeValidationResult.Valid());
+            return PartitionOwningTypes.OwnsPartitionWithoutActivating(_hub, context.Node.NodeType)
+                .Select(owns => owns switch
+                {
+                    true => PartitionOwningTypes.NestedInstanceRefused(context),
+                    false => NodeValidationResult.Valid(),
+                    null => PartitionOwningTypes.Undetermined(context),
+                });
 
-        return PartitionOwningTypes.OwnsPartition(_hub, context.Node.NodeType)
+        return PartitionOwningTypes.OwnsPartitionOnce(_hub, context)
             .SelectMany(owns => owns switch
             {
                 true => Provision(context),
@@ -110,13 +126,10 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
     /// </summary>
     private IObservable<NodeValidationResult> Provision(NodeValidationContext context)
     {
-        // A partition-owning instance is a partition root → must be top-level.
+        // A partition-owning instance is a partition root → must be top-level. Same keyed refusal
+        // an in-mesh owning type gets, in the caller's language.
         if (!string.IsNullOrEmpty(context.Node.Namespace))
-            return Observable.Return(NodeValidationResult.Invalid(
-                $"A '{context.Node.NodeType}' owns its partition, so it must be top-level: its " +
-                $"path is just its id. Cannot create '{context.Node.Id}' under namespace " +
-                $"'{context.Node.Namespace}'.",
-                NodeRejectionReason.InvalidPath));
+            return Observable.Return(PartitionOwningTypes.NestedInstanceRefused(context));
 
         var partitionName = context.Node.Id;
         if (string.IsNullOrEmpty(partitionName))

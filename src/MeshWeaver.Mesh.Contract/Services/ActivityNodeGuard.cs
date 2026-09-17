@@ -1,4 +1,5 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
+using MeshWeaver.Data;
 
 namespace MeshWeaver.Mesh;
 
@@ -95,9 +96,26 @@ public static class ActivityNodeGuard
     /// </summary>
     public static bool IsOwnerless(MeshNode? node, out string reason)
     {
-        reason = string.Empty;
+        reason = OwnerlessRefusal(node)?.English ?? string.Empty;
+        return reason.Length > 0;
+    }
+
+    /// <summary>
+    /// <see cref="IsOwnerless"/>'s refusal as text PLUS the catalog key that renders it in the
+    /// viewer's language, or null when the satellite is properly owned.
+    ///
+    /// <para>The keyed form is the one a write boundary should report, for the reason
+    /// <see cref="Services.AccessAssignmentGuard.ScopeRefusal"/> states: handing a handler only the finished
+    /// English throws the key away at THIS frame, and the handler cannot recover it — it does not
+    /// know which of the two branches below fired, so it can name neither the key nor its
+    /// arguments (MeshWeaver#3917, and #4507 for the create leg).</para>
+    /// </summary>
+    /// <param name="node">The node being written.</param>
+    /// <returns>The refusal, or null when the satellite has a real owner.</returns>
+    public static LocalizableText? OwnerlessRefusal(MeshNode? node)
+    {
         if (node is null)
-            return false;
+            return null;
 
         // Identify a satellite INSTANCE by its placement: the last namespace segment is one of the
         // owner-requiring satellite folders, i.e. the node sits directly under it. This is
@@ -106,11 +124,11 @@ public static class ActivityNodeGuard
         var nsSegments = (node.Namespace ?? string.Empty)
             .Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (nsSegments.Length == 0)
-            return false;
+            return null;
 
         var satelliteSegment = nsSegments[^1];
         if (!OwnerRequiringSatelliteSegments.Contains(satelliteSegment))
-            return false;
+            return null;
 
         // Owner = the namespace with the trailing satellite segment removed.
         //   "_Thread"            -> ""           (ownerless — the bug)
@@ -118,16 +136,16 @@ public static class ActivityNodeGuard
         //   "Doc/Sub/_Activity"  -> "Doc/Sub"    (owned — fine)
         var owner = string.Join('/', nsSegments[..^1]);
         if (string.IsNullOrEmpty(owner))
-        {
-            reason =
+            return LocalizableText.Keyed(
                 $"Satellite '{node.Path}' is anchored at a top-level / ownerless path: the namespace " +
                 $"'{node.Namespace}' has no owning node before '{satelliteSegment}'. Satellites MUST live at " +
                 $"'{{ownerPath}}/{satelliteSegment}/{{id}}' under a real owning node (a Space, NodeType, User " +
                 $"partition, or an Admin-partition version node for startup activities) — never at a bare " +
                 $"'{satelliteSegment}'. There is no partition / per-node hub to route to, so every " +
-                $"poster/subscriber NotFound-storms the router.";
-            return true;
-        }
+                $"poster/subscriber NotFound-storms the router.",
+                OwnerlessSatelliteKey,
+                ("path", node.Path), ("namespace", node.Namespace ?? string.Empty),
+                ("segment", satelliteSegment));
 
         // Activity-specific secondary check: an empty MainNode. Preserves the Phase-1 Activity
         // behaviour. NOT generalised to other satellites: a partition-root _Access grant
@@ -135,16 +153,21 @@ public static class ActivityNodeGuard
         // (first segment), which the owner-segment check above already guarantees is present.
         if (string.Equals(satelliteSegment, ActivitySegment, StringComparison.Ordinal)
             && string.IsNullOrWhiteSpace(node.MainNode))
-        {
-            reason =
+            return LocalizableText.Keyed(
                 $"Activity '{node.Path}' has an empty MainNode. Set MainNode to the owning node path " +
                 $"('{owner}') so access delegates to it and the activity is routable — an empty MainNode is " +
-                $"the ownerless shape that NotFound-storms the router.";
-            return true;
-        }
+                $"the ownerless shape that NotFound-storms the router.",
+                ActivityEmptyMainNodeKey,
+                ("path", node.Path), ("owner", owner));
 
-        return false;
+        return null;
     }
+
+    /// <summary>The catalog key for the ownerless-placement branch of <see cref="OwnerlessRefusal"/>.</summary>
+    public const string OwnerlessSatelliteKey = "activity.satellite.ownerless";
+
+    /// <summary>The catalog key for the empty-MainNode branch of <see cref="OwnerlessRefusal"/>.</summary>
+    public const string ActivityEmptyMainNodeKey = "activity.satellite.activityEmptyMainNode";
 
     /// <summary>
     /// Fail-fast: throws <see cref="OwnerlessActivityException"/> when <paramref name="node"/> is a

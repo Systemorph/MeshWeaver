@@ -86,6 +86,26 @@ The reading is `MeshBuilderModuleActivation.RequiredEntries(configuration)`, and
 No count, no padding, and no knowledge of the image's length. A later provider may withdraw the
 claim by setting it to `false`; the renderer therefore never emits `false`, only `true` or nothing.
 
+Both delivery routes carry it, and both carry the same **slots** — the contiguous `requiredModules`
+list *and* every explicit `requiredModuleSlots` entry. (The operator's catalog config file used to
+render the contiguous list alone and drop the slots, so two renderers of one record described
+different required sets. Harmless while both were read as an overlay; beside the claim they would
+have stated two different *complete* sets, and the route that dropped a slot would have said the
+module is not required at all.)
+
+🚨 **The chart's block has a ceiling, and under the claim an unrendered slot means NOT REQUIRED.**
+The portal ConfigMap names every `Modules__Required__N` key literally — a Helm `range` renders
+correctly and is invisible to the key-literal guards — so the list stops somewhere.
+`DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot` states where, a test reads the number
+back out of the template so the two cannot drift, and `ChartModuleSlotProblems` *names* a slot above
+it instead of letting the render drop it.
+
+That check is **scoped to the chart and deliberately not folded into `SpecProblems`**: the Aspire
+route injects whatever `PortalConfig` emits, ceiling and all, so it delivers such a slot correctly,
+and a route-neutral "why the spec cannot bring an instance up" answer that named it would be false
+for an Aspire run. It is also the nastiest shape here — a slot above the ceiling **works on a laptop
+and disappears in the cluster** — so a Helm renderer asks it alongside the spec problems.
+
 The boot path and the `/health` `required_modules` check must ask this question the *same* way — a
 probe that disagreed with the log line before it would be worse than no probe — so both go through
 `RequiredEntries`, and `MissingRequired` is defined in terms of it.
@@ -137,13 +157,17 @@ Fluent: `record.WithRequiredModules(…).WithRequiredModulesAuthoritative()`.
 | Test | Holds |
 |---|---|
 | `ConfiguredModuleActivationTest` (`test/MeshWeaver.Compiler.Pipeline.Test`) | the reading, over a real two-provider configuration — the short list, the empty claim, the explicit slot, blanking, the no-claim default, the non-root section |
-| `RequiredModuleAuthorityTest` (`test/MeshWeaver.Deployment.Contract.Test`) | the rendering — both renderers, the catalog config file, never-`false`, the JSON round-trip, and the key spelled the way the reader reads it |
+| `RequiredModuleAuthorityTest` (`test/MeshWeaver.Deployment.Contract.Test`) | the rendering — both routes agreeing slot for slot, never-`false`, the JSON round-trip, the ceiling read back out of the chart, and a slot above it reported rather than dropped — scoped to the chart, since the Aspire route delivers it |
 
-That last one matters more than it looks: the record renders from `MeshWeaver.Deployment.Contract`
-(zero MeshWeaver references by design — it ships inside the published Aspire package) and the host
-reads from `MeshWeaver.Mesh.Contract`, so the key is spelled twice and a rename on one side would
-silently stop the other from ever seeing the claim. Rendered-and-never-read is indistinguishable
-from not rendered.
+🚨 **The cross-assembly key assertion is in the FIRST of those, not the second, and deliberately.**
+The record renders from `MeshWeaver.Deployment.Contract` (zero MeshWeaver references by design — it
+ships inside the published Aspire package) and the host reads from `MeshWeaver.Mesh.Contract`, so
+the key is spelled twice and a rename on one side would silently stop the other from ever seeing the
+claim — rendered-and-never-read is indistinguishable from not rendered. But
+`MeshWeaver.Deployment.Contract.Test` references only the renderer's assembly, so the same two
+constants compared *there* would be the renderer against a literal: a check that cannot fail for the
+reason it exists. `ConfiguredModuleActivationTest` sees both assemblies (through
+`MeshWeaver.PluginCatalog`), so the comparison lives there.
 
 ## Still open
 

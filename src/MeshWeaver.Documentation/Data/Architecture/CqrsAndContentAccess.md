@@ -511,6 +511,40 @@ No `Query`, no `await`, no `FromAsync` bridge, no separate request type. The own
 
 That is the read for a node that **exists**. A node that may not exist yet is a different problem, and it has its own pattern — the next section.
 
+### 🚨 "No lag" holds for a reader, NOT for a read that follows YOUR OWN write
+
+The sentence above is about a reader arriving at a node. It does **not** extend to the read-back
+immediately after your own `Update` on the same mirror, and the difference has reddened a test
+(#4559): the assertion read the **pre-write** body and reported the value from the line before.
+
+Two different deliveries are involved.
+
+| | what it means |
+|---|---|
+| the `Update` observable's terminal | the OWNER's verdict — since #2661 "saved" means the owner committed, and a bound expiring is not a commit |
+| your mirror's replayed value | what the last **echo** from the owner put there — a separate delivery, over the sync stream |
+
+So the write can be committed and your mirror still one echo behind, and
+`GetMeshNodeStream(path)` replays *its current value* on subscribe. Nothing is lost; the read is
+simply early. Under load this is routine — `MeshNodeStreamCache`'s own per-path queue was built
+around it (#2305 / #2291: "the queue advanced on the write's LOCAL emit — never on the owner's
+ECHO", so the successor shipped a base predating its predecessor).
+
+**Read back by waiting for the state you wrote**, never by taking the first emission:
+
+```csharp
+workspace.GetMeshNodeStream(path)
+    .Where(node => node is not null && node.ContentAs<Doc>(options)?.Revision == written)
+    .Take(1)
+    .Timeout(TimeSpan.FromSeconds(10))
+```
+
+🚨 **And exactly one shape must NOT be converted this way: an assertion that a value was
+PRESERVED.** There the stale replay *is* the expected value, so a wait passes on the very reading
+the check exists to catch — and it passes instantly, which reads like a strong result. A
+"nothing changed it" check keeps the first-emission read; only a check whose expected value is NEW
+may wait for it.
+
 ---
 
 ### 🚨 An OPTIONAL node: listing for EXISTENCE, stream for CONTENT

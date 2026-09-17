@@ -397,7 +397,12 @@ internal sealed class CreatableTypesProvider(
             DisplayName: node.Name ?? GetLastSegment(node.Path),
             Icon: icon,
             Description: def?.Description,
-            Order: node.Order ?? 0);
+            Order: node.Order ?? 0)
+        {
+            // The definition is already in hand, so the form learns whether instances are partition
+            // roots at no extra read — for a type declared in mesh content too (#4449).
+            OwnsPartition = def?.OwnsPartition == true,
+        };
     }
 
     /// <summary>
