@@ -257,6 +257,40 @@ replica *and* for the two healthy ones beside it, and therefore could not tell t
 consumer of the same endpoint, with the same fixed budget and no way to say which check spent it:
 when the timing line names a slow check, it is naming it for every reader of `/health` at once.
 
+### The rest of the endpoint, audited (2026-09-17)
+
+The question the incident raises is *"where else does a fixed budget pay for something that grows?"*
+Every check registered on the portal — core and `Memex.Portal.Distributed` — read, with the shape of
+its per-call work:
+
+| shape | checks |
+|---|---|
+| **reads a registry or a counter** — cost independent of the mesh | `content-types`, `bake-report`, `source-discovery`, `publication-seal`, `bundle_adoption`, `entitlement_anchor`, `nodetype_bake`, `process_progress`, `pending_module_activation` (memoised by [#3664](https://github.com/Systemorph/MeshWeaver/issues/3664)) |
+| **one bounded call per probe** — live IO, but a constant | `db_version` (one round trip), `storage_capacity` and `data_volume_free_space` (one `statfs` per *configured path*, 11–14 ms measured) |
+| **per declared entry, per probe** | `required_modules` — and it is the only one |
+
+So the defect was singular on this endpoint, and it is now fixed at the root rather than tuned. Two
+things next to it are the same shape and are worth naming rather than filing:
+
+- **the NodeType bake sweep.** ~2.4 s per NodeType, strictly sequential, inside the startup probe's
+  `periodSeconds × failureThreshold`. That budget was deliberately widened for it (3 h on the
+  instances that arm the gate), which is the *right* answer to per-item work — a budget sized to the
+  work, not a timeout sized to a reading — but the measured worst case is already **> 63 min** for
+  ~230 types under serving load, i.e. more than a third of the ceiling. It is bounded, watched, and
+  the one to re-derive when the type count next jumps.
+- **the fleet watch's own pass.** Its per-replica budget is the 8 s above, fanned out over a roster
+  that grows with the fleet, against a `staleAfter` derived from the sweep interval. See
+  [#4611](https://github.com/Systemorph/MeshWeaver/issues/4611) — which should be re-measured once
+  `/health` answers in milliseconds again, because until then its slow-pass reading has an
+  explanation that is not its own.
+
+Not this class, checked and dismissed: the `Hosting/InstanceAction` deadlines (`JobCap` 45 min,
+`ResolutionBudget` 30 s, `IndexGrace` 10 s) and the migration Job's `budgetMinutes`, which bound
+whole operations rather than per-item fan-out — and the migration's own doc already states the rule
+this page states, in its own words: *"a migration that needs longer is not a migration to make room
+for, it is one to rewrite as bulk work (one set-based statement per partition, never a request per
+row)."*
+
 ## Known: two policies that are configured and applied to nothing
 
 `AddDefaultHealthChecks` registers a request-timeout policy named `HealthChecks` (20 s) and an
