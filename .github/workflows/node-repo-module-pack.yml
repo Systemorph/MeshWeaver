@@ -1369,6 +1369,17 @@ jobs:
       # (the same "the checkout IS the platform" reading its bundle-identity block takes), and is
       # RED only when neither can be established.
       platform-version: ${{ steps.platform-version.outputs.version }}
+    env:
+      # The object-store seam (ci-artifact-store.py): where this run's same-run HANDOFFS go when a
+      # caller names a store. `select` resolved the store once; this job only reads it. With no
+      # store the two `if:`s below pick the GitHub artifact exactly as they always have.
+      ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
+      ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
+      # 🚨 A DETERMINISTIC KEY, so nothing has to be plumbed from producer to consumer: run id AND
+      # ATTEMPT, because a re-run must not read the previous attempt's handoff. The `runs/` prefix
+      # is what the store's lifecycle policy deletes after two days — see Doc/Architecture/
+      # CiArtifactStorage; a handoff between the jobs of one run is dead when the run is.
+      STORE_RUN_PREFIX: runs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}
     steps:
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
@@ -1401,12 +1412,19 @@ jobs:
       # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
       # with the other call's builder.
       - name: Hand the tool to the matrix
-        if: needs.select.outputs.build-modules != '[]'
+        if: needs.select.outputs.build-modules != '[]' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         uses: actions/upload-artifact@v7
         with:
           name: module-pack-tool-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/pack-tool
           retention-days: 1
+      - name: Hand the tool to the matrix (object store)
+        if: needs.select.outputs.build-modules != '[]' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        run: |
+          set -euo pipefail
+          tar -C "$RUNNER_TEMP/pack-tool" -cf "$RUNNER_TEMP/module-pack-tool.tar" .
+          python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
+            --key "$STORE_RUN_PREFIX/module-pack-tool.tar" --file "$RUNNER_TEMP/module-pack-tool.tar"
       - name: Restore the platform image tarball (per-digest cache)
         if: inputs.platform-image-digest != ''
         id: image-cache
@@ -1552,12 +1570,19 @@ jobs:
           [ "$n" -gt 50 ] || { echo "::error::the platform's /app holds $n assemblies — not a platform image; refusing to hand it over"; exit 1; }
           echo "platform hand-over: $n assemblies from $DIGEST, $(du -h "$out/platform-refs.tar.gz" | cut -f1) gzipped"
       - name: Upload the platform's /app for the matrix
-        if: inputs.platform-image-digest != ''
+        if: inputs.platform-image-digest != '' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         uses: actions/upload-artifact@v7
         with:
           name: platform-refs-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/platform-refs-artifact
           retention-days: 1
+      - name: Upload the platform's /app for the matrix (object store)
+        if: inputs.platform-image-digest != '' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        run: |
+          set -euo pipefail
+          tar -C "$RUNNER_TEMP/platform-refs-artifact" -cf "$RUNNER_TEMP/platform-refs.tar" .
+          python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
+            --key "$STORE_RUN_PREFIX/platform-refs.tar" --file "$RUNNER_TEMP/platform-refs.tar"
           # Already gzipped — a second deflate pass buys nothing and costs the upload minutes.
           compression-level: 0
       # ───────── THE PLATFORM'S OWN VERSION — the denominator of the module FLOOR gate (#3554) ─────────
@@ -1662,6 +1687,17 @@ jobs:
     timeout-minutes: 30
     # Inherit for the same reason as `prepare`: OIDC is a caller-selected capability, while basic
     # callers must remain able to grant `actions: read` without also granting an identity token.
+    env:
+      # The object-store seam (ci-artifact-store.py): where this run's same-run HANDOFFS go when a
+      # caller names a store. `select` resolved the store once; this job only reads it. With no
+      # store the two `if:`s below pick the GitHub artifact exactly as they always have.
+      ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
+      ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
+      # 🚨 A DETERMINISTIC KEY, so nothing has to be plumbed from producer to consumer: run id AND
+      # ATTEMPT, because a re-run must not read the previous attempt's handoff. The `runs/` prefix
+      # is what the store's lifecycle policy deletes after two days — see Doc/Architecture/
+      # CiArtifactStorage; a handoff between the jobs of one run is dead when the run is.
+      STORE_RUN_PREFIX: runs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}
     steps:
       - name: Resolve the content repository's credential
         id: content-repo
@@ -1956,13 +1992,20 @@ jobs:
             python3 build-logic/.github/scripts/module-build-ledger.py record --key "$key" --status Failed --phase "$phase" --failure-file "$evidence" || true
           done < <(jq -r '.[] | select(.build == "container") | select(.ledger.key != null) | [.module, .project, .ledger.key] | @tsv' <<< "$MODULES")
       - name: Hand the workspace to the matrix
-        if: steps.build.outputs.built == 'true'
+        if: steps.build.outputs.built == 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         uses: actions/upload-artifact@v7
         with:
           name: workspace-build-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/module-build
           retention-days: 1
           if-no-files-found: error
+      - name: Hand the workspace to the matrix (object store)
+        if: steps.build.outputs.built == 'true' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        run: |
+          set -euo pipefail
+          tar -C "$RUNNER_TEMP/module-build" -cf "$RUNNER_TEMP/workspace-build.tar" .
+          python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
+            --key "$STORE_RUN_PREFIX/workspace-build.tar" --file "$RUNNER_TEMP/workspace-build.tar"
 
   # ═══════════ THE PACK LEGS — N MODULES PER RUNNER, ONE VERDICT PER MODULE (2026-09-12) ═══════════
   # 🚨 A BATCH IS A RUNNER-SHARING DEVICE, NOT A COUPLING. Every step below that used to read
@@ -2004,6 +2047,10 @@ jobs:
       # same version or the receipt field and the reader disagree about its shape.
       MODULE_SET_CENSUS: ${{ github.workspace }}/build-logic/.github/scripts/module-set-census.py
       ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
+      ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
+      # The same deterministic handoff prefix `prepare` and `build-workspace` wrote under — run id
+      # AND attempt, so a re-run never reads the previous attempt's bytes.
+      STORE_RUN_PREFIX: runs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}
       # The per-file static-asset assertion (#2384). 🚨 build-logic-ref, NOT platform-ref, for the
       # reason stated two lines above: the platform checkout may deliberately predate this lane, so
       # reading a gate the lane itself introduced out of THAT tree is a file-not-found on every
@@ -2437,13 +2484,23 @@ jobs:
           done
           echo "mounted=false" >> "$GITHUB_OUTPUT"
       - name: Fetch the platform's /app (handed over by prepare)
-        if: inputs.platform-image-digest != '' && steps.platform-mount.outputs.mounted != 'true'
+        if: inputs.platform-image-digest != '' && steps.platform-mount.outputs.mounted != 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         id: platform-artifact
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           name: platform-refs-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/platform-refs-artifact
+      - name: Fetch the platform's /app (handed over by prepare) (object store)
+        if: inputs.platform-image-digest != '' && steps.platform-mount.outputs.mounted != 'true' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        id: platform-store
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/platform-refs-artifact"
+          python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
+            --locator "$ARTIFACT_STORE/$STORE_RUN_PREFIX/platform-refs.tar" --out "$RUNNER_TEMP/platform-refs.tar"
+          tar -C "$RUNNER_TEMP/platform-refs-artifact" -xf "$RUNNER_TEMP/platform-refs.tar"
       - name: The platform reference set — which source, verified
         if: inputs.platform-image-digest != ''
         id: platform
@@ -2452,7 +2509,10 @@ jobs:
           LANE: ${{ needs.select.outputs.lane }}
           MOUNTED: ${{ steps.platform-mount.outputs.mounted }}
           MOUNT_DIR: ${{ steps.platform-mount.outputs.dir }}
-          FETCHED: ${{ steps.platform-artifact.outcome }}
+          # Whichever fetch ran. A skipped step's `outcome` is the falsy empty string, so the
+          # `||` picks the one that executed — and when the mount hit, neither did and this is
+          # empty, which the refusal below renders as '<none>' rather than as a failure.
+          FETCHED: ${{ steps.platform-artifact.outcome || steps.platform-store.outcome }}
         run: |
           set -euo pipefail
           if [ "$MOUNTED" = true ]; then
@@ -2461,7 +2521,7 @@ jobs:
           else
             tarball="$RUNNER_TEMP/platform-refs-artifact/platform-refs.tar.gz"
             if [ "$FETCHED" != success ] || [ ! -f "$tarball" ]; then
-              echo "::error::no platform /app for $DIGEST on this runner ($RUNNER_NAME): no complete set under /opt/platform/sha256-<tester hex>/ pairs it (the runner's platform mount, Memex#316 — the step above says why) AND the run artifact platform-refs-$LANE could not be fetched (download outcome: ${FETCHED:-skipped}). 'Warm the shared build environment (once)' (job: prepare) uploads that artifact in this same run — if it is green, the artifact expired (retention 1 day) or this run was re-run past it; re-run the whole lane, never this leg alone. This job runs no docker and holds no registry credential, by design."
+              echo "::error::no platform /app for $DIGEST on this runner ($RUNNER_NAME): no complete set under /opt/platform/sha256-<tester hex>/ pairs it (the runner's platform mount, Memex#316 — the step above says why) AND the handoff prepare made for this run could not be fetched — the run artifact platform-refs-$LANE, or, when this caller names an object store, $STORE_RUN_PREFIX/platform-refs.tar in it (fetch outcome: ${FETCHED:-skipped}). 'Warm the shared build environment (once)' (job: prepare) uploads that artifact in this same run — if it is green, the artifact expired (retention 1 day) or this run was re-run past it; re-run the whole lane, never this leg alone. This job runs no docker and holds no registry credential, by design."
               exit 1
             fi
             stampfile="$RUNNER_TEMP/platform-refs-artifact/digest.txt"
@@ -2577,11 +2637,19 @@ jobs:
       # The global workspace build's outputs — every container entry's assemblies, closure
       # manifests and the one build log. Container packs consume THIS; sdk entries ignore it.
       - name: Fetch the global workspace build
-        if: ${{ steps.plan.outputs.fetch_workspace == 'true' }}
+        if: steps.plan.outputs.fetch_workspace == 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         uses: actions/download-artifact@v8
         with:
           name: workspace-build-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/workspace-build
+      - name: Fetch the global workspace build (object store)
+        if: steps.plan.outputs.fetch_workspace == 'true' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/workspace-build"
+          python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
+            --locator "$ARTIFACT_STORE/$STORE_RUN_PREFIX/workspace-build.tar" --out "$RUNNER_TEMP/workspace-build.tar"
+          tar -C "$RUNNER_TEMP/workspace-build" -xf "$RUNNER_TEMP/workspace-build.tar"
       # 🚨 `decision == build` on the build/pack/inspect trio is a MODE SWITCH on the ledger's
       # plan, not a skip-trapdoor: the reuse leg below runs in its place for the reuse modules, is
       # itself unconditional within its mode, verifies the bytes it fetched, and drops the same
@@ -2832,7 +2900,6 @@ jobs:
         id: reused
         env:
           GH_TOKEN: ${{ github.token }}
-          ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
@@ -2890,11 +2957,19 @@ jobs:
       # across Plugins#1032). A missing artifact fails this download RED rather than quietly
       # rebuilding a maybe-different tool.
       - name: Fetch the module-pack tool (built once by prepare)
-        if: steps.plan.outputs.any_build == 'true'
+        if: steps.plan.outputs.any_build == 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         uses: actions/download-artifact@v8
         with:
           name: module-pack-tool-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/pack-tool
+      - name: Fetch the module-pack tool (built once by prepare) (object store)
+        if: steps.plan.outputs.any_build == 'true' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pack-tool"
+          python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
+            --locator "$ARTIFACT_STORE/$STORE_RUN_PREFIX/module-pack-tool.tar" --out "$RUNNER_TEMP/module-pack-tool.tar"
+          tar -C "$RUNNER_TEMP/pack-tool" -xf "$RUNNER_TEMP/module-pack-tool.tar"
 
       - name: Pack the module bundle
         id: pack
@@ -3295,8 +3370,6 @@ jobs:
       # nothing for a durable copy to serve.
       - name: Shelve the durable bundle copy (object store)
         if: inputs.ledger == 'required' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
-        env:
-          ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
