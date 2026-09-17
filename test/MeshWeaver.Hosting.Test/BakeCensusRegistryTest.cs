@@ -284,7 +284,7 @@ public class BakeCensusRegistryTest
         sentence.Should()
             .Contain("OUTCOME CENSUS (sweep completed)")
             .And.Contain("every one of the 2 type(s) that reached a verdict has a usable assembly")
-            .And.Contain("Denominator: 2 of 209 enumerated type(s) reached a verdict",
+            .And.Contain("Denominator: 2 of 209 enumerated type(s) reported an outcome",
                 "a zero that does not state what it is a zero OF could equally mean 'I could not "
                 + "look' — the defect class this census belongs to")
             .And.NotContain("NO sweep has reported",
@@ -340,7 +340,7 @@ public class BakeCensusRegistryTest
         reading.Unknown.Should().Be(2);
 
         NodeTypeBakeReportRegistry.Describe(reading).Should()
-            .Contain("2 reached none (timed out, or waiting on something that did)",
+            .Contain("2 reached NO verdict (timed out, or waiting on something that did)",
                 "an unmeasured type must be VISIBLE in the sentence, not absorbed into the clean "
                 + "count — otherwise a sweep that measured almost nothing reads as a pass");
     }
@@ -441,6 +441,58 @@ public class BakeCensusRegistryTest
                 "a sweep that died partway through its population has measured a PREFIX of it, and "
                 + "printing that as a finished census is the same lie as a skipped gate painted "
                 + "green");
+    }
+
+
+    /// <summary>
+    /// 🚨 <b>"Nothing was compiled, on purpose" is its own reading</b> — the adopt-only path (the
+    /// compiling sweep off, adoption having run) settles <c>not applicable</c>, and that must not
+    /// collapse into the empty settlement, which is the sentence reserved for "no sweep reported
+    /// here". Pinned because a documented settlement value that nothing ever sets is exactly the
+    /// contract-vs-code drift this census is supposed to make impossible.
+    /// </summary>
+    [Fact]
+    public void AnAdoptOnlyBoot_SettlesNotApplicable_NotSilence()
+    {
+        var registry = new NodeTypeBakeReportRegistry();
+        registry.Record(Reading(fromLocalAdoption: 0, stamps: 78));
+        registry.RecordSettlement("not applicable");
+
+        registry.Latest!.SweepSettlement.Should().Be("not applicable");
+        NodeTypeBakeReportRegistry.Describe(registry.Latest).Should()
+            .Contain("OUTCOME CENSUS (sweep not applicable)")
+            .And.NotContain("NO sweep has reported an outcome on this replica",
+                "adoption ran and deliberately compiled nothing — that is a measurement with a "
+                + "known answer, not an absence of one");
+    }
+
+    /// <summary>
+    /// 🚨 The denominator must not contradict itself. <c>OutcomesReached</c> counts types that
+    /// REPORTED something — the unknown and the withdrawn included — so a sentence that called it
+    /// "reached a verdict" and then said "N reached none" in the same breath was arithmetic a
+    /// reader would rightly distrust, in the one sentence whose whole job is to be trusted.
+    /// </summary>
+    [Fact]
+    public void TheDenominatorReconciles_AndDoesNotContradictItself()
+    {
+        var reading = Swept(
+            ("Edu/Course", PreWarmStatus.Compiled),
+            ("Store/Item", PreWarmStatus.TimedOut),
+            ("Crm/Mail", PreWarmStatus.Removed),
+            ("Approvals/Desk", PreWarmStatus.CompileError)).Latest!;
+
+        (reading.UsableHere + reading.Unknown + reading.Withdrawn + reading.NoUsableAssembly)
+            .Should().Be(reading.OutcomesReached);
+
+        var sentence = NodeTypeBakeReportRegistry.Describe(reading);
+        sentence.Should()
+            .Contain("4 of 209 enumerated type(s) reported an outcome")
+            .And.Contain("of those, 1 reached NO verdict")
+            .And.Contain("The remaining 205 enumerated type(s) reported nothing at all",
+                "the gap between the population and the reporters is the reading that says how "
+                + "much of the mesh this census is actually about")
+            .And.NotContain("reported an outcome; 1 reached none",
+                "the contradictory phrasing must not come back");
     }
 
     [Fact]

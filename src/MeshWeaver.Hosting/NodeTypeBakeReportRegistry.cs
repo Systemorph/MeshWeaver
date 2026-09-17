@@ -381,12 +381,18 @@ public sealed class NodeTypeBakeReportRegistry
         var settled = string.IsNullOrEmpty(reading.SweepSettlement)
             ? "not settled"
             : reading.SweepSettlement;
+        // 🚨 OutcomesReached INCLUDES the unknown and the withdrawn — it counts types that
+        // REPORTED something, not types that were decided. Saying "reached a verdict" here and
+        // then "N reached none" in the same breath was a contradiction in the one sentence whose
+        // whole job is to be readable, and it would teach a reader to distrust the numbers.
         var residue =
-            $" Denominator: {reading.OutcomesReached} of {reading.Total} enumerated type(s) reached "
-            + $"a verdict; {reading.Unknown} reached none (timed out, or waiting on something that "
-            + $"did) and {reading.Withdrawn} were withdrawn by their own repository (retired or "
-            + "removed — counted apart on purpose, so a retirement wave cannot be read as "
-            + "breakage).";
+            $" Denominator: {reading.OutcomesReached} of {reading.Total} enumerated type(s) "
+            + $"reported an outcome; of those, {reading.Unknown} reached NO verdict (timed out, "
+            + $"or waiting on something that did) and {reading.Withdrawn} were withdrawn by "
+            + "their own repository (retired or removed — counted apart on purpose, so a "
+            + "retirement wave cannot be read as breakage). The remaining "
+            + $"{reading.Total - reading.OutcomesReached} enumerated type(s) reported nothing "
+            + "at all.";
 
         if (reading.NoUsableAssembly == 0)
             return $"OUTCOME CENSUS (sweep {settled}): every one of the {reading.UsableHere} type(s) "

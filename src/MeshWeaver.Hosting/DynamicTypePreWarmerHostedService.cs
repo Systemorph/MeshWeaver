@@ -394,12 +394,23 @@ public sealed class DynamicTypePreWarmerHostedService(
                             + "access, so the pod stays correct — it just cannot tell you how much "
                             + "of its content arrived pre-built.");
                         bake?.MarkSettled(PreWarmSettlement.Faulted);
+                        census?.RecordSettlement("faulted");
                     },
                     // NotApplicable, deliberately: adoption ran but no BAKE did, and completion was
                     // only ever a claim about a sweep. Consumers sequenced behind the barrier (the
                     // default-install pass adopts plugin bundles behind it) still get their signal
                     // once the seeding has landed, and learn that nothing was compiled.
-                    () => bake?.MarkSettled(PreWarmSettlement.NotApplicable));
+                    () =>
+                    {
+                        bake?.MarkSettled(PreWarmSettlement.NotApplicable);
+                        // 🚨 #4645 — and the census says the SAME thing in its own words. This
+                        // path publishes an adopt-only bake report, so without this the reading
+                        // would carry a plan and an empty settlement, which is the sentence
+                        // reserved for "no sweep reported here". "Nothing was compiled, on
+                        // purpose" and "I do not know whether anything was" must not collapse
+                        // into one reading — that is the ambiguity this census exists to refuse.
+                        census?.RecordSettlement("not applicable");
+                    });
             return;
         }
 
