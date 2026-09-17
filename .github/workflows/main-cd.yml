@@ -3064,8 +3064,10 @@ jobs:
       # run-named directory, sealed there, and `_current` — written after the seal — says which one
       # applies. The prefix is never mutated in place again for a reader that follows the pointer,
       # which is every portal (`ShippedPrebuiltBundles.PublicationDirectoryOf`) and both Azure-direct
-      # readers. The flat compatibility copy is still written and still sealed, so a reader that
-      # cannot follow a pointer sees exactly what it sees today.
+      # readers. 🚨 Since PHASE 5 the flat compatibility copy is DISPOSED OF rather than refreshed —
+      # `_complete` first, then its files, and only once `_current` has moved and been read back —
+      # so the prefix is not mutated in place for ANY reader. The deployment census that gated that
+      # is in Doc/Architecture/SealedPublicationGenerations (five records, 2026-09-17).
       #
       # 🚨 WHY THIS DOES NOT HAVE TO BE CO-ORDINATED WITH MeshWeaver.Plugins, whose `publish-bake`
       # is the OTHER producer of this prefix. Since MeshWeaver#4249 the layout belongs to the PREFIX:

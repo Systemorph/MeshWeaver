@@ -11,8 +11,8 @@ was one bulk operation per target, and this file is that: bash stays the orchest
 every verdict; this helper owns the share I/O and runs it inside one process with one
 authenticated client, one HTTP connection pool and a bounded thread pool.
 
-THE TWO PHASES
---------------
+THE PHASES
+----------
 `upload`   reads a PLAN (`<path-under-dest>\\t<local-file>\\t<sha256>` per line), ensures every
            parent directory exists, then uploads every file with the two metadata values the
            postcondition reads back — `digest` (the sha256 from the plan) and `publication` (the
@@ -46,6 +46,30 @@ THE TWO PHASES
            sentinel AFTER the sweep — the ordering is what lets it see a sibling that sealed in the
            meantime.
 
+`dispose`  retires the FLAT COMPATIBILITY COPY at a source prefix (MeshWeaver#3461 phase 5), after the
+           caller has moved `_current` to a sealed generation and read it back. Two steps, and the
+           order is the whole contract:
+
+             1. the prefix's `_complete` is deleted FIRST, on its own. That single delete is what
+                turns the prefix from "a complete, older publication" into "being republished",
+                the state every reader already backs off from. If it fails, NOTHING else is
+                deleted and the exit code is 1: a sealed flat copy that stays sealed and stops
+                being refreshed is a publication frozen on the day phase 5 landed, served whole to
+                every torn pointer read — the stale serve this phase exists to remove.
+             2. then the files, and only files POSITIVELY identified as the flat publication by the
+                caller's `--match` patterns (`*.zip`, `modules/*.module.nupkg`, the markers). A
+                file no pattern names is LEFT and named — the worst case of a narrow pattern is
+                bytes that stay, never a deletion of something that is not the flat copy. The
+                pointer (`--keep`) and every generation directory are never touched: only files
+                directly under the prefix and under the pattern directories are listed at all.
+                A failure here is reported as `::warning::` and is NOT fatal: once step 1 has run
+                the prefix holds no publication, so a left-over file is storage, re-attempted by the
+                prefix's next publication — never a reader-visible state.
+
+           An already-absent file is the postcondition, not an error: two publications of one
+           prefix may dispose of it concurrently. A directory the patterns name (`modules/`) is
+           removed once nothing is left in it.
+
 `sdk-check` imports the pinned SDK, constructs the clients this file uses (no network), asserts
            the installed versions are the ones the caller pinned, and prints them. It is the
            positive signal after the install and the one case the overlap harness runs against the
@@ -70,6 +94,7 @@ announced on stderr whenever it is in use, so a production log could never carry
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import importlib.util
 import os
 import sys
@@ -98,6 +123,12 @@ class ShareBackend(Protocol):
         ...
     def get_properties(self, path: str) -> tuple[dict[str, str], int | None]:
         """(metadata, length) of one file. Raises when it cannot be read."""
+        ...
+    def delete_file(self, path: str) -> bool:
+        """True when the file was deleted, False when it was not there. Raises on any other failure."""
+        ...
+    def delete_directory(self, path: str) -> bool:
+        """True when the (empty) directory was deleted, False when it was not there. Raises otherwise."""
         ...
 
 
@@ -146,6 +177,23 @@ class AzureFilesBackend:
     def get_properties(self, path: str) -> tuple[dict[str, str], int | None]:
         props = self.share.get_file_client(path).get_file_properties()
         return dict(props.metadata or {}), props.size
+
+    def delete_file(self, path: str) -> bool:
+        try:
+            self.share.get_file_client(path).delete_file()
+        except self._not_found:
+            # Not a swallowed fault: the postcondition of this call is "the file is not there", and
+            # a concurrent publication disposing of the same flat copy a moment earlier has
+            # established it. Every OTHER failure propagates.
+            return False
+        return True
+
+    def delete_directory(self, path: str) -> bool:
+        try:
+            self.share.get_directory_client(path).delete_directory()
+        except self._not_found:
+            return False
+        return True
 
 
 def make_backend(account: str, share: str) -> ShareBackend:
@@ -337,6 +385,121 @@ def cmd_stamp(args: argparse.Namespace) -> int:
     return 0
 
 
+# ───────────────────────────── dispose ─────────────────────────────
+def match_arg(value: str) -> tuple[str, str]:
+    """`<dir>/<basename-glob>` or `<basename-glob>` → (dir, glob), one directory level at most.
+
+    🚨 Split BEFORE matching: `fnmatch` lets `*` cross `/`, so `*.zip` matched against a full
+    relative path would also claim `modules/x.zip` — or `<generation>/Store.zip`, a byte of a LIVE
+    publication. Matching the basename inside ONE named directory is what keeps a pattern from
+    ever reaching into a generation.
+    """
+    directory, _, glob = value.rpartition("/")
+    if not glob or "/" in directory or directory in (".", "..") or glob in (".", ".."):
+        raise SystemExit(f"::error::--match {value!r} is not '<glob>' or '<dir>/<glob>' — a disposal "
+                         f"pattern names files directly under the prefix or one directory below it")
+    return directory, glob
+
+
+def cmd_dispose(args: argparse.Namespace) -> int:
+    matchers = [match_arg(m) for m in args.match or []]
+    if not matchers:
+        # A disposal that recognises nothing would unseal the prefix and then report "0 deleted" —
+        # a clean-looking line over a prefix full of unsealed bytes nobody named.
+        raise SystemExit("::error::dispose needs at least one --match — nothing would be recognised "
+                         "as the flat publication")
+    keep = set(args.keep or [])
+    backend = make_backend(args.account, args.share)
+    started = time.monotonic()
+    where = f"{args.account}/{args.share}/{args.dest}"
+
+    # 1. THE SEAL, FIRST AND ALONE.
+    seal = joined(args.dest, SENTINEL)
+    try:
+        unsealed = backend.delete_file(seal)
+    except Exception as exc:  # noqa: BLE001 — fatal and named, never swallowed
+        log(f"::error::could not remove {args.account}/{args.share}/{seal}: {type(exc).__name__}: "
+            f"{exc} — the flat compatibility copy is STILL SEALED and nothing else under {args.dest} "
+            f"was deleted. A sealed flat copy that is no longer refreshed is served whole to every "
+            f"reader that cannot follow the pointer (MeshWeaver#3461 phase 5); the prefix's next "
+            f"publication retries the disposal.")
+        return 1
+    log(f"unsealed the flat compatibility copy: {where}/{SENTINEL} "
+        f"{'removed' if unsealed else 'was already absent'}")
+
+    # 2. THE FILES — listed only AFTER the seal is gone, so nothing listed here is still served.
+    directories: list[str] = []
+    for d, _ in matchers:
+        if d not in directories:
+            directories.append(d)
+    listed: dict[str, dict[str, int | None]] = {}
+    unlisted: list[str] = []
+    for d in directories:
+        try:
+            listed[d] = backend.list_files(joined(args.dest, d))
+        except Exception as exc:  # noqa: BLE001 — reported; the prefix is already unsealed
+            unlisted.append(d or ".")
+            log(f"::warning::could not list {where}{'/' + d if d else ''}: {type(exc).__name__}: "
+                f"{exc} — its files are left in place. The prefix is unsealed, so they are storage, "
+                f"not a publication; its next publication retries the disposal.")
+
+    def rel_of(d: str, name: str) -> str:
+        return f"{d}/{name}" if d else name
+
+    doomed: list[str] = []
+    for d, glob in matchers:
+        for name in sorted(listed.get(d, {})):
+            rel = rel_of(d, name)
+            if name == SENTINEL or rel in keep or rel in doomed:
+                continue
+            if fnmatch.fnmatchcase(name, glob):
+                doomed.append(rel)
+    recognised = set(doomed)
+    left = sorted(rel_of(d, name) for d, files in listed.items() for name in files
+                  if name != SENTINEL and rel_of(d, name) not in keep
+                  and rel_of(d, name) not in recognised)
+
+    deleted = 0
+    absent = 0
+    failed: list[str] = []
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(backend.delete_file, joined(args.dest, rel)): rel for rel in doomed}
+        for future in as_completed(futures):
+            rel = futures[future]
+            try:
+                if future.result():
+                    deleted += 1
+                    log(f"disposed: {where}/{rel}")
+                else:
+                    absent += 1
+            except Exception as exc:  # noqa: BLE001 — reported by name; see the header
+                failed.append(rel)
+                log(f"::warning::could not delete {where}/{rel}: {type(exc).__name__}: {exc}")
+
+    # 3. A pattern directory the flat copy created (`modules/`), once nothing is left in it.
+    for d in sorted((d for d in directories if d), key=lambda d: -d.count("/")):
+        if d in unlisted:
+            continue
+        try:
+            if backend.list_files(joined(args.dest, d)):
+                continue
+            backend.delete_directory(joined(args.dest, d))
+        except Exception as exc:  # noqa: BLE001 — reported; an empty directory is not a publication
+            log(f"::warning::could not remove the directory {where}/{d}: {type(exc).__name__}: {exc}")
+
+    elapsed = time.monotonic() - started
+    log(f"disposed of the flat compatibility copy under {where} in {elapsed:.1f}s: seal "
+        f"{'removed' if unsealed else 'already absent'}, {deleted} of {len(doomed)} recognised "
+        f"file(s) deleted ({absent} already absent, {len(failed)} failed), {len(left)} unrecognised "
+        f"file(s) left in place{(': ' + ' '.join(left)) if left else ''} "
+        f"({args.workers} worker(s), one process)")
+    if failed or unlisted:
+        log(f"::warning::the flat copy under {where} is UNSEALED but not fully removed "
+            f"({len(failed)} delete(s) failed, {len(unlisted)} listing(s) failed) — no reader serves "
+            f"an unsealed directory, and the prefix's next publication retries the rest.")
+    return 0
+
+
 # ───────────────────────────── sdk-check ─────────────────────────────
 def cmd_sdk_check(args: argparse.Namespace) -> int:
     import importlib.metadata as md
@@ -364,8 +527,9 @@ def cmd_sdk_check(args: argparse.Namespace) -> int:
                         credential=_NoNetworkCredential(), token_intent="backup")
     file = share.get_file_client("dir/file.zip")
     directory = share.get_directory_client("dir")
-    for obj, attrs in ((file, ("upload_file", "get_file_properties")),
-                       (directory, ("exists", "create_directory", "list_directories_and_files"))):
+    for obj, attrs in ((file, ("upload_file", "get_file_properties", "delete_file")),
+                       (directory, ("exists", "create_directory", "list_directories_and_files",
+                                    "delete_directory"))):
         for a in attrs:
             if not callable(getattr(obj, a, None)):
                 raise SystemExit(f"::error::{type(obj).__name__}.{a} is missing — the SDK surface "
@@ -404,6 +568,16 @@ def main(argv: list[str] | None = None) -> int:
     target(st)
     st.add_argument("--path", required=True, help="full path under the share")
     st.set_defaults(fn=cmd_stamp)
+
+    di = sub.add_parser("dispose", help="unseal, then delete, the flat compatibility copy at a prefix")
+    target(di)
+    di.add_argument("--dest", required=True, help="the source prefix whose flat copy is disposed of")
+    di.add_argument("--match", action="append",
+                    help="'<glob>' or '<dir>/<glob>' naming a flat-copy file; repeatable")
+    di.add_argument("--keep", action="append",
+                    help="a path relative to --dest that is never deleted (the pointer); repeatable")
+    di.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
+    di.set_defaults(fn=cmd_dispose)
 
     sc = sub.add_parser("sdk-check", help="the pinned SDK imports and its clients construct")
     sc.add_argument("--pins", required=True, help="'name==version …' as installed")

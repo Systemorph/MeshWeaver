@@ -80,6 +80,115 @@ public class AnUnreadableSealIndexHoldsTest
     }
 
     /// <summary>
+    /// 🚨 THE PHASE-5 case, and the one the comment above predicted. `_current` EXISTS and cannot
+    /// be followed (here: it names a generation that is not on disk — the same reading a pointer
+    /// caught mid-replacement gives, since <c>az storage file upload</c> is create-then-put-range),
+    /// and the flat compatibility copy is GONE because a generation publication disposed of it.
+    ///
+    /// <para>The fall-back therefore lands on a source directory that holds no publication: the
+    /// source reads as unsealed AND unattributable, which <see cref="SealedSyncGate"/> answers with
+    /// <c>Go</c> — for every repository, since a source nobody could attribute may be any of
+    /// them.</para>
+    /// </summary>
+    [Fact]
+    public void APointerThatCannotBeFollowed_OverADisposedFlatCopy_IsUNREADABLE()
+    {
+        using var root = new TempRoot();
+        var source = Path.Combine(root.Path, Identity, "plugins");
+        Directory.CreateDirectory(Path.Combine(source, "Systemorph-MeshWeaver-1-1"));
+        File.WriteAllText(
+            Path.Combine(source, "Systemorph-MeshWeaver-1-1",
+                ShippedPrebuiltBundles.CompletionSentinelFileName), "Store.zip\n");
+        File.WriteAllText(
+            Path.Combine(source, ShippedPrebuiltBundles.PublicationPointerFileName),
+            "Systemorph-MeshWeaver-9999-9\n");
+
+        var (sources, outcome) = SealedPublicationIndex.ReadingFor(root.Path, Identity);
+
+        sources.Should().HaveCount(1);
+        sources[0].IsSealed.Should().BeFalse();
+        sources[0].Refusal.Should().Contain("pointer could not be followed",
+            "the reason must name the pointer, not the sentinel — they call for different action");
+        sources[0].Repository.Should().BeNull("there is no marker to attribute it with");
+        outcome.Should().Be(SealedReadOutcome.Unreadable,
+            "a pointer that exists and cannot be followed, with no sealed publication behind it, "
+            + "is an absence of measurement — and phase 5 removed the copy that used to be behind it");
+
+        SealedSyncGate.RefusedForUnreadableIndex(outcome, Identity)!.Proceed.Should().BeFalse();
+        var firstImport = SealedSyncGate.RefusedFirstImportForUnreadableIndex(outcome, Identity);
+        firstImport.Should().NotBeNull(
+            "a first import reads worse from an unreadable index than a green build does: only the "
+            + "repository marker can attribute a seal there, so it would populate from the tip");
+        firstImport!.Proceed.Should().BeFalse();
+        firstImport.HoldReason.Should().Contain("could not be READ");
+    }
+
+    /// <summary>
+    /// The control that keeps the case above from holding the whole fleet on any pointer hiccup:
+    /// the SAME unusable pointer, with a sealed FLAT copy behind it, is today's behaviour exactly —
+    /// the fall-back is a publication, so the reading is a statement.
+    /// </summary>
+    [Fact]
+    public void TheSamePointer_WithASealedFlatCopyBehindIt_ReadsCleanly()
+    {
+        using var root = new TempRoot();
+        var source = Path.Combine(root.Path, Identity, "plugins");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "Store.zip"), "bytes");
+        File.WriteAllText(
+            Path.Combine(source, ShippedPrebuiltBundles.CompletionSentinelFileName), "Store.zip\n");
+        File.WriteAllText(
+            Path.Combine(source, SealedPublicationIndex.RepositoryMarkerFileName),
+            "Systemorph/MeshWeaver.Plugins\n");
+        File.WriteAllText(
+            Path.Combine(source, SealedPublicationIndex.SourceCommitMarkerFileName),
+            "e2ef5679aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+        File.WriteAllText(
+            Path.Combine(source, ShippedPrebuiltBundles.PublicationPointerFileName),
+            "Systemorph-MeshWeaver-9999-9\n");
+
+        var (sources, outcome) = SealedPublicationIndex.ReadingFor(root.Path, Identity);
+
+        sources.Should().HaveCount(1);
+        sources[0].IsSealed.Should().BeTrue("the flat copy behind the pointer IS a sealed publication");
+        outcome.Should().Be(SealedReadOutcome.Read);
+        SealedSyncGate.RefusedForUnreadableIndex(outcome, Identity).Should().BeNull();
+        SealedSyncGate.RefusedFirstImportForUnreadableIndex(outcome, Identity).Should().BeNull();
+    }
+
+    /// <summary>
+    /// And the ordinary phase-5 reading: no flat copy, and the pointer resolves. Without this the
+    /// case above could pass because the reader had stopped following pointers at all.
+    /// </summary>
+    [Fact]
+    public void APointerThatResolves_WithNoFlatCopy_ReadsTheGenerationAndIsSEALED()
+    {
+        using var root = new TempRoot();
+        var source = Path.Combine(root.Path, Identity, "plugins");
+        var generation = Path.Combine(source, "Systemorph-MeshWeaver-1-1");
+        Directory.CreateDirectory(generation);
+        File.WriteAllText(Path.Combine(generation, "Store.zip"), "bytes");
+        File.WriteAllText(
+            Path.Combine(generation, ShippedPrebuiltBundles.CompletionSentinelFileName), "Store.zip\n");
+        File.WriteAllText(
+            Path.Combine(generation, SealedPublicationIndex.RepositoryMarkerFileName),
+            "Systemorph/MeshWeaver.Plugins\n");
+        File.WriteAllText(
+            Path.Combine(generation, SealedPublicationIndex.SourceCommitMarkerFileName),
+            "e2ef5679aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+        File.WriteAllText(
+            Path.Combine(source, ShippedPrebuiltBundles.PublicationPointerFileName),
+            "Systemorph-MeshWeaver-1-1\n");
+
+        var (sources, outcome) = SealedPublicationIndex.ReadingFor(root.Path, Identity);
+
+        sources.Should().HaveCount(1);
+        sources[0].IsSealed.Should().BeTrue();
+        sources[0].Repository.Should().Be("Systemorph/MeshWeaver.Plugins");
+        outcome.Should().Be(SealedReadOutcome.Read);
+    }
+
+    /// <summary>
     /// The negative control for the whole change: with the SAME empty list, the per-repository
     /// verdict still says Go. That is what makes the precondition necessary — the gate alone
     /// cannot tell these apart, and never could.
