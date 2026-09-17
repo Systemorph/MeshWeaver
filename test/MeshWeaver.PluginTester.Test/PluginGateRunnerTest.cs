@@ -163,6 +163,162 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
         }
         """;
 
+    // ── a package with TWO partition-owning NodeTypes (`ownsPartition: true`). An instance of
+    //    such a type IS a partition root, so its path is just its id, and since 693feae92 /
+    //    ae0f706b3 the create-validation chain REFUSES a nested one for EVERY owning type, not
+    //    only `Space`. The gate built `{typePath}/GateProbe` unconditionally, so every such type
+    //    reported `could not create the Tests probe: InvalidOperationException: Cannot create
+    //    '…/GateProbe' … must be created at the top level` and took its repo's `main` red
+    //    (MeshWeaver.Crm on Crm/Client, issue #4602). TWO of them, because relocating the probe to
+    //    the top level drops the namespace that used to make the constant id `GateProbe` unique —
+    //    one gate run covers every type of a repo in a single in-process mesh, so a second owning
+    //    type would collide on the same path and fail as already-exists. ──
+
+    private const string EstateIndexJson =
+        """{"$type":"MeshNode","id":"Estate","namespace":"","path":"Estate","mainNode":"Estate","name":"Estate Plugin","nodeType":"Space","state":"Active","content":{"$type":"PluginManifest","description":"Ships two partition-owning types."}}""";
+
+    private const string TenantNodeTypeJson =
+        """{"$type":"MeshNode","id":"Tenant","namespace":"Estate","path":"Estate/Tenant","mainNode":"Estate/Tenant","name":"Tenant","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"Owns its partition.","ownsPartition":true,"configuration":"config => config.WithContentType<TenantContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Tests\", TenantTestsArea.Tests))","includeGlobalTypes":true}}""";
+
+    private const string BranchNodeTypeJson =
+        """{"$type":"MeshNode","id":"Branch","namespace":"Estate","path":"Estate/Branch","mainNode":"Estate/Branch","name":"Branch","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"Also owns its partition.","ownsPartition":true,"configuration":"config => config.WithContentType<BranchContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Tests\", BranchTestsArea.Tests))","includeGlobalTypes":true}}""";
+
+    private const string TenantContentSource =
+        """
+        public record TenantContent
+        {
+            public string? Label { get; init; }
+
+            public int Answer() => 42;
+        }
+        """;
+
+    private const string BranchContentSource =
+        """
+        public record BranchContent
+        {
+            public string? Label { get; init; }
+
+            public int Answer() => 42;
+        }
+        """;
+
+    private const string TenantTestsArea =
+        """
+        using System;
+        using System.Reactive.Linq;
+        using MeshWeaver.Layout;
+        using MeshWeaver.Layout.Composition;
+
+        public static class TenantTestsArea
+        {
+            public static IObservable<UiControl?> Tests(LayoutAreaHost host, RenderingContext _)
+            {
+                var sb = new System.Text.StringBuilder("### Tenant tests\n\n| Test | Result |\n|---|---|\n");
+                var passed = 0;
+                try
+                {
+                    if (new TenantContent().Answer() != 42)
+                        throw new Exception("expected the answer to be 42");
+                    sb.Append("| Answer is 42 | ✅ pass |\n");
+                    passed++;
+                }
+                catch (Exception ex) { sb.Append($"| Answer is 42 | ❌ {ex.Message} |\n"); }
+                sb.Append($"\n**{passed}/1 passed.**");
+                return Observable.Return<UiControl?>(Controls.Markdown(sb.ToString()));
+            }
+        }
+        """;
+
+    private const string BranchTestsArea =
+        """
+        using System;
+        using System.Reactive.Linq;
+        using MeshWeaver.Layout;
+        using MeshWeaver.Layout.Composition;
+
+        public static class BranchTestsArea
+        {
+            public static IObservable<UiControl?> Tests(LayoutAreaHost host, RenderingContext _)
+            {
+                var sb = new System.Text.StringBuilder("### Branch tests\n\n| Test | Result |\n|---|---|\n");
+                var passed = 0;
+                try
+                {
+                    if (new BranchContent().Answer() != 42)
+                        throw new Exception("expected the answer to be 42");
+                    sb.Append("| Answer is 42 | ✅ pass |\n");
+                    passed++;
+                }
+                catch (Exception ex) { sb.Append($"| Answer is 42 | ❌ {ex.Message} |\n"); }
+                sb.Append($"\n**{passed}/1 passed.**");
+                return Observable.Return<UiControl?>(Controls.Markdown(sb.ToString()));
+            }
+        }
+        """;
+
+    /// <summary>
+    /// The regression this pins (issue #4602): a NodeType that OWNS ITS PARTITION must still get a
+    /// Tests probe, created where the validator allows one — at the TOP LEVEL, where a partition
+    /// root's path is just its id. Before the fix the gate built <c>{typePath}/GateProbe</c> for
+    /// every type and this came back <c>could not create the Tests probe:
+    /// InvalidOperationException: Cannot create '…/GateProbe' … must be created at the top
+    /// level</c>, which is deterministic — so every downstream <c>main</c> carrying such a type
+    /// stayed red and never reached <c>publish-bake</c>.
+    ///
+    /// <para>Both types are asserted, not one: the top-level id has to carry the disambiguation
+    /// the namespace gave the constant <c>GateProbe</c> for free, and a run covering two owning
+    /// types is the case that proves it does.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task PartitionOwningNodeType_TestsProbeIsCreatedAtTopLevel_AndTwoOfThemDoNotCollide()
+    {
+        var repo = CreateRepo(root =>
+        {
+            WriteFile(root, "Estate/index.json", EstateIndexJson);
+            WriteFile(root, "Estate/Tenant.json", TenantNodeTypeJson);
+            WriteFile(root, "Estate/Tenant/Source/TenantContent.cs", TenantContentSource);
+            WriteFile(root, "Estate/Tenant/Test/TenantTestsArea.cs", TenantTestsArea);
+            WriteFile(root, "Estate/Branch.json", BranchNodeTypeJson);
+            WriteFile(root, "Estate/Branch/Source/BranchContent.cs", BranchContentSource);
+            WriteFile(root, "Estate/Branch/Test/BranchTestsArea.cs", BranchTestsArea);
+        });
+        try
+        {
+            var (report, log) = await RunGate(repo, TestContext.Current.CancellationToken);
+
+            report.FatalError.Should().BeNull();
+            var estate = report.Packages.Single(p => p.Id == "Estate");
+            estate.InstallError.Should().BeNull($"the package must install; log:\n{log}");
+
+            var tenant = estate.NodeTypes.Single(t => t.Path == "Estate/Tenant");
+            var branch = estate.NodeTypes.Single(t => t.Path == "Estate/Branch");
+
+            foreach (var type in new[] { tenant, branch })
+            {
+                type.Compile.Should().Be(CheckOutcome.Passed,
+                    $"{type.Path} must compile; detail: {type.CompileDetail}");
+                type.TestsDetail.Should().NotContain("could not create the Tests probe",
+                    $"a partition-owning type's probe must be creatable; log:\n{log}");
+                type.TestsHost.Should().NotContain("/GateProbe",
+                    "a partition-owning instance IS a partition root, so its path is just its id — "
+                    + $"nesting it under the type is what the validator refuses; host: {type.TestsHost}");
+                type.Tests.Should().Be(CheckOutcome.Passed,
+                    $"{type.Path}'s Tests area must execute green; detail: {type.TestsDetail}");
+            }
+
+            tenant.TestsHost.Should().NotBe(branch.TestsHost,
+                "two partition-owning types in ONE run must not collide on one top-level probe "
+                + $"path; tenant: {tenant.TestsHost}, branch: {branch.TestsHost}");
+
+            report.ExitCode.Should().Be(0, $"all green must exit 0; log:\n{log}");
+        }
+        finally
+        {
+            TryDelete(repo);
+        }
+    }
+
     /// <summary>
     /// The regression this pins: a package whose ROOT is typed by an in-package NodeType that
     /// ships a stale compile stamp must still serve that type's areas once installed. The gate
