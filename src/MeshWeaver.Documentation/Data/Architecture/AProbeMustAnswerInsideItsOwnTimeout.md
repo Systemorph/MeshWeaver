@@ -32,13 +32,18 @@ a state the pod cannot leave.
 
 ## What was measured
 
-memex.systemorph.com, 2026-09-17, three consecutive reads from outside the cluster:
+memex.systemorph.com, 2026-09-17, consecutive reads from outside the cluster:
 
-| endpoint | response | time |
-|---|---|---|
-| `/health` | 200 `Degraded` | **8.12 s, 9.62 s, 9.52 s** |
-| `/alive` | 200 | 0.12 s |
-| `/ready` | 200 | 0.12 s |
+| endpoint | response | 14:53Z | 15:22Z |
+|---|---|---|---|
+| `/health` | 200 `Degraded` | **8.12 s, 9.62 s, 9.52 s** | **10.71 s, 13.55 s** |
+| `/alive` | 200 | 0.12 s | — |
+| `/ready` | 200 | 0.12 s | — |
+
+🚨 **It is getting worse, which is the argument against ever fixing this with a bigger
+number.** Half an hour apart, on the same two serving replicas, with no deploy in between, the
+endpoint went from ~9 s to ~12 s. A timeout raised to cover today's reading is a treadmill: it buys
+the interval until the next growth, and the failure it hides is the unrecoverable one.
 
 Same host, same pod, same TLS and the same ingress — so the seconds were entirely in the untagged
 checks that only `/health` runs, not in the network or the process. The chart reads `/health` as the
@@ -119,8 +124,9 @@ bare status word.
 ## What this does and does not fix
 
 It makes the cost **attributable**. It does not make `/health` fast, and it deliberately does not
-raise `timeoutSeconds`: a bigger timeout would move the cliff without removing it, and the next
-instance to grow past the new number would fail the same way with the same silence. The real fix is
+raise `timeoutSeconds`: a bigger timeout would move the cliff without removing it — and on the
+instance measured above the number was still climbing while the page was being written, so the
+cliff moves by itself. The real fix is
 whatever the timing line names — and the shape that fix takes is already settled here.
 
 ## The headroom is the number to watch, and it is per instance
