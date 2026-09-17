@@ -313,7 +313,11 @@ public class ProbeSemanticsGuard
         {
             if (raw.TrimStart().StartsWith('#') || raw.Trim().Length == 0) continue;
             var thisIndent = raw.Length - raw.TrimStart().Length;
-            if (thisIndent <= indent) continue;
+            // Left the block we descended into: the key is absent HERE, and scanning on
+            // would find a same-named key under an unrelated parent and resolve to it.
+            // A resolver that guesses is worse than one that refuses — the callers assert
+            // on the null.
+            if (thisIndent <= indent) return null;
 
             var m = Regex.Match(raw, @"^\s*(?<k>[A-Za-z0-9_]+):\s*(?<v>\S*)\s*$");
             if (!m.Success || m.Groups["k"].Value != segments[depth]) continue;
