@@ -202,11 +202,51 @@ anchored, declared and rule-pinned forms are not.
 
 | Where | Shape | Verdict |
 |---|---|---|
-| MeshWeaver.Plugins `ProviderSetupAreas` (2 reads) | `nodeType:ModelProvider sort:name limit:100`, `nodeType:LanguageModel sort:name limit:400`, per render of the Providers page | **Open, censused.** The page's own text names two homes (`Provider/{Name}`, `{you}/_Memex/{Name}`) while `ChatClientCredentialResolver.BuildModelQueries` also reads `{space}/Provider` — which set the page MEANS is a product decision, not a mechanical anchor |
-| MeshWeaver.Plugins `CouponEditArea.PackageQuery` | `nodeType:Store/Plugin` as a picker's `Queries` | **Open, censused** — the picker class below |
+| MeshWeaver.Plugins `ProviderSetupAreas` (2 reads) | `nodeType:ModelProvider sort:name limit:100`, `nodeType:LanguageModel sort:name limit:400`, per render of the Providers page | **Open — needs a product call.** The page's own text names two homes (`Provider/{Name}`, `{you}/_Memex/{Name}`) while `ChatClientCredentialResolver.BuildModelQueries` also reads `{space}/Provider` for the context partitions. RECOMMENDATION: reuse `BuildModelQueries`' shape — the global `Provider` catalog + `{viewer}/_Memex` + `{context}/Provider` — so the settings page and the resolver answer the same question; the call the maintainer owns is whether an ADMIN's page should also list providers in spaces they administer but are not in (a fourth leg, or a deliberate "no") |
+| MeshWeaver.Plugins `CouponEditArea.PackageQuery` | `nodeType:Store/Plugin` as a picker's `Queries` | **Anchored at issue time 2026-09-17** by the picker's reach (below). The literal stays censused because the SOURCE still names no partition — and the RECOMMENDATION is to leave it that way: a coupon names packages, a package root IS a partition, so the honest declaration is `partitions:all` on the picker's own query the day someone wants the full catalog offered. Until then the reach (the coupon's own space, plus `Store` when the type is `Store/Plugin`) is what a coupon editor means |
 | MeshWeaver.Crm `CrmQueries.AllClients` / `.OpenPipeline` / `.AllOpportunities` / `.AllInteractions` | `nodeType:Crm/{Client,Opportunity,Interaction} scope:subtree`, the board's roster and pipeline | **Open.** Genuinely mesh-wide (a client IS a partition) and the code says so in prose — but it does not DECLARE it, so a CI mesh refuses it and production reports it at Error. The fix is `partitions:all`, not an anchor |
 | MeshWeaver.Reinsurance `RecordSupport.Scope` (`ILS/Source/RecordSupport.cs`) | `IlsQueries.DealQueries("")` when a record page's path is not under a deal — `IlsPaths.DealOfTranche` answers null and the empty string is passed on, so the legs carry `namespace:` with no first segment | **Open, an edge case.** Every shipped record hub sits under `…/Deals/{deal}/{tranche}/`, so it should not arise — but the failure mode if it does is a mesh-wide union from a render path, where refusing to read at all is the honest answer. A guard on an empty deal path closes it |
-| `[MeshNode("nodeType:X")]` picker attributes — 191 lines in MeshWeaver.Reinsurance, 19 in MeshWeaver.Crm, 15 in MeshWeaver.Manufacturing, 2 in MeshWeaver.Education, plus multi-line ones in MeshWeaver.Plugins | the attribute's query, sent verbatim by `MeshNodePickerView` (plus the typed text) on every dropdown open | **Open, and NOT a per-attribute fix.** The picker names no partition, so every `[MeshNode(…)]` in the fleet is unanchored. `{node.namespace}` does not help (it resolves to the edited node's own path). The fix belongs in the picker — let it name the partitions it searches — or in `NodeTypeDefinition.InstanceLocations` for types that have a home |
+| `[MeshNode("nodeType:X")]` picker attributes — 191 lines in MeshWeaver.Reinsurance, 19 in MeshWeaver.Crm, 15 in MeshWeaver.Manufacturing, 2 in MeshWeaver.Education, plus the `WithQueries(…)` pickers in MeshWeaver.Plugins | the attribute's query, sent verbatim by `MeshNodePickerView` (plus the typed text) on every dropdown open | **Resolved 2026-09-17 in the PICKER** (MeshWeaver.Plugins#2011) — see "The picker resolves its own reach" below |
+
+
+### The picker resolves its own reach (2026-09-17)
+
+The biggest population the sweep found was not a caller but a CLASS: **227 `[MeshNode("nodeType:X")]`
+declarations** across the satellites. A picker is declared by naming the TYPE it offers, and that
+statement says nothing about WHERE those nodes live — so `MeshNodePickerView` sent the text verbatim
+and every dropdown open ran the lock-bomb shape. On a host whose policy REFUSES it, the view's own
+`Catch` turned the refusal into an empty dropdown: the picker offered nothing and said nothing.
+
+Anchoring 227 attributes would have been the wrong shape, and `{node.namespace}` is not the fix
+either (it resolves to the edited node's own path, which searches one node's subtree). The attribute
+is a statement about the TYPE; **where to look is the picker's question**, and `PickerQueryReach`
+(MeshWeaver.Plugins, `src/MeshWeaver.Blazor.Graph`) answers it where the query is built — one
+anchored leg per reach:
+
+1. every location the TYPE DECLARES (`NodeTypeDefinition.InstanceLocations` → `INodeTypeInstanceLocations`);
+2. the partition of the node being EDITED;
+3. the partition of the picked type (`Reinsurance/Currency` → `Reinsurance`).
+
+Two shapes are left exactly as written: a query the planner already reads as specified
+(`ParsedQuery.IsSufficientlySpecified`), and one a `QueryRoutingRule` pins — **`nodeType:User` is
+served from `Auth`**, so anchoring it to the edited partition would break the user pickers rather
+than fix them. When nothing can be named at all, the query goes out unchanged: fail-open, slow,
+never silently partial, exactly as `INodeTypeInstanceLocations` promises.
+
+🚨 **It narrows what a picker OFFERS, and that is the point.** A picker exists to offer what you can
+reference from HERE; a node living outside the three reaches is no longer offered, and an author who
+needs it has three ways to say so — declare the type's instance locations (best: it fixes every
+picker of that type at once and narrows the planner's fan-outs too), spell the reach in the
+attribute, or declare `partitions:all` where every partition genuinely is the answer. What is not on
+that list is keeping the silent fan-out, because a dropdown is a render path. Checked against the
+measured homes: `Reinsurance/Currency`, `LineOfBusiness` and `Ifrs17/AocType` live in the module
+partition (reach 3), `ILS/Tranche` under `ILS/Deals` (3), `Reinsurance/Broker` in
+`ReinsuranceDemo/Brokers` (reach 2 while editing there) and `Reinsurance/Samples` (3).
+
+The guards are `PickerQueryReachTest` (the project that owns the picker; every leg asserted against
+the planner's own predicate, the pre-fix shapes as the negative control) and, in the content census,
+`ThePickerResolvesItsReach` — the picker exemption is only sound while the view sends the RESOLVED
+queries, so the census checks that rather than trusting its own comment.
 
 **Two blind spots of the content census, stated rather than hidden.** The predicate is a line
 window, so an unrelated `path:`/`namespace:` within four lines hides a literal: MeshWeaver.Plugins'
