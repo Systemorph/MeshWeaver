@@ -1168,8 +1168,57 @@ right now its "no retry" line tells you nothing about ANY red. In core and MeshW
 `Retry known transients` run sampled from 2026-09-10 to 2026-09-16 printed `log unreadable (the
 response contains terminal escape sequences; pass --allow-escape-sequences …) — cannot prove a
 transient`. The hosted runner's `gh` refuses any response body with escape sequences, and every
-Actions log has them. Crm, Reinsurance and SocialMedia make the same `gh api …/logs` call but were
-not sampled (#4534).
+Actions log has them.
+
+**Crm, Reinsurance and SocialMedia are no longer unsampled — measured 2026-09-17, and it is worse
+there.** Every one of their newest `Retry known transients` runs declined on its **first** failed job
+with that same sentence and then `exit 0`, so the shell steward never looked at the rest; and
+MeshWeaver.Plugins' steward declined **22 jobs in one run** (`35245934949`, 16:21Z) the same way.
+
+### What `/actions/jobs/<id>/logs` actually serves
+
+Read straight from REST — 30 failed jobs across MeshWeaver.Plugins, .Crm, .Reinsurance, .SocialMedia
+and MeshWeaver, deliberately not one payload:
+
+| outcome | n | shape |
+|---|--:|---|
+| served a log | **23** | `200 text/plain`; **all 23** with a UTF-8 BOM; **all 23** carrying ANSI escapes (30–1,932 each); all strict UTF-8; all with the timestamped line; **none** carrying any other control character |
+| `404` *"The specified blob does not exist"* | 1 | the job uploaded no log at all |
+| `410 Gone` | 6 | the log outlived its retention |
+
+So there was never anything exotic to parse. **Three** rules follow — and read the next paragraph
+before assuming any given steward keeps them:
+
+- 🚨 **Three outcomes, not one.** `404` and `410` are **facts about the job** — nothing was uploaded
+  (what a runner that died before writing one looks like), or the log expired — and they *decline*,
+  naming which. **Everything else** (5xx, a permission refusal, a transport failure, a non-UTF-8
+  body, a body with no timestamped line) is the steward **blind to its own input** and is a **RED**.
+  Collapsing those into one "unreadable, no retry" is what made a week-long outage look like a
+  judgement.
+- 🚨 **Strip the BOM and the escapes before matching.** The raw bytes are not what anyone reading the
+  run sees: every echoed `run:` line arrives wrapped in `\e[36;1m…\e[0m`, so a pattern anchored near
+  the start or end of such a line cannot match the raw form.
+- 🚨 **A decline that happens 22 times in one run may not live only in a green job's log.** That is
+  the same defect shape as a scheduled lane whose honest red goes into an empty room. The decision
+  belongs in the job **summary**, and a job judged without a log should raise a `::warning::` — which
+  is visible on the run without pretending the steward itself failed.
+
+🚨 **WHICH STEWARD KEEPS WHICH — do not read the three rules as a description of the fleet.** They are
+what the four stewards fixed on 2026-09-17 do (MeshWeaver.Plugins and the three satellites). **Core's
+`#4554` fix implements the READ and none of the three**, verified against
+`.github/scripts/retry-known-transients.py` on `main`:
+
+| | core (`#4554`) | Plugins + the three satellites |
+|---|---|---|
+| reads the log at all | ✅ REST, no `gh` | ✅ REST / `curl`, no `gh` |
+| `404`/`410` distinguished from a blind read | ❌ `read_job_log` maps **every** `HTTPError` to one `LogUnreadable` → RED | ✅ they decline, naming which |
+| BOM and escapes stripped before matching | ❌ the raw decoded body is matched directly | ✅ |
+| the decision reaches the summary / a `::warning::` | ❌ neither appears in the script | ✅ |
+
+Core's choice is defensible on its own terms — its contract is *"I cannot see my input ⇒ RED"* and it
+has no annotation path to fall back on — but it means a **runner death in core reds the steward job**,
+because a job that uploaded no log is indistinguishable there from an API failure. That is named
+follow-up, not a claim about today.
 
 > **Fixed in core, 2026-09-17 (#4534).** Core's steward is now
 > `.github/scripts/retry-known-transients.py`: it reads the logs endpoint over plain REST — no `gh`,
@@ -1191,6 +1240,34 @@ not sampled (#4534).
 > platform ceiling until the next merge. Core has no such ceiling (it only ever runs the resolver's
 > `--self-test`), which is why core could be fixed first and alone. Fix #4491, then re-enable the
 > satellites.
+>
+> **2026-09-17, the other four: the reader is fixed in all of them, and the #4491 hold turns out to
+> be narrower than "all four".**
+> * **MeshWeaver.Plugins** (Plugins#2042) is *not* held by #4491, because **its retry was never
+>   disabled**: its annotation path — runner death, budget refusal — reads no log at all, so
+>   `rerun-failed-jobs` has been reachable there throughout. The log fix adds a second proof shape
+>   to a lane that already acts.
+> * **Crm / Reinsurance / SocialMedia** (Crm#125, Reinsurance#218, SocialMedia#202) were the ones the
+>   hold applied to — their shell stewards could retry **nothing**, so merging is the moment retries
+>   begin there. They were parked as **drafts** while that call was open, because each of those
+>   repos runs `auto-arm.yml` and would otherwise have merged them on green with the call never
+>   made. **The maintainer took the call on 2026-09-17 and it is MERGE**, on this reasoning: humans
+>   press re-run today *because* the steward is blind, so an evidence-gated automatic retry is
+>   narrower than the status quo. The `#4491`/`#4493` wave that closes the annotation erasure is
+>   being landed separately.
+>
+> 🚨 **And the hazard belongs to `rerun-failed-jobs`, not to the steward.** #4491's own measurement
+> is a re-run of an infrastructure death — *the ordinary response* — and a human pressing the same
+> button erases the same annotation. Today humans press it **because** the steward is blind, so a
+> working reader *reduces* hand re-runs rather than adding a hazard class. That is an argument for
+> sequencing, not for leaving a reader that cannot read.
+>
+> 🚨 **The signature lists are a separate question, and they are thin.** The most frequent transient
+> on the wall right now is `GitHub served a STALE run listing (MeshWeaver#4433)` from
+> `Resolve the released platform`, whose own annotation ends *"Re-run this job"* — measured on
+> MeshWeaver.Plugins job `105249591894` and MeshWeaver.SocialMedia job `105239967968` the same day,
+> and it is in **no** steward's list. Adding it is a curation decision with its own evidence, not
+> something to fold into a reader fix.
 
 ## 🚨 A check that is red on EVERY pull request is not telling you about any of them
 
