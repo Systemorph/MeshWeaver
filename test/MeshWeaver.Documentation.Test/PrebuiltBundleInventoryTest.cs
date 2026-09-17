@@ -119,6 +119,47 @@ public class PrebuiltBundleInventoryTest
     }
 
     [Fact]
+    public void AConfiguredPublishedRootThatIsNotThere_IsUNREADABLE_NotAnEmptyShelf()
+    {
+        var missing = Path.Combine(Directory.CreateTempSubdirectory("mw-inventory-test").FullName, "gone");
+
+        PrebuiltBundleInventory.Presence(imageDirectory: null, missing, Identity)
+            .Should().Be(SealedReadOutcome.Unreadable,
+                "an unmounted share is not a shelf with nothing on it: an empty reading would hold "
+                + "every changed adopted type while the same absent root can never carry the release "
+                + "evidence (review on #4605)");
+        PrebuiltBundleInventory.Read(imageDirectory: null, missing, Identity)
+            .Outcome.Should().Be(SealedReadOutcome.Unreadable,
+                "the full read starts from the same definition, so the two cannot disagree");
+    }
+
+    [Fact]
+    public void ARootThatExistsWithNoDirectoryForThisIdentity_IsREAD()
+    {
+        var root = Shelf(out _);
+
+        PrebuiltBundleInventory.Presence(imageDirectory: null, root, Identity)
+            .Should().Be(SealedReadOutcome.Read,
+                "\"no bundles published for this identity YET\" is a real reading a publication can "
+                + "change — and holding on it is correct, because the publication that lands here "
+                + "releases it");
+        var inventory = PrebuiltBundleInventory.Read(imageDirectory: null, root, Identity);
+        inventory.IsUsable.Should().BeTrue();
+        inventory.Bundles.Should().Be(0);
+        inventory.Carries(TypePath, Fingerprint).Should().BeFalse();
+    }
+
+    [Fact]
+    public void AnImageDirectoryThatIsNotThere_WithNoPublishedRoot_IsNotConfigured()
+        => PrebuiltBundleInventory.Presence(
+                Path.Combine(Path.GetTempPath(), "mw-no-such-prebuilt-dir"), publishedRoot: null, Identity)
+            .Should().Be(SealedReadOutcome.NotConfigured,
+                "the configuration alone cannot answer this — the image directory FALLS BACK to a "
+                + "non-empty default path, so a portal that ships no bundles would otherwise look "
+                + "configured and pay for the mesh-wide NodeType listing on every import (review on "
+                + "#4605)");
+
+    [Fact]
     public void NoShelfAtAll_ReadsAsNotConfigured()
         => PrebuiltBundleInventory.Read(imageDirectory: null, publishedRoot: null, Identity)
             .Outcome.Should().Be(SealedReadOutcome.NotConfigured,

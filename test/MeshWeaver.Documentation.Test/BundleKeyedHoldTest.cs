@@ -308,6 +308,9 @@ public class BundleKeyedHoldTest
             + "that on every later publication");
         decision.Held.Single(h => h.Path == TypePath).HeldBySharing.Should().BeFalse(
             "the root is held on its own reading and IS a release trigger");
+        decision.Held.Should().AllSatisfy(h => h.HeldBySharing.Should().NotBeNull(
+            "every entry this code writes is STAMPED — null is reserved for a record written before "
+            + "the field existed, and the release reads the three states differently (#4605)"));
     }
 
     [Fact]

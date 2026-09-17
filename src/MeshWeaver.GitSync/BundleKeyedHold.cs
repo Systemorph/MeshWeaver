@@ -25,20 +25,34 @@ public sealed record BundleHeldNodeType(
     string Path, string HeldFingerprint, string WantedFingerprint, string Identity, string Reason)
 {
     /// <summary>
-    /// 🚨 True when this type is held only because it SHARES a source with another held type, not on
-    /// its own reading — and that difference decides what may release it (review on #4595).
+    /// 🚨 THREE states, and the third is not decoration. <c>true</c>: this type is held only because
+    /// it SHARES a source with another held type, not on its own reading. <c>false</c>: it is held on
+    /// its own reading. <c>null</c>: the entry was written BEFORE this field existed (#4595) and
+    /// cannot say which — the field is persisted on the sync config, so records predating it are
+    /// read back by a portal that has this code.
     ///
-    /// <para>A sharer's own wanted fingerprint can already be on the shelf while the type it shares
-    /// with is still waiting. Releasing on the sharer would re-import, re-hold the same set (the root
-    /// is still missing) and do it again on every later publication — a futile import per
-    /// announcement. So only an INDEPENDENTLY held type is a release trigger; a sharer is re-judged
-    /// by the import that the root's own release dispatches.</para>
+    /// <para><b>Why the distinction decides a release.</b> A sharer's own wanted fingerprint can
+    /// already be on the shelf while the type it shares with is still waiting. Releasing on the
+    /// sharer would re-import, re-hold the identical set (the root is still missing) and do it again
+    /// on every later publication — a futile import per announcement. So only an INDEPENDENTLY held
+    /// type is a release trigger; a sharer is re-judged by the import the root's own release
+    /// dispatches.</para>
+    ///
+    /// <para>🚨 <b>Why <c>null</c> is not folded into <c>false</c></b> (review on #4605). A plain
+    /// <c>bool</c> would read every #4595 record as "independently held", which is exactly the
+    /// futile-import loop above for a legacy sharer. It is not folded into <c>true</c> either: that
+    /// would leave a legacy INDEPENDENT hold unable to release on the arrival it is waiting for.
+    /// <c>SealedSyncReconcile.ReleasesAHold</c> therefore treats an unknown entry as a trigger only
+    /// when the shelf now carries EVERY held entry's fingerprint — the one case where the re-import
+    /// cannot be futile, because it clears the whole set. Entries this code writes are always
+    /// explicit, so the unknown state is transitional by construction: the first import that
+    /// concludes rewrites the list (<c>RecordSyncResult</c> writes it on every conclusion).</para>
     ///
     /// <para>An <c>init</c> property rather than a sixth positional parameter: this record is
     /// persisted on the sync config and its primary-constructor arity is public surface
     /// (<c>scripts/check-record-signatures.py</c>).</para>
     /// </summary>
-    public bool HeldBySharing { get; init; }
+    public bool? HeldBySharing { get; init; }
 }
 
 /// <summary>
@@ -243,7 +257,12 @@ public static class BundleKeyedHold
                       + $"would move from {candidate.CurrentFold} to {candidate.IncomingFold}"
                     : $"the bundle(s) for framework identity {identity} record "
                       + $"{string.Join(", ", recorded.OrderBy(f => f, StringComparer.Ordinal))} for this "
-                      + $"type, not the {candidate.IncomingFold} its incoming sources would produce");
+                      + $"type, not the {candidate.IncomingFold} its incoming sources would produce")
+            {
+                // 🚨 STAMPED, never defaulted: `null` is reserved for a record written before this
+                // field existed, and a release reads the three states differently (review on #4605).
+                HeldBySharing = false,
+            };
             Hold(candidate);
         }
 

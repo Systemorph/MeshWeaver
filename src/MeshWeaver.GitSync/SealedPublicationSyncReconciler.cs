@@ -200,6 +200,15 @@ public static class SealedSyncReconcile
     /// waiting — releasing on it would re-import, re-hold the identical set, and do it again on
     /// every later publication. Only an independently held entry releases; a sharer is re-judged by
     /// the import the root's own release dispatches.</para>
+    ///
+    /// <para>🚨 And an entry written BEFORE that flag existed (#4595) says neither
+    /// (<see cref="BundleHeldNodeType.HeldBySharing"/> is <c>null</c>), so neither reading is
+    /// available for it (review on #4605): as "independent" a legacy sharer re-enters the futile
+    /// loop, as "sharer" a legacy independent hold can never release on the arrival it waits for.
+    /// Such an entry is a trigger only when the shelf now carries EVERY held entry's fingerprint —
+    /// the one case where the re-import cannot be futile, because it clears the whole set — and that
+    /// import rewrites the list with the flag, so the unknown state survives exactly one
+    /// conclusion.</para>
     /// </summary>
     /// <param name="config">The source's configuration.</param>
     /// <param name="inventory">What bundles for this identity carry, per type.</param>
@@ -216,11 +225,20 @@ public static class SealedSyncReconcile
                    + $"instance no longer runs — the judgement is re-taken against {identity}";
         if (!inventory.IsUsable)
             return null;
-        return held.FirstOrDefault(h => !h.HeldBySharing
-                                        && inventory.Carries(h.Path, h.WantedFingerprint)) is { } arrived
-            ? $"'{arrived.Path}' waits for source fingerprint {arrived.WantedFingerprint}, which a "
-              + $"bundle for framework identity {identity} now records"
-            : null;
+        if (held.FirstOrDefault(h => h.HeldBySharing == false
+                                     && inventory.Carries(h.Path, h.WantedFingerprint)) is { } arrived)
+            return $"'{arrived.Path}' waits for source fingerprint {arrived.WantedFingerprint}, which a "
+                   + $"bundle for framework identity {identity} now records";
+
+        // A legacy entry (no flag) is a trigger only when the shelf carries the WHOLE held set: the
+        // re-import then clears every one of them, so it cannot be the futile re-hold the flag
+        // exists to prevent — and it rewrites the list with the flag, which ends the unknown state.
+        var unknown = held.Where(h => h.HeldBySharing is null).ToList();
+        if (unknown.Count > 0 && held.All(h => inventory.Carries(h.Path, h.WantedFingerprint)))
+            return $"'{unknown[0].Path}' was held before this instance recorded whether a hold is its "
+                   + $"own or a sharer's, and a bundle for framework identity {identity} now records "
+                   + $"the fingerprint of every held type — the re-import clears the whole set";
+        return null;
     }
 
     private static bool SameCommit(string? a, string? b) =>

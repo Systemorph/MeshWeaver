@@ -92,6 +92,23 @@ narrow case where the index read fine and an ARCHIVE did not: a reading that can
 one type, inside an import the seal has already cleared. The source cannot move past its seal either
 way; only the per-type hold is skipped, and the type says it is behind.
 
+**Which readings count as "cannot tell" is one definition, and it is not the configuration.**
+`PrebuiltBundleInventory.Presence` answers it on the same pool as the read it fronts, and the full
+read starts from it so the two cannot disagree:
+
+| the shelf | the reading | why |
+|---|---|---|
+| no framework identity, or nothing configured and no image directory on disk | `NotConfigured` | every NodeType compiles here — nothing to keep in step |
+| a published root IS configured and is not there | `Unreadable` ⇒ **abstain** | unmounted or not yet mounted; the same absent root can never carry the release evidence |
+| the root is there but holds no directory for this identity | `Read`, 0 bundles ⇒ **hold** | a real "nothing published for this identity yet", and the publication that lands here releases it |
+| an archive under it cannot be read | `Unreadable` ⇒ **abstain** | a partial fold is not a short one |
+
+The distinction in rows two and three is the whole point: an empty reading and an unreadable one lead
+to opposite answers, so the difference must be measured rather than defaulted. 🚨 And it is measured
+**before the mesh is asked anything**: `imageDirectory` falls back to a non-empty default path, so a
+configuration-only pre-check is vacuous — it let a portal with no bundles at all pay for the
+mesh-wide NodeType listing plus one stream read per type on every import.
+
 The same asymmetry decides what the reading FOLDS: an archive whose manifest names another framework
 identity — or names none — is skipped, because `SeedBundles` declines exactly those before it looks at
 an assembly. A reading that folded them in would release a hold onto bytes that can never adopt here.
@@ -165,6 +182,14 @@ Three events, and they are the three the rest of this mechanism already has:
    releasing on it would re-import, re-hold the identical set and repeat that on every later
    publication. `BundleHeldNodeType.HeldBySharing` is what tells the two apart, and a sharer is
    re-judged by the import the root's own release dispatches.
+   🚨 **And an entry written before that field existed says NEITHER** (`heldBySharing` is `null`:
+   the list is persisted on the sync config, so records predating the field are read back by a
+   portal that has the code). Neither reading is available for it — as "independent" a legacy sharer
+   re-enters the futile loop, as "sharer" a legacy independent hold can never release on the arrival
+   it waits for. Such an entry is a trigger only when the shelf now carries **every** held entry's
+   fingerprint, the one case where the re-import cannot be futile because it clears the whole set —
+   and that import rewrites the list with the flag (`RecordSyncResult` writes it on every
+   conclusion), so the unknown state survives exactly one conclusion.
 3. **A roll.** A held entry records the identity it was judged under; on an instance running a
    different identity the judgement is void, so the source is re-attempted and re-judged against the
    new identity's inventory.
@@ -206,7 +231,15 @@ away.
 - `test/MeshWeaver.Documentation.Test/PrebuiltBundleInventoryTest.cs` — what the shelf reading folds
   and refuses, over real archives: this identity's bundle is carried, another identity's is not named
   at all, a legacy bundle names the type and satisfies no hold, and an unsealed publication
-  contributes nothing.
+  contributes nothing — plus the `Presence` rows above, including the configured-but-absent root that
+  must read `Unreadable` rather than empty.
+- `test/MeshWeaver.Documentation.Test/BundleHoldReleaseTest.cs` — the release predicate, every case
+  built in the state a held source is actually in (behind the seal, final verdict recorded at it, so
+  the settled shortcut is live and only a release can re-import — the first fact is that negative
+  control): an independent hold releases when its bundle arrives, a sharer never does, an unreadable
+  shelf releases nothing, a hold judged under another identity is retaken whatever the shelf says,
+  and a LEGACY entry (deserialized from #4595's own JSON shape, so the absent key is what is under
+  test) is a trigger only once the shelf carries the whole held set.
 - On a live portal: `get @{space}/_GitSync` shows `bundleHeldNodeTypes` beside the older
   `lastSyncCommitSha`; the import's activity names each held type and the fingerprint it waits for.
 
