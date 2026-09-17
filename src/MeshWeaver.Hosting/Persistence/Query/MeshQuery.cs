@@ -480,19 +480,55 @@ public class MeshQuery : IMeshQueryCore
             var singleProbeLogger = Logger;
             var singleProbeQuery = request.Query;
             var singleProbeUser = request.UserId;
+            var singleProviderName = observables[0].Provider;
             return Observable.Create<QueryResultChange<T>>(observer =>
             {
                 var probeArm = singleProbe.Arm(
                     InitialStallProbeDelay, singleProbeLogger, singleProbeQuery, singleProbeUser);
+                var sawInitial = false;
                 var sub = single.Subscribe(
                     change =>
                     {
                         if (change.ChangeType == QueryChangeType.Initial)
+                        {
+                            sawInitial = true;
                             singleProbe.MarkSeen(0);
+                        }
                         observer.OnNext(change);
                     },
                     observer.OnError,
-                    observer.OnCompleted);
+                    () =>
+                    {
+                        // 🚨 The SAME completion guard the multi-provider merge has, and for the
+                        // same contract ("every Query<T> observable must emit exactly one
+                        // Initial"). Without it a lone provider that completes silently left this
+                        // stream completing with NO frame at all — and a consumer that caches the
+                        // first frame (MeshNodeStreamCache's Replay(1)) then caches "completed,
+                        // nothing" just as durably as it would cache a fabricated empty. Emit the
+                        // empty Initial and NAME the provider on it, so the answer is delivered
+                        // (nothing hangs) and is visibly one nobody gave (MeshWeaver#4557).
+                        if (!sawInitial)
+                        {
+                            singleProbeLogger?.LogWarning(
+                                "Query provider {Provider} completed WITHOUT emitting an Initial for query "
+                                + "'{Query}' (user '{UserId}') — contract violation; answering with an EMPTY "
+                                + "Initial that names it, so nothing hangs and nothing caches this as a real "
+                                + "answer. Fix the provider: every Query<T> observable must emit exactly one "
+                                + "Initial.",
+                                singleProviderName, singleProbeQuery, singleProbeUser);
+                            singleProbe.MarkSeen(0);
+                            observer.OnNext(new QueryResultChange<T>
+                            {
+                                ChangeType = QueryChangeType.Initial,
+                                Items = Array.Empty<T>(),
+                                Timestamp = DateTimeOffset.UtcNow,
+                                Query = new QueryParser().Parse(
+                                    request.EffectiveQueries.FirstOrDefault() ?? ""),
+                                SilentProviders = [singleProviderName],
+                            });
+                        }
+                        observer.OnCompleted();
+                    });
                 return new System.Reactive.Disposables.CompositeDisposable(probeArm, sub);
             });
         }
@@ -532,6 +568,11 @@ public class MeshQuery : IMeshQueryCore
             var initialTarget = observables.Count;
             // Per-provider Initial tracking for the completion guard below.
             var initialSeen = new bool[observables.Count];
+            // 🚨 The providers that COMPLETED without an Initial and were counted as empty below.
+            // Named, not counted: the merged frame carries them so a consumer can tell "nobody
+            // answered yet" from "there is nothing there" — see QueryResultChange.SilentProviders
+            // and MeshWeaver#4557.
+            var silentProviders = new List<string>();
             ParsedQuery? lastQuery = null;
             var gate = new object();
 
@@ -569,7 +610,14 @@ public class MeshQuery : IMeshQueryCore
                 var parsed = lastQuery
                     ?? new QueryParser().Parse(request.EffectiveQueries.FirstOrDefault() ?? "");
                 var clipped = ClipMergedInitial<T>(ordered, template, parsed, request);
-                observer.OnNext(clipped with { Partitions = UnionReportedPartitions(providerPartitions) });
+                observer.OnNext(clipped with
+                {
+                    Partitions = UnionReportedPartitions(providerPartitions),
+                    // Stamped on the merged frame, never on a delta: this says what the SNAPSHOT is
+                    // worth. Empty stays null so the common case allocates nothing and reads as
+                    // "every provider answered".
+                    SilentProviders = silentProviders.Count == 0 ? null : silentProviders.ToArray(),
+                });
             }
 
             for (var i = 0; i < observables.Count; i++)
@@ -652,6 +700,10 @@ public class MeshQuery : IMeshQueryCore
                                 providerName, request.Query, request.UserId);
                             initialSeen[idx] = true;
                             initialCount++;
+                            // NAME it on the merged frame. The log line below says this happened;
+                            // the frame has to say it too, because the consumer that caches the
+                            // answer is not the one reading the log (MeshWeaver#4557).
+                            silentProviders.Add(providerName);
                             // A provider that COMPLETED (even without an Initial) is not stalled —
                             // mark it seen so the stall probe doesn't also flag it.
                             stallProbe.MarkSeen(idx);

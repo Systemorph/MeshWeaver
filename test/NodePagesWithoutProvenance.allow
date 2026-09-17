@@ -1,0 +1,51 @@
+# NodePagesWithoutProvenance.allow — the node-landing-page provenance ratchet (#4500).
+#
+# Each line is a production file that registers a renderer for an area name that is SOMEBODY's
+# landing page, using the bare `WithView` / `WithNamedRenderer` rather than
+# `MeshNodeLayoutAreas.WithNodePage`, and therefore records no NodePageProvenance verdict:
+#
+#     layout.WithView(MeshNodeLayoutAreas.SearchArea, Search)
+#
+# WHY THE SHAPE IS A DEFECT. The `Type · Created · Updated` line rode on ONE renderer — the
+# framework's Overview — and `WithNamedRenderer` is last-writer-wins. A node type that registered
+# its own landing page replaced that renderer and the provenance line went with it, with nothing
+# anywhere recording the loss. Measured 2026-09-16: of the 99 landing pages across the fleet that
+# replace the framework renderer, 86 had lost it — 4 here, 82 in MeshWeaver.Plugins. An omission
+# somebody had WEIGHED (an Activity page reports its own run's start and end) and one nobody had
+# thought about were the same observation from outside: an absence.
+#
+# THE FIX AT A SITE is `WithNodePage(area, page)`. With no second argument the framework composes
+# the line above the page, so a landing page written without an opinion ships correct. A page that
+# already draws the standard header passes `NodePageProvenance.RenderedByThePage`; one that should
+# carry none passes `NodePageProvenance.Declined("<why>")` — and the reason is mandatory, because a
+# blank decline records that somebody decided without recording what.
+#
+# WHY ENTRIES EXIST AT ALL. The scanner cannot tell which hub a registration lands on, and an area
+# name is a landing page on one hub and an ordinary tab on another: `Search` is `Partition`'s
+# landing page (registered there through `WithNodePage`, in PartitionNodeType) and every other
+# node's search TAB. Flagging by name over-flags on purpose — under-flagging costs a page nobody
+# notices is missing something, which is the whole issue — so the judgement lives here, per file,
+# in a sentence.
+#
+# THIS RATCHET MAY ONLY SHRINK. A new file, or a raised count, is a failure; so is a count left
+# HIGHER than the tree (a stale entry reds, so the reason beside it is re-read when it stops being
+# true). Delete an entry when it reaches 0.
+#
+# WHAT IT DOES NOT COVER, and why that is not a gap to close here: `src/` only. Most of the fleet's
+# landing pages live in in-mesh `Source/*.cs` and in NodeType `configuration` lambdas that compile
+# at RUNTIME in the portal — invisible to every compiler and every scan in this repository. Those
+# pages are reached by the changed DEFAULT, not by this guard. Widening the roots would produce a
+# guard that scans a tree the defect does not live in.
+#
+# Format: relative/path<TAB>count. `#` starts a comment.
+
+# The framework's own Search TAB, registered for every node hub by AddDefaultLayoutAreas. It is a
+# landing page on exactly one hub — Partition — and PartitionNodeType re-registers it there through
+# WithNodePage (node-type configuration runs AFTER the default chain), so the Partition landing page
+# does carry a verdict. This registration is the tab, on every other node in the mesh.
+src/MeshWeaver.Graph/MeshNodeLayoutAreas.cs	1
+
+# The NodeType page's instance-search TAB, wrapped in the NodeType shell. A NodeType node's landing
+# page is Overview, registered immediately above it through WithNodePage with RenderedByThePage
+# (NodeTypeLayoutAreas.OverviewContent calls MeshNodeLayoutAreas.BuildHeader).
+src/MeshWeaver.Graph/NodeTypeLayoutAreas.cs	1

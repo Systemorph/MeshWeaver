@@ -185,6 +185,20 @@ public sealed class GitHubWebhookProcessor
     internal sealed record PushTarget(string SpacePath, string? SourceId, string UserId);
 
     /// <summary>
+    /// One sync source a green build imports, and the commit it imports AT — the built commit, or,
+    /// when the build is not sealed for this instance, the commit that IS
+    /// (<see cref="SealedSyncGate.DecideBuild"/>). Carried per target because one delivery can land
+    /// different sources on different commits: a repository's seal attributes by marker, so every
+    /// source of it agrees, but a legacy seal attributed by commit can differ per source.
+    /// </summary>
+    /// <param name="Target">The sync source.</param>
+    /// <param name="Commit">The commit to import at.</param>
+    /// <param name="LandsOnSeal">True when <paramref name="Commit"/> is the sealed commit rather
+    /// than the built one.</param>
+    /// <param name="Reason">Log copy: why this commit.</param>
+    internal sealed record BuildImport(PushTarget Target, string Commit, bool LandsOnSeal, string Reason);
+
+    /// <summary>
     /// Parses a <c>push</c> payload. False for non-branch refs (tag pushes) and branch
     /// deletions — there is nothing to import from either.
     /// </summary>
@@ -292,10 +306,20 @@ public sealed class GitHubWebhookProcessor
                 return 0;
             }
             logger?.LogInformation(
-                "Green build of {Repo}@{Branch} ({Sha}) → importing {Count} sync source(s) AT THAT COMMIT.",
-                repo, branch, headSha, targets.Count);
+                "Green build of {Repo}@{Branch} ({Sha}) → importing {Count} sync source(s): {AtBuilt} AT THAT "
+                + "COMMIT, {AtSeal} at the commit sealed for this instance instead.",
+                repo, branch, headSha, targets.Count,
+                targets.Count(t => !t.LandsOnSeal), targets.Count(t => t.LandsOnSeal));
             var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-            foreach (var t in targets)
+            foreach (var (t, commit, landsOnSeal, reason) in targets)
+            {
+                if (landsOnSeal)
+                    // Its own line: the build's commit is NOT what lands, and an operator reading the
+                    // import activity ("Update … to the built commit C") must be able to find why the
+                    // commit it names is not the one that went green (#3845).
+                    logger?.LogInformation(
+                        "Green build of {Repo} at {Sha}: {Space} lands on the sealed commit {Sealed} — {Reason}.",
+                        repo, headSha, t.SpacePath, commit, reason);
                 // 🚨 RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)` — #1790.
                 // Rx disposes a Using's resource on whichever thread the INNER observable
                 // terminates on, so the subscribing thread stays latched as system-security while
@@ -305,18 +329,20 @@ public sealed class GitHubWebhookProcessor
                 // the very expression this change rewrites; the file's three remaining sites are
                 // untouched work, still on the inventory.
                 accessService.RunAsSystem(
-                        // 🚨 headSha, NOT "latest" — see the remarks. The candidates were selected
-                        // against this commit; importing anything else means the selection and the
-                        // import disagree about which tree this build proved (#1430).
+                        // 🚨 A COMMIT, NOT "latest" — see the remarks. The candidates were selected
+                        // against headSha and the gate decided which commit each may land on
+                        // (headSha, or the sealed one); resolving the branch here would mean the
+                        // selection and the import disagree about which tree was proved (#1430).
                         () => hub.UpdateToProvenCommitFromGitHub(
-                            t.SpacePath, t.UserId, headSha, sourceId: t.SourceId))
+                            t.SpacePath, t.UserId, commit, sourceId: t.SourceId))
                     .Subscribe(
                         activity => logger?.LogInformation(
                             "Build-triggered import of {Space} at {Sha} completed ({Activity}).",
-                            t.SpacePath, headSha, activity),
+                            t.SpacePath, commit, activity),
                         exception => logger?.LogWarning(exception,
                             "Build-triggered import of {Space} at {Sha} (source {Source}) failed.",
-                            t.SpacePath, headSha, t.SourceId ?? "(primary)"));
+                            t.SpacePath, commit, t.SourceId ?? "(primary)"));
+            }
             return targets.Count;
         });
 
@@ -332,7 +358,7 @@ public sealed class GitHubWebhookProcessor
 
     /// <summary>The distinct sync sources whose config targets <paramref name="repo"/> AND
     /// matches the green build's branch, minus those already at <paramref name="headSha"/>.</summary>
-    private IObservable<IReadOnlyList<PushTarget>> MatchingBuildTargets(
+    private IObservable<IReadOnlyList<BuildImport>> MatchingBuildTargets(
         RepoIdentity repo, string branch, string headSha)
         => ConfigsTargeting(repo, $"green build of {branch}")
             .Select(match =>
@@ -369,9 +395,10 @@ public sealed class GitHubWebhookProcessor
                 // (MeshWeaver.Plugins#1823, #1798). Read once per delivery, beside the seals.
                 var newerLine = SealedPublicationIndex.NewerLineThan(publishedRoot, identity, logger);
                 var held = 0;
+                var landed = 0;
                 var gateEvaluated = 0;
                 string? heldReason = null;
-                var picked = new List<PushTarget>();
+                var picked = new List<BuildImport>();
                 var skipped = new List<string>();
                 foreach (var node in match.Configs)
                 {
@@ -390,26 +417,60 @@ public sealed class GitHubWebhookProcessor
                         RecordSealHold(node, cfg, unreadable.HoldReason);
                         continue;
                     }
-                    if (SealedSyncGate.Decide(
-                            repo, headSha, cfg?.LastSyncCommitSha, sealedForThisIdentity, identity, newerLine)
-                        is { Proceed: false } hold)
+                    // 🚨 LAND on the sealed commit rather than only holding (#3845). The first import
+                    // (#4212), the seal's arrival (#4209) and the boot install (#4259) already do; this
+                    // was the last unattended lane that stopped at "not sealed for this instance" and
+                    // waited for the reconciler to read the seal — the commit it would then import is
+                    // exactly the one DecideBuild names here.
+                    var plan = SealedSyncGate.DecideBuild(
+                        repo, headSha, cfg?.LastSyncCommitSha, sealedForThisIdentity, identity, newerLine);
+                    if (!plan.Proceed)
                     {
                         held++;
-                        heldReason ??= hold.HoldReason;
-                        skipped.Add($"{node.Path} ({hold.HoldReason})");
-                        RecordSealHold(node, cfg, hold.HoldReason);
+                        heldReason ??= plan.HoldReason;
+                        skipped.Add($"{node.Path} ({plan.HoldReason})");
+                        RecordSealHold(node, cfg, plan.HoldReason);
                         continue;
+                    }
+                    if (plan.Redirected)
+                    {
+                        // The BUILD is held either way — its commit is not what this source receives —
+                        // so the census and the Warning below count it; what differs is whether there
+                        // is anything to import.
+                        held++;
+                        heldReason ??= plan.Reason;
+                        if (SealedSyncGate.SameCommit(cfg?.LastSyncCommitSha, plan.Commit))
+                        {
+                            // Already on the sealed commit: nothing to import, and the node must say
+                            // why the build did not arrive (#4063) — the note names the sealed commit.
+                            skipped.Add($"{node.Path} (already at the sealed commit — {plan.Reason})");
+                            RecordSealHold(node, cfg, plan.Reason);
+                            continue;
+                        }
+                        if (GitHubSyncService.HasFinalVerdictAt(cfg, plan.Commit))
+                        {
+                            // 🚨 #4499's predicate at the commit that WOULD land. Without it a source
+                            // that cannot converge at the sealed commit is re-fetched on every green
+                            // build of its repository — the storm SkipReason exists to stop, moved
+                            // one commit over. Not recorded as a hold: a hold clears the attempt pair,
+                            // which would licence exactly the re-attempt this skips.
+                            skipped.Add(
+                                $"{node.Path} (the sealed commit already carries a final verdict "
+                                + $"('{cfg?.LastSyncOutcome}') — {plan.Reason})");
+                            continue;
+                        }
+                        landed++;
                     }
                     if (ToPushTarget(node) is not { } pushTarget)
                     {
                         skipped.Add($"{node.Path} (path carries no '{GitHubSyncService.ConfigId}' segment)");
                         continue;
                     }
-                    picked.Add(pushTarget);
+                    picked.Add(new BuildImport(pushTarget, plan.Commit!, plan.Redirected, plan.Reason));
                 }
 
-                var targets = (IReadOnlyList<PushTarget>)picked
-                    .DistinctBy(t => (t.SpacePath, t.SourceId))
+                var targets = (IReadOnlyList<BuildImport>)picked
+                    .DistinctBy(t => (t.Target.SpacePath, t.Target.SourceId))
                     .ToList();
 
                 logger?.LogInformation(
@@ -446,9 +507,10 @@ public sealed class GitHubWebhookProcessor
                     // — an operator must be able to find it without reading the skip detail.
                     logger?.LogWarning(
                         "Green build of {Repo}@{Branch} ({Sha}): {Held} sync source(s) HELD — the build is "
-                        + "not sealed for this instance's framework identity {Identity}; they advance when it is "
-                        + "(MeshWeaver.Plugins#1430).",
-                        repo, branch, headSha, held, identity);
+                        + "not sealed for this instance's framework identity {Identity}; {Landed} of them "
+                        + "import the commit that IS sealed instead, and none receives this build until it is "
+                        + "sealed for this identity (MeshWeaver.Plugins#1430, #3845).",
+                        repo, branch, headSha, held, identity, landed);
 
                 return targets;
             });
@@ -558,10 +620,13 @@ public sealed class GitHubWebhookProcessor
             // 🚨 Ordered AFTER "already at this commit" on purpose: a converged source keeps
             // reporting the reason it has always reported, so this arm's appearance in a log is
             // itself the signal that a source is settled-but-not-converged.
-            : cfg.LastAttemptWasFinal
-              && string.Equals(cfg.LastAttemptedCommitSha, headSha, StringComparison.OrdinalIgnoreCase)
+            // 🚨 #4499 — the SAME predicate the seal reconciler asks, so the two unattended triggers
+            // cannot disagree; it also requires the verdict to have been reached under the source's
+            // CURRENT configuration, so an operator's correction re-attempts at the same commit.
+            : GitHubSyncService.HasFinalVerdictAt(cfg, headSha)
                 ? $"already attempted at this commit with a final verdict ('{cfg.LastSyncOutcome}') — "
-                  + "re-reading the same bytes re-derives it; the next new commit re-attempts"
+                  + "re-reading the same bytes under the same configuration re-derives it; a new "
+                  + "commit or an edit of the source re-attempts"
             : null;
 
     /// <summary>Maps a config node path (<c>{space}/_GitSync</c> or <c>{space}/_GitSync/{sourceId}</c>)

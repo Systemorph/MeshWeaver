@@ -50,7 +50,18 @@ public static class SealedSyncReconcile
     /// <summary>The decision and its reason (log copy an operator can act on).
     /// <paramref name="SteadyState"/> is the STRUCTURED signal for "at the seal, nothing declined"
     /// — the one <see cref="Action.None"/> that is not a hold and is never recorded or logged.</summary>
-    public sealed record Plan(Action Action, string? Commit, string Reason, bool SteadyState = false);
+    public sealed record Plan(Action Action, string? Commit, string Reason, bool SteadyState = false)
+    {
+        /// <summary>
+        /// The STRUCTURED signal for "behind the seal, but this source already holds a final verdict
+        /// on the sealed commit under its current configuration"
+        /// (<see cref="GitHubSyncService.HasFinalVerdictAt"/>) — the other <see cref="Action.None"/>
+        /// that is not a hold. 🚨 It must never be RECORDED as one: a hold clears the attempt pair,
+        /// so writing it would licence the very re-attempt this plan withholds, and the source would
+        /// alternate refuse → hold → refuse on every announcement (#4499).
+        /// </summary>
+        public bool Settled { get; init; }
+    }
 
     /// <summary>
     /// Decides for one sync source of the repository a sealed source belongs to.
@@ -85,6 +96,22 @@ public static class SealedSyncReconcile
         if (!SameCommit(at, commit))
         {
             var verdict = SealedSyncGate.Decide(repo, commit, at, sealedForThisIdentity, identity);
+            // 🚨 #4499 — the green-build webhook has skipped a source with a FINAL verdict at the
+            // built commit since #3945; this trigger never asked, so a source that can never
+            // converge at the sealed commit was fetched again on EVERY publication announcement.
+            // Measured on memex.systemorph.com, 2026-09-16: two Spaces whose subdirectory matches
+            // nothing refused ~32×/hour at one unchanged seal, each refusal a full repository fetch
+            // and an Activity node. Asked AFTER the gate, so a source the seal holds is still
+            // recorded as held; and via the one shared predicate, so an edit of the source or a new
+            // sealed commit re-attempts exactly as it does on the webhook path.
+            if (verdict.Proceed && GitHubSyncService.HasFinalVerdictAt(config, commit))
+                return new Plan(Action.None, commit,
+                    $"'{sealedSource.Source}' is sealed at {Short(commit)} and this source already reached a "
+                    + $"final verdict on that commit under its current configuration ('{config.LastSyncOutcome}') — "
+                    + "re-reading it re-derives the same verdict; an edit of the source or a new sealed commit re-attempts")
+                {
+                    Settled = true,
+                };
             return verdict.Proceed
                 ? new Plan(Action.ImportAtSealedCommit, commit,
                     $"'{sealedSource.Source}' is sealed at {Short(commit)} for this instance and the "
@@ -223,7 +250,8 @@ internal sealed class SealedPublicationSyncReconciler(
                             dispatched++;
                             break;
                         default:
-                            if (plan.SteadyState)
+                            // A settled source passed the gate too — the seal is not what stops it.
+                            if (plan.SteadyState || plan.Settled)
                                 gateLetSomethingThrough = true;
                             RecordHold(node.Path, target, plan, config);
                             break;
@@ -236,7 +264,9 @@ internal sealed class SealedPublicationSyncReconciler(
     }
 
     /// <summary>A hold is written onto the config and said ONCE at Warning per reason; a source
-    /// that is simply at the seal with nothing declined is neither (it is the steady state).</summary>
+    /// that is simply at the seal with nothing declined is neither (it is the steady state); a
+    /// SETTLED source (<see cref="SealedSyncReconcile.Plan.Settled"/>) is said once and never
+    /// written.</summary>
     private void RecordHold(string configPath, GitHubWebhookProcessor.PushTarget target,
         SealedSyncReconcile.Plan plan, GitHubSyncConfig? config)
     {
@@ -249,6 +279,14 @@ internal sealed class SealedPublicationSyncReconciler(
             && string.Equals(previous, plan.Reason, StringComparison.Ordinal))
             return;
         loggedHolds[configPath] = plan.Reason;
+        if (plan.Settled)
+        {
+            // 🚨 Said once per reason and NEVER written (#4499): the config already carries the
+            // final verdict and its note, and recording a hold would clear the attempt pair that
+            // licenses this very skip — turning one refusal per commit back into one per announcement.
+            logger?.LogInformation("[SealedSync] {Space}: not re-attempted — {Reason}", target.SpacePath, plan.Reason);
+            return;
+        }
         logger?.LogWarning("[SealedSync] {Space}: HELD — {Reason}", target.SpacePath, plan.Reason);
         if (config is null || string.Equals(config.LastSyncNote, plan.Reason, StringComparison.Ordinal))
             return;

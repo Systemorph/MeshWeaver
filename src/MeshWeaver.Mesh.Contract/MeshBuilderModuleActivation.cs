@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.Extensions.Configuration;
 
 namespace MeshWeaver.Mesh;
@@ -10,6 +11,30 @@ public static class MeshBuilderModuleActivation
 {
     /// <summary>The configuration key every host reads its module baseline from.</summary>
     public const string AssembliesKey = "Modules:Assemblies";
+
+    /// <summary>
+    /// The module SIMPLE NAMES this image ships its own copy of — the <see cref="AssembliesKey"/>
+    /// baseline, read the way the boot loader reads it, with the <c>.dll</c> dropped.
+    ///
+    /// <para>🚨 It answers exactly one question — "does the image carry a copy of this module?" —
+    /// and it is the question the identity discriminator and the activation report both have to
+    /// ask (MeshWeaver#4550). Deriving it twice is how a gate and a resolver came to disagree
+    /// about where a module's bytes are (#1949), so it lives once, here, beside the key.</para>
+    /// </summary>
+    /// <param name="configuration">The host configuration carrying <see cref="AssembliesKey"/>.</param>
+    /// <remarks>IMMUTABLE, not a <see cref="HashSet{T}"/> behind the interface: the answer is held
+    /// by a mesh-scoped singleton for the life of the process, and the collections policy exists so
+    /// a snapshot cannot be mutated by anyone who is handed it.</remarks>
+    public static IReadOnlySet<string> BaselineModuleNames(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        return configuration.GetSection(AssembliesKey).GetChildren()
+            .Select(child => child.Value)
+            .Where(entry => !string.IsNullOrWhiteSpace(entry))
+            .Select(entry => Path.GetFileNameWithoutExtension(entry!))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// The modules this deployment cannot correctly serve without — the loud half of

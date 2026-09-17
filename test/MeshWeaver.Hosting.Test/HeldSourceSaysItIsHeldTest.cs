@@ -40,13 +40,15 @@ namespace MeshWeaver.Hosting.Test;
 /// <c>Admin/_Build</c> rewritten at 03:44:49Z on both portals, an issue fan-out across 34 spaces at
 /// 02:07:07Z — were what finally located the hold, one branch at a time.</para>
 ///
-/// <para><b>What is measured here, and what could falsify it.</b> The first fact drives a real
-/// <c>workflow_run</c> delivery at a commit the seal does not cover and reads the config node back:
-/// against the pre-fix code the node still reads <c>Imported</c> with an empty note, which is the
-/// defect stated in the words the incident used. The second fact is the control that keeps the
-/// first honest — a delivery at the SEALED commit must import and CLEAR the note, so the hold
-/// record can never be mistaken for a permanent stamp, and "held" stays a statement about one
-/// delivery rather than a property of the source.</para>
+/// <para><b>What is measured here, and what could falsify it.</b> Since MeshWeaver#3845 a green build
+/// the seal does not cover LANDS the source on the sealed commit rather than only holding it — the
+/// first fact pins that. The second drives a delivery the seal does not cover to a source ALREADY on
+/// the seal, where there is nothing to import, and reads the config node back: against the pre-#4065
+/// code the node still reads <c>Imported</c> with an empty note, which is the defect stated in the
+/// words the incident used. Its control keeps it honest — once the seal advances to cover a build, the
+/// delivery must import and CLEAR the note, so the hold record can never be mistaken for a permanent
+/// stamp, and "held" stays a statement about one delivery rather than a property of the
+/// source.</para>
 ///
 /// <para>One seam is substituted, the GitHub transport (<see cref="IGitHubRepoClient"/>), exactly as
 /// in <c>BuildTriggeredSyncPinsTheBuiltCommitTest</c>. The published bundle root is a REAL directory
@@ -69,6 +71,10 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
 
     /// <summary>A later green build of the same branch — the commit the seal does NOT cover.</summary>
     private const string UnsealedSha = "222853d4aabbccddeeff00112233445566778899";
+
+    /// <summary>A still later green build — delivered to a source already on the seal, and the commit
+    /// the seal then advances to for the control.</summary>
+    private const string LaterUnsealedSha = "3a2556b0ffeeddccbbaa99887766554433221100";
 
     private readonly RecordingRepoClient repoClient = new();
 
@@ -133,7 +139,7 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
     /// <see cref="SealedPublicationIndex"/> reads as sealed-and-complete — the seal is what this
     /// test needs, not the bytes.
     /// </summary>
-    private void StageSealedPublication()
+    private void StageSealedPublication(string commit = SealedSha)
     {
         var sourceDirectory = Path.Combine(
             publishedRoot, PrebuiltAssemblySeeder.LiveFrameworkMvid, SealedSourceName);
@@ -141,7 +147,7 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
         File.WriteAllText(
             Path.Combine(sourceDirectory, SealedPublicationIndex.RepositoryMarkerFileName), RepoFullName);
         File.WriteAllText(
-            Path.Combine(sourceDirectory, SealedPublicationIndex.SourceCommitMarkerFileName), SealedSha);
+            Path.Combine(sourceDirectory, SealedPublicationIndex.SourceCommitMarkerFileName), commit);
         File.WriteAllText(
             Path.Combine(sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName), string.Empty);
     }
@@ -157,16 +163,53 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
     // 120_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a
     // constant, and the inner waits below already carry the adaptive bound. This outer one
     // only has to stop a WEDGE.
+    /// <summary>
+    /// 🚨 <b>The webhook LANDS on the sealed commit — it no longer only holds</b> (MeshWeaver#3845).
+    /// A green build the seal does not cover used to leave a Space that had never synced exactly where
+    /// it was until the reconciler next read the seal; the commit that reconciler imports is the one
+    /// the webhook can name itself. Against the pre-change code this fetches NOTHING — the delivery
+    /// records a hold and the config never reaches the sealed commit.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AGreenBuildNotSealedForThisInstance_ImportsTheSealedCommit_NeverTheBuiltOne()
+    {
+        var space = await ArmedSpace("Lands", TestContext.Current.CancellationToken);
+
+        var sealedFetched = repoClient.FetchedRefs.Where(r => r == SealedSha)
+            .Should().Within(TestTimeouts.Convergence * 2)
+            .Emit("a green build not sealed for this instance lands its sources on the commit that IS "
+                  + "sealed — the one the reconciler would import when it next reads the seal",
+                TestContext.Current.CancellationToken);
+
+        await Deliver(UnsealedSha, TestContext.Current.CancellationToken);
+        (await sealedFetched).Should().Be(SealedSha);
+
+        var landed = await ConfigWhenOrCurrent(space,
+            c => string.Equals(c.LastSyncCommitSha, SealedSha, StringComparison.OrdinalIgnoreCase),
+            TestContext.Current.CancellationToken);
+        landed.LastSyncCommitSha.Should().Be(SealedSha,
+            "the Space sits on the commit whose bytes this instance runs");
+        repoClient.Requested.Should().NotContain(UnsealedSha,
+            "the built commit is not sealed for this identity; its sources would run ahead of the bytes");
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task SealHeldSource_RecordsTheHoldOnItsConfig_SoItCannotReadAsSettled()
     {
         var space = await ArmedSpace("Held", TestContext.Current.CancellationToken);
 
-        // ── the delivery the seal does not cover ─────────────────────────────
-        var neverFetched = repoClient.FetchedRefs.Where(r => r == UnsealedSha)
+        // ── bring the source onto the seal: a build the seal does not cover lands it there ──
+        await Deliver(UnsealedSha, TestContext.Current.CancellationToken);
+        await ConfigWhen(space,
+            c => string.Equals(c.LastSyncCommitSha, SealedSha, StringComparison.OrdinalIgnoreCase),
+            TestContext.Current.CancellationToken);
+
+        // ── the delivery the seal does not cover, to a source ALREADY on the seal ──────────
+        // Nothing to import, so the only trace of this build is what the node says.
+        var neverFetched = repoClient.FetchedRefs.Skip(repoClient.Requested.Count)
             .Should().NotEmit(within: TestTimeouts.Quick, cancellationToken: TestContext.Current.CancellationToken);
 
-        await Deliver(UnsealedSha, TestContext.Current.CancellationToken);
+        await Deliver(LaterUnsealedSha, TestContext.Current.CancellationToken);
         await neverFetched;
 
         // 🚨 Read the node back with a FALLBACK to whatever it currently says, never a bare wait:
@@ -197,17 +240,18 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
         afterHold.LastAttemptWasFinal.Should().BeFalse(
             "the finality flag is only ever read beside the attempted sha it qualifies");
 
-        // ── the control: the seal DOES cover this one, so it imports and the note clears ──
-        var fetched = repoClient.FetchedRefs.Where(r => r == SealedSha)
+        // ── the control: the seal ADVANCES to cover this build, so it imports and the note clears ──
+        var fetched = repoClient.FetchedRefs.Where(r => r == LaterUnsealedSha)
             .Should().Within(TestTimeouts.Convergence * 2)
             .Emit("a green build AT the sealed commit is exactly what the gate waits for",
                 TestContext.Current.CancellationToken);
 
-        await Deliver(SealedSha, TestContext.Current.CancellationToken);
-        (await fetched).Should().Be(SealedSha);
+        StageSealedPublication(LaterUnsealedSha);
+        await Deliver(LaterUnsealedSha, TestContext.Current.CancellationToken);
+        (await fetched).Should().Be(LaterUnsealedSha);
 
         var afterImport = await ConfigWhen(space, c =>
-            string.Equals(c.LastSyncCommitSha, SealedSha, StringComparison.OrdinalIgnoreCase),
+            string.Equals(c.LastSyncCommitSha, LaterUnsealedSha, StringComparison.OrdinalIgnoreCase),
             TestContext.Current.CancellationToken);
 
         Output.WriteLine(
@@ -340,13 +384,19 @@ public class HeldSourceSaysItIsHeldTest(ITestOutputHelper output)
     private sealed class RecordingRepoClient : IGitHubRepoClient
     {
         private readonly ReplaySubject<string> fetched = new();
+        private System.Collections.Immutable.ImmutableList<string> requested =
+            System.Collections.Immutable.ImmutableList<string>.Empty;
 
         /// <summary>Every commitish a fetch has asked for, replayed to a late subscriber.</summary>
         public IObservable<string> FetchedRefs => fetched;
 
+        /// <summary>The same record as a snapshot — complete once the imports that made it have landed.</summary>
+        public System.Collections.Immutable.ImmutableList<string> Requested => requested;
+
         public IObservable<RepoSnapshot> Fetch(
             string repositoryUrl, string commitish, string? subdirectory, string accessToken)
         {
+            System.Collections.Immutable.ImmutableInterlocked.Update(ref requested, list => list.Add(commitish));
             fetched.OnNext(commitish);
             // An empty snapshot at the requested sha: the import then has nothing to write, which is
             // exactly what this test wants — the RECORD is the measurement, the content is not.

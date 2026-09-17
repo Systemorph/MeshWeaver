@@ -204,6 +204,23 @@ public static class PluginCatalogConfigurationExtensions
                     // generation the set activates is not the one loaded), and every surface
                     // promises a restart that falls back again.
                     FallbackModules = [.. sp.GetServices<FallbackModule>()],
+                    // 🚨 MeshWeaver#4550 — the two inputs that tell the boot's #4161 DECLINE from an
+                    // ordinary pending update. Without them a declined generation reads as "landed
+                    // but not yet loaded" and every surface promises a restart that re-runs the same
+                    // comparison: measured on memex.systemorph.com 2026-09-16, eight modules named
+                    // that way across a restart that could not clear one of them. The names come
+                    // from the SAME configuration key the boot loader reads, and the identities are
+                    // the two readings this platform states about itself — the surface identity it
+                    // compiles content against, and the producer reading a module packer takes off
+                    // its anchor, which is the scheme every bundle in the fleet states in.
+                    ImageShippedModules = sp.GetService<IConfiguration>() is { } moduleConfiguration
+                        ? MeshBuilderModuleActivation.BaselineModuleNames(moduleConfiguration)
+                        : ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase),
+                    PlatformIdentities =
+                    [
+                        Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                        MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedIdentity,
+                    ],
                 })
                 // The COUNT that proves the distribution lane works (#1782 gap 4). Adoption's only
                 // evidence used to be a log line, and the most important miss — "the registry does

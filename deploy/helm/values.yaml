@@ -66,15 +66,14 @@ selfUpdate:
   # 🚨 WHERE THIS INSTALLATION PULLS ITS PLATFORM IMAGES FROM, AND LISTS THEM (MeshWeaver#3353).
   # Empty (the default) keeps SelfUpdate__Registry at the image's own default — the upstream Azure
   # Container Registry, listed through ACR's API with the workload identity above. A registry
-  # login-server host here — `memex.meshweaver.cloud`, the read-through mirror another
-  # installation serves at /v2 — makes the self-updater list tags through the OCI Distribution API
-  # instead, authenticated with THIS installation's plugin-registry instance key (no second
-  # secret), and roll to images named on that host. Every installation EXCEPT the one serving the
-  # mirror sets this — the mirror instance cannot serve the image that boots it
-  # (Doc/Architecture/ContainerRegistryInMemex).
+  # login-server host here — `cr.meshweaver.cloud`, the fleet's own registry — makes the
+  # self-updater list tags through the OCI Distribution API instead, authenticated with THIS
+  # installation's plugin-registry instance key (no second secret), and roll to images named on
+  # that host. Every installation EXCEPT the one hosting that registry sets this — the hosting
+  # instance cannot serve the image that boots it (Doc/Architecture/ContainerRegistryInMemex).
   #
   # 🚨 WHICH key is presented is decided by a PAIRING, and there are exactly two ways to qualify:
-  # this host IS a pluginCatalog registry (a portal serving its own /v2 mirror), or
+  # this host IS a pluginCatalog registry, or
   # `registryValidationUrl` below declares the portal that validates this installation's key here
   # AND that portal is a pluginCatalog registry. The fleet's own registry needs the SECOND — do not
   # read the first as a requirement to put both on one host, which is what #4093 was.
@@ -93,8 +92,8 @@ selfUpdate:
   # caller's key to a portal, which is the fleet's shape: cr.meshweaver.cloud asks
   # https://memex.meshweaver.cloud/api/instances/token whether the key is good, so the image
   # registry and the plugin registry are two DIFFERENT hosts by design
-  # (Doc/Architecture/ContainerRegistryInMemex). Leave it empty when the registry IS the portal that
-  # serves the catalog — a portal serving its own /v2 mirror needs no declaration.
+  # (Doc/Architecture/ContainerRegistryInMemex). Leave it empty when the registry host IS the
+  # portal that serves the catalog — that pairing needs no declaration.
   #
   # 🚨 It is a GRANT, and an absent one is a refusal, never permission: the self-updater presents
   # this installation's instance key ONLY to a host that is a configured pluginCatalog registry, or
@@ -103,21 +102,7 @@ selfUpdate:
   # Without it an instance on the fleet registry boots fine and then never self-updates — every
   # check fails with "no plugin registry is configured on that host".
   registryValidationUrl: ""
-# ---- Container image mirror (the /v2 pull surface THIS installation serves) -----------------
-# The read-through OCI mirror (src/MeshWeaver.ContainerImages, MeshWeaver#3353): this installation
-# proxies container images from an upstream registry with ONE credential it holds, while every
-# caller — a satellite's CI, another installation's self-updater — authenticates with the plugin-
-# registry instance key it already carries. ONLY the mirror instance (memex.meshweaver.cloud)
-# sets this block; every other installation is a CONSUMER and sets selfUpdate.registry +
-# portal.imagePullSecret instead.
-#
-# Rendered ONLY when `upstream` is set, and then key by key into the portal ConfigMap as
-# ContainerImages__Upstream / __Username / __ImageRoot / __CacheDirectory / __CacheMaxBytes and
-# ContainerImages__Repositories__<i>. Absent block ⇒ no key rendered ⇒ the mirror is OFF and every
-# /v2 route answers 404 (never a partial service). 🚨 `ContainerImages__Password` is a SECRET and
-# is NOT rendered from values: it arrives through the Key Vault CSI mapping like every other
-# credential —
-#   keyVaultSecrets.# ---- Required secrets (Systemorph/Memex#204) ---------------------------------
+# ---- Required secrets (Systemorph/Memex#204) ---------------------------------
 # Per-key statement of whether an EMPTY value is legal. EMPTY BY DEFAULT — this enforces exactly
 # what a deployment declares and nothing otherwise.
 #
@@ -140,31 +125,6 @@ selfUpdate:
 #
 # See templates/_required-secrets.tpl for the full contract.
 requiredSecrets: []
-
-secrets:
-#     - vaultSecret: <prefix>ContainerImages-Password
-#       key: ContainerImages__Password
-# The mirror is off unless Upstream, Username AND Password are all present.
-containerImages:
-  # The upstream registry login server, e.g. meshweaver.azurecr.io. Empty ⇒ the block is inert.
-  upstream: ""
-  # The upstream pull credential's username (an ACR token name). Its password comes from Key Vault.
-  username: ""
-  # 🚨 The ALLOWLIST of repositories this mirror serves. EMPTY MEANS NONE — without it one upstream
-  # credential becomes an open read proxy for the whole registry.
-  repositories: []
-  #   - memex-portal-ai
-  #   - memex-migration
-  #   - mw-plugin-test
-  # Where every served manifest is recorded as a ContainerImage node (the node must exist).
-  # Empty ⇒ recording is off; the mirror still proxies.
-  imageRoot: ""
-  # The digest-keyed read-through cache. Empty ⇒ off, the mirror proxies every pull. On a
-  # multi-replica installation this must be a SHARED (ReadWriteMany) mount, e.g. under /data.
-  cacheDirectory: ""
-  # The cache's byte budget (an integer). Empty ⇒ the image default (20 GiB). Rendered only when
-  # set: it binds to a long, and a blank string fails the binder at startup.
-  cacheMaxBytes: ""
 # ---- Plugin catalog ---------------------------------------------------------
 # Plugins are folders of mesh nodes in (usually private) git repos. ONE install acts as the
 # REGISTRY: it alone holds the git credential, reads the repos listed in `sources`, and re-serves

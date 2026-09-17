@@ -62,9 +62,23 @@ public sealed class GitHubPackageSource : IPackageSource
     {
     }
 
+    /// <summary>
+    /// The FILTERED fetch, when the caller has one — used by <see cref="ListPackages"/> so the
+    /// listing transfers only the <c>package.json</c> manifests it parses instead of the whole
+    /// repository (#4222).
+    ///
+    /// <para>🚨 Only the LISTING uses it: <see cref="FetchPackageFiles"/> needs a package's whole
+    /// folder, so narrowing that one would install an empty package. Absent ⇒ the plain fetch,
+    /// i.e. exactly the behaviour before this existed.</para>
+    /// </summary>
+    public Func<string, string, string?, string, Func<string, bool>, IObservable<RepoSnapshot>>?
+        NarrowFetch { get; init; }
+
     /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
-        tokenProvider().SelectMany(token => fetch(repoUrl, gitRef, NullIfEmpty(subdir), token))
+        tokenProvider().SelectMany(token => NarrowFetch is { } narrow
+                ? narrow(repoUrl, gitRef, NullIfEmpty(subdir), token, IsManifest)
+                : fetch(repoUrl, gitRef, NullIfEmpty(subdir), token))
             .Select(snapshot =>
             {
                 var manifests = new List<PackageManifest>();

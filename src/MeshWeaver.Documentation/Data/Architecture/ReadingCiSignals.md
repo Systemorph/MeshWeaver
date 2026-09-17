@@ -195,6 +195,18 @@ Two bugs that make a monitor lie, both hit in one session:
 - **An empty or partial rollup is vacuously green.** "No failures and nothing incomplete" is *true*
   of a PR with zero checks. Decide readiness by asserting the **required set is present and
   SUCCESS**, never by the absence of failures.
+- **A PAGE of check-runs is not the commit's check-runs.** `commits/<sha>/check-runs` caps at
+  `per_page=100`, and a main commit here carries far more than that — every workflow, every matrix
+  leg, both synthetic probes, the combo verdict. Measured 2026-09-17 on `be8f452c79`: **278**
+  check-runs, page 1 holding **zero** named `Consolidate test results` and page 3 holding its two,
+  both green since the evening before. CD's gate filtered page 1 in `jq`, read `absent/none` for a
+  green commit, and walked delivery back to its parent for six hours until the parent's heal budget
+  ran out and CD reported delivery STUCK with main green (#4526). **Name the check in the request —
+  `&check_name=<name>` — so the API filters server-side**; `CheckRunReadsAreServerFilteredGuard`
+  holds every workflow to that. `--paginate` is not the alternative it looks like: the flag says
+  pages were requested, not consumed, and `gh api --paginate --jq …` piped into a `read -r` still
+  takes the first line. The failure grows with the repository's check volume, so a reader that
+  works today starts lying later, silently.
 
 ### 🚨 A lookup that cannot reach its target answers the DEFAULT, forever, on every machine
 
@@ -1086,6 +1098,99 @@ ambiguous overload or a changed envelope therefore reads as a red `repository_di
 MeshWeaver.Plugins (or another node repo) shortly after core published — with that repository's
 test names — and is fixed by a pull request there. Core carries no context for it by design
 (maintainer, 2026-09-03: the integration is event-based; no top-level repository depends on another).
+
+### 🚨 Several satellites red in the same second on a missing `plugins` publication: find out WHICH seal is missing before blaming anyone
+
+When several satellites' `main` runs fail within a second of each other, they share a trigger, so
+compare their failed steps before reading any one of them. The shape measured on 2026-09-16:
+Reinsurance, Crm, SocialMedia and Manufacturing all red at 20:14:20Z, each on `compile-check`'s
+*Add external modules to the reference set* and the gate shard's *Fetch the upstream publications*:
+
+```
+upstream 'plugins' answers 404 for the module set of identity s5ec352bb… :
+{"error":"no sealed publication for source 'plugins' under framework identity 's5ec352bb…'"}
+```
+
+A `plugins` publication has **two producers**: core CD's `Plugins: bake + seal the publication for
+this identity` job, and MeshWeaver.Plugins' own `publish-bake` lane. The same 404 appears whichever
+one failed. A red in Plugins' own lane is a Plugins defect, and
+[CI Content Bake](/Doc/Architecture/CiContentBake) treats it as a wait for the upstream. So read the
+producers before deciding where the fault is:
+
+1. **The satellite's `Platform pins name one build` job.** The resolver prints which set it took
+   and what it found for Plugins. On 2026-09-16 it said `main-cd #8765 (core 836d4472b): its own
+   Plugins seal is skipped — the platform is taken anyway`, then `plugins publication: main-cd #8760 …
+   — an older set than the platform chosen`. That means the gate is about to ask for a publication
+   that does not exist. `resolve-platform.py` does this on purpose: a terminal Plugins seal does not
+   hold the platform back. [Framework Identity Churn](/Doc/Architecture/FrameworkIdentityChurn)
+   explains why walking back to an older set is refused.
+2. **Core CD's Plugins legs for that set.** In #8765, `Warm the shared build environment (once)`
+   died on `dial tcp 51.12.25.82:443: connect: connection refused` (ACR). Promote had already sealed
+   the platform, so `Plugins: bake + seal …` was skipped. Here the missing seal was core's, and the
+   cause was infrastructure, not Plugins.
+3. **MeshWeaver.Plugins' own `publish-bake` for the same identity.** Its main run had resolved the
+   older set 8760 at 19:28Z, before 8765 was sealed. It published for identity `sd94ee1d…` and
+   registered at 20:14:18Z, and that registration was the wake. So neither producer had published
+   for `s5ec352bb…`.
+
+**The wake names an image, but only one lane uses it.** Per CI Content Bake, the `publish-bake` lane
+reads `client_payload` and bakes against the image the wake names. The gate and compile path does
+not read the payload: `Platform pins name one build`, `compile-check` and the gate shards resolve
+the newest sealed set again. So a wake for an older set can start a run whose gates ask about a
+newer identity. That is how a Plugins publication for 8760 produced four reds about 8765.
+
+**What healed it:** a `plugins` publication for that identity, followed by another wake. On
+2026-09-16 both publications arrived by coincidence. MeshWeaver.Plugins merged, so core's hourly
+reconcile saw a missing pair tag and rebuilt the set (#8767, Plugins seal at 21:30:24Z). Plugins'
+next main run also resolved 8765 and published for `s5ec352bb…`. The runs they woke went green at
+21:52–21:58Z. **The reconciler did not re-attempt a failed core Plugins seal on its own.** Its
+`bake_only` path re-ran only the platform bake, so without a Plugins merge the red would have lasted
+until core merged again. Do not re-run the satellites' failed jobs: the resolver reads the same set
+again and the registry still answers 404.
+
+**Since MeshWeaver#4539 it does.** On every `bake_only` tick `gate` asks
+`check-release-availability.sh <version> plugins` — naming the set's framework identity, resolved
+from the `_releases/<version>` marker — and re-runs the three `plugins-*` legs when, and only when,
+that answer is a definite absence. It is bounded at three attempts per (core sha, plugins sha) pair
+and it refuses rather than acts when the store cannot be read. The hold on the satellite side is
+unchanged and still correct; what changed is that something now clears it. See
+[CD Reconciles the Plugins Seal](../CdReconcilesThePluginsSeal).
+
+**A second red can follow a satellite that has two upstreams.** Reinsurance declares `plugins crm`.
+Its 21:19Z run passed every gate, then its `publish-bake` went red: `crm — no sealed publication
+under prebuilt-bundles/s5ec352bb…/crm`. That is the documented wait. Crm sealed its publication
+for the identity at 21:52Z. Reinsurance's 21:30Z run reached the same gate at 21:52:26Z, printed
+`all 2 source(s) are published`, and finished green at 22:02Z.
+
+**The retry steward is a separate outage, not the cause.** The 404 is not one of the steward's
+named transient signatures, so it would correctly decline this red even with a readable log. But
+right now its "no retry" line tells you nothing about ANY red. In core and MeshWeaver.Plugins, every
+`Retry known transients` run sampled from 2026-09-10 to 2026-09-16 printed `log unreadable (the
+response contains terminal escape sequences; pass --allow-escape-sequences …) — cannot prove a
+transient`. The hosted runner's `gh` refuses any response body with escape sequences, and every
+Actions log has them. Crm, Reinsurance and SocialMedia make the same `gh api …/logs` call but were
+not sampled (#4534).
+
+> **Fixed in core, 2026-09-17 (#4534).** Core's steward is now
+> `.github/scripts/retry-known-transients.py`: it reads the logs endpoint over plain REST — no `gh`,
+> so no dependency on a CLI *output* policy — and an unreadable log is a LOUD exit 1, never a
+> decline. Measured while fixing it: a plain REST GET of the identical URL answers HTTP 200 with
+> 7,251 bytes over 46 escape-bearing lines, so the refusal was never the API's. `--allow-escape-sequences`
+> was rejected as the fix because the flag does not exist on older `gh` (the local 2.95.0 has
+> neither the refusal nor the flag), which would have traded one silent breakage for another.
+>
+> 🚨 **The other four copies are STILL BLIND, on purpose.** Crm, Reinsurance and SocialMedia carry
+> the inline shell; MeshWeaver.Plugins has its own `scripts/retry-known-transients.py`. Nothing
+> propagates a core change to them and nothing reds if they drift — `check-resolver-copy.py` covers
+> exactly `scripts/resolve-platform.py` (one constant, and it parses Python, so it cannot see a
+> workflow), no `uses:` couples them to core, and no copy is fetched at a pin. The proof is
+> historical: core's `block_signatures` clause, added 2026-09-13, reached no satellite and reddened
+> nobody. Reviving them is **not** a mechanical re-copy, because `POST …/rerun-failed-jobs` on a
+> SATELLITE's `main` run erases the `Platform for this run` annotation its PR ceiling reads
+> (#4491, open) — so a satellite steward that works again would silently freeze that repo's
+> platform ceiling until the next merge. Core has no such ceiling (it only ever runs the resolver's
+> `--self-test`), which is why core could be fixed first and alone. Fix #4491, then re-enable the
+> satellites.
 
 ## 🚨 A check that is red on EVERY pull request is not telling you about any of them
 

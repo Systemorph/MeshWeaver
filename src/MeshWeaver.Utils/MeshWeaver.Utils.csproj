@@ -2,4 +2,9 @@
   <PropertyGroup>
     <ProjectGuid>{08be7077-6432-4d7a-9057-47d080cd739b}</ProjectGuid>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- NoReplaceMoveTest drives NoReplaceMove's decision table through its internal step seam
+         (TryMoveWith), including the outcomes no real volume produces on demand (MeshWeaver#2190). -->
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Test" />
+  </ItemGroup>
 </Project>

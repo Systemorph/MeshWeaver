@@ -262,7 +262,19 @@ internal class HierarchicalRouting
         // parent reached DisposeHostedHubs still posts to that parent, and the reply can never come.
         // TRANSIENT (ShuttingDown), never terminal: the parent may reactivate, and long-lived
         // consumers (SynchronizationStream's resubscribe latch) must ride it out rather than die.
-        if (parentHub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+        //
+        // The sender is stamped with the parent BEFORE the check, so the parent is asked about the
+        // very delivery it would receive.
+        var routedUp = parentHub.Address.Type != AddressExtensions.MeshType
+            ? delivery.WithSender(delivery.Sender.WithHost(parentHub.Address))
+            : delivery;
+        // 🚨 …EXCEPT work this hub ACCEPTED before its own teardown, which the parent still carries
+        // while it disposes us (#3986). A disposing parent is exactly one that has only just ASKED
+        // its children to go down; our ShutdownRequest queues behind this very delivery. Refusing it
+        // here discarded a person's click the portal had already taken. See
+        // MessageHub.CarriesAcceptedWorkOfAHostedHub for why that is safe and how narrow it is.
+        if (parentHub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
+            && !(parentHub is MessageHub carrier && carrier.CarriesAcceptedWorkOfAHostedHub(routedUp)))
         {
             logger.LogDebug("Cannot route to parent hub {ParentAddress} - parent is also disposing. Message: {MessageType}",
                 parentHub.Address, delivery.Message.GetType().Name);
@@ -296,10 +308,8 @@ internal class HierarchicalRouting
         if (logger.IsEnabled(LogLevel.Debug))
             logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
                 delivery.Message.GetType().Name, parentHub.Address);
-        if (parentHub.Address.Type != AddressExtensions.MeshType)
-            delivery = delivery.WithSender(delivery.Sender.WithHost(parentHub.Address));
-        parentHub.DeliverMessage(delivery);
-        return delivery.Forwarded();
+        parentHub.DeliverMessage(routedUp);
+        return routedUp.Forwarded();
     }
 }
 

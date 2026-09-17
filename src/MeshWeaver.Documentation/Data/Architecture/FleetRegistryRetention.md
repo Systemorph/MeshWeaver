@@ -218,16 +218,18 @@ publisher credential, and no record of the answer exists as data anywhere.
 A protected set with no denominator cannot authorize a deletion — it can only authorize a
 *retention*, which is what R0 declares.
 
-🚨 **`ContainerImageRecord` is the closest existing shape and it cannot answer this**, for two
-independent reasons, and it is worth being exact because "we already have a type for that" is how
-this gets closed on a false premise:
+🚨 **`ContainerImageRecord` was the closest shape ever built, it could not answer this, and it is
+now DELETED** (2026-09-17, #4066 item 1, with the rest of `src/MeshWeaver.ContainerImages`). The
+reasons it could not are kept here, because "we already had a type for that" is how this gets
+closed on a false premise — by resurrecting it:
 
-1. It records what was pulled **through the read-through mirror**, and `MapContainerImages` is
-   called by **no host** — two tests and nothing else, org-wide (#4066 item 1).
-2. Even wired, it would still not answer: the recorded decision
+1. It recorded what was pulled **through the read-through mirror**, and that mirror was never
+   wired: `MapContainerImages` was called by **no host** — two tests and nothing else, org-wide.
+   It was deleted rather than mapped because `cr.meshweaver.cloud` is a different service (§7).
+2. Even wired, it would not have answered: the recorded decision
    ([ContainerRegistryInMemex](/Doc/Architecture/ContainerRegistryInMemex), 2026-09-08) is that the fleet registry is
-   a *separate service* and installations pull from it directly, so the portal mirror is not in the
-   pull path at all.
+   a *separate service* and installations pull from it directly, so the portal mirror was never in
+   the pull path at all.
 
 And structurally: a record keyed on *"what somebody pulled"* is not an inventory of *"what is
 stored"* in either case. It is a consumption log, which is §5.2's question, not this one.
@@ -351,8 +353,12 @@ because of what the first live run found** ([run 34852827116](https://github.com
    measured (2,936 manifests on 2026-09-13) and this one is not.
 3. **Whether to build §5.2's receiver.** The socket is wired and costs nothing until a URL is set.
    It is the difference between a cleanup that can ever be safe and one that cannot.
-4. **#4066 item 1** — map `MapContainerImages` in a host, or delete the assembly. Nothing in this
-   page depends on the answer: §5.1 shows the mirror cannot supply the inventory either way.
+4. ~~**#4066 item 1** — map `MapContainerImages` in a host, or delete the assembly.~~ **Decided
+   and done 2026-09-17: deleted.** The rule was to map it if it was what serves
+   `cr.meshweaver.cloud`, and delete it otherwise; that host is the separate distribution +
+   docker_auth service (realm `/auth`, not the mirror's `/v2/token`), so the assembly, its tests
+   and the chart's `containerImages:` block went. Nothing in this page depended on the answer
+   (§5.1).
 5. **§8.5 — the chart's default images.** Should an unconfigured install pull the platform from
    `ghcr.io/systemorph/…:latest`, a store this fleet publishes to and does not retain, at a moving
    tag? The record now *states* that it does; whether it should is a deployment decision.

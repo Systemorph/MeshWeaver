@@ -468,11 +468,10 @@ def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
 # annotation survives with its check run. So the ceiling is read back from the newest SUCCESSFUL
 # push runs of this repo's ci.yml on main. A run whose annotation cannot be read is SKIPPED and
 # said so — never treated as "main passed nothing".
-SATELLITE_CD_WORKFLOW = "ci.yml"
-MAIN_RUNS_EXAMINED = 12          # ~a day of merges; deep enough to survive a red patch on main
-PLATFORM_REF_JOB = "Resolve the released platform"
-NOTICE_TITLE = "Platform for this run"
-NOTICE_SET = re.compile(r"(\d+\.\d+\.\d+)[.-]ci\.(\d+)")
+# 🚨 The constants live with the ceiling reader below, and ONLY there. This block used to repeat
+# them here, where the later definitions silently overrode it — including a NARROWER `NOTICE_SET`
+# that would not have matched a prerelease set name had the order ever flipped. An edit made to a
+# definition that never runs is the trap; there is one definition now.
 
 
 # ───── OPTIONAL: what the CALLING repo's own `main` has already passed on (#3842, #4171) ─────
@@ -498,6 +497,15 @@ NOTICE_SET = re.compile(r"(\d+\.\d+\.\d+)[.-]ci\.(\d+)")
 # said so — never read as "main passed nothing", which would silently take the newest set again.
 SATELLITE_CD_WORKFLOW = "ci.yml"
 MAIN_RUNS_EXAMINED = 12          # ~a day of merges; deep enough to survive a red patch on main
+# 🚨 EVERY main run that goes through the FULL gate set vouches, not `push` alone. The daily poll,
+# the release dispatch and a manual dispatch never NARROW what they build (node-repo invariant #9:
+# a publishing or release-follow trigger builds EVERYTHING), and each publishes the same verdict
+# annotation this reader parses — so a green one of them IS "main has passed on this set". Filtering
+# to `push` made the ceiling only as fresh as the last MERGE: a repository whose main is quiet for a
+# day kept every pull request on a day-old set, even though its own daily poll had passed on a newer
+# one. It does NOT rescue a RED main, and must not: a red main is exactly when the ceiling has to
+# hold (MeshWeaver.Plugins#1947).
+MAIN_EVENTS_THAT_VOUCH = ("push", "repository_dispatch", "schedule", "workflow_dispatch")
 PLATFORM_REF_JOB = "Resolve the released platform"
 NOTICE_TITLE = "Platform for this run"
 NOTICE_SET = re.compile(r"(\d+\.\d+\.\d+[0-9A-Za-z.\-]*)[.-]ci\.(\d+)")
@@ -626,11 +634,17 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
     notes: list[str] = []
     best: int | None = None
     data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
-                 f"?branch=main&event=push&status=success&per_page={limit}")
-    runs = list(data.get("workflow_runs") or [])
+                 f"?branch=main&status=success&per_page={limit}")
+    # The event filter is applied HERE, not in the query: the API takes ONE event, and every event
+    # in MAIN_EVENTS_THAT_VOUCH counts. `branch=main` already excludes pull-request and merge-queue
+    # runs; the filter says so anyway, because a run that did not go through the full gate set must
+    # never vouch for a platform set.
+    runs = [run for run in (data.get("workflow_runs") or [])
+            if str(run.get("event") or "push") in MAIN_EVENTS_THAT_VOUCH]
     if not runs:
-        notes.append(f"no successful push run of {SATELLITE_CD_WORKFLOW} on {repo} main in the "
-                     f"newest {limit} — main has published no passing run to follow")
+        notes.append(f"no successful run of {SATELLITE_CD_WORKFLOW} on {repo} main "
+                     f"({'/'.join(MAIN_EVENTS_THAT_VOUCH)}) in the newest {limit} — main has "
+                     "published no passing run to follow")
         return None, notes
     for run in runs:
         run_id = int(run["id"])
@@ -1853,14 +1867,14 @@ def self_test() -> int:
     _freeze_case("…so an unreadable ceiling under a freeze is NOT fatal",
                  "3.0.0-ci.8207", _fetch_main(None, has_run=False), False)
     _freeze_case("…while without a freeze it IS fatal",
-                 None, _fetch_main(None, has_run=False), True, "no successful push run")
+                 None, _fetch_main(None, has_run=False), True, "no successful run")
 
     _ceiling_case("main's newest passed set is read back from its own run notice",
                   _fetch_main("3.0.0-ci.8203"), 8203, "8203")
     _ceiling_case("a prerelease set name in the notice is read too",
                   _fetch_main("3.0.0-rc.1-ci.8203"), 8203, "8203")
     _ceiling_case("no successful main run ⇒ no ceiling (the caller must go RED)",
-                  _fetch_main(None, has_run=False), None, "no successful push run")
+                  _fetch_main(None, has_run=False), None, "no successful run")
     _ceiling_case("a main run that named no set ⇒ no ceiling, and the reason is recorded",
                   _fetch_main(None), None, "annotation")
     _ceiling_case("a main run without the platform-ref job ⇒ skipped, named",
@@ -1910,6 +1924,48 @@ def self_test() -> int:
                               before=[{"title": "Platform for this SELF-TEST",
                                        "message": "3.0.0-ci.8207 — core aaaaaaaaa (a fixture)"}]),
                   8203, "8203")
+
+    # ── 🚨 EVERY FULL MAIN RUN VOUCHES, NOT `push` ALONE ───────────────────────────────────────
+    # The reader used to ask the API for `event=push`, so the ceiling was only as fresh as the last
+    # MERGE. A repository whose main is quiet still runs the daily poll, which resolves the newest
+    # sealed set and rebuilds everything against it — passing evidence that was thrown away. The
+    # last case is the load-bearing one: it fails if the QUERY ever pins an event again, which the
+    # reader's own filter would otherwise hide.
+    def _fetch_main_events(*events: str, seen: list[str] | None = None) -> Fetch:
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                if seen is not None:
+                    seen.append(path)
+                return {"workflow_runs": [
+                    {"id": 900 + index, "created_at": "2026-09-16T08:00:00Z", "event": event}
+                    for index, event in enumerate(events)]}
+            if "/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 777, "name": PLATFORM_REF_JOB}]}
+            if "/check-runs/777/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE,
+                                         "message": f"3.0.0-ci.8203 — core {B[:9]}"}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("the daily poll vouches — a schedule run on main is a FULL run",
+                  _fetch_main_events("schedule"), 8203, "8203")
+    _ceiling_case("…so does the release dispatch, which fires minutes after a seal",
+                  _fetch_main_events("repository_dispatch"), 8203, "8203")
+    _ceiling_case("…and a manual dispatch, which narrows nothing either",
+                  _fetch_main_events("workflow_dispatch"), 8203, "8203")
+    _ceiling_case("a pull-request run never vouches, however it came to be listed on main",
+                  _fetch_main_events("pull_request"), None, "no successful run")
+    _seen_paths: list[str] = []
+    _ceiling_case("…and a push still vouches, listed beside a poll",
+                  _fetch_main_events("schedule", "push", seen=_seen_paths), 8203, "8203")
+    total += 1
+    if any("event=" in path for path in _seen_paths):
+        failures.append("the ceiling query pins an `event=` again — the reader's filter would hide "
+                        "that, and every poll and dispatch run would vanish from the listing")
 
     # ── 🚨 THE FLOOR: A SET OLDER THAN ONE THIS TREE HAS ALREADY ADOPTED (#1826) ────────────────
     # The resolver had a CEILING (the newest set main passed) and a FREEZE, and nothing that stops
@@ -2207,7 +2263,8 @@ def self_test() -> int:
           "its own and reported beside it, a set still sealing its plugins is passed over (bounded), "
           "an unsealed or purged newer set is passed over and SAID, a sealing set is waited for on "
           "request, a freeze never substitutes, a re-run takes a newer set and keeps its baseline "
-          "otherwise, the OPTIONAL main ceiling changes nothing unless asked for and refuses "
+          "otherwise, the OPTIONAL main ceiling counts EVERY full main run and not `push` "
+          "alone, changes nothing unless asked for and refuses "
           "rather than falling back when main has passed nothing, the OPTIONAL source verification "
           "reads no job log unless asked for and passes over a set it cannot attribute, a main run "
           "whose annotations name two DIFFERENT sets is SKIPPED rather than guessed at, a set below "

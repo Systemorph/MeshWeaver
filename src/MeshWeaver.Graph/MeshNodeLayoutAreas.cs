@@ -93,6 +93,20 @@ public static class MeshNodeLayoutAreas
 {
     /// <summary>Area name for the node Overview layout area (the default view showing main content and the action menu).</summary>
     public const string OverviewArea = "Overview";
+
+    /// <summary>
+    /// Area ID of the provenance line INSIDE whatever page renders it — the standard header's row 2
+    /// (<see cref="BuildHeader(LayoutAreaHost, MeshNode?, bool)"/>) and the row
+    /// <see cref="WithNodePage"/> composes for a page that does not draw its own.
+    ///
+    /// <para>🚨 A stable ID rather than the positional auto-name, so "does this page carry
+    /// provenance?" is a question anyone can ASK of a rendered page: nested containers render into
+    /// <c>{parentArea}/{childId}</c> (<c>UiControl.GetContextForArea</c>), so the strip's depth
+    /// varies by page but its store key always ENDS in <c>/NodeMeta</c>. #4500 stayed open partly
+    /// because the only way to answer the question was to read the rendered HTML for the English
+    /// word "Created:" — an assertion that a German reader sees an English page.</para>
+    /// </summary>
+    public const string NodeMetaArea = "NodeMeta";
     /// <summary>Area name for the node Thumbnail layout area (compact card view for catalogs and lists).</summary>
     public const string ThumbnailArea = "Thumbnail";
     /// <summary>Area name for the node Metadata layout area (name, type, path and related metadata).</summary>
@@ -226,7 +240,11 @@ public static class MeshNodeLayoutAreas
     public static LayoutDefinition AddDefaultLayoutAreas(this LayoutDefinition layout)
         => layout
             .WithDefaultArea(OverviewArea)
-            .WithView(OverviewArea, Overview)
+            // The landing page, registered as one: WithNodePage records that this renderer draws
+            // the provenance line itself (Overview → BuildDetailsContent → BuildHeader), and the
+            // record is DISCARDED the moment a node type replaces this renderer — which is how a
+            // type taking over its own landing page becomes visible instead of silent (#4500).
+            .WithNodePage(OverviewArea, Overview, NodePageProvenance.RenderedByThePage)
             .WithView(ThumbnailArea, Thumbnail)
             .WithView(SettingsArea, SettingsLayoutArea.Settings)
             .WithView(SearchArea, Search)
@@ -566,7 +584,9 @@ public static class MeshNodeLayoutAreas
             .WithWidth("100%")
             .WithStyle("padding-bottom: 20px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); gap: 8px;")
             .WithView(identityRow)
-            .WithView(metaRow);
+            // Named, not auto-named: see NodeMetaArea. The identity row keeps its auto name "1"
+            // (GetAutoName is Renderers.Count + 1, so naming the SECOND view shifts nothing).
+            .WithView(metaRow, NodeMetaArea);
     }
 
     /// <summary>
@@ -812,6 +832,112 @@ public static class MeshNodeLayoutAreas
         return row;
     }
 
+    /// <summary>
+    /// Registers the page a node LANDS ON, and says what it does about provenance. Use this — not
+    /// the bare <c>WithView(area, …)</c> — for any area a node type names with
+    /// <c>WithDefaultArea</c>.
+    ///
+    /// <para><b>The default carries the line.</b> Called without a verdict, this composes
+    /// <see cref="BuildMetaRow"/> above <paramref name="page"/>'s own content, so a landing page
+    /// written without an opinion about provenance SHIPS WITH IT. That inversion is the fix for
+    /// Systemorph/MeshWeaver#4500: the line used to ride on one renderer, so replacing that
+    /// renderer dropped it, and nothing recorded the loss. Measured 2026-09-16, 86 of the 99
+    /// landing pages that replace the framework renderer had dropped it — 4 in core, 82 in
+    /// MeshWeaver.Plugins.</para>
+    ///
+    /// <para><b>The two other answers are declared, never inferred.</b> A page that draws its own
+    /// header passes <see cref="NodePageProvenance.RenderedByThePage"/> (the framework then adds
+    /// nothing — two provenance lines is a worse page than one); a page that wants none passes
+    /// <see cref="NodePageProvenance.Declined"/> WITH A REASON. Both are recorded on the
+    /// <see cref="LayoutDefinition"/> and readable back through
+    /// <see cref="LayoutDefinition.GetNodePageProvenance"/>, so "someone weighed this" and "nobody
+    /// thought about it" stop looking identical from outside.</para>
+    ///
+    /// <para>🚨 The composed strip honours the SAME per-node opt-out the standard header does —
+    /// <c>ExcludeFromContext: [header]</c>, <see cref="MeshNodeVisibility.HeaderContext"/> — so a
+    /// chrome-less marketing cover does not grow a metadata strip it was explicitly built without.
+    /// One mechanism, no parallel flag.</para>
+    /// </summary>
+    /// <param name="layout">The layout definition to register on.</param>
+    /// <param name="area">The landing area — the one this hub's <c>WithDefaultArea</c> names.</param>
+    /// <param name="page">The page's own content.</param>
+    /// <param name="provenance">The verdict; null means <see cref="NodePageProvenance.FrameworkSupplied"/>.</param>
+    public static LayoutDefinition WithNodePage(
+        this LayoutDefinition layout,
+        string area,
+        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl?>> page,
+        NodePageProvenance? provenance = null)
+    {
+        var verdict = provenance ?? NodePageProvenance.FrameworkSupplied;
+
+        // 🚨 Order is load-bearing: every WithView overload funnels through WithNamedRenderer,
+        // which REMOVES the area's verdict (LayoutDefinition.NodePages) so a verdict can never
+        // outlive the renderer it describes. Record it AFTER registering, never before.
+        //
+        // WithDecoratedView, not WithView, on the composing path: the area's catalog metadata
+        // ([Browsable(false)], the XML summary) is read off the generator's METHOD, and a lambda
+        // has neither — see LayoutDefinitionExtensions.WithDecoratedView.
+        var registered = verdict.Kind == NodePageProvenanceKind.FrameworkSupplied
+            ? layout.WithDecoratedView<UiControl>(
+                area, (host, ctx) => ComposeProvenance(host, page.Invoke(host, ctx)), page)
+            : layout.WithView(area, page);
+
+        return registered.WithNodePageProvenance(area, verdict);
+    }
+
+    /// <summary>
+    /// <see cref="WithNodePage(LayoutDefinition, string, Func{LayoutAreaHost, RenderingContext, IObservable{UiControl}}, NodePageProvenance)"/>
+    /// for a landing page whose content is produced SYNCHRONOUSLY. Same contract, same default:
+    /// no verdict means the framework composes the provenance line above the page.
+    /// </summary>
+    /// <typeparam name="T">The UiControl subtype the page factory returns.</typeparam>
+    /// <param name="layout">The layout definition to register on.</param>
+    /// <param name="area">The landing area — the one this hub's <c>WithDefaultArea</c> names.</param>
+    /// <param name="page">The page's own content.</param>
+    /// <param name="provenance">The verdict; null means <see cref="NodePageProvenance.FrameworkSupplied"/>.</param>
+    public static LayoutDefinition WithNodePage<T>(
+        this LayoutDefinition layout,
+        string area,
+        Func<LayoutAreaHost, RenderingContext, T> page,
+        NodePageProvenance? provenance = null) where T : UiControl?
+    {
+        var verdict = provenance ?? NodePageProvenance.FrameworkSupplied;
+        var registered = verdict.Kind == NodePageProvenanceKind.FrameworkSupplied
+            ? layout.WithDecoratedView(
+                area,
+                (host, ctx) => ComposeProvenance(host, Observable.Return<UiControl?>(page.Invoke(host, ctx))),
+                page)
+            : layout.WithView(area, page);
+
+        return registered.WithNodePageProvenance(area, verdict);
+    }
+
+    /// <summary>
+    /// The provenance strip above a page that does not draw one itself, composed from framework
+    /// controls only (a <c>Stack</c> carrying <see cref="BuildMetaRow"/>) and aligned to the same
+    /// page geometry as the standard header via <see cref="GetContainerStyle"/>.
+    ///
+    /// <para>🚨 <c>CombineLatest</c>, never <c>.Take(1)</c> on either leg: both the node and the
+    /// page are live, data-bound streams, and latching either one freezes the binding. A null page
+    /// emission passes through UNCHANGED — several renderers emit null as a deliberate
+    /// pass-through frame (the compile-in-progress catch-all's <c>StartWith(null)</c>), and
+    /// wrapping that in a stack would turn a pass-through into a rendered empty page.</para>
+    /// </summary>
+    private static IObservable<UiControl?> ComposeProvenance(
+        LayoutAreaHost host, IObservable<UiControl?> page)
+        => host.Workspace.GetMeshNodeStream()
+            .CombineLatest(page, (node, view) =>
+                view is null || node?.IsExcludedFromContext(MeshNodeVisibility.HeaderContext) == true
+                    ? view
+                    : (UiControl?)Controls.Stack
+                        .WithWidth("100%")
+                        .WithView(
+                            Controls.Stack
+                                .WithWidth("100%")
+                                .WithStyle(GetContainerStyle(host) + " margin-top: 16px; margin-bottom: 8px;")
+                                .WithView(BuildMetaRow(host, node)),
+                            NodeMetaArea)
+                        .WithView(view));
 
     /// <summary>
     /// Builds a content URL for navigating to a specific layout area of a node.

@@ -38,6 +38,22 @@ public record LayoutDefinition(IMessageHub Hub)
         = ImmutableDictionary<string, ObservableRenderer>.Empty;
 
     /// <summary>
+    /// What each node LANDING PAGE registered on this definition does about the provenance line —
+    /// see <see cref="NodePageProvenance"/>. Recorded by
+    /// <c>MeshNodeLayoutAreas.WithNodePage</c>; read back with
+    /// <see cref="GetNodePageProvenance"/>.
+    ///
+    /// <para>🚨 An entry is REMOVED by <see cref="WithNamedRenderer(string, ObservableRenderer)"/>,
+    /// which every <c>WithView(area, …)</c> overload funnels through. That is the invariant that
+    /// keeps the record honest: a verdict describes ONE renderer, so replacing the renderer — which
+    /// is exactly how a node type takes over a landing page — discards it. Without the removal the
+    /// framework's own "the page renders it" verdict for <c>Overview</c> would survive every
+    /// override and every check would pass having measured a renderer that is no longer there.</para>
+    /// </summary>
+    private ImmutableDictionary<string, NodePageProvenance> NodePages { get; init; }
+        = ImmutableDictionary<string, NodePageProvenance>.Empty;
+
+    /// <summary>
     /// The default area to display when no area is specified in the URL.
     /// </summary>
     public string? DefaultArea { get; init; }
@@ -108,8 +124,38 @@ public record LayoutDefinition(IMessageHub Hub)
     public LayoutDefinition WithNamedRenderer(string area, ObservableRenderer renderer)
         => this with
         {
-            NamedRenderers = NamedRenderers.SetItem(area, renderer)
+            NamedRenderers = NamedRenderers.SetItem(area, renderer),
+            // 🚨 The provenance verdict describes the renderer being replaced here, so it goes with
+            // it — see NodePages. Taking over a landing page and inheriting the previous page's
+            // verdict is the one way this record could lie (#4500). Measured negative control:
+            // remove this line and NodePageProvenanceVerdictTest
+            // .A_verdict_does_not_survive_the_renderer_it_describes reads RenderedByThePage where
+            // null is required — i.e. the takeover inherits the page it replaced.
+            NodePages = NodePages.Remove(area)
         };
+
+    /// <summary>
+    /// Records what the landing page registered for <paramref name="area"/> does about the
+    /// provenance line. Called by <c>MeshNodeLayoutAreas.WithNodePage</c> AFTER the renderer is
+    /// registered — the order matters, because registering clears the entry.
+    /// </summary>
+    /// <param name="area">The area whose renderer the verdict describes.</param>
+    /// <param name="provenance">The verdict — see <see cref="NodePageProvenance"/>.</param>
+    public LayoutDefinition WithNodePageProvenance(string area, NodePageProvenance provenance)
+        => this with { NodePages = NodePages.SetItem(area, provenance) };
+
+    /// <summary>
+    /// The recorded verdict for <paramref name="area"/>, or <c>null</c> when the area's renderer
+    /// never declared one.
+    ///
+    /// <para>🚨 <c>null</c> on this hub's <see cref="DefaultArea"/> is the defect #4500 is about:
+    /// the page people land on replaced the framework's renderer and nobody said what should
+    /// happen to the provenance line. It is NOT the same as
+    /// <see cref="NodePageProvenanceKind.Declined"/> — a decline is an answer.</para>
+    /// </summary>
+    /// <param name="area">The area to ask about.</param>
+    public NodePageProvenance? GetNodePageProvenance(string area)
+        => NodePages.GetValueOrDefault(area);
 
     /// <summary>
     /// True when a named renderer is registered for <paramref name="area"/>. Predicate

@@ -33,9 +33,11 @@ modules/activation.json                                                      the
 
 Every file in `activation.d/<Name>/` is **immutable and content-addressed**: its name is the full
 SHA-256 of every field it serializes (length-prefixed, in a fixed order), so a name holds exactly one
-content and two writers of one name are writing identical bytes. That is what makes the create safe
-without an atomic primitive — .NET's no-overwrite move is `link(2)` where the file system has it and
-an existence check plus `rename(2)` where it does not (a CIFS mount). Each file's **arrival** is its
+content and two writers of one name are writing identical bytes, so a racing create is benign. The
+create must still be ONE rename of a complete file, and that is `NoReplaceMove` rather than
+`File.Move(…, overwrite: false)`: the BCL call copies into the final name whenever its rename fails,
+which on this volume published records incomplete and exclusively locked — see
+[Publishing A File On A Shared Volume](../AtomicFilePublication) (#2190). Each file's **arrival** is its
 own write time, never serialized. Temp files are staged in `activation.d/` itself, so every create
 moves that directory's write time — the fingerprint `PendingModuleActivations` memoises the read
 behind.

@@ -552,7 +552,7 @@ on:
 jobs:
   publish-bake:
     name: Bake + publish NodeType assemblies to portal storage
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
     # 🚨 A LITERAL, never an input: the fleet cap is 45 minutes for every job (check-workflow-timeouts.py
     # refuses an expression here because a caller-supplied bound cannot be proven by reading the file).
     # Measured 2026-09-02 the bake runs ~20 min; past 45 it is stuck, not slow.
@@ -1780,6 +1780,27 @@ jobs:
           "$BAKE_CARRY_TARGET"
           "${{ steps.identity.outputs.identity }}"
           "${{ inputs.bake-source }}"
+      # 🚨 A PYTHON WITH `venv` + `pip`, because publish-bake-bundles.sh builds its own venv and
+      # installs its PINNED Azure SDKs into it (the script owns that install on purpose — see its
+      # header: a workflow-side install would leave a satellite whose ref is newer than its pin
+      # running a script whose dependency nobody installed). The self-hosted ARC image ships
+      # python3 3.12 WITHOUT ensurepip/venv, so from the moment every private repo's jobs moved to
+      # `aks-silos*` (2026-09-17) this step died with "The virtual environment was not created
+      # successfully because ensurepip is not available … apt install python3.12-venv" and NO
+      # satellite could publish: MeshWeaver.Crm run 35199593887 and MeshWeaver.Manufacturing run
+      # 35205340142 both failed here while every other job in the run was green. `setup-python`
+      # brings its own interpreter WITH pip on any runner — hosted or ours — so the script's venv
+      # works everywhere; on a hosted runner the tool cache already carries it, so it costs nothing
+      # there. Not `sudo apt-get install python3-venv`: that needs root and the archive, and would
+      # silently be the only thing standing between the fleet and a failed publication.
+      # Delete this step when the runner image bakes python3-venv (Systemorph/Memex
+      # deployments/aks/ci-runners/runner-image/Dockerfile) — the script asserts its own pins
+      # afterwards (`sdk-check`), so a wrong interpreter is RED here, never a later "unreadable".
+      - name: Python with venv + pip for the publish script
+        if: steps.scope.outputs.scope != 'none'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
       - name: Publish bundles to every portal target
         id: publish
         if: steps.scope.outputs.scope != 'none'
@@ -1926,7 +1947,7 @@ jobs:
     name: Register the publication with memex
     needs: publish-bake
     if: needs.publish-bake.result == 'success' && needs.publish-bake.outputs.published == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
