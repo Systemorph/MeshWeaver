@@ -393,7 +393,10 @@ public static class DeploymentPortalConfig
                     + "the module would not be required at all (the Aspire route delivers it, "
                     + "because the reader enumerates the section's children rather than binding an "
                     + "array — so this works locally and disappears in the cluster). Move the entry "
-                    + "into the contiguous requiredModules list, or give it a slot at or above zero.");
+                    + "into the contiguous requiredModules list — or give it a slot that is FREE "
+                    + "(past that list, whose entries win at the indices they occupy, so a slot "
+                    + "inside it is dropped just as silently) and no higher than "
+                    + $"{MaxChartRenderedRequiredModuleSlot}.");
         }
         return problems.ToImmutable();
     }
