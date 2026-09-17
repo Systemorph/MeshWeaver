@@ -109,26 +109,46 @@ SENTINEL="_complete"
 # A pointer is a NAME: it must never be able to address bytes outside its own source directory.
 POINTER="_current"
 RESOLVED_DIR=""
+# 🚨 WHY THE FALL-BACK WAS TAKEN, kept rather than discarded (#3461 phase 5) — the same split as
+# `ShippedPrebuiltBundles.ResolvePublicationPointer`'s `Fault`. Empty means "there is no pointer":
+# the source directory genuinely IS the publication. Non-empty means a pointer EXISTS and could not
+# be followed. Until phase 5 both landed on a sealed flat copy and the difference was invisible;
+# once a generation publication has disposed of that copy, the fall-back finds NO sentinel, and
+# reporting that as "no sealed publication" would be the #3583 message — "the upstream has not
+# published" — for a publication that is sealed, live and pointed at, read during the one small
+# write that replaces the pointer. So a faulted fall-back that finds nothing sealed is a
+# CANNOT-DETERMINE, never an ABSENT.
+RESOLVE_FAULT=""
 resolve_publication_dir() { # <account> <share> <source-dir>
   _rp_account="$1"; _rp_share="$2"; _rp_source="$3"
   RESOLVED_DIR="$_rp_source"
+  RESOLVE_FAULT=""
   _rp_exists=$(az storage file exists --account-name "$_rp_account" --share-name "$_rp_share" \
     --path "$_rp_source/$POINTER" --auth-mode login --backup-intent --query exists -o tsv \
     --only-show-errors 2>/dev/null || echo "unknown")
-  [ "$_rp_exists" = "true" ] || return 0
+  case "$_rp_exists" in
+    true) ;;
+    false) return 0 ;;
+    *) RESOLVE_FAULT="whether $_rp_source/$POINTER exists could not be read (exists=$_rp_exists)"; return 0 ;;
+  esac
   _rp_local="$(mktemp)"
   if ! az storage file download --account-name "$_rp_account" --share-name "$_rp_share" \
       --path "$_rp_source/$POINTER" --dest "$_rp_local" \
       --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
     rm -f "$_rp_local"
+    RESOLVE_FAULT="$_rp_source/$POINTER exists but could not be read (a pointer being replaced reads this way)"
     return 0
   fi
   _rp_named=$(sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' "$_rp_local" | grep -m1 '[^[:space:]]' || true)
   rm -f "$_rp_local"
-  [ -n "$_rp_named" ] || return 0
+  if [ -z "$_rp_named" ]; then
+    RESOLVE_FAULT="$_rp_source/$POINTER is blank (a pointer being replaced reads this way)"
+    return 0
+  fi
   case "$_rp_named" in
     .|..|*/*|*\\*)
       echo "::warning::$_rp_source/$POINTER names '$_rp_named', which is not a single directory name — reading $_rp_source as its own publication directory."
+      RESOLVE_FAULT="$_rp_source/$POINTER names '$_rp_named', which is not a single directory name"
       return 0 ;;
   esac
   _rp_exists=$(az storage directory exists --account-name "$_rp_account" --share-name "$_rp_share" \
@@ -136,6 +156,7 @@ resolve_publication_dir() { # <account> <share> <source-dir>
     --only-show-errors 2>/dev/null || echo "unknown")
   if [ "$_rp_exists" != "true" ]; then
     echo "::warning::$_rp_source/$POINTER names generation '$_rp_named', which is not on the share (exists=$_rp_exists) — reading $_rp_source as its own publication directory."
+    RESOLVE_FAULT="$_rp_source/$POINTER names generation '$_rp_named', which is not on the share (exists=$_rp_exists)"
     return 0
   fi
   RESOLVED_DIR="$_rp_source/$_rp_named"
@@ -208,7 +229,12 @@ for source in "${SOURCES[@]}"; do
     --query exists -o tsv --only-show-errors 2>/dev/null || echo "unknown")
   case "$exists" in
     true)  echo "sealed: $source (identity $IDENTITY) at $publication"; summary "- ✅ \`$source\` is published for \`$IDENTITY\`";;
-    false) ABSENT+=("$source — no sealed publication under $publication");;
+    false)
+      if [ -n "$RESOLVE_FAULT" ]; then
+        UNDETERMINED+=("$source — $RESOLVE_FAULT, and $publication holds no sealed copy to fall back on, so which publication applies could not be read (MeshWeaver#3461 phase 5: the flat copy is gone once a generation is live). Re-run; a pointer being replaced is one small write")
+      else
+        ABSENT+=("$source — no sealed publication under $publication")
+      fi;;
     # 🚨 An errored probe is NOT an absent one, and it is NOT a present one either. Both readings
     # would be a lie; the honest answer is a hold naming the unreadability.
     *)     UNDETERMINED+=("$source — the share could not be queried at $publication");;
@@ -218,7 +244,7 @@ done
 # Reported FIRST and on its own, because it invalidates the other number: when some probes errored,
 # "N of M are not available" is not a measurement anyone may act on — the denominator is unknown.
 if [ "${#UNDETERMINED[@]}" -gt 0 ]; then
-  echo "::error::CANNOT DETERMINE release availability for framework identity $IDENTITY${VERSION:+ (release $VERSION)}: ${#UNDETERMINED[@]} of ${#SOURCES[@]} source(s) could not be queried. This is a REFUSAL, not a verdict — the gate could not ask its question, so nothing here says whether the upstream published. Fix the access to the artifact store (az login / BAKE_PUBLISH_TARGETS / the share) and re-run."
+  echo "::error::CANNOT DETERMINE release availability for framework identity $IDENTITY${VERSION:+ (release $VERSION)}: ${#UNDETERMINED[@]} of ${#SOURCES[@]} source(s) could not be queried or read. This is a REFUSAL, not a verdict — the gate could not ask its question, so nothing here says whether the upstream published. Each entry below says which: an errored probe wants the access to the artifact store fixed (az login / BAKE_PUBLISH_TARGETS / the share); a publication pointer that could not be followed wants a re-run."
   for u in "${UNDETERMINED[@]}"; do echo "::error::  • $u"; summary "- ⛔ $u"; done
   if [ "${#ABSENT[@]}" -gt 0 ]; then
     echo "::error::  (also, ${#ABSENT[@]} source(s) answered NO — but with probes erroring that count is a floor, not the number.)"

@@ -162,8 +162,9 @@ SENTINEL="_complete"
 #
 #   flat        the historical layout: <identity>/<source>/ IS the publication, replaced IN PLACE.
 #   generation  each publication gets its OWN directory <identity>/<source>/<publication token>/,
-#               and a one-line `_current` pointer — moved as soon as that directory is SEALED, and
-#               before the flat compatibility copy — says which one applies.
+#               and a one-line `_current` pointer — moved as soon as that directory is SEALED —
+#               says which one applies. Once the pointer is moved and read back, the prefix's old
+#               FLAT copy is disposed of, its `_complete` first (#3461 phase 5, `dispose_flat_copy`).
 #
 # 🚨 THE FLEET'S DEFAULT IS `generation`, AND IT IS SET BY THE LANE, NOT HERE. `node-repo-publish-
 # bake.yml`'s `publication-layout` input defaults to `generation` (#3461 phase 4) and is always
@@ -202,10 +203,10 @@ SENTINEL="_complete"
 # different thing from a shorter version of the same window.
 #
 # Doc/Architecture/SealedPublicationGenerations carries the phases, the reader contract and what
-# each phase does and does not close. 🚨 In particular: phase 4 (flipping a prefix) does NOT close
-# the window for the flat compatibility copy below — that copy is still unsealed, rewritten and
-# re-sealed in place, so it still races, and only dropping it (phase 5, once no pinned reader needs
-# it) removes the window rather than moving it.
+# each phase does and does not close. 🚨 Phase 5 is what closed the last in-place window: a
+# generation publication no longer REWRITES the flat compatibility copy at all (which was unsealed,
+# rewritten and re-sealed in place, and raced), it DISPOSES of it — see `dispose_flat_copy`, and
+# why "merely stop refreshing it" would have been the wrong phase 5.
 PUBLICATION_LAYOUT="${BAKE_PUBLICATION_LAYOUT:-flat}"
 case "$PUBLICATION_LAYOUT" in
   flat|generation) ;;
@@ -1049,11 +1050,16 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
   # sentinel over their files would stamp their publication with this run's token and make the
   # next carry-forward read two publications where there is one.
   local verdict=0
+  ONE_TARGET_VERDICT=""
   verify_publication "$account" "$share" "$dest" || verdict=$?
   if [ "$verdict" -eq 2 ]; then
-    # 3, not 0: the caller does the accounting, and it must be able to tell a seal this run wrote
-    # from a publication somebody else made. Returning 0 here would count a convergence as a seal.
-    return 3
+    # Named in a global, NOT a return code: the caller does the accounting, and it must be able to
+    # tell a seal this run wrote from a publication somebody else made. It used to `return 3`, which
+    # forced the caller to write `publish_one_target … || rc=$?` — and a function on the left of `||`
+    # runs with `set -e` SUSPENDED for its whole body, so a failed seal upload below printed
+    # "sealed:" and was counted as a publication (see the per-target loop).
+    ONE_TARGET_VERDICT=converged
+    return 0
   fi
   if [ "$verdict" -ne 0 ]; then
     exit 1
@@ -1064,8 +1070,10 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
   # verdict reads the sentinel's digest and token on the next overlapping run).
   printf '%s\t%s\t%s\n' "$SENTINEL" "$SENTINEL_LOCAL" "$(sha256_of "$SENTINEL_LOCAL")" > "$SENTINEL_LOCAL_DIR/seal-plan"
   upload_plan "$account" "$share" "$dest" "$SENTINEL_LOCAL_DIR/seal-plan"
+  ONE_TARGET_VERDICT=sealed
   echo "sealed: $account/$share/$dest/$SENTINEL (${#BUNDLES[@]} bundle(s), source ${SOURCE_SHA:-unknown}, platform surface: $HAS_SURFACE)"
 }
+ONE_TARGET_VERDICT=""
 
 # Moves the pointer that says which generation applies. The LAST write of a generation publication,
 # and the only one a reader has to see for the new publication to become live.
@@ -1149,6 +1157,74 @@ move_pointer() { # <account> <share> <dest>
   echo "pointer: $account/$share/$dest/$POINTER -> $PUBLICATION (this publication is now the live one)"
 }
 
+# ══════════════════ PHASE 5 — DISPOSING OF THE FLAT COMPATIBILITY COPY (MeshWeaver#3461) ══════════════════
+#
+# Until phase 5 a generation publication ALSO rewrote `<identity>/<source>/` itself in place, for
+# portal images that predate pointer resolution (phase 1, a4109d422). Measured 2026-09-17 against
+# the five `Hosting/Deployment` records on the control instance, no deployed reader predates it
+# (build and memex-cloud at c84c6c055, memex at afde4eabe/43915af5c, pearl at 67cbbe0ee, partnerre
+# has no estate yet), and a framework identity moves on every core commit, so no older image
+# resolves a directory a current publisher writes. The copy had one remaining effect: it was
+# replaced IN PLACE, so it still raced, and it was the last reason a publish went red on an overlap.
+#
+# 🚨 "STOP WRITING IT" WOULD HAVE BEEN THE WRONG PHASE 5, and it is the obvious one. The copy already
+# on the share would stay there SEALED and COMPLETE while `_current` moved past it — and every reader
+# falls back to the source directory on a pointer it cannot follow (a torn read of `_current` while
+# it is being replaced: `az storage file upload` is create-then-put-range). That fallback would then
+# serve a publication frozen on the day phase 5 landed — self-consistent, sealed, older every hour,
+# and permanent rather than bounded by one publication: this issue's own failure mode, reached from a
+# third side. So the copy is DISPOSED OF, by the publisher that makes it obsolete:
+#
+#   1. only once `_current` has been MOVED and READ BACK naming a sealed generation — `pointer_is_live`.
+#      A reader must never be left with neither: at every instant before the seal below goes, the
+#      flat copy is still sealed; at every instant after, the pointer already names a sealed
+#      generation. A pointer that did not land (the CLI has reported success for a file it did not
+#      store, measured on this share 2026-09-08) disposes of NOTHING and fails the target.
+#   2. `_complete` FIRST, alone. Removing the seal turns the prefix from "a complete, older
+#      publication" into "being republished" — the state every reader already backs off from (the
+#      seeder compiles, the registry answers 503 + Retry-After, the availability and compose readers
+#      refuse). If that one delete fails, nothing else is touched and the target fails.
+#   3. then the files, and only files positively identified as the flat publication; see
+#      `publish-bake-files.py dispose`. A left-over after step 2 is storage, not a publication.
+#
+# Incremental and per prefix, deliberately: no sweep of the share. A prefix that is never published
+# again keeps its flat copy, which is exactly right — an identity nothing publishes any more is the
+# one an old image's reader could still be resolving, and retention collects it with its identity.
+#
+# 🚨 A superseded run (`pointer_moved_past_us`) disposes of nothing. It returns before the pointer, so
+# it never reaches here — and it must not: the newer run it lost to owns the prefix, and may be a
+# publisher still refreshing the flat copy (a reconcile run at an older platform-ref) whose seal this
+# run would otherwise tear out from under it.
+pointer_is_live() { # <account> <share> <dest> — true when `_current` resolves to a SEALED generation
+  local account="$1" share="$2" dest="$3" sealed
+  resolve_publication_dir "$account" "$share" "$dest"
+  if [ "$RESOLVED_DIR" = "$dest" ]; then
+    return 1
+  fi
+  sealed=$(az storage file exists --account-name "$account" --share-name "$share" \
+    --path "$RESOLVED_DIR/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  [ "$sealed" = "true" ]
+}
+
+dispose_flat_copy() { # <account> <share> <dest> — ONLY after pointer_is_live answered true
+  local account="$1" share="$2" dest="$3"
+  echo "flat copy: $account/$share/$dest/$POINTER names '${RESOLVED_DIR##*/}', sealed — disposing of the flat compatibility copy beside it, $SENTINEL first (MeshWeaver#3461 phase 5)."
+  # The patterns are the flat publication's OWN file set, spelled from the names this script
+  # publishes, so they cannot drift from it. `*.zip` rather than this bake's bundle names: a flat
+  # copy written by an earlier publication may list a bundle this one no longer carries.
+  "$PYTHON" "$HELPER" dispose --account "$account" --share "$share" --dest "$dest" \
+    --keep "$POINTER" \
+    --match '*.zip' \
+    --match "$MODULES_DIR_NAME/*.module.nupkg" \
+    --match "$MODULES_DIR_NAME/$MODULES_INDEX" \
+    --match "$SOURCE_MARKER" \
+    --match "$SURFACE_FILE" \
+    --match "$REPO_MARKER" \
+    --match "$ARCH_MARKER" \
+    --workers "$PUBLISH_BAKE_UPLOAD_WORKERS" < /dev/null
+}
+
 # ONE publication, in whichever layout this caller selected. Everything above this function writes
 # ONE directory; this is the only place that knows there can be two.
 #
@@ -1160,43 +1236,30 @@ move_pointer() { # <account> <share> <dest>
 #   2. the pointer — so a reader either sees the previous generation (intact, sealed, still on the
 #      shelf) or this one, and never a directory being filled in. A refusal at 1 fails the target
 #      before this, so a run that could not prove its publication never becomes the live one.
-#   3. the flat compatibility copy, for readers that predate pointer resolution. 🚨 THIS COPY IS
-#      STILL REPLACED IN PLACE AND STILL RACES — the postcondition is the only thing covering it,
-#      exactly as today. Flipping a prefix does NOT close that window; only dropping the flat copy
-#      does, once no pinned reader needs it.
+#   3. the flat compatibility copy is DISPOSED OF (phase 5, above) — after the pointer, never before.
+#      Until phase 5 this step REFRESHED the copy in place, which was the last in-place write of a
+#      generation publication and therefore the last thing that raced.
 #
-# 🚨 THE POINTER MOVES BEFORE THE FLAT COPY, and the design page says "last" — this is the one
-# deliberate deviation, so here is the reasoning. "Last" is about the GENERATION: a reader must never
-# be pointed at a directory that is still being filled in, and moving the pointer after the seal
-# satisfies that exactly. The flat copy is a different audience — readers that cannot follow a
-# pointer at all — and it is the one part of a generation publication that another publisher can
-# still be writing. Ordering it after the pointer means an overlap on the flat copy costs the
-# compatibility copy (which the postcondition refuses to seal as a mix, as today, and the run goes
-# red) instead of costing the publication itself. Ordering it before would let a race on the OLD
-# layout withhold a publication that is already whole, sealed and disjoint on the NEW one — which
-# would make flipping a prefix deliver nothing until the flat copy is dropped.
-#
-# 🚨 RETENTION IS NOT HERE, and that is a precondition on flipping a prefix rather than an omission
-# to fix later. Generations accumulate (~45 small files each) until a sweep removes the ones nothing
-# names, and that sweep DELETES from the production share — it must land as its own reviewed change,
-# with its own harness, and it cannot be written before there is anything to sweep. Nothing in this
-# function deletes anything it did not create.
+# 🚨 RETENTION OF GENERATIONS IS NOT HERE: generations accumulate (~45 small files each) until the
+# portal's own `PrebuiltBundleStore` sweep removes the ones nothing names — it holds the consumer
+# inventory this publisher does not. The one thing this function deletes is the flat copy its own
+# pointer has just made unreachable.
 publish_publication() { # <account> <share> <dest> <live-was-sealed>
-  local account="$1" share="$2" dest="$3" resealing="$4" rc=0 flat_resealing generation
+  local account="$1" share="$2" dest="$3" resealing="$4" generation
   if [ "$PUBLICATION_LAYOUT" = "flat" ]; then
-    publish_one_target "$account" "$share" "$dest" "$resealing" || rc=$?
-    if [ "$rc" -eq 3 ]; then echo converged >> "$OUTCOMES"; else echo published >> "$OUTCOMES"; fi
+    publish_one_target "$account" "$share" "$dest" "$resealing"
+    if [ "$ONE_TARGET_VERDICT" = "converged" ]; then echo converged >> "$OUTCOMES"; else echo published >> "$OUTCOMES"; fi
     return 0
   fi
   generation="$dest/$PUBLICATION"
-  echo "generation layout: $account/$share/$dest — publishing into $PUBLICATION/ (a path no other publisher writes), then $POINTER, then the flat compatibility copy (which is the part that still races)."
+  echo "generation layout: $account/$share/$dest — publishing into $PUBLICATION/ (a path no other publisher writes), then $POINTER, then disposing of the flat compatibility copy ($SENTINEL first)."
   publish_one_target "$account" "$share" "$generation" false
-  # The flat copy's own sealed state, read fresh: `resealing` above describes the LIVE publication,
-  # which under this layout may be a generation directory and says nothing about the flat copy.
-  flat_resealing=$(az storage file exists --account-name "$account" --share-name "$share" \
-    --path "$dest/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \
-    --only-show-errors 2>/dev/null || echo false)
-  if [ "$flat_resealing" != "true" ]; then flat_resealing=false; fi
+  if [ "$ONE_TARGET_VERDICT" != "sealed" ]; then
+    # A directory named by THIS run's token has no other writer, so nothing else can have sealed it;
+    # a verdict other than `sealed` here is a defect, and pointing at the directory would serve it.
+    echo "::error::$account/$share/$generation ended '${ONE_TARGET_VERDICT:-<no verdict>}', not sealed by this run — a generation directory has no other writer, so this is not a publication to point at. Refusing to move $POINTER."
+    exit 1
+  fi
   # 🚨 Asked again here, ~90 seconds after `publish_to_target` asked it: a newer publication may
   # have become live while this generation was being uploaded and verified. Pointing at this one
   # would then serve OLDER bytes, whole and sealed — see pointer_moved_past_us.
@@ -1204,17 +1267,23 @@ publish_publication() { # <account> <share> <dest> <live-was-sealed>
     # The generation stays on the share, sealed and complete, named by nothing. That is exactly the
     # state retention is defined over (unreachable ⇒ collectable once past the window), so it costs
     # storage for at most the retention window and is never served.
-    # 🚨 The flat compatibility copy is deliberately NOT refreshed either: writing this run's older
-    # bytes there would do to pre-pointer readers precisely what the pointer refusal just declined
-    # to do to pointer-following ones.
+    # 🚨 And the flat copy is deliberately NOT touched — see the phase-5 note above.
     echo superseded >> "$OUTCOMES"
     return 0
   fi
   move_pointer "$account" "$share" "$dest"
-  # Recorded before the compatibility copy: the publication IS live at this point, for every reader
-  # that follows the pointer. A refusal below leaves that true and still fails the target.
+  # 🚨 READ BACK, never trusted from the upload's exit code: the CLI has reported success for files
+  # it did not store on this share (39 of 45, 2026-09-08). A pointer that did not land means this
+  # publication is NOT live — so it is not counted as published, and the flat copy, which may be the
+  # only sealed publication a reader of this prefix has, is not touched.
+  if ! pointer_is_live "$account" "$share" "$dest"; then
+    echo "::error title=The pointer did not land — nothing disposed of::$account/$share/$dest/$POINTER does not resolve to a SEALED generation after this run moved it (it resolves to '${RESOLVED_DIR##*/}'). This publication is not live, and the flat compatibility copy is left exactly as it is: removing it now could leave a reader with NEITHER publication. The generation $PUBLICATION is sealed on the share; re-run once the share answers (MeshWeaver#3461 phase 5)."
+    exit 1
+  fi
+  # Recorded before the disposal: the publication IS live at this point, for every reader that
+  # follows the pointer. A failed disposal leaves that true and still fails the target.
   echo published >> "$OUTCOMES"
-  publish_one_target "$account" "$share" "$dest" "$flat_resealing" || rc=$?
+  dispose_flat_copy "$account" "$share" "$dest"
   return 0
 }
 
@@ -1279,10 +1348,10 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
     # sent to bytes no publisher considers current.
     #
     # 🚨 Deliberately NOT "delete the pointer and take the prefix back". That inverts the layout
-    # on a prefix another producer has already migrated, and it can move consumers BACKWARDS: the
-    # pointer is moved BEFORE the flat compatibility copy is refreshed, so a run that finds an
-    # older flat copy could skip, retire a NEWER generation, and expose the older bytes. Going
-    # forward is always safe; going back is not.
+    # on a prefix another producer has already migrated, and it can move consumers BACKWARDS: a
+    # run that finds an older flat copy (or, since phase 5, none at all) could skip, retire a NEWER
+    # generation, and expose the older bytes — or nothing. Going forward is always safe; going back
+    # is not.
     #
     # Everything below is unchanged: LIVE stays the generation the pointer names, so every
     # already-published / architecture / source-commit / module-set decision still reads the
@@ -1450,11 +1519,23 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
   publish_publication "$ACCOUNT" "$SHARE" "$DEST" "$resealing"
 }
 
+# 🚨 THE SUBSHELL MUST NOT RUN AS A CONDITION, and for two weeks it did (#3461 phase 5, found while
+# adding the one step that DELETES). Bash ignores `set -e` for every command inside an `if`/`while`
+# condition or a `&&`/`||` list — including the whole body of a subshell or function run there. The
+# per-target loop used to be `if ( publish_to_target "$target" ); then`, so from #2682 on EVERY
+# "fatal by `set -e`" in this file was a no-op inside a target: a failed `_complete` upload printed
+# "sealed:" and counted the target as published; a failed pointer move printed "this publication is
+# now the live one"; a failed release marker went unnoticed. Only the explicit `exit 1`s were real.
+# So the subshell runs as a plain command with errexit re-armed INSIDE it, and its status is read
+# afterwards. `set +e` around it is only for this script's own top level, which must survive a
+# failed target to try the next one.
 FAILED=()
 for target in $BAKE_PUBLISH_TARGETS; do
-  if ( publish_to_target "$target" ); then
-    :
-  else
+  set +e
+  ( set -e; publish_to_target "$target" )
+  target_rc=$?
+  set -e
+  if [ "$target_rc" -ne 0 ]; then
     FAILED+=("$target")
     echo "::error::target $target FAILED (see above) — continuing with the remaining targets so a dead target cannot starve the live ones"
   fi
