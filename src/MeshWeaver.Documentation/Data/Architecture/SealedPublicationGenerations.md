@@ -11,8 +11,9 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 today, and ends with what is **not** closed. This page is that remainder: the layout that closes it,
 what each reader must do, and the order the migration has to land in.
 
-Phases 1, 2, 4 and 5 are landed, and phase 3's pin half is the remainder. Every section says which
-phase it belongs to, and ["Where this stands"](#where-this-stands) says exactly what is live. The order the
+Every phase is landed (1, 2, 3, 4 and 5 — phase 3's pin half by measurement, see
+["Where this stands"](#where-this-stands)). Every section says which phase it belongs to, and that
+section says exactly what is live. The order the
 phases have to land in is a property of **who publishes and what they pin**, which is measured
 below rather than assumed.
 
@@ -763,9 +764,11 @@ was ever visible instead of silently shipping a mixed set.
   to what it was.
 - **Phase 3's reader half is landed** — `compose-sealed-modules.sh` and `node-repo-gate.yml`'s
   `seed` resolve the pointer, both are executed by `test-publication-pointer-readers.py`, and
-  `bake-scope.sh --self-test` is wired into CI beside it. Phase 4 and **phase 5** are landed
-  (below), so the only thing still open on
-  [#3461](https://github.com/Systemorph/MeshWeaver/issues/3461) is its pin half.
+  `bake-scope.sh --self-test` is wired into CI beside it. **Its pin half is satisfied by
+  measurement rather than by a change**: every producer floats at `@main` with `scripts-ref: main`
+  (all six node repos, measured 2026-09-14), so each one RUNS the newest publisher and there is no
+  pin left to move. With phase 4 and **phase 5** landed (below), that closes
+  [#3461](https://github.com/Systemorph/MeshWeaver/issues/3461).
   🚨 The sentence that stood here — *"until the writer flips, the window is shrunk, not closed"* — was
   true before phase 4, half true after it (closed for readers that follow `_current`, live for the
   flat copy the writer kept refreshing), and is **spent** since phase 5: nothing is written at the
