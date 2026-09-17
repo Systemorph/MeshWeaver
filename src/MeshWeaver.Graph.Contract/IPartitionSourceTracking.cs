@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace MeshWeaver.Graph;
 
 /// <summary>
@@ -100,20 +102,24 @@ public interface IPartitionSourceTracking
 /// <param name="Known">Whether this provider could answer at all.</param>
 /// <param name="Identities">The importing repositories, each normalised by
 /// <see cref="Normalize"/> — meaningful only when <see cref="Known"/>.</param>
-public sealed record TrackedRepositories(bool Known, IReadOnlyCollection<string> Identities)
+public sealed record TrackedRepositories(bool Known, ImmutableHashSet<string> Identities)
 {
     /// <summary>The default: this provider does not report identities. Obliges no implementer and
     /// licences no hold.</summary>
-    public static TrackedRepositories Unknown { get; } = new(false, []);
+    public static TrackedRepositories Unknown { get; } =
+        // 🚨 ImmutableHashSet, not `[]` (review on #4649): an array behind an
+        // IReadOnlyCollection can be recovered and MUTATED by a caller, and this instance is a
+        // process-wide static every provider reading shares. Immutable is also the house rule.
+        new(false, ImmutableHashSet<string>.Empty);
 
     /// <summary>A definite answer — possibly empty, which then means "nothing imports here".</summary>
     /// <param name="identities">The importing repositories.</param>
     /// <returns>A known reading.</returns>
     public static TrackedRepositories Of(IEnumerable<string> identities) =>
-        new(true, [.. identities
+        new(true, identities
             .Select(i => Normalize(i))
             .Where(i => i.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)]);
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
 
     /// <summary>
     /// One comparable identity from a repository URL and an optional subdirectory —
@@ -166,5 +172,5 @@ public sealed record TrackedRepositories(bool Known, IReadOnlyCollection<string>
         => Known
            && Identities.Count > 0
            && candidate is { Length: > 0 }
-           && !Identities.Contains(candidate, StringComparer.OrdinalIgnoreCase);
+           && !Identities.Contains(candidate);
 }

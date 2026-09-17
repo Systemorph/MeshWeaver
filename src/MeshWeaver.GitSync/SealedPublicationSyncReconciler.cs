@@ -532,7 +532,15 @@ internal sealed class SealedPublicationSyncReconciler(
             .Query<MeshNode>(MeshQueryRequest
                 .FromQuery($"path:{space} scope:descendants nodeType:{MeshNode.NodeTypePath}")
                 .Complete())
+            // 🚨 `Initial`, not merely the first emission (review on #4649). `.Complete()` removes
+            // the paging limit; it does NOT promise that what arrives first is the snapshot. A
+            // pre-initial empty emission would make this report "no type could be compared", the
+            // measurement would ABSTAIN, and the mixed partition would go unseen — a clean-looking
+            // answer from a read that never happened, which is the whole subject of #4620. Same
+            // filter GitHubSyncService's own descendant read makes, for the same reason.
+            .Where(change => change.ChangeType == QueryChangeType.Initial)
             .Take(1)
+            .Timeout(ReadBudget)
             .SelectMany(types =>
             {
                 var paths = types.Items
@@ -543,12 +551,29 @@ internal sealed class SealedPublicationSyncReconciler(
                     .ToImmutableArray();
                 if (paths.IsEmpty)
                     return Observable.Return(ImmutableDictionary<string, NodeTypeDefinition>.Empty);
+                // 🚨 EVERY per-node read is BOUNDED, and a read that does not answer degrades to
+                // "this type has no definition" rather than hanging (review on #4649). These zips
+                // run inside PublicationSealArrivalService's single serialized pump, whose
+                // `Concat()` means one pending reconcile blocks every later seal announcement —
+                // and an outer `Catch` cannot rescue a stream that is merely still waiting. A
+                // point read of a path the (eventually consistent) listing named can also find
+                // nothing there and terminate on a routing NotFound, which is the storm-breaker
+                // shape AGENTS.md names. Both degrade the same way: fewer types compared, a
+                // smaller denominator, and `Measure` abstains rather than inventing drift.
                 return Observable
                     .Zip(paths.Select(path => hub.GetWorkspace().GetMeshNodeStream(path)
                         .Take(1)
                         .Select(node => (Path: path,
                             Definition: node?.ContentAs<NodeTypeDefinition>(
-                                hub.JsonSerializerOptions, logger)))))
+                                hub.JsonSerializerOptions, logger)))
+                        .Timeout(ReadBudget)
+                        .Catch((Exception exception) =>
+                        {
+                            logger?.LogDebug(exception,
+                                "[SealedSync] {Path}: its definition could not be read in time — "
+                                + "not compared", path);
+                            return Observable.Return((Path: path, Definition: (NodeTypeDefinition?)null));
+                        })))
                     .Take(1)
                     .Select(pairs => pairs
                         .Where(p => p.Definition is not null)
@@ -625,6 +650,12 @@ internal sealed class SealedPublicationSyncReconciler(
             sealedSource.Source, identity, reading.Reason, space);
         return reading.Drifted;
     }
+
+    /// <summary>How long any ONE read this pass makes may take. It exists because these
+    /// reads run inside the seal-arrival pump, whose Concat means a pending reconcile
+    /// blocks every later announcement — so the point is that a bound EXISTS, not its
+    /// value. Over it, the read is "not compared", never "nothing drifted".</summary>
+    private static readonly TimeSpan ReadBudget = TimeSpan.FromSeconds(30);
 
     /// <summary>A commit for log copy — the same eight characters every other line in
     /// this file shows, so two lines about one commit read as one commit.</summary>

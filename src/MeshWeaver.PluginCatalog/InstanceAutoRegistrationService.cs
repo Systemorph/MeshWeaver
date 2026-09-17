@@ -1817,8 +1817,22 @@ public sealed class InstanceAutoRegistrationService(
         // kept #4625 open rather than folded into #4619. See
         // PartitionContentOwnership.ImportedFromAnotherRepository for the full asymmetry.
         return candidate.RefIsProven
-            ? PartitionContentOwnership.ImportedFromAnotherRepository(
-                    hub, partition, candidate.Source.RepoPath, candidate.Package.SourceFolder)
+            // 🚨 The folder is the SOURCE's configured prefix PLUS the module's own, through the one
+            // implementation provisioning uses (review on #4649). A package listing stores
+            // `SourceFolder` relative to `Subdir`, so passing it alone would compare `repo#module`
+            // with the real `repo#prefix/module` and FALSELY HOLD the normal same-tree shape.
+            //
+            // 🚨 …and RunAsSystem, because this gate READS. The boot pass is subscribed on the task
+            // pool with no system scope, and `_GitSync` nodes are RLS-filtered: without it the read
+            // sees no config, answers "no mismatch", and gate 1d is INERT on exactly the deployed
+            // instances it exists for — a gate that cannot fail, which is the one shape this whole
+            // family of fixes is about. The publication-arrival path takes the same precaution.
+            ? hub.ServiceProvider.GetRequiredService<AccessService>()
+                .RunAsSystem(() => PartitionContentOwnership.ImportedFromAnotherRepository(
+                    hub, partition, candidate.Source.RepoPath,
+                    ModuleDiscoveryService.Subdirectory(
+                        candidate.Source.Subdir,
+                        candidate.Package.SourceFolder ?? candidate.Package.Id)))
                 .SelectMany(mismatch => mismatch is { } reason
                     ? HoldForThePartitionsOwnWriter(candidate, partition, reason)
                     : Land(candidate, partition))
