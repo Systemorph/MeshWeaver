@@ -714,6 +714,16 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
                 break
             jobs = [j for j in jobs_of if j.get("name") == PLATFORM_REF_JOB]
             if not jobs:
+                # 🚨 THE FALLBACK IS LICENSED BY A LOST ANNOTATION, NOT BY A MISSING JOB (Copilot
+                # review, #4493). #4491's case is narrow and specific: the job IS present in the
+                # latest attempt's records and its annotation list is EMPTY, because a partial
+                # re-run re-created the record without it. A latest attempt that does not carry
+                # the job at all is a different thing entirely — nothing establishes that this run
+                # resolved a platform set, and an older attempt's annotation would be asserted on
+                # its behalf. Skipping the run is what this reader did before #4491 and is still
+                # right; only the empty-annotation case may walk backwards.
+                if attempt == latest_attempt:
+                    break
                 continue
             searched += 1
             try:
@@ -765,9 +775,24 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             continue
         found = distinct[0] if distinct else None
         if found is None:
-            notes.append(
-                f"main run {run_id}: no `{NOTICE_TITLE}` annotation on any of its "
-                f"{searched} attempt(s) carrying a `{PLATFORM_REF_JOB}` job — skipped")
+            # 🚨 "PRESENT BUT UNPARSEABLE" IS NOT "ABSENT" (Copilot review, #4493). `named` filters
+            # on the title AND the set pattern, so an annotation carrying the production title
+            # whose message names no set lands here too — and reported as "no annotation" it hides
+            # exactly the case worth seeing: a malformed notice, or a schema change that moved the
+            # set out of the message. `rows` is non-empty only when some attempt DID carry a
+            # title-matching annotation, so the two branches separate cleanly.
+            titled = [row for row in rows if NOTICE_TITLE in str(row.get("title") or "")]
+            if titled:
+                first = str(titled[0].get("message") or "")
+                notes.append(
+                    f"main run {run_id}: {len(titled)} `{NOTICE_TITLE}` annotation(s) are PRESENT "
+                    f"but none names a set matching `{NOTICE_SET.pattern}` (first message: "
+                    f"{first[:120]!r}) — skipped. An annotation that does not PARSE is not an "
+                    "absent one, and only this sentence tells them apart")
+            else:
+                notes.append(
+                    f"main run {run_id}: no `{NOTICE_TITLE}` annotation on any of its "
+                    f"{searched} attempt(s) carrying a `{PLATFORM_REF_JOB}` job — skipped")
             continue
         notes.append(f"main run {run_id} passed on core CD #{found}")
         best = found if best is None else max(best, found)
@@ -2105,6 +2130,62 @@ def self_test() -> int:
     _ceiling_case("twelve runs that each fell back emit two notes apiece — every one is still "
                   "examined, so the newest set on the LAST of them is the ceiling",
                   _fetch_many_fallback_runs(MAIN_RUNS_EXAMINED, 8203, 8250), 8250, "8250")
+
+    # ── 🚨 THE FALLBACK IS LICENSED BY A LOST ANNOTATION, NOT A MISSING JOB (review, #4493) ─────
+    # #4491's case is the job being PRESENT with an EMPTY annotation list. A latest attempt that
+    # does not carry the job at all establishes nothing about what this run resolved, and reviving
+    # an older attempt's annotation would assert a set on its behalf. That run is skipped, as it
+    # was before #4491 — the two cases must not share a branch.
+    def _fetch_attempt_without_job(earlier: str = "3.0.0-ci.8203") -> Fetch:
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 558, "created_at": "2026-09-14T08:00:00Z", "run_attempt": 2}]}
+            if "/attempts/1/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 721, "name": PLATFORM_REF_JOB}]}
+            if "/jobs" in path:                       # the LATEST attempt carries some other job
+                return {"total_count": 1, "jobs": [{"id": 722, "name": "Something else"}]}
+            if "/check-runs/721/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE,
+                                         "message": f"{earlier} — core {B[:9]}"}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("a latest attempt that does not carry the platform-ref job at all ⇒ the run is "
+                  "SKIPPED, not answered from an older attempt that did",
+                  _fetch_attempt_without_job(), None, f"no `{PLATFORM_REF_JOB}` job")
+
+    # ── 🚨 PRESENT-BUT-UNPARSEABLE IS NOT ABSENT (review, #4493) ────────────────────────────────
+    # An annotation carrying the production title whose message names no set reaches the same dead
+    # end as no annotation at all. Reported as "no annotation" it hides a malformed notice or a
+    # schema change — the one case where the reader most needs to know something WAS published.
+    def _fetch_unparseable(message: str) -> Fetch:
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [{"id": 559, "created_at": "2026-09-14T08:00:00Z"}]}
+            if "/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 731, "name": PLATFORM_REF_JOB}]}
+            if "/check-runs/731/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE, "message": message}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("a `Platform for this run` annotation whose message names no set ⇒ still no "
+                  "ceiling, but the note says PRESENT and unparseable, never absent",
+                  _fetch_unparseable("the platform set is now reported elsewhere"), None,
+                  "are PRESENT but none names a set")
+    _ceiling_case("…and it quotes the message, so a schema change is diagnosable from the log "
+                  "alone",
+                  _fetch_unparseable("the platform set is now reported elsewhere"), None,
+                  "the platform set is now reported elsewhere")
 
     # ── 🚨 THE CEILING IS READ OUT OF A LIST THE SELF-TEST ALSO WRITES INTO (#1826) ─────────────
     # `Resolve the released platform` runs `resolve-platform.py --self-test` and
