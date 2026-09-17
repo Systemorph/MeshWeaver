@@ -414,8 +414,7 @@ public sealed class OciRegistryClient
     {
         if (response.StatusCode == HttpStatusCode.NotFound)
             throw new InvalidOperationException(
-                $"{registry} has no repository {repository} — or does not serve it: the mirror's "
-                + "ContainerImages:Repositories allowlist must name it.");
+                $"{registry} has no repository {repository} — its tags list answered 404.");
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException(
                 $"{registry} answered {(int)response.StatusCode} listing {repository}.",

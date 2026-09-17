@@ -35,7 +35,9 @@ public interface INodeValidator
 /// name, …) do NOT implement this marker and therefore run client-side, so
 /// <c>UpdateNode</c> surfaces their rejection before issuing the write.
 /// </summary>
-public interface IOwnerEnforcedNodeValidator { }
+public interface IOwnerEnforcedNodeValidator
+{
+}
 
 /// <summary>
 /// Context for node validation containing all relevant information.

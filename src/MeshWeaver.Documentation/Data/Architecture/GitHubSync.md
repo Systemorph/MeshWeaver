@@ -146,6 +146,17 @@ and click **Re-import at this commit** — the Space is mirrored to that exact s
 (added / updated / removed to match), and the new commit is recorded. This is how you
 roll a Space forward or back to a specific repository state.
 
+> 🚨 **For a repository whose compiled modules this portal runs, "latest" means the latest this
+> portal can RUN** (since 2026-09-17, MeshWeaver#3845). When a publication of the repository is
+> sealed for the portal's framework identity, both buttons import **the sealed commit** — the commit
+> the portal's bundles were baked from — whatever branch or commit was asked for, and the activity
+> says so in a Warning line naming both. When that publication is torn, at an unknown commit or
+> disagreeing, they import **nothing** and say which publication holds the Space and what releases
+> it: **roll the portal** when a newer platform line is sealed, otherwise the publishing lane sealing
+> a newer commit. A repository this portal runs no publication of (a course, a document tree, a
+> deployment record) is unaffected and reads exactly what was asked. The rule and its reasons:
+> [The Sync-Ref Contract](../SyncRefContract).
+
 Import reuses the platform's content-addressed import pipeline (fingerprint gate +
 activity lock + canonical upsert + prune) — see
 [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport).
@@ -226,7 +237,10 @@ The safe loop for anything you want to keep — the **git-first** discipline:
 1. **Edit in the repo** — or, if you edited live, **Sync now** (`op: commit`) *immediately*
    to capture it in the repo; never let live-only state accumulate.
 2. **Commit / open a PR**, review, **merge**.
-3. **Update to latest** (`op: update`) — pull the merged state back into the Space.
+3. **Update to latest** (`op: update`) — pull the merged state back into the Space. On a
+   repository whose modules this portal runs, the merged state arrives once it is **sealed** for the
+   portal's framework identity; until then the Space stays on the sealed commit and the activity says
+   why (see §4).
 4. **Recycle** any node whose **type or configuration changed**. Importing new content
    into a node that is already *running* does not swap its live views: a node that flipped
    `Markdown → Deck`, or whose `NodeType` source recompiled, keeps its old hub until you

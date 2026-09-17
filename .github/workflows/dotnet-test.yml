@@ -2140,6 +2140,16 @@ jobs:
       run: python3 .github/scripts/check-workflow-timeouts.py --self-test
     - name: "Every job is capped at 45 minutes"
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
+    # 💸 GitHub Actions cost is zero (maintainer, 2026-09-17: "we still incur cost for github actions.
+    # wtf? please see that it goes to 0"). A `workflow_call` lane's hosted minutes bill the CALLER, and
+    # every caller of these lanes but core itself is private — so no job inside one may name a literal
+    # runner. It resolves through the private-visibility org variables MW_RUNNER / MW_RUNNER_DOCKER
+    # (the caller's `vars`), falling back to `ubuntu-latest` only where they are invisible: here. The
+    # self-test takes --root so every real runner expression is mutated back to a literal and must fire.
+    - name: "Reusable workflows pick runners through the caller's runner variables — the gate can fail (self-test)"
+      run: python3 .github/scripts/check-reusable-workflow-runners.py --self-test --root .
+    - name: "Reusable workflows pick runners through the caller's runner variables"
+      run: python3 .github/scripts/check-reusable-workflow-runners.py --root .
     # 🚨 THE SELF-TEST TAKES --root AND --fleet ON PURPOSE. Without them only the unit cases run,
     # and those pass against hand-written dicts while the real tree is broken — which is exactly
     # what happened: #3989's self-test asserted "the 2026-09-10 outage shape is caught" and was
@@ -2187,6 +2197,20 @@ jobs:
     # would file a second issue per red day, or close CD's.
     - name: "The ci-failure ledger can say no (self-test)"
       run: python3 .github/scripts/ci-failure-ledger.py --self-test
+
+    # 🚨 The CI object store (ci-artifact-store.py) — the seam that lets a module bundle's DURABLE
+    # copy live on our own infra instead of in GitHub Actions storage (maintainer, 2026-09-17: "we
+    # still incur cost for github actions … please see that it goes to 0"). Core owns the script and
+    # every satellite fetches it at its scripts ref, and core is the ONE repo that must never use it:
+    # this repository is public, its Actions storage is free, and a fork PR holds no credential at
+    # all. So the rule proven here first is THE DEGRADE RULE — no store declared resolves to `gha`
+    # and exits 0 — because it is the mode core itself runs in and therefore the one whose breakage
+    # would be invisible until a satellite's lane went red. The rest: a locator carries the store and
+    # a sha256 and is refused when either disagrees, `put` is idempotent by content, a declared store
+    # that cannot be reached is RED under --require and never a quiet return to GitHub artifacts, and
+    # an `az` failure names the account rather than being swallowed.
+    - name: "The CI artifact store degrades to GitHub artifacts, and can say no (self-test)"
+      run: python3 .github/scripts/ci-artifact-store.py --self-test
 
     # 🚨 combo-verify.yml fires on `workflow_run` / `workflow_dispatch`, NEVER on `pull_request`, so
     # nothing else on this PR opens it — the same blind spot #2642 cost 33 hours on. Its `preflight`
