@@ -478,6 +478,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Pre-Boot Service Substitution](PreBootServiceSubstitution)
 - [Project Templates](ProjectTemplates)
 - [Reading a Recurrence Reopen](ReadingARecurrenceReopen) — a bot reopen asserts two things and both fail independently; the 2026-09-17 wave measured, and the honest triple behind core's count
+- [Reopening on Image Provenance](ReopeningOnImageProvenance) — the third reopen predicate: an occurrence counts only if it came from an image whose commit contains the fix, and why a staleness window would close live defects
 - [Registry-key rotation — two phases, at the registry that holds the instance](RegistryKeyRotation)
 - [The Release Event Bus](ReleaseEventBus)
 - [The Release Gate's Denominator](ReleaseGateDenominator)
