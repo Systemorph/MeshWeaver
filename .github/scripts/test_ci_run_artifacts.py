@@ -5,15 +5,31 @@ import contextlib
 import importlib.util
 import io
 import json
+import multiprocessing
 from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
     "ci_run_artifacts", Path(__file__).with_name("ci-run-artifacts.py"))
 ART = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ART)
+
+
+def contend_for_attempt(folder, connection):
+    """A separate publisher/pruner process must observe the parent's lock, then acquire it."""
+    try:
+        with ART.attempt_lock(Path(folder), 1, blocking=False):
+            connection.send("unexpected-acquisition")
+            return
+    except BlockingIOError:
+        connection.send("blocked")
+    if connection.recv() != "parent-released":
+        return
+    with ART.attempt_lock(Path(folder), 1, blocking=False):
+        connection.send("acquired")
 
 
 class ArtifactTests(unittest.TestCase):
@@ -93,6 +109,53 @@ class ArtifactTests(unittest.TestCase):
             for future in futures:
                 future.result()
         self.assertEqual(12, len(self.art.list()))
+
+    def test_inflight_stage_precedes_archiving_and_failed_upload_cleans_it(self):
+        archive_files = ART.archive_files
+        folder = self.art.root / self.art.name_prefix("building")
+        def observe_stage(*args):
+            self.assertEqual(1, len(list(folder.glob(".publish-*"))))
+            return archive_files(*args)
+        with patch.object(ART, "archive_files", side_effect=observe_stage):
+            with self.assertRaises(FileNotFoundError):
+                self.art.upload("building", {"missing": self.source / "missing"})
+        self.assertEqual([], list(folder.glob(".publish-*")))
+        self.assertEqual([], self.art.list())
+
+    def test_retention_bound_matches_pruner_contract(self):
+        path = self.file("payload")
+        for retention in (0, -1, 91):
+            with self.assertRaises(ART.Red):
+                self.art.upload("invalid", {"payload": path}, retention=retention)
+        self.assertEqual([], self.art.list())
+        self.art.upload("long-lived", {"payload": path}, retention=90)
+        self.assertEqual(90, self.art.list("long-lived")[0]["retentionDays"])
+
+    def test_attempt_lock_contends_between_processes_and_keeps_its_inode(self):
+        folder = self.art.root / self.art.name_prefix("lock")
+        folder.mkdir(parents=True)
+        context = multiprocessing.get_context("spawn")
+        parent, child = context.Pipe()
+        process = context.Process(target=contend_for_attempt, args=(str(folder), child))
+        try:
+            with ART.attempt_lock(folder, 1):
+                lock = folder / ".locks/1.lock"
+                inode = lock.stat().st_ino
+                process.start()
+                self.assertTrue(parent.poll(5), "child must report its nonblocking lock verdict")
+                self.assertEqual("blocked", parent.recv())
+            parent.send("parent-released")
+            self.assertTrue(parent.poll(5), "child must acquire after parent releases")
+            self.assertEqual("acquired", parent.recv())
+            process.join(5)
+            self.assertEqual(0, process.exitcode)
+            self.assertEqual(inode, lock.stat().st_ino)
+        finally:
+            if process.is_alive():
+                process.terminate()
+                process.join(5)
+            parent.close()
+            child.close()
 
     def test_pattern_braces_directory_layout_and_merge(self):
         self.art.upload("module-AI", {"AI.dll": self.file("a")})

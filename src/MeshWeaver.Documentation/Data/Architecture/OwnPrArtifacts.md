@@ -26,6 +26,9 @@ repository, run, attempt, name, digest, inventory and expiry. Independent names 
 manifests, so parallel jobs do not overwrite a shared index. An attempt cannot replace different
 bytes under the same name unless `overwrite: true` is explicit. Download checks digest, inventory
 and safe paths before extraction, rejects links and preserves executable file permissions.
+Publication and expiry cleanup use the same standard per-attempt filesystem lock, whose inode
+is never removed. The cross-runner proof must also demonstrate lock exclusion and release on the
+actual shared mount; local-disk tests do not establish SMB lock behavior.
 
 Failed-job reruns do not rerun successful producers. A same-run download therefore selects the
 latest published artifact attempt no newer than the consuming attempt. A download from another

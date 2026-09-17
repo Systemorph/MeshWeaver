@@ -23,6 +23,8 @@ No API token, cloud credential, or GitHub API call is used here.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import fnmatch
 import glob
 import gzip
@@ -84,6 +86,26 @@ def no_links(path: Path, stop: Path) -> None:
         if current == current.parent:
             raise Red("artifact path escaped its root")
         current = current.parent
+
+
+@contextlib.contextmanager
+def attempt_lock(folder: Path, attempt: int, blocking: bool = True):
+    """Coordinate publishers and expiry cleanup through a stable, never-pruned lock inode.
+
+    The shared mount must support cross-runner flock; infrastructure proves that before enabling
+    its pruner. Cleanup uses the same path with LOCK_NB and rereads expiry while holding the lock.
+    No polling, lock-file deletion, or stale-lock heuristic is involved: the OS releases the lock.
+    """
+    locks = folder / ".locks"
+    lock = locks / f"{attempt}.lock"
+    no_links(lock, folder)
+    locks.mkdir(exist_ok=True)
+    with lock.open("a+b") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        try:
+            yield
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 def lines(values: list[str]) -> list[str]:
@@ -200,26 +222,31 @@ class Artifacts:
                retention: int = 7, overwrite: bool = False) -> dict:
         if not files:
             raise Red("cannot publish an empty artifact")
+        if not 1 <= retention <= 90:
+            raise Red("artifact retention must be between 1 and 90 days")
         prefix = self.name_prefix(name)
         folder = self.root / prefix
         no_links(folder, self.root)
         folder.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="ci-artifact-") as temp:
+        # Advertise in-flight work BEFORE producing any bytes. The pruner preserves active
+        # stages, and deletes expired attempts individually rather than deleting name families.
+        with tempfile.TemporaryDirectory(prefix="ci-artifact-") as temp, \
+                tempfile.TemporaryDirectory(prefix=".publish-", dir=folder) as staging:
+            stage = Path(staging)
             archive = Path(temp) / "artifact.tar.gz"
             inventory = archive_files(files, archive, compression)
             digest = STORE.sha256_file(archive)
             key = f"{prefix}/objects/{self.attempt}/{digest}.tar.gz"
             no_links(self.root / key, self.root)
-            locator = self.store.put(key, archive)
-            now = time.time()
-            manifest = {"schema": SCHEMA, "repository": self.repository,
-                        "runId": self.run_id, "attempt": self.attempt, "name": name,
-                        "archiveSha256": digest, "archiveBytes": archive.stat().st_size,
-                        "locator": locator, "files": inventory, "createdAt": now,
-                        "expiresAt": now + retention * 86400, "retentionDays": retention}
-            destination = folder / str(self.attempt)
-            stage = Path(tempfile.mkdtemp(prefix=".publish-", dir=folder))
-            try:
+            with attempt_lock(folder, self.attempt):
+                locator = self.store.put(key, archive)
+                now = time.time()
+                manifest = {"schema": SCHEMA, "repository": self.repository,
+                            "runId": self.run_id, "attempt": self.attempt, "name": name,
+                            "archiveSha256": digest, "archiveBytes": archive.stat().st_size,
+                            "locator": locator, "files": inventory, "createdAt": now,
+                            "expiresAt": now + retention * 86400, "retentionDays": retention}
+                destination = folder / str(self.attempt)
                 staged_manifest = stage / "manifest.json"
                 staged_manifest.write_text(json.dumps(manifest, sort_keys=True) + "\n")
                 try:
@@ -233,10 +260,7 @@ class Artifacts:
                     if not overwrite:
                         raise Red("artifact name already published in this attempt; overwrite must be explicit")
                     os.replace(staged_manifest, destination / "manifest.json")
-            finally:
-                if stage.exists():
-                    shutil.rmtree(stage)
-            return manifest
+                return manifest
 
     def read_manifest(self, path: Path, name: str | None = None) -> dict:
         no_links(path, self.root)
@@ -405,8 +429,8 @@ def main(argv: list[str] | None = None) -> int:
         artifacts = Artifacts(args.store, args.repository, args.run_id, attempt)
         if args.command == "upload":
             safe_name(args.name)
-            if args.retention_days < 0:
-                raise Red("retention-days must be nonnegative (0 uses the 7-day default)")
+            if not 0 <= args.retention_days <= 90:
+                raise Red("retention-days must be 0-90 (0 uses the 7-day default)")
             retention = args.retention_days or 7
             files = collect(args.path, args.exclude, args.include_hidden_files, Path.cwd())
             if not files:
