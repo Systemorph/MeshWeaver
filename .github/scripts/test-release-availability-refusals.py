@@ -46,7 +46,10 @@ DETERMINE = "CANNOT DETERMINE"
 ABSENT = "are not available for framework identity"
 
 # `az` stub. Behaviour per invocation is chosen by env vars the case sets:
-#   AZ_MARKER_FAIL=1   -> `storage file download` fails (no release marker)
+#   AZ_MARKER_FAIL=1        -> there is NO release marker: its `exists` answers false (and a download fails)
+#   AZ_MARKER_EXISTS_FAIL=1 -> the marker's `exists` check itself ERRORS (auth / throttling / network)
+#   AZ_MARKER_READ_FAIL=1   -> the marker EXISTS but its download fails
+#   AZ_MARKER_EMPTY=1       -> the marker exists and is EMPTY (the producer recorded no identity)
 #   AZ_EXISTS=<v>      -> `storage file exists` prints <v> ("true"/"false")
 #   AZ_EXISTS_FAIL=1   -> `storage file exists` exits non-zero (an ERRORED probe)
 #   AZ_EXISTS_MAP      -> "source=true;source2=false" per-source override
@@ -54,14 +57,27 @@ AZ_STUB = r"""#!/usr/bin/env bash
 args="$*"
 case "$args" in
   *"storage file download"*)
-    if [ "${AZ_MARKER_FAIL:-0}" = "1" ]; then exit 1; fi
+    if [ "${AZ_MARKER_FAIL:-0}" = "1" ] || [ "${AZ_MARKER_READ_FAIL:-0}" = "1" ]; then
+      echo "ERROR: The specified resource does not exist or could not be read." >&2; exit 1
+    fi
     dest=""; prev=""
     for a in "$@"; do [ "$prev" = "--dest" ] && dest="$a"; prev="$a"; done
+    if [ "${AZ_MARKER_EMPTY:-0}" = "1" ]; then : > "$dest"; exit 0; fi
     printf '%s' "${AZ_MARKER_VALUE:-sdeadbeefdeadbeefdeadbeefdeadbeef}" > "$dest"
     exit 0 ;;
   *"storage file exists"*)
     path=""; prev=""
     for a in "$@"; do [ "$prev" = "--path" ] && path="$a"; prev="$a"; done
+    # The RELEASE MARKER is asked about separately from the sources (MeshWeaver#4539): the script
+    # checks the marker EXISTS before reading it, so "no marker" and "cannot tell" are distinct.
+    case "$path" in
+      */_releases/*)
+        if [ "${AZ_MARKER_EXISTS_FAIL:-0}" = "1" ]; then
+          echo "ERROR: Please run 'az login' to setup account." >&2; exit 3
+        fi
+        if [ "${AZ_MARKER_FAIL:-0}" = "1" ]; then printf 'false\n'; exit 0; fi
+        printf 'true\n'; exit 0 ;;
+    esac
     src=$(printf '%s' "$path" | awk -F/ '{print $(NF-1)}')
     if [ -n "${AZ_EXISTS_MAP:-}" ]; then
       for pair in $(printf '%s' "$AZ_EXISTS_MAP" | tr ';' ' '); do
@@ -208,8 +224,34 @@ def main() -> int:
     rc, out = run(["3.0.0-ci.9999", "crm"], AZ_MARKER_FAIL=1)
     check("case 1", rc != 0, f"exits non-zero (got {rc})")
     expect_only("case 1", out, RESOLVE, [ABSENT, DETERMINE])
+    check("case 1", "has no marker at" in out,
+          "uses the exact wording main-cd's seal step keys NOT MEASURED on ('has no marker at')")
     check("case 1", "crm" not in out.split(RESOLVE)[-1].split("\n")[0],
           "the refusal line does not name an upstream as absent")
+
+    # 🚨 MeshWeaver#4539 review: a marker whose EXISTENCE cannot be read is NOT an absent marker.
+    # The old script reported both as "has no marker", and main-cd answered a storage outage as a
+    # pending bake. It must be CANNOT DETERMINE, and it must carry az's own reason.
+    print("case 1a — the marker's existence cannot be read: CANNOT DETERMINE, carrying az's reason")
+    rc, out = run(["3.0.0-ci.9999", "crm"], AZ_MARKER_EXISTS_FAIL=1)
+    check("case 1a", rc != 0, f"exits non-zero (got {rc})")
+    expect_only("case 1a", out, DETERMINE, [RESOLVE, ABSENT])
+    check("case 1a", "az login" in out, "carries az's own error, not just '<nothing>'")
+    check("case 1a", "has no marker at" not in out, "never reports an unreadable marker as absent")
+
+    print("case 1b — the marker EXISTS but cannot be read: CANNOT DETERMINE, never 'no marker'")
+    rc, out = run(["3.0.0-ci.9999", "crm"], AZ_MARKER_READ_FAIL=1)
+    check("case 1b", rc != 0, f"exits non-zero (got {rc})")
+    expect_only("case 1b", out, DETERMINE, [RESOLVE, ABSENT])
+    check("case 1b", "has no marker at" not in out, "never reports an existing marker as absent")
+
+    print("case 1c — the marker is EMPTY: a refusal naming the producer's defect, not 'no marker'")
+    rc, out = run(["3.0.0-ci.9999", "crm"], AZ_MARKER_EMPTY=1)
+    check("case 1c", rc != 0, f"exits non-zero (got {rc})")
+    expect_only("case 1c", out, RESOLVE, [ABSENT, DETERMINE])
+    check("case 1c", "is empty" in out, "says the marker is empty")
+    check("case 1c", "has no marker at" not in out,
+          "does not use the absent wording — main-cd must be able to tell this from a pending bake")
 
     print("case 2 — identity resolves, upstream absent: the availability verdict, not a refusal")
     rc, out = run(["--identity", "sabc", "crm"], AZ_EXISTS="false")
