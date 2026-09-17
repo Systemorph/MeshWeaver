@@ -569,6 +569,40 @@ public sealed class PendingModuleActivations(string moduleRoot)
     public IReadOnlyCollection<string> PlatformIdentities { get; init; } = [];
 
     /// <summary>
+    /// 🚨 <b>The disk-derived inputs a REQUIRED-modules probe hands
+    /// <c>RequiredModuleStatus.Classify</c> — read ONCE per CHANGE of the on-disk activation state,
+    /// never once per probe</b> (MeshWeaver#4608, the sibling of #3664).
+    ///
+    /// <para>#3664 found <see cref="Read()"/> walking the module volume on every startup and
+    /// readiness probe and memoised it behind <see cref="DiskFingerprint"/>. The REQUIRED-modules
+    /// probe asks the volume the same three questions — the activation sidecar, one existence
+    /// probe per landed DLL, and one per declared entry — and it was left doing all of them per
+    /// call, against the same share, for the same reason. Measured on memex.systemorph.com
+    /// 2026-09-17, on all three replicas: <b>6.5–10.1 s per probe</b>, against a
+    /// <c>startupProbe</c> that waits 5 s. No replica rolled onto the candidate image could ever
+    /// record a startup success; each was killed at its three-hour budget and started over.</para>
+    ///
+    /// <para>This hands out the SAME snapshot <see cref="Read()"/> uses rather than a second one:
+    /// a probe that memoised its own copy would be free to disagree with this one about the same
+    /// volume, which is the shape every defect in this file has in common. The cheap half — which
+    /// assemblies THIS process has loaded — stays the caller's to read fresh per call.</para>
+    /// </summary>
+    /// <returns>The inputs, valid until the next change of the on-disk activation state.</returns>
+    public ModuleProbeInputs ReadProbeInputs()
+    {
+        var disk = ReadDisk();
+        return new ModuleProbeInputs(
+            disk.Activation,
+            disk.OpenFailure is { } failure
+                ? disk.Corruptions.Add(
+                    $"the activation sidecar under '{ModuleRootPath}' could not be opened "
+                    + $"({failure.GetType().Name}: {failure.Message})")
+                : disk.Corruptions,
+            disk.ModuleFileResolves,
+            disk.LandedDllExists);
+    }
+
+    /// <summary>
     /// The current report. Recomputed per call — the state changes underneath a running process
     /// (that is the whole point), so a cached answer would be wrong exactly when it matters.
     /// </summary>
@@ -612,7 +646,9 @@ public sealed class PendingModuleActivations(string moduleRoot)
         Exception? OpenFailure,
         ModuleSetIndex Sets,
         ImmutableList<string> SetNotes,
-        Func<ModuleActivationEntry, bool> LandedDllExists);
+        Func<ModuleActivationEntry, bool> LandedDllExists,
+        ImmutableList<string> Corruptions,
+        Func<string, bool> ModuleFileResolves);
 
     /// <summary>
     /// The last-write times of the three directories every activation writer renames into. PURE
@@ -639,6 +675,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
 
         Interlocked.Increment(ref diskReads);
         string? corrupt = null;
+        var corruptions = ImmutableList.CreateBuilder<string>();
         ModuleActivationList? activation = null;
         Exception? openFailure = null;
         try
@@ -647,7 +684,16 @@ public sealed class PendingModuleActivations(string moduleRoot)
             // swallows an unparseable file into the EMPTY list, so a surface that ignores the
             // callback reports a corrupt sidecar as "nothing pending" — cheerfully, forever. That
             // is the shape this whole cluster of defects has in common.
-            activation = ModuleActivationSidecar.Read(ModuleRootPath, reason => corrupt = reason);
+            //
+            // EVERY reason is kept, and `corrupt` still holds the LAST one so this type's own
+            // report is byte-identical to what it said before: the required-modules probe names
+            // each unreadable file separately (its `unreadable` list), and folding them to one
+            // would lose a file name an operator needs.
+            activation = ModuleActivationSidecar.Read(ModuleRootPath, reason =>
+            {
+                corrupt = reason;
+                corruptions.Add(reason);
+            });
         }
         catch (Exception exception)
         {
@@ -660,13 +706,41 @@ public sealed class PendingModuleActivations(string moduleRoot)
         // One existence probe per landed DLL for the life of this snapshot: the three projection
         // passes below ask about the same entries, and the answer cannot change while the
         // fingerprint stands (a landing renames into activation.d, which moves it).
-        var landed = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
+        //
+        // 🚨 Lazy, not a bare bool: ConcurrentDictionary.GetOrAdd guarantees that ONE VALUE is
+        // stored, never that the factory runs once — so under concurrent probes a bare bool let the
+        // same path be stat-ed several times inside one snapshot, and "asked once per change" was
+        // true only by luck. Lazy's default mode is ExecutionAndPublication, so at-most-once is now
+        // a property of the type rather than of the timing.
+        var landed = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<bool>>(StringComparer.Ordinal);
         bool LandedDllExists(ModuleActivationEntry entry) =>
             landed.GetOrAdd(
                 ModuleActivationBoot.LandedDllPath(ModuleRootPath, entry),
-                path => File.Exists(path));
+                path => new Lazy<bool>(() => File.Exists(path))).Value;
+        // 🚨 The SECOND per-entry volume question, memoised on the same fingerprint. The
+        // required-modules probe asks `File.Exists(MeshBuilder.ResolveModulePath(entry))` for every
+        // declared entry on EVERY probe — and the resolution itself probes the image's modules/
+        // tree before falling back to the app closure, so one entry costs several metadata round
+        // trips. Same Lazy as above, for the same reason.
+        //
+        // 🚨 The ONE-ARGUMENT overload, deliberately, and this is not an oversight to tidy up:
+        // the root-aware overload probes the LANDED tree first, and that is the OTHER predicate's
+        // question. RequiredModuleStatus.Classify asks this one first and answers Present — "present
+        // on this deployment; it loads at the next restart" — then falls through to the store
+        // branches, where LandedDllExists and the activation record produce the far more useful
+        // "landed on the volume, not yet loaded", "its landed assembly is ABSENT — the landing did
+        // not complete" and the plan-tier refusal. Passing ModuleRootPath here would make the first
+        // question swallow all three: every landed module would classify as Present and no operator
+        // would ever be told that a landing did not finish. The split is the contract, and this
+        // reproduces exactly the resolution the probe (and the boot loader before it) already used.
+        var resolved = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<bool>>(
+            StringComparer.OrdinalIgnoreCase);
+        bool ModuleFileResolves(string entry) =>
+            resolved.GetOrAdd(
+                entry, e => new Lazy<bool>(() => File.Exists(Mesh.MeshBuilder.ResolveModulePath(e)))).Value;
         var fresh = new DiskSnapshot(
-            fingerprint, activation, corrupt, openFailure, sets, setNotes.ToImmutable(), LandedDllExists);
+            fingerprint, activation, corrupt, openFailure, sets, setNotes.ToImmutable(), LandedDllExists,
+            corruptions.ToImmutable(), ModuleFileResolves);
         snapshot = fresh;
         return fresh;
     }
