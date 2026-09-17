@@ -649,8 +649,40 @@ migration:
 # STUCK bake is DETECTED, and at 3 h it could not be: every real bake finishes inside 10 min, so the
 # remaining 2h50m distinguished nothing — a wedged pod and a healthy one are indistinguishable for
 # the rest of that window. See deploy/CHANGE-PROPAGATION.md#the-bake-tax.
+#
+# 🚨 timeoutSeconds is the OTHER half of this budget, it is the one an environment must NOT quietly
+# raise, and on 2026-09-17 it took memex.systemorph.com down for 27 minutes. The startup probe reads
+# `path` below, and `/health` is an AGGREGATE CENSUS whose cost grows with the mesh: one check
+# (`required_modules`) walked the shared module volume once per declared entry PER PROBE and reached
+# 6.5–10.1 s against this 5 s. The failure mode is the unrecoverable one — Kubernetes suspends
+# readiness and liveness until the startup probe records ONE success, so the container never starts,
+# is killed at periodSeconds × failureThreshold, and begins the same clock again. Both replicas of
+# the control instance restarted, neither could pass startup, and no image could boot.
+#
+# The remedy is never a bigger number here: the endpoint's cost was still CLIMBING while the
+# incident was being written up (8.12/9.62/9.52 s at 14:53Z became 10.71/13.55 s at 15:22Z on the
+# same two serving replicas, with no deploy in between), so a raised timeout buys the interval until
+# the next growth and hides the unrecoverable failure behind it. The remedy is that every check on
+# this path READS A REGISTRY rather than doing the work — see
+# Doc/Architecture/AProbeMustAnswerInsideItsOwnTimeout — and /health's own `timing:` line (line two
+# of the body) names the check that is spending the budget.
 probes:
   startup:
+    # The endpoint the startup probe reads. `/health` is the default and the only path that carries
+    # the NodeType bake gate (PreWarm__GateReadiness): the untagged checks land there and the
+    # startup probe is their ONLY reader, so an environment that points this elsewhere turns that
+    # gate off — silently, because the gate goes on being configured and goes on reporting healthy.
+    # It also gives up "no traffic to a booting pod": the startup probe is what holds readiness on
+    # the heavy path until the mesh is up.
+    #
+    # 🚨 It must never be the READINESS path. Invariant 10 in check-chart-invariants.py refuses that
+    # render: the two probes would answer one question, the pod would join the Service the instant
+    # the process accepts a socket, and the roll would complete into a portal that is not up yet.
+    #
+    # It is a value rather than a literal so that a deployment which must move it does so in the
+    # repository, where it is reviewed and where chart drift can see it — not as a live
+    # `kubectl patch` that the next `helm upgrade` silently undoes.
+    path: /health
     periodSeconds: 5
     timeoutSeconds: 5
     failureThreshold: 60
