@@ -357,11 +357,48 @@ elif _probe_paths["readinessProbe"] == _probe_paths["startupProbe"]:
 # an overlay the moment probes.startup.path stopped being a literal in the template, and the live
 # `kubectl patch` of 2026-09-17 — startupProbe → /ready, applied as break-glass while the control
 # instance was down — is precisely the render this refuses to let anyone commit by accident.
+#
+# 🚨 And the render cannot always ANSWER whether the gate is armed. The portal's `envFrom` list puts
+# `memex-portal-secrets`, every Key Vault-synced Secret and `.Values.extraEnvFrom` AFTER the
+# ConfigMap, and Kubernetes keeps the LAST source on a key clash — so a source whose contents this
+# render does not contain can set PreWarm__GateReadiness to anything. Reading the ConfigMap and
+# concluding "not armed" would then be a guard answering confidently from evidence it does not have.
+# So the unprovable case is a FINDING, scoped to the one combination where it matters: a startup
+# probe that is NOT on /health. With the probe on /health (the default) nothing can be silently
+# disarmed and the question does not arise.
 checks += 1
 _gate_env = {e.get("name"): e.get("value") for e in (portal.get("env") or [])}
-_gate_armed = str(
-    _gate_env.get("PreWarm__GateReadiness", cfg_data.get("PreWarm__GateReadiness", "false"))
-).strip().lower() == "true"
+# Precedence, lowest first: the ConfigMap, then the chart's own Secret (both rendered here, so both
+# READABLE), then whatever the opaque sources below carry, then the container's inline `env`.
+_gate_secret = ((secret or {}).get("stringData") or {}).get("PreWarm__GateReadiness")
+_gate_stated = _gate_env.get(
+    "PreWarm__GateReadiness",
+    _gate_secret if _gate_secret is not None else cfg_data.get("PreWarm__GateReadiness"))
+_gate_armed = str(_gate_stated or "false").strip().lower() == "true"
+
+# The env sources whose CONTENTS are not in this render — a Key Vault-synced Secret or an
+# extraEnvFrom entry. The chart's own two are excluded because they are rendered above and read.
+_opaque_env_sources = [
+    (src.get("secretRef") or src.get("configMapRef") or {}).get("name")
+    for src in (portal.get("envFrom") or [])
+    if (src.get("configMapRef") or {}).get("name") != "memex-portal-config"
+    and (src.get("secretRef") or {}).get("name") != "memex-portal-secrets"
+]
+
+if not _gate_armed and _probe_paths["startupProbe"] and _probe_paths["startupProbe"] != "/health" \
+        and _opaque_env_sources:
+    finding(
+        f"the startupProbe reads {_probe_paths['startupProbe']} and this render cannot prove the "
+        f"NodeType bake gate is off (env source(s) {sorted(n for n in _opaque_env_sources if n)} "
+        f"are layered after the ConfigMap and their contents are not in this render)",
+        "PreWarm__GateReadiness reads 'false' in memex-portal-config, but Kubernetes keeps the LAST "
+        "envFrom source on a key clash, so a Key Vault-synced Secret or an extraEnvFrom entry can "
+        "arm the gate without appearing here. Armed plus a startup probe off /health is a gate that "
+        "is registered, never read, and permanently green — silently. This is a fail-closed on an "
+        "UNPROVABLE state, not a claim that the gate IS armed: keep the startup probe on /health "
+        "(the chart default, and the path that reads the gate), and the question does not arise.",
+    )
+
 if _gate_armed:
     if not _probe_paths["startupProbe"]:
         finding(
