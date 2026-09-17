@@ -225,6 +225,10 @@ reopened, commented on or labelled.
 
 ## See also
 
+- [Reopening on Image Provenance](../ReopeningOnImageProvenance) — the third predicate this
+  page's 15-of-51 finding points at, designed: the evidence chain, the one link still missing,
+  and the fail-safe for an image that cannot be resolved
+
 - [Operating from the portal, not the cluster](../OperatingFromThePortal) — where the pod and image
   facts come from
 - [Router Traffic Detection](../RouterTrafficDetection) — a detector that had the opposite problem:
