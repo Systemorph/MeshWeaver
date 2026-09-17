@@ -353,6 +353,18 @@ read-back right after the write proves the write landed, never that it held. The
 whose `Feedback` listing carries no `_GitSync`, has one writer and holds the node. See
 [Log watch triage](../LogWatchTriage) → "A REOPEN is not a recurrence".
 
+**What closes it, and what delivers it.** `115e0a9d9c` (PR #4292) is the commit: it makes this lane
+list and install at the sealed commit, so both writers of `Feedback` land on one tree; `8b1e966985`
+(PR #4364) adds the ownership hold, and `4d5a084a8b` (PR #4257) moves the severity off the detection.
+Measured 2026-09-17, none of the three is an ancestor of memex.meshweaver.cloud's running core
+`c84c6c05`, and all three are ancestors of memex.systemorph.com's `afde4eab` — which is why only the
+former still emits it. The delivery is a **Roll of memex-cloud onto a sealed image containing
+`e76fa9f8f2`** (the newest of the three merges); nothing else closes it, and no further code change
+is required. Its preconditions already hold on that instance: `pluginCatalog.sources[0]` carries
+`repoPath: https://github.com/Systemorph/MeshWeaver.Plugins` (not a local checkout),
+`PreWarm__PrebuiltBundleRoot` is `/data/prebuilt-bundles`, and the seal is demonstrably readable
+there — its own `Feedback/_GitSync` prints *"identity sd608997…: 'plugins' is sealed at 627fb3cd"*.
+
 **The fix is the rule, applied to the lane that had missed it.** The boot install now asks
 `SealedSyncGate.DecideFirstImport` per configured git source — the very decision the first import
 takes — and lists *and* installs at its answer:
