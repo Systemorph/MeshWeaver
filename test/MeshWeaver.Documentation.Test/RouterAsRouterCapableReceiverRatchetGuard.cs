@@ -153,10 +153,12 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
             if (!allowed.TryGetValue(file, out var budget))
                 failures.Add(
                     $"  NEW SITE   {file} ({count}) — this file ALREADY calls "
-                    + "NodeOperationIssuingHub()/ReadIssuingHub() on this very receiver, so it has "
-                    + "declared that the receiver can be the ROUTER. Issue this delivery from the "
-                    + "same seam: NodeOperationIssuingHub() for a node mutation, ReadIssuingHub() "
-                    + "for a bounded request/response the target executes. Both are the identity "
+                    + "NodeOperationIssuingHub()/ReadIssuingHub()/StreamSubscribingHub() on this "
+                    + "very receiver, so it has declared that the receiver can be the ROUTER. Issue "
+                    + "this delivery from the same seam: NodeOperationIssuingHub() for a node "
+                    + "mutation, ReadIssuingHub() for a bounded request/response the target "
+                    + "executes, StreamSubscribingHub() for a remote stream SUBSCRIPTION (#4614). "
+                    + "All three are the identity "
                     + "function wherever the router is not reached. Do NOT add a line to "
                     + AllowFileName + ".");
             else if (count > budget)
@@ -219,8 +221,9 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
         // --- 1. the derivation ---------------------------------------------------------------
         var declared = DeclaringFiles(root);
         Assert.True(declared.Count > 0,
-            "No file under " + string.Join(", ", ScannedRoots) + " calls NodeOperationIssuingHub() "
-            + "or ReadIssuingHub() on a named receiver. The DENOMINATOR of this guard is EMPTY, so "
+            "No file under " + string.Join(", ", ScannedRoots) + " calls NodeOperationIssuingHub(), "
+            + "ReadIssuingHub() or StreamSubscribingHub() on a named receiver. The DENOMINATOR of "
+            + "this guard is EMPTY, so "
             + "it reports a clean tree while enforcing nothing — the exact failure mode it exists "
             + "to catch. The seams were renamed or moved; follow them, never relax the scan.");
 

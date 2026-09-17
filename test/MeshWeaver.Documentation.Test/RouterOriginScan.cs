@@ -33,9 +33,12 @@ internal static class RouterOriginScan
     internal static readonly Regex CallMarker =
         new(@"\.\s*(?:(Post)|Observe)\s*(?:<([^<>()]*)>\s*)?\(", RegexOptions.Compiled);
 
-    /// <summary>A call to either seam. Both count: a site that hops for reads is off the router.</summary>
+    /// <summary>A call to ANY of the three seams. All count: a site that hops for reads, for node
+    /// lifecycle or for a stream SUBSCRIPTION is off the router either way — each returns the hub
+    /// unchanged unless its address type is the mesh type, so writing one is the author's statement
+    /// that the receiver can be the router (#4614 added the third).</summary>
     internal static readonly Regex SeamCall =
-        new(@"(?:NodeOperationIssuingHub|ReadIssuingHub)\s*\(\s*\)", RegexOptions.Compiled);
+        new(@"(?:NodeOperationIssuingHub|ReadIssuingHub|StreamSubscribingHub)\s*\(\s*\)", RegexOptions.Compiled);
 
     /// <summary>
     /// A seam call, matched so that the RECEIVER it is called on can be read off the text before it.
@@ -53,7 +56,7 @@ internal static class RouterOriginScan
     /// closed for the sibling guard, and it was found the same way here (Copilot on #4487).</para>
     /// </summary>
     internal static readonly Regex SeamCallMarker =
-        new(@"\.\s*(?:NodeOperationIssuingHub|ReadIssuingHub)\s*\(\s*\)", RegexOptions.Compiled);
+        new(@"\.\s*(?:NodeOperationIssuingHub|ReadIssuingHub|StreamSubscribingHub)\s*\(\s*\)", RegexOptions.Compiled);
 
     /// <summary>A name bound to a seam call — <c>var issuingHub = hub.NodeOperationIssuingHub();</c>
     /// and the lazily-cached property spelling both land here.</summary>
@@ -63,7 +66,7 @@ internal static class RouterOriginScan
     /// </remarks>
     internal static readonly Regex SeamAlias =
         new(@"\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:=>|\?\?=|=)\s*[^;{}()]*?"
-            + @"(?:NodeOperationIssuingHub|ReadIssuingHub)\s*\(\s*\)", RegexOptions.Compiled);
+            + @"(?:NodeOperationIssuingHub|ReadIssuingHub|StreamSubscribingHub)\s*\(\s*\)", RegexOptions.Compiled);
 
     internal static readonly Regex BareIdentifier =
         new(@"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
