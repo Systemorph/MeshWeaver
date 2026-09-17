@@ -220,6 +220,23 @@ This is the same attempt-scoping trap as `rerun-failed-jobs` reusing the previou
 artefact (#4303): a re-run is not a re-execution of the run, and the parts it did not re-run keep
 neither their outputs nor their annotations in the new attempt's records.
 
+🚨 **An attempt you could not READ is not an attempt that was SILENT — and only silence licenses
+the walk.** The fallback above is sound because "this attempt's records came back, and carried no
+such annotation" is a fact about the attempt. An HTTP failure is a fact about the *network*: it
+proves nothing, and the newer attempt is precisely the one that may hold a genuine re-resolution.
+Treating the two the same publishes an older attempt's stale verdict under a note asserting the
+newer attempt carried none — false in exactly the way the sentence this page opens with was false,
+and harder to catch because it now cites an attempt number. So an unreadable attempt **stops the
+walk and skips the run**, and the note says which of the two happened. A reader who cannot tell
+"nothing was there" from "I could not look" has the same defect as a sweep that reports `0` without
+its denominator.
+
+The second-order version bit the same change: the fallback added a **second** note for each run it
+rescued, and the loop's bound was `len(notes) >= limit` — a proxy for "runs examined" that was only
+ever true while every run emitted exactly one note. Twelve rescued runs reached the bound after
+six, halving the evidence and answering with a lower ceiling. **A bound must count the thing it
+names.**
+
 ---
 
 ## The same trap in the tools you write to watch CI

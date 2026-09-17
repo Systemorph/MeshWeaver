@@ -666,8 +666,17 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
                      f"({'/'.join(MAIN_EVENTS_THAT_VOUCH)}) in the newest {limit} — main has "
                      "published no passing run to follow")
         return None, notes
+    # 🚨 THE BOUND COUNTS RUNS, NOT NOTES (Copilot review, #4493). It used to read
+    # `len(notes) >= limit`, which was a proxy for "runs examined" only while every run emitted
+    # exactly one note. The attempt fallback below emits a SECOND note for the run it rescues, so
+    # the proxy would stop the walk after as few as six runs of twelve — dropping up to half the
+    # evidence and, because `best` is a max over the runs examined, answering with a LOWER ceiling
+    # or a false RED. That is the very failure this function exists to prevent, so the counter is
+    # now the thing it claims to be.
+    examined = 0
     for run in runs:
         run_id = int(run["id"])
+        examined += 1
         # 🚨 NEWEST ATTEMPT FIRST, then older ones (#4491). `/runs/{id}/jobs` serves the latest
         # attempt, and after a partial re-run every job of that attempt has a FRESH record — the
         # carried-over `Resolve the released platform` among them — with none of the annotations
@@ -681,6 +690,17 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
         # The NEWEST attempt that carries one wins, so a genuine re-resolution (a full re-run, or a
         # re-run OF this job) still decides; an older attempt is consulted only where the newer
         # record is silent, which is exactly the carried-over case.
+        #
+        # 🚨 AN UNREADABLE ATTEMPT IS NOT A SILENT ONE (Copilot review, #4493). Only a response
+        # that came back and carried no matching annotation licenses the walk to an older attempt.
+        # A read that FAILED proves nothing about what that attempt published — and the newer
+        # attempt is exactly the one that may hold a genuine RE-RESOLUTION — so falling back on it
+        # would publish an older attempt's stale verdict under a note asserting the newer one
+        # carried none. That note would be false in the same way #4491's "main has not passed on
+        # it yet" was false. So any unreadable attempt STOPS the walk and SKIPS the run, which is
+        # this module's standing discipline: a run whose annotation cannot be read is skipped and
+        # said so, never guessed at. `best` is a max over the other runs, so one unreadable run
+        # costs a data point, never a wrong ceiling.
         attempt_rows: list[dict] | None = None
         searched = 0
         unreadable: str | None = None
@@ -691,7 +711,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
                            else run_jobs_of_attempt(fetch, repo, run_id, attempt))
             except ResolutionError as error:
                 unreadable = f"attempt {attempt} jobs unreadable ({error})"
-                continue
+                break
             jobs = [j for j in jobs_of if j.get("name") == PLATFORM_REF_JOB]
             if not jobs:
                 continue
@@ -700,7 +720,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
                 annotations = fetch(f"/repos/{repo}/check-runs/{int(jobs[0]['id'])}/annotations")
             except ResolutionError as error:
                 unreadable = f"attempt {attempt} annotations unreadable ({error})"
-                continue
+                break
             candidate = (annotations if isinstance(annotations, list)
                          else annotations.get("annotations") or [])
             if any(NOTICE_TITLE in str(row.get("title") or "") for row in candidate):
@@ -711,12 +731,15 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
                         f"`{NOTICE_TITLE}` annotation (a partial re-run re-creates the record "
                         f"without it) — read from attempt {attempt}, which published one (#4491)")
                 break
-        if attempt_rows is None and searched == 0:
-            notes.append(f"main run {run_id}: no `{PLATFORM_REF_JOB}` job"
-                         + (f" ({unreadable})" if unreadable else "") + " — skipped")
+        # The unreadable branch is FIRST: with the walk stopping on the error, an unreadable latest
+        # attempt also leaves `searched == 0`, and "no `Resolve the released platform` job" would
+        # then be the wrong sentence for it — the job may well be there, we could not look.
+        if unreadable is not None:
+            notes.append(f"main run {run_id}: {unreadable} — skipped. An unreadable attempt is not "
+                         "a silent one, so no older attempt is consulted for this run")
             continue
-        if attempt_rows is None and unreadable is not None:
-            notes.append(f"main run {run_id}: {unreadable} — skipped")
+        if attempt_rows is None and searched == 0:
+            notes.append(f"main run {run_id}: no `{PLATFORM_REF_JOB}` job — skipped")
             continue
         rows = attempt_rows or []
         # 🚨 EVERY matching annotation is read, and DISAGREEMENT is a refusal (#1826). This used to
@@ -748,7 +771,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             continue
         notes.append(f"main run {run_id} passed on core CD #{found}")
         best = found if best is None else max(best, found)
-        if len(notes) >= limit:
+        if examined >= limit:
             break
     if best is None:
         # 🚨 Say WHEN the runs examined are from, because the one cause of this refusal that is not
@@ -2004,6 +2027,84 @@ def self_test() -> int:
     _ceiling_case("no attempt carrying the job published one ⇒ still skipped, and the note counts "
                   "the attempts searched rather than implying one was never looked at",
                   _fetch_attempts(latest=None, earlier=None), None, "2 attempt(s)")
+
+    # ── 🚨 AN UNREADABLE ATTEMPT IS NOT A SILENT ONE (Copilot review, #4493) ────────────────────
+    # The fallback above is licensed by a response that came back and carried no matching
+    # annotation. A read that FAILED licenses nothing: the newer attempt is the one that may hold a
+    # genuine re-resolution, so consulting an older one would publish a stale verdict under a note
+    # asserting the newer attempt carried none — false in exactly the way #4491's own sentence was
+    # false. The three cases below are the guard; the two #4491 cases above are the control that
+    # shows the fallback itself is still live and was not simply disabled.
+    def _fetch_attempt_unreadable(where: str, earlier: str = "3.0.0-ci.8203") -> Fetch:
+        """The LATEST attempt cannot be read; attempt 1 carries an OLDER annotation."""
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 557, "created_at": "2026-09-14T08:00:00Z", "run_attempt": 2}]}
+            if "/attempts/1/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 711, "name": PLATFORM_REF_JOB}]}
+            if "/jobs" in path:
+                if where == "jobs":
+                    raise ResolutionError("GET /jobs: HTTP 500 (GitHub server error) (a fixture)")
+                return {"total_count": 1, "jobs": [{"id": 712, "name": PLATFORM_REF_JOB}]}
+            if "/check-runs/712/annotations" in path:
+                raise ResolutionError("GET /annotations: HTTP 500 (GitHub server error) (a fixture)")
+            if "/check-runs/711/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE,
+                                         "message": f"{earlier} — core {B[:9]}"}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("the latest attempt's JOB LISTING is unreadable ⇒ the run is SKIPPED, never "
+                  "answered from an older attempt's stale verdict",
+                  _fetch_attempt_unreadable("jobs"), None, "jobs unreadable")
+    _ceiling_case("the latest attempt's ANNOTATIONS are unreadable ⇒ the run is SKIPPED too",
+                  _fetch_attempt_unreadable("annotations"), None, "annotations unreadable")
+    _ceiling_case("…and the note says an unreadable attempt is not a silent one, so nobody reads "
+                  "the skip as `this attempt published nothing`",
+                  _fetch_attempt_unreadable("annotations"), None,
+                  "An unreadable attempt is not a silent one")
+
+    # ── 🚨 THE BOUND COUNTS RUNS, NOT NOTES (Copilot review, #4493) ─────────────────────────────
+    # `len(notes) >= limit` was a proxy for "runs examined" only while every run emitted exactly
+    # one note. The attempt fallback emits a SECOND note for each run it rescues, so twelve such
+    # runs reach the bound after SIX — and `best` being a max over the runs examined, the answer is
+    # the highest set among the first half. Here the newest set is on the LAST of twelve runs, so a
+    # note-counting bound answers 8203 where the true ceiling is 8250.
+    def _fetch_many_fallback_runs(count: int, base: int, last: int) -> Fetch:
+        """`count` runs, each re-run once so its latest attempt lost the annotation."""
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 600 + i, "created_at": "2026-09-14T08:00:00Z", "run_attempt": 2}
+                    for i in range(count)]}
+            for i in range(count):
+                if f"/runs/{600 + i}/attempts/1/jobs" in path:
+                    return {"total_count": 1,
+                            "jobs": [{"id": 6000 + i * 10 + 1, "name": PLATFORM_REF_JOB}]}
+                if f"/runs/{600 + i}/jobs" in path:
+                    return {"total_count": 1,
+                            "jobs": [{"id": 6000 + i * 10 + 2, "name": PLATFORM_REF_JOB}]}
+                if f"/check-runs/{6000 + i * 10 + 1}/annotations" in path:
+                    named = last if i == count - 1 else base
+                    return {"annotations": [{"title": NOTICE_TITLE,
+                                             "message": f"3.0.0-ci.{named} — core {B[:9]}"}]}
+                if f"/check-runs/{6000 + i * 10 + 2}/annotations" in path:
+                    return {"annotations": []}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("twelve runs that each fell back emit two notes apiece — every one is still "
+                  "examined, so the newest set on the LAST of them is the ceiling",
+                  _fetch_many_fallback_runs(MAIN_RUNS_EXAMINED, 8203, 8250), 8250, "8250")
 
     # ── 🚨 THE CEILING IS READ OUT OF A LIST THE SELF-TEST ALSO WRITES INTO (#1826) ─────────────
     # `Resolve the released platform` runs `resolve-platform.py --self-test` and
