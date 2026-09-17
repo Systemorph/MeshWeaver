@@ -71,7 +71,11 @@ exist there. If that copy ever becomes an invitation, it needs this treatment fi
 
 ## Related
 
-- The write-side half is [#4601](https://github.com/Systemorph/MeshWeaver/issues/4601): where such a
-  payload comes from, and why the write boundary now refuses it.
+- The write-side half is tracked separately as
+  [#4601](https://github.com/Systemorph/MeshWeaver/issues/4601) — where such a payload comes from,
+  and whether the write boundary should refuse it. **This page assumes nothing about that.** A
+  renderer that has to be told what it may be handed is a renderer that will meet exactly this
+  payload again: the store holds rows written before any guard existed, and an import, a migration
+  or a restore can put one back at any time.
 - [CQRS and Content Access](/Doc/Architecture/CqrsAndContentAccess) — `ContentAs<T>` over a cast,
   and what a silent null looks like from outside.

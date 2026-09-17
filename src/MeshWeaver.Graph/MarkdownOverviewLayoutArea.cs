@@ -341,14 +341,18 @@ public static class MarkdownOverviewLayoutArea
             // payload carries a `$type` — a discriminator-less one (the measured case) returns from
             // MeshNodeTypeSource.ResolveJsonElementContent before any line is written, so without
             // this there is nothing at all.
-            host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger(typeof(MarkdownOverviewLayoutArea))
-                .LogWarning(
-                    "Markdown node '{Path}' has content that no reader can interpret — stored "
-                    + "member(s)/kind: {Shape}. The page shows a diagnostic instead of the "
-                    + "authoring placeholder, because inviting an edit over unreadable content is "
-                    + "how the stored text gets overwritten. Systemorph/MeshWeaver#4600.",
-                    nodePath, read.Shape);
+            // A LOCAL and an explicit null check, not `factory?.CreateLogger(t).LogWarning(…)`:
+            // LogWarning is an EXTENSION method, so whether `?.` short-circuits past it is a
+            // question a reader should not have to answer (review on #4626). A host without a
+            // logger factory is a minimal test host, and it must render the notice all the same.
+            var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(MarkdownOverviewLayoutArea));
+            logger?.LogWarning(
+                "Markdown node '{Path}' has content that no reader can interpret — stored "
+                + "member(s)/kind: {Shape}. The page shows a diagnostic instead of the "
+                + "authoring placeholder, because inviting an edit over unreadable content is "
+                + "how the stored text gets overwritten. Systemorph/MeshWeaver#4600.",
+                nodePath, read.Shape);
 
             // ONE control, not a Stack of two: the notice has to be legible as a whole, and a
             // consumer (or a test) that asks what this page says must get the sentence rather than
@@ -495,13 +499,22 @@ public static class MarkdownOverviewLayoutArea
             : new MarkdownRead(
                 MarkdownContentState.Unreadable, string.Empty, string.Join(", ", members));
 
-        static MarkdownRead Content(JsonElement value)
-        {
-            var text = value.ValueKind == JsonValueKind.String ? value.GetString() : null;
-            return string.IsNullOrEmpty(text)
-                ? new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty)
-                : new MarkdownRead(MarkdownContentState.Present, text, string.Empty);
-        }
+        // 🚨 A `content` member that is NOT a string is the same defect one level in (review on
+        // #4626): mapping it to Absent would put the invitation back over a payload that is there
+        // and unreadable — an object, an array, a number under the very member the declaration
+        // names. Only a string (or an explicit null / empty string) is an answer about emptiness.
+        static MarkdownRead Content(JsonElement value) =>
+            value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString() is { Length: > 0 } text
+                    ? new MarkdownRead(MarkdownContentState.Present, text, string.Empty)
+                    : new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty),
+                JsonValueKind.Null or JsonValueKind.Undefined =>
+                    new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty),
+                _ => new MarkdownRead(
+                    MarkdownContentState.Unreadable, string.Empty,
+                    "content: " + value.ValueKind.ToString().ToLowerInvariant()),
+            };
     }
 
     /// <summary>

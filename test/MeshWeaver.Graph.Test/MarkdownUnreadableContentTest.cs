@@ -28,10 +28,12 @@ namespace MeshWeaver.Graph.Test;
 /// that were still in the store. So the unreadable state must not render the state that invites the
 /// edit — which is the assertion below, not merely "a different string".</para>
 ///
-/// <para>The node is built IN MEMORY and handed straight to the view. Deliberate: the write
-/// boundary refuses exactly this payload now (#4601), so a test that created the node through
-/// <c>CreateNode</c> would be testing the guard instead of the renderer — and would start failing
-/// the moment the guard landed.</para>
+/// <para>The node is built IN MEMORY and handed straight to the view. Deliberate: a guard on the
+/// write boundary is tracked separately (#4601), and a test that created this node through
+/// <c>CreateNode</c> would be testing that guard instead of the renderer — and would start failing
+/// the moment it landed. The renderer's contract does not depend on it either way: the store holds
+/// rows written before any guard existed, and an import, a migration or a restore can put one back
+/// at any time.</para>
 /// </summary>
 public class MarkdownUnreadableContentTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -166,6 +168,22 @@ public class MarkdownUnreadableContentTest(ITestOutputHelper output) : HubTestBa
         var measured = Read(Node(Json(MeasuredPayload)));
         measured.State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Unreadable);
         measured.Shape.Should().Be("markdown", "the shape is the whole lead for a repair");
+
+        // 🚨 The same defect one level in (review on #4626): the declaration's OWN member is
+        // present, and holds something that is not text. Mapping it to Absent would put the
+        // invitation straight back over a payload that is there and unreadable.
+        var nonString = Read(Node(Json("""{"$type":"MarkdownContent","content":{"blocks":[]}}""")));
+        nonString.State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Unreadable);
+        nonString.Shape.Should().Be("content: object");
+        Read(Node(Json("""{"content":["a","b"]}""")))
+            .State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Unreadable,
+                "the discriminator-less fallback must judge the value the same way");
+
+        // …but an EXPLICIT null or empty string under that member is an answer about emptiness.
+        Read(Node(Json("""{"$type":"MarkdownContent","content":null}""")))
+            .State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Absent);
+        Read(Node(Json("""{"$type":"MarkdownContent","content":""}""")))
+            .State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Absent);
 
         // An object with nothing authored in it IS an empty node — not an unreadable one.
         Read(Node(Json("{}"))).State

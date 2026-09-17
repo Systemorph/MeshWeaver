@@ -20,6 +20,3 @@ The two are now told apart. A page that genuinely has no content still invites y
 page whose content cannot be read says so instead, names what is actually stored, and asks you not
 to start editing until it has been repaired — so the text stays recoverable. The same situation is
 now recorded in the portal's log, which it never was.
-
-Writes that would put a page into that state are refused at the point they are made, so new pages
-cannot be born this way.
