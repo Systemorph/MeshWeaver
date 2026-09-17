@@ -203,6 +203,37 @@ public class RequiredModuleAuthorityTest
     }
 
     /// <summary>
+    /// 🚨 A slot BELOW ZERO renders a key that binds to nothing — an array has no index -1 — so the
+    /// module is required by nobody on either route. It is the one malformed index a hand-written
+    /// record can carry (<c>WithRequiredModuleSlot</c> takes any <c>int</c>) and the ceiling check
+    /// reads only the upper bound, so nothing else sees it. Reported whatever the record claims:
+    /// completeness does not make an impossible index deliverable.
+    /// </summary>
+    [Fact]
+    public void ASlotBelowZero_IsReported_EvenUnderTheAuthorityClaim()
+    {
+        var negative = new DeploymentContent().WithRequiredModuleSlot(-1, "MeshWeaver.Mcp");
+
+        // It really does render — this is not a hypothetical shape.
+        Assert.Equal("MeshWeaver.Mcp.dll", DeploymentPortalConfig.PortalConfig(negative, PortalConfigOptions.Helm)["Modules__Required__-1"]);
+
+        var problem = Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(negative));
+        Assert.Contains("MeshWeaver.Mcp.dll", problem, StringComparison.Ordinal);
+        Assert.Contains("slot -1", problem, StringComparison.Ordinal);
+
+        // The claim removes the image's list from the question; it cannot make -1 an index.
+        var claimed = Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(negative.WithRequiredModulesAuthoritative()));
+        Assert.Contains("slot -1", claimed, StringComparison.Ordinal);
+
+        // And the ceiling surface still does not see it — it reads the upper bound only.
+        Assert.Empty(DeploymentPortalConfig.ChartModuleSlotProblems(negative));
+
+        // Reported ONCE: the shadow loop walks the rendered slots at or above the contiguous
+        // count, so a negative one cannot be counted twice.
+        Assert.Single(DeploymentPortalConfig.PositionalModuleSlotProblems(negative));
+    }
+
+    /// <summary>
     /// One normalization, every surface: a record that states a module WITHOUT the <c>.dll</c>
     /// suffix must be named the same way in the entries it renders and in the problem that reports
     /// it — otherwise a reader greps the problem's spelling and finds nothing.
