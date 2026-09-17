@@ -86,6 +86,32 @@ jobs:
       - name: "Prove the predicate can say no (self-test)"
         run: python3 .github/scripts/check-review-answered.py --self-test
 
+      # 🚨 `--settle-replies 60`: answering N findings posts N separate review-comment events, so a
+      # pull request with seven findings fired this workflow EIGHT times on one head sha and
+      # published eight check-runs — six failures while the replies were still being written, then
+      # two successes. Every one of those reds was TRUE when it was taken; what broke was the
+      # ROLLUP. Measured on #4649, head 94fc73b4fdaa, 57 minutes after the last evaluation
+      # completed: `statusCheckRollup` still read FAILURE and carried 3 of the 8 check-runs — all
+      # failures, with NEITHER success present. Eight distinct check suites, and the selection is
+      # neither newest, nor oldest, nor one-per-suite. So a later success cannot be relied on to
+      # displace an earlier failure, the rollup does not heal with time, and re-arming auto-merge
+      # does not clear it; only a new head does, which is why an empty commit was the remedy found
+      # under pressure (Doc/Architecture/ReviewFindingsAnswered records it, and why it should be
+      # needed only for a long-tail case now).
+      #
+      # The fix cannot be "make the last evaluation win" — nothing here controls the rollup's
+      # choice. It has to be to make every evaluation on one sha AGREE, and they disagreed for one
+      # reason: the question was asked while the answer was being typed. So the step waits for the
+      # answering to stop and then judges once. It softens no verdict — an unanswered thread that
+      # stays unanswered is still red when the wait ends — and it waits ONLY while unanswered
+      # threads are the whole complaint, never for a missing review or an incomplete listing.
+      # 60 s is ~5× the widest gap measured INSIDE an answering burst (1–11 s over #4649, #4656 and
+      # #4646); the 954 s gap in that sample was a separate later round and deliberately falls
+      # outside the window. It also shrinks the burst through the concurrency group above: while one
+      # run holds the slot for the window, every further arrival replaces the PENDING one, and a
+      # replaced run executes zero jobs — so it publishes no check-run and nothing of it reaches the
+      # rollup.
+      #
       # 🚨 `--wait-for-review 15`: while the ONLY thing missing is the review itself, the step
       # re-reads for up to 15 minutes and then answers RED. Measured on this check's own pull
       # request (#4575, run 35197843933): the reviewer's `pull_request_review` event DOES arrive and
@@ -106,7 +132,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "merge_group" ]; then
-            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --merge-group-ref "$QUEUE_REF" --wait-for-review 15
+            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --merge-group-ref "$QUEUE_REF" --wait-for-review 15 --settle-replies 60
           else
-            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR" --wait-for-review 15
+            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR" --wait-for-review 15 --settle-replies 60
           fi

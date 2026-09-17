@@ -303,6 +303,71 @@ gh api -X POST "repos/Systemorph/MeshWeaver/pulls/<PR>/comments/<comment id>/rep
 
 Never hand-request the review to turn the check green, and never apply `review-waived` yourself.
 
+### 🚨 The check still reads red after you answered everything — push an empty commit
+
+**The remedy first, because this is discovered under pressure:**
+
+```bash
+git commit --allow-empty -m "chore: one clean head for the review gate"
+git push
+```
+
+That is not a ritual and it is not a way around the gate. It is the ONLY thing that clears a
+**latched rollup**, and it works because it gives the check a head sha it has never judged before —
+so it runs once, on a settled state, and that single verdict is the only one there is. Re-arming
+auto-merge does not clear it. Waiting does not clear it. **If the check is red because a thread is
+genuinely unanswered, the empty commit changes nothing** — the fresh evaluation is red too, which is
+exactly why this is safe to write down.
+
+**What is actually happening** (measured on #4649, 2026-09-17). Answering N findings posts N
+separate `pull_request_review_comment` events, and each one re-evaluates the check. Seven findings
+answered one at a time produced **eight check-runs on one head sha** — six honest failures while the
+replies were still being written, then two successes:
+
+| check-run | conclusion | completed |
+|---|---|---|
+| 105349138004 | failure | 19:25:37Z |
+| 105356428131 … 105356665266 (5) | failure | 19:47:43Z – 19:48:26Z |
+| 105356708655 | **success** | 19:48:36Z |
+| 105356763402 | **success** | 19:48:49Z |
+
+Each red was TRUE when it was taken. What broke is GitHub's `statusCheckRollup` — the thing branch
+protection reads. Measured **57 minutes after the last evaluation completed**, on head
+`94fc73b4fdaa`:
+
+- rollup state: **`FAILURE`**;
+- it carries **3 of the 8** check-runs — 105349138004, 105356428131, 105356792897 — **all failures**;
+- **neither success appears in the rollup at all.**
+
+Eight runs, eight distinct check *suites*, and the rollup's selection is neither the newest, nor the
+oldest, nor one-per-suite. So three things follow, and each was checked rather than assumed:
+
+1. **It does not heal with time.** Nearly an hour later it still read `FAILURE`.
+2. **A later success does not displace an earlier failure** on the same sha. "The newest run wins"
+   is not how this behaves.
+3. **Only a new head clears it** — hence the empty commit.
+
+**Why the fix is a settle wait, not a smarter rollup read.** Nothing in this repository controls
+which contexts the rollup picks, so the durable fix cannot be to make the last evaluation win. It
+has to make every evaluation on one sha *agree* — and they disagreed for one reason: the question
+was being asked while the answer was being typed. `check-review-answered.py --settle-replies 60`
+therefore waits for the answering to stop before judging, and the workflow passes `60`. It softens
+no verdict (an unanswered thread that stays unanswered is still red when the wait ends), it waits
+only while unanswered threads are the *whole* complaint — never for a missing review or an
+incomplete listing — and it ends in a verdict either way. 60 s is ~5× the widest gap measured
+*inside* an answering burst (1–11 s across #4649, #4656 and #4646); the one 954 s gap in that sample
+was a separate later round of work and deliberately falls outside the window.
+
+It also shrinks the burst for free, through the workflow's existing concurrency group: while one run
+holds the slot for the settle window, every further arrival replaces the *pending* run, and a
+replaced run executes zero jobs — so it publishes no check-run and nothing of it can reach the
+rollup. The eight runs above all executed only because each finished in ~8 s, leaving the slot free
+before the next event arrived.
+
+**So the empty commit should now be a long-tail remedy** — for an author who answers some threads,
+walks away, and answers the rest an hour later, where the two rounds are genuinely separate states
+and the early red is genuinely on the sha. Keep the recipe; expect to need it rarely.
+
 ## Related
 
 - [The Merge Queue](../MergeQueue) — the queue this check runs in, and the steward named in the rollout
