@@ -706,21 +706,38 @@ public sealed class PendingModuleActivations(string moduleRoot)
         // One existence probe per landed DLL for the life of this snapshot: the three projection
         // passes below ask about the same entries, and the answer cannot change while the
         // fingerprint stands (a landing renames into activation.d, which moves it).
-        var landed = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
+        //
+        // 🚨 Lazy, not a bare bool: ConcurrentDictionary.GetOrAdd guarantees that ONE VALUE is
+        // stored, never that the factory runs once — so under concurrent probes a bare bool let the
+        // same path be stat-ed several times inside one snapshot, and "asked once per change" was
+        // true only by luck. Lazy's default mode is ExecutionAndPublication, so at-most-once is now
+        // a property of the type rather than of the timing.
+        var landed = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<bool>>(StringComparer.Ordinal);
         bool LandedDllExists(ModuleActivationEntry entry) =>
             landed.GetOrAdd(
                 ModuleActivationBoot.LandedDllPath(ModuleRootPath, entry),
-                path => File.Exists(path));
+                path => new Lazy<bool>(() => File.Exists(path))).Value;
         // 🚨 The SECOND per-entry volume question, memoised on the same fingerprint. The
         // required-modules probe asks `File.Exists(MeshBuilder.ResolveModulePath(entry))` for every
-        // declared entry on EVERY probe — and the resolution itself probes twice more (the landed
-        // root, then the image's modules/), so one entry costs up to three metadata round trips.
-        // Its answer is governed by exactly the directories the fingerprint watches plus the
-        // image, which is immutable for the life of the process.
-        var resolved = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(
+        // declared entry on EVERY probe — and the resolution itself probes the image's modules/
+        // tree before falling back to the app closure, so one entry costs several metadata round
+        // trips. Same Lazy as above, for the same reason.
+        //
+        // 🚨 The ONE-ARGUMENT overload, deliberately, and this is not an oversight to tidy up:
+        // the root-aware overload probes the LANDED tree first, and that is the OTHER predicate's
+        // question. RequiredModuleStatus.Classify asks this one first and answers Present — "present
+        // on this deployment; it loads at the next restart" — then falls through to the store
+        // branches, where LandedDllExists and the activation record produce the far more useful
+        // "landed on the volume, not yet loaded", "its landed assembly is ABSENT — the landing did
+        // not complete" and the plan-tier refusal. Passing ModuleRootPath here would make the first
+        // question swallow all three: every landed module would classify as Present and no operator
+        // would ever be told that a landing did not finish. The split is the contract, and this
+        // reproduces exactly the resolution the probe (and the boot loader before it) already used.
+        var resolved = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<bool>>(
             StringComparer.OrdinalIgnoreCase);
         bool ModuleFileResolves(string entry) =>
-            resolved.GetOrAdd(entry, e => File.Exists(Mesh.MeshBuilder.ResolveModulePath(e)));
+            resolved.GetOrAdd(
+                entry, e => new Lazy<bool>(() => File.Exists(Mesh.MeshBuilder.ResolveModulePath(e)))).Value;
         var fresh = new DiskSnapshot(
             fingerprint, activation, corrupt, openFailure, sets, setNotes.ToImmutable(), LandedDllExists,
             corruptions.ToImmutable(), ModuleFileResolves);

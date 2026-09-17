@@ -29,10 +29,16 @@ namespace MeshWeaver.PluginCatalog;
 /// <param name="Unreadable">Every file that could not be parsed, and the open failure when the
 /// sidecar itself could not be opened at all — one entry per file, because a probe that folds them
 /// into one sentence loses the name an operator has to go and look at.</param>
-/// <param name="ResolvesFromDeployment">Whether a declared module entry resolves to a file this
-/// deployment actually has. Memoised: the resolution walks the landed root, then the image's
-/// <c>modules/</c>, then the app closure, so an unmemoised call costs up to three metadata round
-/// trips per entry — on a shared network volume that is the whole probe budget.</param>
+/// <param name="ResolvesFromDeployment">Whether a declared module entry resolves to a file the
+/// IMAGE carries — <c>MeshBuilder.ResolveModulePath(entry)</c>, the image's <c>modules/</c> tree
+/// then the app closure. Memoised, because unmemoised it costs several metadata round trips per
+/// entry per probe, and on a shared network volume that is the whole probe budget.
+///
+/// <para>🚨 It deliberately does NOT probe the landed tree: that is
+/// <paramref name="LandedDllExists"/>'s question, and the classification depends on the two being
+/// separable. Answering "yes" here for a landed module would report it Present and suppress the
+/// reasons an operator actually needs — that its landing did not complete, or that the plan
+/// refused it.</para></param>
 /// <param name="LandedDllExists">Whether the landed assembly named by an activation entry is on the
 /// volume. Memoised per generation directory for the life of the snapshot.</param>
 public sealed record ModuleProbeInputs(

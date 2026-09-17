@@ -29,7 +29,15 @@ namespace Memex.Portal.Shared.Test;
 /// the shared Azure Files volume answers in milliseconds, so the defect is invisible to a clock
 /// here and obvious to one there. What is identical in both places is the NUMBER OF QUESTIONS
 /// asked, so that is what is pinned — the snapshot is read once per change, and the two per-entry
-/// predicates are one memo shared by every probe taken against it.</para>
+/// predicates are one memo shared by every probe taken against it. Each memo is a
+/// <see cref="System.Lazy{T}"/>, so at-most-once is a property of the type and not of the timing:
+/// <c>ConcurrentDictionary.GetOrAdd</c> promises one stored VALUE, never one factory call.</para>
+///
+/// <para>A memo that always answered <c>false</c> would satisfy every cost assertion here while
+/// being completely wrong, so both predicates also get a positive and a negative case — and one
+/// test pins that they answer about DIFFERENT trees, which is what keeps the required-modules
+/// classification able to tell "the image has it" from "it landed and the landing did not
+/// finish".</para>
 /// </summary>
 public class ModuleProbeInputsCostTest : IDisposable
 {
@@ -106,12 +114,13 @@ public class ModuleProbeInputsCostTest : IDisposable
     }
 
     /// <summary>
-    /// The predicates answer, and they answer about the volume rather than about nothing: a landed
-    /// module's DLL is found, and a name nothing ever landed is not. Without this the two
-    /// assertions above would pass over a pair of memos that always said <c>false</c>.
+    /// 🚨 <b>BOTH predicates answer, and they answer about the filesystem rather than about
+    /// nothing.</b> Without this the cost assertions above would pass over a pair of memos that
+    /// always returned <c>false</c> — cheap, stable, reference-identical and completely wrong.
+    /// Each gets a positive AND a negative case, because only the pair rules that out.
     /// </summary>
     [Fact]
-    public async Task ThePredicatesAnswerAboutTheVolume()
+    public async Task BothPredicatesAnswerAboutTheFilesystem()
     {
         await LandWave(ModuleA);
         var pending = new PendingModuleActivations(root);
@@ -130,6 +139,40 @@ public class ModuleProbeInputsCostTest : IDisposable
                 Directory = "does-not-exist",
             }),
             "a generation nothing ever landed was reported present");
+
+        // The IMAGE-side question, which is a different tree from the landed one on purpose: this
+        // assembly's own closure is what MeshBuilder.ResolveModulePath falls back to, so a file
+        // sitting beside the test host is the positive case an always-false memo cannot fake.
+        var shipped = Path.GetFileName(typeof(MeshWeaver.Plugin.Packaging.BundleReader).Assembly.Location);
+        Assert.True(inputs.ResolvesFromDeployment(shipped),
+            $"'{shipped}' is in this host's own directory and the resolver did not find it — the "
+            + "image-side predicate is answering about nothing, which would make every declared "
+            + "module read as absent while costing nothing to compute");
+        Assert.False(inputs.ResolvesFromDeployment("MeshWeaver.NeverShipped.dll"),
+            "a module no image ever carried was reported as resolving from this deployment");
+    }
+
+    /// <summary>
+    /// 🚨 The two predicates ask about DIFFERENT trees, and the classification depends on it: the
+    /// image-side resolver must NOT answer for a module that merely landed on the volume, or
+    /// <c>RequiredModuleStatus.Classify</c> would report it Present and swallow the store branches
+    /// that tell an operator a landing did not complete. This is the assertion that would fail if
+    /// the memo were ever "tidied up" to the root-aware overload.
+    /// </summary>
+    [Fact]
+    public async Task TheImageSideResolver_DoesNotAnswerForAMerelyLandedModule()
+    {
+        await LandWave(ModuleA);
+        var inputs = new PendingModuleActivations(root).ReadProbeInputs();
+        var landed = inputs.Activation!.Entries.Single(m =>
+            string.Equals(m.Name, ModuleA, StringComparison.OrdinalIgnoreCase));
+
+        Assert.True(inputs.LandedDllExists(landed), "the landed DLL should be on the volume");
+        Assert.False(inputs.ResolvesFromDeployment(ModuleA + ".dll"),
+            "a module that only LANDED was reported as resolving from the image. Classify asks the "
+            + "image question first and answers Present on a yes, so this would hide 'landed, not "
+            + "yet loaded', 'its landed assembly is ABSENT' and the plan-tier refusal — every "
+            + "reason that tells an operator what to do.");
     }
 
     /// <summary>
