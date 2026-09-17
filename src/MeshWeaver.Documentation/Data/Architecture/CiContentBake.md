@@ -290,14 +290,17 @@ image's framework identity**. Treat it as a missing artifact, never as "boots ar
 
 ### Where the files actually come from (measured on memex, 2026-08-22)
 
-There are two adoption sources, and only one of them is real today:
+There are two adoption sources. On the date in the heading exactly one of them was carrying anything —
+and which one is a property of the image and the volume in front of you, so the table is a
+READING, not a standing fact:
 
 | Source | State |
 |---|---|
 | `prebuilt/` **inside the image** (`ShippedPrebuiltBundles`) | **EMPTY** — `ls /app/prebuilt` returned 0 files on the running portal |
 | the published store on the shared volume, `/data/prebuilt-bundles/<identity>/` | **101 identities present** |
 
-So the store is the only lane that feeds adoption. A pod adopts iff its own identity is one of those
+So on that reading the store was the only lane feeding adoption — re-run the two `ls` commands
+above before assuming it still is. A pod adopts iff its own identity is one of those
 directories — and when it is not, it sweeps.
 
 ### Why the identity can be missing even though bakes are green
@@ -317,7 +320,9 @@ because the newest tag is always the one least likely to be baked yet.
 
 ### Checking it, in order
 
-1. `ls /app/prebuilt` on the pod — if empty, the image lane contributes nothing (it does not today).
+1. `ls /app/prebuilt` on the pod — if empty, the image lane is contributing nothing on THIS image.
+   🚨 Read it; do not carry an answer. Whether the image lane contributes has flipped before and
+   is a property of the image in front of you, not of the fleet.
 2. `ls /data/prebuilt-bundles | wc -l` — the store; then whether THIS image's identity is among them.
 3. The bake job's `bake published: identity=…` versus the instance's `heldReason` identity. Different
    values are the whole bug.
