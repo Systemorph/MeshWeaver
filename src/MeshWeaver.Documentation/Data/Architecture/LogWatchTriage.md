@@ -187,9 +187,21 @@ stands — but only with the second half that this measurement adds:
 > 🚨 **But an outcome read taken right after the remedy cannot see a writer that undoes it later.**
 > It proves the write landed, never that it held. The signature of a remedy that did not hold is the
 > DETECTION REPEATING at an unchanged version on consecutive runs — and once the detection is a
-> Warning and the outcome reads "landed whole", nothing ships that signature to an incident. On an
-> image carrying #4257 without #4292 the flap above would have been completely silent. Before
-> calling a repair successful, look for the same detection on the NEXT run.
+> Warning and the outcome reads "landed whole", nothing ships that signature to an **incident**: the
+> Warning is still in the pod log and still readable through a `Logs` action, but this pipeline
+> ingests `fail:`/`crit:` only, so nothing files it, folds it or reopens on it. On an image carrying
+> #4257 without #4292 the flap above would have kept running with no ticket anywhere. Before calling
+> a repair successful, look for the same detection on the NEXT run.
+
+🚨 **That severity difference is also how you attribute an occurrence to an IMAGE.** The pre-#4257
+line is `fail:` and ends *"…so the install is being REPAIRED rather than skipped (MeshWeaver#3485)."*;
+the post-#4257 line is a Warning and ends *"…Whether the repair worked is reported separately, once
+it has (MeshWeaver#3485)."* So a sample carrying the first sentence was emitted by an image that does
+not contain `83cb0dd932`, whatever its pod name says — measured on this incident 2026-09-16: all ten
+retained samples (occurrences 54→63, through 22:54:35Z) carry it, and the only fleet portal without
+that commit was memex.meshweaver.cloud on core `c84c6c05`. **Read the LINE for the image, the
+`namespace`/`pods` fields for neither** — both portals name their deployment
+`memex-portal-deployment`, so the pod suffix discriminates nothing.
 
 **So the procedure on a reopened auto-filed issue is:**
 
