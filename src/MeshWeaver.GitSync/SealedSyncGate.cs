@@ -136,17 +136,28 @@ public static class SealedSyncGate
         ArgumentNullException.ThrowIfNull(sealedForThisIdentity);
 
         if (RefusedForUnreadableIndex(readOutcome, identity) is { HoldReason: { } unreadable })
-            return new ImportPlan(null, null, unreadable, unreadable,
+            return new ImportPlan(null, null, WithLine(unreadable, newerLine), unreadable,
             [
                 new LogMessage(
                         $"Nothing was imported: the publication index for this instance's framework identity "
                         + $"{identity} could not be read, so the commit its bundles were baked from is unknown.",
                         LogLevel.Warning)
                     .WithKey("activity.gitsync.seal.heldUnreadable", ("identity", identity)),
+                // 🚨 EVERY hold names its direction, this one included (review on #4576). An
+                // unreadable identity directory beside READABLE release markers is exactly the case
+                // where the roll clause is the actionable half — and dropping it here would have made
+                // one of the four holds silent about what releases it.
+                DirectionLine(repo, identity, newerLine),
             ]);
 
+        // 🚨 A REQUESTED REF IS ONLY A COMMIT WHEN IT LOOKS LIKE ONE (review on #4576). `SameCommit`
+        // compares seven-character prefixes, so a branch whose NAME is hex — `abcdef1`, a real and
+        // legal branch name — would be read as the sealed commit: the branch would be fetched with no
+        // redirect, and it could attribute a marker-less seal to this repository. A branch is not a
+        // coordinate; only a commit-shaped ref may take either leg.
+        var requestedCommit = IsFullCommitSha(requested) ? requested : null;
         var mine = sealedForThisIdentity
-            .Where(s => BelongsTo(s, repo, requested, lastSyncSha))
+            .Where(s => BelongsTo(s, repo, requestedCommit ?? "", lastSyncSha))
             .ToList();
         if (mine.Count == 0)
             return new ImportPlan(requested, null, null,
@@ -162,7 +173,7 @@ public static class SealedSyncGate
         }
 
         var commit = adopted.Commit!;
-        if (SameCommit(requested, commit))
+        if (requestedCommit is not null && SameCommit(requestedCommit, commit))
             return new ImportPlan(requested, commit, null,
                 $"'{requested}' is the commit {repo} is sealed at for identity {identity} — imported as asked", []);
 
@@ -524,6 +535,23 @@ public static class SealedSyncGate
         var parts = ownerSlashName.Trim().Split('/', StringSplitOptions.RemoveEmptyEntries);
         return parts.Length == 2 ? new RepoIdentity(parts[0], parts[1]) : new RepoIdentity("", "");
     }
+
+    /// <summary>
+    /// 🚨 Whether a ref a PERSON asked for can be compared to a sealed commit at all: a FULL
+    /// 40-character hex sha, and nothing shorter (review on #4576).
+    ///
+    /// <para><see cref="SameCommit"/> matches on a seven-character prefix, which is right for two
+    /// machine-produced shas and wrong for a ref somebody typed: a branch name may legally be hex,
+    /// so <c>abcdef1</c> — a branch — would have read as the sealed commit, been fetched AS a branch
+    /// with no redirect, and could even have attributed a marker-less seal to this repository. A
+    /// branch is a pointer, not a coordinate, and no shape test can tell the two apart below full
+    /// length. Requiring the full sha costs nothing: a shortened one simply redirects onto the
+    /// sealed commit it names, which is the same tree, and the activity says so.</para>
+    /// </summary>
+    /// <param name="commitish">The ref a caller was asked for.</param>
+    /// <returns>True when it can only be a commit.</returns>
+    internal static bool IsFullCommitSha(string? commitish)
+        => commitish is { Length: 40 } sha && sha.All(char.IsAsciiHexDigit);
 
     internal static bool SameCommit(string? a, string? b) =>
         !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b)
