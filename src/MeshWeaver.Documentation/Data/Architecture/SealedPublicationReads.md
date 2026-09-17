@@ -581,9 +581,17 @@ Stated plainly, because a page that only lists what works is how the next sessio
   with nothing red anywhere. The writer is behind a `publication-layout` selector whose lane
   default moved from `flat` to **`generation`** at phase 4 (2026-09-14), so **every producer now
   writes generations** — core CD's `plugins-bake` by its own explicit input, the six node repos by
-  that default. 🚨 **What still describes what is live on this page is the FLAT COMPATIBILITY COPY**,
-  which every generation publication also writes, in place, exactly as before; the pointer-following
-  reads have moved on. Dropping that copy is phase 5 and is open. **Generation retention — the stated
+  that default. 🚨 **And since phase 5 (2026-09-17) the FLAT COMPATIBILITY COPY is DISPOSED OF
+  rather than rewritten**: once `_current` has moved and been read back, the prefix's own
+  `_complete` is deleted first and then the files it positively identifies, so nothing is written at
+  the prefix in place any more and the window in this section's first paragraph has no subject left.
+  Merely ceasing to refresh it would have been the wrong change — the copy would have stayed sealed
+  and complete while the pointer moved past it, which is a *permanent* stale serve to any reader
+  that cannot follow the pointer. 🚨 **The reading a reader gets from a pointer it cannot follow is
+  therefore no longer a publication**, and the readers that DECIDED on that fall-back rather than
+  serving it were fixed with the same phase (the seal index and the gate that consumes it, the
+  release gate's denominator, the retention identity rules, and the availability gate's wording).
+  **Generation retention — the stated
   precondition on flipping — has landed too**: the portal's own `PrebuiltBundleStore` sweep now
   collects a generation no `_current` names, whose pointer resolved cleanly, whose own seal could be
   read, and that is older than the 30-day window, applying the identity rules' fail-closed discipline
@@ -616,9 +624,11 @@ Stated plainly, because a page that only lists what works is how the next sessio
   above, which also measures the thing the earlier two did not: **every** prefix the two lanes shared
   that day, they shared carrying *different* content, so the sealed-skip cannot separate them and the
   premise of #3461 is confirmed rather than narrowed.
-- **The window itself remains.** In this layout it cannot be removed — in-place replacement means
-  unsealed time, and the alternative is a layout migration every reader must land first (the portal
-  boot seeder, the gate's Azure-direct path, and every pinned satellite workflow copy).
+- **The window itself remains — in THIS layout.** It cannot be removed here: in-place replacement
+  means unsealed time, and the alternative was a layout migration every reader had to land first
+  (the portal boot seeder, the gate's Azure-direct paths, and every pinned satellite workflow copy).
+  That migration is now complete through phase 5, so what is left is the pointer's own one-line
+  write — and an atomic rename would remove even that.
 - 🚨 **THREE Azure-direct readers addressed the PREFIX rather than the publication**, and this
   entry said TWO until 2026-09-14. `compose-sealed-modules.sh` and `node-repo-gate.yml`'s inline
   `download-batch` composed their paths under `prebuilt-bundles/<identity>/<source>/` directly, so
@@ -627,8 +637,10 @@ Stated plainly, because a page that only lists what works is how the next sessio
   upstream gate `main-cd`, `release.yml` and every node repo's `publish-bake` run — which probed the
   prefix's own sentinel and therefore answered *"no sealed publication"* for the ~90 s of every
   generation publish in which the flat compatibility copy is unsealed; routed through the same
-  resolution now. All three are executed by `test-publication-pointer-readers.py` (**18 cases over
-  the three readers**). They are named as phase 3's precondition on
+  resolution now. All three are executed by `test-publication-pointer-readers.py` (**26 cases over
+  the three readers** since phase 5, which added the phase-5 prefix — a pointer, its generation and
+  no flat copy — for each of them, plus the two faulted-pointer cases the availability gate must
+  call CANNOT-DETERMINE rather than an absent upstream). They are named as phase 3's precondition on
   [Sealed Publication Generations](../SealedPublicationGenerations); the publish lane's own two
   readers (`bake-scope.sh`, `carry-forward-bundles.sh`) already resolve it.
 - **The Azure-direct read path carries no generation.** `az storage file download-batch` against the

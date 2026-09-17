@@ -11,8 +11,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 today, and ends with what is **not** closed. This page is that remainder: the layout that closes it,
 what each reader must do, and the order the migration has to land in.
 
-It is a design plus a landed first phase, not a finished migration. Every section says which phase
-it belongs to, and ["Where this stands"](#where-this-stands) says exactly what is live. The order the
+Phases 1, 2, 4 and 5 are landed, and phase 3's pin half is the remainder. Every section says which
+phase it belongs to, and ["Where this stands"](#where-this-stands) says exactly what is live. The order the
 phases have to land in is a property of **who publishes and what they pin**, which is measured
 below rather than assumed.
 
@@ -107,8 +107,8 @@ source directory — see the resolution rules below — so the worst case is:
 
 | phase | a torn pointer read gives | what the reader does |
 |---|---|---|
-| flat copy still present | the previous publication, whole | serves it; correct, just not the newest |
-| flat copy gone | a directory with no `_complete` | "being republished right now" → `503` + `Retry-After`, which every consumer already waits out |
+| flat copy still present (phases 1–4; a prefix nothing has published since) | the previous publication, whole | serves it; correct, just not the newest |
+| flat copy gone (since phase 5) | a directory with no `_complete` | "being republished right now" → `503` + `Retry-After`, which every consumer already waits out — **and, for a reader that DECIDES on the reading rather than serving it, "cannot tell": see [the reader contract phase 5 changes](#-the-reader-contract-phase-5-changes-a-faulted-pointer-is-no-longer-the-flat-copy)** |
 
 So the trade is: **~90 seconds in which a mix can be sealed** becomes **the duration of one small
 file write in which a reader may be told to come back**. The failure *mode* changes, not only its
@@ -296,6 +296,8 @@ neither directory holds a byte of the other, and `_current` names exactly one of
 At `generation` the writer uploads into `<source>/<publication token>/`, verifies there (the #3496
 postcondition still applies, now over a directory nobody else writes), seals it, **also writes the
 flat copy** so a portal image that predates phase 1 keeps working, and moves `_current` last.
+*(Historical, as this phase shipped: since phase 5 the writer DISPOSES of the flat copy instead of
+writing it, once the pointer has moved and been read back.)*
 
 Every read that decides *what is already published* — the architecture marker, the sentinel, the
 source-commit marker, the module index — resolves the pointer first and reads inside the resolved
@@ -337,7 +339,9 @@ green. (`repository.txt` was added under this rule and says so in place.)
   on the flat copy costs the *compatibility copy* (refused, as today, and the run goes red) instead
   of costing a publication that is already whole, sealed and disjoint. Ordering it before would let
   a race on the OLD layout withhold a publication that is correct on the NEW one — which would make
-  flipping a prefix deliver nothing at all until the flat copy is dropped.
+  flipping a prefix deliver nothing at all until the flat copy is dropped. **The same ordering
+  argument carries phase 5's DISPOSAL, which replaced that write**: the flat seal goes only after
+  `_current` has moved and been read back, so at no instant is a reader left with neither.
 - ✅ **Retention landed** — see "Generation retention" above. It was the precondition on flipping:
   generations accumulate at ~45 small files each, and nothing the writer does deletes anything it
   did not create. The collector is the portal's own `PrebuiltBundleStore` sweep, one level down from
@@ -467,7 +471,7 @@ look transient — and the sentences differ by a preposition.
 
 | the message | who prints it | what it means | does re-running help? |
 |---|---|---|---|
-| `no sealed publication **under** <path on the share>` | `check-release-availability.sh` | **since the fix above: a REAL absence.** The probe follows `_current`, so the refresh window can no longer produce it. Before the fix it could be either, and the output did not distinguish them | **no** (post-fix). A run from before the fix may have been the window |
+| `no sealed publication **under** <path on the share>` | `check-release-availability.sh` | **since the fix above: a REAL absence.** The probe follows `_current`, so the refresh window can no longer produce it — and since phase 5 a pointer that EXISTS and cannot be followed is reported as CANNOT DETERMINE instead, so this sentence keeps meaning exactly one thing. Before the fix it could be either, and the output did not distinguish them | **no** (post-fix). A run from before the fix may have been the window |
 | `no SEALED publication **at** <registry URL> … (404)` | `node-repo-gate.yml`'s `upstream_not_ready`, from the registry probe — a **definite** 404, refused immediately on purpose: `408`, `429`, any `5xx` and `000` are retried as transient, and everything else is a decision the registry has already made | the upstream genuinely has **not published** for that framework identity | **no.** Look at whether the upstream's own seal is blocked |
 | `no SEALED publication **under** <account>/<share>/<dir>` | `compose-sealed-modules.sh` | the resolved publication carries no sentinel — pointer-resolved since phase 3 | **no**; not this window |
 
@@ -487,6 +491,10 @@ currently publishing for; a registry 404 names one nothing has published for yet
 before the verb.
 
 ### 🚨 The residual phase 4 does NOT remove: a flat publication beside a generation one
+
+*(Phase 5 removed the refresh this section is about; what survives it is point 2 of
+["The residues, named"](#the-residues-named) below — a flat publication on a prefix with no
+resolvable pointer, which the same guard keeps at zero.)*
 
 Raised by the review of the default move, and real. A generation publication writes its generation,
 moves `_current`, and refreshes the flat compatibility copy **last**. A FLAT publication of the same
@@ -593,22 +601,23 @@ loser leaves the pointer naming a stale generation until that lane publishes aga
 its next merge, so it is self-healing and bounded by one publication rather than permanent. Worth
 knowing before reading such a serve as a defect.
 
-### Phase 5 — drop the flat copy *(open)*
+### Phase 5 — dispose of the flat copy *(landed, 2026-09-17)*
 
-Once no deployed portal predates phase 1. From here the mix is unrepresentable and the republish
-window is gone; what remains is the sub-second pointer write described above, and an atomic rename
-removes even that.
+From here the mix is unrepresentable and the republish window is gone — for every reader, not only
+the pointer-following ones. What remains is the sub-second pointer write described above, and an
+atomic rename would remove even that.
 
-#### What the precondition actually needs, and what was measured for it on 2026-09-14
+#### The precondition, measured on 2026-09-17 — the census, with its denominator
 
 | | reading |
 |---|---|
-| `memex` (memex.systemorph.com) | `/api/version` → `3.0.0+c84c6c05503228860df03c4a8b596e497e6d218c`; `a4109d422` (phase 1) is an ancestor. **Past phase 1.** |
-| `memex-cloud` (memex.meshweaver.cloud) | the same commit. **Past phase 1.** |
-| `build` | `Ops/Status/build` carries a `/health` body reporting framework `sd608997` — the same identity `memex` and `memex-cloud` report. No commit is readable through it, so this rests on identity equality rather than a commit read (see the churn argument below, which is what makes identity equality say something). |
-| `pearl` | **not a deployed portal.** `content.status` is `Provisioning`, `Ops/Status/pearl` reports `replicas: []`, and `pearl.meshweaver.cloud` does not resolve; the record's own notes say the two 2026-09-09 provision runs stopped at step 3 and the next step is still a fresh `Provision` action. Its `pinnedImageTag` is `3.0.0-ci.8080` = `67cbbe0ee` (2026-09-08), which **contains phase 1** — so even once it exists it does not predate it. |
+| `build` | `Ops/Status/build` → `cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411`. **The commit read the 09-14 census owed**: `main-cd` run number 8411 is `c84c6c055`, and `a4109d422` (phase 1) is an ancestor. Past phase 1 on a COMMIT now, not on identity equality. (The mapping is the run number the image tag carries: run 8798 = `43915af5c`, the roll `memex` was on the same day, confirms it.) |
+| `memex` (memex.systemorph.com) | mid-roll: replicas on `3.0.0-ci.8710` = `afde4eabe` and `3.0.0-ci.8798` = `43915af5c`. **Both past phase 1.** |
+| `memex-cloud` (memex.meshweaver.cloud) | `3.0.0-ci.8411` = `c84c6c055` on all four replicas. **Past phase 1.** |
+| `pearl` | now RUNNING (it was `Provisioning` on 09-14): `3.0.0-ci.8080` = `67cbbe0ee`, which **contains phase 1**. |
+| `partnerre` | `status: Planned`, no estate: the record deliberately carries no host, cluster or `pinnedImageTag` until its first infra deploy, and its data lives in PartnerRe's own subscription. It reads nothing on this share. |
 
-🚨 **State the denominator: those are the four `Hosting/Deployment` records on the control instance, and the records are not provably the whole population** — an install that self-updates from the registry and has stopped doing so appears in none of them. The instrument that would name a running image per replica is `Sample`, and on this cluster it is blind ([#4218](https://github.com/Systemorph/MeshWeaver/issues/4218)).
+🚨 **State the denominator: those are the FIVE `Hosting/Deployment` records on the control instance, and the records are not provably the whole population** — an install that self-updates from the registry and has stopped doing so appears in none of them. The instrument that would name a running image per replica is `Sample`, and on this cluster it is blind ([#4218](https://github.com/Systemorph/MeshWeaver/issues/4218)).
 
 #### Why an install that is NOT in the records still cannot be reached — and it is a mechanism, not an inference
 
@@ -624,21 +633,74 @@ This is the part the phase's one-line description hides, and it inverts the fail
 
 The table above says a torn pointer read with the **flat copy gone** finds a directory with no `_complete`, i.e. *"being republished right now"* → `503` + `Retry-After`, which every consumer already waits out. That is correct **only if the copy is actually gone**. A phase 5 that merely stops refreshing it leaves the last flat publication sitting at the prefix, **sealed and complete**, while `_current` keeps moving past it. From then on a torn pointer read resolves to a publication frozen at the day phase 5 landed — self-consistent, sealed, and older every hour. That is a *stale serve with nothing red anywhere*: this issue's own failure mode, reached from the third side, and permanent rather than bounded by one publication.
 
-**So phase 5 has to dispose of the existing copy, and the cheap disposal is the publisher's own, incremental and per prefix:** on a generation publish, instead of refreshing the flat copy, **delete the flat `_complete` first** and then its files. Removing the sentinel is what turns the prefix from *"a complete older publication"* into *"being republished"*, which is the state every reader already handles and the one the design table assumes. It needs no bulk sweep of the share, it happens once per prefix on that prefix's next publication, and a prefix that is never published again keeps its flat copy — which is exactly right, because it is the one an old identity's reader still needs.
+**So phase 5 disposes of the existing copy, and the disposal is the publisher's own, incremental and per prefix:** on a generation publish, instead of refreshing the flat copy, `dispose_flat_copy` **deletes the flat `_complete` first** and then its files. Removing the sentinel is what turns the prefix from *"a complete older publication"* into *"being republished"*, which is the state every reader already handles and the one the design table assumes. It needs no bulk sweep of the share, it happens once per prefix on that prefix's next publication, and a prefix that is never published again keeps its flat copy — which is exactly right, because it is the one an old identity's reader still needs.
 
-Ordering matters and is the same argument as the pointer's: the sentinel goes **after** `_current` has moved, so a reader that resolved early is never left with neither.
+#### What landed, in the order the code runs it
 
-#### What remains before phase 5 can be attempted
+| step | and why it is in that place |
+|---|---|
+| the generation is sealed | unchanged: the #3496 postcondition runs there and refuses, exactly as at phase 4 |
+| `_current` is moved | unchanged |
+| `_current` is **READ BACK** (`pointer_is_live`) and must resolve to a SEALED generation | 🚨 never the upload's exit code. This share has reported SUCCESS for files it did not store (39 of 45, 2026-09-08), and on a prefix being migrated the flat copy is the ONLY sealed publication a reader has — so a pointer that did not land disposes of NOTHING, is not counted as published, and fails the target |
+| the flat `_complete` is deleted, **alone** | the one write that turns a complete older publication into "being republished". If it fails, nothing else is touched and the target fails: a sealed flat copy that is no longer refreshed IS the frozen serve this phase removes |
+| the flat files are deleted (`publish-bake-files.py dispose`) | only files POSITIVELY identified as the flat publication — `*.zip`, `modules/*.module.nupkg`, `modules/_index`, the markers — matched per directory so a pattern can never reach into a generation. An unrecognised file is LEFT and named; the worst case of a narrow pattern is bytes that stay. A failure here is a `::warning::`, not fatal: the prefix is already unsealed, so a left-over is storage, not a publication, and the next publication retries it |
 
-1. **A commit read for `build`** — today it rests on identity equality.
-2. **A decision on the disposal above**, which is a change to a live delivery path and deletes bytes from the production share.
-3. Nothing else: no pinned publisher and no pinned reader of these prefixes exists in the fleet (measured 2026-09-14), and every reader in `src/` degrades an unusable pointer to the source directory.
+🚨 **A SUPERSEDED run disposes of nothing.** `pointer_moved_past_us` returns before the pointer moves, so such a run never reaches the disposal — and it must not: the newer run it lost to owns that prefix, and may be a producer still refreshing the flat copy (a reconcile at an older `platform-ref`) whose seal this run would otherwise tear out from under it.
 
-🚨 **Until then the flat copy is still replaced IN PLACE, so it still races.** Phase 4 removes the
-window for readers that follow the pointer; the compatibility copy the writer keeps making for
-pre-phase-1 images is unsealed, rewritten and re-sealed exactly as today, and can still be sealed as
-a mix. The #3496 postcondition is what covers it, and it covers it only as a postcondition. A report
-that says "the window is closed" at phase 4 is describing the pointer-following readers only.
+**"A reader is never left with neither" is read off the DELETES, not off the code's line order.** `test-publish-bake-overlap.py`'s fake share records, before every delete, what `_current` names, whether that generation is sealed, and whether the flat copy still is — so every line of that log must satisfy *(generation sealed) OR (flat sealed)*, the first line must be the sentinel, and every line after it must show the flat copy already unsealed.
+
+#### 🚨 The reader contract phase 5 changes: a FAULTED pointer is no longer the flat copy
+
+Every reader resolves `_current` and falls back to the source directory when it cannot follow it
+(absent, blank, unreadable, refused, dangling). **Those five used to be one answer** because the
+fall-back landed on the flat copy — a sealed publication. They are now two:
+
+| the pointer | what the fall-back finds | what a reader must do |
+|---|---|---|
+| **absent** | the source directory IS the publication (the flat layout; a prefix nothing has published for yet) | read it, exactly as before |
+| **exists and could not be followed** | nothing sealed — the copy was disposed of | 🚨 **"cannot tell", never "nothing sealed"** |
+
+The readers whose "no sentinel" answer already backs off need no change and got none: the boot
+seeder compiles instead, the registry's prebuilt routes answer `503` + `Retry-After`,
+`compose-sealed-modules.sh` and the gate's `seed` refuse. The three whose answer was PERMISSIVE were
+fixed with this phase:
+
+- **`SealedPublicationIndex.ReadSource`** reported the source unsealed AND unattributable (there are
+  no markers to read either), and `SealedSyncGate` answers an unattributable source with `Go` — for
+  *every* repository, since a source nobody could attribute may be any of them. A faulted pointer
+  with nothing sealed behind it is now `SealedReadOutcome.Unreadable`, which
+  `RefusedForUnreadableIndex` turns into a hold. The two unattended FIRST-IMPORT callers
+  (`ModuleDiscoveryService.FirstImport`, `InstanceAutoRegistrationService`'s boot default install)
+  read the index with `ReadFor`, which discards the outcome, so they would have provisioned a Space
+  from the branch TIP; both now ask `RefusedFirstImportForUnreadableIndex` first.
+- **`PublishedBundleCatalogue.EverSealedBundles`** — the release gate's *denominator* — read the
+  declaration of whatever the fall-back landed on, so a faulted pointer silently dropped that
+  source's packages out of the floor. A smaller floor is the one direction that EXEMPTS a package
+  instead of holding it, so it now refuses (`SealedBundleFloor.Unreadable`).
+- **`PrebuiltBundleRetention`** already kept every GENERATION of such a source; the identity holding
+  them was protected only by "the newest SEALED publication of this source", and such a source now
+  reads unsealed. One more keep rule, with the same sentence: an inventory that could not be read
+  licenses no deletion.
+- **`check-release-availability.sh`** classified it as ABSENT — `no sealed publication under …`, the
+  one message that means *an upstream has not published*, and the wording that held
+  MeshWeaver.Reinsurance 23 times in 24 hours (#3583). It is now CANNOT-DETERMINE, naming the
+  pointer, with the re-run that actually helps.
+
+#### The residues, named
+
+1. **A producer running a pre-phase-5 publisher re-creates the copy.** Core's own `plugins-bake` on
+   a reconcile resolves its scripts at `platform-ref` = the commit it publishes, so an older run
+   refreshes a flat copy that a phase-5 run then disposes of again on the prefix's next publication.
+   It is bounded by one publication and reachable only by a torn pointer read in between.
+2. **A FLAT caller on a prefix with no resolvable pointer still publishes in place.** The lane
+   default is `generation` and `NoCallerInThisRepository_PublishesFlat` keeps the reachable
+   population at zero; #4249 promotes a flat caller that resolves a live `_current` to a generation.
+3. **`MeshWeaver.Education`'s `e2e/mesh/fetch-upstream.sh`** has an Azure-share FALLBACK lane that
+   probes the prefix's own `_complete` and `download-batch`es the prefix recursively. It is taken
+   only when `MW_REGISTRY_URL` is empty, which that repo's own preflight refuses, and it has been
+   flattening generations since phase 4 — so phase 5 turns a silent union into a loud refusal on a
+   lane the repo does not run. Fixing it is a satellite change; it is named here so the next reader
+   of that script knows which phase it predates.
 
 ## If the publication moves to an OCI registry
 
@@ -701,13 +763,13 @@ was ever visible instead of silently shipping a mixed set.
   to what it was.
 - **Phase 3's reader half is landed** — `compose-sealed-modules.sh` and `node-repo-gate.yml`'s
   `seed` resolve the pointer, both are executed by `test-publication-pointer-readers.py`, and
-  `bake-scope.sh --self-test` is wired into CI beside it. Its pin half and **phase 5** are open,
-  tracked on [#3461](https://github.com/Systemorph/MeshWeaver/issues/3461); phase 4 is landed (below).
+  `bake-scope.sh --self-test` is wired into CI beside it. Phase 4 and **phase 5** are landed
+  (below), so the only thing still open on
+  [#3461](https://github.com/Systemorph/MeshWeaver/issues/3461) is its pin half.
   🚨 The sentence that stood here — *"until the writer flips, the window is shrunk, not closed"* — was
-  true before phase 4 and is **half true after it**: the window is closed for readers that follow
-  `_current`, and the flat compatibility copy is still replaced in place, so the publisher's
-  postcondition still carries THAT copy and the interval between its last verification read and the
-  seal is still live there.
+  true before phase 4, half true after it (closed for readers that follow `_current`, live for the
+  flat copy the writer kept refreshing), and is **spent** since phase 5: nothing is written at the
+  prefix itself any more, so there is nothing left there to replace in place.
 - 🚨 **What the postcondition costs while this is open, measured 2026-09-08.** Of 30 core-CD runs,
   9 executed the bake job; of the 9 publications (either lane) that had a same-identity run
   overlapping them in time, **2 failed** — 22%, and both were the two halves of ONE mutual
@@ -727,7 +789,13 @@ was ever visible instead of silently shipping a mixed set.
   is what flips the five single-producer prefixes (`crm`, `education`, `reinsurance`, `socialmedia`,
   `manufacturing`) with no change in their repositories. Every reader that follows `_current` stops
   reading a directory mutated in place, on every prefix. The satellite's own flip is explicitness,
-  not correctness (phase 4 above). **Phase 5 is open.**
+  not correctness (phase 4 above).
+- **Phase 5 is landed** (2026-09-17) — a generation publication DISPOSES of the flat compatibility
+  copy once `_current` has moved and been read back: the seal first, alone, then the files it
+  positively identifies. The precondition was measured on the five `Hosting/Deployment` records the
+  same day, with the commit read `build` owed (`3.0.0-ci.8411` = `c84c6c055`). The readers whose
+  fall-back was permissive were fixed with it — see
+  ["The reader contract phase 5 changes"](#-the-reader-contract-phase-5-changes-a-faulted-pointer-is-no-longer-the-flat-copy).
 - **The precondition on moving the default, measured 2026-09-14 rather than inherited.** The
   prefix-ownership mechanism (#4249) lives in `publish-bake-bundles.sh`, so it is a claim about the
   publisher each producer RUNS. Across `ci.yml` on `main` of all six node repos every `uses:` of a
@@ -735,11 +803,11 @@ was ever visible instead of silently shipping a mixed set.
   `publication-layout`; and `publish-bake-bundles.sh` is named in exactly one satellite file, in a
   comment — nothing in the fleet invokes it outside the lane. So there is no pinned publisher and no
   pinned reader of any of these prefixes, and moving the default reaches all six producers at once.
-- **Moving the default is safe for a portal of ANY age, which is what separates phase 4 from phase
-  5.** A generation publication still writes the flat compatibility copy, so a reader that cannot
-  resolve `_current` — a portal image predating phase 1, or a torn pointer read on any image — is
-  served exactly what it was served before. Phase 5 is the change that has a portal-age
-  precondition; phase 4 does not.
+- **Moving the default was safe for a portal of ANY age, which is what separated phase 4 from phase
+  5.** A phase-4 generation publication still wrote the flat compatibility copy, so a reader that
+  could not resolve `_current` — a portal image predating phase 1, or a torn pointer read on any
+  image — was served exactly what it was served before. Phase 5 is the change that HAS a portal-age
+  precondition, which is why it carries a census of the deployment records rather than an argument.
 - **The measurement the flip waited on.** Measured over
   2026-09-12T08:00Z → 09-13T08:00Z, every `plugins` publish job of both lanes: core `plugins-bake`
   **25** executed (23 sealed), Plugins `publish-bake` **10** (8 sealed); **62 of 62** target
@@ -751,11 +819,13 @@ was ever visible instead of silently shipping a mixed set.
   and the interval between the two merges cannot produce a stale serve. What phase 3 removed was the
   reason a flip could not be attempted at all; what #4249 removed is the reason it had to be
   attempted atomically across two repositories; core's half is now merged.
-- 🚨 **Flipping `plugins` does not by itself stop the publish reds.** The flat compatibility copy is
-  still replaced in place and still races, so an overlap still costs that copy and still fails the
-  job — the postcondition covering it is unchanged. What the flip buys immediately is that the
-  *publication* survives an overlap intact and pointed-to instead of being lost. The reds go when the
-  flat copy does (phase 5), or when the publication moves to digest-addressed artifacts.
+- 🚨 **Flipping `plugins` did not by itself stop the publish reds — phase 5 is what did.** While the
+  flat compatibility copy was still replaced in place, an overlap cost that copy and failed the job,
+  with the postcondition carrying it exactly as before; the flip bought only that the *publication*
+  survived an overlap intact and pointed-to instead of being lost. Since phase 5 the two runs of an
+  overlap share NO directory at all, so both succeed — asserted on the interleaved case in
+  `test-publish-bake-overlap.py`, which now reads the inner run's receipt as well as the outer's
+  exit code.
 - **What the postcondition costs in TIME, and the 2026-09-08 change to it.** The sweep used to be
   one `az storage file show` process per file on top of one `az storage file upload` process per
   file — **184 CLI launches for two targets**, 5–10 minutes of every bake. It is now one process per
@@ -770,9 +840,9 @@ was ever visible instead of silently shipping a mixed set.
 
 ## Verification
 
-- `.github/scripts/test-publish-bake-overlap.py` — **98 assertions, 98 passed / 0 failed**
-  (measured 2026-09-14 on the phase-4 default change; it was 90 at #4249 and gained the
-  pointer-ordering case and its `gh` compare stub in #4273), executing the REAL publish
+- `.github/scripts/test-publish-bake-overlap.py` — **136 assertions, 136 passed / 0 failed**
+  (measured 2026-09-17 on phase 5; it was 105 before it, 98 at the phase-4 default move, 90 at
+  #4249), executing the REAL publish
   script against a stub share (the stub `az` for the per-target decisions, a fake share backend for
   the bulk helper's uploads and read-back) and reading every verdict off the BYTES. The writer half is covered by
   seven generation cases: one publisher writes and seals under its own token and the pointer names it;
@@ -797,6 +867,26 @@ was ever visible instead of silently shipping a mixed set.
   98/0 before and after. The phase-4 default itself is guarded in C#, not here —
   `NodeRepoLaneHostGuard.ThePublishBakeLane_DefaultsToTheGenerationLayout`, watched failing in both
   directions (default reverted to `flat`; the step's `BAKE_PUBLICATION_LAYOUT` export removed).
+  *(phase 5, the disposal)* **six** negative controls, each one mutation, each run against the same
+  136 assertions: the publisher at `origin/main`, which still refreshes the copy, **19 fail**;
+  disposing BEFORE the pointer moves, **7** (including every "a reader is never left with neither"
+  line); the files deleted before the seal, **3**; the pointer read-back removed, **2**; a superseded
+  run that disposes too, **2**; and the per-target subshell put back in an `if` CONDITION, **4** —
+  that last one is the pre-existing defect phase 5 found: bash suspends `set -e` for a subshell run
+  as a condition, so from #2682 every "fatal by `set -e`" inside a target was a no-op, and a failed
+  `_complete` upload printed "sealed:" while a failed pointer move printed "this publication is now
+  the live one". The disposal's own evidence is the fake backend's delete log, which records what
+  `_current` names and whether each copy is sealed BEFORE every delete.
+- `.github/scripts/test-publication-pointer-readers.py` — **26 cases over three readers** (was 18):
+  the phase-5 prefix — a pointer, its generation, and NO flat copy — for `compose-sealed-modules.sh`,
+  the gate's `seed` and `check-release-availability.sh`; a dangling and a blank pointer over that
+  prefix, which the availability gate must call CANNOT-DETERMINE rather than an absent upstream; and
+  the control that a prefix with no pointer and nothing sealed is still reported ABSENT. Against
+  `origin/main`'s availability gate **2 of the 26 fail**, both of them those two.
+- `AnUnreadableSealIndexHoldsTest` (7, was 4), `PrebuiltBundleRetentionTest` (53, was 51) and
+  `ReleaseGateDenominatorTest` (9, was 7) carry phase 5's reader half, each new case with its
+  control on the same fixture and each watched failing with its own fix reverted (1 of 7, 1 of 53,
+  1 of 9).
 - `bake-scope.sh --self-test` — four pointer-resolution assertions, and the positive one is
   discriminating by construction: the flat copy and the generation record *different* baselines (a
   diverged commit versus an ancestor), so the verdict itself says which was read. A resolver that
