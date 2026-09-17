@@ -72,5 +72,5 @@ must be rechecked before enabling admission. A failed check-post must not be rec
 admission, and a full build portal must not be treated as a healthy queue merely because its pod
 is Ready.
 
-See [CI artifact storage](CiArtifactStorage.md) for the dated billing evidence and the lower-level
+See [CI artifact storage](../CiArtifactStorage) for the dated billing evidence and the lower-level
 object-store design. Deployment-specific shared-volume bindings belong in Systemorph/Memex.

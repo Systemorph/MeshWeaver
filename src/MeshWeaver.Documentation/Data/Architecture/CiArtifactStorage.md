@@ -16,7 +16,7 @@ positive Actions budget does not enforce self-hosted-only execution. What is sti
 > · *"disable for any private repo"* · *"and when free capacity gone => defer to our infra"*.
 
 The object-store changes described below do **not** by themselves remove every GitHub artifact
-handoff. [PR artifacts on our infrastructure](OwnPrArtifacts.md) documents the named-artifact
+handoff. [PR artifacts on our infrastructure](../OwnPrArtifacts) documents the named-artifact
 adapter, partial-rerun contract, shared-mount proof and remaining rollout gates. Do not treat a
 declared store variable, an admission check or an extra durable copy as proof of zero uploads.
 
