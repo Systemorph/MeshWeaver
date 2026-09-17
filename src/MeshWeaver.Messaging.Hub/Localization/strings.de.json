@@ -1615,5 +1615,8 @@
   "notification.delivery.compiled.title": "'{typeName}' aus der aktuellen Quelle kompiliert",
   "notification.delivery.compiled.body": "'{nodeTypePath}' wurde aus der aktuellen Quelle kompiliert (Fingerabdruck {fingerprint}); der bisher ausgelieferte Build ist stillgelegt.",
   "notification.delivery.heldIncompatible.title": "'{typeName}' wartet auf ein Bundle (inkompatibler Build)",
-  "notification.delivery.heldStale.title": "'{typeName}' liefert seinen letzten Build aus; die Quelle ist weitergezogen"
+  "notification.delivery.heldStale.title": "'{typeName}' liefert seinen letzten Build aus; die Quelle ist weitergezogen",
+  "layout.areaNotFound.title": "Dieser Abschnitt konnte nicht angezeigt werden.",
+  "layout.areaNotFound.pageUnaffected": "Der Rest dieser Seite ist davon nicht betroffen.",
+  "layout.areaNotFound.details": "Technische Details"
 }

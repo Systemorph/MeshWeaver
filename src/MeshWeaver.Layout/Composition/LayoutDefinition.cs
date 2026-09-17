@@ -195,8 +195,11 @@ public record LayoutDefinition(IMessageHub Hub)
         var applicable = rendererList.ToImmutable();
 
         if (applicable.Count == 0)
-            // No renderer for this area at all — surface a visible placeholder.
-            return Observable.Return(NotFound(host, context, store));
+            // No renderer for this area at all — surface a visible placeholder. Localized inline
+            // here, unlike the terminal fallback below: this branch runs synchronously inside
+            // Render, so the host's scope is alive by construction and there is no teardown window
+            // to cross.
+            return Observable.Return(NotFound(host, context, store, NotFoundText(host)));
 
         // Compose the applicable renderers. ONE in the common case (a single named area, or a single
         // predicate match); SEQUENTIALLY when several apply (a named area PLUS the predicate menu, or
@@ -244,6 +247,18 @@ public record LayoutDefinition(IMessageHub Hub)
 
         return Observable.Create<EntityStoreAndUpdates>(observer =>
         {
+            // 🚨 LOCALIZED HERE, WHILE THE SCOPE IS ALIVE — never inside the completion handler
+            // below. `host.Localize` is a DI resolve off the host's Autofac scope, and the
+            // completion that decides the placeholder can arrive DURING that scope's teardown: the
+            // render faults on the disposed scope, completes, and the placeholder is built on a
+            // scope that no longer resolves anything. That is the second ObjectDisposedException of
+            // #2679 — the one that left the user with neither the area nor a message — and moving
+            // the reader's sentence into this frame walked straight back into it
+            // (ScopeTeardownRenderTest caught it; the stack was Localize → BuildNotFoundControl →
+            // AppendNotFound → the OnCompleted below). Subscribe-time is the last moment the scope
+            // is guaranteed live, the strings are three dictionary lookups, and the frame that
+            // needs them then needs nothing but memory.
+            var notFoundText = NotFoundText(host);
             var areaProduced = false;
             EntityStoreAndUpdates? last = null;
             return composed.Subscribe(
@@ -259,43 +274,82 @@ public record LayoutDefinition(IMessageHub Hub)
                 {
                     if (!areaProduced)
                         observer.OnNext(last is null
-                            ? NotFound(host, context, store)
-                            : AppendNotFound(last, host, context));
+                            ? NotFound(host, context, store, notFoundText)
+                            : AppendNotFound(last, host, context, notFoundText));
                     observer.OnCompleted();
                 });
         });
     }
+
+    /// <summary>
+    /// The reader-facing half of the area-not-found frame, in the viewer's language, resolved while
+    /// the host's scope is still alive. See the call site for why it is not resolved on demand.
+    /// </summary>
+    /// <param name="host">The rendering host, whose AccessContext carries the viewer's language.</param>
+    /// <returns>The title, the reassurance and the disclosure summary.</returns>
+    private static (string Title, string Unaffected, string Details) NotFoundText(LayoutAreaHost host)
+        => (host.Localize("layout.areaNotFound.title"),
+            host.Localize("layout.areaNotFound.pageUnaffected"),
+            host.Localize("layout.areaNotFound.details"));
 
     /// <summary>True when the produced store carries a control at <c>/areas/{area}</c>.</summary>
     private static bool StoreHasArea(EntityStore store, string area) =>
         store.Collections.GetValueOrDefault(LayoutAreaReference.Areas)?.Instances.ContainsKey(area) == true;
 
     /// <summary>
-    /// The visible "Area not found" placeholder control — shown instead of an eternal spinner when no
-    /// renderer produced content for the requested area. Lists the hub's named areas to aid diagnosis.
+    /// The visible placeholder shown instead of an eternal spinner when no renderer produced
+    /// content for the requested area: ONE localized sentence for whoever is reading the page,
+    /// and the framework diagnostic — area, hub, the hub's named areas — folded away beneath it.
     ///
-    /// <para>🚨 Carries <see cref="AreaFrameClassifier.AreaNotFoundId"/> as its
+    /// <para>🚨 <b>This lands INSIDE a business document, not only on a developer's page.</b> A
+    /// node page embeds other packages' areas by reference — <c>MarkdownOverviewLayoutArea</c>'s
+    /// approvals and signatures sections are two — and each guard asks the mesh INDEX whether the
+    /// package's desk node exists, which it cannot ask about the replica that ends up answering.
+    /// When those disagree (exactly what a mid-roll produces: the desk's NodeType assembly is
+    /// stamped with a framework identity the serving replica does not run, so its areas are never
+    /// registered) a reader of a customer letter got sixty framework area names in the middle of
+    /// it. Measured 2026-09-17 on memex.systemorph.com,
+    /// <c>CollaborationNotus/PrereadToNotus20260918</c>.</para>
+    ///
+    /// <para>🚨 <b>The diagnostic stays English, and stays present.</b> It is operator copy, not UI
+    /// copy — <see cref="AreaFrameClassifier"/> says so and depends on it: its fallback recognises
+    /// this frame by the literal <c>**Area not found**</c> marker for a control that lost its id on
+    /// the way over. Localizing the whole body would have broken that, so the reader's sentence is
+    /// ADDED in front rather than substituted, and the marker is kept verbatim.</para>
+    ///
+    /// <para>🚨 The control still carries <see cref="AreaFrameClassifier.AreaNotFoundId"/> as its
     /// <see cref="UiControl.Id"/> so a consumer can tell this VERDICT ("nothing will ever render
     /// here") apart from the compile-progress PROMISE an instance serves while its NodeType is
-    /// still building — the two are indistinguishable to anything that only reads the prose.
-    /// Keep the id stable; the markdown is free to change.</para>
+    /// still building — the two are indistinguishable to anything that only reads the prose. Keep
+    /// the id and the marker stable; the prose around them is free to change.</para>
+    ///
+    /// <para>The sentence deliberately does NOT say "temporary" or "does not exist". This frame is
+    /// classified as a verdict, and its causes genuinely differ — a module not loaded here, an area
+    /// renamed, an embed naming an area that never existed. Telling the reader which one it is
+    /// would be a guess; telling them the rest of the page is intact is not.</para>
     /// </summary>
-    private MarkdownControl BuildNotFoundControl(LayoutAreaHost host, object area)
+    private MarkdownControl BuildNotFoundControl(
+        LayoutAreaHost host, object area, (string Title, string Unaffected, string Details) text)
     {
         var availableAreas = NamedRenderers.Keys.OrderBy(k => k).ToArray();
         var availableLine = availableAreas.Length == 0
             ? "_no named areas registered on this hub_"
             : "Available named areas: " + string.Join(", ", availableAreas.Select(a => $"`{a}`"));
         return new MarkdownControl(
-            $"**Area not found**\n\nNo renderer is registered for area `{area}` on hub `{host.Hub.Address}`.\n\n{availableLine}")
+            $"{text.Title}\n\n{text.Unaffected}\n\n"
+            + $"<details><summary>{text.Details}</summary>\n\n"
+            + $"**Area not found**\n\nNo renderer is registered for area `{area}` on hub `{host.Hub.Address}`.\n\n"
+            + $"{availableLine}\n\n</details>")
         {
             Id = AreaFrameClassifier.AreaNotFoundId
         };
     }
 
-    private EntityStoreAndUpdates NotFound(LayoutAreaHost host, RenderingContext context, EntityStore store)
+    private EntityStoreAndUpdates NotFound(
+        LayoutAreaHost host, RenderingContext context, EntityStore store,
+        (string Title, string Unaffected, string Details) text)
     {
-        var notFound = BuildNotFoundControl(host, context.Area);
+        var notFound = BuildNotFoundControl(host, context.Area, text);
         return new EntityStoreAndUpdates(
             store.Update(LayoutAreaReference.Areas, coll => coll.SetItem(context.Area, notFound)),
             [new EntityUpdate(LayoutAreaReference.Areas, context.Area, notFound)],
@@ -307,9 +361,11 @@ public record LayoutDefinition(IMessageHub Hub)
     /// (preserving the menu and any other sidecar content), for the case where applicable renderers
     /// ran but none produced the requested area's control.
     /// </summary>
-    private EntityStoreAndUpdates AppendNotFound(EntityStoreAndUpdates result, LayoutAreaHost host, RenderingContext context)
+    private EntityStoreAndUpdates AppendNotFound(
+        EntityStoreAndUpdates result, LayoutAreaHost host, RenderingContext context,
+        (string Title, string Unaffected, string Details) text)
     {
-        var notFound = BuildNotFoundControl(host, context.Area);
+        var notFound = BuildNotFoundControl(host, context.Area, text);
         return new EntityStoreAndUpdates(
             result.Store.Update(LayoutAreaReference.Areas, coll => coll.SetItem(context.Area, notFound)),
             result.Updates.Append(new EntityUpdate(LayoutAreaReference.Areas, context.Area, notFound)),
