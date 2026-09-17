@@ -94,7 +94,7 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
         if (!string.IsNullOrEmpty(context.Node.Namespace))
             return Observable.Return(NodeValidationResult.Valid());
 
-        return PartitionOwningTypes.OwnsPartition(_hub, context.Node.NodeType)
+        return PartitionOwningTypes.OwnsPartitionOnce(_hub, context)
             .SelectMany(owns => owns switch
             {
                 true => Provision(context),
