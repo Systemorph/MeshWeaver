@@ -501,11 +501,22 @@ jobs:
             # bash, so it would have worked here — and that is precisely the kind of difference
             # that makes a shell bug survive review and surface somewhere else. Reading line by
             # line is unambiguous in every shell.
+            # 🚨 `check_name=` — ASK THE API FOR THE CHECK, never filter a page of them in jq.
+            # `commits/<sha>/check-runs` pages at 100 and this repository puts FAR more than 100
+            # check-runs on a main commit (every workflow, every matrix leg, both probes, the
+            # combo verdict). Measured 2026-09-17 on `be8f452` (main's tip, 278 check-runs): page 1
+            # holds ZERO `Consolidate test results` and page 3 holds its two — so the unfiltered
+            # read answered `absent/none` for a commit whose required check had been green since
+            # 22:41Z, the walk skipped the tip, and every reconcile for six hours targeted its
+            # PARENT instead. That parent then spent its 3 heal attempts and delivery stopped with
+            # main green (#4526). The failure grows with the repository's own check volume, which
+            # is why it appeared now and why a bigger `per_page` is not the fix. `check_name`
+            # filters SERVER-side, so the answer cannot be truncated away.
             sha="$tip"
             while IFS= read -r candidate; do
               [ -n "$candidate" ] || continue
               read -r c_status c_concl < <(gh api \
-                "repos/${{ github.repository }}/commits/$candidate/check-runs?per_page=100" \
+                "repos/${{ github.repository }}/commits/$candidate/check-runs?per_page=100&check_name=Consolidate%20test%20results" \
                 --jq '[.check_runs[] | select(.name=="Consolidate test results")]
                       | sort_by(.started_at) | last // {}
                       | "\(.status // "absent") \(.conclusion // "none")"')
@@ -542,7 +553,10 @@ jobs:
           # which is indistinguishable from "never ran" if you only read the conclusion — and the
           # reconciler draws opposite conclusions from those two ("wait" vs "main cannot ship").
           # Sorted by started_at, not completed_at: an in-progress run has no completed_at.
-          read -r status concl < <(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100" \
+          # 🚨 `check_name=` for the same reason as the walk above: an unfiltered page of 100 is
+          # not the commit's check-runs on a busy main, and a truncated read here says `absent`
+          # about a check that is green (#4526).
+          read -r status concl < <(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100&check_name=Consolidate%20test%20results" \
             --jq '[.check_runs[] | select(.name=="Consolidate test results")]
                   | sort_by(.started_at) | last // {}
                   | "\(.status // "absent") \(.conclusion // "none")"')
@@ -1042,6 +1056,15 @@ jobs:
     needs: gate
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    # 🚨 30 minutes covers what this job now does, and the cr mirror moved OUT of it on purpose
+    # (`portal-image-mirror` below). Measured on the last run that finished (#8767, 2026-09-16):
+    # build + push the multi-arch image to ACR 20.8 min, identity readback and the reference-set
+    # gate 0.4 min — and then 7.5 min of mirroring a 2 GiB manifest to cr.meshweaver.cloud, which
+    # took the job to 28.7 min against this 30-minute cap. One minute of headroom is not headroom:
+    # on the night of 2026-09-16→17 three consecutive reconciles (attempts 1/3, 2/3 and 3/3 for
+    # `03919a6`) were killed at exactly 30:00 with the mirror still copying, `promote` never ran,
+    # and the heal budget was spent on runs that were progressing normally (#4526). Two jobs, two
+    # budgets — not one bigger number.
     timeout-minutes: 30
     outputs:
       version: ${{ steps.vars.outputs.version }}
@@ -1245,22 +1268,8 @@ jobs:
           done
           echo "::error::portal-ai publish failed on all 3 attempts with no compiler diagnostics — read the LAST attempt's output above. A registry blob-upload failure there (the CONTAINER-10xx family) means the connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
           exit 1
-      # 🚨 THE SAME MANIFEST, TO THE FLEET'S OWN REGISTRY — right after the ACR push, in this job
-      # (Doc/Architecture/ContainerRegistryInMemex). Still the staging tag only: a name no consumer
-      # selects, on cr exactly as on ACR, so the all-or-nothing gate `promote` applies is unchanged
-      # — promote mirrors every consumer-visible tag to cr the same way. The digest is read BACK
-      # off cr and compared to ACR's; a mismatch fails this leg RED, because a digest-pinned
-      # consumer (MW_IMAGE_DIGEST, platform-image-digest) must resolve the identical object on
-      # either registry. Login is by the publisher account; its password is asserted by preflight.
-      - name: Log in to the fleet registry (publisher)
-        env:
-          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
-        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
-      - name: Mirror portal-ai (staging tag) to the fleet registry — same manifest, digest verified
-        run: >
-          .github/scripts/mirror-image-to-registry.sh
-          "${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
-          "${{ env.REGISTRY }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
+      # 🚨 The mirror of this manifest to the fleet registry is `portal-image-mirror`, a job of its
+      # own — it used to be two steps here, and see this job's `timeout-minutes` for what that cost.
       # 🚨 The publish SUCCEEDING is not evidence the image identifies itself correctly — that is
       # exactly the state that shipped for a week (see the version note above). So the version is
       # read back out of the pushed image config, per architecture, before anything selectable is
@@ -1322,6 +1331,61 @@ jobs:
           for d in "${dirs[@]}"; do
             .github/scripts/check-platform-reference-set.sh "$d" .github/workflows/main-cd.yml
           done
+
+  # 🚨 THE SAME MANIFEST, TO THE FLEET'S OWN REGISTRY (Doc/Architecture/ContainerRegistryInMemex),
+  # in a job of its own with a budget of its own. Still the staging tag only: a name no consumer
+  # selects, on cr exactly as on ACR, so the all-or-nothing gate `promote` applies is unchanged —
+  # promote mirrors every consumer-visible tag to cr the same way. The digest is read BACK off cr
+  # and compared to ACR's; a mismatch fails this leg RED, because a digest-pinned consumer
+  # (MW_IMAGE_DIGEST, platform-image-digest) must resolve the identical object on either registry.
+  #
+  # 🚨 WHY IT IS NOT A STEP OF `portal-image` any more. It was, and the two shared one 30-minute
+  # cap: 20.8 min of build and ACR push plus 7.5 min of mirroring left ~1 minute of headroom
+  # (#8767, the last run that finished). On 2026-09-16→17 the mirror ran 9.7, 9.7 and 11.5 minutes
+  # in three consecutive reconciles and every one of them was killed at exactly 30:00 with the copy
+  # still in flight — so `promote` never ran, the image set stayed incomplete, and the reconciler's
+  # 3-attempt heal budget was spent on runs that were progressing normally. Delivery stopped with
+  # main green (#4526). The fix is two budgets, not a bigger one: a build that overruns and a
+  # mirror that overruns are different faults and now fail as different jobs, each naming itself.
+  #
+  # 🚨 `promote` needs THIS job, so the ordering the old step gave for free is kept: nothing
+  # consumer-visible is tagged until cr holds the identical manifest. 25 minutes is ~3× the
+  # measured copy; reaching it means the copy is STUCK, not slow (AGENTS.md) — read the registry,
+  # never this number.
+  portal-image-mirror:
+    name: "Mirror portal-ai to the fleet registry"
+    needs: [gate, portal-image]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      # Sparse: this job needs the two registry-login scripts and the mirror script, not the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # buildx reads registry credentials from ~/.docker/config.json, which is what both of these
+      # logins write — one store, both registries. The ACR side is the SOURCE of the copy.
+      - name: ACR login
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
+      - name: Log in to the fleet registry (publisher)
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      - name: Mirror portal-ai (staging tag) to the fleet registry — same manifest, digest verified
+        run: >
+          .github/scripts/mirror-image-to-registry.sh
+          "${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
+          "${{ env.REGISTRY }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
 
   migration-image:
     name: "Build + push migration image"
@@ -1555,7 +1619,7 @@ jobs:
 
   promote:
     name: "Promote: tag the full set (all-or-nothing)"
-    needs: [gate, portal-image, migration-image, plugin-test-image]
+    needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -2974,7 +3038,7 @@ jobs:
 
   verify-images:
     name: "Verify every image shipped"
-    needs: [gate, portal-image, migration-image, plugin-test-image, promote]
+    needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote]
     if: always() && needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -3129,7 +3193,7 @@ jobs:
     name: "CD delivered, or had a good reason not to"
     # 🚨 Every delivery leg is a NEED, not just [gate, promote]. The verdict cannot assert that a
     # publish actually happened while it can only see two of the nine jobs that make it happen.
-    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote,
+    needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote,
             publish-bake, notify-platform-update, verify-images,
             plugins-modules, plugins-bake-image, plugins-bake,
             satellite-compat-image, satellite-compat]
@@ -3358,6 +3422,7 @@ jobs:
           LEGS: >-
             preflight=${{ needs.preflight.result }}
             portal-image=${{ needs.portal-image.result }}
+            portal-image-mirror=${{ needs.portal-image-mirror.result }}
             migration-image=${{ needs.migration-image.result }}
             plugin-test-image=${{ needs.plugin-test-image.result }}
             promote=${{ needs.promote.result }}
@@ -3549,7 +3614,7 @@ jobs:
     # per-build compatibility measurement that replaced the per-build satellite wave, it does not
     # block the publish, and a red nobody is paged for is the 03:00 discovery it exists to prevent.
     # Its verdict artifacts are read below so the alert names the satellite and the types.
-    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote, verify-images, publish-bake, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
+    needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote, verify-images, publish-bake, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
