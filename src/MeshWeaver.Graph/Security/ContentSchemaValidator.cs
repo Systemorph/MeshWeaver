@@ -128,7 +128,11 @@ public sealed class ContentSchemaValidator : INodeValidator
         var options = _hub.JsonSerializerOptions;
         try
         {
-            JsonSerializer.Deserialize(content.GetRawText(), declared, options);
+            // Deserialise from the ELEMENT, not from GetRawText(): the raw text would allocate the
+            // whole payload as a string and reparse it on every judged write, and every consumer
+            // that binds a JsonElement here (MeshContentTypeRegistry.Materialize, ContentAs<T>)
+            // already reads it directly (review on #4624).
+            content.Deserialize(declared, options);
         }
         catch (JsonException ex) when (MemberOf(ex.Path) is { } member)
         {

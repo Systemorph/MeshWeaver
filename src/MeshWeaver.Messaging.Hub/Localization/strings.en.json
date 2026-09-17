@@ -94,7 +94,7 @@
   "access.partitionCreate.ownerUnestablished": "'{0}' could not be set up as a partition: whether '{1}' owns its partition could not be established, so no owner was granted. Please try again.",
   "access.partitionCreate.noCreator": "Cannot create '{0}' without a signed-in creator to make its owner.",
   "access.partitionCreate.nestedOwningType": "Cannot create '{0}': a '{1}' owns its partition, so it must be created at the top level, where its path is just its id ('{2}') — not under '{3}'.",
-  "content.schema.memberTypeMismatch": "Cannot write '{0}': the content member '{1}' is declared {2} on '{4}' (the content type of NodeType '{5}'), but a JSON {3} was given. Content that contradicts its declared type is stored exactly as sent and then reads as absent everywhere — the page would show an empty node over it. Correct '{1}' and send the write again.",
+  "content.schema.memberTypeMismatch": "Cannot write '{0}': the content member '{1}' is declared as {2} on '{4}' (the content type of NodeType '{5}'), but a JSON {3} was given. Content that contradicts its declared type is stored exactly as sent and then reads as absent everywhere — the page would show an empty node over it. Correct '{1}' and send the write again.",
   "content.schema.noDeclaredMember": "Cannot write '{0}': not one of the content's members ('{1}') is declared by '{2}', the content type of NodeType '{3}'. The content would be stored exactly as sent and then read as an empty node, because nothing in it can be matched. Declared members are: '{4}'.",
   "error.userActionNotRun": "Your last action (“{0}”) did not run — the view it was sent from had already closed. Nothing was changed; please try again.",
   "error.deserializationFailed": "Content could not be deserialized",
