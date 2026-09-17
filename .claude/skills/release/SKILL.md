@@ -289,12 +289,15 @@ against the run's "Resolve the target commit" job output — never against the r
 
 🚨 **And the running IMAGE is still not the served ANSWER.** *"The grain keeps serving old state
 until we send a dispose request"* (maintainer, 2026-09-17): a per-node hub binds its configuration
-once at activation and is pinned by address, so an address already up after the roll keeps answering
-from what it bound — and `Modules:AutoRecycleOnStaleBuild` is OFF by default, so a portal is a
-mixture of old and new assemblies for as long as viewers do not click the stale-build banner.
-Exercise the feature at the running address; recycle the addresses that still answer the old way and
-name them. A recycle makes the activation re-read, it does not change what the re-read finds — so a
-second one that answers the same is a delivery question, not an activation one. Full reference:
+once at activation and is pinned by address. A roll ends the activations on the pods it replaces, so
+the gap is not the roll itself — it is everything a portal absorbs **while it keeps running** (a
+package published or installed, a NodeType recompiled in place) and what a fresh activation then
+chooses. Whether an instance converges on a newly published build is `Modules:AutoRecycleOnStaleBuild`,
+and the code default (**off** — only a banner, so viewers must click) is NOT what the AKS chart sets
+(**true**, fleet-wide): read the effective value rather than either. Exercise the feature at the
+running address; recycle the addresses that still answer the old way and name them. A recycle makes
+the activation re-read, it does not decide what the re-read finds — so a second one that answers the
+same is a delivery question, not an activation one. Full reference:
 [StaleStateUntilRecycle.md](../../../src/MeshWeaver.Documentation/Data/Architecture/StaleStateUntilRecycle.md).
 
 ## Pipeline files (edit here to change the pipeline)

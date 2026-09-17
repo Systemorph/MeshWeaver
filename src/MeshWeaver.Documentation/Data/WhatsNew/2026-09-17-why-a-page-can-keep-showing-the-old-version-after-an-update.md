@@ -14,11 +14,10 @@ code behind that type — **once, when it starts**, and holds on to it. New cont
 writes still reaches it immediately; that is why editing and chat never need anything special. But a
 new *build* of the code behind a node does not, because the worker never looks again.
 
-So an update can be finished everywhere it is measured — built, published, rolled out, the new
-version showing in the portal's own version line — and a node someone already had open keeps
-answering exactly as it did before, with nothing anywhere reporting a problem. The remedy is the
-**Recycle** action on that node: it stops the worker, and the next visit starts a fresh one that
-reads everything again.
+So an update can be finished everywhere it is measured — built, published, installed, showing in the
+portal's own version line — and a node whose worker was already running keeps answering exactly as it
+did before, with nothing anywhere reporting a problem. The remedy is the **Recycle** action on that
+node: it stops the worker, and the next visit starts a fresh one that reads everything again.
 
 The new page [Stale State Until a Recycle](/Doc/Architecture/StaleStateUntilRecycle) writes this
 down in one place: what a worker holds on to and what stays live, when the portal offers you a

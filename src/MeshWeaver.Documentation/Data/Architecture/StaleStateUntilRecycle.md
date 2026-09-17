@@ -17,12 +17,19 @@ is activating, and is then pinned by address. `MeshNodeHubFactory` says so at th
 > re-reads the NodeType for the hub's whole lifetime**."*
 > — `src/MeshWeaver.Graph/Configuration/MeshNodeHubFactory.cs`
 
-A merged pull request, a published bake, a new image, a rolled deployment and even a pod restart all
-change what the **next** activation would load. An address that is already up is untouched by every
-one of them, and the failure has no signal of its own: no error, no warning, no log line, nothing to
-grep. The address answers promptly and answers the old thing. That is the missing half of three
-recurring stories — *"merged and rolled is not loaded"*, *"the NodeType recompiled but the hub still
-serves the previous assembly"*, and *"the fix is in the image and invisible in the running mesh"*.
+Every change a portal absorbs **while it keeps running** — a merge that syncs in, a package installed
+or updated, a NodeType recompiled in place, a new build published — changes what the **next**
+activation would load, and reaches a live one through nothing at all. The failure has no signal of
+its own: no error, no warning, no log line, nothing to grep. The address answers promptly and
+answers the old thing. That is the missing half of three recurring stories — *"merged and rolled is
+not loaded"*, *"the NodeType recompiled but the hub still serves the previous assembly"*, and *"the
+fix is in the image and invisible in the running mesh"*.
+
+🚨 **A pod restart or a roll is NOT in that list, and saying otherwise is the easy overstatement.**
+Restarting a pod tears down every activation it hosts, so those addresses re-activate and re-read on
+their next access; a roll replaces the pods and does the same. What a roll leaves open is the
+*second* half of this page — what the fresh activation then **chooses** — plus anything that was
+pinned at process start. The gap this page is about is the running portal, not the restarted one.
 
 ## What an activation pins, and what stays live
 
@@ -40,8 +47,16 @@ without anyone recycling anything. See
 | The **NodeType binding** the hub was born with | Resolved once in `MeshNodeHubFactory.ResolveHubConfiguration`, then short-circuited by `HostedHubsCollection`. *"If the node acquires — or changes — its type while the hub is alive, the hub keeps serving the configuration it was born with for the rest of its lifetime"* (`NodeTypeRebindWatcher`, #1104). |
 | The **compiled assembly and its collectible load context** | Resolved during that same enrichment (`CompilationCacheService.GetOrCreateLoadContextForPath`); the configuration delegate's closure captured types from that ALC. Only idle deactivation or a recycle ever replaced the binding. |
 | **Layout-area streams**, the stale-build `$Banner` subject, the armed watchers | Hub-owned, created in `WithInitialization` / `hub.Set(...)`, destroyed with the hub. |
-| Anything read from **outside the mesh** — the image's files, the store modules under `/data/modules` | Store modules are *"pinned at process start and never swapped"*; that lane's gap is a pod restart, by construction. |
+| Anything read from **outside the mesh** — the store modules under `/data/modules` | *"Pinned at process start and never swapped"* — so this one is pinned to the PROCESS, not the activation, and a recycle does not touch it; a restart is its only lane, by construction. |
 | A node written **around** the mesh — a raw `psql UPDATE` on a live portal | The write never passes the workspace, so no activation hears about it. (Which is why that is forbidden — see [Postgres Schema Architecture](/Doc/Architecture/PostgresSchemaArchitecture).) |
+
+🚨 **Tests are not exempt.** A shared fixture — the canonical case being an Orleans `TestCluster` with
+one silo per xUnit collection — keeps activations between tests, and *"the grain caches its config,
+Test B activates a different node at the same path, reads stale state from Test A, and fails for
+reasons entirely unrelated to its own logic"* is the same pinning seen from the test side. Disposing
+the hubs a test created is one of the two halves of
+[Test State Isolation](/Doc/Architecture/TestStateIsolation); the exemption is a fixture that builds
+and tears down its own mesh, not "it is a test".
 
 **"Published" therefore does not imply "every instance is running it".** The framework states the
 consequence at the site that chose it:
@@ -61,16 +76,24 @@ re-resolves the NodeType, re-runs adopt-or-compile, rebuilds the data context an
 watchers. There is no partial refresh and no invalidation hook: the lifetime of an activation is the
 unit.
 
-### The one framework surface
+### The one framework surface — dispose-only
 
-**`hub.RecycleNode(path, reason: "…")`** — `src/MeshWeaver.Mesh.Contract/HubRecycleExtensions.cs`:
+**`hub.RecycleNode(path, reason: "…")`** — `src/MeshWeaver.Mesh.Contract/HubRecycleExtensions.cs`.
+It posts a `DisposeRequest` and waits. It requests **no compile**; the fresh activation binds
+whatever the store and the adoption lane then offer.
 
 - **Cold.** The `DisposeRequest` is posted on *subscribe*, never at call time, so a composed-but-
   unsubscribed chain cannot silently tear a hub down.
 - **The wait is a read, not a poll.** `GetMeshNode` already treats a `ShuttingDown` NACK as
-  *"recycling, NOT absent"* and re-probes on its own paced loop inside the caller's budget, so the
-  method emits the node as served by the **re-activated** address. No timer, no watchdog, no sleep;
-  over budget it errors with `AddressRecyclingException` rather than emitting a stale nothing.
+  *"recycling, NOT absent"* and re-probes on its own paced loop inside the caller's budget, so for
+  every caller this class documents the method emits the node as served by the **re-activated**
+  address. No timer, no watchdog, no sleep; over budget it errors with `AddressRecyclingException`
+  rather than emitting a stale nothing. 🚨 **One documented exception, and it is the caller this
+  class already excludes:** from the ROOT hub the dispose and the read hop to *different* off-router
+  hubs (`portal/nodeops-{meshId}` and `portal/reads-{meshId}`), whose action blocks are independent,
+  so the read can reach the target first and be answered by the still-live activation — and the
+  method then emits before a fresh one exists. The ordering holds because both deliveries leave the
+  *same* hub, which is true for every non-router caller and false for that one.
 - **It defers while an install holds the root.** `WhenNoInstallHoldsRoot` / `PackageRootInstallLeases`
   is the ONE implementation of that rule, never a second copy: *"While an install holds a root, a
   recycle aimed at that root waits — it is never dropped, never retried on a timer, and no bound
@@ -83,16 +106,29 @@ unit.
   or both — structurally, not by a race you can re-order away (#2202). Callers pass a surviving hub:
   the portal circuit's, a session hub, an MCP hub, a test client.
 
-### The operator / agent surface
+### The operator / agent surface — dispose, plus a FORCED rebuild when the target is a NodeType
 
 The **`recycle` verb** (`MeshOperations.Recycle`) backs the `recycle` MCP tool, a node's **Recycle**
-menu entry and `mw recycle <path>`. It is more than a dispose: it checks `Update` permission on the
-target (a refusal is an *answer* rendered in the operation's envelope, not a fault), waits on the
-same install lease, **stamps a release request on the NodeType before the dispose** — so the fresh
-activation recompiles rather than re-binding — and broadcasts a cache invalidation on the change
-feed. The stamp is *sequenced* before the dispose, never merely issued alongside it: when the dispose
-won that race, the reactivated hub re-ran its source query against a half-invalidated state, matched
-zero `Code` nodes and recompiled the **pre-fix** source.
+menu entry and `mw recycle <path>`. It checks `Update` permission on the target (a refusal is an
+*answer* rendered in the operation's envelope, not a fault), waits on the same install lease, and
+broadcasts a cache invalidation on the change feed. And **only when the target is a NodeType node**
+(`IsNodeTypeNode` — content is a `NodeTypeDefinition`, or `nodeType` is the NodeType path) it stamps
+`RequestedReleaseAt` **and `RequestedReleaseForce = true`** before the dispose. Recycling an ordinary
+page or instance stamps nothing and recompiles nothing — it is a plain teardown.
+
+🚨 **That forced flag is what makes the operator verb a rebuild rather than a re-bind**, and it is the
+opposite of an adoption. `NodeTypeCompilationHelpers` short-circuits on it:
+
+> *"A FORCE MEANS 'BUILD THE LIVE SOURCE', NOT 'SERVE ME WHATEVER A BUNDLE STILL RESOLVES' … until
+> now this branch asked the bundle sources again regardless. On any mesh whose bundle still resolved,
+> a force therefore re-adopted the very bytes the operator was trying to replace … That is how the
+> stale prebuilt in #2813 could not be forced off a node whose live source was already fixed."*
+> — #2818
+
+So on a NodeType the operator recycle is the *"rebuild from what is there now"* remedy. The stamp is
+also *sequenced* before the dispose, never merely issued alongside it: when the dispose won that
+race, the reactivated hub re-ran its source query against a half-invalidated state, matched zero
+`Code` nodes and recompiled the **pre-fix** source.
 
 🚨 **The Compile button is not a recycle.** It writes the same `RequestedReleaseAt` /
 `RequestedReleaseForce` stamp through `GetMeshNodeStream(hubPath).Update` and posts **no**
@@ -108,7 +144,8 @@ zero `Code` nodes and recompiled the **pre-fix** source.
   hub whose address type is not the mesh type, so an ordinary caller is byte-for-byte unaffected. A
   **self-directed** post (a hub recycling itself, `o.WithTarget(thatHub.Address)`) is structurally
   excluded from that rule — issuing it from a different hub would misdeliver it — which is what makes
-  the automatic recyclers below legitimate.
+  the three self-healing watchers below legitimate; the installer's root recycle is not self-directed
+  and goes through the seam like any other routed teardown.
 - **The root mesh hub refuses.** `MessageHub.HandleDispose` returns `Ignored()` for
   `Address.Type == "mesh"`: that hub is a process-lifetime DI singleton, and disposing it over the
   bus timed every node operation out at 60 s until the process restarted (the mesh-wide outage of
@@ -145,23 +182,29 @@ as a mismatch and deliberately carries **no** recycle link, while only a genuine
 (`NewerBuildAvailable`) earns one (#2471). It was measured on memex on 2026-08-26 over 30+ minutes
 and six recycles, with every surface reporting success.
 
-**And the recompile can re-choose the same bundle.** The release request the `recycle` verb stamps
+**And an UNFORCED trigger can re-choose the same bundle.** A release request that is *not* forced
 runs *adopt-before-compile*: the deployment's prebuilt bundle sources get one bounded chance to
 supply the assembly first, and an adopted type then satisfies its release request without Roslyn
 ever running. `Modules:VersionStrictness` decides what counts as a candidate, and its default is
-**`Family`** — a bundle sealed for another identity of the same major line is adopted when its
-declared floor is satisfied and its type links resolve. So on an ordinary mesh a bundle baked
-against a different platform surface is a legal candidate, the recycle asks the question again, the
-same bundle is still the only answer, and the identical MVID lands. **The recycle changed when the
-question was asked, not what was answered.**
+**`Family`** (`Minimum` on a Development host) — a bundle sealed for another identity of the same
+major line is adopted when its declared floor is satisfied and its type links resolve. So a bundle
+baked against a different platform surface is a legal candidate, the question is asked again, the
+same bundle is still the only answer, and the identical MVID lands.
 
-The remedies, none of which is another recycle:
+🚨 **This is exactly what `RequestedReleaseForce` exists to defeat**, so it is not what the operator
+verb or the Compile button do — both force. Where it bites is the unforced lanes (install, boot, a
+watcher's own trigger), and on a `Modules:RequirePrebuilt` mesh, where there is no local compile to
+fall back to at all.
 
-- **rebake and republish** the package for *this* framework identity;
-- **force a recompile of the live source**;
-- make the miss loud instead of silent with `Modules:RequirePrebuilt` (default off — *"a PRODUCTION
-  portal opts in because its invariant is 'the runtime artifact of a module is a baked DLL'"*), or
-  tighten `Modules:VersionStrictness` to `Exact` at the stated cost that every platform roll then
+The remedies there, none of which is another dispose-only recycle:
+
+- **force the rebuild** — the `recycle` verb or the Compile button on the NodeType, which skips
+  adoption and compiles the live source;
+- **rebake and republish** the package for *this* framework identity — the only remedy on a
+  `Modules:RequirePrebuilt` mesh (default off — *"a PRODUCTION portal opts in because its invariant
+  is 'the runtime artifact of a module is a baked DLL': a silent compile there is a distribution
+  failure being papered over"*);
+- tighten `Modules:VersionStrictness` to `Exact`, at the stated cost that every platform roll then
   adopts nothing until every satellite has re-sealed.
 
 See [Execute-Time Interlock](/Doc/Architecture/ExecuteTimeInterlock) for the provenance verdicts
@@ -192,16 +235,28 @@ load-bearing for this symptom"* — it is a redundant second cure rather than th
 |---|---|---|---|
 | `NodeTypeRebindWatcher` | a post-commit change event retypes this path away from the bound type (#1104) — `Take(1)` | always armed | yes |
 | `WithOverlaySelfHeal` | a DEGRADED activation (error overlay, slow-path timeout, unresolved pin, missing bytes, compiling) reaches a usable build, by version advance, grace timer or the re-evaluation ladder — `Take(1)` | always, on degraded branches | no — by design: it recycles per-TYPE hubs an install is often waiting for |
-| `ArmStaleAssemblySelfHeal` — convergence branch | a NodeType publishes a usable build whose assembly **path** advanced past the bound one, throttled by a 10 s settle window — `Take(1)` | **opt-in:** `Modules:AutoRecycleOnStaleBuild` (absent or unparseable means OFF) | no |
+| `ArmStaleAssemblySelfHeal` — convergence branch | a NodeType publishes a usable build whose assembly **path** advanced past the bound one, throttled by a 10 s settle window — `Take(1)` | **config:** `Modules:AutoRecycleOnStaleBuild`; the code default is OFF (absent or unparseable means OFF), the AKS chart sets it **true** | no |
 | `PackageInstaller.SettleRetypedRoot` | an install retyped its own package root and the in-package type has a loadable build | always, for such an install | no — it *is* the lease holder, and deferring a holder against its own lease deadlocks |
 
-All four post to **their own hub**, which is the sanctioned shape and the reason `DisposeRequest`
-carries a `Reason` at all. The stale-build case defaults to an **offer** — a banner over the
-instance's still-working content — because the unconditional self-recycle it replaced made
-publication frequency equal restart frequency and tore hubs out from under users mid-edit. The cost
-of that default is the operative fact for anyone reading a deployment: **after a package publishes,
-a portal without `Modules:AutoRecycleOnStaleBuild` is a mixture of old and new assemblies for as
-long as viewers do not click.** The 2026-08-25 Store outage is the worked example.
+The first three post to **their own instance hub**, which is the sanctioned shape and the reason
+`DisposeRequest` carries a `Reason` at all — `[QUIESCE-START]` could otherwise only say *"requested
+by itself — a rebind or self-heal recycle"*, one sentence covering three states. `SettleRetypedRoot`
+is the exception: it issues off-router through `hub.NodeOperationIssuingHub()` at the **package
+root** and then waits for that root to answer, so it is a routed teardown, not a self-post.
+
+🚨 **Read the EFFECTIVE `Modules:AutoRecycleOnStaleBuild`, not the code default.** They disagree, and
+each reading is wrong about the other's portals:
+
+- **Off** (the code default, and any portal that does not set it) — the watcher only publishes a
+  **banner offering** a recycle, so **a portal is a mixture of old and new assemblies for as long as
+  viewers do not click**. That default was chosen because the unconditional self-recycle it replaced
+  made publication frequency equal restart frequency and tore hubs out from under users mid-edit; the
+  2026-08-25 Store outage is what the cost looks like.
+- **True** — which is what `deploy/aks/values.aks.yaml` sets **fleet-wide**, so the portals this
+  repository deploys converge by themselves and no viewer has to click.
+
+On **neither** setting does it fire for a same-path byte change: a path that did not move is a build
+*mismatch* to report, not a build to converge on, because re-binding it lands the same bytes (#2471).
 
 ## Where this bites, and what to do about it
 

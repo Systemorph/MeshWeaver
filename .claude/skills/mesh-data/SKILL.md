@@ -196,11 +196,14 @@ lifetime"* (`NodeTypeRebindWatcher`, #1104).
 
 **The one surface that makes an activation re-read** is `hub.RecycleNode(path, reason: "…")` — cold
 (posts on Subscribe), the wait is the framework's own READ rather than a poll, and it defers while a
-package install holds that root. The caller's hub must OUTLIVE the target. As an operator it is the
-`recycle` verb (MCP tool / **Recycle** menu entry / `mw recycle`), which additionally checks `Update`
-and stamps a release request *before* the dispose. Always carry a `Reason`.
+package install holds that root. It is **dispose-only**: it requests no compile. The caller's hub
+must OUTLIVE the target (and must not be the root hub, whose dispose and read leave different
+off-router hubs, so the read can overtake the teardown). As an operator it is the `recycle` verb
+(MCP tool / **Recycle** menu entry / `mw recycle`), which additionally checks `Update` and — **only
+when the target is a NodeType node** — stamps a FORCED release request before the dispose, the one
+trigger that skips prebuilt adoption and compiles the live source (#2818). Always carry a `Reason`.
 
-🚨 **A dispose makes the activation RE-READ; it does not change what the re-read FINDS**, so it is
+🚨 **A dispose makes the activation RE-READ; it does not decide what the re-read FINDS**, so it is
 never itself a fix and a second recycle proves nothing the first did not. Full reference:
 [StaleStateUntilRecycle.md](../../../src/MeshWeaver.Documentation/Data/Architecture/StaleStateUntilRecycle.md).
 
