@@ -19,7 +19,29 @@ maintainer's visible waiver. It is the build of option B on #4299, decided by th
 
 - Workflow: `.github/workflows/review-answered.yml`
 - Predicate and self-test: `.github/scripts/check-review-answered.py`
-- Status: **observed, not required** — see Rollout below.
+- Status: 🚨 **REQUIRED on `main` since 2026-09-17** — measured that evening on ruleset 2128472,
+  which now lists `Automatic review answered` beside `Consolidate test results`. The Rollout section
+  below is kept as the record of how it got there; it is no longer the current state.
+
+🚨 **What being required FEELS like, because it is not obvious from the outside.** An unanswered
+thread leaves the pull request `mergeable_state: blocked` with every build green — and `blocked` is
+the same word REST returns for a pull request merely waiting its turn in the queue. Three pull
+requests sat green, armed and silently OUTSIDE the merge queue for ~45 minutes on the evening this
+landed, and nothing in the REST view distinguished that from progress. If a green, armed pull
+request is not merging, read this check before anything else, and read the merge queue itself
+(`mergeQueue(branch:"main"){entries{...}}`) rather than `mergeable_state` — the queue is the one
+thing REST cannot express.
+
+🚨 **It is answered by replying ON the thread**, and nothing else does it:
+
+```bash
+gh api repos/Systemorph/MeshWeaver/pulls/<n>/comments/<comment-id>/replies -f body='…'
+```
+
+A PR-level issue comment does NOT count, however thorough — that mistake cost the same session
+another round-trip — and neither does resolving the thread. The check's own log names each
+unanswered thread with its URL, its file and line, and the finding's first line, so it tells you
+exactly what it wants.
 
 ## Why: a review was advisory
 
@@ -243,8 +265,12 @@ polls, then RED naming the quota refusal.
 
 ## Rollout
 
-The check lands **non-required**. The context to add to ruleset 2128472, beside
-`Consolidate test results`, is:
+🚨 **This section is HISTORY — the context was added, and the check is required (see Status above).**
+It is kept because the reasoning for the order of operations is worth having if the check ever has
+to be re-rolled.
+
+The check landed **non-required**. The context to add to ruleset 2128472, beside
+`Consolidate test results`, was:
 
 ```text
 Automatic review answered
