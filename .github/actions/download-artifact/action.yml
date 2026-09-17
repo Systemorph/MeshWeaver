@@ -1,0 +1,71 @@
+name: Read a CI artifact
+description: Download from the explicitly selected store and verify own-store bytes before extraction.
+inputs:
+  store:
+    description: Empty or gha for GitHub; file:/mounted/shared/path for our runners.
+    default: ''
+  name:
+    description: Exact name; omit to select all artifacts or use pattern.
+    default: ''
+  path:
+    description: Extraction directory.
+    default: '.'
+  pattern:
+    description: Artifact name glob when name is not set.
+    default: ''
+  merge-multiple:
+    description: Extract selected artifacts into one directory instead of name subdirectories.
+    default: 'false'
+  github-token:
+    description: GitHub token for another run or repository; never used by the own store.
+    default: ''
+  repository:
+    description: Repository which produced the artifacts.
+    default: ${{ github.repository }}
+  run-id:
+    description: Run which produced the artifacts.
+    default: ${{ github.run_id }}
+outputs:
+  download-path:
+    description: Absolute extraction directory.
+    value: ${{ steps.own.outputs.download-path || steps.github.outputs.download-path }}
+runs:
+  using: composite
+  steps:
+    - name: Download from GitHub when no own store is declared
+      id: github
+      if: ${{ inputs.store == '' || inputs.store == 'gha' }}
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        pattern: ${{ inputs.pattern }}
+        merge-multiple: ${{ inputs.merge-multiple }}
+        github-token: ${{ inputs.github-token }}
+        repository: ${{ inputs.repository }}
+        run-id: ${{ inputs.run-id }}
+    - name: Download from our shared artifact store
+      id: own
+      if: ${{ inputs.store != '' && inputs.store != 'gha' }}
+      shell: bash
+      env:
+        CI_ARTIFACT_ACTION_PATH: ${{ github.action_path }}
+        CI_ARTIFACT_STORE: ${{ inputs.store }}
+        CI_ARTIFACT_NAME: ${{ inputs.name }}
+        CI_ARTIFACT_PATTERN: ${{ inputs.pattern }}
+        CI_ARTIFACT_PATH: ${{ inputs.path }}
+        CI_ARTIFACT_MERGE: ${{ inputs.merge-multiple }}
+        CI_ARTIFACT_REPOSITORY: ${{ inputs.repository }}
+        CI_ARTIFACT_RUN_ID: ${{ inputs.run-id }}
+      run: |
+        args=(--store "$CI_ARTIFACT_STORE" --repository "$CI_ARTIFACT_REPOSITORY"
+          --run-id "$CI_ARTIFACT_RUN_ID" --path "$CI_ARTIFACT_PATH"
+          --merge-multiple "$CI_ARTIFACT_MERGE")
+        # Failed-job reruns still consume artifacts from successful earlier attempts. Bound the
+        # selection only for THIS run; another run's attempt number is unrelated to this one.
+        if [ "$CI_ARTIFACT_REPOSITORY" = "$GITHUB_REPOSITORY" ] && [ "$CI_ARTIFACT_RUN_ID" = "$GITHUB_RUN_ID" ]; then
+          args+=(--attempt "$GITHUB_RUN_ATTEMPT")
+        fi
+        [ -z "$CI_ARTIFACT_NAME" ] || args+=(--name "$CI_ARTIFACT_NAME")
+        [ -z "$CI_ARTIFACT_PATTERN" ] || args+=(--pattern "$CI_ARTIFACT_PATTERN")
+        python3 "$CI_ARTIFACT_ACTION_PATH/../../scripts/ci-run-artifacts.py" download "${args[@]}"
