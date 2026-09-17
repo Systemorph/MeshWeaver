@@ -22,7 +22,38 @@ namespace MeshWeaver.GitSync;
 /// judgement VOID rather than merely old, which is why it is recorded beside the fingerprints.</param>
 /// <param name="Reason">Log copy: why this type is held.</param>
 public sealed record BundleHeldNodeType(
-    string Path, string HeldFingerprint, string WantedFingerprint, string Identity, string Reason);
+    string Path, string HeldFingerprint, string WantedFingerprint, string Identity, string Reason)
+{
+    /// <summary>
+    /// 🚨 THREE states, and the third is not decoration. <c>true</c>: this type is held only because
+    /// it SHARES a source with another held type, not on its own reading. <c>false</c>: it is held on
+    /// its own reading. <c>null</c>: the entry was written BEFORE this field existed (#4595) and
+    /// cannot say which — the field is persisted on the sync config, so records predating it are
+    /// read back by a portal that has this code.
+    ///
+    /// <para><b>Why the distinction decides a release.</b> A sharer's own wanted fingerprint can
+    /// already be on the shelf while the type it shares with is still waiting. Releasing on the
+    /// sharer would re-import, re-hold the identical set (the root is still missing) and do it again
+    /// on every later publication — a futile import per announcement. So only an INDEPENDENTLY held
+    /// type is a release trigger; a sharer is re-judged by the import the root's own release
+    /// dispatches.</para>
+    ///
+    /// <para>🚨 <b>Why <c>null</c> is not folded into <c>false</c></b> (review on #4605). A plain
+    /// <c>bool</c> would read every #4595 record as "independently held", which is exactly the
+    /// futile-import loop above for a legacy sharer. It is not folded into <c>true</c> either: that
+    /// would leave a legacy INDEPENDENT hold unable to release on the arrival it is waiting for.
+    /// <c>SealedSyncReconcile.ReleasesAHold</c> therefore treats an unknown entry as a trigger only
+    /// when the shelf now carries EVERY held entry's fingerprint — the one case where the re-import
+    /// cannot be futile, because it clears the whole set. Entries this code writes are always
+    /// explicit, so the unknown state is transitional by construction: the first import that
+    /// concludes rewrites the list (<c>RecordSyncResult</c> writes it on every conclusion).</para>
+    ///
+    /// <para>An <c>init</c> property rather than a sixth positional parameter: this record is
+    /// persisted on the sync config and its primary-constructor arity is public surface
+    /// (<c>scripts/check-record-signatures.py</c>).</para>
+    /// </summary>
+    public bool? HeldBySharing { get; init; }
+}
 
 /// <summary>
 /// What an import may write, once the bundle inventory has spoken: which NodeTypes are held, which
@@ -119,8 +150,33 @@ public static class BundleKeyedHold
         // A mesh that consumes no bundles has nothing to keep in step: every type compiles here, so
         // holding its sources would wait for a publication that is never coming — hole 1's
         // adjudication, one level down.
-        if (inventory.Outcome is SealedReadOutcome.NotConfigured || live.Count == 0)
+        //
+        // 🚨 And an UNREADABLE reading holds NOTHING either, which is the opposite of this file's
+        // usual direction and is deliberate (review on #4595). "Cannot tell is never clear to
+        // proceed" applies where a hold can be RELEASED; here it cannot: the release predicate reads
+        // the same shelf (`SealedSyncReconcile.ReleasesAHold` refuses an unreadable inventory), so
+        // one unreadable archive would wedge every changed adopted type of the Space with nothing
+        // able to clear it. Holding requires evidence that the bytes are absent, and an unreadable
+        // shelf is not that evidence — the type imports as it did before this gate and may go
+        // StaleAdopted, which is honest, serving and announced (#3583).
+        //
+        // 🚨 And it does NOT reopen what #3461 phase 5 closed ("cannot tell", never "nothing
+        // sealed"): that contract is about the SEAL INDEX, whose unreadable reading still holds at
+        // the SOURCE level (`SealedSyncGate.RefusedForUnreadableIndex`) — which means the import
+        // this gate sits inside does not run at all. What reaches this branch is the narrow case
+        // where the index read fine and an ARCHIVE did not, inside an import the seal has already
+        // cleared; the source cannot move past its seal either way.
+        if (inventory.Outcome is not SealedReadOutcome.Read || live.Count == 0)
+        {
+            if (inventory.Outcome is SealedReadOutcome.Unreadable)
+                logger?.LogWarning(
+                    "[BundleHold] {Partition}: the bundle inventory for framework identity {Identity} "
+                    + "could not be READ, so no NodeType is held — a hold taken from an unreadable "
+                    + "shelf could not be released by the same shelf. The import writes what it "
+                    + "fetched; a type whose sources move past its bundle reports StaleAdopted until "
+                    + "the shelf is readable again", partition, identity);
             return BundleHoldDecision.Nothing;
+        }
 
         var incomingSet = NodeSet.Create(incoming);
         var currentSet = NodeSet.Create(current);
@@ -201,7 +257,12 @@ public static class BundleKeyedHold
                       + $"would move from {candidate.CurrentFold} to {candidate.IncomingFold}"
                     : $"the bundle(s) for framework identity {identity} record "
                       + $"{string.Join(", ", recorded.OrderBy(f => f, StringComparer.Ordinal))} for this "
-                      + $"type, not the {candidate.IncomingFold} its incoming sources would produce");
+                      + $"type, not the {candidate.IncomingFold} its incoming sources would produce")
+            {
+                // 🚨 STAMPED, never defaulted: `null` is reserved for a record written before this
+                // field existed, and a release reads the three states differently (review on #4605).
+                HeldBySharing = false,
+            };
             Hold(candidate);
         }
 
@@ -225,7 +286,12 @@ public static class BundleKeyedHold
                 held[candidate.Path] = new BundleHeldNodeType(
                     candidate.Path, candidate.CurrentFold, candidate.IncomingFold, identity,
                     $"shares held source '{shared}' with another held type, so its own compile input "
-                    + "cannot move either");
+                    + "cannot move either")
+                {
+                    // Not a release trigger: its own bundle may already be on the shelf, and
+                    // re-importing for that would re-hold the same set — see BundleHeldNodeType.
+                    HeldBySharing = true,
+                };
                 Hold(candidate);
                 grew = true;
             }

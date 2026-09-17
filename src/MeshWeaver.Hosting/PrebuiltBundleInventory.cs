@@ -77,6 +77,57 @@ public sealed record PrebuiltBundleInventory(
             : [];
 
     /// <summary>
+    /// 🚨 Whether a shelf is CONFIGURED here and could be read at all — the cheap half of
+    /// <see cref="Read"/>, and its first step, so a caller that only needs to know whether to
+    /// bother cannot answer it differently (review on #4605).
+    ///
+    /// <para><b>Three answers, and the third is the one that was missing.</b>
+    /// <see cref="SealedReadOutcome.NotConfigured"/>: nothing here consumes published bundles (no
+    /// identity, or neither an existing image directory nor a configured published root) — every
+    /// NodeType compiles on this instance, so there is nothing to keep in step.
+    /// <see cref="SealedReadOutcome.Unreadable"/>: a published root IS configured and is not there —
+    /// unmounted, renamed, not yet mounted. That is NOT an empty shelf: an empty reading would hold
+    /// every changed adopted type while the same absent root can never carry the release evidence, so
+    /// it surfaces as "cannot tell" and the hold abstains (<c>BundleKeyedHold.Decide</c>).
+    /// <see cref="SealedReadOutcome.Read"/>: there is something to read — including a root that holds
+    /// no directory for this identity yet, which is a real "no bundles published for this identity"
+    /// that a publication can change.</para>
+    ///
+    /// <para>🚨 Two <c>Directory.Exists</c> calls: this runs on <c>IoPoolNames.FileSystem</c> like
+    /// the read it fronts, NEVER on a hub turn — the published root is a mounted share. It is also
+    /// why the configuration alone cannot answer it: <c>imageDirectory</c> defaults to
+    /// <see cref="ShippedPrebuiltBundles.DefaultDirectory"/>, so "no shelf" is a fact about the disk
+    /// rather than about the settings.</para>
+    /// </summary>
+    /// <param name="imageDirectory">The image's <c>prebuilt/</c> directory, or null.</param>
+    /// <param name="publishedRoot">The published bundle root, or null when none is configured.</param>
+    /// <param name="identity">This instance's framework identity.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <returns>What a full read of this shelf can be.</returns>
+    public static SealedReadOutcome Presence(
+        string? imageDirectory, string? publishedRoot, string? identity, ILogger? logger = null)
+    {
+        // Every reading is scoped to ONE framework identity — the shelf is read as the adopter reads
+        // it — so no identity means there is nothing this reading could be about.
+        if (string.IsNullOrWhiteSpace(identity))
+            return SealedReadOutcome.NotConfigured;
+        var hasImage = !string.IsNullOrWhiteSpace(imageDirectory) && Directory.Exists(imageDirectory);
+        if (string.IsNullOrWhiteSpace(publishedRoot))
+            return hasImage ? SealedReadOutcome.Read : SealedReadOutcome.NotConfigured;
+        if (Directory.Exists(publishedRoot))
+            return SealedReadOutcome.Read;
+        logger?.LogWarning(
+            "PrebuiltBundleInventory: the published bundle root {Root} is configured and is not there "
+            + "— this reading is UNREADABLE, not an empty shelf{Image}", publishedRoot,
+            hasImage
+                ? " (the image's own bundles are readable, but a reading of those alone would be "
+                  + "SHORT, and a hold taken from it could not be released by the publication that "
+                  + "lands on the share)"
+                : "");
+        return SealedReadOutcome.Unreadable;
+    }
+
+    /// <summary>
     /// Reads the inventory from disk. Pure over the file system and never throws: an unreadable
     /// enumeration is reported as <see cref="SealedReadOutcome.Unreadable"/> rather than as an empty
     /// one, because "no bundle carries this fingerprint" and "I could not look" call for opposite
@@ -98,10 +149,15 @@ public sealed record PrebuiltBundleInventory(
     public static PrebuiltBundleInventory Read(
         string? imageDirectory, string? publishedRoot, string? identity, ILogger? logger = null)
     {
+        // 🚨 ONE definition of "is there a shelf, and can it be read at all", shared with the cheap
+        // pre-check (review on #4605) so the two can never disagree — in particular about a
+        // configured published root that is not there, which is UNREADABLE and not an empty shelf.
+        var presence = Presence(imageDirectory, publishedRoot, identity, logger);
+        if (presence is not SealedReadOutcome.Read)
+            return new PrebuiltBundleInventory(
+                ImmutableDictionary<string, ImmutableHashSet<string>>.Empty, 0, presence);
         var hasImage = !string.IsNullOrWhiteSpace(imageDirectory) && Directory.Exists(imageDirectory);
-        var hasPublished = !string.IsNullOrWhiteSpace(publishedRoot) && !string.IsNullOrWhiteSpace(identity);
-        if (!hasImage && !hasPublished)
-            return NotConfigured;
+        var hasPublished = !string.IsNullOrWhiteSpace(publishedRoot);
 
         var byPath = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(StringComparer.Ordinal);
         var bundles = 0;
@@ -124,6 +180,21 @@ public sealed record PrebuiltBundleInventory(
                         "PrebuiltBundleInventory: {Bundle} could not be read — this reading is "
                         + "UNREADABLE, not short", archive);
                     unreadable = true;
+                    continue;
+                }
+                // 🚨 THE IDENTITY GATE THE ADOPTER APPLIES, APPLIED HERE TOO (review on #4595).
+                // `SeedBundles` declines a whole archive whose manifest names another framework
+                // identity — or names none — BEFORE it considers a single assembly. The published
+                // root is identity-scoped by path, but the IMAGE's prebuilt directory is not, and a
+                // legacy archive records no identity at all. Folding such an entry in would let
+                // `Carries` answer "those bytes are on the shelf" for bytes the seeding pass
+                // refuses, which releases a hold onto a bundle that will never adopt.
+                if (!string.Equals(manifest?.FrameworkMvid, identity, StringComparison.Ordinal))
+                {
+                    logger?.LogDebug(
+                        "PrebuiltBundleInventory: {Bundle} is stamped for framework identity {Stamped}, "
+                        + "not {Identity} — not folded into the inventory (the seeding pass declines it "
+                        + "for the same reason)", archive, manifest?.FrameworkMvid ?? "(none)", identity);
                     continue;
                 }
                 bundles++;
