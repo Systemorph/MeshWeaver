@@ -137,12 +137,15 @@ public static class SpaceNodeType
     /// PreRenderedHtml of its own. Plain markdown — no pseudo-HTML.
     /// Per-Space overrides live in each Space's own <c>index.md</c>
     /// (set on <see cref="MeshNode.PreRenderedHtml"/>).
-    /// <para>The mesh catalog is the node's <c>Search</c> area (namespace tree by default;
-    /// <c>?groupBy=type|category|flat</c> and <c>?subtree=true</c> tune it — see the
-    /// "Mesh Search &amp; Catalogs" doc). It is embedded INLINE in this template via the
-    /// <c>@@("area/Search")</c> operator (a "Contents" section), NOT a hardcoded layout section —
-    /// so an author owns it in the editable Body and can move, tune (<c>@@("area/Search?groupBy=…")</c>),
-    /// or remove it like any other content.</para>
+    /// <para>🚨 <b>No "Contents" catalog, deliberately.</b> The children index is the SIDE RAIL,
+    /// which <see cref="DefaultNodeNavigation"/> derives for every markdown page — one index per
+    /// space, the same on every page, the reader's position marked, nested, and live off a change
+    /// feed. This template used to end in <c>@@("area/Search")</c>, which put a second and worse
+    /// copy of that index below the content, and taught every author who copied it to do the same
+    /// (maintainer directive, 2026-09-17: "we prefer index on side"). A catalog embed is still
+    /// right where the LISTING IS THE CONTENT — a log, a register, a store page, or a filtered
+    /// view the rail cannot express (<c>?groupBy=type|category|flat</c>, <c>?subtree=true</c> —
+    /// see the "Mesh Search &amp; Catalogs" doc) — and an author may add one to their own Body.</para>
     /// </summary>
     public const string WelcomeMarkdown = """
         # Welcome
@@ -170,9 +173,8 @@ public static class SpaceNodeType
         ask the assistant in the chat below to draft it — it writes to the same Body field.
         See [Configurable Home & Space Pages](/Doc/GUI/ConfigurablePages) for the full guide.
 
-        ## Contents
-
-        @@("area/Search")
+        Your pages appear in the index on the left as you add them — you do not need to
+        list them here.
         """;
 
     /// <summary>
