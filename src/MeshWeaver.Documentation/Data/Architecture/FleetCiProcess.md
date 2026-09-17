@@ -94,7 +94,7 @@ newest set. The twin-parity guard (`TeardownTwinParityTest`) adds the ordering: 
 core change seals → the freeze moves → the Plugins port lands under it; every other branch that runs
 in between reds once on the guard and re-runs after merging main.
 
-**2. The value must name the NEWEST SEALED set, because that is what the runners hold.** The CI
+**2. The value must name a sealed set the volume CARRIES — which is the newest one, or a set the refresh restores for you.** The CI
 runners mount `/opt/platform` read-only, and a CronJob refreshes it every ten minutes (Memex
 `deployments/aks/ci-runners/ci-platform-refresh.py`). It installs *the newest sealed set* — and,
 since Memex#329, also **the set each subscribed repository's `main` last PASSED**, installing that
