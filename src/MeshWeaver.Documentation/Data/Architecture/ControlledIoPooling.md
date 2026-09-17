@@ -1002,12 +1002,73 @@ would dodge the ThreadPool and buy back the worse half — every refusal's downs
 serialised behind the slowest one, which is the shape #2394 is about — so the shared pool is the
 deliberate choice, not the convenient one.
 
-🚨 **One cell in that matrix is a different defect and is NOT fixed here:** `InvokeBlocking` built
-before a `Drain()` and subscribed after delivers **nothing at all** — 0 terminals in 50 subscribes.
-Its task is created with an already-cancelled token, so the delegate never runs and the continuation's
-`IsCanceled` arm is silent by construction. That is the #1789 shape (a leg that terminates in neither
-direction), tracked as #4545; `IoPoolRefusedLegTerminatesOffSubscriberTest` names the cell it leaves
-out rather than dropping it silently.
+🚨 **One cell in that matrix was a different defect, fixed separately as #4545 — the section below.**
+
+### 🚨 A blocking leaf the POOL cancels FAULTS; one the SUBSCRIBER cancels stays silent
+
+`InvokeBlocking` starts its work with a token linked to the pool's, so a drain, a dispose and an
+unsubscribe all land the task on `IsCanceled`. The continuation's arm named one of them — *"Unsubscribed
+before completion — silent teardown"* — and stayed silent for all three. The other two are the pool
+ending the caller's work:
+
+- a leaf still **queued** on the limited-concurrency scheduler when `Drain()` cancels the pool, and
+- a leaf **built before a drain and subscribed after**, whose task is created with an already-cancelled
+  token, so its delegate never runs at all.
+
+Measured on the second: **0 terminals in 50 subscribes** — the one cell of the matrix where a
+subscriber got neither `OnNext`, `OnError` nor `OnCompleted`. That is the #1789 shape: the `.Finally`
+that releases a route slot and advances a FIFO never runs, and a caller with a bounded wait sees only
+its own timeout.
+
+**The terminal is a FAULT, and the choice is forced by what callers do with a completion.**
+`InvokeBlocking<T>` emits one value and completes, so an empty completion does not read as "cancelled"
+— it reads as *"the IO ran and produced nothing"*, and this codebase folds exactly that into a value:
+
+| caller | what an empty completion becomes |
+|---|---|
+| `CatalogLayoutAreas` (install completeness) | `DefaultIfEmpty()` → the **Undeclared verdict** — its own comment: *"an absent record is a value here … never a silence"* |
+| `InstalledPackageRepairService.TargetPartitionIsGone` | `DefaultIfEmpty(true)` → **"the partition is present"** |
+| `PublishedBundleCatalogue` | the rule in one line: *"'I could not look' is NOT 'there is nothing here', and the difference decides the verdict"* |
+
+A cancelled read that completed empty would be read as a successful negative answer by all three. The
+siblings agree: `Invoke`/`InvokeStream` already fault with `TaskCanceledException` when the pool cancels
+them, and every refusal answers `OperationCanceledException` — so a cancellation-shaped fault is also
+the only terminal that keeps the three value-producing entry points identical.
+`SubscribeThroughPool` is the one surface that COMPLETES on a drain, and it is not a counter-example:
+a change feed's terminal carries no value, nobody reads a result out of it, and its job is to run the
+`.Finally` bookkeeping (#1789).
+
+**The discrimination is explicit, because the task cannot tell you.** The subscription's disposable
+publishes `unsubscribed` before it cancels, and the arm reads it: the subscriber's own cancellation
+stays silent (after a dispose nothing may be delivered), the pool's gets
+`OperationCanceledException`.
+
+🚨 **And WHERE that terminal is delivered decides whether the drain covers it.** The continuation runs
+before its own `finally` hands the leaf's region back, and `TryFinishDisposal` refuses to complete
+disposal while any region is open — so delivering **inline there** puts the subscriber's teardown
+strictly inside the window `Disposed` closes, which is the window a caller waits on before releasing
+the mesh and unloading collectible ALCs. Scheduling it away would put it *after* that join. Measured,
+same scenario both ways (a leaf queued behind a parked head, then `Dispose()`):
+
+```
+always scheduled:  head released → Disposed fired → queued OnError      (terminal ~200 µs AFTER the join)
+delivered inline:  head released → queued OnError → Disposed fired      (terminal INSIDE the join)
+```
+
+So the arm delivers inline, and schedules only in the one case that cannot be delivered there: a token
+already cancelled when the continuation was ATTACHED runs it on whoever subscribed, and a terminal must
+never run on that thread (#4530). Nothing of that leaf ever ran — no delegate, no slot — so it is a
+refusal in all but name and takes the refusal's path, with the refusal's stated trade.
+`IoPoolCancelledBlockingLeafTest.ACancelledBlockingLeafsTerminal_RunsBeforeDisposedReportsTheJoin`
+pins the ordering, and fails on the always-scheduled shape by the microseconds above.
+
+**The whole matrix, measured after the change** (50 subscribes per cell, from a dedicated thread):
+16 of 16 cells deliver a terminal, **0 of 16 on the subscriber's thread**, medians 7–17 µs. The
+previously-silent cell answers `OperationCanceledException` at 9.7 µs. The only `OnCompleted` left is
+`SubscribeThroughPool` on a drain, which is the deliberate exception above. Pinned by
+`IoPoolRefusedLegTerminatesOffSubscriberTest` (the matrix, now including that cell) and
+`IoPoolCancelledBlockingLeafTest` (the queued-then-drained path, and the unsubscribe that must stay
+silent).
 
 ---
 

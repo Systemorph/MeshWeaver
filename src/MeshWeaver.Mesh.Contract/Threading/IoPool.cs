@@ -200,6 +200,12 @@ public sealed class IoPool : IIoPool, IDisposable
     private const string DisposedMessage =
         "The I/O pool has been disposed (mesh or silo teardown) — this leaf will not run.";
 
+    // The other half of the same statement, for work the pool ACCEPTED and then ended: the leaf was
+    // admitted, the drain cancelled it before it could produce its value, and the subscriber is told
+    // so rather than being handed an empty completion it would read as a result (#4545).
+    private const string DrainedMessage =
+        "The I/O pool was drained (mesh or silo teardown) — this leaf was cancelled before it produced a result.";
+
     // 🚨 AND THE REFUSAL IS DELIVERED OFF THE SUBSCRIBER'S THREAD — issue #4530.
     //
     // `Observable.Throw(ex)` runs on the IMMEDIATE scheduler: the OnError is delivered inside the
@@ -241,14 +247,22 @@ public sealed class IoPool : IIoPool, IDisposable
         Observable.Throw<T>(new OperationCanceledException(DisposedMessage), TaskPoolScheduler.Default);
 
     /// <summary>
-    /// Refuses a subscribe that is already INSIDE an entry point when disposal wins the race — the
-    /// admission region said no, so the terminal cannot come from a leaf that will never run.
-    /// Delivered on the pool's scheduler for the reason above (#4530), and the returned disposable is
-    /// the scheduled item, so an unsubscribe before it runs cancels it like any other pool work.
+    /// Ends a leg the pool will not carry, with a cancellation, on the pool's own scheduler.
+    ///
+    /// <para>Two callers, one contract. A subscribe that is already INSIDE an entry point when
+    /// disposal wins the race — the admission region said no, so the terminal cannot come from a leaf
+    /// that will never run. And a blocking leaf the DRAIN cancelled (<paramref name="message"/> =
+    /// <see cref="DrainedMessage"/>), whose task carries no terminal of its own (#4545).</para>
+    ///
+    /// <para>Delivered on the pool's scheduler for the reason above (#4530); the returned disposable
+    /// is the scheduled item, so an unsubscribe before it runs cancels it like any other pool
+    /// work.</para>
     /// </summary>
-    private static IDisposable RefuseOffSubscriber<T>(IObserver<T> observer) =>
+    /// <param name="observer">The subscriber to terminate.</param>
+    /// <param name="message">Why the leg will not run; defaults to <see cref="DisposedMessage"/>.</param>
+    private static IDisposable RefuseOffSubscriber<T>(IObserver<T> observer, string? message = null) =>
         TaskPoolScheduler.Default.Schedule(() =>
-            observer.OnError(new OperationCanceledException(DisposedMessage)));
+            observer.OnError(new OperationCanceledException(message ?? DisposedMessage)));
 
     /// <summary>
     /// Opens the region in which the caller may touch <see cref="_gate"/>, <see cref="_poolCts"/> or
@@ -687,6 +701,18 @@ public sealed class IoPool : IIoPool, IDisposable
                     LeaveGateRegion();
             }
 
+            // Whether the SUBSCRIBER ended this leaf (its unsubscribe cancels `cts` below) rather
+            // than the pool. The two are indistinguishable from the task alone — both land on
+            // `IsCanceled` — and they owe the subscriber opposite things: silence, or a terminal
+            // (#4545). Declared out here because the continuation reads it and the returned
+            // disposable writes it.
+            var unsubscribed = 0;
+
+            // Whoever is subscribing. The cancelled arm compares against it to decide whether it may
+            // deliver the terminal INSIDE this leaf's region — see there; a task already cancelled
+            // when the continuation is attached runs that continuation on this very thread.
+            var subscriberThreadId = Environment.CurrentManagedThreadId;
+
             // 🚨 Blocking work does NOT pass through _gate — it queues on the limited-concurrency
             // scheduler instead — so its wait is timed at THAT grant point. Instrumenting only the
             // async gate would have left a whole admission path out of a reading that looks total.
@@ -772,7 +798,56 @@ public sealed class IoPool : IIoPool, IDisposable
                         {
                             if (t.IsCanceled)
                             {
-                                // Unsubscribed before completion — silent teardown.
+                                // 🚨 SILENT ONLY FOR AN UNSUBSCRIBE — issue #4545. This arm is reached
+                                // by THREE things, and the comment that stood here named one: the
+                                // subscriber disposing (correct — after a dispose nothing may be
+                                // delivered), a blocking leaf still QUEUED on the limited-concurrency
+                                // scheduler when Drain() cancels the pool, and a leaf built before a
+                                // drain and subscribed after, whose task is created with an already
+                                // cancelled token so the delegate never runs at all. The last two are
+                                // the pool ending the caller's work, and they delivered NOTHING:
+                                // measured 0 terminals in 50 subscribes, the one cell of the matrix
+                                // where a subscriber got neither OnNext, OnError nor OnCompleted.
+                                //
+                                // 🚨 AND IT FAULTS, it does not complete. InvokeBlocking is a
+                                // SINGLE-VALUE surface: an empty OnCompleted is not "cancelled", it is
+                                // "the IO ran and produced nothing", and callers fold exactly that into
+                                // a value — `CatalogLayoutAreas` maps an empty read to the Undeclared
+                                // verdict through DefaultIfEmpty ("an absent record is a value here …
+                                // never a silence"), `InstalledPackageRepairService` maps it to
+                                // "partition present", and `PublishedBundleCatalogue` writes the rule
+                                // down: "'I could not look' is NOT 'there is nothing here', and the
+                                // difference decides the verdict". A cancelled read that completes
+                                // empty would be read as a successful negative answer by all three.
+                                // Its siblings agree: Invoke/InvokeStream already fault with
+                                // TaskCanceledException when the pool cancels them, and every refusal
+                                // answers OperationCanceledException. SubscribeThroughPool is the one
+                                // surface that completes instead, because a change feed's terminal
+                                // carries no value — nobody reads a result out of it, its job is to run
+                                // the .Finally bookkeeping (#1789).
+                                //
+                                // 🚨 AND IT IS DELIVERED INSIDE THIS LEAF'S REGION WHENEVER IT CAN BE.
+                                // This continuation runs before its own `finally` hands the region
+                                // back, and TryFinishDisposal refuses to complete disposal while any
+                                // region is open — so an inline delivery here happens strictly BEFORE
+                                // `Disposed` fires, i.e. before the caller that waits on it releases
+                                // the mesh and unloads collectible ALCs. Scheduling it away would put
+                                // the subscriber's own teardown after that join, which is the one
+                                // thing this pool's drain exists to rule out (Copilot review).
+                                //
+                                // The exception is the case that cannot be delivered here at all: a
+                                // token already cancelled when the continuation was ATTACHED runs it
+                                // inline on whoever subscribed, and a terminal must never run on that
+                                // thread (#4530). Nothing of this leaf ever ran in that case — no
+                                // delegate, no slot — so it is a refusal in all but name, and it
+                                // travels the refusal's path, with the refusal's stated trade.
+                                if (Volatile.Read(ref unsubscribed) == 0)
+                                {
+                                    if (Environment.CurrentManagedThreadId == subscriberThreadId)
+                                        RefuseOffSubscriber(observer, DrainedMessage);
+                                    else
+                                        observer.OnError(new OperationCanceledException(DrainedMessage));
+                                }
                             }
                             else if (t.IsFaulted)
                             {
@@ -799,6 +874,10 @@ public sealed class IoPool : IIoPool, IDisposable
 
                 return Disposable.Create(() =>
                 {
+                    // Tells the continuation's cancelled arm which cancellation this was: the
+                    // subscriber's own (silent, #4545) or the pool's (a terminal). Published BEFORE
+                    // the Cancel that triggers it, so the arm cannot read a stale zero.
+                    Volatile.Write(ref unsubscribed, 1);
                     // 🚨 No catch. The old `catch { /* already disposed */ }` guarded a case that
                     // cannot occur — `cts` is this subscription's own linked source, disposed
                     // nowhere but the finally below, and Disposable.Create runs its action at most
