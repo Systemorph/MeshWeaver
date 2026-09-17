@@ -254,6 +254,92 @@ install (gate 1c holds the UNPINNED one) and a human's Update click — so no la
 record that has stopped describing the partition. The cost is one full package fetch, paid only when an update is actually landing (the
 hash-equal skip path is untouched) and only on a synced partition.
 
+### Gate 1d — a PROVEN ref must still be the partition's OWN repository ([#4625](https://github.com/Systemorph/MeshWeaver/issues/4625))
+
+Gate 1c holds the boot install where the ref could not be *proven*. A proven ref is deliberately
+**not** held: the seal named a commit, so both writers are pinned and land the same tree. That rests
+on an assumption nothing verified — **that the two commits are trees of the SAME repository.**
+
+Where they are not — a package whose `targetPartition` is connected to a different repository, or to
+a different *subdirectory* of one — both writers are pinned, both are "proven", and they still land
+two different trees. Copilot's review of the gate-1c change spotted it in the change's own control
+arm, which configured exactly that mismatch.
+
+`IPartitionSourceTracking` gained `ImportingRepositories(partition)`, returning
+`TrackedRepositories` — identities as `owner/repo#subdirectory`, **with `Known` beside them** so
+that *"nothing imports here"* and *"I cannot tell you what imports here"* are never the same value.
+
+🚨 **The asymmetry is the OPPOSITE of gate 1c's, and deliberately.** Gate 1c holds on
+`Undetermined` because an unproven ref is cheap to hold — it is re-derived and lifted at the next
+boot. Here, *unknown* is the DEFAULT answer of every provider that has not implemented the member,
+so holding on it would hold every proven install on the fleet's normal shape and take
+[#4259](../SealedPublicationReads)'s lane offline. That cost is precisely why #4625 was filed rather
+than folded into the gate-1c change. So gate 1d holds **only on a definite disagreement** — both
+sides known, and no tracked identity matching.
+
+The subdirectory is part of the identity because a package sealed from `Systemorph/MeshWeaver.Plugins`
+and a partition synced from that repository's `Hosting` folder are two different trees — one of the
+two shapes #4625 names.
+
+## The sync side has the same blind spot, and its detector was unreachable ([#4620](https://github.com/Systemorph/MeshWeaver/issues/4620))
+
+The gates above stop the INSTALLER from diffing against a baseline it does not own. The sealed
+GitSync import has the identical blind spot from the other side: it is a delta between two
+**commits**, so it writes what moved between the previous sealed commit and the new one, and leaves
+everything else alone. That is correct exactly while the mesh equals the previous commit's tree.
+
+**Measured on memex.systemorph.com, 2026-09-17, in two partitions of nineteen.**
+
+| partition | what its sync said | what the partition held |
+|---|---|---|
+| `Hosting` | `lastSyncOutcome: Imported`, `lastAttemptWasFinal: true`, at `061976bc` | `Issue/Source/IssueLayoutAreas.cs` from `061976bc` beside `Issue/Test/IssueTests.cs` from `main` (the boot install's copy, 17:36:42Z). The test calls `IssueLayoutAreas.Facts`/`StatusBadge`/`SeverityBadge`, which `061976bc`'s view does not define ⇒ three `CS0117`s, for over a day |
+| `Crm` | `lastSyncOutcome: Skipped`, `lastAttemptWasFinal: true` | **fourteen** NodeTypes at `compilationStatus: Error` |
+
+`Crm` is the sharper of the two: **`Skipped` is the content-skip short-circuit, which answers
+without reading the partition at all.** So a "full re-import" is not the remedy either — at an
+unchanged fingerprint it returns `Skipped` having looked at nothing. Only a *reconciling* import
+(`ImportConflictPolicy.Reconcile`, which bypasses that short-circuit) re-reads.
+
+### The detector already existed — its input could not arrive
+
+`SealedSyncReconcile.DecideWithInventory` has always answered `ReconcileAtSealedCommit` for a source
+that claims the sealed commit while types baked from it were declined on their source fingerprint:
+*"the live sources have drifted from the commit they claim."* Its evidence is `declinedTypePaths`,
+a by-product of the **boot sweep's** bundle-adoption walk.
+
+🚨 **The one post-boot trigger passed `[]`.** `PublicationSealArrivalService` handed the reconciler
+an empty declined set, and an at-the-seal source with an empty set is its STEADY STATE — so after
+boot the branch could only ever take the "nothing was declined" exit. **The detector reported a
+clean partition it had never read.** Empty meant "I measured, and nothing had drifted"; the caller
+meant "I did not measure". Those are different facts and folding them disabled the gate.
+
+So `IPublicationSyncReconciler.Reconcile` now takes `IReadOnlyCollection<string>?`: **null means
+"I did not measure"**, and the reconciler measures for itself, where the bundle inventory already
+is. `SyncedPartitionDrift.Measure` compares each live NodeType's `CurrentSourceFingerprint` against
+what bundles for this identity record — no fetch, no disk walk, and it abstains (rather than
+reporting a clean partition) when the shelf is unreadable or nothing is comparable. It reports its
+denominator, so "0 drifted" is never read without "of how many".
+
+### Why not the other two answers
+
+- **Always re-import in full.** This is what the git-diff was introduced to stop — the memex-cloud
+  outage loop of 2026-07-23, where a routine push re-materialised whole partitions and stormed the
+  live compiler. And it would not even work, per `Crm` above: a full import at an unchanged
+  fingerprint never reads the partition.
+- **Rely on one writer.** Defensible once the unattended second writer is gone — except the `Crm`
+  mix involves no boot install at all, and both partitions' sync records read as success. A mix
+  nobody can detect is the worst of the three outcomes.
+
+### What the detection SAYS
+
+Naming it is half the fix, because #4588 cost a session precisely for want of a line that joins the
+three clocks. On drift the reconciler logs, at Warning, the partition, the repository and commit its
+sync claims, the sealed publication and framework identity, which types hold sources no bundle
+records — and **where to read the other writer**: the package whose `targetPartition` is this
+partition, and its `installedFromRef` / `installedAtUtc`. The installer's record is not read
+directly from here on purpose: it lives in `MeshWeaver.PluginCatalog`, which this layer deliberately
+does not reference, and reading it untyped would be the `.As<T>()` trap.
+
 ## What the fix deliberately does not do
 
 - **It does not stop, defer or weaken the seal reconcile.** The freeze class of

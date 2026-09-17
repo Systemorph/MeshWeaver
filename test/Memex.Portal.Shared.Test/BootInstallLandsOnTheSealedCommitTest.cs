@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -265,25 +266,81 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
             "and the record was NOT re-stamped — a hold that moved the record would leave the next "
             + "delta computed against a claim nothing wrote");
 
-        // ── The control: the SAME sync-owned partition, once the ref IS proven. ────────────────
-        // 🚨 What this control does and does not say. It pins that the gate keys on PROVENANCE —
-        // a seal-named commit installs, which is #4259'''s lane and must not be held. It does NOT say
-        // that installing a proven tree of THIS repository into a partition synced from ANOTHER one
-        // is safe: nothing compares the two repositories, and that gap is MeshWeaver#4625. The
-        // partition here is connected to a different repository precisely so the sync cannot fetch
-        // through this transport and pollute the witness; the arm is about the ref, not the repo.
+        // ── ARM 2: a PROVEN ref, into a partition synced from ANOTHER repository. ──────────────
+        // 🚨 This arm used to be the "control", and it was UNSOUND — which Copilot's review of
+        // #4619 said in as many words: the fixture connects the partition to `Systemorph/Example`
+        // while the package is sealed from `test/boot-seal`, so "the two agree" was never true of
+        // it. Both writers are pinned, and they are pinned to two different repositories. #4619
+        // left that as MeshWeaver#4625 because nothing compared them. Gate 1d now does, so the same
+        // fixture is no longer a control: it IS the #4625 case, and it must HOLD.
         StageSeal(RepoFullName, SealedSha, complete: true);
+        var mismatched = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120))
+            .Await(TestContext.Current.CancellationToken);
+        var repoHold = mismatched.Held.Should().ContainSingle(h => h.Package == Package,
+            "a proven ref is not enough: this partition imports from a DIFFERENT repository, so the "
+            + "two pinned writers still land two trees (MeshWeaver#4625)").Subject;
+        repoHold.Reason.Should().Contain("MeshWeaver#4625",
+            "the hold names the gap it is about, or nobody can act on it");
+        repoHold.Reason.Should().Contain("two pinned writers, two repositories, one partition");
+        mismatched.Packages.Should().BeEmpty("a held package is not a package this pass landed");
+        (await Record())!.InstalledFromRef.Should().Be("main",
+            "and the record is still not re-stamped");
+
+        // ── ARM 3, THE CONTROL: a proven ref into the partition's OWN repository INSTALLS. ─────
+        // 🚨 This is the arm that must never break. It is the fleet's normal shape — a package
+        // sealed from a repository, installed into a partition synced from that repository's own
+        // folder — and holding it would take #4259's lane offline on every instance, which is the
+        // stated cost that kept #4625 open rather than folded into #4619. Only the REPOSITORY
+        // changes between arm 2 and arm 3: same seal, same proven ref, same partition. So what this
+        // pins is the comparison and nothing else.
+        await PointTheSyncAt($"https://github.com/{RepoFullName}", Package);
         var third = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120))
             .Await(TestContext.Current.CancellationToken);
         third.Held.Should().BeEmpty(
-            "the control: a PROVEN ref lands the same tree the partition's own writer is held to, "
-            + "so the two agree and nothing is held — the gate must not read 'this partition has a "
-            + "second writer' as 'never install here again'");
+            "the control: a PROVEN ref into the partition's OWN repository lands the same tree the "
+            + "partition's writer is held to, so the two agree and nothing is held — the gate must "
+            + "not read 'this partition has a second writer' as 'never install here again'");
         third.Packages.Should().Equal(new[] { Package });
         (await Record())!.InstalledFromRef.Should().Be(SealedSha);
         (await Lesson()).Should().Be("# Lesson, as sealed",
             "and the control really WROTE — the partition now holds the sealed tree, the same one "
             + "its sync entry is held to, which is the state the two writers may share");
+    }
+
+    /// <summary>
+    /// Re-points the partition's <c>_GitSync</c> at a repository and subdirectory — the one thing
+    /// that differs between the #4625 hold and the control that must install.
+    /// </summary>
+    /// <param name="repositoryUrl">The repository the partition's own writer imports from.</param>
+    /// <param name="subdirectory">The subdirectory within it.</param>
+    private async Task PointTheSyncAt(string repositoryUrl, string? subdirectory)
+    {
+        var path = $"{Package}/{GitHubSyncService.ConfigId}";
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Update(node => node with
+            {
+                Content = new GitHubSyncConfig
+                {
+                    RepositoryUrl = repositoryUrl,
+                    Branch = "main",
+                    Subdirectory = subdirectory,
+                },
+            })
+            .Should().Within(TestTimeouts.WriteConvergence)
+            .Emit("the arm below turns on this edit, so it has to have landed",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        // 🚨 Read it back THROUGH the decision under test, never off the node: a write that landed
+        // and a seam that re-read it are different facts, and the arm below is only meaningful once
+        // the gate itself can see the new repository. Waiting on the gate is also what makes a
+        // failure here read as "the seam never saw the edit" rather than as the arm's own verdict.
+        await Observable.Interval(TestTimeouts.Quick / 20).StartWith(0L)
+            .SelectMany(_ => PartitionContentOwnership.ImportedFromAnotherRepository(
+                Mesh, Package, RepoFullName, Package))
+            .Where(mismatch => mismatch is null)
+            .FirstAsync()
+            .Timeout(TestTimeouts.CrossSilo)
+            .Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>
