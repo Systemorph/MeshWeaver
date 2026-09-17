@@ -446,11 +446,16 @@ So the mesh teardown awaits **all three**, in order, before the scope is dispose
    async cleanup onto the `AsyncDisposeQueue` during this synchronous-`Dispose()` phase — `Dispose()`
    must never block, so async cleanup is *queued*, not run inline.)
 2. `IoPoolRegistry.DrainAll()` — offloaded ThreadPool I/O. **GRACE, then CANCEL + JOIN — never wait
-   alone, never cancel first.** The drain first lets every in-flight leaf finish on its own: it
-   re-acquires the gate permits one at a time, each under `IoPoolOptions.DrainGrace` (8 s), so every
-   completion restarts the clock and a leaf that is going to finish is never cancelled (a write that
-   would have landed in 50 ms lands). Only a leaf that outlives a whole grace with the pool making
-   no further progress is *wedged*: its call site is captured, and then the pool cancels. 🚨 Do *not*
+   alone, never cancel first.** The drain first lets every in-flight leaf finish on its own: it waits
+   while anything is still outstanding, under `IoPoolOptions.DrainGrace` (8 s) per step, and every
+   *completion* restarts the clock — so a leaf that is going to finish is never cancelled (a write
+   that would have landed in 50 ms lands), and a leaf that reaches the gate while the drain is
+   running extends it rather than consuming someone else's grace (see [the admission count says
+   OUTSTANDING, never PROGRESS](#-the-admission-count-says-outstanding-never-progress--the-grace-needs-a-second-counter)).
+   🚨 The grace is deliberately **not** the gate: re-acquiring permits here would compete with the
+   queued leaves for them, steal their turn and then cancel them at the gate — the very outcome it
+   exists to prevent. Only a leaf that outlives a whole grace with the pool making no further
+   progress is *wedged*: its call site is captured, and then the pool cancels. 🚨 Do *not*
    use the wait-only `WhenDrained(timeout)` in place of that cancel: a live change-feed leaf never
    completes on its own, so a polled wait times out and lets the scope dispose *while the leaf is
    still running* — its ThreadPool thread then dereferences a collectible node ALC's freed metadata
@@ -635,6 +640,101 @@ either disposal defers, or the caller is refused and answers `OperationCanceledE
 the pool will not run is a CANCELLATION, never an `ObjectDisposedException`** — that is the contract
 the region exists to keep, and it is why there is no `catch (ObjectDisposedException)` anywhere in the
 file. Adding one would hide a region that was never entered.
+
+### 🚨 The admission count says OUTSTANDING, never PROGRESS — the grace needs a second counter
+
+The drain's grace is a **stall bound, not a budget**: every completion restarts it, so a burst of ten
+short writes drains in ten completions rather than one budget, and work that keeps finishing is never
+cancelled. The obvious way to implement that — and the way it *was* implemented — is to take a
+baseline of the admission count and wait for it to fall below it.
+
+**That reads progress off a counter that moves in both directions.** `_gateUsers` is a live census:
+it rises on an arrival exactly as far as it falls on a completion. And arrivals during a drain are
+routine rather than exotic, because the pool creates them itself — `Invoke` and `InvokeStream` defer
+their prologue to the ThreadPool (`SubscribeOn`), as does `SubscribeThroughPool`'s setup leaf, so a
+leaf whose `Subscribe()` returned *before* the drain enters its gate region *after* the drain has
+taken its baseline. (`InvokeBlocking` is the exception: its region is taken on the subscriber's
+thread and spans the whole leaf.) Each such arrival then cancels out a
+completion one for one, and the predicate cannot fire until **every** arrival has also finished:
+
+| | what the pool did | what the grace saw |
+|---|---|---|
+| baseline | one leaf running | `outstanding = 1`, wait for `< 1` |
+| +0 ms | three queued leaves reach the gate | `outstanding = 4` |
+| +0 ms | the running leaf **finishes** | `outstanding = 3` — not `< 1` |
+| +800 ms | the next leaf **finishes** | `outstanding = 2` — not `< 1` |
+| +1600 ms | the next leaf **finishes** | `outstanding = 1` — not `< 1` |
+| +2000 ms | *nothing has changed* | grace expires ⇒ **wedged**, cancel |
+
+The per-completion grace had silently become one total budget for the whole queue. The pool made
+progress four times in that window and the drain called it a stall, then cancelled a leaf 400 ms from
+the end of work it was going to finish — accepted work discarded, which is precisely what the grace
+exists to prevent and a contradiction of what the teardown contract promises: *teardown lets accepted
+work finish and NAMES what it had to stop.* This did neither; it discarded the work and reported a
+stall.
+
+**So progress is now counted, not inferred.** `LeaveGateRegion` increments a monotone
+`_admissionsCompleted` (published *after* the census decrement, so a drain that observes the
+completion also observes the settled count behind it), and the two counters answer the two different
+questions the loop actually asks:
+
+```csharp
+var seen = Volatile.Read(ref _admissionsCompleted);
+while (Volatile.Read(ref _gateUsers) - 1 > 0)          // is anything still OUTSTANDING?
+{
+    var progressed = SpinWait.SpinUntil(
+        () => Volatile.Read(ref _admissionsCompleted) != seen,   // has anything FINISHED?
+        _drainGrace);
+    if (!progressed)
+        break;                                          // a whole grace, nothing finished ⇒ wedged
+    seen = Volatile.Read(ref _admissionsCompleted);
+}
+```
+
+A leaf that reaches the gate mid-drain now **extends** the drain — it is outstanding, so the loop
+keeps going — and never consumes the grace of the leaf that finished before it. Nothing about the
+cancel changed: a leaf that outlives a whole grace with nothing finishing is still wedged, still
+cancelled, and still named in `CancelledLeafSites`.
+
+#### How it was found, and why load was not the explanation
+
+It surfaced as a 1-in-5 failure of `IoPoolTest.Drain_restartsTheGraceOnEveryCompletion_…` —
+`Expected 3 … but found 1` — on a machine at load ~29 across 18 cores. **Saturation is the
+condition, never the cause.** It changes nothing about the predicate; it only widens the window in
+which a prologue lands on the far side of the baseline, which is what makes an arrival available to
+mask a completion. Raising the grace, lengthening the leaves or widening the test's margin would
+have bought slack against the load and left the defect exactly where it was.
+
+`IoPoolDrainGraceTest` reproduces it on an **idle** machine instead, by arranging that ordering
+structurally rather than waiting for load to arrange it: a test seam
+(`IoPool.OnDrainGraceBaselineTaken`) runs on the drain's own thread the instant the baseline is
+taken, subscribes the queued leaves there, and waits until each is provably *at the gate* before the
+grace clock starts. The queue then outlasts one grace **by construction** — three 800 ms leaves
+against a 2000 ms grace, and `Task.Delay` never fires early — so the red is structural and load can
+only make it redder. Its sibling test is the control that keeps the fix honest: a leaf that reaches
+the gate after the baseline and then *wedges* is still cancelled and still named, so the fix cannot
+have degenerated into unconditional patience.
+
+#### 🚨 The residue: a leaf between `Subscribe()` and its prologue is invisible, and that is separate
+
+Closing this closes the masking, not the whole window. Between `Subscribe()` returning and the
+ThreadPool running the prologue, a leaf is counted by nothing at all — the drain cannot extend a
+grace for work it cannot see, and if the outstanding count reaches zero in that gap the grace simply
+ends. **Three of the four entry points have such a window**, and the consequence is not the same in
+each:
+
+| entry point | region taken | consequence of the gap |
+|---|---|---|
+| `Invoke` / `InvokeStream` | inside the `SubscribeOn`'d body | the leaf is cancelled at its gate wait when it finally arrives, too late even to be **named** — accepted work discarded silently |
+| `SubscribeThroughPool` (setup leaf) | outer region released in the subscribe's `finally`, before the leaf runs | milder: the drain registration is already **armed**, and the leaf re-checks its linked token before `source.Subscribe`, so the leg is refused and **terminated** rather than run after teardown. The use-after-unload precondition is not reopened; what is lost is that the drain does not *wait* for it |
+| `InvokeBlocking` | subscriber's thread, spanning the whole leaf | **none** |
+
+That window is the pool's own making and is structurally evident in the code, but it was **not** the
+mechanism measured here and is not closed by this change. It is tracked as **#4555**, separately and
+deliberately: closing it means moving the admission onto the subscriber's thread, which is a change
+to the subscribe path — the same path #4530 / #4545 are editing — rather than to the drain. Both
+defects can produce the same observable symptom, a queued leaf cancelled during a drain, which is
+exactly why they are worth keeping apart.
 
 ### 🚨 The gate permit is the DRAIN'S SIGNAL — so a leaf publishes it LAST
 
