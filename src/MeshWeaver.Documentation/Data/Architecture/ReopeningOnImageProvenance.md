@@ -85,15 +85,18 @@ Two places can supply it, and the first is nearly free:
    memex.systemorph.com, that payload names no pod, no image and no commit — it is a prose census.
    `/api/version` is the endpoint that answers, and it answers for whichever replica takes the
    request, which is why it has to be probed **per pod** rather than through the ingress.
-2. **The watcher may already hold a label it throws away.** `LokiClient` parses Loki's stream
-   label-set into a `Dictionary<string, string>` and reads exactly two keys — `namespace` and `pod`.
-   Every other label the shipper attaches is already in that dictionary and is dropped. If the
-   relabel config attaches an image or container-image label, the chain's missing link is one
-   `Label(stream, "…")` call. **Unverified:** the shipper's relabel config lives in the cluster and
-   was not read for this page, so this is a possibility to check, not a plan to rely on.
+2. ~~**A Loki label the watcher already throws away.**~~ 🚨 **Dropped, and the reason is worth
+   keeping.** `LokiClient` does parse Loki's stream label-set into a `Dictionary<string, string>` and
+   read only `namespace` and `pod`, so *if* the shipper attached an image label it would be one
+   `Label(stream, "…")` away. Nothing supports that it does: the log-shipping stack's relabel config
+   is **not in any fleet repository**, and every Loki selector the fleet actually ships — the
+   red-log alert rule and all four observability dashboards — uses `namespace` and `pod` and nothing
+   else. Confirming or refuting it needs a Loki label query, which is break-glass. An unverified
+   option left standing in a design page gets implemented by the next reader as though it were a
+   plan, so it is struck rather than carried.
 
-Option 1 is the one a config change elsewhere cannot take away, and it reuses a probe that already
-runs.
+Option 1 is therefore the route, and it is also the one a config change elsewhere cannot take away:
+it reuses a probe that already runs, against an endpoint this repository owns.
 
 ## The rule
 
