@@ -2198,6 +2198,20 @@ jobs:
     - name: "The ci-failure ledger can say no (self-test)"
       run: python3 .github/scripts/ci-failure-ledger.py --self-test
 
+    # 🚨 The CI object store (ci-artifact-store.py) — the seam that lets a module bundle's DURABLE
+    # copy live on our own infra instead of in GitHub Actions storage (maintainer, 2026-09-17: "we
+    # still incur cost for github actions … please see that it goes to 0"). Core owns the script and
+    # every satellite fetches it at its scripts ref, and core is the ONE repo that must never use it:
+    # this repository is public, its Actions storage is free, and a fork PR holds no credential at
+    # all. So the rule proven here first is THE DEGRADE RULE — no store declared resolves to `gha`
+    # and exits 0 — because it is the mode core itself runs in and therefore the one whose breakage
+    # would be invisible until a satellite's lane went red. The rest: a locator carries the store and
+    # a sha256 and is refused when either disagrees, `put` is idempotent by content, a declared store
+    # that cannot be reached is RED under --require and never a quiet return to GitHub artifacts, and
+    # an `az` failure names the account rather than being swallowed.
+    - name: "The CI artifact store degrades to GitHub artifacts, and can say no (self-test)"
+      run: python3 .github/scripts/ci-artifact-store.py --self-test
+
     # 🚨 combo-verify.yml fires on `workflow_run` / `workflow_dispatch`, NEVER on `pull_request`, so
     # nothing else on this PR opens it — the same blind spot #2642 cost 33 hours on. Its `preflight`
     # is the only thing between "no per-instance credential was provisioned" and a lane that
