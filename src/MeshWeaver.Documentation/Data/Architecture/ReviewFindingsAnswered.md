@@ -28,15 +28,26 @@ thread leaves the pull request `mergeable_state: blocked` with every build green
 the same word REST returns for a pull request merely waiting its turn in the queue. Three pull
 requests sat green, armed and silently OUTSIDE the merge queue for ~45 minutes on the evening this
 landed, and nothing in the REST view distinguished that from progress. If a green, armed pull
-request is not merging, read this check before anything else, and read the merge queue itself
-(`mergeQueue(branch:"main"){entries{...}}`) rather than `mergeable_state` — the queue is the one
-thing REST cannot express.
+request is not merging, read this check before anything else, and read the merge queue ITSELF rather than
+`mergeable_state` — the queue is one of the two things REST cannot express:
+
+```bash
+gh api graphql -f query='{repository(owner:"Systemorph",name:"MeshWeaver"){
+  mergeQueue(branch:"main"){entries(first:20){totalCount nodes{position state
+  pullRequest{number}}}}}}'
+```
+
+A `totalCount` that does not contain your pull request, while other pull requests merge through it,
+is the reading that separates "held" from "waiting".
 
 🚨 **It is answered by replying ON the thread**, and nothing else does it:
 
 ```bash
-gh api repos/Systemorph/MeshWeaver/pulls/<n>/comments/<comment-id>/replies -f body='…'
+gh api "repos/Systemorph/MeshWeaver/pulls/<n>/comments/<comment-id>/replies" -f body='…'
 ```
+
+🚨 Quote the path. Unquoted, the shell reads `<n>` as a redirection and the command fails
+before `gh` runs — which looks like a broken instruction rather than a quoting mistake.
 
 A PR-level issue comment does NOT count, however thorough — that mistake cost the same session
 another round-trip — and neither does resolving the thread. The check's own log names each
