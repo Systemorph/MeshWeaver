@@ -1070,6 +1070,54 @@ previously-silent cell answers `OperationCanceledException` at 9.7 µs. The only
 `IoPoolCancelledBlockingLeafTest` (the queued-then-drained path, and the unsubscribe that must stay
 silent).
 
+### 🚨 ADMISSION is taken on the subscriber's thread, so "accepted" means one thing
+
+Three of the four entry points deferred their whole prologue to the ThreadPool (`SubscribeOn`) and
+took their admission region **inside** it. Between a caller's `Subscribe()` returning and that
+prologue running, the leaf was counted by **nothing** — not `_gateUsers`, not `_inFlight`, not
+`CurrentlyWaiting`. The caller believed the work was queued; the pool did not know it existed
+(#4555).
+
+`Drain()` waits while anything is outstanding and gives it a grace. A leaf in that window is
+outstanding to nobody, so the drain never enters the grace at all, cancels the pool token, and the
+leaf then arrives to find itself cancelled — too late even to be counted in
+`LeavesCancelledAfterGrace`, which is captured *before* the cancel. **Measured on `main`**, subscribing
+one leaf and draining immediately: **50 of 50** for `Invoke` and **50 of 50** for `InvokeStream` lost
+the work, terminated the subscriber with a cancellation, and reported `LeavesCancelledAfterGrace == 0`.
+That is accepted work discarded in silence — the exact outcome #3291 forbids (*teardown lets accepted
+work finish and NAMES what it had to stop*).
+
+**The fix is where the region is taken, not a new counter.** `Invoke`, `InvokeStream` and
+`SubscribeThroughPool`'s setup leaf now enter the region **synchronously, on the subscriber's thread**
+— which is what `InvokeBlocking` always did — and the leaf claims it when its prologue starts:
+
+```csharp
+if (!TryEnterGateRegion())
+    return RefuseOffSubscriber(observer);          // a refusal still leaves on a POOL thread (#4530)
+
+var regionOwner = 0;                               // 0 unclaimed · 1 the leaf · 2 an unsubscribe
+// prologue:   if (Interlocked.CompareExchange(ref regionOwner, 1, 0) != 0) throw …   // already released
+// unsubscribe: if (Interlocked.CompareExchange(ref regionOwner, 2, 0) == 0) LeaveGateRegion();
+```
+
+The CAS is the whole protocol, and it exists because **only one of the two may release**: a leaf that
+has started still touches `_gate` and `_poolCts`, so an unsubscribe releasing the region under it
+would reopen the hole #2146 closed. A leaf that never started is released by the unsubscribe, so a
+subscription dropped before its prologue cannot leak a region and park `Disposed` forever.
+
+What does **not** change: the work still runs on a pool thread (the `SubscribeOn` is untouched — only
+the admission moved), refusals still leave off the subscriber's thread, and the region still ends with
+the **setup leaf** for `SubscribeThroughPool`, never with the long-lived subscription — holding it for
+a live change feed would park disposal behind every feed routed through the pool.
+
+**What it costs.** `Disposed` now waits for a leaf that has been accepted but whose prologue has not
+run, where before it could complete and leave that leaf to be refused on arrival. That is the correct
+direction — the pool waits for work it accepted — and it is bounded by the ThreadPool getting to the
+prologue. Pinned by `IoPoolAcceptedWorkIsAccountedTest`, which parks a prologue on
+`IoPool.OnLeafPrologueStarting` (so the leaf is inside the window by construction, not by racing it)
+and then asserts both halves of the contract: the drain **spends its grace**, and the leaf it has to
+cancel is **counted**. On `main` it fails at `Expected 0 to be greater than 0`.
+
 ---
 
 ## Applied to (current scope)
