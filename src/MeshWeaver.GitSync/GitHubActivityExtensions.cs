@@ -693,7 +693,38 @@ public static class GitHubActivityExtensions
     {
         if (FailedNodesLine(result) is { } failedNodes)
             ctx.Log(failedNodes);
+        if (BundleHeldLine(result) is { } bundleHeld)
+            ctx.Log(bundleHeld);
         ctx.Log(ImportedLine(result, commitish));
+    }
+
+    /// <summary>
+    /// 🚨 <b>The NodeTypes whose SOURCES this import held for their bundle</b> (MeshWeaver#3845
+    /// hole 4) — named on the activity, in the viewer's language, by every import path at once,
+    /// because they all end here.
+    ///
+    /// <para>Warning, not Information: the Space is deliberately NOT at the commit the rest of it
+    /// took, and a reader who is told only "Imported" would draw the opposite conclusion. The
+    /// activity's terminal status therefore reads <c>Warning</c>, which is the honest state — nothing
+    /// failed, and nothing is complete either.</para>
+    /// </summary>
+    private static LogMessage? BundleHeldLine(StaticRepoImportResult result)
+    {
+        if (result.BundleHeldNodeTypePaths.Count == 0)
+            return null;
+        const int Named = 10;
+        var paths = string.Join(", ", result.BundleHeldNodeTypePaths.Take(Named))
+            + (result.BundleHeldNodeTypePaths.Count > Named
+                ? $", … (+{result.BundleHeldNodeTypePaths.Count - Named} more)"
+                : "");
+        return new LogMessage(
+                $"⏸ {result.BundleHeldNodeTypePaths.Count} NodeType(s) keep the sources their adopted "
+                + "build was compiled from — no bundle for this instance's framework identity carries "
+                + $"the repository's newer sources yet: {paths}. They advance when one does, or when "
+                + "this instance rolls onto a platform that has one.",
+                LogLevel.Warning)
+            .WithKey("activity.gitsync.bundleHeldTypes",
+                ("count", result.BundleHeldNodeTypePaths.Count), ("paths", paths));
     }
 
     /// <summary>

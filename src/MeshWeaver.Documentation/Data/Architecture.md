@@ -295,6 +295,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Install Readability](InstallReadability) — the two doors an install can open, and the cover-grant deadlock detector
 - [A Module's Static Web Assets](ModuleStaticAssets) — a module's CSS/JS ride the bundle in their own folder and must land MODULE-RELATIVE beside the entry assembly; anything that copies only the closure loads perfectly and 404s every asset behind one Debug line
 - [Static Repo Import](StaticRepoImport)
+- [Adopt Then Sync, Per NodeType](AdoptThenSyncPerNodeType) — the seal is a REPOSITORY fact and adoption is a per-NodeType one, so landing a Space on the sealed commit is not enough: an adopted type's sources wait for the bundle built from them, the rest of the Space imports, and a partially-held Space keeps the commit it genuinely holds
 - [The Sync-Ref Contract](SyncRefContract) — an import of a repository whose bundles this instance runs lands on the commit they were baked from, whoever asked — a person's Update included since 2026-09-17; every other repository reads a commit CI proved, or a branch tip a person asked for; resolving the ref twice put sources no build had compiled onto two production portals for five hours
 - [Node Type Compilation](NodeTypeCompilation)
 - [The Platform Image's Closure](PlatformImageClosure) — the image IS the reference set every satellite's modules compile against; the two invariants, and why every consumer used to discover them by failing to compile
