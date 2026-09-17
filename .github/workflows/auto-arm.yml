@@ -93,7 +93,7 @@ permissions:
 jobs:
   arm:
     name: Arm auto-merge on this PR
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     # 🚨 Job-level, not workflow-level, and that is load-bearing now that this file is also called.
     # A concurrency group is per-repository, and a CALLER run and the job it dispatches into this
     # workflow are two separate holders of it: if both named `auto-arm-<n>` the inner job would

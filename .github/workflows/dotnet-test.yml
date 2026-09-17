@@ -2140,6 +2140,16 @@ jobs:
       run: python3 .github/scripts/check-workflow-timeouts.py --self-test
     - name: "Every job is capped at 45 minutes"
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
+    # 💸 GitHub Actions cost is zero (maintainer, 2026-09-17: "we still incur cost for github actions.
+    # wtf? please see that it goes to 0"). A `workflow_call` lane's hosted minutes bill the CALLER, and
+    # every caller of these lanes but core itself is private — so no job inside one may name a literal
+    # runner. It resolves through the private-visibility org variables MW_RUNNER / MW_RUNNER_DOCKER
+    # (the caller's `vars`), falling back to `ubuntu-latest` only where they are invisible: here. The
+    # self-test takes --root so every real runner expression is mutated back to a literal and must fire.
+    - name: "Reusable workflows pick runners through the caller's runner variables — the gate can fail (self-test)"
+      run: python3 .github/scripts/check-reusable-workflow-runners.py --self-test --root .
+    - name: "Reusable workflows pick runners through the caller's runner variables"
+      run: python3 .github/scripts/check-reusable-workflow-runners.py --root .
     # 🚨 THE SELF-TEST TAKES --root AND --fleet ON PURPOSE. Without them only the unit cases run,
     # and those pass against hand-written dicts while the real tree is broken — which is exactly
     # what happened: #3989's self-test asserted "the 2026-09-10 outage shape is caught" and was
