@@ -33,8 +33,28 @@ public sealed class GitHubPartitionSyncSourceProvider(GitHubSyncService sync, IM
     /// gate and the administration page can never disagree about a partition.</remarks>
     public IObservable<bool> IsTracked(string partition)
         => sync.WatchConfigNodes(partition)
-            .Select(nodes => nodes.Any(n =>
-                n.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions)?.RepositoryUrl is { Length: > 0 }));
+            .Select(nodes => nodes.Any(n => Tracks(n) is not null));
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 The same sources as <see cref="IsTracked"/>, minus <see cref="SyncDirection.ExportOnly"/>
+    /// — the one direction that is <c>mesh → repo</c> and REJECTS imports, so nothing it configures
+    /// can overwrite or prune content an installer wrote. Counting it as a writer would hold an
+    /// install on a partition whose only other "writer" cannot write (MeshWeaver#4588). The compile
+    /// control plane keeps asking <see cref="IsTracked"/>, which must stay wide: with the mesh as
+    /// the source of truth, its live source IS current and the type must compile rather than park.
+    /// </remarks>
+    public IObservable<bool> ImportsContent(string partition)
+        => sync.WatchConfigNodes(partition)
+            .Select(nodes => nodes.Any(n => Tracks(n) is { Direction: not SyncDirection.ExportOnly }));
+
+    /// <summary>The source's configuration when it names a repository, else null — one reading of
+    /// the node for both questions, so they can never disagree about which sources exist.</summary>
+    private GitHubSyncConfig? Tracks(MeshNode node)
+    {
+        var config = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions);
+        return config?.RepositoryUrl is { Length: > 0 } ? config : null;
+    }
 
     /// <inheritdoc />
     public string Describe(MeshNode source)

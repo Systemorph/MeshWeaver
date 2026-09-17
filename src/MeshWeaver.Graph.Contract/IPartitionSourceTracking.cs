@@ -30,4 +30,26 @@ public interface IPartitionSourceTracking
     /// <summary>Live answer for <paramref name="partition"/> (the top-level path segment):
     /// whether at least one configured source of this kind tracks it.</summary>
     IObservable<bool> IsTracked(string partition);
+
+    /// <summary>
+    /// Whether at least one configured source of this kind WRITES this partition's content — i.e.
+    /// imports repo → mesh. The narrower half of <see cref="IsTracked"/>, and the one an
+    /// installer's "am I the only writer here?" question needs (MeshWeaver#4588).
+    ///
+    /// <para>🚨 <b>The two questions differ for an EXPORT-ONLY source, and each consumer needs its
+    /// own.</b> A `mesh → repo` source makes the repository a mirror of the mesh and rejects
+    /// imports, so nothing can overwrite or prune what an installer wrote: the installer IS the
+    /// only writer, and holding an install there would be a false positive. The compile control
+    /// plane's question is the opposite way round — with the mesh as the source of truth, its live
+    /// source IS current, so that plane must keep reading <see cref="IsTracked"/> and must not be
+    /// narrowed by this. One shared bit answering both is how they would come to disagree.</para>
+    ///
+    /// <para>The default is <see cref="IsTracked"/> — the conservative answer and the pre-#4588
+    /// behaviour — so a provider that cannot tell the directions apart keeps treating every tracked
+    /// partition as written. Same contract otherwise: live, re-emitting, never stalling.</para>
+    /// </summary>
+    /// <param name="partition">The partition (the top-level path segment).</param>
+    /// <returns>A live observable; <see langword="true"/> while a source of this kind imports into
+    /// the partition.</returns>
+    IObservable<bool> ImportsContent(string partition) => IsTracked(partition);
 }
