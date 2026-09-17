@@ -57,6 +57,7 @@ public class ColdEmptyInitialIsNotCachedTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 240_000)]
     public async Task AFrameNobodyAnswered_IsNotReplayedAsTheAnswerForever()
     {
+        var ct = TestContext.Current.CancellationToken;
         var cache = Cache;
         var id = $"cold-initial-{Guid.NewGuid():N}";
         var query = $"path:{NodePath}";
@@ -64,7 +65,7 @@ public class ColdEmptyInitialIsNotCachedTest(ITestOutputHelper output) : Monolit
         // FIRST read — the provider completes without an Initial (the cold moment). The merge
         // counts that as empty so nothing hangs, which is the behaviour this test must NOT break.
         var cold = await cache.GetQuery(id, Mesh.JsonSerializerOptions, query)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.Empty(cold);
         Assert.Equal(1, provider.Subscriptions);
 
@@ -74,7 +75,7 @@ public class ColdEmptyInitialIsNotCachedTest(ITestOutputHelper output) : Monolit
         // the life of the process.
         var answered = await cache.GetQuery(id, Mesh.JsonSerializerOptions, query)
             .Where(nodes => nodes.Any())
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.Equal(NodePath, answered.Single().Path);
         Assert.True(provider.Subscriptions >= 2,
             "the cold chain must not be kept: the second read has to ASK the provider again, "
@@ -87,18 +88,19 @@ public class ColdEmptyInitialIsNotCachedTest(ITestOutputHelper output) : Monolit
         // The control arm, and the property this fix must preserve: a snapshot every provider
         // answered keeps its Replay(1) — one upstream subscription, replayed to later callers.
         // Without this arm the fix could "pass" by never caching anything.
+        var ct = TestContext.Current.CancellationToken;
         var cache = Cache;
         var id = $"warm-initial-{Guid.NewGuid():N}";
         var query = $"path:{NodePath}";
         provider.AnswerFromTheStart();
 
         var first = await cache.GetQuery(id, Mesh.JsonSerializerOptions, query)
-            .Where(nodes => nodes.Any()).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .Where(nodes => nodes.Any()).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.Equal(NodePath, first.Single().Path);
         var afterFirst = provider.Subscriptions;
 
         var second = await cache.GetQuery(id, Mesh.JsonSerializerOptions, query)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         Assert.Equal(NodePath, second.Single().Path);
         Assert.Equal(afterFirst, provider.Subscriptions);
     }
