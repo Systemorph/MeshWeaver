@@ -477,7 +477,10 @@ change-feed resubscribe latch **stay armed** and the subscriber rehydrates after
 ## A recycle owes its subscribers a goodbye — and can only say it BEFORE the teardown
 
 A routed `DisposeRequest` is a **recycle**, not an end: the address comes back on the next
-access. The automatic ones exist *for* the people currently looking at a page —
+access. *Why* anyone sends one — a hub binds its configuration once at activation and is then pinned
+by address, so it serves that state until it is torn down — is
+[Stale State Until a Recycle](/Doc/Architecture/StaleStateUntilRecycle). The automatic ones exist
+*for* the people currently looking at a page —
 `NodeTypeEnrichmentHelpers.WithOverlaySelfHeal` recycles an instance hub the moment its NodeType
 reaches a usable build, so the compile-progress overlay is replaced by the real page;
 `NodeTypeRebindWatcher` and the stale-build convergence branch do the same for a superseded
