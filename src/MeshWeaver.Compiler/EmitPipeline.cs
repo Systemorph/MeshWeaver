@@ -54,9 +54,24 @@ public static class EmitPipeline
     /// list has always produced (<see cref="CompileWarning.Describe"/> is injective, so
     /// distinct-then-sort over tuples and over their renderings agree).</para>
     /// </summary>
+    /// <remarks>
+    /// 🚨 <see cref="CompileWarning.NotReported"/> is applied HERE, at the single point every
+    /// consumer reads warnings through, and it is the in-mesh compile's <c>NoWarn</c> — the parity
+    /// that makes "in-mesh C# is held to the standard <c>src/</c> is held to" true rather than
+    /// aspirational. A raw <see cref="CSharpCompilation"/> applies no <c>NoWarn</c> at all, so
+    /// before this filter the in-mesh compile was the ONLY compiler in the fleet reporting the .NET
+    /// SDK's own default suppressions (<c>CS1701</c>/<c>CS1702</c>, 95 baseline entries in
+    /// MeshWeaver.Plugins alone, unpayable by any author) and core's own <c>src/</c> doc-completeness
+    /// suppressions (<c>CS1591</c>/<c>CS1573</c>/<c>CS1712</c>). Filtering at collection rather than
+    /// through <c>WithSpecificDiagnosticOptions</c> is deliberate: the options are REFLECTED into
+    /// <see cref="GeneratedInputIdentity.OptionsFingerprint"/>, so suppressing there would change
+    /// the content key of every NodeType in the fleet and force one global recompile — a rollout
+    /// cost for a reporting decision.
+    /// </remarks>
     internal static IReadOnlyList<CompileWarning> Collect(IEnumerable<Diagnostic> diagnostics)
         => diagnostics
             .Where(d => d.Severity == DiagnosticSeverity.Warning && !d.IsSuppressed)
+            .Where(d => !CompileWarning.IsNotReported(d.Id))
             .Select(d => new CompileWarning(d.Id, d.GetMessage(), Where(d)))
             .Distinct()
             .OrderBy(w => w.Describe(), StringComparer.Ordinal)
