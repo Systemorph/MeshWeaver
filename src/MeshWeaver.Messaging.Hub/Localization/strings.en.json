@@ -1003,6 +1003,8 @@
   "ui.typeRequired": "Type *",
   "ui.noComments": "No Comments",
   "ui.noContentYet": "No content yet. Click Edit to add content.",
+  "ui.markdownContentUnreadable": "This page has content that cannot be displayed.",
+  "ui.markdownContentUnreadableHint": "The text is still stored, but it is saved in a shape this page cannot read (it holds: {0}). Do not start editing — saving would replace what is stored. Ask an administrator to repair the node's content.",
   "ui.notebookEmpty": "This notebook is empty.",
   "ui.writingCode": "Writing code",
   "ui.delegatingTo": "Delegating to",

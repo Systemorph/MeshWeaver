@@ -1003,6 +1003,8 @@
   "ui.typeRequired": "Typ *",
   "ui.noComments": "Keine Kommentare",
   "ui.noContentYet": "Noch kein Inhalt. Zum Hinzufügen auf Bearbeiten klicken.",
+  "ui.markdownContentUnreadable": "Diese Seite enthält Inhalt, der nicht angezeigt werden kann.",
+  "ui.markdownContentUnreadableHint": "Der Text ist weiterhin gespeichert, liegt aber in einer Form vor, die diese Seite nicht lesen kann (enthalten ist: {0}). Bitte nicht mit dem Bearbeiten beginnen — beim Speichern würde der gespeicherte Inhalt ersetzt. Wenden Sie sich an eine Administratorin oder einen Administrator, um den Knoteninhalt zu reparieren.",
   "ui.notebookEmpty": "Dieses Notebook ist leer.",
   "ui.writingCode": "Code wird geschrieben",
   "ui.delegatingTo": "Delegiert an",
