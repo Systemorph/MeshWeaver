@@ -106,6 +106,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Reading & writing nodes
 
 - **Start here:** [CQRS — Queries vs. Content Access](CqrsAndContentAccess)
+- [An Answer Nobody Gave Is Not Cached](AnswerNobodyGaveIsNotCached) — a synced chain replays its FIRST frame for the life of the process, and a provider that completes without an Initial is counted as an empty one, so a cold moment used to become a permanent false "absent"; the frame now names who never answered and an unanswered frame is delivered but not kept
 - [MeshNode Stream Cache](MeshNodeStreamCache)
 - [Update Queue Ownership](UpdateQueueOwnership) — one published queue per path, retained until accepted work settles
 - [Request via Stream Update](RequestViaStreamUpdate)

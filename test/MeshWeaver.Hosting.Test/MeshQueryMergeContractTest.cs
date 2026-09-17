@@ -106,6 +106,66 @@ public class MeshQueryMergeContractTest
 
         change.ChangeType.Should().Be(QueryChangeType.Initial);
         change.Items.Should().BeEmpty();
+        // 🚨 …and the frame SAYS SO. An empty nobody answered is not the same fact as an empty
+        // every provider agreed on, and a consumer that CACHES the answer needs the difference:
+        // MeshNodeStreamCache replays a first frame for the life of the process, so a fabricated
+        // empty became a node reading absent forever (MeshWeaver#4557, #1246).
+        change.SilentProviders.Should().NotBeNull()
+            .And.Contain("silentA").And.Contain("silentB");
+    }
+
+    /// <summary>
+    /// The counterpart, and the one that keeps the flag meaningful: when every provider ANSWERED,
+    /// nothing is named — an empty result from providers that all spoke is a real answer, cacheable
+    /// like any other.
+    /// </summary>
+    // 240_000, not the file's older 30_000: an attribute argument must be a constant, and the
+    // outer bound has to DOMINATE the inner TestTimeouts.Convergence wait (216 s at the CI
+    // factor) or the xunit kill pre-empts it and the failure cannot say what it waited for.
+    [Fact(Timeout = 240_000)]
+    public async Task EveryProviderAnswered_NamesNoSilentProvider()
+    {
+        var emptyButAnswering = new FakeProvider("answers-empty", () => Observable.Return(Initial()));
+        var answering = new FakeProvider("answers", () => Observable.Return(Initial(Node("a/one"))));
+
+        var query = new MeshQuery([emptyButAnswering, answering], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.SilentProviders.Should().BeNull(
+            "every provider emitted its Initial, so this snapshot is an answer");
+    }
+
+    /// <summary>
+    /// A LONE provider that completes without an Initial used to leave the merged stream completing
+    /// with NO frame at all — and a consumer that caches the first frame caches "completed,
+    /// nothing" just as durably as a fabricated empty. The single-provider path now honours the
+    /// same contract as the merge: deliver an empty Initial that NAMES the provider.
+    /// </summary>
+    // 240_000, not the file's older 30_000: an attribute argument must be a constant, and the
+    // outer bound has to DOMINATE the inner TestTimeouts.Convergence wait (216 s at the CI
+    // factor) or the xunit kill pre-empts it and the failure cannot say what it waited for.
+    [Fact(Timeout = 240_000)]
+    public async Task ASingleSilentProvider_AnswersAnEmptyInitialThatNamesIt()
+    {
+        var silent = new FakeProvider("lonely-silent", Observable.Empty<QueryResultChange<MeshNode>>);
+
+        var query = new MeshQuery([silent], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.ChangeType.Should().Be(QueryChangeType.Initial);
+        change.Items.Should().BeEmpty();
+        change.SilentProviders.Should().NotBeNull().And.ContainSingle()
+            .Which.Should().Be("lonely-silent");
     }
 
     /// <summary>
