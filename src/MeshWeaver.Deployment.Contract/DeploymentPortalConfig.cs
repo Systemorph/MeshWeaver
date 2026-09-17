@@ -191,8 +191,7 @@ public static class DeploymentPortalConfig
     {
         var names = (requiredModules ?? Enumerable.Empty<string>())
             .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Select(name => name.Trim())
-            .Select(name => name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name : name + ".dll")
+            .Select(WithDllSuffix)
             .ToArray();
         var entries = ImmutableList.CreateBuilder<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -218,8 +217,7 @@ public static class DeploymentPortalConfig
         {
             if (builder.ContainsKey(slot) || string.IsNullOrWhiteSpace(assembly))
                 continue;
-            var name = assembly.Trim();
-            builder[slot] = name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name : name + ".dll";
+            builder[slot] = WithDllSuffix(assembly);
         }
         return builder.ToImmutable();
     }
@@ -381,6 +379,78 @@ public static class DeploymentPortalConfig
                     + "entry per index) and MaxChartRenderedRequiredModuleSlot together, or move "
                     + "the entry into the contiguous requiredModules list.");
         return problems.ToImmutable();
+    }
+
+    /// <summary>
+    /// Why this record's POSITIONAL boot-module slots cannot be trusted, or an empty list when it
+    /// declares none — the ROUTE-NEUTRAL half, wrong under Aspire exactly as in the cluster.
+    ///
+    /// <para>🚨 <b>A slot names an index in an array whose OTHER HALF this record cannot read.</b>
+    /// <c>Modules:Required</c> merges by index, so slot N means "replace whatever the image's own
+    /// list holds at N" — and the image's list lives in another repository, versions on its own
+    /// schedule and is not given to the record at render time. The advice that produced every one
+    /// of these slots ("put it at the first free index") is therefore a measurement of a list the
+    /// record does not own, taken once and silently invalidated by the next append.</para>
+    ///
+    /// <para>🚨 <b>It has already happened twice, on the same instance.</b> Memex#131:
+    /// <c>Modules__Required__5</c> named MCP over an image whose index 5 had become
+    /// <c>MeshWeaver.Social.dll</c>. Memex#378, measured 2026-09-16 and unchanged at record v92 on
+    /// 2026-09-17: <c>requiredModuleSlots {"7": "MeshWeaver.Mcp.dll"}</c> over an image whose list
+    /// has grown from seven entries to nine, so index 7 is now
+    /// <c>MeshWeaver.Markdown.Collaboration.dll</c> — the collaboration pack is REQUIRED BY NOBODY
+    /// on the public instance, and a pod that never landed it reports Healthy and rolls out green.
+    /// Neither shadow was visible: the module is not MISSING (nothing asks for it), so the
+    /// readiness contract has nothing to say, and the override is rendered, so the key-coverage
+    /// gate passes.</para>
+    ///
+    /// <para><b>The rule, and why it is this one.</b> A positional slot is sound only where the
+    /// record owns the WHOLE index space — which is exactly what
+    /// <see cref="DeploymentContent.RequiredModulesAuthoritative"/> claims (#4476/#4483). Under the
+    /// claim the image's list does not apply at any index, so no entry of it can be shadowed and a
+    /// slot is merely a position in the record's own set. Without the claim the slot's meaning is
+    /// whatever the image happened to ship that day, and no amount of care in the record can fix
+    /// that — so this reports it rather than waiting for the next append to make it wrong
+    /// again.</para>
+    ///
+    /// <para>🚨 <b>This is a rule with no production caller yet</b>, exactly like
+    /// <see cref="ChartModuleSlotProblems"/> beside it: the one renderer that asks a record "why
+    /// can you not be deployed" is <c>HelmValues.Problems</c> in MeshWeaver.Plugins, and it asks
+    /// neither. Until it does, both are pinned here and reach no deploy — stated so the next reader
+    /// does not mistake a defined surface for an enforced one.</para>
+    ///
+    /// <para>Pure.</para>
+    /// </summary>
+    public static ImmutableList<string> PositionalModuleSlotProblems(DeploymentContent? record)
+    {
+        if (record is null || record.RequiredModuleSlots.IsEmpty || record.RequiredModulesAuthoritative)
+            return ImmutableList<string>.Empty;
+
+        var problems = ImmutableList.CreateBuilder<string>();
+        foreach (var (slot, assembly) in record.RequiredModuleSlots)
+            problems.Add(
+                $"required module '{WithDllSuffix(assembly)}' is declared at SLOT {slot}, and this record "
+                + "does not claim the complete set — so the slot replaces whatever the IMAGE's own "
+                + $"{ModulesSection}:Required list holds at index {slot}, which this record cannot "
+                + "read and which versions on its own schedule (it has already grown from seven "
+                + "entries to nine underneath a slot chosen as 'the first free index', twice: "
+                + "Memex#131 and Memex#378). The replaced module is then required by nobody, which "
+                + "nothing reports — it is not missing, so readiness is silent, and the key IS "
+                + "rendered, so coverage passes. State the complete set in requiredModules and set "
+                + "requiredModulesAuthoritative, after which no index of the image's list applies "
+                + "and a slot can shadow nothing.");
+        return problems.ToImmutable();
+    }
+
+    /// <summary>
+    /// A stated module name as the render writes it — trimmed, with the <c>.dll</c> suffix added
+    /// when it is not already there. ONE rule, asked by every place that turns a record's word into
+    /// a <c>Modules:Required</c> value, so a record cannot be normalized one way into the entries
+    /// and another into a problem that names it. Pure.
+    /// </summary>
+    private static string WithDllSuffix(string? stated)
+    {
+        var name = (stated ?? "").Trim();
+        return name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name : name + ".dll";
     }
 
     /// <summary>
