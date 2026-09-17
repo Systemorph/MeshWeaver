@@ -77,6 +77,13 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddPluginCatalog()
+            // The tracking seam, REAL: the second test's gate is answered by the shipped GitHub
+            // provider over a real {partition}/_GitSync node, not by a stand-in. With no such node
+            // — every arm of the first test — it answers "nothing tracks this partition", which is
+            // the pre-#4588 behaviour and is what keeps that test measuring what it always did.
+            .AddGitHubSyncTypes()
+            .ConfigureServices(services => services
+                .AddGitHubSyncServices())
             .ConfigureServices(services => services
                 .AddSingleton<IConfiguration>(new ConfigurationBuilder()
                     .AddInMemoryCollection(new Dictionary<string, string?>
@@ -107,6 +114,8 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
 
     private InstanceAutoRegistrationService Installer =>
         Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>();
+
+    private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     [Fact(Timeout = 300_000)]
     public async Task TheBootInstall_LandsOnTheCommitTheSealNames_NeverTheBranch()
@@ -169,6 +178,169 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
             "another repository's seal holds nothing here — this repository is back to 'no publication sealed', the residue");
         (await Read(QuizPath)).Should().NotBeNull("the branch tip's tree is back, so its extra node is too");
         repoClient.FetchedRefs.Skip(fetchesBeforeFourth).Should().NotBeEmpty().And.OnlyContain(r => r == "main");
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE RESIDUE, and what it may not do</b> — Systemorph/MeshWeaver#4588.
+    ///
+    /// <para>The test above removes the branch-tip install wherever a seal can be attributed to the
+    /// source. It cannot be attributed to a REGISTRY source — <see cref="InstanceAutoRegistrationService.ProvenRef"/>
+    /// answers "no repository to attribute a seal to" for a source with no <c>RepoPath</c> — and
+    /// that residue is what the control instance runs. Measured on memex.systemorph.com
+    /// 2026-09-17: <c>Plugins/Hosting</c> was installed at 14:34:30Z with
+    /// <c>installedFromRef: HEAD</c> into <c>Hosting</c>, whose <c>Hosting/_GitSync</c> re-imports
+    /// the same subdirectory at the commit sealed for the running framework (then <c>061976bc</c>,
+    /// which does not carry <c>Hosting/Issue/Source/FleetWatchCadence.cs</c>). Thirteen minutes
+    /// later the record claimed that file and the node was gone; three Hosting NodeTypes could not
+    /// compile and the roll onto the 3.0.0 candidate could not converge.</para>
+    ///
+    /// <para><b>Fails on main.</b> There the residue writes the branch tip into a partition another
+    /// writer keeps current, whatever that writer is held to. The witness is the transport's own
+    /// request log — what a lane ASKED FOR is the one thing it cannot fake.</para>
+    ///
+    /// <para><b>The control is in the same test and differs by one fact</b>: once the repository IS
+    /// sealed for this identity the same sync-owned partition installs again, at the sealed commit.
+    /// The gate discriminates on whether the REF was proven, never on whether the partition has a
+    /// second writer — so it cannot become "the boot install stopped installing".</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task TheBootInstall_HoldsAnUnprovenRef_WhereAnotherWriterKeepsThePartitionCurrent()
+    {
+        // ── Boot 1: nothing sealed, and nothing syncs Course. The residue installs the branch
+        //    tip — today's behaviour, and the precondition that makes the next pass a measurement.
+        var first = await Installer.Completed.FirstAsync().Timeout(TimeSpan.FromSeconds(180))
+            .Await(TestContext.Current.CancellationToken);
+        first.Packages.Should().Equal(new[] { Package });
+        first.Skipped.Should().BeEmpty(
+            "nothing else writes this partition, so there is nothing to hold — a hold here would "
+            + "make every assertion below pass for the wrong reason");
+        (await Record())!.InstalledFromRef.Should().Be("main");
+        (await Lesson()).Should().Be("# Lesson, as of main");
+
+        // ── The one fact that changes: a sync source now keeps Course current. ──────────────────
+        await TrackPartition();
+
+        // ── And it does what a sealed reconcile does: it PRUNES the node its tree does not carry.
+        //    This is the shape that loops on main — the installer's completeness check sees a
+        //    declared node absent, installs in FULL to repair it, the partition's own writer
+        //    removes it again at the next import, and the next boot detects the same shortfall.
+        //    "A detection that REPEATS at an unchanged module version is a repair that did not
+        //    hold" (CatalogLayoutAreas.SkipOrHeal), measured on memex.meshweaver.cloud over ELEVEN
+        //    boots for Feedback/Feedback/Source/FeedbackHandover.
+        await MeshService.DeleteNode(QuizPath)
+            .Should().Within(TestTimeouts.WriteConvergence)
+            .Emit("the prune is the precondition of the repair this gate must not attempt",
+                cancellationToken: TestContext.Current.CancellationToken);
+        (await Read(QuizPath)).Should().BeNull("the prune must have landed, or nothing is measured");
+        var fetchesBeforeTheHold = repoClient.FetchedRefs.Count;
+
+        var second = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120))
+            .Await(TestContext.Current.CancellationToken);
+
+        // ── THE assertion. ─────────────────────────────────────────────────────────────────────
+        (await Read(QuizPath)).Should().BeNull(
+            "THE assertion: an unattended install must not write a ref no publication sealed here "
+            + "names back into a partition another writer keeps current — not even to repair a node "
+            + "that writer deliberately does not carry. On main it writes it back every boot, which "
+            + "is how Hosting/Issue/Source/FleetWatchCadence came to be claimed by a 13-minute-old "
+            + "install and absent from the mesh (MeshWeaver#4588)");
+        repoClient.FetchedRefs.Count.Should().Be(fetchesBeforeTheHold,
+            "and it did not even ASK the transport — what a lane requested is the one thing it "
+            + "cannot fake");
+        second.Packages.Should().BeEmpty("a held package is not a package this pass landed");
+        second.Failed.Should().Be(0,
+            "a hold is not a failure — no retry can prove a ref, and advertising a defect where "
+            + "there is a standing decision is the #2536 mistake one lane over");
+        var held = second.Skipped.Should().ContainSingle(s => s.Package == Package,
+            "the hold is RECORDED, once, with its reason — an install that will never land here is "
+            + "exactly the quiet 'my plugin never updates' this lane must not become").Subject;
+        held.Reason.Should().Contain(Package,
+            "the reason names the partition it is about, or nobody can act on it");
+        held.Reason.Should().Contain("MeshWeaver#4588");
+        (await Record())!.InstalledFromRef.Should().Be("main",
+            "and the record was NOT re-stamped — a hold that moved the record would leave the next "
+            + "delta computed against a claim nothing wrote");
+
+        // ── The control: the SAME sync-owned partition, once the ref IS proven. ────────────────
+        StageSeal(RepoFullName, SealedSha, complete: true);
+        var third = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120))
+            .Await(TestContext.Current.CancellationToken);
+        third.Skipped.Should().BeEmpty(
+            "the control: a PROVEN ref lands the same tree the partition's own writer is held to, "
+            + "so the two agree and nothing is held — the gate must not read 'this partition has a "
+            + "second writer' as 'never install here again'");
+        third.Packages.Should().Equal(new[] { Package });
+        (await Record())!.InstalledFromRef.Should().Be(SealedSha);
+        (await Lesson()).Should().Be("# Lesson, as sealed",
+            "and the control really WROTE — the partition now holds the sealed tree, the same one "
+            + "its sync entry is held to, which is the state the two writers may share");
+    }
+
+    /// <summary>
+    /// The gate's decision, pinned offline so every arm stays separate — including the two that are
+    /// not passes. Folding <see cref="PartitionContentOwner.Undetermined"/> into "proceed" would
+    /// make a seam that faulted read exactly like a partition nothing syncs, and the lane would
+    /// then write a branch tip into a partition it has no evidence about.
+    /// </summary>
+    [Fact]
+    public void UnprovenRefHold_HoldsEverythingButARealNegative()
+    {
+        InstanceAutoRegistrationService.UnprovenRefHold(
+                PartitionContentOwnership.Decide(Package, tracked: false, providerCount: 1), "main")
+            .Should().BeNull(
+                "a mesh WITH a sync layer that says nothing tracks this partition is a real "
+                + "negative — the installer is its only writer and the residue is unchanged");
+
+        InstanceAutoRegistrationService.UnprovenRefHold(
+                PartitionContentOwnership.Decide(Package, tracked: null, providerCount: 0), "main")
+            .Should().BeNull(
+                "a mesh that registers NO tracking provider has no second writer at all — a local "
+                + "mesh, a CI mesh, the bake host — and must keep the pre-#4588 behaviour");
+
+        var tracked = InstanceAutoRegistrationService.UnprovenRefHold(
+            PartitionContentOwnership.Decide(Package, tracked: true, providerCount: 1), "main");
+        tracked.Should().NotBeNull().And.Contain(Package).And.Contain("main",
+            "the hold names the partition AND the ref it refused to land there");
+
+        InstanceAutoRegistrationService.UnprovenRefHold(
+                PartitionContentOwnership.Decide(Package, tracked: null, providerCount: 2), "main")
+            .Should().NotBeNull(
+                "THE arm: a seam that did not answer was NOT checked, and 'I could not tell' is "
+                + "never 'clear to write' — a hold that was wrong is lifted by the next boot, an "
+                + "install that was wrong cannot be taken back");
+    }
+
+    /// <summary>A real <c>{partition}/_GitSync</c> naming a repository — what the settings tab
+    /// writes when a Space is connected — read back through the very decision under test, so a
+    /// false negative cannot be mistaken for a working gate. The repository is deliberately NOT
+    /// this package's: the transport refuses it, exactly as a real client with no credential for it
+    /// would, so the sync writes nothing and the arm measures the INSTALL alone.</summary>
+    private async Task TrackPartition()
+    {
+        await MeshService
+            .CreateNode(new MeshNode(GitHubSyncService.ConfigId, Package)
+            {
+                Name = "GitHub Sync",
+                NodeType = GitHubSyncService.ConfigNodeType,
+                State = MeshNodeState.Active,
+                Content = new GitHubSyncConfig
+                {
+                    RepositoryUrl = "https://github.com/Systemorph/Example",
+                    Branch = "main",
+                },
+            })
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("connecting the partition to a repository is the precondition of the hold",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var verdict = await Observable.Interval(TestTimeouts.Quick / 20).StartWith(0L)
+            .SelectMany(_ => PartitionContentOwnership.Observe(Mesh, Package))
+            .Where(v => v.Owner == PartitionContentOwner.SyncSource)
+            .FirstAsync()
+            .Timeout(TestTimeouts.CrossSilo)
+            .Await(TestContext.Current.CancellationToken);
+        verdict.InstallerOwnsTheContent.Should().BeFalse(
+            "the seam must actually see the sync entry, or the pass below would be held by nothing");
     }
 
     /// <summary>
@@ -253,6 +425,14 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
         public IObservable<RepoSnapshot> Fetch(
             string repositoryUrl, string commitish, string? subdirectory, string accessToken)
         {
+            // Another repository is not this transport's business, and saying so BEFORE recording
+            // keeps the witness clean: the second test connects the partition to a different
+            // repository, and a sync attempt of THAT one must neither appear in FetchedRefs nor
+            // import anything over the package's content. A real client without a credential for it
+            // fails in exactly this place.
+            if (!string.Equals(repositoryUrl, RepoUrl, StringComparison.Ordinal))
+                return Observable.Throw<RepoSnapshot>(new NotSupportedException(
+                    $"This transport answers only for '{RepoUrl}'; '{repositoryUrl}' is another repository."));
             lock (fetched)
                 fetched.Add(commitish);
             return commitish switch
