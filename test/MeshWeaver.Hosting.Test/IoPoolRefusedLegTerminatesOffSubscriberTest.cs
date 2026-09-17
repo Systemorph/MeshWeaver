@@ -32,6 +32,11 @@ namespace MeshWeaver.Hosting.Test;
 /// <c>TaskPoolScheduler</c>, which is where every ADMITTED leaf's terminal already comes from
 /// (13–30 µs on the same measurement).</para>
 ///
+/// <para>Since #4545 the matrix also carries the cell that delivered NOTHING — a blocking leaf the
+/// pool ENDED rather than refused. Its terminal is a cancellation-shaped fault, not a completion,
+/// because <c>InvokeBlocking</c> is a single-value surface and callers fold an empty completion into
+/// a VALUE (see the issue and <c>Doc/Architecture/ControlledIoPooling</c>).</para>
+///
 /// <para>The consequence this protects is in
 /// <c>OrderedRouteDispatcherDrainRecursionTest</c>: a consumer that subscribes the next leg from the
 /// previous leg's terminal walks its whole backlog by recursion when a refusal completes inside the
@@ -51,14 +56,13 @@ public class IoPoolRefusedLegTerminatesOffSubscriberTest
     }
 
     /// <summary>
-    /// Every refusal the four entry points can answer with.
+    /// Every way the four entry points can end a leg they will not carry.
     ///
-    /// <para>🚨 One cell is deliberately absent and named rather than dropped: <c>InvokeBlocking</c>
-    /// built BEFORE a drain and subscribed after is not refused at all — its task is created with an
-    /// already-cancelled token, so the delegate never runs and the continuation's <c>IsCanceled</c>
-    /// arm delivers NOTHING. Measured 0 terminals in 50 subscribes. That is a silent
-    /// non-termination, a different defect from this one, and it is filed as #4545; asserting it
-    /// here would fail this test for a reason it does not fix.</para>
+    /// <para>🚨 The last cell was the hole: <c>InvokeBlocking</c> built BEFORE a drain and subscribed
+    /// after is not refused at build time at all — its task is created with an already-cancelled
+    /// token, so the delegate never runs and the continuation's <c>IsCanceled</c> arm used to deliver
+    /// NOTHING (measured: 0 terminals in 50 subscribes). #4545 gave that arm a terminal, so the cell
+    /// is now asserted here with the other twelve rather than named as an exclusion.</para>
     /// </summary>
     private static IEnumerable<Cell> Cells()
     {
@@ -78,6 +82,9 @@ public class IoPoolRefusedLegTerminatesOffSubscriberTest
             // Built while the pool was alive, subscribed after disposal began — the admission
             // region's refusal, which is reached on SUBSCRIBE and so cannot be answered at build time.
             yield return new Cell($"{name} built before Dispose(), subscribed after", build, pool => pool.Dispose(), BuildBeforeKill: true);
+            // Built while the pool was alive, subscribed after the DRAIN — admitted, then ended by
+            // the pool. InvokeBlocking is the cell that delivered nothing until #4545.
+            yield return new Cell($"{name} built before Drain(), subscribed after", build, pool => pool.Drain(), BuildBeforeKill: true);
         }
     }
 
