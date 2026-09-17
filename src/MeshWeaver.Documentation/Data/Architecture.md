@@ -412,6 +412,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Self-Update on the Control Lane](SelfUpdateControlLane) — detection stays on the instance, the apply is one signed event to the control instance, the chart's one declaration binds the self-patch Role to the poller's intent; no portal holds a credential that changes the cluster
 - [The Continuous Delivery Contract](ContinuousDeliveryContract) — all-or-nothing publication; verify the image, never the tick
 - [Reading a Bake Publication Receipt](BakePublicationReceipt) — the four target outcomes and what each licenses; the one that had no word rendered "already everywhere" as "reached nothing", and two readers acted on it
+- [CD Reconciles the Plugins Seal](CdReconcilesThePluginsSeal) — a set seals on its trio alone, so it can seal with no `plugins` publication for its framework identity; why the reconciler REPAIRS that rather than the seal forbidding it, and the three probe answers of which only one licenses a re-attempt
 - [The Self-Update Schema Wall](SelfUpdateSchemaWall) — every schema-bumping release is un-takeable by self-update, the stall is invisible, and a promoted tag is not a deployable tag
 - [Bake Identity Mismatch](BakeIdentityMismatch) — why a green CD can publish a bake no portal adopts, and the one rule that keeps two images of one commit on one address
 - [Release Availability Gates](ReleaseGates) — one predicate; never roll or build into a release a package cannot survive
