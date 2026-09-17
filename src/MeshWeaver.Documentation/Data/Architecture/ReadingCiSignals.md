@@ -202,9 +202,11 @@ Two bugs that make a monitor lie, both hit in one session:
   both green since the evening before. CD's gate filtered page 1 in `jq`, read `absent/none` for a
   green commit, and walked delivery back to its parent for six hours until the parent's heal budget
   ran out and CD reported delivery STUCK with main green (#4526). **Name the check in the request —
-  `&check_name=<name>` — so the API filters server-side**, or `--paginate` when you really want all
-  of them; `CheckRunReadsAreServerFilteredGuard` holds every workflow to that. The failure grows
-  with the repository's check volume, so a reader that works today starts lying later, silently.
+  `&check_name=<name>` — so the API filters server-side**; `CheckRunReadsAreServerFilteredGuard`
+  holds every workflow to that. `--paginate` is not the alternative it looks like: the flag says
+  pages were requested, not consumed, and `gh api --paginate --jq …` piped into a `read -r` still
+  takes the first line. The failure grows with the repository's check volume, so a reader that
+  works today starts lying later, silently.
 
 ### 🚨 A lookup that cannot reach its target answers the DEFAULT, forever, on every machine
 

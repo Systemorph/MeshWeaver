@@ -35,15 +35,21 @@ namespace MeshWeaver.Documentation.Test;
 public class CheckRunReadsAreServerFilteredGuard
 {
     /// <summary>
-    /// Every <c>check-runs</c> read in a workflow carries <c>check_name=</c> (or pages the answer
-    /// with <c>--paginate</c>), so the row it needs cannot be truncated away.
+    /// Every <c>check-runs</c> read in a workflow names the check it wants, so the row it needs
+    /// cannot be truncated away.
+    ///
+    /// <para>🚨 <c>--paginate</c> is deliberately NOT accepted as an alternative. The flag on the
+    /// command line says pages were requested, not that they were CONSUMED: <c>gh api --paginate
+    /// --jq …</c> emits one filtered result per page, and the surrounding <c>read -r a b</c> or
+    /// <c>x=$(…)</c> still takes the first line — which is the same truncation wearing a safer
+    /// spelling. A reader that genuinely wants every check-run has to aggregate the pages itself,
+    /// and should say so by changing this guard deliberately rather than by matching a token.</para>
     /// </summary>
     [Fact]
-    public void EveryCheckRunReadNamesTheCheckOrPages()
+    public void EveryCheckRunReadNamesTheCheck()
     {
         var offenders = CheckRunReads()
-            .Where(r => !r.Url.Contains("check_name=", StringComparison.Ordinal)
-                        && !r.PagesExplicitly)
+            .Where(r => !r.Url.Contains("check_name=", StringComparison.Ordinal))
             .ToList();
 
         Assert.True(offenders.Count == 0,
@@ -53,8 +59,10 @@ public class CheckRunReadsAreServerFilteredGuard
             + "row the reader filters for in jq may not be on the page at all — measured on "
             + "be8f452c79, where `Consolidate test results` sat on page 3 and CD read `absent/none` "
             + "for a green commit and stopped delivering (#4526). Add "
-            + "`&check_name=<the check>` so the API does the filtering, or `--paginate` if the "
-            + "reader genuinely wants every check-run.");
+            + "`&check_name=<the check>` so the API does the filtering. If a reader genuinely needs "
+            + "EVERY check-run, it must page AND aggregate them — `--paginate` alone does not do "
+            + "that when the caller reads one line — so change this guard with that reader, not "
+            + "around it.");
     }
 
     /// <summary>
@@ -74,11 +82,12 @@ public class CheckRunReadsAreServerFilteredGuard
             + "verifies nothing.");
     }
 
-    private sealed record Read(string File, int Line, string Url, bool PagesExplicitly);
+    private sealed record Read(string File, int Line, string Url);
 
     /// <summary>
     /// Every <c>commits/&lt;sha&gt;/check-runs…</c> URL in <c>.github/workflows</c>, with the line
-    /// it sits on and whether that same line asks for pagination. Comment lines are skipped: a
+    /// it sits on. BOTH workflow extensions are read — GitHub accepts <c>.yml</c> and <c>.yaml</c>,
+    /// and a guard that knows only one lets a rename walk past it. Comment lines are skipped: a
     /// comment quoting the bad shape is documentation, not a read.
     /// </summary>
     private static IReadOnlyList<Read> CheckRunReads()
@@ -86,7 +95,11 @@ public class CheckRunReadsAreServerFilteredGuard
         var root = Path.Combine(FindRepoRoot(), ".github", "workflows");
         var reads = new List<Read>();
 
-        foreach (var file in Directory.EnumerateFiles(root, "*.yml", SearchOption.TopDirectoryOnly).OrderBy(f => f))
+        var files = Directory.EnumerateFiles(root, "*.yml", SearchOption.TopDirectoryOnly)
+            .Concat(Directory.EnumerateFiles(root, "*.yaml", SearchOption.TopDirectoryOnly))
+            .OrderBy(f => f, StringComparer.Ordinal);
+
+        foreach (var file in files)
         {
             var lines = File.ReadAllLines(file);
             for (var i = 0; i < lines.Length; i++)
@@ -95,11 +108,7 @@ public class CheckRunReadsAreServerFilteredGuard
                 var m = Regex.Match(lines[i], @"commits/[^""'\s]*/check-runs[^""'\s]*");
                 if (!m.Success) continue;
 
-                reads.Add(new Read(
-                    Path.GetFileName(file),
-                    i + 1,
-                    m.Value,
-                    lines[i].Contains("--paginate", StringComparison.Ordinal)));
+                reads.Add(new Read(Path.GetFileName(file), i + 1, m.Value));
             }
         }
 
