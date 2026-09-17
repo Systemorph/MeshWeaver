@@ -3112,30 +3112,6 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     }
 
     /// <summary>
-    /// Drops the TERMINALLY-ERRORED synced query registered for
-    /// (<paramref name="id"/>, <paramref name="signature"/>) so the next
-    /// <c>GetQuery(id, …)</c> builds a fresh chain and re-probes the providers for real,
-    /// instead of replaying the latched terminal to every future subscriber (#1316).
-    ///
-    /// <para>The subscriber that observed the fault still SEES it — this is a cache-hygiene
-    /// step, never a swallow and never a retry. Nothing re-subscribes on its own: the next
-    /// caller decides, and the callers are already paced (a NodeType sources watcher
-    /// re-establishes at 1 Hz; a render subscribes once per render). Concurrent callers cannot
-    /// multiply the re-probe either — <c>AutoConnect(1)</c> means the first of them connects
-    /// the single fresh upstream and the rest attach to its <c>Replay(1)</c>.</para>
-    ///
-    /// <para>Pair-exact on (id, signature), exactly like <see cref="EvictFaultedEntry"/> is on a
-    /// path: a chain that some other caller has ALREADY replaced is left alone, so a late
-    /// terminal arriving from the old chain can never evict the healthy new one. Since #1311 one
-    /// id can hold SEVERAL query sets, so the signature is part of that check — matching on the
-    /// id alone would evict whichever set happened to be stored, which is either a miss (the
-    /// poisoned set survives and replays forever) or the collateral removal of a healthy
-    /// sibling. Unlike the per-path entry there is no upstream to detach — the
-    /// <c>SyncedQueryMeshNodes</c> instance is constructed INSIDE the <c>Observable.Defer</c>, so
-    /// a fresh chain builds a genuinely fresh instance with fresh provider subscriptions, and the
-    /// errored one's <c>Replay(1).RefCount()</c> has already disposed its own upstream.</para>
-    /// </summary>
-    /// <summary>
     /// Drops the chain registered for (<paramref name="id"/>, <paramref name="signature"/>) because
     /// its complete-snapshot frame NAMED providers that never answered — see
     /// <see cref="QueryResultChange{T}.SilentProviders"/> and MeshWeaver#4557. The frame itself was
@@ -3189,6 +3165,30 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         }
     }
 
+    /// <summary>
+    /// Drops the TERMINALLY-ERRORED synced query registered for
+    /// (<paramref name="id"/>, <paramref name="signature"/>) so the next
+    /// <c>GetQuery(id, …)</c> builds a fresh chain and re-probes the providers for real,
+    /// instead of replaying the latched terminal to every future subscriber (#1316).
+    ///
+    /// <para>The subscriber that observed the fault still SEES it — this is a cache-hygiene
+    /// step, never a swallow and never a retry. Nothing re-subscribes on its own: the next
+    /// caller decides, and the callers are already paced (a NodeType sources watcher
+    /// re-establishes at 1 Hz; a render subscribes once per render). Concurrent callers cannot
+    /// multiply the re-probe either — <c>AutoConnect(1)</c> means the first of them connects
+    /// the single fresh upstream and the rest attach to its <c>Replay(1)</c>.</para>
+    ///
+    /// <para>Pair-exact on (id, signature), exactly like <see cref="EvictFaultedEntry"/> is on a
+    /// path: a chain that some other caller has ALREADY replaced is left alone, so a late
+    /// terminal arriving from the old chain can never evict the healthy new one. Since #1311 one
+    /// id can hold SEVERAL query sets, so the signature is part of that check — matching on the
+    /// id alone would evict whichever set happened to be stored, which is either a miss (the
+    /// poisoned set survives and replays forever) or the collateral removal of a healthy
+    /// sibling. Unlike the per-path entry there is no upstream to detach — the
+    /// <c>SyncedQueryMeshNodes</c> instance is constructed INSIDE the <c>Observable.Defer</c>, so
+    /// a fresh chain builds a genuinely fresh instance with fresh provider subscriptions, and the
+    /// errored one's <c>Replay(1).RefCount()</c> has already disposed its own upstream.</para>
+    /// </summary>
     private void EvictFaultedQuery(
         object id, string signature, IObservable<IEnumerable<MeshNode>> faulted, Exception ex)
     {
