@@ -2,10 +2,14 @@ using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -201,15 +205,27 @@ public static class GitHubActivityExtensions
                 }, onActivityCreated));
     }
 
-    /// <summary>Checkout / update to latest — re-import the Space at the configured branch HEAD.
+    /// <summary>Checkout / update to latest — re-import the Space at the configured branch HEAD, or,
+    /// for a repository whose publication is sealed for this instance, at the SEALED commit
+    /// (<see cref="SealedSyncGate.DecideRequestedImport"/>, MeshWeaver#3845 hole 3).
     /// <paramref name="sourceId"/> selects the sync source (null = the primary). The caller's click
     /// authorizes (Read on the Space — the repo is authoritative, an update only converges to it);
-    /// the activity and the import execute as System.</summary>
+    /// the activity and the import execute as System.
+    ///
+    /// <para>🚨 <b>"Latest" means the latest this instance can RUN.</b> A person pressing Update on a
+    /// module repository used to read the branch tip whatever the seal said, and sources on a tree no
+    /// bundle for this identity was baked from are declined on their fingerprint whoever asked. So the
+    /// seal is asked first, inside the activity: an unattributable repository still reads the branch;
+    /// an attributable one lands on the sealed commit — the activity says so in a Warning line naming
+    /// both — or imports nothing and says which publication holds it and what releases it (roll the
+    /// instance, or fix the publishing lane). <paramref name="force"/> discards local edits; it never
+    /// selects the tree. See <c>Doc/Architecture/SyncRefContract</c>.</para></summary>
     public static IObservable<string> UpdateToLatestFromGitHub(
         this IMessageHub hub, string spacePath, string userId, Action<string>? onActivityCreated = null,
         string? sourceId = null, bool force = false)
     {
         var pr = hub.ServiceProvider.GetRequiredService<PullRequestService>();
+        var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
         // 🚨 #3510 — hold the Space's root for the whole import; see HoldSpaceDuringImport.
         return HoldSpaceDuringImport(hub, spacePath,
             $"GitSync: an import is writing '{spacePath}' from the branch HEAD",
@@ -224,26 +240,136 @@ public static class GitHubActivityExtensions
                         ("space", spacePath)),
                 ctx =>
                 {
-                    ctx.Log(new LogMessage(
-                            force
-                                ? "Fetching the branch HEAD from GitHub and overwriting local changes (force)…"
-                                : "Fetching the branch HEAD from GitHub and importing the deltas…",
-                            LogLevel.Information)
-                        .WithKey(force
-                            ? "activity.gitsync.update.fetchingForce"
-                            : "activity.gitsync.update.fetching"));
-                    // ctx.Log as the progress sink: files dropped from the import (parse failures)
-                    // append an Error line here and flip the terminal status to Failed.
-                    return pr.UpdateToLatest(spacePath, userId, sourceId, ctx.Log, force).Select(r =>
+                    IObservable<Unit> AtBranch()
                     {
-                        // 🚨 NAME every pruned node on the user-facing activity (issue #604): a prune
-                        // deletes user-visible data, and "pruned N" alone left no record of WHAT.
-                        if (r.PrunedPaths.Count > 0)
-                            ctx.Log(PrunedLine(r));
-                        LogImportOutcome(ctx, r, commitish: null);
-                        return Unit.Default;
-                    });
+                        ctx.Log(new LogMessage(
+                                force
+                                    ? "Fetching the branch HEAD from GitHub and overwriting local changes (force)…"
+                                    : "Fetching the branch HEAD from GitHub and importing the deltas…",
+                                LogLevel.Information)
+                            .WithKey(force
+                                ? "activity.gitsync.update.fetchingForce"
+                                : "activity.gitsync.update.fetching"));
+                        // ctx.Log as the progress sink: files dropped from the import (parse failures)
+                        // append an Error line here and flip the terminal status to Failed.
+                        return pr.UpdateToLatest(spacePath, userId, sourceId, ctx.Log, force).Select(r =>
+                        {
+                            // 🚨 NAME every pruned node on the user-facing activity (issue #604): a prune
+                            // deletes user-visible data, and "pruned N" alone left no record of WHAT.
+                            if (r.PrunedPaths.Count > 0)
+                                ctx.Log(PrunedLine(r));
+                            LogImportOutcome(ctx, r, commitish: null);
+                            return Unit.Default;
+                        });
+                    }
+
+                    return sync.ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
+                        // No repository, or export-only: the import path refuses it in its own words,
+                        // exactly as before — the seal has nothing to decide about a source that
+                        // cannot import.
+                        config?.RepositoryUrl is not { Length: > 0 } || config.Direction == SyncDirection.ExportOnly
+                            ? AtBranch()
+                            : PlanRequestedImport(hub, config,
+                                    string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch)
+                                .SelectMany(plan => plan switch
+                                {
+                                    { Proceed: false } => Held(ctx, plan),
+                                    { Redirected: true } => AtSealedCommit(ctx, sync, plan, spacePath, userId, sourceId, force),
+                                    _ => AtBranch(),
+                                }));
                 }, onActivityCreated)));
+    }
+
+    /// <summary>
+    /// 🚨 Asks the seal what a PERSON's import may land on (MeshWeaver#3845 hole 3) — the reading
+    /// behind <see cref="SealedSyncGate.DecideRequestedImport"/>, taken the way every other lane
+    /// takes it: what this instance's framework identity sealed, whether that reading is a statement
+    /// or a failure to look (#3461), and the newest line above this one, which names a hold's
+    /// direction (#4063).
+    ///
+    /// <para>The share is read on the FileSystem <see cref="IIoPool"/> — the published root is a
+    /// mounted share, and a read off the pool is invisible to the registry's teardown drain
+    /// (<c>PublicationSealArrivalService</c>, <c>InstanceAutoRegistrationService.ProvenRef</c>). A mesh
+    /// with a published root but no pool registry cannot read it that way, and "could not read" is
+    /// never "nothing sealed": the plan holds and the log says why.</para>
+    ///
+    /// <para>No published root configured is the one case the gate genuinely does not apply —
+    /// nothing is sealed here, so the import reads what was asked.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose services and configuration are read.</param>
+    /// <param name="config">The sync source's configuration — its repository and last-sync commit.</param>
+    /// <param name="requested">What was asked for: the configured branch, or the typed commitish.</param>
+    private static IObservable<SealedSyncGate.ImportPlan> PlanRequestedImport(
+        IMessageHub hub, GitHubSyncConfig config, string requested)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.GitSync.SealedSyncGate");
+        var publishedRoot = hub.ServiceProvider.GetService<IConfiguration>()
+            ?[ShippedPrebuiltBundles.PublishedRootConfigKey];
+        var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
+        if (string.IsNullOrWhiteSpace(publishedRoot)
+            || GitHubRepoIdentityResolver.Parse(config.RepositoryUrl) is not { } repo)
+            return Observable.Return(SealedSyncGate.DecideRequestedImport(
+                GitHubRepoIdentityResolver.Parse(config.RepositoryUrl) ?? new RepoIdentity("", ""),
+                requested, config.LastSyncCommitSha, SealedReadOutcome.NotConfigured, [], identity, null));
+        if (hub.ServiceProvider.GetService<IoPoolRegistry>() is not { } pools)
+        {
+            logger?.LogWarning(
+                "[SealedSync] no IoPoolRegistry is registered, so the seal under {Root} cannot be read on a "
+                + "drained pool — an import of {Repo} asked for '{Requested}' is HELD rather than read as "
+                + "unsealed.", publishedRoot, repo, requested);
+            return Observable.Return(SealedSyncGate.DecideRequestedImport(
+                repo, requested, config.LastSyncCommitSha, SealedReadOutcome.Unreadable, [], identity, null));
+        }
+        return pools.Get(IoPoolNames.FileSystem)
+            .InvokeBlocking(_ => (
+                Reading: SealedPublicationIndex.ReadingFor(publishedRoot, identity, logger),
+                NewerLine: SealedPublicationIndex.NewerLineThan(publishedRoot, identity, logger)))
+            .Select(read => SealedSyncGate.DecideRequestedImport(
+                repo, requested, config.LastSyncCommitSha, read.Reading.Outcome, read.Reading.Sources,
+                identity, read.NewerLine))
+            .Do(plan =>
+            {
+                if (!plan.Proceed)
+                    logger?.LogWarning("[SealedSync] an import of {Repo} asked for '{Requested}' is HELD — {Reason}",
+                        repo, requested, plan.HoldReason);
+                else if (plan.Redirected)
+                    logger?.LogInformation("[SealedSync] an import of {Repo} asked for '{Requested}' lands on {Commit} — {Reason}",
+                        repo, requested, plan.Commit, plan.Reason);
+            });
+    }
+
+    /// <summary>A held import: the plan's own lines on the activity, and nothing imported. The
+    /// Warning lines finish the activity as <c>Warning</c> — never a quiet <c>Succeeded</c>, never a
+    /// <c>Failed</c> a retry could change (a retry cannot move a seal; the seal landing can).</summary>
+    private static IObservable<Unit> Held(ActivityContext ctx, SealedSyncGate.ImportPlan plan)
+    {
+        foreach (var line in plan.Notice)
+            ctx.Log(line);
+        return Observable.Return(Unit.Default);
+    }
+
+    /// <summary>A redirected import: say what was asked and what lands, then import the sealed
+    /// commit through the same path a typed commitish takes.</summary>
+    private static IObservable<Unit> AtSealedCommit(
+        ActivityContext ctx, GitHubSyncService sync, SealedSyncGate.ImportPlan plan,
+        string spacePath, string userId, string? sourceId, bool force)
+    {
+        foreach (var line in plan.Notice)
+            ctx.Log(line);
+        var commit = plan.Commit!;
+        var shortSha = Short(commit);
+        ctx.Log(new LogMessage(
+                $"Fetching {shortSha} — the commit this instance's bundles were baked from — from GitHub and "
+                + "importing the deltas…", LogLevel.Information)
+            .WithKey("activity.gitsync.seal.fetching", ("sha", shortSha)));
+        return sync.ReimportAtCommit(spacePath, commit, userId, sourceId, ctx.Log, force).Select(r =>
+        {
+            if (r.PrunedPaths.Count > 0)
+                ctx.Log(PrunedLine(r));
+            LogImportOutcome(ctx, r, commitish: shortSha);
+            return Unit.Default;
+        });
     }
 
     /// <summary>
@@ -389,7 +515,10 @@ public static class GitHubActivityExtensions
     private static string Short(string commitish) =>
         commitish.Length > 8 && commitish.All(char.IsAsciiHexDigit) ? commitish[..8] : commitish;
 
-    /// <summary>Re-import the Space at a chosen commit / branch (mirror to that state).
+    /// <summary>Re-import the Space at a chosen commit / branch (mirror to that state) — or, for a
+    /// repository whose publication is sealed for this instance, at the SEALED commit
+    /// (<see cref="SealedSyncGate.DecideRequestedImport"/>, MeshWeaver#3845 hole 3; the same rule
+    /// as <see cref="UpdateToLatestFromGitHub"/>, with the typed commitish in place of the branch).
     /// <paramref name="sourceId"/> selects the sync source (null = the primary).</summary>
     public static IObservable<string> ReimportFromGitHub(
         this IMessageHub hub, string spacePath, string commitish, string userId,
@@ -408,20 +537,36 @@ public static class GitHubActivityExtensions
                 .WithKey("activity.gitsync.reimport.title", ("space", spacePath), ("commitish", commitish)),
             ctx =>
             {
-                ctx.Log(new LogMessage(
-                        $"Fetching {commitish} from GitHub and importing the deltas…", LogLevel.Information)
-                    .WithKey("activity.gitsync.reimport.fetching", ("commitish", commitish)));
-                // ctx.Log as the progress sink: files dropped from the import (parse failures)
-                // append an Error line here and flip the terminal status to Failed.
-                return sync.ReimportAtCommit(spacePath, commitish, userId, sourceId, ctx.Log, force).Select(r =>
+                IObservable<Unit> AsAsked()
                 {
-                    // 🚨 NAME every pruned node on the user-facing activity (issue #604): a prune
-                    // deletes user-visible data, and "pruned N" alone left no record of WHAT.
-                    if (r.PrunedPaths.Count > 0)
-                        ctx.Log(PrunedLine(r));
-                    LogImportOutcome(ctx, r, commitish);
-                    return Unit.Default;
-                });
+                    ctx.Log(new LogMessage(
+                            $"Fetching {commitish} from GitHub and importing the deltas…", LogLevel.Information)
+                        .WithKey("activity.gitsync.reimport.fetching", ("commitish", commitish)));
+                    // ctx.Log as the progress sink: files dropped from the import (parse failures)
+                    // append an Error line here and flip the terminal status to Failed.
+                    return sync.ReimportAtCommit(spacePath, commitish, userId, sourceId, ctx.Log, force).Select(r =>
+                    {
+                        // 🚨 NAME every pruned node on the user-facing activity (issue #604): a prune
+                        // deletes user-visible data, and "pruned N" alone left no record of WHAT.
+                        if (r.PrunedPaths.Count > 0)
+                            ctx.Log(PrunedLine(r));
+                        LogImportOutcome(ctx, r, commitish);
+                        return Unit.Default;
+                    });
+                }
+
+                // 🚨 The typed commitish is ASKED, not granted (#3845 hole 3): the field accepts a
+                // branch, so without the seal this was a tip import with a text box in front of it.
+                return sync.ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
+                    config?.RepositoryUrl is not { Length: > 0 } || config.Direction == SyncDirection.ExportOnly
+                        ? AsAsked()
+                        : PlanRequestedImport(hub, config, commitish)
+                            .SelectMany(plan => plan switch
+                            {
+                                { Proceed: false } => Held(ctx, plan),
+                                { Redirected: true } => AtSealedCommit(ctx, sync, plan, spacePath, userId, sourceId, force),
+                                _ => AsAsked(),
+                            }));
             }, onActivityCreated));
     }
 
