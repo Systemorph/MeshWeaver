@@ -74,24 +74,32 @@ seen after their close, and then stopped.
 
 **Awaiting delivery is empty here by construction.** The newest close in the population is
 2026-09-08T21:04Z, while memex.systemorph.com runs `afde4ea` (2026-09-15 21:50Z) and
-memex.meshweaver.cloud runs `c84c6c0` (2026-09-12 09:30Z) — so every fix that closed a wave issue is
-in both running images, by at least four days. A wave issue that recurs is recurring against its own
-fix. The genuine awaiting-delivery cases on 2026-09-17 are the two reopened *outside* the wave whose
-fixes merged on 2026-09-16, after both images: #4616 and #4464.
+memex.meshweaver.cloud runs `c84c6c0` (2026-09-12 09:30Z). Every fix that closed a wave issue is in
+both running images by at least four days, so **no wave issue can be excused as delivery lag**.
+(Whether a given close carried a *fix* at all is a separate question, answered per issue below; the
+delivery argument only establishes that if there was one, it is running.) The genuine
+awaiting-delivery cases on 2026-09-17 are the two reopened *outside* the wave whose fixes merged on
+2026-09-16, after both images: #4616 and #4464.
 
 ### The three that are live
 
-Each has an occurrence on **2026-09-17**, reported from `memex-portal-deployment-6c967c7c4c-*` —
-the currently-running replica, on an image that contains the August fix that closed the issue:
+Each has an occurrence on **2026-09-17**, reported from `memex-portal-deployment-6c967c7c4c-*` — the
+currently-running replica. 🚨 **What each close actually asserted differs, and that decides what the
+recurrence means** — so the three are listed with their closing verdict rather than lumped together:
 
-| issue | closed | seen today at |
-|---|---|---|
-| [#1549](https://github.com/Systemorph/MeshWeaver/issues/1549) | 2026-08-21 21:12:33Z | 2026-09-17 11:11:00Z |
-| [#2299](https://github.com/Systemorph/MeshWeaver/issues/2299) | 2026-08-26 07:22:28Z | 2026-09-17 11:28:58Z |
-| [#2765](https://github.com/Systemorph/MeshWeaver/issues/2765) | 2026-08-30 18:43:43Z | 2026-09-17 14:25:47Z |
+| issue | closed | seen today at | what the close asserted | so a recurrence today means |
+|---|---|---|---|---|
+| [#1549](https://github.com/Systemorph/MeshWeaver/issues/1549) | 2026-08-21 21:12:33Z | 2026-09-17 11:11:00Z | *"the defect this issue converged on is fixed and deployed"*, residual named | a delivered fix did not hold, or the named residual is what is firing |
+| [#2299](https://github.com/Systemorph/MeshWeaver/issues/2299) | 2026-08-26 07:22:28Z | 2026-09-17 11:28:58Z | **nothing — a bare close, no comment, no linked fix** | the fault was never established as fixed; this is the first evidence either way |
+| [#2765](https://github.com/Systemorph/MeshWeaver/issues/2765) | 2026-08-30 18:43:43Z | 2026-09-17 14:25:47Z | *"a single transient with no code defect identified, and the retry model worked"* | the "single transient" premise is falsified — the record now stands at 1,069 |
 
 These three are the wave's entire signal. Reading the reopen wave as noise loses them; reading it as
 130 regressions buries them.
+
+🚨 **And "recurring against its own fix" is a claim to check per issue, not a property of the
+bucket.** Only #1549's close carried a stated, deployed fix; #2765's close explicitly identified no
+code defect, and #2299's carried no verdict at all. A live occurrence is a live occurrence either
+way — but only one of these three is evidence that a *fix* failed.
 
 ## The third predicate nobody has written: the close races the roll
 
