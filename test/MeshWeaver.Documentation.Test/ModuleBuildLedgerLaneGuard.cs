@@ -236,6 +236,58 @@ public class ModuleBuildLedgerLaneGuard
         }
     }
 
+    /// <summary>
+    /// 🚨 THE SAME-RUN HANDOFFS — three artifacts that exist only to cross a job boundary inside ONE
+    /// run, and are 30% of the fleet's GitHub Actions storage bill because a 1-day artifact is billed
+    /// for four to seven days (retention plus GitHub's deletion lag — Doc/Architecture/
+    /// CiArtifactStorage). Each has exactly one producer and one consumer, and since 2026-09-17 each
+    /// has TWO paths: the GitHub artifact when no object store is named, and the store when one is.
+    ///
+    /// <para>Both must exist for every one of them. A producer that lost its store path would send
+    /// the consumer looking for bytes nobody wrote; a producer that lost its ARTIFACT path would
+    /// break every caller without our infra — the public repo above all — and neither shows up in a
+    /// green run of the other mode. The store key must carry the run ATTEMPT too: a re-run that read
+    /// the previous attempt's handoff would compile against bytes this attempt did not produce.</para>
+    /// </summary>
+    [Fact]
+    public void SameRunHandoffs_HaveBothPaths_AndTheStoreKeyCarriesTheRunAttempt()
+    {
+        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+        const string off = "(needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')";
+        const string on = "needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'";
+
+        foreach (var (name, producer, consumer) in new[]
+                 {
+                     ("module-pack-tool", "prepare", "pack"),
+                     ("platform-refs", "prepare", "pack"),
+                     ("workspace-build", "build-workspace", "pack"),
+                 })
+        {
+            var p = JobBody(producer);
+            var c = JobBody(consumer);
+            Assert.Contains($"name: {name}-" + "${{ needs.select.outputs.lane }}", p, StringComparison.Ordinal);
+            Assert.Contains($"name: {name}-" + "${{ needs.select.outputs.lane }}", c, StringComparison.Ordinal);
+            Assert.Contains($"--key \"$STORE_RUN_PREFIX/{name}.tar\"", p, StringComparison.Ordinal);
+            Assert.Contains($"--locator \"$ARTIFACT_STORE/$STORE_RUN_PREFIX/{name}.tar\"", c, StringComparison.Ordinal);
+        }
+
+        // Every artifact path is gated OFF by the store, every store path ON — so exactly one runs.
+        Assert.Equal(3, Regex.Matches(text, Regex.Escape(off)).Count - CountInPack(text, off));
+        Assert.True(Regex.Matches(text, Regex.Escape(on)).Count >= 3,
+            "each same-run handoff needs a store branch guarded by the store being named");
+
+        // 🚨 run id AND attempt — a deterministic key is what lets the consumer fetch without any
+        // locator being plumbed through, and the attempt is what stops a re-run reading stale bytes.
+        const string prefix = "STORE_RUN_PREFIX: runs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}";
+        foreach (var job in new[] { "prepare", "build-workspace", "pack" })
+            Assert.Contains(prefix, JobBody(job), StringComparison.Ordinal);
+    }
+
+    /// <summary>Occurrences of <paramref name="needle"/> inside the pack job — the retention
+    /// expression uses the same text, and it is not one of the three handoff guards.</summary>
+    private static int CountInPack(string text, string needle) =>
+        Regex.Matches(JobBody("pack"), Regex.Escape(needle)).Count;
+
     private static string JobBody(string job)
     {
         var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
