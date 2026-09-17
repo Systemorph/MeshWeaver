@@ -215,6 +215,45 @@ the batch rollback):
 What the check therefore means is *"it will not delete a row it can SEE is not ours"* — never *"it
 cannot delete someone else's row"*.
 
+### The conditional delete was weighed, and DECLINED — #4506, closed 2026-09-17
+
+Both limits above stand as stated. The remedy they point at — a `DeleteIfCreatedAt` in the
+`IStorageAdapter` contract, the DELETE-side twin of `WriteIfVersion` — was weighed and is **not being
+built**. The reasoning, so nobody re-derives it:
+
+- **The precedent makes it cheaper than #4506 assumed, and that still is not enough.**
+  `IStorageAdapter` already carries `WriteIfVersion` and `DeleteIfExists`, both with an honest
+  non-atomic default and overrides in the two backends that can express the condition — so this would
+  be a third instance of an accepted pattern, not a new concept. What it adds is a third method
+  carrying the footgun both of those carry: *"Decorators MUST forward … or the atomicity is silently
+  lost at the outermost decorator that falls back to the default."* That failure is silent and
+  fleet-wide, and it has already happened twice on this interface (`Changes`; `ReadMany`, #4200).
+- **`Version` cannot stand in for `CreatedDate`,** which removes the cheap version of the fix. The
+  replacement in this race arrives via delete-then-recreate, so its version sequence starts again
+  where ours did and the two rows can carry the same version. `CreatedDate` is the only field that
+  necessarily differs — which is precisely why the check already compares it, and why the remedy
+  inherits limit 2's weakness rather than fixing it.
+- **On every satellite path the new primitive would have no input at all.**
+  `PostgreSqlStorageAdapter.AuthorCols` projects the authorship trio only for `mesh_nodes`; every
+  satellite table (`_Access`, `_Thread`, `_Activity`, `_Comment`, `Source`, …) is read with
+  `NULL::timestamptz AS created_date` (MeshWeaver.Plugins#1971). A conditional delete keyed on the
+  creation stamp would be handed `default` for every row there, its own included — unusable exactly
+  where lineage already cannot be established.
+- **The behaviour it replaces already fails closed.** Where lineage cannot be established the
+  rollback deletes nothing and says which of the two it is (`Undetermined` / `LeftInPlace`); the
+  operator gets a specific sentence rather than a silent ghost.
+
+🚨 **What that argument does NOT rest on: "nobody else has rights".** That holds for the canonical
+#638 case — a partition root whose grant is what failed — and **not** for the bulk rollback, where
+nodes *k+1…n* are ordinary nodes in an existing partition. The bulk case is narrow because of the
+arithmetic stated in limit 1 (two storage turns, a few milliseconds, and a concurrent actor that must
+delete *and* re-create that exact path inside the window), not because of access control. Anyone
+re-opening this should argue against the arithmetic, not against RLS.
+
+**What would reopen it:** the create rollback becoming a routine path rather than a handler-failure
+compensation, or a server-owned row identity token arriving for some other reason — at which point
+conditioning the delete on it is nearly free and should simply be done.
+
 ## What is asserted
 
 `BulkCreateCompensatesAFailedCriticalHandlerTest` (MeshWeaver.Graph.Test) drives a five-node batch
