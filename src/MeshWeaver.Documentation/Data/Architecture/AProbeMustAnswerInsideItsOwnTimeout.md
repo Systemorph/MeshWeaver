@@ -131,12 +131,79 @@ instance measured above the number was still climbing while the page was being w
 cliff moves by itself. The real fix is
 whatever the timing line names — and the shape that fix takes is already settled here.
 
+## What the timing line named, and what it cost first
+
+The line shipped at 17:36Z on 2026-09-17. At **19:20Z the control instance went 503** and stayed
+down for 27 minutes: both portal containers had restarted, and neither could pass startup again —
+54 `context deadline exceeded` startup failures in nine minutes. The pods that had been serving all
+day were serving only because they had passed startup *hours* earlier, under a `/health` that was
+faster then. Nothing had been deployed. The instance had simply become unable to boot, and nobody
+knew until something restarted it.
+
+The line named the cost exactly:
+
+```
+timing: 10068ms total over 17 check(s), slowest first — required_modules 10068ms;
+        pending_module_activation 30ms; data_volume_free_space 11ms; 14 more under 10ms
+```
+
+**One check was the entire budget.** `RequiredModulesHealthCheck` read the activation sidecar and
+then probed the shared module volume twice per declared entry, on every call —
+`File.Exists(MeshBuilder.ResolveModulePath(entry))` (itself up to three metadata round trips) and
+`LandedModuleDllExists`. It is the same defect [#3664](https://github.com/Systemorph/MeshWeaver/issues/3664)
+had already fixed on the sibling reader, on the same volume, for the same reason, and the fix is the
+same one: the probe now takes `PendingModuleActivations.ReadProbeInputs()`, which answers all three
+questions off one snapshot memoised behind a fingerprint of three directory timestamps
+([#4609](https://github.com/Systemorph/MeshWeaver/issues/4609) in core, the portal half in
+MeshWeaver.Plugins).
+
+🚨 **What made it an outage rather than a slow boot is the asymmetry at the top of this page.** The
+crash that restarted the pods was incidental; a container that cannot pass startup cannot recover,
+and `maxUnavailable: 0` — correct, and what makes a roll zero-downtime — means the ingress had no
+backend at all once the serving pods were gone.
+
+## Where the probe may point, and what moving it costs
+
+The break-glass mitigation was `startupProbe.httpGet.path` → `/ready`, patched live with the
+maintainer's approval, and it did bring the instance back in ~6 minutes. It is a **mitigation, not
+the fix**, and the chart now makes that choice expressible (`probes.startup.path`, default
+`/health`) for one reason: a path changed with `kubectl patch` is undone by the next `helm upgrade`
+without anyone deciding to undo it, and a deployment that must move it should move it where it is
+reviewed and where chart drift can see it.
+
+Moving it costs two things, and both are load-bearing:
+
+| what is lost | why |
+|---|---|
+| the **NodeType bake gate** | `nodetype_bake` is deliberately tagged neither `live` nor `ready` (see [Probe Semantics](../ProbeSemantics)), so it lands on `/health` alone and the startup probe is its ONLY reader. Point the probe elsewhere and `PreWarm__GateReadiness` goes on being configured, goes on reporting healthy, and gates nothing. |
+| **no traffic to a booting pod** | the startup probe is what holds readiness on the heavy path until the mesh is up. On `/ready` a pod is "started" the instant the process accepts a socket, so it joins the Service while the mesh is still booting. |
+
+So `/ready` is what you reach for when an instance is down and cannot boot — and what you reconcile
+away once the endpoint answers again. Two guards make the trade visible instead of silent:
+`PreWarmGateReadinessGuard` fails when the chart arms the gate and `probes.startup.path` is not
+`/health`, and **invariant 10b** in `deploy/aks/scripts/check-chart-invariants.py` fails the same
+combination on the *rendered* manifest, where an overlay could arm the gate the chart does not.
+Invariant 10 already refuses the narrower case of readiness and startup sharing one path.
+
+🚨 **The durable rule is not about the path at all.** The startup probe's budget is fixed and
+`/health`'s cost is not: it is an aggregate census whose members are registered by several
+repositories and whose per-check cost grows with the mesh, the module volume and the partition
+count. So the invariant that has to hold is the one the section below states — **every check on
+that endpoint reads a reading, and does not take it** — and the timing line is what makes a breach
+nameable in one `curl` instead of an argument.
+
 ## The headroom is the number to watch, and it is per instance
 
-`timeoutSeconds` for this probe is **5 s** on the shipped chart and on every environment overlay
-measured — instances raise `periodSeconds` and `failureThreshold` to fit a cold bake, and leave the
-per-probe timeout alone. So the quantity that decides whether a roll can ever finish is
-`/health` latency against a fixed five seconds:
+`timeoutSeconds` for this probe is **5 s** on the shipped chart and on three of the four environment
+overlays — instances raise `periodSeconds` and `failureThreshold` to fit a cold bake, and leave the
+per-probe timeout alone. The fourth is `memex`, raised to **30 s** during the 2026-09-17 incident,
+which is a stopgap with a condition attached: **it comes back to 5 once the image carrying the
+`required_modules` fix is running.** Read that number as debt, not as the setting — a raised
+per-probe timeout is how the next growth becomes invisible, and the `build`, `memex-cloud` and
+`pearl` overlays are at 5 precisely because nothing has needed to hide anything from them.
+
+So the quantity that decides whether a roll can ever finish is `/health` latency against a fixed
+five seconds:
 
 | instance | `/health` warm | headroom against 5 s |
 |---|---|---|
@@ -163,7 +230,18 @@ share, a registry fetch — puts unbounded latency on the one endpoint whose lat
 gate. Two checks added on 2026-09-08 read volume capacity synchronously on every call
 (`StorageCapacityHealthCheck`, `DataVolumeHealthCheck`), and their own doc comments already claim
 they "only take the reading, exactly as `ContentTypeHealthCheck` only reads its registry". Whether
-they are what the timing line names is now a one-`curl` question rather than an argument.
+they are what the timing line names is now a one-`curl` question rather than an argument — and the
+answer, on the first line it published, is **no**: `data_volume_free_space` measured **11 ms**
+against `required_modules`'s 10 068 ms. One `statfs` per configured path is a constant; a probe of
+the volume per declared module entry is not, and the difference between those two shapes is the
+whole of this page.
+
+🚨 **`/health` is not the only fixed budget spent by that aggregate.** The fleet watch gives each
+replica's `/health` **8 s** (`ObservationQueries.cs`, MeshWeaver.Plugins) and the public host **15 s**
+— which is why, on the day of the incident, it reported `TaskCanceledException` for the stalled
+replica *and* for the two healthy ones beside it, and therefore could not tell them apart. A second
+consumer of the same endpoint, with the same fixed budget and no way to say which check spent it:
+when the timing line names a slow check, it is naming it for every reader of `/health` at once.
 
 ## Known: two policies that are configured and applied to nothing
 

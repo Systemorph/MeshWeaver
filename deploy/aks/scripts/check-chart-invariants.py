@@ -330,11 +330,60 @@ elif _probe_paths["readinessProbe"] == _probe_paths["livenessProbe"]:
 elif _probe_paths["readinessProbe"] == _probe_paths["startupProbe"]:
     finding(
         f"readinessProbe probes the startupProbe's path {_probe_paths['startupProbe']}",
-        "that path runs EVERY registered health check — the database and the mesh included. Under "
-        "load a heavy readiness check times out, the pod is yanked from the Service endpoints, and "
-        "the survivors inherit its traffic: the 2026-07-21 death spiral. The startup probe already "
-        "holds readiness on the heavy path until the mesh is up; after that readiness must be cheap.",
+        "the two probes then answer ONE question, and whichever path they share is wrong for one of "
+        "them. Shared on /health (the default), readiness inherits every registered check — the "
+        "database and the mesh included — so under load a heavy readiness check times out, the pod "
+        "is yanked from the Service endpoints, and the survivors inherit its traffic: the "
+        "2026-07-21 death spiral. Shared on /ready — which probes.startup.path now makes "
+        "expressible, and which a live `kubectl patch` reached for during the 2026-09-17 incident — "
+        "the startup probe stops asking whether the portal is UP at all: the pod is 'started' the "
+        "instant the process accepts a socket, joins the Service while the mesh is still booting, "
+        "and the NodeType bake gate (PreWarm__GateReadiness) loses its only reader. Startup asks "
+        "'is everything I need up yet', readiness asks 'can I take a request': separate paths.",
     )
+
+# ---------------------------------------------------------------------------
+# 10b. An ARMED NodeType bake gate must have a reader.
+#
+# 🚨 PreWarm__GateReadiness holds /health RED until this pod's NodeTypes are built against ITS
+# image, and the startupProbe is the ONLY probe that reads /health — so a gate that is armed while
+# the startup probe reads some other path is registered, permanently unread, and protects nothing.
+# It does not fail: it reports healthy on every rollout, which is exactly the outcome the gate
+# exists to prevent. Memex.Portal.Distributed already says this at Critical for the sibling case
+# (GateReadiness=true with DynamicTypes=false), and deploy/aks/values.aks.yaml has stated the rule
+# in PROSE for months — "the startupProbe must actually EXIST and point at /health".
+#
+# A rule stated in a comment is not a gate (#3330's lesson, one probe over). It became reachable by
+# an overlay the moment probes.startup.path stopped being a literal in the template, and the live
+# `kubectl patch` of 2026-09-17 — startupProbe → /ready, applied as break-glass while the control
+# instance was down — is precisely the render this refuses to let anyone commit by accident.
+checks += 1
+_gate_env = {e.get("name"): e.get("value") for e in (portal.get("env") or [])}
+_gate_armed = str(
+    _gate_env.get("PreWarm__GateReadiness", cfg_data.get("PreWarm__GateReadiness", "false"))
+).strip().lower() == "true"
+if _gate_armed:
+    if not _probe_paths["startupProbe"]:
+        finding(
+            "PreWarm__GateReadiness is true but the portal container has no startupProbe httpGet path",
+            "the bake gate withholds /health, and the startup probe is its only reader. With no "
+            "startup probe the gate is registered, never read, and every rollout completes as if it "
+            "had passed. Render a startupProbe on /health, or turn the gate off so the "
+            "configuration stops claiming a protection that is not there.",
+        )
+    elif _probe_paths["startupProbe"] != "/health":
+        finding(
+            f"PreWarm__GateReadiness is true but the startupProbe reads "
+            f"{_probe_paths['startupProbe']}, not /health",
+            "the bake gate's check (nodetype_bake) is deliberately tagged neither `live` nor "
+            "`ready` — a long bake, a missing module and an unreachable registry are all wrong "
+            "answers to a restart AND to an eviction — so it lands on /health alone and the startup "
+            "probe is its only reader. Pointing the startup probe elsewhere disarms the gate "
+            "silently: it goes on being configured and goes on reporting healthy. If the startup "
+            "probe has to move because /health cannot answer inside its timeout, fix what is "
+            "spending the budget (its `timing:` line names it) — moving the probe trades a rollout "
+            "gate for a faster boot, and that is a decision, not a side effect.",
+        )
 
 # ---------------------------------------------------------------------------
 # 11. The platform-image pull secret is on BOTH pods that pull a platform image, or on neither.
