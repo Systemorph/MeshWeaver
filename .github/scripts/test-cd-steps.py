@@ -40,7 +40,13 @@ from pathlib import Path
 
 WORKFLOW = ".github/workflows/main-cd.yml"
 MODULE_PACK_WORKFLOW = ".github/workflows/node-repo-module-pack.yml"
+AVAILABILITY = ".github/scripts/check-release-availability.sh"
 STEP_ID = "release"
+# 🚨 The ACR read `release` used to do MOVED to `gate` (MeshWeaver#4539) so that the seal probe and
+# the bake share ONE resolution of the release version. The cases moved with it — the harness
+# executes the step wherever it lives, which is the whole point of extracting by `id:`.
+BAKE_VERSION_STEP_ID = "bake_version"
+SEAL_STEP_ID = "seal"
 DECIDE_STEP_ID = "decide"
 VERDICT_STEP_ID = "verdict"
 HEAL_STEP_ID = "heal"
@@ -137,6 +143,30 @@ echo "gh $*" >> "$GH_CALLS"
 #    the comment that has to survive it.
 case "$*" in
   *"issue list"*) printf '%s' "${GH_ISSUE_RESULT:-}" ;;
+  # The seal step's attempt ledger (MeshWeaver#4539): `issue view --json comments --jq "[…] | length"`
+  # counts its marker comments. A case supplies the number the real `--jq` would have produced.
+  # Two markers are counted with two different needles, so the answers are separate: GH_SEAL_COUNT
+  # for the attempt marker, GH_STOPPED_COUNT for the one-shot "stopped" marker. Matching on the
+  # NEEDLE rather than on call order means a case cannot pass by accident if the step reorders them.
+  # 🚨 `${VAR-0}`, NOT `${VAR:-0}`. With the colon an explicitly EMPTY value would be replaced by
+  # the default, so the case that drives "the ledger could not be read" would silently hand the step
+  # a perfectly good `0` and pass having tested the opposite branch. (It did, once — which is why
+  # that case exists and why this comment does.) Without the colon, set-but-empty stays empty, which
+  # is exactly what `$(gh …)` yields when the call fails.
+  *"issue view"*)
+    if [ -n "${GH_VIEW_FAIL:-}" ]; then
+      echo "gh: HTTP 502 (https://api.github.com/repos/x/y/issues/1)" >&2
+      exit 1
+    fi
+    case "$*" in
+      *cd-seal-stopped*) printf '%s' "${GH_STOPPED_COUNT-0}" ;;
+      *cd-seal*)         printf '%s' "${GH_SEAL_COUNT-0}" ;;
+      *)                 printf '%s' "${GH_VIEW_RESULT-}" ;;
+    esac
+    ;;
+  # `gh issue create` prints the new issue's URL; the step takes the number off its tail.
+  *"issue create"*) printf '%s\n' "${GH_CREATE_RESULT:-https://github.com/o/r/issues/4242}" ;;
+  *"label create"*) ;;
   # Matched explicitly and BEFORE the reads below: a heal comment quotes a run URL, and a body
   # containing `actions/runs` would otherwise fall into the run-list arm and answer a fixture.
   *"issue comment"*) ;;
@@ -203,7 +233,12 @@ def die(msg: str):
 
 # ── running one case ────────────────────────────────────────────────────────────────────────
 def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: bool = False,
-             runs: list[dict] | None = None, calls_out: list[str] | None = None):
+             runs: list[dict] | None = None, calls_out: list[str] | None = None,
+             cwd: str | None = None):
+    """Execute one extracted step. `cwd` runs it in a prepared tree — the seal step invokes
+    `.github/scripts/check-release-availability.sh` BY PATH, so a case that wants to drive the
+    probe's three outcomes puts its own script there. Nothing else about the step is rewritten;
+    the real body decides, from the real exit code and the real log."""
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         binp = tmp / "bin"
@@ -245,6 +280,13 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
         # silently change what a case measures.
         e.pop("GH_ISSUE_RESULT", None)
         e.pop("GH_CLOSE_FAIL", None)
+        for knob in ("GH_SEAL_COUNT", "GH_STOPPED_COUNT", "GH_VIEW_RESULT", "GH_CREATE_RESULT",
+                     "GH_VIEW_FAIL"):
+            e.pop(knob, None)
+        # `RUNNER_TEMP` is where the seal step writes the probe's log. The runner always provides
+        # it; inherited from a developer's shell it would be absent and the step would fall back to
+        # /tmp, which is shared — two concurrent cases would read each other's log.
+        e["RUNNER_TEMP"] = str(tmp)
         e["GH_CALLS"] = str(calls)
         # Belt AND braces: the stub above shadows `gh` on PATH, and these leave a real `gh` — if one
         # is ever reached another way — with no credential to write with.
@@ -261,7 +303,7 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
             e["GH_RUNS_FIXTURE"] = str(rf)
         e.update(env)
 
-        p = subprocess.run(["bash", "-c", body], env=e, capture_output=True, text=True)
+        p = subprocess.run(["bash", "-c", body], env=e, cwd=cwd, capture_output=True, text=True)
         # What the step ASKED GitHub to do is the subject of the ledger cases: a step that prints
         # "closing" and calls no `gh issue close` is exactly the defect #3176 records, and it is
         # invisible in stdout.
@@ -633,6 +675,228 @@ def run_heal_cases(root, case) -> None:
     case("...and the heal comment is still written, so the delivery record survives",
          "gh issue comment 3176" in joined, f"calls={calls}")
 
+# ── the SEAL step: "does this sealed set still owe its plugins publication?" (#4539) ─────────
+#
+# 🚨 THE BROKEN STATE IS CONSTRUCTED, NOT ASSUMED. The lane being fixed "works" whenever nothing
+# is missing, so a case that only exercises the healthy path proves nothing. Every outcome below
+# is produced by a stub `check-release-availability.sh` that prints the REAL script's sentences and
+# exits with the REAL script's codes, and the step under test is extracted from the workflow and
+# executed against it — exit code, log parsing, ledger calls and all.
+#
+# 🚨 AND THE STUB IS PINNED TO THE REAL SCRIPT. A stub is only evidence about what it stubs: if the
+# probe ever reworded these lines, every case here would keep passing while the step stopped
+# recognising a definite absence and silently answered "nothing due" — the exact failure this whole
+# change exists to remove. So the phrases are asserted to still exist in the real script.
+SEAL_PHRASES = (
+    # the step parses the identity out of this line, and refuses to act without one
+    "identity resolved: ",
+    # the ONLY outcome that licenses a re-attempt
+    "are not available for framework identity",
+    # the refusal that means "the platform bake has not published this release yet"
+    "CANNOT RESOLVE a framework identity",
+    # the refusal that means "the store could not be read" — a red, never a verdict
+    "CANNOT DETERMINE release availability",
+)
+
+IDENTITY = "s5ec352bb102e5a2275e3831a08ac0c8d"
+SEAL_VERSION = "3.0.0-ci.8765"
+
+
+def _probe_stub(kind: str) -> str:
+    """A stand-in for check-release-availability.sh reproducing one of its outcomes verbatim."""
+    resolved = f'echo "identity resolved: {IDENTITY} — from the release marker at acct/share/_releases/$1"'
+    bodies = {
+        # exit 0 — `plugins` IS sealed for this identity. The control.
+        "sealed": f'{resolved}\necho "release availability: all 1 source(s) are published for '
+                  f'identity {IDENTITY} (release $1)."\nexit 0',
+        # exit 1 — the measured #4539 state: the set is sealed, the publication is not there.
+        "absent": f'{resolved}\necho "::error::release availability: 1 of 1 source(s) are not '
+                  f'available for framework identity {IDENTITY} (release $1)."\nexit 1',
+        # exit 1 — no `_releases` marker at all: the platform bake has not published this release.
+        "unmarked": 'echo "::error::CANNOT RESOLVE a framework identity: release \'$1\' has no '
+                    'marker at acct/share/prebuilt-bundles/_releases/$1."\nexit 1',
+        # exit 1 — the store could not be read. A refusal, in neither direction.
+        "unreadable": f'{resolved}\necho "::error::CANNOT DETERMINE release availability for '
+                      f'framework identity {IDENTITY} (release $1): 1 of 1 source(s) could not be '
+                      f'queried."\nexit 1',
+        # exit 1 — absent, but the identity line never printed. Must refuse, not act.
+        "nameless": 'echo "::error::release availability: 1 of 1 source(s) are not available for '
+                    'framework identity (release $1)."\nexit 1',
+    }
+    return "#!/usr/bin/env bash\n" + bodies[kind] + "\n"
+
+
+def run_seal_cases(root, case) -> None:
+    body = extract_step(root, SEAL_STEP_ID)
+
+    # A stub is only evidence about the call it stubs.
+    if AVAILABILITY.split("/")[-1] not in body:
+        die(f"step `{SEAL_STEP_ID}` no longer calls {AVAILABILITY} — the probe these cases drive is "
+            "no longer the seam under test, so every case below would pass vacuously.")
+    if "plugins_seal_due=" not in body:
+        die(f"step `{SEAL_STEP_ID}` no longer writes `plugins_seal_due` — the output the three "
+            "`plugins-*` jobs gate on is gone or renamed, so these cases test nothing.")
+    real = (root / AVAILABILITY).read_text()
+    for phrase in SEAL_PHRASES:
+        if phrase not in real:
+            die(f"{AVAILABILITY} no longer emits {phrase!r}, but step `{SEAL_STEP_ID}` still "
+                "classifies its answer by that text. The stubs below would keep passing while the "
+                "real lane stopped telling a definite absence from a refusal — re-point both.")
+
+    def seal(kind: str, **env):
+        """Run the step against one probe outcome, in a tree holding that stub."""
+        with tempfile.TemporaryDirectory() as td:
+            tree = Path(td)
+            scripts = tree / ".github" / "scripts"
+            scripts.mkdir(parents=True)
+            probe = tree / AVAILABILITY
+            probe.write_text(_probe_stub(kind))
+            probe.chmod(0o755)
+            calls: list[str] = []
+            base = {
+                "RELEASE_VERSION": SEAL_VERSION, "SHORT": "836d447", "PSHORT": "07bcf72",
+                "REPO": "Systemorph/MeshWeaver", "GH_TOKEN": "",
+                "RUN_URL": "https://example.invalid/run", "MAX_SEAL_ATTEMPTS": "3",
+                "BAKE_PUBLISH_TARGETS": "acct/share",
+            }
+            rc, log, outputs = run_step(body, {**base, **env}, None,
+                                        calls_out=calls, cwd=str(tree))
+            return rc, log, outputs, "\n".join(calls)
+
+    # ── 1. THE BROKEN STATE: sealed set, no `plugins` publication for its identity ──
+    rc, log, outputs, calls = seal("absent")
+    case("a sealed set whose `plugins` publication is ABSENT re-attempts the seal",
+         rc == 0 and "plugins_seal_due=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it NAMES the framework identity it is acting on",
+         IDENTITY in log, f"the verdict named no identity:\n{log}")
+    case("...and it records the attempt on the ledger before acting",
+         "issue comment" in calls and "cd-seal:836d447-p07bcf72" in calls,
+         f"no attempt marker was written; gh calls were:\n{calls}")
+
+    # ── 2. THE CONTROL: the publication IS there, so the lane must do NOTHING ──
+    # Without this, "it re-attempts" would also pass if it re-attempted unconditionally — which is
+    # the expensive, alarm-every-hour shape the probe exists to prevent.
+    rc, log, outputs, calls = seal("sealed")
+    case("a set whose `plugins` publication IS sealed re-attempts NOTHING",
+         rc == 0 and "plugins_seal_due=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it touches no ledger at all",
+         "issue comment" not in calls and "issue create" not in calls,
+         f"a healthy tick wrote to the ledger; gh calls were:\n{calls}")
+
+    # ── 3. REFUSALS ARE NOT VERDICTS, in either direction ──
+    rc, log, outputs, calls = seal("unreadable")
+    case("an UNREADABLE store fails RED rather than answering",
+         rc != 0, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it never claims the publication is fine",
+         "plugins_seal_due=true" not in outputs, f"out={outputs!r}")
+    case("...and it says the store could not be read, not that Plugins is at fault",
+         "CANNOT DETERMINE" in log or "could not ANSWER" in log, f"log={log}")
+
+    # A release with no marker yet is the platform bake's turn, not a defect: this tick writes it.
+    rc, log, outputs, calls = seal("unmarked")
+    case("a release with no `_releases` marker yet is NOT MEASURED, and is not a red",
+         rc == 0 and "plugins_seal_due=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it says so instead of folding into a silent pass",
+         "NOT MEASURED" in log, f"log={log}")
+    case("...and it writes no ledger entry for a measurement it did not take",
+         "issue comment" not in calls, f"gh calls were:\n{calls}")
+
+    # Absent, but the probe named no identity: acting would be acting on the wrong identity.
+    rc, log, outputs, calls = seal("nameless")
+    case("an absence with NO resolved identity refuses rather than acting",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # ── 4. BOUNDED. The budget stops the re-attempt; it does not stop the reporting ──
+    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="3")
+    case("a spent re-attempt budget stops re-attempting",
+         rc == 0 and "plugins_seal_due=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it says so ONCE, with the stopped marker",
+         "cd-seal-stopped:836d447-p07bcf72" in calls, f"gh calls were:\n{calls}")
+    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="3", GH_STOPPED_COUNT="1")
+    case("...and having said it once, it does not say it again",
+         "issue comment" not in calls, f"it repeated the stop comment; gh calls were:\n{calls}")
+    # One BELOW the budget must still act — otherwise "bounded" would also pass if it never acted.
+    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="2")
+    case("...and the last attempt inside the budget still runs",
+         rc == 0 and "plugins_seal_due=true" in outputs and "3/3" in log,
+         f"rc={rc} out={outputs!r} log={log}")
+
+    # An unreadable ledger must not silently grant a fresh attempt every hour. Two shapes: the API
+    # call FAILS (gh exits non-zero, `$(…)` is empty), and it answers something that is not a count.
+    rc, log, outputs, calls = seal("absent", GH_VIEW_FAIL="1")
+    case("an unreadable attempt ledger refuses rather than defaulting the count to zero",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="null")
+    case("...and a non-numeric ledger answer is refused too, not coerced",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # An empty release version cannot name an identity — refuse before probing anything.
+    rc, log, outputs, calls = seal("sealed", RELEASE_VERSION="")
+    case("an empty release version refuses instead of probing an unnamed release",
+         rc != 0 and "plugins_seal_due" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+
+# ── the BAKE_VERSION step: the ACR read that moved out of `publish-bake` (#4539) ──────────────
+def run_bake_version_cases(root, case) -> None:
+    body = extract_step(root, BAKE_VERSION_STEP_ID)
+    if "az acr manifest list-metadata" not in body:
+        die(f"step `{BAKE_VERSION_STEP_ID}` no longer calls `az acr manifest list-metadata` — the "
+            "stub these cases rely on is no longer the seam under test, so every case below would "
+            "pass vacuously. Update the harness with the step.")
+
+    base = {"SHORT_SHA": SHORT_SHA}
+
+    # 🚨 THE CASE THAT HAD NEVER SUCCEEDED, carried over verbatim from the step's old home. The
+    # repository holds 16 untagged manifests whose `tags` is null; before #2642 the query threw on
+    # the first of them and the step blamed promote.
+    rc, log, outputs = run_step(body, base, fixture(True))
+    case("the moved read recovers the version DESPITE 16 untagged manifests",
+         rc == 0 and f"version={VERSION}" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    rc, log, outputs = run_step(body, base, fixture(False))
+    case("a digest with no version tag is still a loud, accurate stop",
+         rc != 0 and "carries no version tag" in log, f"rc={rc} log={log}")
+
+    # 🚨 THE REGRESSION GUARD. A failing az must fail the step with AZ's message — never be
+    # converted into "there is no version tag" and blamed on promote.
+    rc, log, outputs = run_step(body, base, fixture(True), az_fail=True)
+    case("a FAILING az fails the moved read", rc != 0, f"rc={rc} log={log}")
+    case("a FAILING az is never reported as promote's fault",
+         "Fix promote" not in log and "carries no version tag" not in log,
+         f"the step blamed a healthy component for its own failed call:\n{log}")
+    case("a FAILING az surfaces az's own message", "az login" in log, f"log={log}")
+
+
+def plugins_leg_problems(workflow_text: str) -> list[str]:
+    """🚨 On a seal re-attempt `plugin-test-image` is SKIPPED, so `needs.plugin-test-image.outputs.version`
+    is the EMPTY STRING — and `test-image` / `platform-image` are REQUIRED inputs of the bake lane,
+    so an empty value does not even fail loudly: it yields `…/mw-plugin-test:` and the lane dies on
+    a manifest that can never resolve. `gate.image_tag` exists precisely so there is ONE place to
+    get this right; the workflow's own comment records SEVEN times a per-reference conditional got
+    it wrong. So: no `plugins-*` job may name the tester job's version output."""
+    import yaml
+
+    problems: list[str] = []
+    doc = yaml.safe_load(workflow_text)
+    for name, job in (doc.get("jobs") or {}).items():
+        if not name.startswith("plugins-"):
+            continue
+        if "plugin-test-image.outputs.version" in json.dumps(job):
+            problems.append(
+                f"{name} still reads `needs.plugin-test-image.outputs.version`, which is EMPTY on a "
+                "seal re-attempt (that job is skipped there). Use `needs.gate.outputs.image_tag`.")
+        cond = " ".join(str(job.get("if", "")).split())
+        if "plugins_seal_due" not in cond:
+            problems.append(
+                f"{name} has no `plugins_seal_due` arm in its `if:`, so the reconcile cannot repair "
+                "a sealed set whose plugins publication is missing (MeshWeaver#4539).")
+        elif not cond.startswith("always()"):
+            problems.append(
+                f"{name}'s `if:` does not start with `always()`, so it inherits `promote`'s skip on "
+                "the reconcile path and the repair is inert — the exact shape it is fixing.")
+    return problems
+
+
 def plugin_module_build_problems(workflow_text: str) -> list[str]:
     """The platform bake must have one compiler for every module it composes (#3732)."""
     import yaml
@@ -707,13 +971,15 @@ def main() -> int:
             "step's real --jq filter over a workflow_runs fixture. Install jq.")
 
     body = extract_step(root, STEP_ID)
-    # A stub is only evidence about the call it stubs. If the step stopped making that call, the
-    # cases below would all pass while testing nothing.
-    if "az acr manifest list-metadata" not in body:
+    # A stub is only evidence about the seam it stubs. Since MeshWeaver#4539 this step no longer
+    # READS the registry — `gate.bake_version` does, and this step CHOOSES between the minted
+    # version and that recovered one, refusing rather than inventing. If it stopped reading the
+    # recovered value, every case below would pass while testing nothing.
+    if "RECOVERED" not in body:
         die(
-            f"step `{STEP_ID}` no longer calls `az acr manifest list-metadata` — the stub these "
-            "cases rely on is no longer the seam under test, so every case below would pass "
-            "vacuously. Update the harness with the step."
+            f"step `{STEP_ID}` no longer reads `RECOVERED` (gate's resolved release version) — the "
+            "seam these cases drive is gone, so they would pass vacuously. Either the read moved "
+            "back into this step (re-point BAKE_VERSION_STEP_ID) or the wiring broke."
         )
 
     failures: list[str] = []
@@ -776,41 +1042,60 @@ def main() -> int:
              for problem in workflow_narrowed_problems),
          "the mutation passed with workflow-level id-token: write")
 
-    base = {"RELEASE_VERSION": "", "BAKE_ONLY": "true", "SHORT_SHA": SHORT_SHA}
+    # 🚨 The three `plugins-*` jobs must be able to run on the reconcile path, and must not name an
+    # output that is empty there (MeshWeaver#4539). Asserted structurally, with its own mutation
+    # controls below — a guard that cannot fail is not a guard.
+    leg_problems = plugins_leg_problems(workflow_text)
+    case("every `plugins-*` job can run on a seal re-attempt, off `gate.image_tag`",
+         not leg_problems, "; ".join(leg_problems))
+    reverted_tag = workflow_text.replace(
+        "      test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.gate.outputs.image_tag }}",
+        "      test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.plugin-test-image.outputs.version }}",
+        1)
+    case("...and the guard catches a leg reaching for the SKIPPED tester job's version",
+         any("plugin-test-image.outputs.version" in p for p in plugins_leg_problems(reverted_tag)),
+         "the mutation passed with a leg reading an output that is empty on a re-attempt")
+    reverted_if = workflow_text.replace(
+        "       needs.gate.outputs.plugins_seal_due == 'true')",
+        "       needs.gate.outputs.publish == 'true')", 1)
+    case("...and the guard catches a leg losing its reconcile arm",
+         any("plugins_seal_due" in p for p in plugins_leg_problems(reverted_if)),
+         "the mutation passed with a leg that can never repair a half-sealed set")
+
+    base = {"RELEASE_VERSION": "", "BAKE_ONLY": "true", "SHORT_SHA": SHORT_SHA,
+            "RECOVERED": VERSION}
 
     # 1 ── A full run: portal-image minted the version, so nothing is read back.
     rc, log, outputs = run_step(body, {**base, "RELEASE_VERSION": "3.0.0-rc9.ci.1"}, fixture(True))
     case("a minted version passes straight through",
          rc == 0 and "version=3.0.0-rc9.ci.1" in outputs, f"rc={rc} out={outputs!r} log={log}")
 
-    # 2 ── THE CASE THAT HAD NEVER SUCCEEDED. Bake-only reconcile, and the repository holds 16
-    #      untagged manifests whose `tags` is null. Before #2642 the query threw on the first of
-    #      them, jmespath aborted the WHOLE query, az exited non-zero, `2>/dev/null || true`
-    #      turned that into an empty tag list, and the step blamed promote.
+    # 2 ── A bake-only reconcile takes the version `gate` resolved, and takes it VERBATIM.
     rc, log, outputs = run_step(body, base, fixture(True))
-    case("a bake-only reconcile recovers the version DESPITE 16 untagged manifests",
+    case("a bake-only reconcile publishes under the version gate resolved",
          rc == 0 and f"version={VERSION}" in outputs, f"rc={rc} out={outputs!r} log={log}")
 
-    # 3 ── The genuine "promote never armed it" case must still be loud, and must still say so.
-    rc, log, outputs = run_step(body, base, fixture(False))
-    case("a digest with no version tag is still a loud, accurate stop",
-         rc != 0 and "carries no version tag" in log, f"rc={rc} log={log}")
+    # 3 ── 🚨 An empty recovered version is a REFUSAL, not a fallback. Without this case, a wiring
+    #      break between `gate` and this step would publish a release marker under no version at
+    #      all — which is the shape the read it replaced was written to prevent.
+    rc, log, outputs = run_step(body, {**base, "RECOVERED": ""}, fixture(True))
+    case("an empty recovered version refuses rather than publishing under an unknown release",
+         rc != 0 and "no release to make available" in log, f"rc={rc} log={log}")
+    case("...and it points at the step that owns the resolution, not at promote",
+         "gate" in log, f"log={log}")
 
-    # 4 ── 🚨 THE REGRESSION GUARD. When az itself fails, the step must fail with az's message —
-    #      it must NOT convert the failure into "there is no version tag" and blame promote.
-    #      Reintroduce `2>/dev/null || true` on that read and this case goes red: `tags` becomes
-    #      empty, `version` becomes empty, and the step prints the promote accusation.
-    rc, log, outputs = run_step(body, base, fixture(True), az_fail=True)
-    case("a FAILING az fails the step", rc != 0, f"rc={rc} log={log}")
-    case("a FAILING az is never reported as promote's fault",
-         "Fix promote" not in log and "carries no version tag" not in log,
-         f"the step blamed a healthy component for its own failed call:\n{log}")
-    case("a FAILING az surfaces az's own message", "az login" in log, f"log={log}")
-
-    # 5 ── A non-bake-only run with no version is a refusal, not a read.
-    rc, log, outputs = run_step(body, {**base, "BAKE_ONLY": "false"}, fixture(True))
+    # 4 ── A non-bake-only run with no version is a refusal, not a read.
+    rc, log, outputs = run_step(body, {**base, "BAKE_ONLY": "false", "RECOVERED": ""}, fixture(True))
     case("no version on a non-bake-only run refuses rather than guessing",
          rc != 0 and "unknown release" in log, f"rc={rc} log={log}")
+
+    print()
+    print(f"── step `{BAKE_VERSION_STEP_ID}` ──")
+    run_bake_version_cases(root, case)
+
+    print()
+    print(f"── step `{SEAL_STEP_ID}` ──")
+    run_seal_cases(root, case)
 
     print()
     print(f"── step `{DECIDE_STEP_ID}` ──")
@@ -828,7 +1113,8 @@ def main() -> int:
     if failures:
         print(f"::error::{len(failures)} case(s) failed: {', '.join(failures)}")
         return 1
-    print(f"all cases passed against {WORKFLOW} steps `{STEP_ID}` + `{DECIDE_STEP_ID}` "
+    print(f"all cases passed against {WORKFLOW} steps `{STEP_ID}` + `{BAKE_VERSION_STEP_ID}` "
+          f"+ `{SEAL_STEP_ID}` + `{DECIDE_STEP_ID}` "
           f"+ `{VERDICT_STEP_ID}` + `{HEAL_STEP_ID}` (extracted, not copied)")
     return 0
 
