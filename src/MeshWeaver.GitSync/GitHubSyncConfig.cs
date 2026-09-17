@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Text.Json.Serialization;
 
@@ -246,4 +247,24 @@ public record GitHubSyncConfig
     /// </summary>
     [Browsable(false)]
     public string? LastSyncNote { get; init; }
+
+    /// <summary>
+    /// 🚨 The NodeTypes whose SOURCES the last import held back because no bundle for this instance's
+    /// framework identity carries the fingerprint they would produce — adopt-then-sync per NodeType
+    /// (MeshWeaver#3845 hole 4; <c>Doc/Architecture/AdoptThenSyncPerNodeType</c>).
+    ///
+    /// <para><b>Why it is on the record and not only in a log.</b> #4063's lesson, one level down: a
+    /// held source that says nothing is indistinguishable from one that is up to date. Each entry
+    /// names the type, the fingerprint its sources have now, the fingerprint a bundle must record for
+    /// the hold to release, and the framework identity the judgement was made under — so a reader can
+    /// tell "waiting for a publication" from "judged under an identity this instance no longer
+    /// runs", which a roll makes true of every entry.</para>
+    ///
+    /// <para>It is also what the seal reconciler asks before re-fetching: a publication arriving
+    /// releases a source only when the inventory now carries a wanted fingerprint (or the identity
+    /// moved), so an unrelated publication costs nothing. Written on every import conclusion; an
+    /// import that holds nothing clears it. Not user-editable.</para>
+    /// </summary>
+    [Browsable(false)]
+    public ImmutableList<BundleHeldNodeType>? BundleHeldNodeTypes { get; init; }
 }

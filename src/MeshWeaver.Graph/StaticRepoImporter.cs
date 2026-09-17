@@ -59,6 +59,20 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     public ImmutableList<string> HeldNodeTypePaths { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// 🚨 The NodeType paths whose SOURCES this import held back because no bundle for this
+    /// instance's framework identity carries the fingerprint they would produce — adopt-then-sync per
+    /// NodeType (MeshWeaver#3845 hole 4; <c>Doc/Architecture/AdoptThenSyncPerNodeType</c>).
+    ///
+    /// <para>A DIFFERENT hold from <see cref="HeldNodeTypePaths"/>, which is a retirement the mesh
+    /// still has instances for. This one is a delivery ordering: the type's bytes are here and
+    /// serving, its sources match them, and the tree's newer sources wait for the bundle that was
+    /// built from them. The caller that computed it (<c>GitHubSyncService</c>) sets this after the
+    /// import so the one activity line every import path already logs can name the held types, and so
+    /// the last-sync baseline is not advanced past content the mesh deliberately does not hold.</para>
+    /// </summary>
+    public ImmutableList<string> BundleHeldNodeTypePaths { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
     /// How many source nodes this import could NOT land — the per-file failures the
     /// <c>ImportedWithErrors</c> outcome and the activity's ⚠ lines report.
     ///

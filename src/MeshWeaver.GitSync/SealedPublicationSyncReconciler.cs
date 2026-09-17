@@ -4,7 +4,9 @@ using MeshWeaver.Graph;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -78,6 +80,44 @@ public static class SealedSyncReconcile
         SealedSource sealedSource, RepoIdentity repo, string spacePath, GitHubSyncConfig? config,
         IReadOnlyList<SealedSource> sealedForThisIdentity, string identity,
         IReadOnlyCollection<string> declinedTypePaths)
+        => DecideWithInventory(
+            sealedSource, repo, spacePath, config, sealedForThisIdentity, identity, declinedTypePaths,
+            PrebuiltBundleInventory.NotConfigured);
+
+    /// <summary>
+    /// <see cref="Decide"/> plus the per-NodeType bundle inventory — the release half of
+    /// adopt-then-sync per NodeType (MeshWeaver#3845 hole 4).
+    ///
+    /// <para>A source with NodeTypes held for their bundle
+    /// (<see cref="GitHubSyncConfig.BundleHeldNodeTypes"/>) sits on an OLDER commit deliberately, and
+    /// its attempt pair records a final verdict on the sealed one — so the settled shortcut below
+    /// would answer "re-reading re-derives the same verdict", which is true of the COMMIT and false
+    /// of the SHELF. A publication arriving is exactly the event that can change the answer, and this
+    /// asks whether it did BEFORE anything is re-fetched: a hold releases when the inventory now
+    /// carries a wanted fingerprint, or when it was judged under a framework identity this instance
+    /// no longer runs (a roll makes the judgement void, not merely old). An unrelated publication
+    /// costs nothing.</para>
+    ///
+    /// <para>A DISTINCT name, not an overload: an added overload makes every dependent's
+    /// <c>cref</c> to the original ambiguous (CS0419 under warnings-as-errors — the shape that bit
+    /// MeshWeaver.SocialMedia on 2026-09-04), which is why <c>ReconcileAtCommit</c> is spelled out
+    /// beside <c>ReimportAtCommit</c> too.</para>
+    /// </summary>
+    /// <param name="sealedSource">The sealed publication (this identity's).</param>
+    /// <param name="repo">The repository the seal attributes to.</param>
+    /// <param name="spacePath">The Space the sync source configures.</param>
+    /// <param name="config">The source's config, or null when unreadable.</param>
+    /// <param name="sealedForThisIdentity">Everything sealed under this identity (the gate's input).</param>
+    /// <param name="identity">This instance's framework identity — log copy, and the identity a held
+    /// judgement is compared against.</param>
+    /// <param name="declinedTypePaths">NodeType paths whose bundle entry was declined on its source
+    /// fingerprint during the sweep that read this seal.</param>
+    /// <param name="inventory">What bundles for this identity carry, per type.</param>
+    public static Plan DecideWithInventory(
+        SealedSource sealedSource, RepoIdentity repo, string spacePath, GitHubSyncConfig? config,
+        IReadOnlyList<SealedSource> sealedForThisIdentity, string identity,
+        IReadOnlyCollection<string> declinedTypePaths,
+        PrebuiltBundleInventory inventory)
     {
         ArgumentNullException.ThrowIfNull(sealedSource);
         ArgumentNullException.ThrowIfNull(repo);
@@ -104,6 +144,14 @@ public static class SealedSyncReconcile
             // and an Activity node. Asked AFTER the gate, so a source the seal holds is still
             // recorded as held; and via the one shared predicate, so an edit of the source or a new
             // sealed commit re-attempts exactly as it does on the webhook path.
+            // 🚨 #3845 hole 4 — a hold the SHELF can release is not settled, whatever the attempt
+            // pair says about the commit. Asked before the settled shortcut, and only when a hold is
+            // actually recorded, so nothing else changes shape.
+            if (verdict.Proceed && ReleasesAHold(config, inventory, identity) is { } released)
+                return new Plan(Action.ReconcileAtSealedCommit, commit,
+                    $"'{sealedSource.Source}' is sealed at {Short(commit)} and this source holds "
+                    + $"NodeType sources for a bundle that has now arrived ({released}) — re-importing "
+                    + "at the sealed commit so the held sources land on the bytes that match them");
             if (verdict.Proceed && GitHubSyncService.HasFinalVerdictAt(config, commit))
                 return new Plan(Action.None, commit,
                     $"'{sealedSource.Source}' is sealed at {Short(commit)} and this source already reached a "
@@ -134,6 +182,38 @@ public static class SealedSyncReconcile
             + $"yet {declinedHere.Count} type(s) baked from it were declined on their source fingerprint "
             + $"({string.Join(", ", declinedHere.Take(5))}{(declinedHere.Count > 5 ? ", …" : "")}) — "
             + "the live sources have drifted from the commit they claim; re-importing at it");
+    }
+
+    /// <summary>
+    /// Whether this reading of the shelf RELEASES a NodeType this source is holding — the sentence
+    /// naming the first one it releases, or null.
+    ///
+    /// <para>Two releases, and they are different facts. A bundle for this identity now records the
+    /// fingerprint a held type was waiting for: the import can land those sources onto bytes that
+    /// match them. Or the hold was judged under ANOTHER framework identity — this instance has
+    /// rolled, so the judgement is about bytes it no longer runs and must be taken again rather than
+    /// trusted. An UNREADABLE inventory releases nothing: "cannot tell" is never "clear to proceed",
+    /// and a re-attempt taken from it would be taken from a measurement that was not made.</para>
+    /// </summary>
+    /// <param name="config">The source's configuration.</param>
+    /// <param name="inventory">What bundles for this identity carry, per type.</param>
+    /// <param name="identity">This instance's framework identity.</param>
+    /// <returns>The release, as log copy, or null.</returns>
+    internal static string? ReleasesAHold(
+        GitHubSyncConfig? config, PrebuiltBundleInventory inventory, string identity)
+    {
+        if (config?.BundleHeldNodeTypes is not { IsEmpty: false } held || inventory is null)
+            return null;
+        if (held.FirstOrDefault(h => !string.Equals(h.Identity, identity, StringComparison.Ordinal))
+            is { } rolled)
+            return $"'{rolled.Path}' was held under framework identity {rolled.Identity}, which this "
+                   + $"instance no longer runs — the judgement is re-taken against {identity}";
+        if (!inventory.IsUsable)
+            return null;
+        return held.FirstOrDefault(h => inventory.Carries(h.Path, h.WantedFingerprint)) is { } arrived
+            ? $"'{arrived.Path}' waits for source fingerprint {arrived.WantedFingerprint}, which a "
+              + $"bundle for framework identity {identity} now records"
+            : null;
     }
 
     private static bool SameCommit(string? a, string? b) =>
@@ -174,10 +254,16 @@ internal sealed class SealedPublicationSyncReconciler(
             if (attributable.Count == 0)
                 return Observable.Return(0);
 
-            return attributable
-                .Select(s => ReconcileSource(s, identity, sealedForThisIdentity, declinedTypePaths))
+            // 🚨 #3845 hole 4 — the inventory is read ONCE per reconcile, on the FileSystem pool,
+            // and ONLY when some source actually holds NodeTypes for a bundle: it is the one fact
+            // that can release such a hold, and a publication announcement that releases nothing
+            // must cost nothing. The read is shared by every source this pass touches, so the
+            // decisions cannot disagree about what the shelf carries.
+            return Inventory(identity).SelectMany(inventory => attributable
+                .Select(s => ReconcileSource(
+                    s, identity, sealedForThisIdentity, declinedTypePaths, inventory))
                 .Concat()
-                .Sum();
+                .Sum());
         })
         .Catch<int, Exception>(ex =>
         {
@@ -187,9 +273,40 @@ internal sealed class SealedPublicationSyncReconciler(
             return Observable.Return(0);
         });
 
+    /// <summary>
+    /// What bundles for this identity carry, per NodeType — read on the FileSystem
+    /// <see cref="IIoPool"/> like every other reader of the published root, and only when a
+    /// configured source is holding something a bundle could release. A mesh with no pool registry,
+    /// or one whose read faults, answers <see cref="PrebuiltBundleInventory.NotConfigured"/>, which
+    /// releases nothing: "cannot tell" is never "clear to proceed".
+    /// </summary>
+    private IObservable<PrebuiltBundleInventory> Inventory(string identity)
+        => Observable.Defer(() =>
+        {
+            var configuration = hub.ServiceProvider.GetService<IConfiguration>();
+            var publishedRoot = configuration?[ShippedPrebuiltBundles.PublishedRootConfigKey];
+            var imageDirectory = configuration?[ShippedPrebuiltBundles.DirectoryConfigKey]
+                is { Length: > 0 } configured
+                ? configured
+                : ShippedPrebuiltBundles.DefaultDirectory;
+            if (hub.ServiceProvider.GetService<IoPoolRegistry>() is not { } pools)
+                return Observable.Return(PrebuiltBundleInventory.NotConfigured);
+            return pools.Get(IoPoolNames.FileSystem)
+                .InvokeBlocking(_ => PrebuiltBundleInventory.Read(
+                    imageDirectory, publishedRoot, identity, logger));
+        })
+        .Catch((Exception exception) =>
+        {
+            logger?.LogWarning(exception,
+                "[SealedSync] the bundle inventory for identity {Identity} could not be read — no "
+                + "bundle-keyed hold is released by this pass", identity);
+            return Observable.Return(PrebuiltBundleInventory.NotConfigured);
+        });
+
     private IObservable<int> ReconcileSource(
         SealedSource sealedSource, string identity,
-        IReadOnlyList<SealedSource> sealedForThisIdentity, IReadOnlyCollection<string> declinedTypePaths)
+        IReadOnlyList<SealedSource> sealedForThisIdentity, IReadOnlyCollection<string> declinedTypePaths,
+        PrebuiltBundleInventory inventory)
     {
         var repo = SealedSyncGate.Parse(sealedSource.Repository!);
         if (!repo.IsComplete)
@@ -216,9 +333,9 @@ internal sealed class SealedPublicationSyncReconciler(
                     if (GitHubWebhookProcessor.ToPushTarget(node) is not { } target)
                         continue;
                     var config = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger);
-                    var plan = SealedSyncReconcile.Decide(
+                    var plan = SealedSyncReconcile.DecideWithInventory(
                         sealedSource, repo, target.SpacePath, config, sealedForThisIdentity, identity,
-                        declinedTypePaths);
+                        declinedTypePaths, inventory);
                     switch (plan.Action)
                     {
                         case SealedSyncReconcile.Action.ImportAtSealedCommit:
