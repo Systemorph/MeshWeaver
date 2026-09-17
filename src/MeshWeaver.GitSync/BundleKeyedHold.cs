@@ -145,6 +145,13 @@ public static class BundleKeyedHold
         // able to clear it. Holding requires evidence that the bytes are absent, and an unreadable
         // shelf is not that evidence — the type imports as it did before this gate and may go
         // StaleAdopted, which is honest, serving and announced (#3583).
+        //
+        // 🚨 And it does NOT reopen what #3461 phase 5 closed ("cannot tell", never "nothing
+        // sealed"): that contract is about the SEAL INDEX, whose unreadable reading still holds at
+        // the SOURCE level (`SealedSyncGate.RefusedForUnreadableIndex`) — which means the import
+        // this gate sits inside does not run at all. What reaches this branch is the narrow case
+        // where the index read fine and an ARCHIVE did not, inside an import the seal has already
+        // cleared; the source cannot move past its seal either way.
         if (inventory.Outcome is not SealedReadOutcome.Read || live.Count == 0)
         {
             if (inventory.Outcome is SealedReadOutcome.Unreadable)

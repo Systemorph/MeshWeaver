@@ -83,6 +83,15 @@ bytes are ABSENT, and an unreadable shelf is not that evidence; the import write
 type may report `StaleAdopted` (honest, serving, announced — #3583), and the next readable pass judges
 it properly. The refusal is logged at Warning naming the identity.
 
+**This does NOT reopen what the phase-5 reader contract closed** (#3461 phase 5, #4592: *"cannot
+tell", never "nothing sealed"*). That contract is about the SEAL INDEX, and an unreadable index still
+HOLDS — at the source level, where a publication arriving releases it
+(`SealedSyncGate.RefusedForUnreadableIndex`). An unreadable index therefore holds the whole source,
+so the import this gate sits inside does not even run. What is left for the abstain above is the
+narrow case where the index read fine and an ARCHIVE did not: a reading that can name no bundle for
+one type, inside an import the seal has already cleared. The source cannot move past its seal either
+way; only the per-type hold is skipped, and the type says it is behind.
+
 The same asymmetry decides what the reading FOLDS: an archive whose manifest names another framework
 identity — or names none — is skipped, because `SeedBundles` declines exactly those before it looks at
 an assembly. A reading that folded them in would release a hold onto bytes that can never adopt here.
