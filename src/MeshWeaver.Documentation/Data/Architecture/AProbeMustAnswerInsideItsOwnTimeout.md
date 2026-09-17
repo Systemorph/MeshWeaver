@@ -210,6 +210,20 @@ five seconds:
 | memex | 8.12 / 9.62 / 9.52 s | **none — every probe times out** |
 | memex-cloud | 0.14 / 0.75 s | ~7× |
 
+Re-measured after the outage, 2026-09-17 **20:19Z**, from outside the cluster (so TLS and ingress are
+in the number), with the fix merged in core and its portal half still open:
+
+| instance | `/health` | what its own timing line says | headroom against 5 s |
+|---|---|---|---|
+| memex | **9.10 s** | `timing: 8968ms total over 17 check(s) … required_modules 8968ms; pending_module_activation 21ms; data_volume_free_space 14ms; 14 more under 10ms` | **none** — it answers only because the startup probe is patched to `/ready` |
+| memex-cloud | **1.66 s** | *no timing line* — this instance is on an image from before the line shipped | ~3× |
+
+🚨 **Read the second row as the next one to watch, not as the comfortable one.** `memex-cloud` is the
+instance with 714 module generations and 33,383 files on its share — the volume whose size is the
+whole of the first row's number — and it is at the chart's `timeoutSeconds: 5` with no override.
+Three times is not seven, it cannot yet say which check is spending it, and the growth that closed
+memex's headroom is growth it has more of.
+
 Two things follow. First, this is **not** a property of the image: both instances were running
 images from the same line. Second, a warm reading is not the reading that matters — a booting
 replica runs its cold bake on the same CPU and the same volume as these checks, so the number to
