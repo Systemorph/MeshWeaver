@@ -163,6 +163,28 @@ Publishing the gap is not — each row above was repaired only after someone els
 - **A healthy meter standing in for the thing that actually refused.** Read the **refusal**, not the
   meter. `5000/5000 remaining` while every call is refused is the documented signature of the
   secondary limit — the meter is honest and answering a different question.
+- **A WINDOW standing in for a result set.** `grep … | head -N`, `| tail`, `--per_page`, a listing's
+  first page: each shows a window, and an absence read off one is not a measurement. Measured
+  2026-09-18 on MeshWeaver.Plugins, asserting its `ci.yml` never calls the shared validate lane —
+  `grep -nE '…|node-repo-|…' ci.yml | head -20`. **The pattern matched.** `ci.yml:2745` is
+  `uses: …/node-repo-validate.yml@main`, and it was **match 36 of 50**; `head -20` cut at match 20
+  (line 1039) of a 4,983-line file. 🚨 **A CORRECT pattern is the dangerous case** — a wrong one
+  announces itself by returning nothing plausible, while a right one in a truncated window returns
+  real, on-topic hits, so the window looks like the answer. The habit is `grep -c` **before**
+  `grep | head` — if the count exceeds the window, the window is not the answer — and to
+  positive-control the *window*, not the query: grep for something the subject is KNOWN to contain
+  and confirm that hit lands **inside the window you are actually reading**. State it as *N of M*,
+  never as *N*. It is the same shape as
+  [Adoption and the Sweep Count Different Things](/Doc/Architecture/AdoptionAndTheSweepCountDifferentThings),
+  arriving by a different road: 20 shown, 50 matched, and nobody asked how many there were.
+- **A SUBSET standing in for the sweep.** In the same measurement, five of six vendored copies were
+  compared by **blob sha** against the canonical and correctly reported byte-identical; the sixth was
+  settled by a *title search for an open PR* instead. The five were a set being compared and the
+  sixth was a question about existence, so it felt like a different kind of question — **it was
+  not**, and the weaker check was the one load-bearing for the conclusion. A sweep gets its hole
+  exactly where a cheaper instrument was substituted, so name the check that decides and run *that*
+  one on every member. Here the blob comparison would have caught the gap whatever the other answer
+  had been: the sixth copy had been merged and never applied (`changed_files=0`).
 - **A declaration standing in for an effective capability.** An App's own page lists what it *asked
   for*; the **installation** lists what it was *granted*. Measured 2026-09-12: `meshweaver-cloud`
   declares `contents, emails, issues, metadata, pull_requests, workflows`, and its installation on
