@@ -4113,6 +4113,12 @@ public sealed class MessageHub : IMessageHub
         // flip would let them disagree.
         var startsTheTeardown = !IsShuttingDown;
 
+        // The dependency network first, while this hub is still whole enough to compute it: the
+        // set is derived HERE, once, and delivered by a surviving hub. A request that is itself a
+        // cascade never fans out again (RecycleCascade / DisposeRequest.CascadedFrom).
+        if (startsTheTeardown && request.Message.CascadedFrom is null)
+            CascadeRecycle(request.Message);
+
         if (startsTheTeardown)
             AnnounceRecycle();
 
@@ -4177,6 +4183,21 @@ public sealed class MessageHub : IMessageHub
     /// that type for the contract. Best-effort by design: a recycle that cannot announce must
     /// still recycle, so a faulting announcement is logged and never propagated into the teardown.
     /// </summary>
+    private void CascadeRecycle(DisposeRequest request)
+    {
+        try
+        {
+            Get<RecycleCascade>()?.Cascade(request);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Recycle cascade for hub {Address} faulted — its dependency network keeps its live "
+                + "activations until each is recycled by hand",
+                Address);
+        }
+    }
+
     private void AnnounceRecycle()
     {
         try

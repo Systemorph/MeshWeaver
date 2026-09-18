@@ -537,6 +537,54 @@ teardown; silent on a direct `Dispose()`).
 
 ---
 
+## A recycle of the main bit takes its dependency network with it — and instantiates nothing
+
+A routed `DisposeRequest` on a **NodeType definition** is a recycle of everything built on that
+definition, not of one hub. The definition's hub carries a second seam beside `RecycleAnnouncement`:
+
+```csharp
+// MessageHub.HandleDispose — on the recycle's own turn, BEFORE Dispose()
+if (startsTheTeardown && request.Message.CascadedFrom is null)
+    CascadeRecycle(request.Message);   // Get<RecycleCascade>()?.Cascade(request)
+AnnounceRecycle();
+Dispose();
+```
+
+`NodeTypeNodeType` installs the one real `RecycleCascade` (`NodeTypeRecycleCascade`). It derives the
+**dependency network** from the index — the NodeTypes whose sources reach into this type's tree
+(`shared=@Type/Source/…`, transitively, the reverse of `NodeTypeDependencyGraph.Build`) and every
+instance of the type and of each dependent — and posts one `DisposeRequest { CascadedFrom = type }`
+per address **from the mesh's node-operation issuing hub**, a survivor. The definition hub computes;
+it never delivers: a dying hub cannot deliver its own last frame.
+
+Three properties, each load-bearing:
+
+| Property | Why |
+|---|---|
+| **Derived ONCE, at the main node** | Every fanned-out request carries `CascadedFrom`, and `HandleDispose` never cascades a request that carries it. A cycle among NodeTypes (`A` shares from `B`, `B` from `A`) is therefore one wave, not a storm. |
+| **Only what was instantiated is recycled** | The set comes from the index — every instance the mesh knows — but WHICH of them is live is a fact of the routing layer, and it is answered there: `MonolithRoutingService.RouteImpl` returns a `DisposeRequest` to an address with no registered stream `Ignored` without creating a hub, and `MessageHubGrain.DeliverMessage` answers one that reaches an activation which never built its hub `Ignored` and releases the activation. So a type with ten thousand instances and three open pages recycles three hubs. |
+| **The check reads the ENVELOPE, not the type** | A delivery that crossed a hub boundary is still `RawJson` at the router and at the grain — it is deserialised only inside the target's `MessageService` — so `delivery.Message is DisposeRequest` matches an in-process post and nothing else (measured: the typed test never fired on Orleans and a cold grain built its hub for a dispose after all). Both sites go through `DisposeRequestEnvelope.TryRead`, which reads `$type`, `reason` and `cascadedFrom` off the packaged frame. |
+| **The hub build is deferred to the first non-dispose delivery** | Orleans activates a grain for ANY call; until this change that call also built the hub (node resolution, NodeType binding, assembly load). `OnActivateAsync` now COMPOSES the build and `EnsureActivationStarted` RUNS it on the first delivery that needs a hub. The self-routed own-address read the build issues arrives at `DeliverMessage` after the build has started, so it parks on `HubReady` exactly as before. |
+
+What this does NOT do, deliberately: it recompiles nothing (the Recycle tool's forced release stamp on
+the definition still does that, for the definition alone — a dependent recompiles through
+`ReleaseAffectedNodeTypes` when its shared sources change), it clears no data, and it touches
+neither other replicas nor any process-wide cache — the same limits every recycle has.
+
+Repros: `RecycleCascadeTest` (Messaging.Hub.Test — once, with the request, before the teardown; a
+cascaded request never cascades; a direct `Dispose()` never cascades), `NodeTypeRecycleCascadeTest`
+(Graph.Test — the network: transitive dependents, instances, deterministic order, a cycle),
+`ADisposeRequestNeverInstantiatesAHubTest` (Hosting.Test, Monolith — a cold address stays cold; a
+live one is recycled and reactivates) and `AColdGrainAnswersADisposeWithoutBuildingItsHubTest`
+(Hosting.Orleans.Test — the grain answers `Ignored` and registers no stream).
+
+Maintainer, 2026-09-18: *"everything involved must be properly disposed ⇒ implement logic mesh side
+and just recycle main bit. all sub-bits (dependency network) should only be recycled if instantiated
+in the first place ⇒ handle dispose request on grain level if hub is not instantiated. don't
+instantiate in this case."*
+
+---
+
 ## The first instant of teardown: `ShuttingDown`
 
 `Dispose()` is not the first moment a hub is part of a shutdown. An **ancestor's**
