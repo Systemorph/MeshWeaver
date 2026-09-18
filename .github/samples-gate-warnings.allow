@@ -1,23 +1,79 @@
 # The in-mesh WARNING debt the samples trees carry, for `mw-plugin-test compile
 # --warning-baseline`. Format: `<NodeType path> <diagnostic id>`, `#` comments, blanks ignored.
 #
+# ── THIS FILE IS DELIBERATELY EMPTY OF ENTRIES ─────────────────────────────────────────────────
+# An EMPTY baseline is the strictest setting there is, and it is spelled as an empty FILE on
+# purpose: nothing is tolerated, so EVERY in-mesh warning that REACHES THE RATCHETS fails the bake.
+# It is not the same as omitting `--warning-baseline`, which would be OBSERVE-ONLY — "no known debt"
+# and "the bake never read a baseline" must never render the same, which is why the file stays here
+# rather than being deleted. `bake-then-gate.sh` asserts both ratchets print ENFORCED.
+#
+# 🚨 "REACHES THE RATCHETS" is not "the compiler produced", and every number in this file is on the
+# first side of that line. Roslyn still EMITS the centrally-suppressed codes — CS1591/CS1573/CS1712
+# and CS1701/CS1702 — on these trees; `CompileWarning.NotReported` drops them in
+# `EmitPipeline.Collect`, the ONE place any consumer reads warnings through, so they never enter the
+# inventory the two ratchets judge, and a baseline line naming one of them is INERT rather than
+# tolerating anything. An empty file is the strictest setting over the REPORTED set — never a claim
+# that the compiler is silent. (The 362 CS1591 occurrences below are exactly that difference.)
+#
 # 🚨 SHRINK-ONLY, and the gate holds you to it in BOTH directions:
 #   * a (type, code) pair that is NOT listed FAILS the bake — the debt cannot grow back;
 #   * a listed pair whose type compiled CLEAN of that code is STALE and FAILS the bake until the
 #     line is deleted — so paying a debt down is not optional bookkeeping.
-# A listed type that did NOT compile this run is UNVERIFIABLE, never stale: it produced no
-# warnings at all, and reading that silence as "the debt is paid" would delete a real record on a
-# measurement nobody took.
+# A listed type that did NOT compile this run is UNVERIFIABLE, never stale: it produced no warnings
+# at all, and reading that silence as "the debt is paid" would delete a real record on a
+# measurement nobody took. With no lines at all, the first rule is the whole contract.
 #
 # 🚨 TWO RATCHETS, one file, split by the code — see Doc/Architecture/InMeshWarningStandard.
 #   * CS1591 is documentation debt and has its own verdict, so a missing doc comment can never be
 #     the reason an unrelated change cannot merge.
 #   * everything else is a latent bug or a doc comment that is actively WRONG.
 #
-# 🚨 THIS IS NOT A PLACE TO PUT A DIAGNOSTIC YOU DID NOT WANT TO FIX. Three whole codes that this
-# file would otherwise have carried were fixed at the ROOT instead, because the platform — not the
-# content — emitted them, and baselining them would have recorded the generator's debt under the
-# content's name in every repo of the fleet:
+# ── WHERE THE THIRTY LINES WENT (2026-09-18) ───────────────────────────────────────────────────
+# 🚨 They were NOT fixed by writing anything. Say so plainly, because the opposite claim is the
+# mistake this file exists to make impossible: every one of the 30 named CS1591 or CS1701 — the two
+# families #4591 added to `CompileWarning.NotReported`, the in-mesh compile's PARITY list.
+#
+# The premise of the whole standard is that in-mesh C# is held to the standard `src/` C# is held to
+# under `-warnaserror`. A raw CSharpCompilation applies no NoWarn at all, so without that list the
+# in-mesh compile was held to a STRICTER standard than CORE's own `src/` build — that is what was
+# measured, here, and the satellites were not — in exactly two families:
+#   * CS1701/CS1702 — reference-set skew ("assuming assembly reference 'System.Linq.Expressions,
+#     Version=8.0.0.0' used by 'System.Reactive' matches identity '…Version=10.0.0.0'"). A property
+#     of the REFERENCE SET, never of the content: no author can fix it and no `#pragma` belongs in
+#     their source. Measured on this repo at e8fce8130d: a 28-project `-c Release -warnaserror`
+#     build reports `0 Warning(s)` and ZERO CS1701, with Rx referenced throughout.
+#   * CS1591/CS1573/CS1712 — doc COMPLETENESS, suppressed for `src/` by core's own
+#     Directory.Build.props: `<NoWarn>649;CA2255;NU5104;NU1510;CS1591;CS1573;CS1712;$(NoWarn)</NoWarn>`.
+#
+# The tester names such a line INERT: it tolerates nothing (nothing can produce the code) and hides
+# nothing, and it prints "Delete the lines" on every run. Deleting them is that instruction carried
+# out, and it leaves the file exactly consistent with what the bake measures.
+#
+# Measured on these trees at e8fce8130d, with `MW_LOG_LEVEL=Information`:
+#
+#   before  warnings: 0 raw occurrence(s) folded to 0 distinct site(s), over 0 of 27 compiled type(s)
+#           warnings: 30 INERT baseline entr(ies) naming CS1591, CS1701 — … Delete the lines.
+#           warnings: warnings     ratchet — ENFORCED against 0 baseline entr(ies): 0 NEW, 0 stale
+#           warnings: doc-comments ratchet — ENFORCED against 0 baseline entr(ies): 0 NEW, 0 stale
+#   after   the same three measured lines, and no INERT line.
+#
+# Both ratchets were already enforcing against ZERO entries before the trim — `WarningBaseline.For`
+# excludes a retired code — so nothing this file used to say was being relied on by anything. The
+# trees themselves REPORT no warnings at all: 27 of 28 NodeTypes compile (PensionFund/BalanceSheet
+# is the samples-gate.allow known-debt `#r "nuget:…"` that cannot resolve on a gate host) and the
+# bake's inventory over those 27 is 0 occurrences over 0 sites. The suppressed codes are not part of
+# that zero — they are still emitted, and still not measured.
+#
+# 🚨 What this file is NOT. It is not a record that the sample trees' public members are
+# documented — CS1591 is suppressed, so nobody is measuring that. The 362 occurrences over 271
+# members the earlier revision counted are still undocumented; writing those doc comments is worth
+# doing and changes NO verdict here. Do not read an empty file as a claim that it was done.
+#
+# 🚨 THIS IS STILL NOT A PLACE TO PUT A DIAGNOSTIC YOU DID NOT WANT TO FIX, and three whole codes
+# that this file would otherwise have carried were fixed at the ROOT instead, because the platform —
+# not the content — emitted them, and baselining them would have recorded the generator's debt under
+# the content's name in every repo of the fleet:
 #   * CS0105 (119 occurrences / 23 types) — the skeleton generator concatenated every source
 #     file's `using` lines without de-duplicating them, so correct authored source earned "the
 #     using directive … appeared previously". Fixed in DynamicMeshNodeAttributeGenerator.
@@ -26,48 +82,9 @@
 #     generating the doc comments.
 #   * CS8632 (21 types) — authored `string?` in a tree with no `#nullable` directive. Fixed with
 #     NullableContextOptions.Annotations (the annotation context only — no nullable analysis).
-# Measured before/after on this tree: 850 raw occurrences over 27 of 27 types → 375 over 18.
-
-# ── CS1591 · missing XML doc comment (the doc-comments ratchet) ────────────────────────────────
-# 362 occurrences over 271 distinct members in 17 NodeTypes, all of it authored sample content.
-# Every line here is one NodeType's worth of undocumented public API; delete the line the day that
-# type is fully documented — the gate will tell you, by failing on the stale entry.
-ACME/Article                CS1591
-ACME/Project                CS1591
-ACME/Project/Todo           CS1591
-FutuRe/BusinessUnit         CS1591
-FutuRe/ExchangeRate         CS1591
-FutuRe/GroupAnalysis        CS1591
-FutuRe/LineOfBusiness       CS1591
-FutuRe/LocalAnalysis        CS1591
-MathDemo/Matrix             CS1591
-Northwind/AnalyticsCatalog  CS1591
-Northwind/Article           CS1591
-Northwind/Customer          CS1591
-Northwind/Employee          CS1591
-Northwind/Product           CS1591
-Northwind/Supplier          CS1591
-PensionFund/Position        CS1591
-PythonDemo/PrimeReport      CS1591
-
-# ── CS1701 · assembly-reference version skew (the warnings ratchet) ────────────────────────────
-# 🚨 The ONE class of entry here whose owner is the REFERENCE SET rather than the content:
-#   "Assuming assembly reference 'System.Linq.Expressions, Version=8.0.0.0' used by
-#    'System.Reactive' matches identity '…, Version=10.0.0.0' … you may need to supply runtime policy"
-# System.Reactive is compiled against .NET 8's System.Linq.Expressions and runs on the .NET 10
-# shared framework. No content author can fix it and no `#pragma` belongs in their source; the
-# honest outcome is that the bake RECORDS it. It lands on exactly the types whose compile binds Rx,
-# so a line goes stale when a type stops using it — which is the ratchet working, not churn.
-ACME/Article                CS1701
-ACME/Project                CS1701
-ACME/Project/Todo           CS1701
-FutuRe/GroupAnalysis        CS1701
-FutuRe/LocalAnalysis        CS1701
-Northwind/AnalyticsCatalog  CS1701
-Northwind/Article           CS1701
-Northwind/Customer          CS1701
-Northwind/Employee          CS1701
-Northwind/Product           CS1701
-Northwind/ReportsCatalog    CS1701
-Northwind/Supplier          CS1701
-PythonDemo/PrimeReport      CS1701
+# Measured across those root fixes and this trim, all three numbers being REPORTED occurrences as
+# the bake's inventory counts them: 850 raw occurrences over 27 of 27 types → 375 over 18 → 0 over
+# 0. The first two were taken before CS1591/CS1701 were retired, so the fall from 375 to 0 is the
+# retirement, not 375 defects fixed; the root fixes are the fall from 850 to 375.
+#
+# 🚨 ADD A LINE ONLY FOR A WARNING A RUN ACTUALLY REPORTED, and prefer fixing it.
