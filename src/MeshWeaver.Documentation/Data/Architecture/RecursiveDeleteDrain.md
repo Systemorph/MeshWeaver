@@ -181,6 +181,25 @@ Three properties, and each is the reason for a choice above:
 The stage bound survives as a **backstop**: every leg terminates on its own, so reaching it means
 the fan-out as a whole stopped progressing, and it says so rather than blaming a leaf.
 
+### A leg that reports an ABSENCE is confirmed against storage first (#4680)
+
+The pre-flight and the commit both address the **one** snapshot stage 3 enumerated, so a concurrent
+delete that removes a planned leaf at any point afterwards leaves the operation holding a path that
+really is gone. Such a leg refuses in one of two vocabularies — a `ValidateDeleteResponse` carrying
+`NodeNotFound` while the leaf's hub is still activated, otherwise a routing failure whose sentence
+names three different situations at once — and neither of them distinguishes "already deleted" from
+"still stored, and its NodeType will not load". The second is exactly what this pre-flight exists to
+refuse before a row is removed.
+
+So an absence-shaped leg failure is confirmed against the store of record
+(`MeshExtensions.ConfirmDescendantGone` → `IStorageAdapter.Exists`) before it is believed: confirmed
+gone blocks nothing, still-stored keeps today's refusal verbatim, and a store that cannot answer is
+"not confirmed gone" so the refusal stands. It is a read on an error path only, one rung inside the
+leg it runs in — the `.Catch` is past the point the leg's own bound covers. The commit leg takes the
+same reading and then emits nothing, so a leaf somebody else removed is never counted among the
+paths this delete removed. Full account:
+[Deleting What Is Already Gone](/Doc/Architecture/IdempotentDelete).
+
 ### What is NOT fixed: the commit's writes serialize process-wide
 
 #1198's third item reads *"the `commit` stage's N-deletes-over-a-cap-1 `pg:{adapter}` pool"*. As
