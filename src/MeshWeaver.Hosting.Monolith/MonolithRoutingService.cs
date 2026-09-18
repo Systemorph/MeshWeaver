@@ -65,6 +65,24 @@ internal class MonolithRoutingService(
             return stream.Invoke(delivery, CancellationToken.None);
         }
 
+        // 🚨 A DisposeRequest for an address with NO live hub instantiates nothing. A recycle exists
+        // to make an ACTIVATION re-read its node; an address that has none is already in the state a
+        // recycle produces, so building a hub only to tear it down would cost a full activation
+        // (node resolution, NodeType binding, assembly load) for no change — and a NodeType's
+        // cascade (RecycleCascade) fans out to EVERY instance of the type precisely because it can
+        // rely on this: only the sub-bits that were instantiated are recycled. On this host the
+        // stream table is authoritative for liveness (every node hub registers on creation), so
+        // "no stream" IS "not instantiated"; the Orleans host answers the same question inside the
+        // grain (MessageHubGrain.DeliverMessage), where a silo's table is not the cluster's.
+        if (DisposeRequestEnvelope.TryRead(delivery, out var dispose))
+        {
+            logger.LogInformation(
+                "[ROUTE-IMPL] DisposeRequest → {Address} finds no live hub — nothing to dispose, and "
+                + "nothing is instantiated for it (cascadedFrom={CascadedFrom}; reason: {Reason})",
+                address, dispose!.CascadedFrom ?? "(direct)", dispose.Reason ?? DisposeRequest.ReasonNotStated);
+            return Observable.Return(delivery.Ignored());
+        }
+
         // 100% reactive: CreateHub returns IObservable<IMessageHub?>. Compose
         // delivery on the same chain inside Select. No await, no inner ToTask
         // — the only Task bridge is at the framework boundary in the base

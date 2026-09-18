@@ -44,6 +44,9 @@ public static class NodeTypeNodeType
             // long as it is live. The OBSERVABLE overload, as BuildNodeType: the own-node stream
             // must be opened on the init turn, after Build returns, never inside it.
             .WithInitialization(PublishInstanceLocations)
+            // A recycle of the definition tears down its dependency network — dependent NodeTypes
+            // and every instance — through this ONE seam; only live activations are touched.
+            .WithInitialization(NodeTypeRecycleCascade.InstallRecycleCascade)
     };
 
     /// <summary>
