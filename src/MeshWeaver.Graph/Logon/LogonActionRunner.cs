@@ -97,11 +97,13 @@ public sealed class LogonActionRunner(IMessageHub hub, ILogger<LogonActionRunner
                 .SelectMany(ordered => ordered.Length == 0
                     ? Observable.Return(Unit.Default)
                     : ReadProfile(userPath)
-                        .SelectMany(user => ordered
-                            .Where(a => IsPending(a, user))
-                            .Select(a => RunOne(a, context, access))
-                            .Concat()
-                            .DefaultIfEmpty(Unit.Default))))
+                        .SelectMany(profile => profile.Exists
+                            ? ordered
+                                .Where(a => IsPending(a, profile.User))
+                                .Select(a => RunOne(a, context, access))
+                                .Concat()
+                                .DefaultIfEmpty(Unit.Default)
+                            : NothingToRunWithoutAProfile(userPath))))
             .TakeLast(1)
             .Timeout(RunBudget)
             .Catch<Unit, Exception>(ex =>
@@ -124,18 +126,73 @@ public sealed class LogonActionRunner(IMessageHub hub, ILogger<LogonActionRunner
     /// The user's own profile node. Read through the shared per-node handle — never
     /// <c>QueryAsync</c>, which is the lagged index and would answer with pre-migration state
     /// (<c>Doc/Architecture/CqrsAndContentAccess</c>).
+    ///
+    /// <para>🚨 <b>"No node" and "a node whose content did not deserialize" are different answers,
+    /// and only this method can tell them apart.</b> It used to answer <c>null</c> for both, and
+    /// <see cref="IsPending"/> reads a null profile as "the ledger is empty, so every run-once
+    /// action is still pending" — which is right for a real user with an unreadable profile and
+    /// catastrophic for a caller who has no profile at all. See
+    /// <see cref="NothingToRunWithoutAProfile"/>.</para>
     /// </summary>
-    private IObservable<User?> ReadProfile(string userPath) =>
+    private IObservable<ProfileRead> ReadProfile(string userPath) =>
         hub.GetWorkspace().GetMeshNodeStream(userPath)
             .Where(node => node is not null)
             .Take(1)
             .Timeout(ProfileReadBound)
-            .Select(node => node.ContentAs<User>(hub.JsonSerializerOptions, logger))
-            .Catch<User?, Exception>(ex =>
+            .Select(node => new ProfileRead(true, node.ContentAs<User>(hub.JsonSerializerOptions, logger)))
+            .Catch<ProfileRead, Exception>(ex =>
             {
                 logger?.LogWarning(ex, "Logon actions: could not read profile {User}", userPath);
-                return Observable.Return<User?>(null);
+                return Observable.Return(ProfileRead.Absent);
             });
+
+    /// <summary>
+    /// The run for a signed-in caller who has NO profile node: nothing runs, and that is the whole
+    /// fix.
+    ///
+    /// <para>🚨 <b>A logon action must never be the thing that creates a user's partition.</b>
+    /// Measured on a brand-new instance (PartnerRe, 2026-09-18 10:04Z): the first person signed in
+    /// with Microsoft, <c>UserContextMiddleware</c> fell back to the email local-part for the
+    /// partition key ("the mesh user index has not received its first snapshot yet" — the normal
+    /// state of an instance with no users), the runner found no profile, read that as "no action
+    /// has run yet", and <see cref="SeedDefaultAppsLogonAction"/> created
+    /// <c>{user}/_App/Store</c>. Creating a node inside an empty partition runs
+    /// <c>EnsurePartitionBootstrap</c>, which created the Space root at <c>{user}</c> — so three
+    /// seconds after the very first sign-in, a node stood at the bare path <c>rbuergi</c>. The
+    /// onboarding form that same person was then shown probes <c>path:{username}</c> and refused:
+    /// <i>"Username 'rbuergi' is already taken. Please choose a different one."</i> The platform had
+    /// taken the name for them, they could never pick it, and the instance had no administrator —
+    /// the FIRST user of every fresh deployment hits this, deterministically.</para>
+    ///
+    /// <para>The Anonymous/System guard in <see cref="RunFor(AccessContext, IReadOnlyCollection{ILogonAction})"/>
+    /// already says the rule this completes: an identity with no profile is not a user yet, and
+    /// nothing may be written on its behalf. Onboarding creates the partition root; until it has,
+    /// there is no one here to migrate.</para>
+    ///
+    /// <para>The deliberate cost: a REAL user whose profile read times out under load also skips
+    /// this logon's actions, where it used to re-run every run-once action against a null ledger.
+    /// Skipping is the safe direction — actions are idempotent and at-least-once by design, so they
+    /// run on the next logon — and it is strictly better than re-running them against a profile we
+    /// could not read.</para>
+    /// </summary>
+    private IObservable<Unit> NothingToRunWithoutAProfile(string userPath)
+    {
+        logger?.LogInformation(
+            "Logon actions: no profile node at '{User}' — nothing runs. A signed-in caller with no "
+            + "profile has not onboarded yet; seeding one would materialise their partition and "
+            + "claim the very username onboarding is about to ask them for.",
+            userPath);
+        return Observable.Return(Unit.Default);
+    }
+
+    /// <summary>What the profile read found: whether the node EXISTS, and its content when it did.</summary>
+    /// <param name="Exists">False only when no node could be read at the user's path at all.</param>
+    /// <param name="User">The deserialized profile; null when the node exists but its content did not bind.</param>
+    private readonly record struct ProfileRead(bool Exists, User? User)
+    {
+        /// <summary>No node at the user's path — the not-yet-onboarded caller.</summary>
+        public static readonly ProfileRead Absent = new(false, null);
+    }
 
     /// <summary>
     /// Every action that applies to this deployment: the ones registered in code, plus the ones
