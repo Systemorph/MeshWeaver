@@ -3,10 +3,18 @@
 #
 # ── THIS FILE IS DELIBERATELY EMPTY OF ENTRIES ─────────────────────────────────────────────────
 # An EMPTY baseline is the strictest setting there is, and it is spelled as an empty FILE on
-# purpose: nothing is tolerated, so EVERY in-mesh warning these trees produce fails the bake. It is
-# not the same as omitting `--warning-baseline`, which would be OBSERVE-ONLY — "no known debt" and
-# "the bake never read a baseline" must never render the same, which is why the file stays here
+# purpose: nothing is tolerated, so EVERY in-mesh warning that REACHES THE RATCHETS fails the bake.
+# It is not the same as omitting `--warning-baseline`, which would be OBSERVE-ONLY — "no known debt"
+# and "the bake never read a baseline" must never render the same, which is why the file stays here
 # rather than being deleted. `bake-then-gate.sh` asserts both ratchets print ENFORCED.
+#
+# 🚨 "REACHES THE RATCHETS" is not "the compiler produced", and every number in this file is on the
+# first side of that line. Roslyn still EMITS the centrally-suppressed codes — CS1591/CS1573/CS1712
+# and CS1701/CS1702 — on these trees; `CompileWarning.NotReported` drops them in
+# `EmitPipeline.Collect`, the ONE place any consumer reads warnings through, so they never enter the
+# inventory the two ratchets judge, and a baseline line naming one of them is INERT rather than
+# tolerating anything. An empty file is the strictest setting over the REPORTED set — never a claim
+# that the compiler is silent. (The 362 CS1591 occurrences below are exactly that difference.)
 #
 # 🚨 SHRINK-ONLY, and the gate holds you to it in BOTH directions:
 #   * a (type, code) pair that is NOT listed FAILS the bake — the debt cannot grow back;
@@ -28,8 +36,8 @@
 #
 # The premise of the whole standard is that in-mesh C# is held to the standard `src/` C# is held to
 # under `-warnaserror`. A raw CSharpCompilation applies no NoWarn at all, so without that list the
-# in-mesh compile was held to a STRICTER standard than any `dotnet build` in the fleet, in exactly
-# two families:
+# in-mesh compile was held to a STRICTER standard than CORE's own `src/` build — that is what was
+# measured, here, and the satellites were not — in exactly two families:
 #   * CS1701/CS1702 — reference-set skew ("assuming assembly reference 'System.Linq.Expressions,
 #     Version=8.0.0.0' used by 'System.Reactive' matches identity '…Version=10.0.0.0'"). A property
 #     of the REFERENCE SET, never of the content: no author can fix it and no `#pragma` belongs in
@@ -52,9 +60,10 @@
 #
 # Both ratchets were already enforcing against ZERO entries before the trim — `WarningBaseline.For`
 # excludes a retired code — so nothing this file used to say was being relied on by anything. The
-# trees themselves produce NO warnings at all: 27 of 28 NodeTypes compile (PensionFund/BalanceSheet
-# is the samples-gate.allow known-debt `#r "nuget:…"` that cannot resolve on a gate host) and every
-# one of the 27 compiles clean.
+# trees themselves REPORT no warnings at all: 27 of 28 NodeTypes compile (PensionFund/BalanceSheet
+# is the samples-gate.allow known-debt `#r "nuget:…"` that cannot resolve on a gate host) and the
+# bake's inventory over those 27 is 0 occurrences over 0 sites. The suppressed codes are not part of
+# that zero — they are still emitted, and still not measured.
 #
 # 🚨 What this file is NOT. It is not a record that the sample trees' public members are
 # documented — CS1591 is suppressed, so nobody is measuring that. The 362 occurrences over 271
@@ -73,7 +82,9 @@
 #     generating the doc comments.
 #   * CS8632 (21 types) — authored `string?` in a tree with no `#nullable` directive. Fixed with
 #     NullableContextOptions.Annotations (the annotation context only — no nullable analysis).
-# Measured across those root fixes and this trim: 850 raw occurrences over 27 of 27 types → 375
-# over 18 → 0 over 0.
+# Measured across those root fixes and this trim, all three numbers being REPORTED occurrences as
+# the bake's inventory counts them: 850 raw occurrences over 27 of 27 types → 375 over 18 → 0 over
+# 0. The first two were taken before CS1591/CS1701 were retired, so the fall from 375 to 0 is the
+# retirement, not 375 defects fixed; the root fixes are the fall from 850 to 375.
 #
 # 🚨 ADD A LINE ONLY FOR A WARNING A RUN ACTUALLY REPORTED, and prefer fixing it.

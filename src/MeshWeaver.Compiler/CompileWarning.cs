@@ -62,27 +62,38 @@ public readonly record struct CompileWarning(string Id, string Message, int Line
         string.Equals(Id, MissingDocComment, StringComparison.Ordinal);
 
     /// <summary>
-    /// The diagnostic ids an in-mesh compile does NOT report — because no <c>dotnet build</c> in
-    /// this fleet reports them either.
+    /// The diagnostic ids an in-mesh compile does NOT report — because core's own <c>src/</c> build
+    /// does not report them either (measured; see the two families below for what was measured and
+    /// what was not).
     ///
     /// <para>🚨 <b>This is a PARITY list, not an escape hatch.</b> The whole premise of the in-mesh
     /// warning standard is that in-mesh C# is held to the standard <c>src/</c> C# is held to under
     /// <c>-warnaserror</c>. A raw <see cref="Microsoft.CodeAnalysis.CSharp.CSharpCompilation"/>
     /// applies no <c>NoWarn</c> at all, so without this list the in-mesh compile is held to a
     /// standard that is not merely equal to <c>src/</c>'s but STRICTER — and it was, in exactly two
-    /// families, both of which are recorded below with the file that suppresses them for
-    /// <c>src/</c>. A code that is NOT suppressed for <c>src/</c> must never be added here; it gets
-    /// fixed, or it is recorded as debt in a <c>--warning-baseline</c>.</para>
+    /// families, each recorded below with the EVIDENCE that core's <c>src/</c> build is silent on
+    /// it. 🚨 The two evidences are different in kind and the difference matters: doc completeness is
+    /// suppressed by a file that can be quoted (<c>Directory.Build.props</c>), while reference-set
+    /// skew is suppressed by nothing and is simply not produced by a project build — which is a
+    /// MEASUREMENT, and one taken on core only. A code that core's <c>src/</c> build would report
+    /// must never be added here; it gets fixed, or it is recorded as debt in a
+    /// <c>--warning-baseline</c>.</para>
     ///
     /// <para><b>Reference-set skew — <c>CS1701</c>, <c>CS1702</c>.</b> "Assuming assembly reference
     /// 'A, Version=X' … matches identity 'A, Version=Y'". A property of the REFERENCE SET, never of
     /// the content: <c>System.Reactive</c> is built against .NET 8's <c>System.Linq.Expressions</c>
     /// and runs on .NET 10, so every NodeType that touches Rx earns one. No author can fix it and no
-    /// <c>#pragma</c> belongs in their source. No <c>dotnet build</c> in this fleet reports one:
-    /// measured on core at <c>e8fce8130d</c>, a 28-project <c>-c Release -warnaserror</c> build
-    /// covering the Rx-referencing assemblies emits <c>0 Warning(s)</c> and zero <c>CS1701</c>. The
-    /// 95 baseline entries this list retires were the in-mesh compile being the only compiler in
-    /// the fleet that saw them.</para>
+    /// <c>#pragma</c> belongs in their source. 🚨 The evidence is a CORE measurement and the claim is
+    /// stated no wider than it: at <c>e8fce8130d</c>, a 28-project <c>-c Release -warnaserror</c>
+    /// build over THIS repo's Rx-referencing assemblies emits <c>0 Warning(s)</c> and zero
+    /// <c>CS1701</c>. What that does NOT establish is the rest of the fleet — MeshWeaver.Plugins and
+    /// the satellites were not built for this, and whether their <c>src/</c> reports one turns on
+    /// whether each repo's own <c>Directory.Build.props</c> SETS <c>$(NoWarn)</c> (killing the SDK
+    /// default named below) or appends to it, which is precisely the distinction core got wrong
+    /// until this was measured. The 95 <c>CS1701</c> baseline entries this retires in
+    /// MeshWeaver.Plugins rest on the MECHANISM — a hand-assembled reference set is shown a skew a
+    /// project build never presents — not on a build measured in that repo; widening the sentence to
+    /// the fleet means running the build there.</para>
     ///
     /// <para>🚨 That parity is NOT core's <c>NoWarn</c>, and assuming it was is a trap worth
     /// naming. The .NET SDK does ship the default —

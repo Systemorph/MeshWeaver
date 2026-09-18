@@ -147,7 +147,7 @@ families in it were never the content's to fix, because **a raw `CSharpCompilati
 families. `CompileWarning.NotReported`, applied at `EmitPipeline.Collect`, is the in-mesh compile's
 `NoWarn`:
 
-| Family | Codes | Not reported for `src/` because | Entries this retired in MeshWeaver.Plugins |
+| Family | Codes | Not reported for CORE's `src/` because | Entries this retired in MeshWeaver.Plugins |
 |---|---|---|---|
 | **Reference-set skew** | `CS1701`, `CS1702` | a project build's reference set is coherent — measured, not assumed (below) | **95** |
 | **Doc COMPLETENESS** | `CS1591`, `CS1573`, `CS1712` | core's own `Directory.Build.props` `NoWarn`, mirrored in `MeshWeaver.Plugins/src/` and `MeshWeaver.SocialMedia/src/` | **115** |
@@ -159,8 +159,11 @@ families. `CompileWarning.NotReported`, applied at `EmitPipeline.Collect`, is th
 > before it evaluates, so the default never applies here. Measured 2026-09-18, core's effective
 > `$(NoWarn)`: `649;CA2255;NU5104;NU1510;CS1591;CS1573;CS1712;;NU1608` — no 1701, no 1702. What
 > makes `src/` clean anyway is that MSBuild's reference resolution hands `csc` a **coherent** set:
-> a 28-project `-c Release -warnaserror` build over the Rx-referencing assemblies emits
-> `0 Warning(s)` and zero `CS1701`. The in-mesh compile assembles its reference set by hand (the
+> a 28-project `-c Release -warnaserror` build over CORE's Rx-referencing assemblies emits
+> `0 Warning(s)` and zero `CS1701`. 🚨 That measurement is core's and the claim goes no wider —
+> MeshWeaver.Plugins and the satellites were not built for it, and whether each reports `CS1701`
+> turns on whether its own `Directory.Build.props` SETS `$(NoWarn)` (killing the SDK default) or
+> appends to it. The in-mesh compile assembles its reference set by hand (the
 > host's `TRUSTED_PLATFORM_ASSEMBLIES`) and is therefore shown a skew a project build never
 > presents. The SDK line *does* govern `compile-check.py`'s synthesized projects, which carry no
 > `Directory.Build.props` and append to `$(NoWarn)` rather than setting it — which is why
@@ -173,8 +176,9 @@ SET, not of the content: no author could fix it, no `#pragma` belonged in their 
 platform bump could add or remove 95 baseline lines with no content change at all. **This codebase
 had already made exactly this call one lane over** — `ProjectFile` seeds `NoWarn = 1701;1702` for the
 `build-project` verb, because omitting it *"turned five otherwise-clean projects red on warnings the
-SDK does not report"*. The in-mesh compile was simply the last compiler in the fleet still reporting
-them.
+SDK does not report"*. The in-mesh compile was reporting a family core's own project build does not
+— which is the measured statement; "the last compiler in the fleet still reporting them" is the
+unmeasured one, and the satellites were never built to check it.
 
 > 🚨 **This is a PARITY list, not an escape hatch.** A code that is NOT suppressed for `src/` must
 > never be added to it; it gets fixed, or it is recorded as debt in a baseline. In particular the doc
@@ -225,8 +229,19 @@ what is true.
 🚨 **An empty baseline is not a disarmed one.** Omitting `--warning-baseline` is OBSERVE-ONLY; an
 empty FILE tolerates nothing, so any in-mesh warning of any non-suppressed code fails the bake
 immediately. `bake-then-gate.sh` still asserts both `ENFORCED` lines. Core's in-mesh C# is now at
-**zero tolerated warnings over zero produced warnings** — the state `plugin-gate-warnings.allow`
-reached from the other direction, by fixing 87 sites.
+**zero tolerated warnings over zero warnings REACHING THE RATCHETS** — the state
+`plugin-gate-warnings.allow` reached from the other direction, by fixing 87 sites.
+
+🚨 **"Reaching the ratchets" is not "produced", and the two numbers differ by exactly the parity
+list.** Roslyn still emits `CS1591`/`CS1573`/`CS1712` and `CS1701`/`CS1702` on both trees;
+`CompileWarning.NotReported` drops them in `EmitPipeline.Collect` — the single point every consumer
+reads warnings through — so they never enter the `WarningInventory` the ratchets judge, and the
+zeroes above are counts of REPORTED warnings. The paragraph below is that difference in numbers:
+362 `CS1591` occurrences, emitted and unmeasured. `TheRuntimeCompileStaysLenientTest
+.ACentrallySuppressedCode_IsNotReported` asserts both halves on one run — the compiler DID produce
+the diagnostic, and `Collect` did NOT carry it — and
+`ACodeThatIsNotSuppressed_StillReachesTheGate` is its control, so "nothing was reported" can never
+quietly become "nothing is reported".
 
 🚨 **And the emptiness is not a claim that the doc comments were written.** The 362 `CS1591`
 occurrences over 271 members in 17 sample types are still undocumented; `CS1591` is simply no
