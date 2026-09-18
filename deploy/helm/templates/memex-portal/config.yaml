@@ -475,6 +475,15 @@ data:
   # #2494's safety net. Same typed-key rule as the line above: a real default, never "" — this
   # binds to a TimeSpan and an empty string aborts the host in the configuration binder.
   SelfUpdate__SafetyNetCheckInterval: "{{ .Values.config.memex_portal.SelfUpdate__SafetyNetCheckInterval | default "01:00:00" }}"
+  # 🚨 How long the release-availability gate and the roll selector may take to ANSWER before the
+  # verdict becomes Indeterminate — which HOLDS (MeshWeaver#4742). This is a knob for a slow SHARE
+  # and NEVER the remedy for a slow read: what blew the shipped 60 s on memex.meshweaver.cloud was
+  # the gate re-enumerating every framework-identity directory /data/prebuilt-bundles has ever
+  # held, on every tick, against a store that gains ~60 a day — so the public instance held every
+  # candidate and sat six days behind main while CD kept sealing. That read is incremental now;
+  # widening this buys a longer freeze with the same ending. Same typed-key rule as the two lines
+  # above: a real default, never "" — it binds to a TimeSpan and an empty string aborts the host.
+  SelfUpdate__AvailabilityAnswerBudget: "{{ .Values.config.memex_portal.SelfUpdate__AvailabilityAnswerBudget | default "00:01:00" }}"
   # The registry this installation pulls its platform images from and lists them on
   # (MeshWeaver#3353). Rendered ONLY when selfUpdate.registry is set: SelfUpdateOptions.Registry
   # has a real default (the upstream ACR) and every image the updater rolls to is named on it, so

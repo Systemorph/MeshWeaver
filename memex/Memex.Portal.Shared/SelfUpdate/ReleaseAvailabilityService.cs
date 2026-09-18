@@ -64,6 +64,23 @@ public class ReleaseAvailabilityService(
         hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
         ?? IoPool.Unbounded;
 
+    /// <summary>
+    /// 🚨 The gate's DENOMINATOR, read incrementally (#4742). The mesh-scoped singleton
+    /// <c>AddSelfUpdate</c> registers; the fall-back is an instance of this service's own, which is
+    /// itself a mesh-scoped singleton — never a static, so nothing survives mesh disposal. See
+    /// <see cref="SealedBundleFloorCache"/> for why re-walking it every tick froze the fleet.
+    /// </summary>
+    private readonly SealedBundleFloorCache floorCache =
+        hub.ServiceProvider.GetService<SealedBundleFloorCache>() ?? new SealedBundleFloorCache();
+
+    /// <summary>
+    /// The self-update knobs, for <see cref="AnswerBudget"/>. Resolved rather than injected so a host
+    /// that constructs this gate without the poller (the tests, <c>/api/plugins/is-updatable</c> on a
+    /// minimal host) still gets the shipped defaults.
+    /// </summary>
+    private readonly SelfUpdateOptions options =
+        hub.ServiceProvider.GetService<SelfUpdateOptions>() ?? new SelfUpdateOptions();
+
     /// <summary>The published bundle root this deployment mounts, or null when it consumes no CI
     /// bakes.</summary>
     public string? PublishedRoot => configuration[ShippedPrebuiltBundles.PublishedRootConfigKey];
@@ -123,11 +140,12 @@ public class ReleaseAvailabilityService(
             var publishedRoot = PublishedRoot!;
 
             // 🚨 The DENOMINATOR is read FIRST, and from every identity the root holds except the
-            // one under judgement — never from the target's own publication (#3441). See
-            // PublishedBundleCatalogue.EverSealedBundles.
-            return pool
-                .InvokeBlocking(_ => PublishedBundleCatalogue.EverSealedBundles(publishedRoot, logger))
-                .SelectMany(floor => Verdict(floor, publishedRoot, targetVersion));
+            // one under judgement — never from the target's own publication (#3441). Read
+            // incrementally (#4742): the identities this process has already read are not walked
+            // again, because the store is append-only and a full walk outgrew this budget.
+            return floorCache
+                .Observe(pool, publishedRoot, logger)
+                .SelectMany(f => Verdict(f, publishedRoot, targetVersion));
         })
         // 🚨 The gate must ANSWER, always. Its two inputs can each stall indefinitely — a mesh
         // query that never emits its initial snapshot, an I/O pool slot that never frees — and a
@@ -148,8 +166,21 @@ public class ReleaseAvailabilityService(
     /// budget: the reads behind it are a mesh query and a handful of directory stats, so anything
     /// approaching this is wedged rather than slow. Deliberately shorter than the poll interval, so
     /// a stalled tick can never overlap the next one.
+    ///
+    /// <para>🚨 <b>Configurable (<c>SelfUpdate__AvailabilityAnswerBudget</c>), and that is the
+    /// SECONDARY half of #4742 — never the fix.</b> What blew this budget was the denominator being
+    /// re-enumerated from the share on every tick (<see cref="SealedBundleFloorCache"/>); widening a
+    /// bound over a store that only grows buys a longer freeze with the same ending. The key exists
+    /// so an operator whose share is genuinely slow can state that in configuration rather than wait
+    /// for a release — and a non-positive value falls back to
+    /// <see cref="SelfUpdateOptions.DefaultAvailabilityAnswerBudget"/>, because "no timeout" would
+    /// turn a stall into a tick that never completes, which is the failure this bound exists to
+    /// convert into an honest hold.</para>
     /// </summary>
-    private static readonly TimeSpan AnswerBudget = TimeSpan.FromSeconds(60);
+    private TimeSpan AnswerBudget =>
+        options.AvailabilityAnswerBudget > TimeSpan.Zero
+            ? options.AvailabilityAnswerBudget
+            : SelfUpdateOptions.DefaultAvailabilityAnswerBudget;
 
     /// <summary>
     /// 🚨 <b>The roll SELECTOR (#3479): which release should this environment be on?</b>
@@ -214,19 +245,19 @@ public class ReleaseAvailabilityService(
 
             var publishedRoot = PublishedRoot!;
 
-            return pool
-                .InvokeBlocking(_ => PublishedBundleCatalogue.EverSealedBundles(publishedRoot, logger))
-                .SelectMany(floor =>
+            return floorCache
+                .Observe(pool, publishedRoot, logger)
+                .SelectMany(f =>
                     // 🚨 Tested FIRST, and separately from ServesBakes: a configured root that does
                     // not exist or faults on read produces a floor with no bundles — the SAME SHAPE
                     // as a root that genuinely serves none — and they mean opposite things. See
                     // Verdict() for the full reasoning; this is the same order, one level up.
-                    floor.Refusal is { } refusal
+                    f.Refusal is { } refusal
                         ? Observable.Return(Indeterminate(environment, currentVersion, refusal))
-                        : !floor.ServesBakes
+                        : !f.ServesBakes
                             ? Observable.Return(NotEnforced(
                                 environment, currentVersion, NoPublicationsReason(publishedRoot)))
-                            : Select(environment, currentVersion, publishedRoot, floor,
+                            : Select(environment, currentVersion, publishedRoot, f,
                                 candidatesNewestFirst, condemned, policy, requireCiGreen))
                 .Do(outcome => logger?.LogInformation("[RollSelect] {Summary}", outcome.Summary));
         })
