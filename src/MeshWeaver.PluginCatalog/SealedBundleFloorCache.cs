@@ -195,14 +195,18 @@ public sealed class SealedBundleFloorCache
 
         Interlocked.Add(ref identitiesRead, read);
         Interlocked.Add(ref identitiesRecalled, recalled);
+        var floor = new SealedBundleFloor(ReleaseArtifacts.Of(bundles).SealedBundles, identities);
         // Information, and deliberately: this line is the operator's evidence that the read #4742
         // froze the fleet on is bounded now. It costs one line per availability check — the poller is
-        // event-driven with an hourly safety net, so single figures per hour per install.
+        // event-driven with an hourly safety net, so single figures per hour per install. The bundle
+        // count is the FLOOR's, after de-duplication, never the raw declaration count: the same id is
+        // declared under every identity that sealed it, so the raw number is roughly ids × identities
+        // and would read as a store far larger than the denominator actually is.
         logger?.LogInformation(
             "ReleaseAvailability: denominator over {Root} — {Read} identity directories read from "
-            + "the share, {Recalled} answered from this process's reading of them, {Identities} "
-            + "carrying a sealed publication, {Bundles} bundle ids",
-            publishedRoot, read, recalled, identities, bundles.Count);
-        return new SealedBundleFloor(ReleaseArtifacts.Of(bundles).SealedBundles, identities);
+            + "the share, {Recalled} answered from this process's earlier reading of them, "
+            + "{Identities} carrying a sealed publication, {Bundles} distinct bundle ids",
+            publishedRoot, read, recalled, identities, floor.Bundles.Count);
+        return floor;
     }
 }
