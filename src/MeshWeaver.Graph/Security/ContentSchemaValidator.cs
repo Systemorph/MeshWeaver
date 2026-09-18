@@ -73,7 +73,8 @@ namespace MeshWeaver.Graph.Security;
 /// whose first instance has not activated yet must not have its writes refused for a fact this
 /// process has not learned. Typed (in-process) CLR content ⇒ Valid: it already bound. Content whose
 /// own <c>$type</c> names a DIFFERENT record than the declared one ⇒ Valid, the same
-/// <c>DiscriminatorAdmits</c> rule the recovery path applies — judging such content by the declared
+/// <see cref="ContentDiscriminator.Admits(JsonElement, Type)"/> rule the recovery path applies —
+/// judging such content by the declared
 /// type would be reshaping it, and the discriminator guard owns that case. An Update whose content
 /// is byte-identical to what is stored ⇒ Valid: re-asserting a row already on disk is not a new
 /// write of bad content, and refusing it would make an existing broken node impossible to move.</para>
@@ -124,7 +125,7 @@ public sealed class ContentSchemaValidator : INodeValidator
         if (contentTypes is null || !contentTypes.TryResolveByNodeType(node.NodeType!, out var declared))
             return NodeValidationResult.Valid();
 
-        if (!DiscriminatorAdmits(content, declared))
+        if (!ContentDiscriminator.Admits(content, declared))
             return NodeValidationResult.Valid();
 
         // Re-asserting bytes already on disk is not a new write of bad content.
@@ -303,23 +304,6 @@ public sealed class ContentSchemaValidator : INodeValidator
         {
             return true;   // unknown ⇒ judge nothing
         }
-    }
-
-    /// <summary>
-    /// Whether the content's own <c>$type</c> does not CONTRADICT the declared content type — the
-    /// same short-name rule <c>MeshContentTypeRegistry.DiscriminatorAdmits</c> applies, so two
-    /// packages that each ship a <c>Currency</c> both pass through their own NodeType's entry, and
-    /// a rebuild into a new collectible assembly matches. Absent is not contradicting.
-    /// </summary>
-    private static bool DiscriminatorAdmits(JsonElement content, Type declared)
-    {
-        if (!content.TryGetProperty("$type", out var typeProp)
-            || typeProp.ValueKind != JsonValueKind.String
-            || typeProp.GetString() is not { Length: > 0 } discriminator)
-            return true;
-        var lastDot = discriminator.LastIndexOf('.');
-        var shortName = lastDot >= 0 ? discriminator[(lastDot + 1)..] : discriminator;
-        return string.Equals(shortName, declared.Name, StringComparison.Ordinal);
     }
 
     /// <summary>
