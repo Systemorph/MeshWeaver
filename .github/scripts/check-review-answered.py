@@ -21,12 +21,14 @@ the question the merge never asked: has each finding been answered?
 
 THE RULE (all three must hold, or the check is RED — it never skips)
 --------------------------------------------------------------------
-1. The automatic review has LANDED. A review by the reviewer account counts only when its body is
-   recognisably a review. The reviewer posts its REFUSALS under the same account and in the same
-   endpoint — measured on #645–#654 (2026-07-2x): "Copilot was unable to review this pull request
-   because the user who requested the review has reached their quota limit." — so "a review by the
-   bot exists" would read a quota outage as "reviewed". A body that is neither a recognised review
-   nor a recognised refusal is RED as well: the check cannot tell, and cannot-tell is never a pass.
+1. The automatic review has LANDED. A review by the reviewer account at a non-PENDING state counts,
+   UNLESS its body is a refusal. The reviewer posts its REFUSALS under the same account and in the
+   same endpoint — measured on #645–#654 (2026-07-2x): "Copilot was unable to review this pull
+   request because the user who requested the review has reached their quota limit." — so "a review
+   by the bot exists" would read a quota outage as "reviewed", and that is the ONE thing the body is
+   read for. An unfamiliar body is a NEW FORMAT, not an absence: see "PROVENANCE, NOT PRESENTATION"
+   below for what requiring a recognisable shape cost on 2026-09-18. Only an EMPTY body is
+   unrecognised — there is then nothing to read as either a review or a refusal.
 2. Every inline thread the reviewer STARTED (a comment by the reviewer with no `in_reply_to_id`)
    has at least one reply by a non-bot account (`user.type == "User"`). A reply that says nothing
    counts; that limitation is known and accepted (the decision on #4299).

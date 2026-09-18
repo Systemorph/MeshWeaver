@@ -85,8 +85,9 @@ decides to.
 
 All three hold, or the check is RED:
 
-1. **The automatic review has landed** — a review by the reviewer account whose body is recognisably
-   a review.
+1. **The automatic review has landed** — a review by the reviewer account, at a non-`PENDING` state,
+   whose body is not a refusal. What makes it a review is *who posted it*, not how it is worded — see
+   **"Provenance, not presentation"** below for why, and what requiring a recognisable shape cost.
 2. **Every thread the reviewer started has a person's reply** — for every comment by the reviewer
    with no `in_reply_to_id`, at least one comment in that thread by an account of `type: User`
    (following `in_reply_to_id` to the root, so a reply to a reply counts).
