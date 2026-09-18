@@ -230,6 +230,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [User Interface](UserInterface)
 - [Blazor Data Binding](BlazorDataBinding)
+- [Editor Field Keys](EditorFieldKeys) — the node-content editor binds by JSON key, so a rename behind `[JsonPropertyName]` or a value the serializer drops discards what an admin set, silently and permanently
 - [Per-Tab Session State](PerTabSessionState) — a node is shared by every tab of one account, so "which page is this viewer on" and "navigate ME there" can never live on one
 - [Blazor Async](BlazorAsync)
 - [Available Controls](UserInterface/AvailableControls)
