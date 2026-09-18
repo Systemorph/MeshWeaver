@@ -21,8 +21,15 @@ namespace Memex.Portal.Shared.Api;
 /// Blazor catch-all served the SPA HTML shell on both URLs — a crawler asking for robots.txt got
 /// a web page. The sitemap enumerates exactly the ANONYMOUS surface: every top-level node that
 /// passes <see cref="AnonymousGate.AllowAnonymous"/> (public covers, the Store, Space landings)
-/// plus each store plugin's declared public segments (the marketing brochures). Fail-open to an
-/// empty sitemap — a mesh hiccup must never turn into a 500 for a crawler.
+/// plus each store plugin's declared public segments (the marketing brochures).
+///
+/// <para>🚨 <b>It does NOT fail open to an empty sitemap.</b> It used to, and that is issue #4751:
+/// a well-formed <c>&lt;urlset&gt;</c> with zero <c>&lt;loc&gt;</c> is not a smaller answer, it is
+/// the OPPOSITE answer — an affirmative census saying this deployment publishes nothing. The
+/// crawler-facing concern the old sentence was protecting against is real and is answered with
+/// <b>503 + Retry-After</b>, which is what "ask again later" means on the wire; a 200 that
+/// declares zero roots is the one response a crawler cannot tell from the truth. See
+/// <see cref="PublishedSurface.AssertsWhatItDidNotCheck"/>.</para>
 /// </summary>
 /// <summary>
 /// One page that is live on the public internet: the node, and the path a logged-out visitor
@@ -32,6 +39,57 @@ namespace Memex.Portal.Shared.Api;
 /// <param name="Path">Its mesh path, which is also its public URL path — publishing never moves a
 /// node, so this is the same path it has always had.</param>
 public sealed record PublishedPage(MeshNode Node, string Path);
+
+/// <summary>
+/// The published surface AND whether the enumeration that produced it actually decided it.
+///
+/// <para>🚨 <b>The second field exists because a list cannot carry it and every consumer needs
+/// it</b> (#4751). <see cref="AnonymousGate"/> answers a TRI-state — granted, denied, or
+/// <see cref="PermissionCheckOutcome.IsUndetermined"/> when the permission fold reached no verdict
+/// — and <c>SeoEndpoints</c> used to project that onto a bool, on the stated grounds that omitting
+/// an undecidable root "states nothing". That is true of ONE root and false of all of them: N
+/// omissions that each state nothing compose into a census that states everything. So the reason
+/// travels out with the pages, and the consumer decides.</para>
+/// </summary>
+/// <param name="Pages">Every page a logged-out visitor may open, as far as this run established.</param>
+/// <param name="Undecided">Null when every root was decided and nothing faulted; otherwise the
+/// first reason a root's publicness could not be established, ready to log.</param>
+public sealed record PublishedSurface(IReadOnlyList<PublishedPage> Pages, string? Undecided)
+{
+    /// <summary>A surface every root was decided for — a census, and still a census when empty.</summary>
+    /// <param name="pages">The decided pages.</param>
+    public static PublishedSurface Decided(IReadOnlyList<PublishedPage> pages) => new(pages, null);
+
+    /// <summary>
+    /// 🚨 <b>THE ONE RULE, and it is deliberately narrow:</b> true only when publishing this list
+    /// would ASSERT something the enumeration never established — no pages at all, and at least one
+    /// root whose publicness could not be decided.
+    ///
+    /// <para>A PARTIAL surface is fine and stays a 200: a sitemap is a hint, the protocol never
+    /// promised completeness, and dropping one undecidable root out of a thousand costs one URL
+    /// until the next crawl. <b>Zero is the only value that reads as a statement</b>, which is why
+    /// it is the only one withheld. The rule is also why a genuinely empty portal still answers
+    /// 200 with an empty urlset — that IS the truth, and the synthetic probe that fails on it is
+    /// then correctly failing.</para>
+    /// </summary>
+    public bool AssertsWhatItDidNotCheck => Pages.Count == 0 && Undecided is not null;
+}
+
+/// <summary>
+/// There is no honest sitemap to render: the enumeration decided nothing AND admitted no page, so
+/// the only document it could produce is the zero-root census of #4751. Carried as a fault rather
+/// than an empty string so that no caller can mistake it for a result — the route turns it into
+/// 503, and <c>PublishedSettingsTab</c> turns it into a sentence for a human.
+/// </summary>
+/// <param name="reason">Why the surface could not be decided.</param>
+public sealed class SitemapUndecidedException(string reason)
+    : InvalidOperationException(
+        "the published surface could not be decided and no page was admitted, so a sitemap would "
+        + "declare zero public roots without having checked any: " + reason)
+{
+    /// <summary>Why the surface could not be decided, without the framing sentence.</summary>
+    public string Reason { get; } = reason;
+}
 
 public static class SeoEndpoints
 {
@@ -68,6 +126,29 @@ public static class SeoEndpoints
         return ex => logger.LogWarning(
             ex, "The icon of '{Path}' is inline svg that will not render; serving no raster icon "
                 + "for it", nodePath);
+    }
+
+    /// <summary>
+    /// 🚨 THE ANSWER FOR "I COULD NOT CHECK" — 503 with a <c>Retry-After</c>, and a warning naming
+    /// the cause.
+    ///
+    /// <para>Both halves are the fix for #4751. The status code, because 503 is the wire's word
+    /// for "ask again later" and a crawler acts on it correctly, whereas a 200 carrying zero
+    /// <c>&lt;loc&gt;</c> is indistinguishable from a portal that genuinely publishes nothing. And
+    /// the log line, because the old code discarded the exception into <c>_ =&gt;</c> — so nine
+    /// failures over 27 hours left NOTHING anywhere naming a cause, which is why the issue could be
+    /// measured precisely and diagnosed not at all.</para>
+    /// </summary>
+    private static IResult SitemapUnavailable(IMessageHub hub, HttpContext http, Exception cause)
+    {
+        hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(SeoEndpoints))
+            .LogWarning(
+                cause,
+                "/sitemap.xml: the published surface could not be enumerated; answering 503 rather "
+                + "than a well-formed sitemap that declares zero public roots");
+        http.Response.Headers.RetryAfter = "300";
+        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
     }
 
     /// <summary>Node types whose top-level mains are sitemap candidates (the partition roots).</summary>
@@ -155,6 +236,10 @@ public static class SeoEndpoints
             var baseUrl = PublicSite.CanonicalBaseUrl(configuration, http.Request);
             return BuildSitemap(hub, baseUrl)
                 .Select(xml => Results.Text(xml, "application/xml"))
+                // The ONE place a failed enumeration becomes an answer — and the answer is 503,
+                // never a rendered urlset. Both arms land here: the deliberate
+                // SitemapUndecidedException, and anything the mesh read faulted on.
+                .Catch<IResult, Exception>(ex => Observable.Return(SitemapUnavailable(hub, http, ex)))
                 .FirstAsync()
                 .ObserveCompletion(LateFault(hub, "/sitemap.xml"), ct)!;
         }).AllowAnonymous();
@@ -358,12 +443,17 @@ public static class SeoEndpoints
     /// <summary>
     /// The sitemap XML, built reactively: candidate roots from the (System-read) type queries,
     /// each gated through the REAL anonymous permission check, then every page-shaped descendant
-    /// of an admitted root, each gated the same way. Cold; never errors (fail-open to fewer URLs).
+    /// of an admitted root, each gated the same way. Cold.
+    ///
+    /// <para>Fail-open to fewer URLs — never to ZERO of them. It faults with
+    /// <see cref="SitemapUndecidedException"/> rather than render a urlset that declares no public
+    /// root it never checked; the route maps that to 503.</para>
     /// </summary>
     public static IObservable<string> BuildSitemap(IMessageHub hub, string baseUrl) =>
         EnumeratePublished(hub)
-            .Select(pages => Render(baseUrl, pages.Select(p => (p.Node, p.Path)).ToList()))
-            .Catch<string, Exception>(_ => Observable.Return(Render(baseUrl, [])));
+            .Select(surface => surface.AssertsWhatItDidNotCheck
+                ? throw new SitemapUndecidedException(surface.Undecided!)
+                : Render(baseUrl, surface.Pages.Select(p => (p.Node, p.Path)).ToList()));
 
     /// <summary>
     /// 🚨 THE ONE DEFINITION OF "PUBLISHED TO THE WEB" — every page a logged-out visitor may open.
@@ -378,12 +468,15 @@ public static class SeoEndpoints
     /// sitemap renders it as XML for crawlers; <c>PublishedSettingsTab</c> renders the same list for
     /// a human. Two views, one truth — they cannot drift.</para>
     /// </summary>
-    public static IObservable<IReadOnlyList<PublishedPage>> EnumeratePublished(IMessageHub hub)
+    public static IObservable<PublishedSurface> EnumeratePublished(IMessageHub hub)
     {
         var mesh = hub.ServiceProvider.GetService<IMeshService>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
+        // DECIDED, not undecided: a host with no mesh publishes nothing, permanently and by
+        // configuration — the same reasoning AnonymousGate applies to a mesh with no permission
+        // evaluator. Retrying changes nothing, so calling it "unavailable" would be its own lie.
         if (mesh is null)
-            return Observable.Return<IReadOnlyList<PublishedPage>>([]);
+            return Observable.Return(PublishedSurface.Decided([]));
 
         // Candidate enumeration runs as System (an anonymous HTTP entry has no query identity);
         // ANONYMOUS readability is then decided per node by the fail-closed gate — the sitemap
@@ -403,28 +496,54 @@ public static class SeoEndpoints
 
         return candidates
             .SelectMany(roots => roots.Count == 0
-                ? Observable.Return(new List<(MeshNode Node, string Url)>())
-                : roots
-                    // Boolean projection on purpose (#2901): a root the gate cannot decide on is
-                    // OMITTED from the sitemap, which is the same action as "not public" and the
-                    // fail-closed one. Omission states nothing, so there is nothing here to be
-                    // dishonest about; see AnonymousGate.AllowAnonymous.
-                    .Select(root => AnonymousGate.AllowAnonymous(hub, root.Path)
-                        .Take(1)
-                        .SelectMany(allowed => allowed
-                            ? PagesOf(mesh, accessService, hub, root)
-                            : Observable.Return<IReadOnlyList<(MeshNode, string)>>([])))
-                    .ToObservable().Concat().ToList()
-                    .Select(pages => pages.SelectMany(p => p).ToList()))
+                ? Observable.Return(new List<RootAdmission>())
+                : roots.Select(Admit).ToObservable().Concat().ToList())
             // PagesOf yields UNNAMED (MeshNode, string) tuples, so address them positionally.
-            .Select(pages => (IReadOnlyList<PublishedPage>)pages
-                .DistinctBy(p => p.Item2)
-                .Select(p => new PublishedPage(p.Item1, p.Item2))
-                .ToList())
-            .Timeout(TimeSpan.FromSeconds(20))
-            .Catch<IReadOnlyList<PublishedPage>, Exception>(_ =>
-                Observable.Return<IReadOnlyList<PublishedPage>>([]));
+            .Select(admissions => new PublishedSurface(
+                admissions
+                    .SelectMany(a => a.Pages)
+                    .DistinctBy(p => p.Item2)
+                    .Select(p => new PublishedPage(p.Item1, p.Item2))
+                    .ToList(),
+                // FIRST reason, not all of them: one sentence is what a log line and a 503 need,
+                // and an undecided fold is a property of the deployment rather than of the root
+                // that happened to be asked first.
+                admissions.Select(a => a.Undecided).FirstOrDefault(reason => reason is not null)))
+            // 🚨 The bound STAYS and the swallow under it GOES. A 20 s cap at an HTTP edge is
+            // legitimate; what was not is that timing out and completing a census produced the
+            // same value. It now faults, and SitemapUnavailable names it.
+            .Timeout(TimeSpan.FromSeconds(20));
+
+        // 🚨 The TRI-state, not the bool. AnonymousGate.AllowAnonymous is documented as usable
+        // "only where 'unknown' and 'not public' lead to the SAME correct action and nothing is
+        // asserted" — and it even names omitting a page from the sitemap as such a place. That is
+        // right per PAGE (PagesOf still uses it, and always emits its root regardless) and wrong
+        // per ROOT, because the roots ARE the sitemap: omit every one of them and the document
+        // that comes out is an assertion. #4751.
+        IObservable<RootAdmission> Admit(MeshNode root) =>
+            AnonymousGate.Evaluate(hub, root.Path)
+                .Take(1)
+                .SelectMany(outcome => outcome.IsGranted
+                    ? PagesOf(mesh, accessService, hub, root)
+                        .Select(pages => new RootAdmission(pages, null))
+                    : Observable.Return(new RootAdmission(
+                        [],
+                        // A DENIAL is decided — the root is simply not public, and leaving it out
+                        // is the whole point of the gate. Only "no verdict" is carried out.
+                        outcome.IsUndetermined
+                            ? $"the anonymous gate on '{root.Path}' reached no verdict: "
+                              + outcome.UndeterminedReason
+                            : null)));
     }
+
+    /// <summary>
+    /// What one candidate root contributed: the pages it published, and — when its publicness
+    /// could not be decided — why. Both are needed: a root can contribute no page because it is
+    /// private (decided, ordinary) or because nothing could establish either way (#4751).
+    /// </summary>
+    /// <param name="Pages">The pages admitted under this root; empty when it is not public.</param>
+    /// <param name="Undecided">Null unless the gate reached no verdict on this root.</param>
+    private sealed record RootAdmission(IReadOnlyList<(MeshNode, string)> Pages, string? Undecided);
 
     /// <summary>
     /// The sitemap pages of one anonymous-readable root: the root itself plus every page-shaped
@@ -473,8 +592,21 @@ public static class SeoEndpoints
                                 .OrderBy(n => n!.Path, StringComparer.Ordinal)
                                 .Select(n => (n!, n!.Path)))
                             .ToList()))
-            .Catch<IReadOnlyList<(MeshNode, string)>, Exception>(
-                _ => Observable.Return<IReadOnlyList<(MeshNode, string)>>([self]));
+            // Bounded degradation, unlike the sinks this change removed: the root itself is still
+            // published, so this can cost pages and can never produce the zero-root document of
+            // #4751. It was SILENT though, which is the other half of that issue — a sitemap that
+            // quietly lost a course's chapters left nothing to read.
+            .Catch<IReadOnlyList<(MeshNode, string)>, Exception>(ex =>
+            {
+                hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(SeoEndpoints))
+                    .LogWarning(
+                        ex,
+                        "sitemap: listing the pages below '{Root}' failed; publishing the root "
+                        + "alone and none of its pages",
+                        root.Path);
+                return Observable.Return<IReadOnlyList<(MeshNode, string)>>([self]);
+            });
     }
 
     // `limit:all` — this is an ENUMERATION, so every match comes back (MeshQueryRequest.NoLimit);

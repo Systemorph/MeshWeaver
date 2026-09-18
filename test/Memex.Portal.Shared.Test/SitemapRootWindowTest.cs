@@ -61,9 +61,12 @@ public class SitemapRootWindowTest(ITestOutputHelper output) : MonolithMeshTestB
     [Fact]
     public async Task APublicRoot_IsPublished_HoweverManyNonRootMainsOfItsTypeExist()
     {
-        var pages = await SeoEndpoints.EnumeratePublished(Mesh)
+        var surface = await SeoEndpoints.EnumeratePublished(Mesh)
             .Timeout(TestTimeouts.Convergence);
-        var paths = pages.Select(p => p.Path).OrderBy(p => p, StringComparer.Ordinal).ToList();
+        // As in SitemapDescentTest: a window defect and an undecided gate both end in a short
+        // list, so the assertion states which one this is NOT (#4751).
+        Assert.Null(surface.Undecided);
+        var paths = surface.Pages.Select(p => p.Path).OrderBy(p => p, StringComparer.Ordinal).ToList();
 
         Assert.Equal(["PublicSpace", "PublicSpace/Guide"], paths);
     }

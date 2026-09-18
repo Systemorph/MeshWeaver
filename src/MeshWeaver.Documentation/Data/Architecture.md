@@ -248,6 +248,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Catalog Action Identity](CatalogActionIdentity) — a retained click keeps its package when the catalog refreshes
 - [Link Previews](LinkPreviews)
 - [Public Web Presence](PublicWebPresence) — one public host, a body in the first response, a sitemap that descends to every page a stranger may open
+- [A Zero-Root Sitemap Is an Assertion](AZeroRootSitemapIsAnAssertion) — the sitemap projected the tri-state anonymous gate onto a bool because omitting ONE undecidable page states nothing; omitting every root produces a 200 that says the deployment publishes nothing, so an empty surface nothing decided is now 503 and a partial one is still published
 - [Local-First Client & Bootstrap](LocalFirstClient)
 - [PDF Export — one browser, two fidelities](PixelFaithfulExport)
 - [UI Extensibility](UiExtensibility)
