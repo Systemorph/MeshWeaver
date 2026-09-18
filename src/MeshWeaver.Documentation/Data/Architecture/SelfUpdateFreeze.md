@@ -143,6 +143,22 @@ The 09-11 row is the important one: the policy was restored, produced exactly on
 was lost again within hours. **That is a recurring fault, not residue from a past incident** — so
 restoring the policy by hand is a repair with a known half-life, not a fix.
 
+### Would those ~25 modules still hold on a current set?
+
+Probably not, and the control instance is the evidence. It evaluated a **current** target
+(`3.0.0-ci.8886`) at 01:02Z and produced **no module hold at all** — only advisories: one assembly
+version skew that rolls forward (`System.Reactive` 6.1 against the platform's 7.0), three declared
+floors that decide nothing since #3648, and one package that would recompile at boot. The two
+instances share the five modules their records require (`Blazor.Radzen`, `Blazor.Analysis`,
+`Blazor.EntityViews`, `Blazor.GoogleMaps`, `Speech`).
+
+So the working hypothesis is that memex-cloud's module story **dissolves into its stale-target story**:
+the ~25 entries were measured against a set from 09-11 and were never re-measured. It is a hypothesis
+and not a measurement — memex-cloud carries packages memex does not (RolePlay, SocialMedia, Edu), and
+the only instrument that can settle it is that instance evaluating a current target, which needs its
+policy back. **Restore the policy first, then read the hold it produces.** Reading today's frozen text
+as the answer is what this page exists to prevent.
+
 ## memex: detecting, handing over, and waiting for an approval
 
 The control instance is the one portal whose policy is intact, and it shows what the fleet would do if
@@ -190,8 +206,19 @@ The budget bounds two cold legs on the file-system `IIoPool`:
 `SelectRollTarget` walks candidates newest-first and reads one observation per candidate until one
 clears. **Since 06:29Z today the newest sixteen-odd tags carry images but no sealed publication** (next
 section), so the walk has that many more candidates to read and reject before it can reach one that
-clears — inside the same fixed budget. That is the most likely reason this appeared today and not
-yesterday, and it is a prediction the next measurement can falsify.
+clears — inside the same fixed budget.
+
+**The prediction, stated so it can fail.** If that is the cause, the timeout should disappear once the
+seal recovers and the newest tag clears on the first read. If the timeout survives a freshly sealed
+set, the cause is the denominator's size and not the candidate walk, and the remedy moves from "the
+seal" to "the store". Either way the next reading decides it, and the two do not look alike.
+
+🚨 **Do not read this timeout as the thing standing between the control instance and a roll.** It is
+not, and the same node said so eight hours earlier: at 01:02Z it *did* answer, *did* select
+`3.0.0-ci.8886`, *did* hand it over — and still did not patch itself, because the candidate is newer
+than the record's pin and waits for an approval. Fixing the timeout restores the *diagnosis*; it does
+not produce a roll. Two standstills with the same appearance and different remedies is the recurring
+shape of this whole incident.
 
 ### Why the denominator has no upper bound
 
