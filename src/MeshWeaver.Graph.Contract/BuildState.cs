@@ -65,6 +65,82 @@ public sealed record BuildGo(
     string? Detail = null);
 
 /// <summary>
+/// How ONE holder's build ENDED, as a fact the holder STATES under its own key in
+/// <see cref="BuildState.ReportedOutcomes"/> — never a conclusion it writes onto fields it does not
+/// own.
+///
+/// <para>🚨 <b>Why this is a stated fact and not simply the terminal write (#4708).</b> A holder
+/// does not own the Build node, so a <c>stream.Update</c> lambda it runs is evaluated against ITS
+/// OWN copy — this hub's mirror, or the locally computed state its own predecessor on the stream
+/// cache's per-path write queue handed forward (<c>MeshNodeStreamHandle.PatchBaseSource</c>).
+/// <c>UpdateBuildAsHolder</c> asked <c>ClaimedBy == me</c> on that copy and returned the node
+/// UNCHANGED when it disagreed, which is the strongest form of the failure
+/// <c>Doc/Architecture/ConditionalWritesAcrossHubs</c> describes: not one member missing from the
+/// patch, but NO PATCH AT ALL. <c>IsRecordNoOp</c> fires, nothing is posted, and the caller is
+/// completed as a SUCCESS. The completion lands on nothing, the fingerprint gets no GO,
+/// <c>ObserveBuildGo</c> never emits, and every silo's readiness probe stays down — with no error,
+/// nothing logged above <c>Debug</c>, and nothing to grep.</para>
+///
+/// <para>The asymmetry that made it fire is that hand-off: the predecessor of a completion is very
+/// often ANOTHER completion, whose locally computed state carries <c>ClaimedBy = null</c> — the one
+/// value that makes the next holder's guard fail. Measured as six failures of
+/// <c>BuildCoordinationTest.ClaimQueue_Go_And_HolderGuard</c> across five branches including
+/// <c>main</c>, every one of them the same ~15 s timeout on the wait for the SECOND holder's GO and
+/// never on the first.</para>
+///
+/// <para>So the holder writes this record UNCONDITIONALLY under its own holder id — merge-safe
+/// against every other holder, and true whatever the owner's state turns out to be — and
+/// <c>BuildNodeType.FoldReportedOutcomes</c>, which runs on the node's OWN hub
+/// and is therefore serialised against fresh state, decides what it implies. It is the same
+/// <c>RequestedX</c>-plus-owner-watcher shape as <see cref="BuildState.StoodDown"/> one field over,
+/// and the property the old guard existed for is PRESERVED rather than dropped: a superseded
+/// builder's report is REFUSED by the fold, which is the only place that can tell a superseded
+/// builder from a stale copy.</para>
+/// </summary>
+/// <param name="ReportedAt">When the holder stated the outcome.</param>
+/// <param name="Go">
+/// The GO record for a build that succeeded AND publishes one — the root's completion. <c>null</c>
+/// on a failure, and on a chunk close-out, which reaches <see cref="BuildStatus.Ready"/> without
+/// publishing a GO (the <see cref="BuildState.Ready"/> map is root-only).
+/// </param>
+/// <param name="Error">
+/// What failed. Non-<c>null</c> ⇒ the fold lands <see cref="BuildStatus.Failed"/> and this text on
+/// <see cref="BuildState.Error"/>, and no GO is published — readiness for that fingerprint stays
+/// refused, which is the fail-closed behaviour the probe contract requires.
+/// </param>
+/// <param name="WrittenPaths">The release paths this build produced — chunk bookkeeping, folded
+/// onto <see cref="BuildState.WrittenPaths"/> when present.</param>
+public sealed record BuildOutcome(
+    DateTime ReportedAt,
+    BuildGo? Go = null,
+    string? Error = null,
+    ImmutableList<string>? WrittenPaths = null)
+{
+    /// <summary>
+    /// A build that ended without a gating regression. <paramref name="go"/> is the root's GO
+    /// record; a chunk close-out passes <c>null</c> and reports only its release paths.
+    /// </summary>
+    /// <param name="at">When the holder stated the outcome.</param>
+    /// <param name="go">The GO record to publish, or <c>null</c> for a unit that publishes none.</param>
+    /// <param name="writtenPaths">The release paths this build produced.</param>
+    /// <returns>The outcome record.</returns>
+    public static BuildOutcome Completed(
+        DateTime at, BuildGo? go = null, ImmutableList<string>? writtenPaths = null)
+        => new(at, go, null, writtenPaths);
+
+    /// <summary>
+    /// A build that ended on a regression or an execution fault. The fingerprint gets NO GO.
+    /// </summary>
+    /// <param name="at">When the holder stated the outcome.</param>
+    /// <param name="error">What failed.</param>
+    /// <param name="writtenPaths">The release paths this build produced before it failed.</param>
+    /// <returns>The outcome record.</returns>
+    public static BuildOutcome Failed(
+        DateTime at, string error, ImmutableList<string>? writtenPaths = null)
+        => new(at, null, error, writtenPaths);
+}
+
+/// <summary>
 /// What a read of the durable build root actually established about one framework fingerprint's GO
 /// — THREE states, never two (#3404).
 ///
@@ -181,6 +257,24 @@ public sealed record BuildState
     /// the same budget the claim itself ages by.</para>
     /// </summary>
     public ImmutableDictionary<string, DateTime>? StoodDown { get; init; }
+
+    /// <summary>
+    /// Holders that have REPORTED how their build ended, keyed by holder id — the terminal
+    /// counterpart of <see cref="StoodDown"/>, and a fact the holder states rather than a
+    /// conclusion it tries to write. See <see cref="BuildOutcome"/> for the whole of #4708: a
+    /// holder evaluating <c>ClaimedBy == me</c> on its own copy returned the node unchanged when
+    /// that copy was stale, so the completion posted NOTHING while reporting success and the
+    /// fingerprint never got its GO.
+    ///
+    /// <para>Written UNCONDITIONALLY by <c>ReportBuildOutcome</c> under the reporter's own key
+    /// (merge-safe against every other holder) and CONSUMED by
+    /// <c>BuildNodeType.FoldReportedOutcomes</c> on the node's own hub, which
+    /// applies the outcome when the reporter is still the claim holder and refuses it otherwise —
+    /// the superseded-builder property, decided where the state is current. Entries are never
+    /// accumulated: every pass consumes every entry it sees, whether it applied it or refused
+    /// it.</para>
+    /// </summary>
+    public ImmutableDictionary<string, BuildOutcome>? ReportedOutcomes { get; init; }
 
     /// <summary>The holder currently granted this node, or <c>null</c> when unclaimed.</summary>
     public string? ClaimedBy { get; init; }
