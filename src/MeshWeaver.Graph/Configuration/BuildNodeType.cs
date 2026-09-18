@@ -402,14 +402,25 @@ public static class BuildNodeType
                 // it reports how its build ended and FoldReportedOutcomes publishes the GO, records
                 // a failure, and frees the claim — here, where the state is current.
                 //
-                // Both halves are composed into ONE serialised write so a freed build is granted in
-                // the same pass, and both are no-ops when there is nothing to do, so a quiet node
-                // still costs nothing. The write publishes on the mirror's change feed, which is
-                // this arbiter's own trigger, so the next candidate is elected immediately rather
-                // than at the slow tick — level-triggered, no timer, no retry. Each fact's ARRIVAL
-                // is a trigger on the same feed for the same reason (see ArbitrationTrigger): it
-                // lands on a node with nothing queued, so a trigger that asked only about pending
-                // registrations would have left this pass waiting for the stale tick.
+                // Both halves are composed into ONE serialised write, and both are no-ops when there
+                // is nothing to do, so a quiet node still costs nothing.
+                //
+                // 🚨 That write does NOT also grant: this pass frees the build and RETURNS. A
+                // durable grant is a compare-and-set against the claim LOCK — a storage read and a
+                // WriteIfVersion — and neither can happen inside a pure Update lambda, which is
+                // exactly why only GrantOnMirror composes fold-and-elect into one expression. The
+                // election happens on the NEXT pass, and this write is what wakes it: it publishes
+                // on the mirror's change feed, which is this arbiter's own trigger, and folding
+                // moves the trigger key (the holder cleared, the reporters gone) so
+                // DistinctUntilChanged cannot swallow it, while the candidate that was queued
+                // behind the holder is still queued and now grantable. Immediately, therefore, and
+                // not at the slow tick — level-triggered, no timer, no retry. Chaining the election
+                // on here instead would not make it one write; it would run a second pass against
+                // the candidate set this one read BEFORE the fold, racing the pass the write
+                // already triggers for the lock it has to win. Each fact's ARRIVAL is a trigger on
+                // the same feed for the same reason (see ArbitrationTrigger): it lands on a node
+                // with nothing queued, so a trigger that asked only about pending registrations
+                // would have left this pass waiting for the stale tick.
                 var stoodDown = StoodDownHolder(state);
                 if (stoodDown is not null || HasReportedOutcomes(state))
                     return workspace.GetMeshNodeStream()
@@ -787,11 +798,13 @@ public static class BuildNodeType
         // as a SUPERSEDED builder's and refuse it — losing a GO that was genuinely earned, which is
         // the very stall this whole change exists to end.
         //
-        // ArbitrateDurably orders fold-before-decide within one pass, and GrantOnMirror composes the
-        // two into ONE lambda where nothing can come between them. The durable path cannot: it spans
-        // two storage round-trips between reading the candidate set and publishing here, and a
-        // report can commit inside that window. This lambda runs on the node's own serialised write
-        // path, so it is the last — and only — point that can still see that it did.
+        // ArbitrateDurably orders fold-before-decide — a pass that finds a report folds it and
+        // returns, and the pass its own write triggers is the one that elects — and GrantOnMirror
+        // goes further, composing the two into ONE lambda where nothing can come between them. The
+        // durable path cannot do that: a grant there is a compare-and-set against the lock, so it
+        // spans two storage round-trips between reading the candidate set and publishing here, and
+        // a report can commit inside that window. This lambda runs on the node's own serialised
+        // write path, so it is the last — and only — point that can still see that it did.
         //
         // A refused publication hands the lock straight back (HandBackAStoodDownGrant), so the next
         // pass folds first and then elects; it cannot loop, because the fold CONSUMES every report
@@ -1047,7 +1060,8 @@ public static class BuildNodeType
     /// refused report is never re-judged against a later claim it has nothing to do with. At most
     /// one report can apply per pass (applying one clears <see cref="BuildState.ClaimedBy"/>, so
     /// every other report is refused against the same state), which makes the result independent of
-    /// the order the map enumerates in.</para>
+    /// the order the map enumerates in — and the REFUSAL WARNING with it: it names the holder this
+    /// node carried when the fold began, not the field the loop has since cleared.</para>
     ///
     /// <para>Pure over its inputs and returns the same node when there is nothing to do, so a
     /// caller may run it on every pass for free. An UNREADABLE mirror is left untouched, exactly as
@@ -1065,6 +1079,17 @@ public static class BuildNodeType
         var state = node.ContentAs<BuildState>(options);
         if (state?.ReportedOutcomes is not { Count: > 0 } reports)
             return node;
+
+        // 🚨 The holder as the node NAMED IT when the fold began, captured because the loop below
+        // clears it. The refusal warning is written from this and never from `folded.ClaimedBy`:
+        // applying a report sets that to null, so a refusal logged AFTER the holder's own report was
+        // applied would say "held by <nobody>" — for a node that was held, and only when the map
+        // happened to enumerate the holder first. ImmutableDictionary specifies no order and string
+        // hashing is randomised per process, so the same two reports would name the holder on one
+        // run and nobody on the next. A diagnostic that is right half the time sends the next reader
+        // hunting a claim nobody dropped; the refusal it explains is itself order-independent (see
+        // the summary above), so its wording has to be too.
+        var holderAtFoldStart = state.ClaimedBy;
 
         var folded = state;
         foreach (var (reporter, outcome) in reports)
@@ -1086,10 +1111,10 @@ public static class BuildNodeType
                 else
                     logger?.LogWarning(
                         "Build node {Path}: REFUSING the outcome reported by {Reporter} — this node "
-                        + "is held by {Holder}, so the reporter is a superseded builder whose build "
-                        + "must land on nothing. The report is consumed; no GO is published and no "
-                        + "claim is released.",
-                        node.Path, reporter, folded.ClaimedBy ?? "<nobody>");
+                        + "named {Holder} as its holder when the fold began, so the reporter is a "
+                        + "superseded builder whose build must land on nothing. The report is "
+                        + "consumed; no GO is published and no claim is released.",
+                        node.Path, reporter, holderAtFoldStart ?? "<nobody>");
                 continue;
             }
 

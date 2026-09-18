@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Text.Json;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -151,6 +154,58 @@ public class AHoldersCompletionLandsOnTheOwnerTest
         after.ReportedOutcomes.Should().BeNull();
     }
 
+    /// <summary>
+    /// 🚨 …and on the DURABLE path that is NOT what happens, which is the other half of the same
+    /// statement: <c>ArbitrateDurably</c>'s bookkeeping branch releases, folds and RETURNS. A
+    /// durable grant is a compare-and-set against the claim lock — a storage read and a
+    /// <c>WriteIfVersion</c> — and neither fits inside a pure <c>Update</c> lambda, so only
+    /// <c>GrantOnMirror</c> can fold and elect in one write.
+    ///
+    /// <para>What makes that ordering sound rather than a deferral is that the fold's OWN write
+    /// wakes the pass that elects, and this pins the two properties it needs. The candidate must
+    /// still be queued after the fold — the fold frees the claim and touches nothing else — and the
+    /// arbitration key must MOVE, or <c>DistinctUntilChanged</c> swallows the emission and the GO
+    /// waits out the two-minute stale tick, the exact silent delay this protocol keeps producing.
+    /// Neither is visible from the durable path itself: it is IO around two pure functions, and
+    /// these are the two pure functions.</para>
+    /// </summary>
+    [Fact]
+    public void OnTheDurablePath_TheFoldFreesTheBuild_AndItsOwnWriteWakesThePassThatElects()
+    {
+        var reportedWithACandidateQueued = TheOwnersState with
+        {
+            ReportedOutcomes = ImmutableDictionary<string, BuildOutcome>.Empty
+                .Add(HolderB, BuildOutcome.Completed(T0.AddMinutes(1), GoB)),
+            RequestedClaims = ImmutableDictionary<string, BuildClaimRequest>.Empty
+                .Add("next-image", new BuildClaimRequest("fp-next", T0)),
+        };
+
+        // Exactly what that branch writes — release, then fold — and nothing else.
+        var written = BuildNodeType.FoldReportedOutcomes(
+            BuildNodeType.ReleaseStoodDownClaim(Node(reportedWithACandidateQueued), Options, T0),
+            Options);
+        var folded = StateOf(written);
+
+        folded.Ready.Should().ContainKey("fp-b", "the holder's GO lands here, not on a later pass");
+        folded.ClaimedBy.Should().BeNull("the fold FREES the build…");
+        folded.RequestedClaims.Should().ContainKey(
+            "next-image", "…and leaves the candidate queued: this write grants nobody");
+
+        BuildNodeType.ArbitrationTrigger(folded).Should().NotBeNull(
+            "a freed build with a candidate queued is exactly what a pass is for");
+        BuildNodeType.ArbitrationTrigger(folded).Should().NotBe(
+            BuildNodeType.ArbitrationTrigger(reportedWithACandidateQueued),
+            "an unchanged key is swallowed by DistinctUntilChanged, and the GO would then wait for "
+            + "the stale tick");
+
+        // …and the pass that key wakes is the one that elects.
+        var elected = StateOf(BuildNodeType.Arbitrate(
+            written, Options, T0.Add(BuildNodeType.GrantSettleWindow).AddMinutes(2)));
+
+        elected.ClaimedBy.Should().Be("next-image");
+        elected.FrameworkVersion.Should().Be("fp-next");
+    }
+
     // ── the property the old guard existed for, kept ────────────────────────────────────────────
 
     /// <summary>
@@ -260,6 +315,75 @@ public class AHoldersCompletionLandsOnTheOwnerTest
         after.Ready.Should().NotContainKey("fp-stale");
         after.ClaimedBy.Should().BeNull();
         after.ReportedOutcomes.Should().BeNull("both are consumed, applied or not");
+    }
+
+    /// <summary>
+    /// 🚨 …and the REFUSAL those two produce names the real holder in BOTH enumeration orders — the
+    /// half that was order-dependent while the verdict was not.
+    ///
+    /// <para>The refusal warning used to read its holder off the state the loop is folding into,
+    /// which applying a report CLEARS. Fold the holder's own report first and the next refusal said
+    /// <c>held by &lt;nobody&gt;</c> — for a node that was held, by a holder whose id was right
+    /// there in the input. <c>ImmutableDictionary</c> specifies no enumeration order and string
+    /// hashing is randomised per process, so the same two reports named the holder on one run and
+    /// nobody on the next: not a message that is wrong, a message that is wrong at random.</para>
+    ///
+    /// <para>A diagnostic naming no holder is exactly the shape that sends the next reader looking
+    /// for a claim nobody dropped — the same class of defect as the one this whole change fixes, a
+    /// statement that does not match what happened. So the order is SEARCHED for and then ASSERTED
+    /// rather than assumed: this case runs under the one order in which the old code was wrong, and
+    /// would have passed on that code under the other.</para>
+    /// </summary>
+    [Fact]
+    public void TheRefusalNamesTheHolder_EvenWhenTheHoldersOwnReportIsFoldedFirst()
+    {
+        var (reports, superseded) = ReportsWhereTheHolderEnumeratesFirst();
+        reports.First().Key.Should().Be(
+            HolderB,
+            "the case only bites when applying the HOLDER's report has already cleared ClaimedBy "
+            + "by the time the superseded one is judged");
+
+        var logger = new RecordingLogger();
+        var after = StateOf(BuildNodeType.FoldReportedOutcomes(
+            Node(TheOwnersState with { ReportedOutcomes = reports }), Options, logger));
+
+        after.Ready.Should().ContainKey("fp-b", "the holder's report still applies");
+        after.Ready.Should().NotContainKey("fp-stale", "…and the superseded one is still refused");
+
+        var refusal = logger.Records.Should().ContainSingle(
+            r => r.Level == LogLevel.Warning, "the refusal is the only fault here").Which;
+        refusal.Message.Should().Contain(
+            superseded, "the reporter whose build lands on nothing has to be named");
+        refusal.Message.Should().Contain(
+            HolderB, "…and so does the holder it was superseded BY — the field the loop clears");
+        refusal.Message.Should().NotContain(
+            "<nobody>",
+            "a node that named a holder when the fold began was never unheld, whatever order the "
+            + "map enumerated in");
+    }
+
+    /// <summary>
+    /// Two reports over a node whose holder's own report enumerates FIRST. The order cannot be
+    /// asserted into existence — <c>ImmutableDictionary</c> specifies none and
+    /// <c>string.GetHashCode</c> is seeded per process — so it is searched for over candidate
+    /// reporter ids and the winner's order is re-asserted in the test body. A run that found none
+    /// fails loudly rather than quietly testing the other order.
+    /// </summary>
+    private static (ImmutableDictionary<string, BuildOutcome> Reports, string Superseded)
+        ReportsWhereTheHolderEnumeratesFirst()
+    {
+        foreach (var candidate in Enumerable.Range(0, 256).Select(i => $"superseded-{i}"))
+        {
+            var reports = ImmutableDictionary<string, BuildOutcome>.Empty
+                .Add(HolderB, BuildOutcome.Completed(T0.AddMinutes(1), GoB))
+                .Add(candidate, BuildOutcome.Completed(T0, new BuildGo("fp-stale", T0)));
+            if (string.Equals(reports.First().Key, HolderB, StringComparison.Ordinal))
+                return (reports, candidate);
+        }
+
+        throw new InvalidOperationException(
+            "No reporter id out of 256 made the holder enumerate first — the search, not the "
+            + "subject, is what broke.");
     }
 
     // ── the guard that keeps this fix from becoming a worse bug ─────────────────────────────────
@@ -431,5 +555,30 @@ public class AHoldersCompletionLandsOnTheOwnerTest
         };
 
         BuildNodeType.FoldReportedOutcomes(unreadable, Options).Should().BeSameAs(unreadable);
+    }
+
+    private sealed record LogRecord(LogLevel Level, string Message);
+
+    /// <summary>Captures level and formatted message — enough to assert that a refusal is visible
+    /// and names the right holder.</summary>
+    private sealed class RecordingLogger : ILogger
+    {
+        private readonly List<LogRecord> records = [];
+
+        public IReadOnlyList<LogRecord> Records => records;
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => records.Add(new LogRecord(logLevel, formatter(state, exception)));
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
     }
 }

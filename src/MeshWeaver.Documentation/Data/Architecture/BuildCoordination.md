@@ -440,7 +440,19 @@ The fix is the shape the record already uses one field over:
 - **The superseded-builder property is preserved, not dropped.** A report from a holder the node no
   longer names is REFUSED and logged. The verdict is the same one the old guard tried to reach; what
   changed is *who reaches it*, and refusing here is sound exactly because the owner's state cannot be
-  stale.
+  stale. The warning names the holder the node carried when the fold BEGAN, not the field the fold
+  clears on its way through: applying the holder's own report sets `ClaimedBy` to null, so reading it
+  afterwards said `held by <nobody>` — on the runs where the map happened to enumerate the holder
+  first, and `ImmutableDictionary` guarantees no order at all.
+- **Fold-then-elect is one write on the mirror and two passes on the durable path**, and only the
+  first is composable. `GrantOnMirror` runs release → fold → `Arbitrate` inside one `Update` lambda,
+  so the freed build is granted in the same serialised write. `ArbitrateDurably` cannot: a durable
+  grant is a compare-and-set against the claim LOCK — a storage read plus a `WriteIfVersion` — which
+  no pure lambda can perform. Its bookkeeping branch therefore frees the build and RETURNS, and the
+  write it just made is what wakes the election: it publishes on the mirror's change feed, folding
+  moves the trigger key (holder cleared, reporters gone) so `DistinctUntilChanged` cannot swallow it,
+  and the candidate queued behind the holder is still queued and now grantable. Immediately, on a
+  real state change — not on the stale tick.
 - Reports are **consumed**, applied or refused, so nothing accumulates and a refused report is never
   re-judged against a later claim. A holder's own report arriving twice — the write path's CONFLICT
   re-attempt can produce that — is recognised by the GO already being on the history and logged at
