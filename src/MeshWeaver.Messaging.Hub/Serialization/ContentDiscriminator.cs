@@ -77,11 +77,11 @@ public static class ContentDiscriminator
 
     /// <summary>
     /// The record name a <c>$type</c> discriminator names — the segment after the last <c>.</c>, so
-    /// an assembly-qualified or namespaced discriminator compares as the bare record does.
+    /// an assembly-qualified or namespaced discriminator compares as the bare record does. Private:
+    /// this is the rule's own vocabulary, and a public surface nothing calls is one more thing that
+    /// can never be deleted (in-mesh callers are invisible to the compiler).
     /// </summary>
-    /// <param name="discriminator">The raw <c>$type</c> value, or null.</param>
-    /// <returns>The short name, or null when there is nothing to compare.</returns>
-    public static string? ShortNameOf(string? discriminator)
+    private static string? ShortNameOf(string? discriminator)
     {
         if (discriminator is not { Length: > 0 })
             return null;
