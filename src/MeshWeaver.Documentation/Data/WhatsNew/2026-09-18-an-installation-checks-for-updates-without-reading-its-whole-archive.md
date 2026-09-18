@@ -40,18 +40,24 @@ as a result.
 
 ## What changed
 
-**The installation now remembers what each archived folder said**, and reads only the folders it has
-not seen before. Each check still lists the archive — so a newly published set is always noticed, and a
-removed one always drops out — but it no longer opens every folder it has already read. In a local
-measurement over 800 archived sets, the repeated reading went from roughly a third of a second to three
-milliseconds, and it no longer grows with the size of the archive.
+**The installation now remembers what each archived publication said**, and re-opens only the ones
+that have actually changed since it last looked. Each check still lists the archive — so a newly
+published set is always noticed, a newly added publication is always noticed, and a removed one always
+drops out — but it no longer opens the contents of every publication it has already read. Over an
+archive of 800 sets that is **4,800 file reads removed from every check**, which on shared network
+storage is where the minute was going.
 
 **Nothing became less careful.** If anything cannot be read, the check still refuses to answer and the
 installation still holds; that refusal is never remembered, so one momentary storage glitch cannot
-freeze an installation until it restarts. Nothing about the *offered* version is remembered either —
-its own artifacts are re-read in full, every time. And the one way the remembered reading can be wrong
-is by keeping a package on the list a little longer than strictly necessary, which can only ever make
-the check hold, never let something through.
+freeze an installation until it restarts. A publication that is still being written is never remembered
+either. Nothing about the *offered* version is remembered — its own artifacts are re-read in full,
+every time. And the one way the remembered reading can be wrong is by keeping a package on the list a
+little longer than strictly necessary, which can only ever make the check hold, never let something
+through.
+
+**What it remembers is also bounded.** When old sets are cleared out of the archive, what the
+installation remembered about them is dropped on the next successful check — so this does not
+accumulate for as long as the installation runs.
 
 There is also now a setting, **`SelfUpdate__AvailabilityAnswerBudget`**, for how long the check may
 take — still one minute by default. It is there for an installation on genuinely slow storage. It is

@@ -243,25 +243,40 @@ them, on the instance where subscriptions happen. Filed as
 [MeshWeaver#4742](https://github.com/Systemorph/MeshWeaver/issues/4742).
 
 **Fixed at the read, not at the bound.** `SealedBundleFloorCache` — a mesh-scoped singleton the
-availability gate and the roll selector share — remembers what each framework-identity directory
-declared, so a tick still enumerates the root once (a new identity is always seen, a pruned one always
-drops out) and descends only into the identities it has not read before. Two signals decide that, and
-they close different windows: the identity directory's own write stamp, which moves when a source is
-ADDED under it (a satellite baking against a platform identity core sealed earlier); and whether every
-source under it was SEALED, which is the window the stamp cannot see, because a publisher writes the
-completion sentinel last and INSIDE the source directory. Anything less than a finished reading is
-re-read next tick.
+availability gate and the roll selector share — remembers what each **source** directory
+(`<root>/<identity>/<source>`) declared, keyed by its path and its own write stamp. A tick still
+*lists* the root and each identity, so a new identity is always seen, a new source is always seen and
+a pruned one always drops out; what it no longer does is **open** the publication pointer and the
+completion sentinel of a source whose directory has not changed. The listings are one directory
+response each; the opens were the cost.
 
-🚨 **Fail-closed, clause by clause**, because a cache that turned a hold into a roll would be far worse
-than the freeze it removed. A refusal — an absent root, an unfollowable publication pointer, an
-enumeration fault — is **never** remembered, so one transient share fault cannot latch into a permanent
-verdict. Nothing about the CANDIDATE is cached: the target's own publication, its marker, its surface
-and its module set are read fresh per candidate per tick, and only the denominator's *history* — the
-part #3441 made monotone on purpose — is remembered. And the one direction the cache can err in is a
-**larger** denominator (a remembered contribution whose seal has since been removed), which can only
-HOLD. The one reading it does not refresh is a source republished in place under an identity already
-settled; closing that would cost one stat per source per tick, which is the growth the fix exists to
-remove.
+🚨 **Why the SOURCE directory's stamp, and not the identity's.** The identity directory's stamp moves
+when a source is added or removed under it and **not** when a source is republished in place — and a
+republication in place is routine, not exotic: a satellite re-bakes into a platform identity that has
+not moved every day its own build runs. Keying on the identity would freeze a newly-added package
+*out* of the denominator for as long as that identity stayed newest, which **exempts** it from the gate
+(#3461) — the one direction that must never happen. The source directory's stamp moves on every
+publication path there is: in the generation layout a republish creates `<source>/<token>/` and
+rewrites `_current`, both entries of the source directory; in the flat layout it removes and rewrites
+`_complete` in the source directory itself.
+
+And the argument closes in the direction that matters: the stamp detects any change to the source
+directory's **entry set**, and a republication that ADDS a package necessarily adds an entry — a bundle
+file, or a whole generation directory. The only change it cannot see is a rewrite of `_complete` in
+place with no entry added, which can only re-word or SHRINK a declaration, i.e. can only make the gate
+hold.
+
+🚨 **Fail-closed otherwise, clause by clause**, because a cache that turned a hold into a roll would be
+far worse than the freeze it removed. A refusal — an absent root, an unfollowable publication pointer,
+an enumeration fault — is **never** remembered, so one transient share fault cannot latch into a
+permanent verdict. A source carrying **no seal** is never remembered either: a flat-layout republish
+unseals, rewrites and re-seals, and if all of that landed inside one stamp granule a mid-way reading
+would otherwise be remembered as "declares nothing". Nothing about the CANDIDATE is cached — the
+target's own publication, its marker, its surface and its module set are read fresh per candidate per
+tick, and only the denominator's *history*, the part #3441 made monotone on purpose, is remembered.
+Eviction happens **only after a successful, complete enumeration** and only for the root it covered, so
+a share that could not be read never evicts a reading it merely failed to reach — and memory therefore
+tracks the live store rather than every publication the process has ever seen.
 
 `SelfUpdate__AvailabilityAnswerBudget` is now a configuration key with the same 60 s fail-closed
 default, rendered by the portal ConfigMap. 🚨 **It is the secondary half and never the fix** — a knob
@@ -329,21 +344,28 @@ particular build. They fail once the store is big enough, and then on every buil
 **Raising the budget is not the remedy** — it exists to convert a stall into an honest answer, and a
 bigger one buys a longer freeze with the same ending.
 
-**Measured, on the fastest hardware the read will ever see** (a local APFS SSD, three sources per
-identity, `SealedBundleFloorCacheTest`'s own fixture shape), which is why the shape matters more than
-the numbers:
+🚨 **Count the OPERATIONS, not the local milliseconds.** On a developer SSD with a warm page cache a
+directory listing and a file open cost about the same — both are VFS hits — so a local stopwatch
+understates this fix by construction. What decides it on Azure Files is **round trips**, and those
+track file-system operations exactly, because the cifs client's metadata cache (`actimeo`, one second
+by default) has long expired between two checks minutes apart.
 
-| identity directories | walk every tick | remembered, warm |
-|---|---|---|
-| 50 | 13–22 ms | 0.60 ms |
-| 200 | 56–95 ms | 1.71 ms |
-| 800 | 250–355 ms | 2.96 ms |
+Measured with three sources per identity, which is the fleet's shape (`meshweaver-content`, `plugins`,
+a satellite):
 
-The walk costs about **0.3 ms per identity** and the remembered read about **3.7 µs** — the root
-listing, and nothing else. On Azure Files over SMB each of the walk's roughly ten round trips per
-identity costs milliseconds rather than microseconds, which is how a store a few thousand identities
-deep reaches 60 s while the same store answers in one listing once it is remembered. The growth is the
-point: the first column has a slope and the second does not.
+| store | directory listings, per tick | publication opens, per tick — before | after, steady state |
+|---|---|---|---|
+| 50 identities | 51 | 300 | **0** |
+| 200 identities | 201 | 1,200 | **0** |
+| 800 identities | 801 | 4,800 | **0** |
+
+A "publication open" is one pointer probe plus one sentinel read — two file operations per source, and
+three or more SMB round trips each. At 800 identities that is **4,800 file operations removed from
+every tick**, and a few milliseconds of round trip apiece is how the old read reached sixty seconds.
+The listings remain, and they are the honest residual: the read is no longer flat, it is one directory
+response per identity. Removing that last linear term would need the publisher to advance a stamp on
+the identity directory itself (`publish-bake-bundles.sh`), which is the follow-up if the store grows
+another order of magnitude — not something to fold into a fix for a live freeze.
 
 ### The timeout hold reports itself on the wrong side
 
@@ -408,7 +430,7 @@ skipped. Neither conclusion tells you whether a set exists.
 | every instance | a bookkeeping write must never replace a record it could not materialize — refuse and log instead | **a code fix** |
 | memex, pearl | a newer tag than `pinnedImageTag` waits for an approval | **working as designed** — approve, or clear the pin deliberately |
 | every instance | `PreWarm__PrebuiltBundleRetention__Delete` | **an operations decision**, from a ledger line, after confirming the protected set covers every instance and every CI gate pinning an older platform build |
-| the availability gate | answer inside its budget over a store that only grows | ✅ **done** — `SealedBundleFloorCache` (#4742) remembers each identity's declaration, so a tick descends only into the identities it has not read; `SelfUpdate__AvailabilityAnswerBudget` is the secondary knob, never the fix |
+| the availability gate | answer inside its budget over a store that only grows | ✅ **done** — `SealedBundleFloorCache` (#4742) remembers each SOURCE publication's declaration, so a tick lists but no longer re-opens them; `SelfUpdate__AvailabilityAnswerBudget` is the secondary knob, never the fix |
 | a timeout hold | record `heldIndeterminate: true` | **a code fix**, one call site |
 | build | MeshWeaver#4093 — list tags on `cr.meshweaver.cloud` | **a code fix**, already tracked |
 

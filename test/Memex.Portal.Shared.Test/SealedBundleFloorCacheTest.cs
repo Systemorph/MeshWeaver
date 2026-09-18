@@ -13,7 +13,7 @@ using Xunit;
 namespace Memex.Portal.Shared.Test;
 
 /// <summary>
-/// 🚨 <b>The deployment gate's denominator may not be re-enumerated from the share on every tick
+/// 🚨 <b>The deployment gate's denominator may not be re-opened from the share on every tick
 /// (#4742).</b>
 ///
 /// <para><c>PublishedBundleCatalogue.EverSealedBundles</c> walks EVERY framework-identity directory
@@ -27,15 +27,18 @@ namespace Memex.Portal.Shared.Test;
 /// NodeTypes parked at <c>compilationStatus: Error</c> as a result.</para>
 ///
 /// <para><b>The control is EXECUTED, not asserted.</b>
-/// <see cref="ARememberedIdentityIsNotWalkedAgain_MeasuredAgainstTheReadingThatDoes"/> runs the OLD
+/// <see cref="ARememberedSourceIsNotOpenedAgain_MeasuredAgainstTheReadingThatDoes"/> runs the OLD
 /// reading and the new one over the same sabotaged fixture in one test, so it cannot pass because
-/// the fixture happened to be empty: the walk-every-time reading collapses to nothing while the
-/// cached one still answers.</para>
+/// the fixture happened to be empty: the open-every-time reading collapses to nothing while the
+/// remembered one still answers.</para>
 ///
-/// <para>🚨 <b>And fail-closed is the other half of the subject.</b> A cache that served a stale
-/// "available" would be far worse than the freeze it removes, so the tests below pin each clause:
-/// a refusal is never remembered, a source added under an already-read identity IS picked up, and
-/// the one direction the cache may err in is a LARGER denominator, which can only hold.</para>
+/// <para>🚨 <b>And fail-closed is the other half of the subject</b>, because a cache that served a
+/// stale "available" would be far worse than the freeze it removes. Each clause has its own test: a
+/// refusal is never remembered; a source ADDED under an identity already read is picked up; a source
+/// REPUBLISHED IN PLACE that adds a package is picked up (the case an identity-level stamp cannot
+/// see, and the reason the signal lives on the source directory); a pruned identity is forgotten
+/// while a FAILED read evicts nothing; and the one direction the cache may err in is a LARGER
+/// denominator, which can only hold.</para>
 /// </summary>
 public class SealedBundleFloorCacheTest : IDisposable
 {
@@ -55,10 +58,13 @@ public class SealedBundleFloorCacheTest : IDisposable
     /// <summary>The bundle every generated identity seals, so a floor can be recognised.</summary>
     private const string Platform = "Documentation";
 
-    // ── the fix: O(identities not read before), not O(every identity ever) ──────────────────────
+    /// <summary>The source every generated identity seals it under.</summary>
+    private const string PlatformSource = "meshweaver-content";
+
+    // ── the fix: O(new or changed sources), not O(every publication ever) ───────────────────────
 
     [Fact]
-    public void AnIdentityAlreadyReadIsNotWalkedAgain_AndANewOneAlwaysIs()
+    public void ASourceAlreadyReadIsNotOpenedAgain_AndANewOneAlwaysIs()
     {
         var root = RootWithIdentities(12);
         var cache = new SealedBundleFloorCache();
@@ -67,15 +73,15 @@ public class SealedBundleFloorCacheTest : IDisposable
 
         // The whole store on a cold cache — this is the reading that used to happen every tick.
         Assert.Equal(12, first.Identities);
-        Assert.Equal(12L, cache.IdentitiesRead);
-        Assert.Equal(0L, cache.IdentitiesRecalled);
+        Assert.Equal(12L, cache.SourcesRead);
+        Assert.Equal(0L, cache.SourcesRecalled);
 
         var second = cache.Read(root);
 
-        // 🚨 THE CLAIM: not one identity directory descended into, and the same answer. The old
-        // reading has no such property by construction — it opens every sentinel, every time.
-        Assert.Equal(12L, cache.IdentitiesRead);
-        Assert.Equal(12L, cache.IdentitiesRecalled);
+        // 🚨 THE CLAIM: not one publication re-opened, and the same answer. The old reading has no
+        // such property by construction — it opens every pointer and every sentinel, every time.
+        Assert.Equal(12L, cache.SourcesRead);
+        Assert.Equal(12L, cache.SourcesRecalled);
         Assert.Equal(first.Identities, second.Identities);
         Assert.True(first.Bundles.SetEquals(second.Bundles));
 
@@ -83,13 +89,13 @@ public class SealedBundleFloorCacheTest : IDisposable
         SealIdentity(root, "s4742new0000000000000000000000000", "plugins", ["Store"]);
         var third = cache.Read(root);
 
-        Assert.Equal(13L, cache.IdentitiesRead);
+        Assert.Equal(13L, cache.SourcesRead);
         Assert.Equal(13, third.Identities);
         Assert.Contains("Store", third.Bundles);
     }
 
     [Fact]
-    public void ARememberedIdentityIsNotWalkedAgain_MeasuredAgainstTheReadingThatDoes()
+    public void ARememberedSourceIsNotOpenedAgain_MeasuredAgainstTheReadingThatDoes()
     {
         var root = RootWithIdentities(6);
         var cache = new SealedBundleFloorCache();
@@ -98,28 +104,29 @@ public class SealedBundleFloorCacheTest : IDisposable
         Assert.Equal(6, warm.Identities);
         Assert.Contains(Platform, warm.Bundles);
 
-        // Remove every seal. The sentinel lives INSIDE <identity>/<source>, so deleting it moves
-        // that source directory's write stamp and never the identity directory's — which is the
-        // one signal the cache validates against.
+        // Empty every seal IN PLACE. Rewriting an existing file changes no directory ENTRY, so no
+        // source directory's write stamp moves — which is precisely the one class of change the
+        // remembered reading is documented not to follow, and the one that can only ever SHRINK a
+        // declaration (the direction that holds, never exempts).
         foreach (var sentinel in Directory.EnumerateFiles(
                      root,
                      ShippedPrebuiltBundles.CompletionSentinelFileName,
                      SearchOption.AllDirectories))
-            File.Delete(sentinel);
+            File.WriteAllText(sentinel, string.Empty);
 
         // ── the NEGATIVE CONTROL, executed ──────────────────────────────────────────────────────
-        // The reading that walks the share on every tick now sees nothing at all. If this line ever
-        // stops failing that way, the test below is measuring nothing.
-        var walked = PublishedBundleCatalogue.EverSealedBundles(root);
-        Assert.Null(walked.Refusal);
-        Assert.Equal(0, walked.Identities);
-        Assert.Empty(walked.Bundles);
+        // The reading that opens every sentinel on every tick now sees nothing at all. If this line
+        // ever stops failing that way, the assertions below are measuring nothing.
+        var opened = PublishedBundleCatalogue.EverSealedBundles(root);
+        Assert.Null(opened.Refusal);
+        Assert.Equal(0, opened.Identities);
+        Assert.Empty(opened.Bundles);
 
         // ── the fix ─────────────────────────────────────────────────────────────────────────────
-        var readBefore = cache.IdentitiesRead;
+        var readBefore = cache.SourcesRead;
         var again = cache.Read(root);
 
-        Assert.Equal(readBefore, cache.IdentitiesRead);
+        Assert.Equal(readBefore, cache.SourcesRead);
         Assert.Equal(warm.Identities, again.Identities);
         Assert.True(warm.Bundles.SetEquals(again.Bundles));
     }
@@ -144,7 +151,7 @@ public class SealedBundleFloorCacheTest : IDisposable
     [Fact]
     public void ASourceSealedUnderAnIdentityAlreadyReadIsPickedUp()
     {
-        // The real shape: core's CD seals <identity>/plugins, and a satellite repo bakes
+        // Core's CD seals <identity>/meshweaver-content, and a satellite repo bakes
         // <identity>/education against that SAME platform identity later. Missing the second one
         // would shrink the denominator, which is the one direction that EXEMPTS a package (#3461).
         var root = RootWithIdentities(3);
@@ -152,21 +159,71 @@ public class SealedBundleFloorCacheTest : IDisposable
 
         Assert.DoesNotContain("ThinkInStreams", cache.Read(root).Bundles);
 
-        var identity = Directory.EnumerateDirectories(root)
-            .Where(d => !PathIsReleaseMarkers(d))
-            .OrderBy(d => d, StringComparer.Ordinal)
-            .First();
-        var before = Directory.GetLastWriteTimeUtc(identity);
-        Seal(identity, "education", ["ThinkInStreams"]);
-
-        // 🚨 The design's invalidation signal, asserted rather than assumed: adding a source
-        // directory advances the identity directory's own write stamp. On a file system that did
-        // not, the cache would silently under-report — this is the line that would say so.
-        Assert.NotEqual(before, Directory.GetLastWriteTimeUtc(identity));
+        Seal(FirstIdentityOf(root), "education", ["ThinkInStreams"]);
 
         var after = cache.Read(root);
         Assert.Contains("ThinkInStreams", after.Bundles);
         Assert.Equal(3, after.Identities);
+    }
+
+    [Fact]
+    public void ARepublishedSourceThatAddsAPackageIsPickedUp()
+    {
+        // 🚨 THE CASE AN IDENTITY-LEVEL STAMP CANNOT SEE, and the reason the signal lives on the
+        // SOURCE directory. A satellite re-baking into a platform identity that has not moved is a
+        // routine daily event: the same source directory is republished with a longer package list,
+        // and the IDENTITY directory's own stamp does not move at all. Keying on it would freeze the
+        // new package out of the denominator for as long as that identity stayed newest, which
+        // exempts it from the gate. This test fails against that design and passes against this one.
+        var root = RootWithIdentities(3);
+        var cache = new SealedBundleFloorCache();
+
+        Assert.DoesNotContain("Northwind", cache.Read(root).Bundles);
+
+        var identity = FirstIdentityOf(root);
+        var identityStampBefore = Directory.GetLastWriteTimeUtc(identity);
+        Seal(identity, PlatformSource, [Platform, "Northwind"]);
+
+        // The identity directory is untouched by a republication of a source it already held — said
+        // out loud, because it is the whole premise of this test rather than a detail of it.
+        Assert.Equal(identityStampBefore, Directory.GetLastWriteTimeUtc(identity));
+
+        var after = cache.Read(root);
+        Assert.Contains("Northwind", after.Bundles);
+        Assert.Contains(Platform, after.Bundles);
+        Assert.Equal(3, after.Identities);
+    }
+
+    [Fact]
+    public void APrunedIdentityIsForgotten_AndAFailedReadEvictsNothing()
+    {
+        var root = RootWithIdentities(4);
+        var cache = new SealedBundleFloorCache();
+
+        Assert.Equal(4, cache.Read(root).Identities);
+        Assert.Equal(4, cache.Remembered);
+        Assert.Equal(0L, cache.SourcesForgotten);
+
+        // Retention removes an identity. Its publication must leave memory too — otherwise every
+        // publication this process has ever seen stays rooted for the life of the mesh.
+        Directory.Delete(FirstIdentityOf(root), recursive: true);
+
+        Assert.Equal(3, cache.Read(root).Identities);
+        Assert.Equal(3, cache.Remembered);
+        Assert.Equal(1L, cache.SourcesForgotten);
+
+        // 🚨 And the other half: a read that FAILED must evict nothing. A share we could not finish
+        // reading is not evidence that anything left it — treating it as such would be the
+        // fail-open direction wearing tidying's clothes.
+        var broken = Path.Combine(root, "s4742pointer00000000000000000000", "plugins");
+        Directory.CreateDirectory(broken);
+        File.WriteAllText(
+            Path.Combine(broken, ShippedPrebuiltBundles.PublicationPointerFileName),
+            "nested/elsewhere\n");
+
+        Assert.NotNull(cache.Read(root).Refusal);
+        Assert.Equal(3, cache.Remembered);
+        Assert.Equal(1L, cache.SourcesForgotten);
     }
 
     [Fact]
@@ -237,6 +294,25 @@ public class SealedBundleFloorCacheTest : IDisposable
         Assert.False(floor.ServesBakes);
     }
 
+    [Fact]
+    public void TwoRootsInOneProcessDoNotEvictEachOther()
+    {
+        // Entries carry the root they were read under, so a complete enumeration of one root can
+        // never prune another's — the cache is an instance, but an instance can still serve two
+        // mounts (a test host, a registry answering for more than one store).
+        var first = RootWithIdentities(3);
+        var second = RootWithIdentities(2);
+        var cache = new SealedBundleFloorCache();
+
+        cache.Read(first);
+        cache.Read(second);
+        Assert.Equal(5, cache.Remembered);
+
+        cache.Read(first);
+        Assert.Equal(5, cache.Remembered);
+        Assert.Equal(0L, cache.SourcesForgotten);
+    }
+
     // ── the secondary half: the budget is a configuration key, with the same fail-closed default ─
 
     [Fact]
@@ -268,11 +344,15 @@ public class SealedBundleFloorCacheTest : IDisposable
         return root;
     }
 
-    private static bool PathIsReleaseMarkers(string directory) =>
-        string.Equals(
-            Path.GetFileName(directory),
-            PublishedBundleCatalogue.ReleaseMarkerDirectoryName,
-            StringComparison.Ordinal);
+    /// <summary>The lowest-ordinal framework-identity directory — the release markers are not one.</summary>
+    private static string FirstIdentityOf(string root) =>
+        Directory.EnumerateDirectories(root)
+            .Where(d => !string.Equals(
+                Path.GetFileName(d),
+                PublishedBundleCatalogue.ReleaseMarkerDirectoryName,
+                StringComparison.Ordinal))
+            .OrderBy(d => d, StringComparer.Ordinal)
+            .First();
 
     /// <summary>A published root carrying <paramref name="count"/> distinct framework identities,
     /// each with one sealed source — the shape the share accumulates, one identity per set.</summary>
@@ -281,7 +361,7 @@ public class SealedBundleFloorCacheTest : IDisposable
         var root = Track(Path.Combine(Path.GetTempPath(), "mw-4742-" + Guid.NewGuid().ToString("N")));
         Directory.CreateDirectory(Path.Combine(root, PublishedBundleCatalogue.ReleaseMarkerDirectoryName));
         for (var i = 0; i < count; i++)
-            SealIdentity(root, $"s4742{i:D27}", "meshweaver-content", [Platform]);
+            SealIdentity(root, $"s4742{i:D27}", PlatformSource, [Platform]);
         return root;
     }
 

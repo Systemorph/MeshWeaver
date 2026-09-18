@@ -358,40 +358,48 @@ public static class PublishedBundleCatalogue
     internal static IdentityDeclaration DeclaredBundlesUnderIdentity(
         string identityDirectory, ILogger? logger)
     {
-        // The sentinel's DECLARATION, not a per-bundle presence check — see DeclaredBundlesOf
-        // for why the denominator must be both inclusive and cheap.
         var declaredHere = new List<string>();
-        var sources = 0;
-        var sealedSources = 0;
         foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory)
                      .OrderBy(d => d, StringComparer.Ordinal))
         {
-            sources++;
-            // 🚨 A POINTER THAT CANNOT BE FOLLOWED SHRINKS THIS DENOMINATOR, and a smaller
-            // denominator is the one direction that EXEMPTS a package from the gate (#3461
-            // phase 5). Until the flat compatibility copy was disposed of, the fall-back landed
-            // on a sealed copy and this read what that source declares; now it lands on a
-            // source directory holding nothing, so the source silently declares NOTHING. The
-            // floor is the set of packages that must carry a sealed bake, so reading it short
-            // clears a release that should hold — cannot determine ≠ clear to proceed.
-            var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, logger);
-            var declared = DeclaredBundlesOf(pointer.Directory);
-            if (declared is null && pointer.Fault is not null)
-                return new IdentityDeclaration(
-                    [],
-                    false,
-                    $"the publication pointer of '{sourceDirectory}' could not be followed "
-                    + $"({pointer.Fault}) and no sealed publication sits behind it, so what that "
-                    + "source declares could not be read — the floor would be SMALLER than what "
-                    + "is published, which exempts a package instead of holding it (#3461)");
-            if (declared is not null)
-            {
-                sealedSources++;
-                declaredHere.AddRange(declared);
-            }
+            var declaration = DeclaredBundlesOfSource(sourceDirectory, logger);
+            if (declaration.Refusal is not null)
+                return new IdentityDeclaration([], declaration.Refusal);
+            if (declaration.Declared is not null)
+                declaredHere.AddRange(declaration.Declared);
         }
-        return new IdentityDeclaration(
-            declaredHere, sources > 0 && sealedSources == sources, null);
+        return new IdentityDeclaration(declaredHere, null);
+    }
+
+    /// <summary>
+    /// What ONE source directory under one framework identity declares — the leaf of the
+    /// denominator, and the unit <see cref="SealedBundleFloorCache"/> remembers, because a source
+    /// directory is the smallest thing a publisher writes as a whole.
+    ///
+    /// <para>The sentinel's DECLARATION, not a per-bundle presence check — see
+    /// <see cref="DeclaredBundlesOf"/> for why the denominator must be both inclusive and cheap.</para>
+    /// </summary>
+    /// <param name="sourceDirectory">A <c>&lt;root&gt;/&lt;identity&gt;/&lt;source&gt;</c> directory.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static SourceDeclaration DeclaredBundlesOfSource(string sourceDirectory, ILogger? logger)
+    {
+        // 🚨 A POINTER THAT CANNOT BE FOLLOWED SHRINKS THIS DENOMINATOR, and a smaller
+        // denominator is the one direction that EXEMPTS a package from the gate (#3461
+        // phase 5). Until the flat compatibility copy was disposed of, the fall-back landed
+        // on a sealed copy and this read what that source declares; now it lands on a
+        // source directory holding nothing, so the source silently declares NOTHING. The
+        // floor is the set of packages that must carry a sealed bake, so reading it short
+        // clears a release that should hold — cannot determine ≠ clear to proceed.
+        var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, logger);
+        var declared = DeclaredBundlesOf(pointer.Directory);
+        if (declared is null && pointer.Fault is not null)
+            return new SourceDeclaration(
+                null,
+                $"the publication pointer of '{sourceDirectory}' could not be followed "
+                + $"({pointer.Fault}) and no sealed publication sits behind it, so what that "
+                + "source declares could not be read — the floor would be SMALLER than what "
+                + "is published, which exempts a package instead of holding it (#3461)");
+        return new SourceDeclaration(declared, null);
     }
 
     /// <summary>
@@ -1091,16 +1099,21 @@ public sealed record PublishedReleaseCatalogue(
 /// </summary>
 /// <param name="Declared">The bundle names every SEALED source under the identity lists, as the
 /// sentinels spell them (extensions still on — <see cref="ReleaseArtifacts.Of"/> normalises).</param>
-/// <param name="EverySourceSealed">Whether the identity holds at least one source and EVERY source
-/// under it carried a seal — i.e. whether this reading is FINISHED rather than caught mid-publication.
-/// 🚨 It is what makes the reading safe to remember: a publisher creates a source directory and
-/// writes its sentinel LAST, and that write does not move the identity directory's own stamp, so a
-/// reading taken in that window would otherwise be frozen declaring nothing.</param>
 /// <param name="Refusal">Why the identity could not be read, or null when it was. 🚨 Non-null is a
 /// HOLD for the whole floor and is NEVER remembered by <see cref="SealedBundleFloorCache"/>: a
 /// cached refusal would latch one transient share fault into a permanent freeze.</param>
-internal sealed record IdentityDeclaration(
-    IReadOnlyList<string> Declared, bool EverySourceSealed, string? Refusal);
+internal sealed record IdentityDeclaration(IReadOnlyList<string> Declared, string? Refusal);
+
+/// <summary>
+/// What ONE source directory declares, as
+/// <see cref="PublishedBundleCatalogue.DeclaredBundlesOfSource"/> read it.
+/// </summary>
+/// <param name="Declared">The bundle names its seal lists, or <c>null</c> when it carries no seal at
+/// all — a source mid-publication, or one whose bake died before sealing. Null contributes nothing
+/// and is NOT a refusal: the boot seeder would skip such a directory too.</param>
+/// <param name="Refusal">Why what this source declares could not be read, or null. 🚨 Non-null is a
+/// HOLD for the whole floor and is never remembered.</param>
+internal sealed record SourceDeclaration(IReadOnlyList<string>? Declared, string? Refusal);
 
 /// <summary>
 /// 🚨 The deployment gate's DENOMINATOR (#3441) — what a published root has ever demonstrably been
