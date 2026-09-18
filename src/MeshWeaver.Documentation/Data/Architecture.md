@@ -458,6 +458,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Self-hosted CI runners on AKS](SelfHostedRunners) — ARC beside the portals on one pool; three brakes, a negative priority class, and the reserve arithmetic that decides the cap
 - [Candidate Release Protocol](CandidateReleaseProtocol)
 - [Chart Drift — what a deploy actually does](ChartDriftSemantics)
+- [Rendering a chart you are not allowed to fully configure](ChartDriftRenderWithoutSecrets) — 39 runs, 39 failures, zero verdicts: the check may hold two of the deploy's three value sources and the chart correctly refuses that subset; the placeholder that unblocks the render, the two-render proof that no compared object depends on it, and the bake gate that was off on both production namespaces the moment a verdict finally appeared
 - [Configuring an instance from Aspire](ConfiguringAnInstanceFromAspire)
 - [The Dependabot Secret Store](DependabotSecretStore)
 - [GitHub App Credentials](GitHubAppCredentials) — `meshweaver-cloud` writes to its own repo; every cross-repo READ mints from the read-only `fleet-reader`
