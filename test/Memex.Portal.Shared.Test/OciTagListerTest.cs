@@ -401,6 +401,42 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
     /// <summary>
+    /// 🚨 THE BOUND IS EXERCISED (review of #4745). The cap on how many hosts a refusal names was
+    /// introduced with this reader and every other case here has at most two, so nothing observed
+    /// it: a regression that truncated SILENTLY, or dropped the overflow instead of counting it,
+    /// passed them all — *"a verification step that cannot fail is not a verification step"*.
+    ///
+    /// <para>Nine readable registries, asserted from both sides of the boundary: the first eight are
+    /// named, the ninth is NOT, and the count of what was left out is in the message. A list that
+    /// looks complete when it is not is the same defect class this whole change is about, and this
+    /// string lands in Loki and on <c>Admin/UpdatePolicy</c>.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task MoreHostsThanTheRefusalNames_AreCounted_NeverSilentlyDropped()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Nine, named so that ordinal-case-insensitive ordering is the obvious r1…r9 and the test
+        // reads the same way the message does.
+        catalog.Registries = Enumerable.Range(1, 9)
+            .Select(i => new PluginRegistryReference { Name = $"R{i}", Url = $"https://r{i}.example.test" })
+            .ToList();
+
+        var fault = await Record.ExceptionAsync(() =>
+            Lister(RegistryHost).ListTags(Repository).FirstAsync().Timeout(Budget).Await(ct));
+
+        mirror.CredentialsSeen.Should().BeEmpty("nine candidates select nothing, exactly as two do");
+        var message = fault.Should().BeOfType<InvalidOperationException>().Which.Message;
+        message.Should().Contain("r1.example.test").And.Contain("r8.example.test",
+            "the hosts the message names are the first eight in a deterministic order");
+        message.Should().NotContain("r9.example.test",
+            "past the cap the hosts are counted, not named — otherwise a pathological configuration "
+            + "grows a log line without bound");
+        message.Should().Contain("(and 1 more)",
+            "🚨 the overflow is COUNTED. Dropped silently, the operator reads a complete-looking list "
+            + "that is not one — which is the defect class this change exists to remove");
+    }
+
+    /// <summary>
     /// 🚨 ZERO configured registries is its OWN sentence, not an empty list. "Declare the validator"
     /// is the wrong instruction for an installation that holds no key at all: the first act is to
     /// configure PluginCatalog, and a message naming neither leaves the operator nothing to do.
