@@ -88,6 +88,36 @@ public static class BuildNodeType
         path is not null && path.EndsWith('/' + ClaimSegment, StringComparison.Ordinal);
 
     /// <summary>
+    /// Whether a decision taken on <paramref name="path"/> is the ROOT election — and the ONE
+    /// notion of that, because the decision state reaches <see cref="Arbitrate"/> in TWO shapes and
+    /// only one of them is the Build node itself.
+    ///
+    /// <para>🚨 <b>Why a bare <c>path == RootPath</c> was wrong (#4729).</b> Since #1424 the holder
+    /// state a grant is decided on lives on the claim LOCK, never on the Build node — that
+    /// separation IS <see cref="ClaimPath"/>'s whole purpose. So the node
+    /// <see cref="ArbitrateOnLock"/> hands the decision procedure is <c>Admin/Build/_Claim</c>,
+    /// which can never equal <see cref="RootPath"/>, and the guard that holds a fresh root election
+    /// for <see cref="GrantSettleWindow"/> was therefore skipped on every host that HAS an
+    /// <see cref="IStorageAdapter"/> — i.e. every real deployment, and exactly where #1424's
+    /// cross-cluster race lives. Only <see cref="GrantOnMirror"/> passes the Build node, so the
+    /// convergence window applied ONLY where there is one cluster and nothing to converge with.
+    /// Measured on the live protocol: two full root elections in 0.878 s, where one window alone
+    /// costs five seconds.</para>
+    ///
+    /// <para>Both spellings are DERIVED from <see cref="RootPath"/> through the same
+    /// <see cref="ClaimPath"/> that minted the lock, so "the root" and "the root's lock" cannot
+    /// drift apart — and neither caller has to say which it is holding, which is the coupling that
+    /// produced the defect. A chunk (<c>Admin/Build/{chunk}</c>) and its lock are both false, which
+    /// is the pre-existing rule: the root election already decided THE builder, and 37 chunks × 5 s
+    /// of settle would put minutes of pure waiting into a bake measured at ~1m42s.</para>
+    /// </summary>
+    /// <param name="path">The path of the node the decision is being taken on.</param>
+    /// <returns><c>true</c> for the Build root or its claim lock; <c>false</c> for anything else.</returns>
+    internal static bool IsRootElection(string? path) =>
+        string.Equals(path, RootPath, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(path, ClaimPath(RootPath), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// How long a claim survives without a heartbeat before the arbiter hands it to the next
     /// candidate — the FALLBACK rule, used only where cluster membership has no opinion about the
     /// holder (<c>ClusterMemberState.Unknown</c>: no cluster at all, or an identity it cannot
@@ -108,6 +138,14 @@ public static class BuildNodeType
     /// to propagate (a Postgres NOTIFY plus a mirror refresh, measured sub-second; 5 s covers a
     /// slow feed) so that every arbiter elects from the same candidate set and computes the same
     /// winner. Costs 5 s once per build against a bake measured in minutes.
+    ///
+    /// <para>🚨 <b>It is charged on BOTH arbitration paths, and until #4729 it was charged on
+    /// neither of the ones that need it.</b> The window is imposed by <see cref="Arbitrate"/> via
+    /// <see cref="IsRootElection"/>, which recognises the root whether the decision arrives on the
+    /// Build node (<see cref="GrantOnMirror"/>) or on its claim LOCK (<see cref="ArbitrateOnLock"/>)
+    /// — the durable shape, and the only one a multi-cluster deployment ever takes. The budget
+    /// itself is unchanged: five seconds, once per root election, and the readiness probe every
+    /// rollout waits on is gated by the GO that follows the bake, not by the grant.</para>
     /// </summary>
     public static readonly TimeSpan GrantSettleWindow = TimeSpan.FromSeconds(5);
 
@@ -494,16 +532,9 @@ public static class BuildNodeType
         if (heldState is null)
             return Observable.Return(Unit.Default);   // refused — see ReadLockStateOrRefuse
 
-        var decisionInput = (held ?? NewClaimNode(claimPath)) with
-        {
-            Content = heldState with
-            {
-                RequestedClaims = pending,
-            }
-        };
-
-        var decided = Arbitrate(decisionInput, options, DateTime.UtcNow, membership);
-        if (ReferenceEquals(decided, decisionInput))
+        var decided = ArbitrateOnLock(
+            held, claimPath, heldState, pending, options, DateTime.UtcNow, membership);
+        if (decided is null)
             return Observable.Return(Unit.Default);   // nothing to grant — the quiet path, no write
 
         var granted = decided.ContentAs<BuildState>(options)!;
@@ -909,6 +940,55 @@ public static class BuildNodeType
             options, now, membership);
 
     /// <summary>
+    /// One arbitration pass on the durable LOCK — the decision <see cref="CommitGrant"/> takes,
+    /// named for the same reason <see cref="ArbitrateOnMirror"/> is: so a test drives the
+    /// expression the host actually runs rather than a re-spelling of it that is free to drift.
+    ///
+    /// <para>🚨 <b>Here that naming is load-bearing rather than tidy (#4729).</b> The decision
+    /// INPUT of a durable pass is assembled from two different rows — holder state from the LOCK,
+    /// pending registrations from this cluster's MIRROR — and it carries the LOCK's path, which is
+    /// never the Build node's. A unit test that hands <see cref="Arbitrate"/> a Build node it built
+    /// itself is therefore exercising a shape this path cannot produce, and that is precisely how
+    /// the skipped <see cref="GrantSettleWindow"/> sat unnoticed: the window read as covered while
+    /// no host with an <see cref="IStorageAdapter"/> ever applied it.</para>
+    ///
+    /// <para>Pure over its inputs, instant and membership verdict included, so the durable path's
+    /// decision is testable without a store, a cluster or wall-clock — the property
+    /// <see cref="Arbitrate"/> already had and this composition did not.</para>
+    /// </summary>
+    /// <param name="held">The lock row as storage answered it, or <c>null</c> when there is none.</param>
+    /// <param name="claimPath">The lock's path — see <see cref="ClaimPath"/>.</param>
+    /// <param name="heldState">
+    /// The lock's holder state as <see cref="ReadLockStateOrRefuse"/> read it — a fresh
+    /// <see cref="BuildState"/> for the INSERT case, never a default stood in for an unreadable row.
+    /// </param>
+    /// <param name="pending">This cluster's pending registrations, read off its own mirror.</param>
+    /// <param name="options">Serializer options for content recovery.</param>
+    /// <param name="now">The decision instant.</param>
+    /// <param name="membership">Cluster membership, or <c>null</c> where this host is in no cluster.</param>
+    /// <returns>The lock row to commit, or <c>null</c> when this pass grants nothing.</returns>
+    internal static MeshNode? ArbitrateOnLock(
+        MeshNode? held,
+        string claimPath,
+        BuildState heldState,
+        ImmutableDictionary<string, BuildClaimRequest> pending,
+        System.Text.Json.JsonSerializerOptions options,
+        DateTime now,
+        IClusterMembership? membership = null)
+    {
+        var decisionInput = (held ?? NewClaimNode(claimPath)) with
+        {
+            Content = heldState with
+            {
+                RequestedClaims = pending,
+            }
+        };
+
+        var decided = Arbitrate(decisionInput, options, now, membership);
+        return ReferenceEquals(decided, decisionInput) ? null : decided;
+    }
+
+    /// <summary>
     /// Releases a claim whose holder has STOOD DOWN, and prunes stand-down marks that have aged
     /// out. Pure over its inputs; returns the same node when there is nothing to do, so a caller
     /// may run it on every pass for free (<c>Update</c> no-ops on an unchanged node).
@@ -1188,8 +1268,15 @@ public static class BuildNodeType
         // arrive pre-arbitrated by it, and 37 chunks × 5 s of settle would put minutes of pure
         // waiting into a bake measured at ~1m42s. When parallel builders make chunk contention
         // real, chunk elections get the same treatment.
+        //
+        // 🚨 …and "is this the root" is asked of IsRootElection, never of RootPath directly
+        // (#4729). This procedure is handed the node that CARRIES the decision state, which on the
+        // durable path is the claim LOCK and not the Build node at all — the very separation #1424
+        // introduced. A bare comparison against RootPath is false for `Admin/Build/_Claim`, so the
+        // window this block exists to impose was skipped on every host with an IStorageAdapter and
+        // applied only on hosts with no second cluster to converge with.
         if (state.ClaimedBy is null
-            && string.Equals(node.Path, RootPath, StringComparison.OrdinalIgnoreCase)
+            && IsRootElection(node.Path)
             && now - pending.Min(kv => kv.Value.RequestedAt) < GrantSettleWindow)
             return node;
 
