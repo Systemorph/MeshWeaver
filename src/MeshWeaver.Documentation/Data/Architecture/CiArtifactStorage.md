@@ -295,6 +295,86 @@ somewhere else or rebuilds from source — that is the fault-becomes-fact defect
 ([#2695](https://github.com/Systemorph/MeshWeaver/issues/2695)), and it is how *unchanged ⇒ no
 compile* turns into *sometimes compiles, nobody knows*.
 
+### 🚨 The path is not the identity — a `file:` store is per-MOUNT, and mine may not be yours
+
+**`file:/ci-artifacts` names a directory, and the two runner pools mount two different Azure Files
+shares there.** `MW_ARTIFACT_STORE` was set to `file:/ci-artifacts` on 2026-09-18 and the shared
+module-pack lane stopped completing for every repository that calls it
+([#4761](https://github.com/Systemorph/MeshWeaver/issues/4761)). The producer wrote a 1,459,865,600-byte
+`workspace-build.tar` and **succeeded**; eight consumers asked for that exact path **13 seconds**
+later and got *"is not there — the record names an object this store does not hold"*. Both sides
+printed byte-identical `ARTIFACT_STORE` and `STORE_RUN_PREFIX`, the same run, the same attempt.
+
+The cluster manifests say why, in the header of the file that declares them — *"ONE Azure Files
+share per runner namespace"*:
+
+| | runner scale set | namespace | `ci-artifacts` PVC |
+|---|---|---|---|
+| producer (`prepare`, `build-workspace`) | `aks-silos-dind` | `arc-runners-dind` | its own dynamically-provisioned share |
+| consumers (`pack`) | `aks-silos` | `arc-runners` | **a different** dynamically-provisioned share |
+
+Two `PersistentVolumeClaim`s with the same *name* in two namespaces are two different claims, and
+with `storageClassName: azurefile-csi` and no `volumeName` each one provisions its own share. So the
+write genuinely succeeded and the read genuinely found nothing: **the `file:` backend never had a
+successful cross-pool precedent at all.** (The green runs cited as proof it worked had
+`ARTIFACT_STORE: gha` — a control on the other side of the variable.)
+
+The fleet already owns the cure one volume over. `ci-platform` reaches both namespaces as **two
+static `PersistentVolume`s carrying ONE `volumeHandle`**, i.e. one share addressed twice; the
+`node-repo-module-pack.yml` `select → prepare` edge is cross-pool by construction
+(`MW_RUNNER` → `MW_RUNNER_DOCKER`), so nothing in that lane can hand bytes over until `ci-artifacts`
+is wired the same way or the variable goes back to `gha`. That half is a cluster change and is
+tracked as **Systemorph/Memex#420**, which states both routes: one share behind two static PVs, or
+the move to `azblob:` this page already recommends.
+
+**Why nobody could see it: `put`'s success line could not be wrong.** The byte count and the sha256
+both came from the **source** file and `dst` was never stat-ed or read back, so the producer was
+green *by construction* and the failure necessarily presented as a consumer problem — the same
+family as a gate that cannot fail on its own input. Both halves are now closed:
+
+- **`put` reads the destination back.** After the rename it asserts that `dst` exists, is a regular
+  file, has the source's length, re-hashes to the digest, appears in its own directory listing, and
+  left no staging file behind. The bytes are `fsync`ed before the rename, because on a network
+  filesystem the *server* — and so every other mount — holds them only once the client has flushed.
+  Four deliberate breakages of the swap (the destination vanishes, is truncated, holds different
+  bytes, or the "rename" was really a copy) are self-test rules, each proved red.
+- **A store has an IDENTITY, read from the kernel.** `store_id()` returns the mount source from
+  `/proc/self/mountinfo` — for cifs `//<account>.file.core.windows.net/<share>` — which is identical
+  for two pods on one share and different for two shares. `resolve` emits it as `store-id`, and the
+  lane hands it to every `put`/`get` as `--expect-store-id`, so **a runner standing on a different
+  share is RED at the first store operation of the run**, naming the mechanism and both remedies,
+  instead of writing a handoff that reads as an absence eight jobs later. An *empty*
+  `--expect-store-id` is red too: a check wired up with nothing to check against is a check that
+  passes on no evidence.
+
+The identity is derived, never minted — no marker file to lose, nothing to keep in sync, and a
+symlinked or trailing-slash spelling of the same directory is the same store (a self-test rule,
+because that negative control is what stops the check reddening a correct run).
+
+🚨 **A mount source is only an identity for a SHARED filesystem.** `overlay` is the source of every
+container's root filesystem and `tmpfs` of every tmpfs, so comparing sources alone would answer
+*"same store"* for two pods that share nothing — the exact false pass the check exists to refuse. If
+`/ci-artifacts` were ever a plain directory on the pod's own root (a volume that never mounted, a
+spec that lost its `volumeMounts` entry), `reachable()` accepts it, because it exists and is
+writable. So an identity outside `SHARED_FSTYPES` (cifs/smb3/nfs/…) carries **this machine's node
+name**: two pods can then never agree about a node-local directory, one process always agrees with
+itself, and the refusal says *check volumeMounts* rather than *unify the shares* — a different fault
+with a different remedy.
+
+🚨 **The named-artifact layer inherits the constraint and is NOT yet protected by it.**
+`ci-run-artifacts.py` and the `upload-artifact` / `download-artifact` composites ride on the same
+`FileStore`, and their manifest lives *in the store* — so a consumer on the other pool cannot read
+it either, and for a pattern or whole-collection download an empty result is a valid success by
+design (it mirrors `actions/download-artifact`). Nothing wires those composites to a store yet;
+until `ci-artifacts` is one share, **do not hand a `store:` to them across pools**. Their
+single-name refusal now at least names which share it is standing on.
+
+**The general form, for the third time on this volume class:** a *publish atomically, then swap*
+protocol is only atomic if the swap is a real rename **on that filesystem**, and a *shared* store is
+only shared if both ends are on the same one. The portal learnt the first half as `File.Move`
+copying on Azure Files ([#2190](https://github.com/Systemorph/MeshWeaver/issues/2190) →
+[#4547](https://github.com/Systemorph/MeshWeaver/issues/4547)); this is the second half, in CI.
+
 ### How the module bundle splits in two
 
 `node-repo-module-pack.yml` takes an `artifact-store` input. When it names a store:

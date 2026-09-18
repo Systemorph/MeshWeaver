@@ -344,7 +344,13 @@ class Artifacts:
         selected = self.list(name, pattern)
         if not selected:
             if name:
-                raise Red("no artifact matches this repository, run, attempt and name")
+                # 🚨 Name the STORE, not just the absence (#4761). This layer rides on the same
+                # FileStore, and `file:<dir>` is a path: two runner pools can mount two different
+                # shares behind it, in which case a producer's artifact is genuinely absent here and
+                # nothing about the message would have said so.
+                raise Red("no artifact matches this repository, run, attempt and name — "
+                          f"this runner's {self.store.spec} is {self.store.store_id()}, and the "
+                          "job that uploaded prints its own identity beside its `store: wrote` line")
             # Pattern/all downloads are collections: an empty collection is valid, as in
             # actions/download-artifact. The constructor and list still validate the store
             # and manifests; unavailable/corrupt storage must never become an empty success.
