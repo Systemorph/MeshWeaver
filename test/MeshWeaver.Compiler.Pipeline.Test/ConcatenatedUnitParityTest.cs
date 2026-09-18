@@ -100,14 +100,50 @@ public class ConcatenatedUnitParityTest : IDisposable
         foreach (var file in files)
             psi.ArgumentList.Add(file);
 
+        // 🚨 Both pipes are drained by the EVENT callbacks, never by a blocking read, and the
+        // timeout is taken on the WAIT. `ReadToEnd()` returns only at EOF, which a child produces
+        // by exiting — so draining first and waiting second makes the wait unreachable on exactly
+        // the hang it claims to bound: a wedged script blocks the read forever and the 60 s is
+        // never consulted. (Copilot on #4727. It is the same shape as a gate whose verdict cannot
+        // fail — a bound that only fires when it is not needed is not a bound.) Reading after the
+        // wait is the other deadlock: a child that fills the pipe buffer blocks in `write` and
+        // never exits.
+        var stdoutBuffer = new StringBuilder();
+        var stderrBuffer = new StringBuilder();
+        psi.RedirectStandardInput = true;
         using var process = Process.Start(psi);
         Assert.NotNull(process);
-        // 🚨 Drain BOTH pipes before waiting: a redirected stream nobody reads fills its OS buffer
-        // and blocks the child in `write`, so the wait would time out on a process that had already
-        // done its work — a hang that reads as a broken gate.
-        var stdout = process!.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit(milliseconds: 60_000);
+        process!.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is not null) lock (stdoutBuffer) stdoutBuffer.AppendLine(e.Data);
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not null) lock (stderrBuffer) stderrBuffer.AppendLine(e.Data);
+        };
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        // The child reads nothing; closing stdin means a script that ever waited on input fails
+        // fast instead of hanging until the bound.
+        process.StandardInput.Close();
+
+        if (!process.WaitForExit(milliseconds: 60_000))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // It exited between the wait and the kill — nothing to stop.
+            }
+        }
+        // The parameterless overload after a successful timed wait flushes the async readers, so
+        // the buffers below are complete rather than whatever had arrived when the wait returned.
+        process.WaitForExit();
+        string stdout, stderr;
+        lock (stdoutBuffer) stdout = stdoutBuffer.ToString();
+        lock (stderrBuffer) stderr = stderrBuffer.ToString();
         Assert.True(process.HasExited,
             "compile-check.py --emit-unit did not exit within 60 s — it shapes text and compiles "
             + "nothing, so a wedge there is a defect, not slowness.");
