@@ -1132,7 +1132,7 @@ def compile_set(work: Path, cs_files, ref_xml: str, restored: bool, ai_available
 
 def _is_ai_error(err: str) -> bool:
     """True iff a diagnostic is attributable to the absent Microsoft.Extensions.AI assembly (used
-       only when the AI dlls could not be located — see usings_union)."""
+       only when the AI dlls could not be located — see `names_external`)."""
     return ("Microsoft.Extensions.AI" in err
             or "namespace name 'AI'" in err
             or "'AI' does not exist" in err)
