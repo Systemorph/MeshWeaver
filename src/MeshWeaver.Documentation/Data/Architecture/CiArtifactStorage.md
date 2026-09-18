@@ -323,7 +323,9 @@ The fleet already owns the cure one volume over. `ci-platform` reaches both name
 static `PersistentVolume`s carrying ONE `volumeHandle`**, i.e. one share addressed twice; the
 `node-repo-module-pack.yml` `select → prepare` edge is cross-pool by construction
 (`MW_RUNNER` → `MW_RUNNER_DOCKER`), so nothing in that lane can hand bytes over until `ci-artifacts`
-is wired the same way or the variable goes back to `gha`.
+is wired the same way or the variable goes back to `gha`. That half is a cluster change and is
+tracked as **Systemorph/Memex#420**, which states both routes: one share behind two static PVs, or
+the move to `azblob:` this page already recommends.
 
 **Why nobody could see it: `put`'s success line could not be wrong.** The byte count and the sha256
 both came from the **source** file and `dst` was never stat-ed or read back, so the producer was
