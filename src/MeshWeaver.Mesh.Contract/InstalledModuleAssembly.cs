@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 
 namespace MeshWeaver.Mesh;
 
@@ -47,11 +49,82 @@ public sealed record InstalledModuleAssembly(Assembly Assembly)
     public static string? VersionOf(Assembly assembly)
     {
         ArgumentNullException.ThrowIfNull(assembly);
-        var version = assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        var version = InformationalVersionOf(assembly);
         if (string.IsNullOrWhiteSpace(version))
             return null;
         var plus = version.IndexOf('+');
         return plus < 0 ? version : version[..plus];
     }
+
+    /// <summary>
+    /// 🚨 The stamp read out of the assembly's OWN METADATA, never through
+    /// <c>GetCustomAttribute&lt;T&gt;</c> (MeshWeaver.Plugins#2116).
+    ///
+    /// <para><b>Why the reflection call could not stay.</b> Reading ONE attribute through
+    /// reflection pays for ALL of them: <c>Attribute.GetCustomAttributes(Assembly, Type)</c>
+    /// resolves the declaring TYPE of every assembly-level attribute record in order to test it
+    /// against the filter. So an assembly carrying an unrelated assembly-level attribute whose
+    /// type lives in an assembly this process cannot bind throws
+    /// <see cref="FileNotFoundException"/> from inside
+    /// <c>System.Reflection.CustomAttribute.FilterCustomAttributeRecord</c> — while the value
+    /// being asked for, an <see cref="AssemblyInformationalVersionAttribute"/> from corelib, sits
+    /// in the metadata untouched. Measured 2026-09-18: <c>mw-plugin-test compile … --module
+    /// Azure.Core.dll</c> (its <c>System.ClientModel</c> reference absent from the tester) died
+    /// <c>FATAL</c> with a nine-frame reflection stack that named neither the module nor the
+    /// missing assembly, and the same read runs in the portal
+    /// (<c>NodeTypeCompilationHelpers.ModuleVersionsOf</c>) over every installed module.</para>
+    ///
+    /// <para>The metadata read resolves no type at all, so an incomplete attribute closure is
+    /// simply not this property's business. It answers exactly what the reflection call answered
+    /// wherever the reflection call could answer: the same attribute, the same string, decoded
+    /// from the same bytes. An assembly with no <see cref="Assembly.Location"/> — loaded from
+    /// bytes, or inside a single-file bundle — has no file to read and keeps the reflection path;
+    /// a module is file-backed by construction (see the <c>Assembly</c> parameter), so the
+    /// hazardous path is unreachable for one.</para>
+    ///
+    /// <para>The cost is one PE open per call rather than a cached reflection lookup. Deliberately
+    /// NOT memoised on the record: record equality is over instance fields, so a cache field would
+    /// make two <c>InstalledModuleAssembly</c> values over one assembly compare unequal.</para>
+    /// </summary>
+    private static string? InformationalVersionOf(Assembly assembly)
+    {
+        var location = assembly.Location;
+        if (location.Length == 0 || !File.Exists(location))
+            return assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+
+        using var stream = File.OpenRead(location);
+        using var peReader = new PEReader(stream);
+        if (!peReader.HasMetadata)
+            return null;
+        var metadata = peReader.GetMetadataReader();
+        foreach (var handle in metadata.GetAssemblyDefinition().GetCustomAttributes())
+        {
+            var attribute = metadata.GetCustomAttribute(handle);
+            // The attribute type is in corelib, so its constructor is always a MemberReference
+            // into a TypeReference — an attribute DEFINED in this assembly cannot be it.
+            if (attribute.Constructor.Kind != HandleKind.MemberReference)
+                continue;
+            var member = metadata.GetMemberReference((MemberReferenceHandle)attribute.Constructor);
+            if (member.Parent.Kind != HandleKind.TypeReference)
+                continue;
+            var type = metadata.GetTypeReference((TypeReferenceHandle)member.Parent);
+            if (!metadata.StringComparer.Equals(type.Name, nameof(AssemblyInformationalVersionAttribute))
+                || !metadata.StringComparer.Equals(type.Namespace, InformationalVersionNamespace))
+                continue;
+            // The single-string constructor's blob: the 0x0001 prolog, then a SerString.
+            var blob = metadata.GetBlobReader(attribute.Value);
+            if (blob.RemainingBytes < sizeof(ushort) || blob.ReadUInt16() != CustomAttributeProlog)
+                continue;
+            return blob.ReadSerializedString();
+        }
+        return null;
+    }
+
+    /// <summary>The namespace of <see cref="AssemblyInformationalVersionAttribute"/>, spelled out
+    /// because the metadata read compares names and never resolves the type.</summary>
+    private const string InformationalVersionNamespace = "System.Reflection";
+
+    /// <summary>The two-byte prolog every custom-attribute value blob opens with (ECMA-335 II.23.3).</summary>
+    private const ushort CustomAttributeProlog = 0x0001;
 }
