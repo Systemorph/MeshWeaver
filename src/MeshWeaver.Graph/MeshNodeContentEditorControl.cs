@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
+using System.Text.Json.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
@@ -49,11 +50,36 @@ public record MeshNodeEditorField(string Key, string Label, MeshNodeEditorFieldK
         => OptionLabels.TryGetValue(option, out var label) ? label : option;
 
     /// <summary>
-    /// Builds the editable field list from a content record type: <c>[Browsable(false)]</c>
-    /// properties are skipped, <c>[Translation]</c>/<c>[Description]</c>/<c>[Display]</c>/
-    /// <c>[DisplayName]</c> supply the label (else the wordified property name), the key is the
-    /// camelCase property name, and the kind follows the property type (bool → checkbox, enum →
-    /// dropdown, everything else → text).
+    /// Builds the editable field list from a content record type: <c>[Browsable(false)]</c> and
+    /// <c>[JsonIgnore]</c> properties are skipped, <c>[Translation]</c>/<c>[Description]</c>/
+    /// <c>[Display]</c>/<c>[DisplayName]</c> supply the label (else the wordified property name),
+    /// the key is the property's JSON name, and the kind follows the property type (bool →
+    /// checkbox, enum → dropdown, everything else → text).
+    ///
+    /// <para>🚨 <b><see cref="MeshNodeEditorField.Key"/> is a WIRE name, not a CLR name</b> —
+    /// <c>[JsonPropertyName]</c> wins over the camelCase property name (#3542).
+    /// <c>MeshNodeContentEditorView</c> uses this key verbatim on BOTH sides of the binding, as a
+    /// key into the node content's JSON object: <c>LoadValues</c> reads <c>obj[f.Key]</c> and
+    /// <c>Persist</c> writes <c>obj[f.Key]</c>. A key derived from the CLR name therefore binds the
+    /// control to a field that does not exist the moment a property is renamed behind a
+    /// <c>[JsonPropertyName]</c>: the read misses (the control renders unset over a value that IS
+    /// there) and the write lands under a key the record ignores (the edit is discarded). Both
+    /// halves are SILENT — nothing throws, nothing logs, and the junk key echoes back into the
+    /// control, so the UI reads as though the edit had been applied.</para>
+    ///
+    /// <para>That is not hypothetical: it disabled the platform's own update policy.
+    /// <c>Admin/UpdatePolicy</c>'s <c>Policy</c> became <c>DeclaredPolicy</c> +
+    /// <c>[JsonPropertyName("policy")]</c> so that an absent declaration could fail closed to
+    /// <c>None</c> (#3607), and from that commit the Updates tab's strategy dropdown wrote
+    /// <c>declaredPolicy</c>. An install whose policy was lost could no longer be repaired from the
+    /// one surface built for it, and under <c>None</c> nothing evaluates, so nothing ever
+    /// contradicted the tab. See <c>Doc/Architecture/EditorFieldKeys</c>.</para>
+    ///
+    /// <para>🚨 <c>[JsonIgnore]</c> is skipped for the same reason, one step further on: such a
+    /// property is one the record does NOT persist, so a control over it could only ever write a
+    /// key the type drops on read. Only the default <see cref="JsonIgnoreCondition.Always"/> form
+    /// is skipped — <c>[JsonIgnore(Condition = Never)]</c> means the opposite ("always write this,
+    /// even at its default") and stays editable.</para>
     /// </summary>
     /// <param name="contentType">The content record type to derive fields from.</param>
     /// <param name="locale">
@@ -65,13 +91,19 @@ public record MeshNodeEditorField(string Key, string Label, MeshNodeEditorFieldK
     public static ImmutableList<MeshNodeEditorField> FromType(Type contentType, string? locale = null) =>
         contentType.GetProperties()
             .Where(p => p.GetCustomAttribute<BrowsableAttribute>()?.Browsable != false)
+            .Where(p => p.GetCustomAttribute<JsonIgnoreAttribute>()
+                is not { Condition: JsonIgnoreCondition.Always })
             .Select(p =>
             {
                 var label = p.LocalizedDescription(locale)
                     ?? p.GetCustomAttribute<DisplayAttribute>()?.Name
                     ?? p.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
                     ?? p.Name.Wordify();
-                var key = p.Name.ToCamelCase()!;
+                // The WIRE name, so the control binds to the field the record actually carries. The
+                // camelCase fallback is unchanged on purpose: it is the key every stored record was
+                // written under, and re-deriving it differently would re-key live content.
+                var key = p.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name
+                    ?? p.Name.ToCamelCase()!;
                 var t = Nullable.GetUnderlyingType(p.PropertyType) ?? p.PropertyType;
                 if (t.IsEnum)
                     return new MeshNodeEditorField(key, label, MeshNodeEditorFieldKind.Enum)
