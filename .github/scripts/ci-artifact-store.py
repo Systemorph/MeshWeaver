@@ -146,6 +146,20 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+# 🚨 THE FILESYSTEMS WHOSE `source` IS A SHARED IDENTITY. For these the mount source names a
+# REMOTE export (`//account.file.core.windows.net/share`, `server:/export`), so two pods that print
+# the same one are looking at the same bytes. For EVERY other filesystem the source is either a
+# node-local device (`/dev/sda1`) or an anonymous word the kernel reuses for every instance —
+# `overlay` is `overlay` in every container on earth, and `tmpfs` is `tmpfs` — so two pods printing
+# the same one are NOT sharing anything. That distinction is the whole safety of this check, and
+# getting it backwards would hand a green to exactly the case it exists to refuse.
+SHARED_FSTYPES = frozenset({
+    "cifs", "smb3", "smbfs",                       # SMB — the fleet's azurefile-csi default
+    "nfs", "nfs3", "nfs4",                         # NFS — azurefile-csi's other protocol
+    "ceph", "glusterfs", "fuse.glusterfs", "lustre", "beegfs",
+})
+
+
 def _unescape_mountinfo(field: str) -> str:
     r"""mountinfo escapes space, tab, newline and backslash as \040 &c. Decode them, so a mount
     point with a space in it is not silently read as a different one."""
@@ -160,7 +174,8 @@ def _unescape_mountinfo(field: str) -> str:
     return "".join(out)
 
 
-def mount_identity(path: Path, mountinfo: list[str] | None = None) -> str:
+def mount_identity(path: Path, mountinfo: list[str] | None = None,
+                   machine: str | None = None) -> str:
     """WHICH FILESYSTEM this directory lives on — read from the kernel, never minted, never cached.
 
     🚨 THIS IS THE INSTRUMENT #4761 WAS MISSING. `file:<dir>` names a PATH, and two jobs can print
@@ -183,9 +198,21 @@ def mount_identity(path: Path, mountinfo: list[str] | None = None) -> str:
     the same question answered locally: two directories are two stores, and one directory reached
     through a symlink is one store.
 
-    `mountinfo` is the kernel's table, injectable ONLY so the self-test can exercise the Linux
-    branch on a macOS laptop: this file's own dev machine has no /proc, so without it every local
-    green would come from the fallback and the code that actually runs in CI would be untested."""
+    🚨 A MOUNT THAT IS NOT A SHARED FILESYSTEM IS SCOPED TO THIS MACHINE, and that is not a detail.
+    `overlay` is the mount source of every container's root filesystem, and `tmpfs` of every tmpfs,
+    so comparing sources alone would answer "same store" for two pods that share nothing — which is
+    precisely the false pass this check exists to prevent. If `/ci-artifacts` were ever a plain
+    directory on the pod's own root (a volume that never mounted, a spec that lost its
+    `volumeMounts` entry, a local `file:` spec in a test), a source-only identity would say the two
+    pools agree while each wrote into its own container. So anything outside SHARED_FSTYPES gets
+    this machine's node name appended: two pods can then never agree about a node-local directory,
+    which is the truth, and one process always agrees with itself, which is what the self-test and
+    a single-job use need.
+
+    `mountinfo` and `machine` are injectable ONLY so the self-test can exercise the Linux branch and
+    the two-pod case on one macOS laptop: this file's own dev machine has no /proc, so without them
+    every local green would come from the fallback and the code that actually runs in CI, plus the
+    overlay collision above, would be untested."""
     real = os.path.realpath(str(path))
     best: tuple[str, str, str, str] | None = None
     if mountinfo is None:
@@ -208,12 +235,17 @@ def mount_identity(path: Path, mountinfo: list[str] | None = None) -> str:
         # ordered, and a later mount over the same point shadows the earlier one.
         if best is None or len(mount_point) >= len(best[0]):
             best = (mount_point, tf[0], _unescape_mountinfo(tf[1]), bind_root)
+    if machine is None:
+        machine = os.uname().nodename
     if best:
         mount_point, fstype, source, bind_root = best
         rel = os.path.relpath(real, mount_point)
         rel = "" if rel == "." else rel
-        return f"{fstype}:{source}:{bind_root.rstrip('/')}/{rel}".rstrip("/")
-    return f"dev:{os.stat(real).st_dev}:{real}"
+        identity = f"{fstype}:{source}:{bind_root.rstrip('/')}/{rel}".rstrip("/")
+        return identity if fstype in SHARED_FSTYPES else f"{identity}@{machine}"
+    # No /proc, or a path under no listed mount: the device id answers the same question locally,
+    # and it is node-local by construction, so it carries the machine too.
+    return f"dev:{os.stat(real).st_dev}:{real}@{machine}"
 
 
 class Store:
@@ -249,10 +281,20 @@ class Store:
                       "letting the check quietly evaporate.")
         mine = self.store_id()
         if expect.strip() != mine:
+            # A node-local identity carries `@<node name>`. When either side has one, the store is
+            # not a shared filesystem at all and no amount of unifying shares will help — say that
+            # instead, because the remedies are different.
+            local = "@" in mine or "@" in expect
             raise Red(
                 f"this runner is NOT on the store this run resolved.\n"
                 f"    this job stands on : {mine}\n"
                 f"    the run resolved   : {expect.strip()}\n"
+                + (f"  An identity ending `@<node>` is a filesystem LOCAL TO THAT MACHINE — an "
+                   f"overlay or tmpfs directory, not a mounted share. `{self.spec}` is then a "
+                   f"per-pod directory and cannot carry a handoff between two runners at all: the "
+                   f"share did not mount, or the spec points somewhere that was never one. Check "
+                   f"the pod's volumeMounts before looking at the share.\n" if local else "")
+                +
                 f"  Both address it as `{self.spec}` — a `file:` store is a PATH, and the same path "
                 f"on two runner pools can be two different shares. On this fleet it IS: each runner "
                 f"namespace's `ci-artifacts` PVC provisions its own Azure Files share, so a handoff "
@@ -968,21 +1010,60 @@ def self_test() -> int:
                 "//f45d8e671caa74b96a6c37f.file.core.windows.net/pvc-d9f747ad-2304-44f9-87d2-cc32f0e7318e rw,vers=3.1.1",
                 "95 21 0:95 / /opt/platform ro,relatime - cifs "
                 "//f45d8e671caa74b96a6c37f.file.core.windows.net/pvc-20a8d165-9942-45aa-ba6b-ff3f1a8eadc6 ro,vers=3.1.1"]
-        mi_silos = mount_identity(Path("/ci-artifacts"), silos)
-        mi_dind = mount_identity(Path("/ci-artifacts"), dind)
+        mi_silos = mount_identity(Path("/ci-artifacts"), silos, machine="runner-sw8rv")
+        mi_dind = mount_identity(Path("/ci-artifacts"), dind, machine="runner-pbc74")
         check("mountinfo: the SAME path on the two runner pools is TWO stores — #4761 in one line",
               mi_silos != mi_dind and "pvc-f3e4220c" in mi_silos and "pvc-d9f747ad" in mi_dind,
               f"{mi_silos} vs {mi_dind}")
         check("mountinfo: ONE share mounted into both namespaces is ONE store (the ci-platform shape)",
-              mount_identity(Path("/opt/platform"), silos) == mount_identity(Path("/opt/platform"), dind))
+              mount_identity(Path("/opt/platform"), silos, machine="runner-sw8rv")
+              == mount_identity(Path("/opt/platform"), dind, machine="runner-pbc74"))
+        check("mountinfo: a SHARED filesystem's identity does NOT depend on which pod is asking",
+              "@" not in mi_silos and "@" not in mi_dind, f"{mi_silos} | {mi_dind}")
         check("mountinfo: the longest matching mount point wins, never the root overlay",
               "cifs" in mi_silos and "overlay" not in mi_silos, mi_silos)
         check("mountinfo: a directory INSIDE the share belongs to the share, and is distinguished",
-              mount_identity(Path("/ci-artifacts/runs"), silos).startswith(mi_silos)
-              and mount_identity(Path("/ci-artifacts/runs"), silos) != mi_silos)
+              mount_identity(Path("/ci-artifacts/runs"), silos, machine="m").startswith(mi_silos)
+              and mount_identity(Path("/ci-artifacts/runs"), silos, machine="m") != mi_silos)
         check("mountinfo: a path on no listed mount falls back rather than crashing",
-              mount_identity(Path(str(pool_a)), []).startswith("dev:"))
+              mount_identity(Path(str(pool_a)), [], machine="m").startswith("dev:"))
         check("mountinfo: an escaped mount point decodes", _unescape_mountinfo(r"/ci\040artifacts") == "/ci artifacts")
+
+        # 15f. 🚨 THE OVERLAY COLLISION (Copilot on #4762). `overlay` is the mount SOURCE of every
+        # container root filesystem on earth, and `tmpfs` of every tmpfs, so an identity built from
+        # the source alone answers "same store" for two pods that share NOTHING. That is not a
+        # theoretical shape: if `/ci-artifacts` were ever a plain directory on the pod's own root —
+        # a volume that never mounted, a spec that lost its `volumeMounts` entry — `reachable()`
+        # accepts it (it exists and is writable) and the cross-pool check would have passed while
+        # each pool wrote into its own container. The identity of a filesystem that is not in
+        # SHARED_FSTYPES therefore carries the NODE, and two pods can never agree about one.
+        unmounted_a = ["21 20 0:20 / / rw,relatime - overlay overlay rw,lowerdir=/x"]
+        unmounted_b = ["21 20 0:20 / / rw,relatime - overlay overlay rw,lowerdir=/y"]
+        oa = mount_identity(Path("/ci-artifacts"), unmounted_a, machine="runner-sw8rv")
+        ob = mount_identity(Path("/ci-artifacts"), unmounted_b, machine="runner-pbc74")
+        check("mountinfo: an UNMOUNTED /ci-artifacts on two pods' overlays is TWO stores",
+              oa != ob, f"{oa} vs {ob}")
+        # …and the same trap with the superblock options byte-identical, which is the case a
+        # `lowerdir` comparison would still have got wrong.
+        same_opts = ["21 20 0:20 / / rw,relatime - overlay overlay rw,lowerdir=/same"]
+        check("mountinfo: …even when the two overlays' superblock options are IDENTICAL",
+              mount_identity(Path("/ci-artifacts"), same_opts, machine="pod-a")
+              != mount_identity(Path("/ci-artifacts"), same_opts, machine="pod-b"))
+        check("mountinfo: a tmpfs store is node-scoped too, not shared by its source word",
+              mount_identity(Path("/scratch"), ["21 20 0:21 / /scratch rw - tmpfs tmpfs rw"], machine="a")
+              != mount_identity(Path("/scratch"), ["21 20 0:21 / /scratch rw - tmpfs tmpfs rw"], machine="b"))
+        check("a node-local store is marked as such, so the refusal can name the right remedy",
+              "@" in oa and "@" in ob)
+        # The refusal for that case must name the MOUNT, not the share: unifying two Azure Files
+        # shares would not help a directory that is not on one.
+        local_store = make_store(f"file:{pool_a}")
+        try:
+            local_store.put("runs/x/1/1/bundle.tar", payload,
+                            expect_store_id="overlay:overlay:/ci-artifacts@some-other-pod")
+            check("a node-local mismatch names volumeMounts, not the share", False, "accepted")
+        except Red as e:
+            check("a node-local mismatch names volumeMounts, not the share",
+                  "LOCAL TO THAT MACHINE" in str(e) and "volumeMounts" in str(e), str(e)[:200])
 
         # 15c. 🚨 AN EMPTY --expect-store-id IS RED, NEVER A SKIP. A lane that wires the check up
         # and passes an unset variable would otherwise get a check that passes on no evidence —

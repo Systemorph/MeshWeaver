@@ -351,6 +351,16 @@ The identity is derived, never minted — no marker file to lose, nothing to kee
 symlinked or trailing-slash spelling of the same directory is the same store (a self-test rule,
 because that negative control is what stops the check reddening a correct run).
 
+🚨 **A mount source is only an identity for a SHARED filesystem.** `overlay` is the source of every
+container's root filesystem and `tmpfs` of every tmpfs, so comparing sources alone would answer
+*"same store"* for two pods that share nothing — the exact false pass the check exists to refuse. If
+`/ci-artifacts` were ever a plain directory on the pod's own root (a volume that never mounted, a
+spec that lost its `volumeMounts` entry), `reachable()` accepts it, because it exists and is
+writable. So an identity outside `SHARED_FSTYPES` (cifs/smb3/nfs/…) carries **this machine's node
+name**: two pods can then never agree about a node-local directory, one process always agrees with
+itself, and the refusal says *check volumeMounts* rather than *unify the shares* — a different fault
+with a different remedy.
+
 🚨 **The named-artifact layer inherits the constraint and is NOT yet protected by it.**
 `ci-run-artifacts.py` and the `upload-artifact` / `download-artifact` composites ride on the same
 `FileStore`, and their manifest lives *in the store* — so a consumer on the other pool cannot read
