@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Text;
 using MeshWeaver.PluginTester;
 using MeshWeaver.Testing;
@@ -431,7 +431,7 @@ public class StaticTestRunnerTest
 
         var package = new CascadeBuild.PackageBuild(
             "Probe",
-            [new CascadeBuild.TypeBuild("Probe/T", "Probe", null, TimeSpan.Zero, 1, "x.dll", run, [])],
+            [new CascadeBuild.TypeBuild("Probe/T", "Probe", null, TimeSpan.Zero, 1, "x.dll", run)],
             [], TimeSpan.Zero, TimeSpan.Zero, []);
 
         Assert.Equal(1, package.TestsPassed);
@@ -457,7 +457,7 @@ public class StaticTestRunnerTest
         ], null);
         var package = new CascadeBuild.PackageBuild(
             "Probe",
-            [new CascadeBuild.TypeBuild("Probe/T", "Probe", null, TimeSpan.Zero, 1, "x.dll", run, [])],
+            [new CascadeBuild.TypeBuild("Probe/T", "Probe", null, TimeSpan.Zero, 1, "x.dll", run)],
             [], TimeSpan.Zero, TimeSpan.Zero, []);
         var report = new CascadeBuild.Report(
             "identity",
