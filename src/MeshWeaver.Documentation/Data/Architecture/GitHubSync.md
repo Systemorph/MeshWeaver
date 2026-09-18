@@ -483,6 +483,44 @@ Server configuration for GitHub Sync — the first two are required, the rest op
    `GitHubAppTokenRefreshTest` in `Memex.Portal.Shared.Test` holds the invariant with an
    injected clock: the second and third refresh mint, a fresh token replays.
 
+   **🚨 A token that was never minted is a different event from one GitHub rejected — and
+   they used to read the same.** Every fault out of `GetInstallationToken()` is now a
+   `GitHubAppTokenMintException` carrying the stage it stopped at: `NotConfigured`,
+   `Signing` (the key cannot sign — nothing reached GitHub), `InstallationDiscovery` (the App
+   is not installed where it is expected), `TokenExchange` (GitHub refused the exchange — the
+   nearest thing to "revoked"), `Response` (no token in the body) or `Transport` (no verdict
+   at all), plus GitHub's status code where one exists. The translation is total — anything
+   unexpected from the HTTP leaf is wrapped with the original as `InnerException`, and only a
+   cancellation passes through as itself, because a cancelled mint is not a failed one. The
+   type derives from `InvalidOperationException`, which is what all of these paths threw
+   before, so every existing catch behaves identically, and it never carries the key, the JWT
+   or the token.
+
+   Why the distinction has to be carried by a TYPE rather than a message: a consumer may
+   legitimately degrade to an anonymous fetch when no token can be minted — the Store's
+   package feed does, because a public source must keep working — and the *next* thing that
+   happens is GitHub refusing the private repositories, which Octokit reports as
+   `AuthorizationException: Bad credentials`. That sentence is about a credential that was
+   presented and judged. Read against a credential that was never issued it sends the reader
+   to the installation's repository permissions, which are fine, and away from the private key
+   or the installation, which are not (#4736 — four days of identical five-minute reports).
+   `GitHubAppTokenMintFailureTest` pins both sides: a failed mint is a
+   `GitHubAppTokenMintException` naming its stage, and a mint that SUCCEEDS and is then
+   refused downstream is not one.
+
+   Two things that follow, and neither is obvious from a log:
+
+   - **An empty token means anonymous, not "a bad token".** `OctokitGitHubRepoClient.Client`
+     builds a credential-free client for an empty string (Octokit's `new Credentials("")`
+     throws), so an anonymous read of a *private* repository answers **404**. A **401** on a
+     private source therefore means a token was presented — the mint succeeded and the
+     credential is the problem. The empty-token downgrade cannot produce a 401.
+   - **The Store's own degradation is not in this repository.** `StoreManifestSource.Token()`
+     is in-mesh C# in `Systemorph/MeshWeaver.Plugins` (`Store/Catalog/Source/`), so it
+     compiles at runtime in the portal and never in core's CI. It catches the mint failure,
+     names it at Error on the feed's own logger, and then lets the empty token flow on
+     purpose.
+
 All GitHub HTTP and serialization run through the controlled I/O pool — see
 [ControlledIoPooling.md](/Doc/Architecture/ControlledIoPooling).
 
