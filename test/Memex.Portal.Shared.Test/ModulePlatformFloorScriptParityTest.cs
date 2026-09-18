@@ -108,6 +108,16 @@ public class ModulePlatformFloorScriptParityTest
             // keeps the named failure below, rather than replacing it with an opaque
             // InvalidOperationException. Nothing is suppressed: Assert.Fail runs either way.
             try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
+            // 🚨 JOIN THE READERS BEFORE READING THE BUFFERS (Copilot review). `Kill` only requests
+            // termination; it does not stop the OutputDataReceived/ErrorDataReceived callbacks, so
+            // without this the interpolation below would call StringBuilder.ToString() while a
+            // threadpool thread is still appending — not thread-safe, and the way it fails is an
+            // opaque ArgumentOutOfRangeException standing WHERE THE NAMED FAILURE SHOULD BE. That
+            // is the very defect this change exists to remove. The wait cannot hang: the whole
+            // tree is dead, so both pipes are at EOF and the readers complete. Joining also beats
+            // locking the snapshot here — it yields everything the child wrote before it died,
+            // which on a wedged script is the most useful part of the message.
+            process.WaitForExit();
             Assert.Fail(
                 "python3 did not answer within 30s — the gate's own logic is a pure comparison, so a "
                 + "hang here is the environment, not the rule. Do not raise the bound.\n"
