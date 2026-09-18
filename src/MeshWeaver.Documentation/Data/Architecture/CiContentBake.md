@@ -1450,6 +1450,10 @@ Pinned by `PlatformBakeLaneGuard.PlatformBake_ResolvesTheReleaseVersionOnce_AndE
 set that regresses a satellite reds that satellite's `main` alone instead of every open pull request.
 A **freeze** (`MW_PLATFORM_REF`) says which set to take, and overrides the ceiling, because the
 likeliest moment to need it is when `main` is red and has passed nothing recently.
+When the ceiling cannot be established the resolver REFUSES, and what that refusal says is its
+own subject: GitHub has served that listing a weeks-old page three times, and the old wording
+closed on "Fix main" — see
+[A Stale Run Listing Is Not a Broken Main](../StaleRunListingRefusals).
 
 Neither answers which sets a repository's **source** can still be compiled against. That is a third,
 independent fact, and a repository acquires it the moment it adopts a symbol from a newer set.
