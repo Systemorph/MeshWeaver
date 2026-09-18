@@ -53,9 +53,18 @@ Both halves of the binding then miss, and **both are silent**:
 - **the read** finds nothing at `declaredPolicy` and renders the control **unset** — over a value
   that is on the record;
 - **the write** persists `declaredPolicy`, which the record's deserializer does not recognise, so
-  the value lands nowhere. Nothing throws; nothing is logged; the write genuinely succeeds. And
-  because the junk key is now ON the node, the next emission echoes it back into the control — so
-  **the UI reads as though the edit had been applied, permanently.**
+  the value lands nowhere. Nothing throws; nothing is logged; the write genuinely succeeds.
+
+🚨 **And it is worse than "written but unread": the value never reaches storage at all.** The owning
+per-node hub materialises the content as `UpdatePolicyContent` and re-serialises it, so an unknown
+key is dropped on that round trip. Measured by the control in this repo — a wait for `Stable` to
+appear on the record under *any* key spends its entire convergence budget and times out.
+
+What the operator sees is therefore a *transient* success. `MeshNodeContentEditorView` keeps the
+chosen value in its own `_text[f.Key]` field state, so the dropdown shows it until the next stream
+emission runs `LoadValues`, which reads `obj["declaredPolicy"]`, finds nothing, and silently reverts
+the control to unset. An admin who sets the strategy and navigates away sees it applied; one who
+watches the tab sees it undo itself for no stated reason.
 
 ### What that cost
 

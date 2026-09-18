@@ -22,9 +22,10 @@ record stores them by. The strategy field had been renamed internally — for a 
 an install with *no* strategy recorded would fail safe and stop updating rather than take anything
 on offer — and the editor kept writing under the old name.
 
-So picking a strategy stored a value beside the real one instead of in it. The tab then showed the
-choice back, because it read the same misplaced value it had just written. **The setting looked
-applied, and the install went on following whatever it followed before.**
+So picking a strategy wrote the value under a name the settings record does not use — and the record
+then discarded it entirely on its way to being saved. **The dropdown went on showing the choice, so
+it looked applied, while nothing was stored and the install went on following whatever it followed
+before.** Leaving the page and coming back showed the field empty again, with nothing to say why.
 
 That is worse than it sounds for one particular install: the one whose strategy had already gone
 missing. Such an install fails safe — it stops checking for updates at all — and this tab is the

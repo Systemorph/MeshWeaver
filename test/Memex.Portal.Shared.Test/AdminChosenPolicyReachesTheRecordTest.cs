@@ -43,8 +43,12 @@ namespace Memex.Portal.Shared.Test;
 /// <list type="bullet">
 ///   <item><description>an install WITH a policy renders the dropdown EMPTY (the read misses);</description></item>
 ///   <item><description>an admin who then picks one persists <c>declaredPolicy</c>, which
-///     deserializes into nothing — <c>Policy</c> stays <see cref="UpdatePolicyKind.None"/>, and the
-///     junk key echoes back into the dropdown so the UI reads as if it had been applied.</description></item>
+///     deserializes into nothing — <c>Policy</c> stays <see cref="UpdatePolicyKind.None"/>.
+///     🚨 Measured here: the value does not even reach storage. The owning hub materialises the
+///     content as <c>UpdatePolicyContent</c> and re-serialises it, so the unknown key is dropped on
+///     that round trip — <see cref="WaitForWrittenValue"/> spends its whole budget without ever
+///     seeing <c>Stable</c> on the record. The control keeps the choice in its own field state, so
+///     the tab shows it until the next emission and then silently reverts to unset.</description></item>
 /// </list>
 ///
 /// <para>🚨 <b>That is what makes the fault self-latching rather than merely wrong.</b> Under
@@ -132,7 +136,7 @@ public class AdminChosenPolicyReachesTheRecordTest(ITestOutputHelper output) : M
 
         await PersistAsTheEditorDoes(field.Key, JsonValue.Create(nameof(UpdatePolicyKind.Stable)));
 
-        var content = await WaitForContent(c => c.DeclaredPolicy is not null);
+        var content = await WaitForWrittenValue(nameof(UpdatePolicyKind.Stable));
 
         content.Policy.Should().Be(UpdatePolicyKind.Stable,
             "the strategy an admin picks on the Updates tab is the ONLY surface built to re-enable "
@@ -265,6 +269,45 @@ public class AdminChosenPolicyReachesTheRecordTest(ITestOutputHelper output) : M
             JsonElement je => JsonNode.Parse(je.GetRawText()) as JsonObject,
             _ => JsonSerializer.SerializeToNode(content, Mesh.JsonSerializerOptions) as JsonObject,
         };
+
+    /// <summary>
+    /// Waits for the editor's write to be OBSERVABLE on the record — the VALUE it wrote, under
+    /// whatever key it wrote it — and only then parses and asserts.
+    ///
+    /// <para>🚨 The predicate may NOT be <c>DeclaredPolicy is not null</c>, which is what this test
+    /// asked for first. The seeded record already carries an explicit <c>policy: "None"</c>, so that
+    /// is TRUE of the PRE-WRITE snapshot: the wait returned the state the write had not touched yet
+    /// and the assertion ran against something it never observed. It passed locally and failed on
+    /// CI (shard 5, run 13126) — a real ordering race, not a flake, and the same trap
+    /// <see cref="UnreadablePolicyRecordIsNotClobberedTest"/> documents on its own positive
+    /// controls.</para>
+    ///
+    /// <para>Filtering on the written VALUE is what makes the test decisive, and it turned out to be
+    /// a SHARPER statement of the defect than intended: before the fix this wait spends its entire
+    /// budget and times out, because <c>Stable</c> never appears on the record under ANY key. The
+    /// owning hub materialises the content as <c>UpdatePolicyContent</c> and re-serialises it, so
+    /// <c>declaredPolicy</c> is dropped on that round trip. The admin's choice is not merely read by
+    /// nobody — it is never stored. A timeout is the honest verdict for "the write had no effect
+    /// this test could observe", and it is the same shape (and cost) as the negative arm of
+    /// <see cref="UntickingOnlyUpdateToCiVerifiedBuildsSticks"/>.</para>
+    /// </summary>
+    private Task<UpdatePolicyContent> WaitForWrittenValue(string jsonValue) =>
+        RawContent()
+            .Where(c => RawJson(c).Contains(jsonValue, StringComparison.Ordinal))
+            .Select(c => UpdatePolicyNodeType.ParseContent(c, Mesh.JsonSerializerOptions))
+            .FirstAsync()
+            .Timeout(Budget)
+            .Await(TestContext.Current.CancellationToken);
+
+    /// <summary>The stored bytes, not a parse of them — "the write is on the record" is a fact about
+    /// what is ON the node, and the parser fails closed to <c>None</c> for a record that has no
+    /// policy at all.</summary>
+    private string RawJson(object? content) => content switch
+    {
+        null => string.Empty,
+        JsonElement je => je.GetRawText(),
+        _ => JsonSerializer.Serialize(content, Mesh.JsonSerializerOptions),
+    };
 
     private Task<UpdatePolicyContent> WaitForContent(Func<UpdatePolicyContent, bool> settled) =>
         RawContent()

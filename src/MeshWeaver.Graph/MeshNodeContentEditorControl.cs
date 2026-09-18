@@ -63,9 +63,12 @@ public record MeshNodeEditorField(string Key, string Label, MeshNodeEditorFieldK
     /// <c>Persist</c> writes <c>obj[f.Key]</c>. A key derived from the CLR name therefore binds the
     /// control to a field that does not exist the moment a property is renamed behind a
     /// <c>[JsonPropertyName]</c>: the read misses (the control renders unset over a value that IS
-    /// there) and the write lands under a key the record ignores (the edit is discarded). Both
-    /// halves are SILENT — nothing throws, nothing logs, and the junk key echoes back into the
-    /// control, so the UI reads as though the edit had been applied.</para>
+    /// there) and the write lands under a key the record ignores. Both halves are SILENT — nothing
+    /// throws and nothing logs. 🚨 And the edit is not merely unread: the owning hub materialises
+    /// the content as the record type and re-serialises it, so the unknown key is dropped on that
+    /// round trip and never reaches storage at all. Measured — the control keeps the chosen value
+    /// in its own field state, so the editor shows it until the next emission and then silently
+    /// reverts to unset.</para>
     ///
     /// <para>That is not hypothetical: it disabled the platform's own update policy.
     /// <c>Admin/UpdatePolicy</c>'s <c>Policy</c> became <c>DeclaredPolicy</c> +
