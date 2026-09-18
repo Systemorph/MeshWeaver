@@ -216,7 +216,7 @@ Systemorph/MeshWeaver.Plugins#2047).
 **What the refusal SAYS, and why it names both arms.** `.Timeout(ProbeTimeout, null)` and
 `.Catch(_ => null)` fold into the same `null`, so by the time a validator sees the answer the code
 genuinely cannot tell a fault from a timeout. `access.partitionCreate.undetermined` therefore names
-both — *"the read of its NodeType definition failed, or did not answer within {n} s"* — and
+both — *"the read of its NodeType definition failed, or did not answer within {1} s"* — and
 deliberately does not claim a bound it cannot know. Until 2026-09-18 it named only the timeout, and
 the fault case above surfaced it in 148 ms wearing a sentence about 10 s; the next reader's first
 move on such a message is to reach for the bound, which is never the fix here.
