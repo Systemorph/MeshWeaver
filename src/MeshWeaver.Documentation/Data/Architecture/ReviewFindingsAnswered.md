@@ -221,6 +221,54 @@ Every read is REST — `pulls/{n}`, `pulls/{n}/reviews`, `pulls/{n}/comments`, `
 is taken on every run for the pull request's author (when that is a person), so a token that cannot verify a waiver is
 discovered on an ordinary pull request rather than when a maintainer needs the waiver.
 
+## 🚨 Three ways to be red, and only one of them is something you can do anything about
+
+The check has one red and three causes, and until 2026-09-18 it printed **one sentence for all
+three** — *"the automatic review must land. It usually arrives minutes after the pull request
+opens…"*. That sentence is correct for exactly one of them.
+
+| the state | what the reader is told now | what actually clears it |
+|---|---|---|
+| the reviewer has not posted yet | "the automatic review must land … usually arrives minutes after the pull request opens" | time |
+| the reviewer posted a **refusal** | "**unreviewable right now** … nothing on this pull request can answer this" | the reviewer becoming able to review, then a maintainer's re-request — or the waiver |
+| the reviewer posted **findings** nobody answered | "reply to each unanswered thread (fixed, or why not)" | a reply ON each thread |
+
+**The middle row is the one that cost something** (#4730). On 2026-09-18 the reviewer refused for
+quota from 11:39Z, and six pull requests — every one green on `Consolidate test results`, every one
+with auto-merge armed — sat blocked for over four hours reading *"it usually arrives minutes after
+the pull request opens"*. Nothing was arriving. There were no findings to answer, and no push,
+re-run or new commit could change the answer, because the refusal is about the reviewer and not
+about the pull request.
+
+So a refusal now names itself in all three places a reader looks — the run's headline
+(`RED — UNREVIEWABLE (the reviewer REFUSED to review this pull request)`), the step summary's
+heading, and the *To go green* line, which for a refusal says explicitly that pushing, re-running
+and replying all leave it exactly where it is.
+
+🚨 **And the run no longer WAITS for it.** `waiting_would_help` existed for a real case — the
+reviewer's own event cannot start an evaluation here, so a review that raises no findings needs a
+bounded wait to be seen at all — but it asked *"does the reason contain `has not landed`?"*, and the
+refusal reason is spelled *"the automatic review has not landed — the reviewer posted, but not a
+review: …"*. So `--wait-for-review 15` slept a quarter of an hour printing *"waiting for the
+automatic review"* at a reviewer that had already answered: **it said no.** Nothing arrives in that
+window by construction, the run then contradicts its own summary, and it spends a runner doing it.
+That is the same defect as the guidance line, one layer down, and it is why the discriminator has to
+be the field rather than the prose.
+
+🚨 **The VERDICT did not change and is not meant to.** A refusal was red before and is red now; the
+check still fails in the safe direction, and the remedy is still a maintainer's. `refused` is a
+field on the verdict rather than a substring of the reason text, for the reason this page's own
+header gives about presentation-keyed reading — and the self-test asserts what the reader is *told*
+(`says` / `never_says`, over the guidance, the summary **and the run headline**), not only what the
+verdict *is*, because that is precisely the half that was wrong while the verdict was right. Each
+half has a negative control: remove the wait's `not verdict.refused` and the refusal-only wait case
+goes red; delete the headline and the refusal case goes red.
+
+**Still open, and deliberately not decided here:** what a structurally unavailable reviewer should
+do to the merge gate — hold as today, retry on a schedule once quota resets, or a time-boxed
+maintainer waiver. That is a policy call (#4730's second ask), and naming the state does not make
+it.
+
 ## The waiver
 
 A pull request the reviewer cannot review — a quota refusal, an outage, a change with no reviewable
