@@ -392,6 +392,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Cancel and Join Are Two Questions](CancelAndJoinSequencing) — a deadline that asks work to stop and a deadline that waits for it to have stopped must not share one clock
 - [Collection-Scoped Test Fixtures](CollectionScopedTestFixtures)
 - [Debugging Native Crashes (core dumps)](DebuggingNativeCrashes)
+- [Peer Death Is Dated by Its Exception Class](PeerDeathIsDatedByItsExceptionClass) — a frozen silo and a dead silo raise different Orleans exceptions, so the changeover between them timestamps the crash; how one pod's SIGSEGV became three issues, and how to get a dead pod's own account out of Loki
 - [Reading the Memory Watchdog](ReadingTheMemoryWatchdog) — a step with no mesh class active is a plain test class, a ramp across mesh classes is retention; the guard states what it measured, never a cause
 - [Debugging Postgres in Prod / Test](DebuggingPostgres)
 - [Decentralised Tests](DecentralisedTests)
