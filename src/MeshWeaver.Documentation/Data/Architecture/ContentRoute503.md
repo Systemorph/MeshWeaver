@@ -224,7 +224,7 @@ knows WHICH read starved."* On this path every inner bound is LARGER than the bu
 | Bound on the work the read triggers | Value | Where |
 |---|---|---|
 | the reader's budget | **10 s** | `ReadBudget.cs` → `Default` |
-| deferred delivery, per message | 30 s | `MessageService.cs:151` → `DeferralTimeout` |
+| deferred delivery, per message | 30 s (default) | `MessageService` → `deferralTimeout`, off `MessageHubConfiguration.WithDeferralTimeout` |
 | the hub's own initialization turn | 120 s | `MessageHub.cs:210` → `DefaultInitializationTimeout` |
 | `DataContext` initialization | 120 s | `DataContext.cs:144` → `InitializationTimeout` |
 | monolith path resolution on the routing path | 30 s | `RoutingServiceBase.cs:306` |

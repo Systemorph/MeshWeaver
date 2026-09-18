@@ -784,11 +784,16 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
     {
         var (owner, name) = ModuleDiscovery.SplitRepo(source.RepoPath);
         var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
-        var sealedForThisIdentity = SealedPublicationIndex.ReadFor(
+        // 🚨 `ReadingFor`, not `ReadFor`: an unreadable index HOLDS this first import rather than
+        // provisioning the Space from the branch tip (#3461). The two answers are the same empty
+        // list, and at a first import there is no built commit and no `LastSyncCommitSha` to
+        // attribute a seal with, so "I could not look" is indistinguishable from "not my business".
+        var reading = SealedPublicationIndex.ReadingFor(
             hub.ServiceProvider.GetService<IConfiguration>()?[ShippedPrebuiltBundles.PublishedRootConfigKey],
             identity, logger);
-        return SealedSyncGate.DecideFirstImport(
-            new RepoIdentity(owner, name), sealedForThisIdentity, identity);
+        return SealedSyncGate.RefusedFirstImportForUnreadableIndex(reading.Outcome, identity)
+            ?? SealedSyncGate.DecideFirstImport(
+                new RepoIdentity(owner, name), reading.Sources, identity);
     }
 
     /// <summary>The branch a sync entry commits against. A ref of <c>HEAD</c> (the catalog default,
@@ -800,8 +805,18 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
             : gitRef.Trim();
 
     /// <summary>The module's folder inside the repo: the source's configured prefix plus the module's
-    /// own folder.</summary>
-    private static string Subdirectory(string? sourceSubdir, string moduleFolder)
+    /// own folder.
+    ///
+    /// <para>🚨 <b>INTERNAL, and the only implementation</b> (review on #4649). Gate 1d compares the
+    /// repository a package is sealed from against the one the partition imports, and that
+    /// comparison is only sound if it builds the folder the SAME way provisioning does: a package
+    /// listing stores <c>SourceFolder</c> relative to the source's configured <c>Subdir</c>, so
+    /// comparing <c>repo#module</c> against the real <c>repo#prefix/module</c> would falsely hold
+    /// the normal same-tree shape — an outage, in the direction the gate must never fail.</para></summary>
+    /// <param name="sourceSubdir">The source's configured prefix, or null/empty for the repo root.</param>
+    /// <param name="moduleFolder">The module's own folder.</param>
+    /// <returns>The repo-root-relative folder.</returns>
+    internal static string Subdirectory(string? sourceSubdir, string moduleFolder)
     {
         var prefix = (sourceSubdir ?? "").Trim().Trim('/');
         var folder = (moduleFolder ?? "").Trim().Trim('/');

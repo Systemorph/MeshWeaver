@@ -1,0 +1,28 @@
+# FIXTURE for check-chart-invariants.sh — the NodeType bake gate ARMED (MeshWeaver#4588).
+#
+# Invariant 10b asserts that an armed PreWarm__GateReadiness has a READER: the gate withholds
+# /health, and the startupProbe is the only probe that reads /health, so a render that arms the gate
+# while the startup probe points anywhere else has a gate that is registered, never read, and
+# permanently green — the exact outcome the gate exists to prevent.
+#
+# That invariant became reachable the moment probes.startup.path stopped being a literal in the
+# template, and it needs a render that arms the gate or it would check nothing on every combination
+# here. No environment in THIS repository arms it (the fleet's real one is
+# `deployments/aks/build/values.build.public.yaml` in the private Systemorph/Memex repo), so this
+# fixture is the subject. It carries only what arming the gate means:
+#
+#   * the gate itself, and the sweep it reads — a gate without PreWarm__DynamicTypes is registered,
+#     permanently green and protects nothing, which Memex.Portal.Distributed says at Critical;
+#   * the paired startup budget, because the gate holds /health red for the whole cold bake —
+#     10 × 180 = 1800 s, the chart's own suggested pairing (~570 s bake + ~300 s plain boot, ×2).
+#
+# It does NOT restate probes.startup.path: the point is that the chart's DEFAULT (/health) is the
+# one that keeps the gate readable, so the fixture must inherit it rather than assert it.
+config:
+  memex_portal:
+    PreWarm__GateReadiness: "true"
+    PreWarm__DynamicTypes: "true"
+probes:
+  startup:
+    periodSeconds: 10
+    failureThreshold: 180

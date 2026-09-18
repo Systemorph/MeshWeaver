@@ -85,7 +85,17 @@ public static class UserActivityLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddUserActivityLayoutAreas(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout
-            .WithView(ActivityArea, Activity)
+            // #4500: the User page is the one landing page in core where the provenance line is
+            // the WRONG answer, and saying so is the point of the verdict — an absence used to be
+            // indistinguishable from an oversight.
+            .WithNodePage(ActivityArea, Activity, NodePageProvenance.Declined(
+                "The subject of this page is a PERSON, not a document, and the User node's own "
+                + "stamps describe the row rather than the person: LastModified moves whenever a "
+                + "preference is flipped, and CreatedBy is the sign-in flow, so 'Updated … by "
+                + "system-security' across the top of somebody's home would state a fact about a "
+                + "database row to a reader asking about a colleague. The reader's real question — "
+                + "'member since' — belongs in the profile the page already renders "
+                + "(UserActivityLayoutAreas.BuildProfile) and is tracked separately."))
             .WithView(PinnedArea, PinnedAreaView)
             .WithView(ThreadsArea, ThreadsAreaView)
             .WithView(CatalogArea, CatalogAreaView)
@@ -779,7 +789,9 @@ public static class UserActivityLayoutAreas
         return Controls.Stack
             .WithWidth("100%")
             .WithStyle("gap: 24px; width: 100%;")
-            .WithView(BuildAppsBand(nodeOwnerId, locale))
+            // The launcher's Spaces scope needs the invitations too — the same list the content
+            // section folds into All, screened the same way.
+            .WithView(BuildAppsBand(nodeOwnerId, locale, privacy.Retain(sharedTargets)))
             .WithView(BuildContentSection(
                 nodeOwnerId, config, user, locale, screen, privacy.Retain(sharedTargets)));
     }
@@ -896,7 +908,8 @@ public static class UserActivityLayoutAreas
     /// <para>No search box and no view options: this is a launcher, not a search surface — the
     /// content section below is where you search. Pure, exposed for tests.</para>
     /// </summary>
-    internal static MeshSearchControl BuildAppsBand(string nodeOwnerId, string? locale)
+    internal static MeshSearchControl BuildAppsBand(
+        string nodeOwnerId, string? locale, IReadOnlyList<string>? sharedTargets = null)
     {
         var appsQuery =
             $"path:{nodeOwnerId}/{AppNodeType.UserNamespace} scope:children " +
@@ -932,8 +945,44 @@ public static class UserActivityLayoutAreas
                         SortByAccess = true,
                         Sortable = true,
                     },
+                    // 🚨 A SECOND scope, and the launcher's filter offers it after the categories:
+                    // the SPACES the viewer can reach, as icons, most recently used first. A space
+                    // is something you OPEN, which is the launcher's whole subject — and a viewer
+                    // who works in three workspaces was reaching them through the content list
+                    // below, a search surface, because the launcher only knew about app records.
+                    //
+                    // It is a scope rather than a slice because it is a different QUERY: the app
+                    // records are one partition's children, the spaces are the partition roots the
+                    // reader can see (mesh-wide by nature, and the qualifier says so) plus the ones
+                    // they were invited into. NOT Sortable: the arrangement lives on App records,
+                    // and a space has none — a drop here would have nowhere to write.
+                    new MeshSearchScopeTab(LocalizationCatalog.Get("home.spaces", locale), SpacesQuery(sharedTargets))
+                    {
+                        RenderMode = nameof(MeshSearchRenderMode.Icons),
+                        NavigateToMainNode = true,
+                        SortByAccess = true,
+                        Sortable = false,
+                    },
                 ],
             };
+    }
+
+    /// <summary>
+    /// The launcher's <b>Spaces</b> scope query: the partition roots the reader can see (the
+    /// <see cref="RootTypeFilter">Space</see> allow-list — the same one the content list's root leg
+    /// uses, so the two cannot disagree about what a workspace is), plus, as a second UNION leg, the
+    /// spaces the viewer was invited into, which no scope query can reach (#385). Ordered by last
+    /// modified in the query and re-ordered by the viewer's own access log at paint
+    /// (<c>SortByAccess</c>), so "recently used" is the viewer's recency, not the mesh's. Pure.
+    /// </summary>
+    internal static string SpacesQuery(IReadOnlyList<string>? sharedTargets)
+    {
+        var roots = $"namespace: is:main is:content{RootTypeFilter} {SortSuffixLastModified} "
+            + ParsedQuery.CrossPartitionQualifier;
+        return sharedTargets is { Count: > 0 }
+            ? roots + "\n" + $"path:{string.Join("|", sharedTargets)} is:main is:content "
+                + $"-nodeType:User{SpacesDedupExclusions} {SortSuffixLastModified}"
+            : roots;
     }
 
     /// <summary>The record content property the Apps grid groups by — <see cref="App.Group"/>.</summary>

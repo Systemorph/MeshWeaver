@@ -953,6 +953,10 @@ public static class PrebuiltAssemblySeeder
                             CompilationStatus = CompilationStatus.Ok,
                             CompilationError = null,
                             CompilationDiagnostics = null,
+                            // #4469 — the import finding belongs to the FAILURE it explained; an
+                            // adopted build is not that failure. Cleared wherever the error text
+                            // and the diagnostics are (Copilot review).
+                            CompilationImportRefusals = null,
                             LastCompileSucceededAt = DateTimeOffset.UtcNow,
                             LastCompiledVersion = version,
                             LatestAssemblyCollection = location.Collection,

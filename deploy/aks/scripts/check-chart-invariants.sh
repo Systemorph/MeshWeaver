@@ -43,6 +43,8 @@
 #                                                             nothing about the connection that fails
 #  17. no wait-for-postgres probes memex-postgres-service unless the chart renders it  or the gate
 #                                                             spins forever on a name that never resolves
+#  18. the operator EXECUTOR renders whatever `enabled` says  or Actions never reaches the pod that
+#                                                             switched the operator Job off
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -133,6 +135,23 @@ COMBOS=(
   # Invariant 19 asserts the credentials are defined before the strings that expand them, and that
   # the gate probes the host those strings name.
   "the instance's own database release (the pearl shape after 2026-09-15, fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.incluster-db-release.yaml"
+  # 🚨 The control instance on the ACTIONS executor (Plugins#1738): the operator Job OFF and the
+  # executor switched to aks-ops.yml through the GitHub App. The only combination that sets
+  # `hostingOperator.executor`, so without it the one render that must carry
+  # `Hosting__Operator__Executor: "Actions"` beside `Hosting__Operator__Enabled: "false"` exists
+  # nowhere. Invariant 18 checks the key in EVERY render; the evidence check below the loop
+  # asserts that this one rendered Actions.
+  "the Actions executor with the operator Job off (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-actions-executor.yaml"
+  # A whitespace-only maintainer: the one render where "only when set" can be observed failing, if
+  # the template stops trimming. The evidence check asserts it renders NO maintainer key.
+  "a whitespace-only operator maintainer (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-maintainer-blank.yaml"
+  # 🚨 The NodeType bake gate ARMED (MeshWeaver#4588). Invariant 10b asserts an armed gate has a
+  # reader — the startupProbe on /health — and no combination above arms it, so without this fixture
+  # that invariant runs on nothing and reports clean. It became reachable when probes.startup.path
+  # stopped being a literal in the template; the evidence check below asserts this render really
+  # does arm the gate, so "the invariant passed" and "the invariant had no subject" stay different
+  # sentences.
+  "the NodeType bake gate armed (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.bake-gate-armed.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -174,6 +193,48 @@ if [ "$rendered" -lt "${#COMBOS[@]}" ]; then
   report "only $rendered of ${#COMBOS[@]} values combinations rendered — treating as FAILURE rather than reporting 'no contradictions' on partial evidence"
 fi
 
+# The executor evidence (Plugins#1738). Invariant 18 holds in every render, but it holds just as
+# well if NO render ever says Actions, or if the maintainer always rendered a non-blank default. So
+# three renders above are read by NAME (not re-rendered):
+#   * the Actions fixture, written loosely on purpose (`actions`, a padded maintainer), must render
+#     the canonical Executor "Actions" beside Enabled "false" and the TRIMMED maintainer exactly;
+#   * the whitespace-only maintainer and the chart defaults must render NO maintainer key.
+render_of() { echo "$WORK/$(echo "$1" | tr -c 'a-zA-Z0-9' '-').yaml"; }
+actions_render="$(render_of "the Actions executor with the operator Job off (fixture)")"
+executor_evidence=0
+if [ -f "$actions_render" ] \
+   && grep -q '^  Hosting__Operator__Executor: "Actions"$' "$actions_render" \
+   && grep -q '^  Hosting__Operator__Enabled: "false"$' "$actions_render" \
+   && grep -q '^  Hosting__Operator__Maintainer: "maintainer-id"$' "$actions_render"; then
+  executor_evidence=$((executor_evidence + 1))
+else
+  report "the Actions fixture did not render Executor=\"Actions\", Enabled=\"false\" and the trimmed Maintainer=\"maintainer-id\" — the executor switch or its maintainer does not reach a pod that disabled the operator Job"
+fi
+for combo in "a whitespace-only operator maintainer (fixture)" "self-host (neutral chart defaults)"; do
+  r="$(render_of "$combo")"
+  if [ -f "$r" ] && ! grep -q '^  Hosting__Operator__Maintainer:' "$r"; then
+    executor_evidence=$((executor_evidence + 1))
+  else
+    report "'$combo' renders a Hosting__Operator__Maintainer key, or did not render at all — an unset or blank maintainer must render NO key"
+  fi
+done
+if [ "$executor_evidence" -eq 3 ]; then
+  ok "the executor reaches the ConfigMap with the operator Job off; the maintainer renders trimmed, and only when set"
+fi
+
+# The bake-gate evidence (MeshWeaver#4588). Invariant 10b — an armed PreWarm__GateReadiness must
+# have a reader, i.e. a startupProbe on /health — is CONDITIONAL, so it is satisfied just as well by
+# a set of renders where nothing ever arms the gate. Read the fixture by NAME and assert it actually
+# armed it, and that the startup probe it rendered is the one that reads the gate.
+gate_render="$(render_of "the NodeType bake gate armed (fixture)")"
+if [ -f "$gate_render" ] \
+   && grep -q '^  PreWarm__GateReadiness: "true"$' "$gate_render" \
+   && grep -q 'path: /health' "$gate_render"; then
+  ok "the bake-gate fixture arms PreWarm__GateReadiness and renders the startupProbe that reads it"
+else
+  report "the bake-gate fixture did not render PreWarm__GateReadiness=\"true\" with a /health startupProbe — invariant 10b then had no subject, and 'no contradictions' would mean 'nothing was armed'"
+fi
+
 # ---------------------------------------------------------------------------
 # REFUSALS — shapes the chart must NOT render, and must name why.
 #
@@ -196,6 +257,8 @@ REFUSALS=(
   "an external database with neither a values connection string nor a MEMEX_HOST (the pearl refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-no-host.yaml|names no external database host"
   "an external database whose values string names the in-cluster Service (the explicit-placeholder refusal)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.external-db-explicit-in-cluster-host.yaml|names the in-cluster Service memex-postgres-service"
   "a database release AND the bundled Postgres (two answers to which database)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.db-release-with-bundled-postgres.yaml|exclusive with postgres.enabled"
+  # Plugins#1738: an executor the portal would silently read as Job must fail the render.
+  "a misspelled operator executor|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-executor-misspelled.yaml|must be Job or Actions"
 )
 refused=0
 for entry in "${REFUSALS[@]}"; do

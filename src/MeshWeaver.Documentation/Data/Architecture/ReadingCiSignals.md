@@ -163,6 +163,28 @@ Publishing the gap is not — each row above was repaired only after someone els
 - **A healthy meter standing in for the thing that actually refused.** Read the **refusal**, not the
   meter. `5000/5000 remaining` while every call is refused is the documented signature of the
   secondary limit — the meter is honest and answering a different question.
+- **A WINDOW standing in for a result set.** `grep … | head -N`, `| tail`, `--per_page`, a listing's
+  first page: each shows a window, and an absence read off one is not a measurement. Measured
+  2026-09-18 on MeshWeaver.Plugins, asserting its `ci.yml` never calls the shared validate lane —
+  `grep -nE '…|node-repo-|…' ci.yml | head -20`. **The pattern matched.** `ci.yml:2745` is
+  `uses: …/node-repo-validate.yml@main`, and it was **match 36 of 50**; `head -20` cut at match 20
+  (line 1039) of a 4,983-line file. 🚨 **A CORRECT pattern is the dangerous case** — a wrong one
+  announces itself by returning nothing plausible, while a right one in a truncated window returns
+  real, on-topic hits, so the window looks like the answer. The habit is `grep -c` **before**
+  `grep | head` — if the count exceeds the window, the window is not the answer — and to
+  positive-control the *window*, not the query: grep for something the subject is KNOWN to contain
+  and confirm that hit lands **inside the window you are actually reading**. State it as *N of M*,
+  never as *N*. It is the same shape as
+  [Adoption and the Sweep Count Different Things](/Doc/Architecture/AdoptionAndTheSweepCountDifferentThings),
+  arriving by a different road: 20 shown, 50 matched, and nobody asked how many there were.
+- **A SUBSET standing in for the sweep.** In the same measurement, five of six vendored copies were
+  compared by **blob sha** against the canonical and correctly reported byte-identical; the sixth was
+  settled by a *title search for an open PR* instead. The five were a set being compared and the
+  sixth was a question about existence, so it felt like a different kind of question — **it was
+  not**, and the weaker check was the one load-bearing for the conclusion. A sweep gets its hole
+  exactly where a cheaper instrument was substituted, so name the check that decides and run *that*
+  one on every member. Here the blob comparison would have caught the gap whatever the other answer
+  had been: the sixth copy had been merged and never applied (`changed_files=0`).
 - **A declaration standing in for an effective capability.** An App's own page lists what it *asked
   for*; the **installation** lists what it was *granted*. Measured 2026-09-12: `meshweaver-cloud`
   declares `contents, emails, issues, metadata, pull_requests, workflows`, and its installation on
@@ -185,6 +207,60 @@ Two neighbouring pages carry the same lesson from other directions:
 [The Release Gate's Denominator](/Doc/Architecture/ReleaseGateDenominator) (a rate is meaningless
 until you state what it is over).
 
+## 🚨 An annotation belongs to an ATTEMPT, not to a run — a partial re-run erases it
+
+**`GET /actions/runs/{id}/jobs` answers with the LATEST attempt's job records.** After
+`rerun-failed-jobs`, GitHub re-creates a record for *every* job of the new attempt — including the
+ones it did not re-run — and **those records carry none of the earlier attempt's annotations**. The
+run still reads `success`. Anything that reads a fact out of an annotation therefore loses it, with
+no error and no red anywhere.
+
+Measured 2026-09-16 on MeshWeaver.Plugins (#4491):
+
+```
+main run 35073843357 resolved 3.0.0-ci.8721, died on an artifact-service 403
+(FinalizeArtifact; tests failed: 0), was re-run, concluded SUCCESS
+
+attempt 1, job 104721425856 (Resolve the released platform)  ->  annotation present
+attempt 2, job 104732056546 (same job, NOT re-run)           ->  0 annotations
+a PR's resolver, 6 minutes later                             ->  "no 'Platform for this run'
+                                                                  annotation — skipped"
+                                                             ->  pinned every PR to #8716
+```
+
+`main` had demonstrably passed on 8721, and every open pull request in the repo went on resolving
+8716 — including the one adopting a core capability that only exists from 8721 onwards. The
+resolver's sentence for this was *"`main` has not passed on it yet"*, which was **false**.
+
+**If you read an annotation, say which attempt you mean.** `/actions/runs/{id}/attempts/{n}/jobs`
+serves one attempt's records. Walk attempts **newest-first** and take the first that carries what
+you are looking for: a genuine re-resolution (a full re-run, or a re-run *of that job*) then still
+decides, and an older attempt is consulted only where the newer record is silent — which is exactly
+the carried-over case. Taking the oldest instead would let a stale verdict outrank a fresh one.
+
+This is the same attempt-scoping trap as `rerun-failed-jobs` reusing the previous attempt's
+artefact (#4303): a re-run is not a re-execution of the run, and the parts it did not re-run keep
+neither their outputs nor their annotations in the new attempt's records.
+
+🚨 **An attempt you could not READ is not an attempt that was SILENT — and only silence licenses
+the walk.** The fallback above is sound because "this attempt's records came back, and carried no
+such annotation" is a fact about the attempt. An HTTP failure is a fact about the *network*: it
+proves nothing, and the newer attempt is precisely the one that may hold a genuine re-resolution.
+Treating the two the same publishes an older attempt's stale verdict under a note asserting the
+newer attempt carried none — false in exactly the way the sentence this page opens with was false,
+and harder to catch because it now cites an attempt number. So an unreadable attempt **stops the
+walk and skips the run**, and the note says which of the two happened. A reader who cannot tell
+"nothing was there" from "I could not look" has the same defect as a sweep that reports `0` without
+its denominator.
+
+The second-order version bit the same change: the fallback added a **second** note for each run it
+rescued, and the loop's bound was `len(notes) >= limit` — a proxy for "runs examined" that was only
+ever true while every run emitted exactly one note. Twelve rescued runs reached the bound after
+six, halving the evidence and answering with a lower ceiling. **A bound must count the thing it
+names.**
+
+---
+
 ## The same trap in the tools you write to watch CI
 
 Two bugs that make a monitor lie, both hit in one session:
@@ -195,6 +271,18 @@ Two bugs that make a monitor lie, both hit in one session:
 - **An empty or partial rollup is vacuously green.** "No failures and nothing incomplete" is *true*
   of a PR with zero checks. Decide readiness by asserting the **required set is present and
   SUCCESS**, never by the absence of failures.
+- **A PAGE of check-runs is not the commit's check-runs.** `commits/<sha>/check-runs` caps at
+  `per_page=100`, and a main commit here carries far more than that — every workflow, every matrix
+  leg, both synthetic probes, the combo verdict. Measured 2026-09-17 on `be8f452c79`: **278**
+  check-runs, page 1 holding **zero** named `Consolidate test results` and page 3 holding its two,
+  both green since the evening before. CD's gate filtered page 1 in `jq`, read `absent/none` for a
+  green commit, and walked delivery back to its parent for six hours until the parent's heal budget
+  ran out and CD reported delivery STUCK with main green (#4526). **Name the check in the request —
+  `&check_name=<name>` — so the API filters server-side**; `CheckRunReadsAreServerFilteredGuard`
+  holds every workflow to that. `--paginate` is not the alternative it looks like: the flag says
+  pages were requested, not consumed, and `gh api --paginate --jq …` piped into a `read -r` still
+  takes the first line. The failure grows with the repository's check volume, so a reader that
+  works today starts lying later, silently.
 
 ### 🚨 A lookup that cannot reach its target answers the DEFAULT, forever, on every machine
 
@@ -1087,6 +1175,176 @@ MeshWeaver.Plugins (or another node repo) shortly after core published — with 
 test names — and is fixed by a pull request there. Core carries no context for it by design
 (maintainer, 2026-09-03: the integration is event-based; no top-level repository depends on another).
 
+### 🚨 Several satellites red in the same second on a missing `plugins` publication: find out WHICH seal is missing before blaming anyone
+
+When several satellites' `main` runs fail within a second of each other, they share a trigger, so
+compare their failed steps before reading any one of them. The shape measured on 2026-09-16:
+Reinsurance, Crm, SocialMedia and Manufacturing all red at 20:14:20Z, each on `compile-check`'s
+*Add external modules to the reference set* and the gate shard's *Fetch the upstream publications*:
+
+```
+upstream 'plugins' answers 404 for the module set of identity s5ec352bb… :
+{"error":"no sealed publication for source 'plugins' under framework identity 's5ec352bb…'"}
+```
+
+A `plugins` publication has **two producers**: core CD's `Plugins: bake + seal the publication for
+this identity` job, and MeshWeaver.Plugins' own `publish-bake` lane. The same 404 appears whichever
+one failed. A red in Plugins' own lane is a Plugins defect, and
+[CI Content Bake](/Doc/Architecture/CiContentBake) treats it as a wait for the upstream. So read the
+producers before deciding where the fault is:
+
+1. **The satellite's `Platform pins name one build` job.** The resolver prints which set it took
+   and what it found for Plugins. On 2026-09-16 it said `main-cd #8765 (core 836d4472b): its own
+   Plugins seal is skipped — the platform is taken anyway`, then `plugins publication: main-cd #8760 …
+   — an older set than the platform chosen`. That means the gate is about to ask for a publication
+   that does not exist. `resolve-platform.py` does this on purpose: a terminal Plugins seal does not
+   hold the platform back. [Framework Identity Churn](/Doc/Architecture/FrameworkIdentityChurn)
+   explains why walking back to an older set is refused.
+2. **Core CD's Plugins legs for that set.** In #8765, `Warm the shared build environment (once)`
+   died on `dial tcp 51.12.25.82:443: connect: connection refused` (ACR). Promote had already sealed
+   the platform, so `Plugins: bake + seal …` was skipped. Here the missing seal was core's, and the
+   cause was infrastructure, not Plugins.
+3. **MeshWeaver.Plugins' own `publish-bake` for the same identity.** Its main run had resolved the
+   older set 8760 at 19:28Z, before 8765 was sealed. It published for identity `sd94ee1d…` and
+   registered at 20:14:18Z, and that registration was the wake. So neither producer had published
+   for `s5ec352bb…`.
+
+**The wake names an image, but only one lane uses it.** Per CI Content Bake, the `publish-bake` lane
+reads `client_payload` and bakes against the image the wake names. The gate and compile path does
+not read the payload: `Platform pins name one build`, `compile-check` and the gate shards resolve
+the newest sealed set again. So a wake for an older set can start a run whose gates ask about a
+newer identity. That is how a Plugins publication for 8760 produced four reds about 8765.
+
+**What healed it:** a `plugins` publication for that identity, followed by another wake. On
+2026-09-16 both publications arrived by coincidence. MeshWeaver.Plugins merged, so core's hourly
+reconcile saw a missing pair tag and rebuilt the set (#8767, Plugins seal at 21:30:24Z). Plugins'
+next main run also resolved 8765 and published for `s5ec352bb…`. The runs they woke went green at
+21:52–21:58Z. **The reconciler did not re-attempt a failed core Plugins seal on its own.** Its
+`bake_only` path re-ran only the platform bake, so without a Plugins merge the red would have lasted
+until core merged again. Do not re-run the satellites' failed jobs: the resolver reads the same set
+again and the registry still answers 404.
+
+**Since MeshWeaver#4539 it does.** On every `bake_only` tick `gate` asks
+`check-release-availability.sh <version> plugins` — naming the set's framework identity, resolved
+from the `_releases/<version>` marker — and re-runs the three `plugins-*` legs when, and only when,
+that answer is a definite absence. It is bounded at three attempts per (core sha, plugins sha) pair
+and it refuses rather than acts when the store cannot be read. The hold on the satellite side is
+unchanged and still correct; what changed is that something now clears it. See
+[CD Reconciles the Plugins Seal](../CdReconcilesThePluginsSeal).
+
+**A second red can follow a satellite that has two upstreams.** Reinsurance declares `plugins crm`.
+Its 21:19Z run passed every gate, then its `publish-bake` went red: `crm — no sealed publication
+under prebuilt-bundles/s5ec352bb…/crm`. That is the documented wait. Crm sealed its publication
+for the identity at 21:52Z. Reinsurance's 21:30Z run reached the same gate at 21:52:26Z, printed
+`all 2 source(s) are published`, and finished green at 22:02Z.
+
+**The retry steward is a separate outage, not the cause.** The 404 is not one of the steward's
+named transient signatures, so it would correctly decline this red even with a readable log. But
+right now its "no retry" line tells you nothing about ANY red. In core and MeshWeaver.Plugins, every
+`Retry known transients` run sampled from 2026-09-10 to 2026-09-16 printed `log unreadable (the
+response contains terminal escape sequences; pass --allow-escape-sequences …) — cannot prove a
+transient`. The hosted runner's `gh` refuses any response body with escape sequences, and every
+Actions log has them.
+
+**Crm, Reinsurance and SocialMedia are no longer unsampled — measured 2026-09-17, and it is worse
+there.** Every one of their newest `Retry known transients` runs declined on its **first** failed job
+with that same sentence and then `exit 0`, so the shell steward never looked at the rest; and
+MeshWeaver.Plugins' steward declined **22 jobs in one run** (`35245934949`, 16:21Z) the same way.
+
+### What `/actions/jobs/<id>/logs` actually serves
+
+Read straight from REST — 30 failed jobs across MeshWeaver.Plugins, .Crm, .Reinsurance, .SocialMedia
+and MeshWeaver, deliberately not one payload:
+
+| outcome | n | shape |
+|---|--:|---|
+| served a log | **23** | `200 text/plain`; **all 23** with a UTF-8 BOM; **all 23** carrying ANSI escapes (30–1,932 each); all strict UTF-8; all with the timestamped line; **none** carrying any other control character |
+| `404` *"The specified blob does not exist"* | 1 | the job uploaded no log at all |
+| `410 Gone` | 6 | the log outlived its retention |
+
+So there was never anything exotic to parse. **Three** rules follow — and read the next paragraph
+before assuming any given steward keeps them:
+
+- 🚨 **Three outcomes, not one.** `404` and `410` are **facts about the job** — nothing was uploaded
+  (what a runner that died before writing one looks like), or the log expired — and they *decline*,
+  naming which. **Everything else** (5xx, a permission refusal, a transport failure, a non-UTF-8
+  body, a body with no timestamped line) is the steward **blind to its own input** and is a **RED**.
+  Collapsing those into one "unreadable, no retry" is what made a week-long outage look like a
+  judgement.
+- 🚨 **Strip the BOM and the escapes before matching.** The raw bytes are not what anyone reading the
+  run sees: every echoed `run:` line arrives wrapped in `\e[36;1m…\e[0m`, so a pattern anchored near
+  the start or end of such a line cannot match the raw form.
+- 🚨 **A decline that happens 22 times in one run may not live only in a green job's log.** That is
+  the same defect shape as a scheduled lane whose honest red goes into an empty room. The decision
+  belongs in the job **summary**, and a job judged without a log should raise a `::warning::` — which
+  is visible on the run without pretending the steward itself failed.
+
+🚨 **WHICH STEWARD KEEPS WHICH — do not read the three rules as a description of the fleet.** They are
+what the four stewards fixed on 2026-09-17 do (MeshWeaver.Plugins and the three satellites). **Core's
+`#4554` fix implements the READ and none of the three**, verified against
+`.github/scripts/retry-known-transients.py` on `main`:
+
+| | core (`#4554`) | Plugins + the three satellites |
+|---|---|---|
+| reads the log at all | ✅ REST, no `gh` | ✅ REST / `curl`, no `gh` |
+| `404`/`410` distinguished from a blind read | ❌ `read_job_log` maps **every** `HTTPError` to one `LogUnreadable` → RED | ✅ they decline, naming which |
+| BOM and escapes stripped before matching | ❌ the raw decoded body is matched directly | ✅ |
+| the decision reaches the summary / a `::warning::` | ❌ neither appears in the script | ✅ |
+
+Core's choice is defensible on its own terms — its contract is *"I cannot see my input ⇒ RED"* and it
+has no annotation path to fall back on — but it means a **runner death in core reds the steward job**,
+because a job that uploaded no log is indistinguishable there from an API failure. That is named
+follow-up, not a claim about today.
+
+> **Fixed in core, 2026-09-17 (#4534).** Core's steward is now
+> `.github/scripts/retry-known-transients.py`: it reads the logs endpoint over plain REST — no `gh`,
+> so no dependency on a CLI *output* policy — and an unreadable log is a LOUD exit 1, never a
+> decline. Measured while fixing it: a plain REST GET of the identical URL answers HTTP 200 with
+> 7,251 bytes over 46 escape-bearing lines, so the refusal was never the API's. `--allow-escape-sequences`
+> was rejected as the fix because the flag does not exist on older `gh` (the local 2.95.0 has
+> neither the refusal nor the flag), which would have traded one silent breakage for another.
+>
+> 🚨 **The other four copies are STILL BLIND, on purpose.** Crm, Reinsurance and SocialMedia carry
+> the inline shell; MeshWeaver.Plugins has its own `scripts/retry-known-transients.py`. Nothing
+> propagates a core change to them and nothing reds if they drift — `check-resolver-copy.py` covers
+> exactly `scripts/resolve-platform.py` (one constant, and it parses Python, so it cannot see a
+> workflow), no `uses:` couples them to core, and no copy is fetched at a pin. The proof is
+> historical: core's `block_signatures` clause, added 2026-09-13, reached no satellite and reddened
+> nobody. Reviving them is **not** a mechanical re-copy, because `POST …/rerun-failed-jobs` on a
+> SATELLITE's `main` run erases the `Platform for this run` annotation its PR ceiling reads
+> (#4491, open) — so a satellite steward that works again would silently freeze that repo's
+> platform ceiling until the next merge. Core has no such ceiling (it only ever runs the resolver's
+> `--self-test`), which is why core could be fixed first and alone. Fix #4491, then re-enable the
+> satellites.
+>
+> **2026-09-17, the other four: the reader is fixed in all of them, and the #4491 hold turns out to
+> be narrower than "all four".**
+> * **MeshWeaver.Plugins** (Plugins#2042) is *not* held by #4491, because **its retry was never
+>   disabled**: its annotation path — runner death, budget refusal — reads no log at all, so
+>   `rerun-failed-jobs` has been reachable there throughout. The log fix adds a second proof shape
+>   to a lane that already acts.
+> * **Crm / Reinsurance / SocialMedia** (Crm#125, Reinsurance#218, SocialMedia#202) were the ones the
+>   hold applied to — their shell stewards could retry **nothing**, so merging is the moment retries
+>   begin there. They were parked as **drafts** while that call was open, because each of those
+>   repos runs `auto-arm.yml` and would otherwise have merged them on green with the call never
+>   made. **The maintainer took the call on 2026-09-17 and it is MERGE**, on this reasoning: humans
+>   press re-run today *because* the steward is blind, so an evidence-gated automatic retry is
+>   narrower than the status quo. The `#4491`/`#4493` wave that closes the annotation erasure is
+>   being landed separately.
+>
+> 🚨 **And the hazard belongs to `rerun-failed-jobs`, not to the steward.** #4491's own measurement
+> is a re-run of an infrastructure death — *the ordinary response* — and a human pressing the same
+> button erases the same annotation. Today humans press it **because** the steward is blind, so a
+> working reader *reduces* hand re-runs rather than adding a hazard class. That is an argument for
+> sequencing, not for leaving a reader that cannot read.
+>
+> 🚨 **The signature lists are a separate question, and they are thin.** The most frequent transient
+> on the wall right now is `GitHub served a STALE run listing (MeshWeaver#4433)` from
+> `Resolve the released platform`, whose own annotation ends *"Re-run this job"* — measured on
+> MeshWeaver.Plugins job `105249591894` and MeshWeaver.SocialMedia job `105239967968` the same day,
+> and it is in **no** steward's list. Adding it is a curation decision with its own evidence, not
+> something to fold into a reader fix.
+
 ## 🚨 A check that is red on EVERY pull request is not telling you about any of them
 
 A signal carries information only to the extent that it *varies*. A check that fails on every open
@@ -1512,6 +1770,42 @@ or left out with the failing assertion, the run URL and the `queue-rejected` lab
 comment first. Never re-run the failed queue build and never re-queue by hand — a re-run hides the
 bug and destroys the control arm; the steward re-queues on evidence and records the attempt. The
 whole protocol is [The Merge Queue](/Doc/Architecture/MergeQueue).
+
+## 🚨 GitHub's run LISTING can be served stale — judge page 1 against a fact it cannot fake
+
+A run listing (`actions/workflows/<wf>/runs?branch=main&per_page=…`) is sometimes answered from an
+old snapshot. The page is well-formed, correctly ordered and internally consistent — it is simply
+days behind — and the same query issued a minute later is correct. Measured instances:
+
+| when | query | what came back |
+|---|---|---|
+| 2026-09-14 | a satellite's `ci.yml` runs, `status=success` | a page from 2026-08-19, twelve runs that predate the job being looked for |
+| 2026-09-15 13:03Z | core `main-cd.yml` runs, page 1 | began at #8423 while #8676 was sealed (~260 runs behind) |
+| 2026-09-15 14:07Z | the same | began at #8420 — the same stale point, an hour later |
+| 2026-09-15 ~14:2xZ | Plugins `ci.yml` runs, `per_page=1` | a run from 2026-08-10 as the newest |
+
+A reader that takes "the first matching run on page 1" as the newest acts on the stale answer
+without a trace. `resolve-platform.py` did exactly that (#4433): with a declared floor it went red
+naming the floor, and without one — every satellite but Plugins — it would have compiled, tested
+and published against a three-day-old platform while reporting it as the newest.
+
+**The rule: make the wrong answer harmless, never retry it away.** Check page 1 against a fact the
+listing cannot supply itself, and refuse — red, naming the staleness — when it fails:
+
+- **the clock**, when the workflow runs on a known cadence: core CD runs on `main` at least hourly
+  (an hourly `schedule` plus every main build; the widest gap in 300 measured runs was 1.7 h), so a
+  page whose newest main run is over 12 h old is not the newest page;
+- **a run number known to exist** from another read: a set the caller's own `main` already passed
+  on cannot be missing from a fresh listing.
+
+A retry keyed on "this answer is inconvenient" is a gate testing its own inputs; the refusal is
+the answer, and a re-run of the job reads the listing again. A freeze is exempt — it names one set,
+and an incident is when it must keep working.
+
+The same family has two more readings that look like verdicts and are not: `workflow_runs[0]` for
+a head sha can be a run **cancelled** by its concurrency group while a sibling run for the same
+sha is live (judge the highest-id non-cancelled run), and a `head_sha` filter given a SHORT sha
+matches nothing, silently.
 
 ## Related
 

@@ -598,10 +598,24 @@ public sealed record DataContext : IDisposable
         Exception? failure = null;
         if (!allInit.IsCompleted)
         {
+            // 🚨 NAME what did not finish; never guess at it (Systemorph/MeshWeaver#1122). This
+            // message used to end "— likely a stuck NodeType compile, or a data source that never
+            // initialised": two candidates, neither measured. The first of them is FALSE BY
+            // CONSTRUCTION on the path that produces most of these — NodeType enrichment runs in the
+            // ROUTING layer before GetHostedHub is ever called, is bounded at 3 s + 30 s
+            // (NodeTypeEnrichmentHelpers.NodeTypeProbeTimeout / SlowPathTimeout) and fails to a
+            // compilation-error overlay, so it cannot reach this time-box at all. Five weeks and 217
+            // occurrences folded into one LogIncident fingerprint behind that sentence, mixing at
+            // least three unrelated populations (a pod-wide wave of four hubs inside one
+            // millisecond; a mixed _Access/_Activity/_Issue wave; a single user partition going dark
+            // for 34 minutes) because the text could not tell them apart.
+            //
+            // Everything needed to tell them apart is in hand right here: which data sources have
+            // not settled, which of their streams never produced a first frame, and which type
+            // sources' legs the fan-out is still waiting on. Read it and say it.
             failure = new TimeoutException(
                 $"Hub '{Hub.Address}' DataContext initialization did not complete within "
-                + $"{InitializationTimeout.TotalSeconds:F0}s — likely a stuck NodeType compile, "
-                + "or a data source that never initialised.");
+                + $"{InitializationTimeout.TotalSeconds:F0}s. {DescribePendingInitialization()}");
             logger.LogError(failure,
                 "DataContext initialization TIMED OUT for {Address}. Hub is now in FAILED state.", Hub.Address);
         }
@@ -631,17 +645,25 @@ public sealed record DataContext : IDisposable
             // TERMINAL answer and stop re-subscribing — never the 30s-defer loop.
             RegisterInitializationFailureHandler(failure);
 
-            // Also propagate to existing data source streams.
+            // 🚨 Propagate to the streams each data source ACTUALLY HOLDS — presence, never creation
+            // (Systemorph/MeshWeaver#1122). This was `ds.GetStreamForPartition(null).OnError(failure)`,
+            // which errored ONE stream of however many the source holds and, on a source that has no
+            // null-partition stream, CREATED one to error. See IDataSource.OpenStreams for both
+            // halves; the short version is that the streams which were genuinely hung were the ones
+            // NOT told, so their subscribers each waited out an unrelated deadline and reported an
+            // unrelated-looking fault — the four-log-site shape this issue consolidated.
             foreach (var ds in DataSources)
+            foreach (var stream in ds.OpenStreams)
             {
                 try
                 {
-                    var stream = ds.GetStreamForPartition(null);
-                    stream?.OnError(failure);
+                    stream.OnError(failure);
                 }
                 catch (Exception ex)
                 {
-                    logger.LogDebug(ex, "Error propagating init failure to data source {Id}", ds.Id);
+                    logger.LogDebug(ex,
+                        "Error propagating init failure to stream {StreamId} of data source {Id}",
+                        stream.StreamId, ds.Id);
                 }
             }
         }
@@ -654,6 +676,85 @@ public sealed record DataContext : IDisposable
             InitializationGateName, Hub.Address, failure is not null);
         Hub.OpenGate(InitializationGateName);
     }
+
+    /// <summary>
+    /// Names what the init time-box was still waiting on, read off live state at the instant it
+    /// expired — <b>measured, never guessed</b> (Systemorph/MeshWeaver#1122).
+    ///
+    /// <para>The wait has three nested layers, and every one of them is inspectable here:
+    /// <list type="number">
+    ///   <item>which configured DATA SOURCES have not settled;</item>
+    ///   <item>which of their STREAMS never produced a first frame (a stream settles by opening its
+    ///     sync sub-hub's gates, so an unstarted sub-hub is precisely an unfinished initial load);</item>
+    ///   <item>which TYPE SOURCE legs of the initial-store fan-out are still outstanding — the
+    ///     innermost answer, and the one that distinguishes "a storage read did not come back" from
+    ///     "a remote hub never answered a subscribe".</item>
+    /// </list></para>
+    ///
+    /// <para>🚨 <b>Nothing here may create, block, or throw.</b> It runs on the failure path of a hub
+    /// that is already in trouble: it reads presence-only snapshots
+    /// (<see cref="IDataSource.OpenStreams"/>, <see cref="IDataSource.PendingTypeSources"/>) and
+    /// completed-flags, and a fan-out that settles while this renders simply produces a shorter
+    /// sentence. The time-box has already decided the outcome; this only says why.</para>
+    ///
+    /// <para><b>The log TEMPLATE is deliberately left unchanged</b> by this — the attribution rides
+    /// on the exception MESSAGE. A <c>LogIncident</c> fingerprint is category + normalized template +
+    /// exception type, so putting the detail in the message keeps one issue collecting its own
+    /// five-week history while every sample line now carries the cause.</para>
+    /// </summary>
+    /// <returns>A sentence naming the pending data sources, streams and type sources.</returns>
+    private string DescribePendingInitialization()
+    {
+        var pending = ImmutableList<string>.Empty;
+        var settled = ImmutableList<string>.Empty;
+        foreach (var dataSource in DataSourcesById.Values)
+        {
+            var streams = dataSource.OpenStreams;
+            var waiting = streams
+                .Where(s => s.HubIfHeld() is { } streamHub && !streamHub.Started.IsCompleted)
+                .ToArray();
+            if (waiting.Length == 0)
+            {
+                settled = settled.Add(Describe(dataSource));
+                continue;
+            }
+
+            var legs = dataSource.PendingTypeSources;
+            pending = pending.Add(
+                $"'{Describe(dataSource)}' — {waiting.Length} of {streams.Count} stream(s) never "
+                + $"produced a first frame ({string.Join("; ", waiting.Select(DescribeStream))})"
+                + (legs.Count == 0
+                    ? string.Empty
+                    : $", type-source legs still outstanding: {string.Join(", ", legs.Order())}"));
+        }
+
+        if (pending.Count == 0)
+            return $"No data source reports an outstanding wait now ({DataSourcesById.Count} "
+                + "configured), so the initialization settled between the time-box expiring and "
+                + "this diagnostic being read.";
+
+        return $"Still waiting on {pending.Count} of {DataSourcesById.Count} data source(s): "
+            + string.Join(" | ", pending) + "."
+            + (settled.Count == 0
+                ? string.Empty
+                : $" Settled: {string.Join(", ", settled)}.");
+    }
+
+    /// <summary>
+    /// Identifies a stream in the pending-initialization diagnostic by what locates it in a log: the
+    /// address of the sub-hub it actually HOLDS, the address it mirrors, and its partition.
+    ///
+    /// <para>🚨 The hub address is READ off the stream, never composed from its id. The sub-hub is
+    /// addressed by the stream's client id, not its stream id, and a diagnostic that printed
+    /// <c>sync/{StreamId}</c> would name a hub that does not exist — sending the reader to grep for
+    /// an address no log line carries, in the one message whose job is to stop that happening.
+    /// <c>DataSourceOpenStreamsIsPresenceOnlyTest</c> is what caught it.</para>
+    /// </summary>
+    /// <param name="stream">The stream that has not produced a first frame.</param>
+    /// <returns>A one-line description of the stream.</returns>
+    private static string DescribeStream(ISynchronizationStream<EntityStore> stream) =>
+        $"{stream.HubIfHeld()?.Address.ToString() ?? "(no hub held)"} stream={stream.StreamId} "
+        + $"owner={stream.Owner} partition={stream.StreamIdentity.Partition ?? "(none)"}";
 
     /// <summary>
     /// Registers a global handler on the hub that rejects all incoming requests

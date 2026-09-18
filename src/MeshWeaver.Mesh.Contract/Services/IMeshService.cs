@@ -64,6 +64,19 @@ public interface IMeshService
     /// <summary>
     /// Deletes a node and all its descendants (bottom to top).
     /// Routes through DeleteNodeRequest for proper security enforcement.
+    ///
+    /// <para><b>IDEMPOTENT.</b> The postcondition is "no node exists at <paramref name="path"/>",
+    /// and a node that was ALREADY gone satisfies it — so that is a success, not an error. The
+    /// emitted <c>bool</c> says which of the two happened: <c>true</c> = this call removed the
+    /// node, <c>false</c> = there was nothing there to remove. Do NOT pre-check existence before
+    /// calling this; the check's negative can be stale by the time the delete lands (same reasoning
+    /// as <see cref="CreateOrUpdateNode"/> on the create side), and the owning hub is the only
+    /// place the race is decidable.</para>
+    ///
+    /// <para>Every other refusal still errors: <see cref="UnauthorizedAccessException"/> for a
+    /// denial or validator refusal, <see cref="InvalidOperationException"/> otherwise — including
+    /// an absence discovered mid-cascade, which leaves a subtree that may be partially removed and
+    /// is a different fact from "there was nothing to do".</para>
     /// </summary>
     IObservable<bool> DeleteNode(string path);
 

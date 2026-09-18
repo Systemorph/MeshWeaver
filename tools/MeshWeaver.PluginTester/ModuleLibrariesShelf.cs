@@ -34,6 +34,7 @@ public sealed class ModuleLibrariesShelf
     private readonly ImmutableDictionary<string, string> _versionsByPackage;
     private readonly ImmutableDictionary<string, string> _filesByName;
     private readonly ImmutableDictionary<string, ImmutableArray<string>> _nativesByPackage;
+    private readonly ImmutableDictionary<string, ImmutableArray<string>> _uncarriedByPackage;
 
     private ModuleLibrariesShelf(
         string directory,
@@ -41,7 +42,8 @@ public sealed class ModuleLibrariesShelf
         ImmutableDictionary<string, ImmutableArray<string>> dependenciesByPackage,
         ImmutableDictionary<string, string> versionsByPackage,
         ImmutableDictionary<string, string> filesByName,
-        ImmutableDictionary<string, ImmutableArray<string>> nativesByPackage)
+        ImmutableDictionary<string, ImmutableArray<string>> nativesByPackage,
+        ImmutableDictionary<string, ImmutableArray<string>> uncarriedByPackage)
     {
         Directory = directory;
         _assembliesByPackage = assembliesByPackage;
@@ -49,6 +51,7 @@ public sealed class ModuleLibrariesShelf
         _versionsByPackage = versionsByPackage;
         _filesByName = filesByName;
         _nativesByPackage = nativesByPackage;
+        _uncarriedByPackage = uncarriedByPackage;
     }
 
     /// <summary>Where the shelf was read from.</summary>
@@ -98,6 +101,7 @@ public sealed class ModuleLibrariesShelf
         var dependencies = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
         var versions = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
         var natives = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
+        var uncarried = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
 
         if (!document.RootElement.TryGetProperty("targets", out var targets))
             throw new InvalidOperationException($"'{depsFiles[0]}' has no 'targets' — not a deps.json.");
@@ -126,6 +130,10 @@ public sealed class ModuleLibrariesShelf
                 // otherwise resolve, ride nothing, and throw at the first P/Invoke.
                 if (NativeContributions.DeclaredBy(library.Value) is { IsEmpty: false } declared)
                     natives[id] = declared;
+                // 🚨 The shelf is a PORTABLE publish, so its runtimeTargets keep BOTH shapes this lane
+                // cannot carry — named, never read past (#4445).
+                if (NativeContributions.UncarriedBy(library.Value, id) is { IsEmpty: false } dropped)
+                    uncarried[id] = dropped;
                 if (library.Value.TryGetProperty("dependencies", out var deps))
                     dependencies[id] = [.. deps.EnumerateObject().Select(d => d.Name)];
             }
@@ -139,7 +147,7 @@ public sealed class ModuleLibrariesShelf
 
         return new ModuleLibrariesShelf(
             full, assemblies.ToImmutable(), dependencies.ToImmutable(),
-            versions.ToImmutable(), files, natives.ToImmutable());
+            versions.ToImmutable(), files, natives.ToImmutable(), uncarried.ToImmutable());
     }
 
     /// <summary>Whether the shelf carries this package at all (its deps record names it).</summary>
@@ -175,6 +183,13 @@ public sealed class ModuleLibrariesShelf
     /// <returns>The declared module-relative paths.</returns>
     public ImmutableArray<string> DeclaredNativesOf(string packageId) =>
         _nativesByPackage.TryGetValue(packageId, out var declared) ? declared : [];
+
+    /// <summary>What a shelf package DECLARES that the container lane does not carry, as worded
+    /// findings (<see cref="NativeContributions.UncarriedBy"/>, #4445).</summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>The findings, empty when none.</returns>
+    public ImmutableArray<string> UncarriedOf(string packageId) =>
+        _uncarriedByPackage.TryGetValue(packageId, out var findings) ? findings : [];
 
     /// <summary>The file on the shelf backing one declared native path, or null.</summary>
     /// <param name="relativePath">The module-relative path.</param>

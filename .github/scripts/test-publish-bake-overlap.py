@@ -201,7 +201,22 @@ if action == "upload":
             "publish-bake-files.py now; this stub models only the unstamped backfill: " + raw)
     if not target.parent.is_dir():
         sys.stderr.write("stub-az: ParentNotFound for %s\n" % target); sys.exit(1)
+    # Two failure shapes for a CLI upload, both measured rather than imagined: a plain failure, and
+    # the one this share produced on 2026-09-08 — SUCCESS reported for a file that was never stored.
+    if os.environ.get("MOCK_AZ_FAIL_UPLOAD_OF") == target.name:
+        sys.stderr.write("stub-az: simulated upload failure for %s\n" % target); sys.exit(1)
+    if os.environ.get("MOCK_AZ_DROP_UPLOAD_OF") == target.name:
+        sys.exit(0)
     target.write_bytes(src.read_bytes())
+    # A hook AFTER a CLI upload landed — the pointer is the only file that still goes this way, so
+    # this is how a sibling publication is made to move `_current` in the gap between this run's
+    # pointer write and its read-back of it.
+    if os.environ.get("MOCK_AZ_AFTER_UPLOAD_OF") == target.name:
+        cmd = os.environ["MOCK_AZ_AFTER_UPLOAD_CMD"]
+        env = dict(os.environ)
+        for k in ("MOCK_AZ_AFTER_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_CMD"):
+            env.pop(k, None)
+        subprocess.run(["bash", "-c", cmd], env=env, check=False)
     mp = meta_path(rel)
     if mp.exists():
         mp.unlink()
@@ -329,6 +344,9 @@ class FakeShare:
 
     def upload(self, path, local, metadata):
         _run_hook("before", path)
+        refuse = os.environ.get("MOCK_AZ_FAIL_UPLOAD_PATH")
+        if refuse and path.endswith(refuse):
+            raise RuntimeError("simulated upload failure for %s" % path)
         counter = os.environ.get("MOCK_AZ_UPLOAD_COUNTER")
         if counter:
             with _LOCK:
@@ -352,6 +370,44 @@ class FakeShare:
         if not d.is_dir():
             return {}
         return {p.name: p.stat().st_size for p in d.iterdir() if p.is_file()}
+
+    def delete_file(self, path):
+        # 🚨 THE READER'S VIEW, recorded at the instant BEFORE each delete (#3461 phase 5): what
+        # `_current` names, whether that generation is sealed, and whether the flat copy at the
+        # prefix is still sealed. "A reader is never left with neither" is then a fact about every
+        # line of this log rather than a claim about the order the script's lines are written in.
+        log = os.environ.get("MOCK_AZ_DELETE_LOG")
+        prefix = os.environ.get("MOCK_AZ_DISPOSAL_PREFIX")
+        if log and prefix:
+            src = self.root / prefix
+            pointer = src / "_current"
+            named = pointer.read_text().strip() if pointer.is_file() else ""
+            gen_sealed = bool(named) and (src / named / "_complete").is_file()
+            flat_sealed = (src / "_complete").is_file()
+            with _LOCK, open(log, "a") as fh:
+                fh.write("%s\t%s\t%d\t%d\n" % (path, named or "-", gen_sealed, flat_sealed))
+        _run_hook("before", path)
+        fails = os.environ.get("MOCK_AZ_DELETE_FAILS")
+        if fails and path.endswith(fails):
+            raise RuntimeError("simulated delete failure for %s" % path)
+        f = self.root / path
+        if not f.is_file():
+            return False
+        f.unlink()
+        mp = self._meta(path)
+        if mp.exists():
+            mp.unlink()
+        # A hook AFTER a delete landed: this is how a LEGACY writer is made to seal the flat copy
+        # inside the disposal, which is the one interleaving the deletion order cannot prevent.
+        _run_hook("after", path)
+        return True
+
+    def delete_directory(self, path):
+        d = self.root / path
+        if not d.is_dir():
+            return False
+        d.rmdir()   # raises when not empty, exactly as the share refuses a non-empty directory
+        return True
 
     def get_properties(self, path):
         # Reproduces the ONE way a read-back loop could end early: a command inside a `while read`
@@ -529,7 +585,9 @@ class Harness:
         env.pop("RUNNER_TEMP", None)
         for k in ("MOCK_AZ_HOOK_ON", "MOCK_AZ_HOOK_CMD", "MOCK_AZ_HOOK_ONCE", "MOCK_AZ_HOOK_WHEN",
                   "MOCK_AZ_FAIL_UPLOADS_AFTER", "MOCK_AZ_UPLOAD_COUNTER", "MOCK_AZ_SHOW_FAILS",
-                  "MOCK_AZ_EAT_STDIN"):
+                  "MOCK_AZ_EAT_STDIN", "MOCK_AZ_DELETE_LOG", "MOCK_AZ_DISPOSAL_PREFIX",
+                  "MOCK_AZ_DELETE_FAILS", "MOCK_AZ_FAIL_UPLOAD_PATH", "MOCK_AZ_FAIL_UPLOAD_OF",
+                  "MOCK_AZ_DROP_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_CMD"):
             env.pop(k, None)
         for k, v in (env_extra or {}).items():
             if v is None:
@@ -575,6 +633,21 @@ def check(name: str, condition: bool, detail: str = ""):
     else:
         FAILURES.append(name)
         print(f"  FAIL {name}" + (f" — {detail}" if detail else ""))
+
+
+def inner_receipt(work: Path, run_id: str) -> str:
+    """The final receipt of a publication a backend hook ran — `<no receipt>` when it never got there."""
+    log = work / f"inner-{run_id}.log"
+    text = log.read_text() if log.is_file() else ""
+    return next((l for l in text.splitlines() if l.startswith("bake published:")), "<no receipt>")
+
+
+def inner_run_succeeded(work: Path, run_id: str) -> bool:
+    """A hooked publication ran to its receipt and failed no target. Its exit code is not captured
+    (the hook runs it inside the outer run's upload), so success is read off what it printed."""
+    log = work / f"inner-{run_id}.log"
+    text = log.read_text() if log.is_file() else ""
+    return "bake published:" in text and "FAILED" not in text
 
 
 def denominator(shelf: Shelf) -> str:
@@ -682,6 +755,37 @@ def check_helper_shape(script: Path, h: "Harness") -> None:
                         "--dest", DEST, "--manifest", str(empty)], capture_output=True, text=True, env=env)
     check("an empty manifest is refused, never verified into a green",
           r.returncode != 0 and "EMPTY" in r.stderr, f"rc={r.returncode}")
+
+    # ── `dispose` (#3461 phase 5): the only helper phase that DELETES from a production share, so
+    # ── its reach is pinned directly, not only through the script. `fnmatch`'s `*` crosses `/`, so a
+    # ── pattern matched against a full relative path would claim a LIVE generation's bytes.
+    h.reset()
+    gen_dir = shelf / "Systemorph-MeshWeaver-1-1"
+    (gen_dir / "modules").mkdir(parents=True)
+    (shelf / "modules").mkdir(parents=True)
+    for p in (shelf / "_complete", shelf / "_current", shelf / "Store.zip", shelf / "modules" / "A.module.nupkg",
+              gen_dir / "_complete", gen_dir / "Store.zip", gen_dir / "modules" / "A.module.nupkg"):
+        p.write_text("x")
+    r = subprocess.run([sys.executable, str(HELPER), "dispose", "--account", ACCOUNT, "--share", SHARE,
+                        "--dest", DEST, "--keep", "_current", "--match", "*.zip",
+                        "--match", "modules/*.module.nupkg", "--match", "_current"],
+                       capture_output=True, text=True, env=env)
+    check("dispose removes the prefix's seal and its recognised files, and exits 0",
+          r.returncode == 0 and not (shelf / "_complete").exists() and not (shelf / "Store.zip").exists()
+          and not (shelf / "modules").exists(),
+          f"rc={r.returncode}: {r.stderr.strip().splitlines()[-1:]}")
+    check("…a pattern never reaches INTO a generation directory, and --keep wins over a pattern",
+          (gen_dir / "_complete").is_file() and (gen_dir / "Store.zip").is_file()
+          and (gen_dir / "modules" / "A.module.nupkg").is_file() and (shelf / "_current").is_file(),
+          f"generation now holds {sorted(str(p.relative_to(gen_dir)) for p in gen_dir.rglob('*'))}")
+    r = subprocess.run([sys.executable, str(HELPER), "dispose", "--account", ACCOUNT, "--share", SHARE,
+                        "--dest", DEST], capture_output=True, text=True, env=env)
+    check("a dispose that recognises NOTHING is refused before it unseals anything",
+          r.returncode != 0 and "at least one --match" in r.stderr, f"rc={r.returncode}")
+    r = subprocess.run([sys.executable, str(HELPER), "dispose", "--account", ACCOUNT, "--share", SHARE,
+                        "--dest", DEST, "--match", "a/b/*.zip"], capture_output=True, text=True, env=env)
+    check("a pattern two directories deep is refused",
+          r.returncode != 0 and "is not '<glob>' or '<dir>/<glob>'" in r.stderr, f"rc={r.returncode}")
 
 
 def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
@@ -1105,46 +1209,298 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
               f"rc={r.returncode}, generation {tok_a}: {denominator(ga)}")
         check("the pointer names it",
               s.pointer() == tok_a, f"_current={s.pointer()!r}")
-        check("the flat compatibility copy is written too, for readers that cannot follow a pointer",
-              s.sealed() and len(s.files()) == EXPECTED_FILES
-              and set(s.bakes_present()) - {"<marker>"} == {"core-cd"},
-              denominator(s))
+        # 🚨 PHASE 5 (#3461): no flat compatibility copy is written any more. Until phase 5 this
+        # case asserted the opposite — the copy for pre-pointer readers, refreshed in place.
+        check("NO flat compatibility copy is written — the prefix holds the pointer and the generation, nothing else",
+              not s.sealed() and s.files() == {} and not (s.dest / "modules").exists(),
+              f"flat: {denominator(s)}")
         check("the pointer is NOT stamped — it is written after the postcondition, by construction",
               s.stamp(POINTER) == {}, f"stamp={s.stamp(POINTER)!r}")
 
-    # 🚨 THE ORDER, OBSERVED RATHER THAN READ OFF THE CODE. The pointer moves once the generation is
-    # sealed and BEFORE the flat compatibility copy — deliberately, so that an overlap on the flat
-    # copy (which still races) costs that copy rather than a publication which is already whole and
-    # disjoint. Nothing in the finished state records the order, so this hooks the flat copy's first
-    # upload and asks whether the pointer is already there. Without it the ordering lived only in a
-    # comment, and a comment is what drifted: the announcement line described the opposite order for
-    # one review cycle.
-    print("\ngeneration layout — the pointer moves BEFORE the flat compatibility copy:")
+    # ── 🚨 PHASE 5 (#3461): THE FLAT COMPATIBILITY COPY IS DISPOSED OF — AFTER THE POINTER, SEAL FIRST.
+    # ──
+    # ── The prefix below starts as every prefix on the share looked before its first phase-5
+    # ── publication: a SEALED flat copy (here published by the flat arm, with no pointer at all — the
+    # ── migration case, the hardest one, because until the pointer lands the flat copy is the ONLY
+    # ── sealed publication a reader of this prefix has). A generation run then publishes.
+    # ──
+    # ── Merely ceasing to refresh the copy would leave it sealed and complete while `_current` moves
+    # ── on, so every torn pointer read would be served a publication frozen at that moment. What is
+    # ── asserted is the approved disposal: the pointer lands, THEN `_complete` goes, THEN the files —
+    # ── and the fake backend records the reader's view at the instant before EVERY delete, so "a
+    # ── reader is never left with neither" is read off the log, not off the script's own lines.
+    print("\nphase 5 — a generation publication disposes of the flat copy it makes obsolete:")
     h.reset()
-    witness = work / "pointer-at-flat-copy"
-    r = h.publish(core, "Systemorph/MeshWeaver", "3501", {
-        "MOCK_AZ_HOOK_ON": f"{DEST}/{BUNDLES[0]}",
-        "MOCK_AZ_HOOK_WHEN": "before",
-        "MOCK_AZ_HOOK_ONCE": work / "fired-order",
-        "MOCK_AZ_HOOK_CMD":
-            f'if [ -f "{h.shelf_root}/{ACCOUNT}/{SHARE}/{DEST}/{POINTER}" ]; '
-            f'then echo present > "{witness}"; else echo absent > "{witness}"; fi',
-        **gen,
+    r = h.publish(core, "Systemorph/MeshWeaver", "3500")              # flat — no pointer yet
+    s = h.shelf()
+    check("the fixture really did start from a SEALED flat copy with no pointer (not vacuous)",
+          r.returncode == 0 and s.sealed() and len(s.files()) == EXPECTED_FILES and s.pointer() == "",
+          f"rc={r.returncode}, {denominator(s)}, _current={s.pointer()!r}")
+    (s.dest / "operator-notes.txt").write_text("not part of any publication\n")
+    deletes = work / "deletes-migration.log"
+    tok_p5 = "Systemorph-MeshWeaver.Plugins-3501-1"
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3501", {
+        "MOCK_AZ_DELETE_LOG": deletes, "MOCK_AZ_DISPOSAL_PREFIX": DEST, **gen,
     })
     s = h.shelf()
-    check("the hook really did fire on the flat copy's first upload (not vacuous)",
-          witness.is_file(), f"witness={witness.read_text().strip() if witness.is_file() else '<none>'}")
+    rows = [l.split("\t") for l in deletes.read_text().splitlines()] if deletes.is_file() else []
     if not expect_defect:
-        check("the pointer is already live when the flat compatibility copy starts being written",
-              witness.is_file() and witness.read_text().strip() == "present"
-              and r.returncode == 0 and s.pointer() == "Systemorph-MeshWeaver-3501-1",
-              f"rc={r.returncode}, at the flat copy's first upload {POINTER} was "
-              f"{witness.read_text().strip() if witness.is_file() else '<unobserved>'}")
-        check("…and the announcement says that order, so an incident log matches the code",
-              r.stdout.index(f"then {POINTER}") < r.stdout.index("then the flat compatibility copy")
-              if (f"then {POINTER}" in r.stdout and "then the flat compatibility copy" in r.stdout)
-              else False,
-              "the generation-layout line names the pointer before the flat copy")
+        check("the generation publication succeeds, sealed and pointed at",
+              r.returncode == 0 and s.pointer() == tok_p5 and s.under(tok_p5).sealed()
+              and len(s.under(tok_p5).files()) == EXPECTED_FILES
+              and set(s.under(tok_p5).bakes_present()) - {"<marker>"} == {"satellite"},
+              f"rc={r.returncode}, _current={s.pointer()!r}: {denominator(s.under(tok_p5))}")
+        check("the flat copy is GONE: no seal, no bundle, no module, no marker, no modules/ directory",
+              not s.sealed() and set(s.files()) == {"operator-notes.txt"}
+              and not (s.dest / "modules").exists(),
+              f"flat: {denominator(s)}, files={sorted(s.files())}")
+        check("…a file that is not part of the flat publication is LEFT, and named",
+              (s.dest / "operator-notes.txt").is_file()
+              and "1 unrecognised file(s) left in place: operator-notes.txt" in r.stderr,
+              "positive identification: the worst case of a pattern that is too narrow is bytes that stay")
+        check("…and the pointer itself is never deleted",
+              (s.dest / POINTER).is_file() and not any(row[0].endswith("/" + POINTER) for row in rows),
+              f"deleted: {[row[0] for row in rows]}")
+        check("the fixture really did record every delete (not vacuous)",
+              len(rows) == EXPECTED_FILES + 2,
+              f"{len(rows)} delete(s) logged, wanted the seal + {EXPECTED_FILES} file(s) + the "
+              f"post-disposal re-read of the seal (the legacy-writer postcondition)")
+        check("_complete is the FIRST thing deleted, and ALONE — no other file goes while the flat copy is sealed",
+              bool(rows) and rows[0][0] == f"{DEST}/{SENTINEL}"
+              and all(row[3] == "0" for row in rows[1:]),
+              f"delete order: {[row[0].rsplit('/', 2)[-1] + ('(sealed)' if row[3] == '1' else '') for row in rows]}")
+        check("the pointer had already LANDED on a sealed generation before the first delete",
+              bool(rows) and rows[0][1] == tok_p5 and rows[0][2] == "1" and rows[0][3] == "1",
+              f"at the seal's delete: _current={rows[0][1] if rows else '?'}, generation sealed="
+              f"{rows[0][2] if rows else '?'}, flat sealed={rows[0][3] if rows else '?'}")
+        check("a reader is NEVER left with neither — at every delete a sealed generation is named",
+              bool(rows) and all(row[2] == "1" or row[3] == "1" for row in rows),
+              f"{sum(1 for row in rows if row[2] != '1' and row[3] != '1')} of {len(rows)} delete(s) left a reader with neither")
+        check("…and the log says what it disposed of, with its denominator",
+              f"{EXPECTED_FILES} of {EXPECTED_FILES} recognised file(s) deleted" in r.stderr
+              and "seal removed" in r.stderr,
+              next((l for l in r.stderr.splitlines() if l.startswith("disposed of the flat")), "<no summary line>"))
+        check("…and the announcement names the order the code runs",
+              f"then {POINTER}, then disposing of the flat compatibility copy ({SENTINEL} first)" in r.stdout,
+              "the generation-layout line must match what the log below it shows")
+
+    # The CONTROL for the migration case: a prefix that is NOT published again keeps its flat copy.
+    # The disposal is incremental and per prefix — no sweep of the share — so an identity nothing
+    # publishes any more keeps the copy an old image's reader may still be resolving.
+    print("\nphase 5 — a prefix that is not published again keeps its flat copy (no sweep):")
+    h.reset()
+    h.publish(core, "Systemorph/MeshWeaver", "3510")
+    r = h.publish(core, "Systemorph/MeshWeaver", "3511", gen)         # the SAME content ⇒ a skip
+    s = h.shelf()
+    check("the fixture really did skip (not vacuous)",
+          r.returncode == 0 and "already published; skipping" in r.stdout, f"rc={r.returncode}")
+    check("a run that publishes nothing disposes of nothing — the flat copy stays sealed and whole",
+          s.sealed() and len(s.files()) == EXPECTED_FILES and s.pointer() == "",
+          f"flat: {denominator(s)}")
+
+    # ── The seal cannot be removed ⇒ NOTHING is removed, and the target fails. A sealed flat copy that
+    # ── is no longer refreshed is exactly the frozen serve phase 5 exists to end, so it must be red.
+    print("\nphase 5 — the flat copy's seal cannot be deleted:")
+    h.reset()
+    h.publish(core, "Systemorph/MeshWeaver", "3520")
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3521", {
+        "MOCK_AZ_DELETE_FAILS": f"{DEST}/{SENTINEL}", **gen})
+    s = h.shelf()
+    if not expect_defect:
+        check("the target FAILS, naming the seal it could not remove",
+              r.returncode != 0 and "STILL SEALED" in r.stderr, f"rc={r.returncode}")
+        check("…and nothing else was deleted: the flat copy is still sealed and whole",
+              s.sealed() and len(s.files()) == EXPECTED_FILES
+              and set(s.bakes_present()) - {"<marker>"} == {"core-cd"},
+              f"flat: {denominator(s)}")
+        check("…while the new publication stays live for every pointer-following reader",
+              s.pointer() == "Systemorph-MeshWeaver.Plugins-3521-1"
+              and s.under("Systemorph-MeshWeaver.Plugins-3521-1").sealed(),
+              f"_current={s.pointer()!r}")
+
+    # ── Once the seal is gone, a file that cannot be deleted is storage, not a publication: named,
+    # ── and not fatal. Going red here would fail a publication that is live and a prefix no reader
+    # ── serves, over bytes the next publication removes.
+    print("\nphase 5 — a flat file that cannot be deleted AFTER the seal went:")
+    h.reset()
+    h.publish(core, "Systemorph/MeshWeaver", "3530")
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3531", {
+        "MOCK_AZ_DELETE_FAILS": f"{DEST}/{BUNDLES[1]}", **gen})
+    s = h.shelf()
+    if not expect_defect:
+        check("the run succeeds: the prefix is unsealed, so a left-over file serves nobody",
+              r.returncode == 0 and not s.sealed() and set(s.files()) == {BUNDLES[1]},
+              f"rc={r.returncode}, flat: {denominator(s)}, files={sorted(s.files())}")
+        check("…and the left-over is named as a warning, never silently",
+              f"::warning::could not delete {TARGET}/{DEST}/{BUNDLES[1]}" in r.stderr
+              and "UNSEALED but not fully removed" in r.stderr,
+              "a disposal that says nothing about what it left is indistinguishable from a complete one")
+
+    # ── 🚨 THE POINTER DID NOT LAND. The CLI reported SUCCESS for files it never stored on this
+    # ── share (39 of 45, 2026-09-08). On the migration prefix the flat copy is then the ONLY sealed
+    # ── publication there is: disposing of it on the upload's word alone would leave every reader of
+    # ── this prefix with NEITHER. The pointer is read back first, and a pointer that is not there
+    # ── disposes of nothing.
+    print("\nphase 5 — the pointer upload reports success and stores nothing:")
+    h.reset()
+    h.publish(core, "Systemorph/MeshWeaver", "3540")
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3541", {
+        "MOCK_AZ_DROP_UPLOAD_OF": POINTER, **gen})
+    s = h.shelf()
+    check("the fixture really did lose the pointer (not vacuous)",
+          s.pointer() == "" and s.under("Systemorph-MeshWeaver.Plugins-3541-1").sealed(),
+          f"_current={s.pointer()!r}, generations={s.generations()}")
+    if not expect_defect:
+        check("the target FAILS, saying the pointer did not land",
+              r.returncode != 0 and "The pointer did not land" in r.stdout, f"rc={r.returncode}")
+        check("…and the flat copy — the only sealed publication this prefix has — is untouched",
+              s.sealed() and len(s.files()) == EXPECTED_FILES
+              and set(s.bakes_present()) - {"<marker>"} == {"core-cd"},
+              f"flat: {denominator(s)}")
+
+    # ── 🚨 …AND THE POINTER UPLOAD CAN LEAVE THE PREVIOUS POINTER IN PLACE, which is the shape that
+    # ── makes "does `_current` name a sealed generation" too weak a read-back (Copilot's review of
+    # ── this PR). The share reports SUCCESS for a file it did not store, so the PREVIOUS pointer
+    # ── survives — it resolves to the previous generation, sealed and whole. A check that asked only
+    # ── "is a generation live" therefore passed, counted this run as published, and deleted the flat
+    # ── copy for a publication nobody points at. The read-back compares against THIS run's token.
+    print("\nphase 5 — the pointer upload stores nothing and the PREVIOUS pointer survives:")
+    h.reset()
+    h.publish(core, "Systemorph/MeshWeaver", "3580", gen)        # generation A, pointed at
+    tok_a5 = "Systemorph-MeshWeaver-3580-1"
+    prefix_dir = h.shelf_root / ACCOUNT / SHARE / DEST
+    # A flat copy at the prefix, as a producer still running a pre-phase-5 publisher leaves one.
+    for p in sorted((prefix_dir / tok_a5).iterdir()):
+        if p.is_file():
+            shutil.copy2(p, prefix_dir / p.name)
+    (prefix_dir / "modules").mkdir(exist_ok=True)
+    for p in sorted((prefix_dir / tok_a5 / "modules").iterdir()):
+        shutil.copy2(p, prefix_dir / "modules" / p.name)
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3581", {
+        "MOCK_AZ_DROP_UPLOAD_OF": POINTER, **gen})
+    s = h.shelf()
+    check("the fixture really did leave the PREVIOUS pointer live (not vacuous)",
+          s.pointer() == tok_a5 and s.under(tok_a5).sealed()
+          and "Systemorph-MeshWeaver.Plugins-3581-1" in s.generations(),
+          f"_current={s.pointer()!r}, generations={s.generations()}")
+    if not expect_defect:
+        check("the read-back compares against THIS run's generation, so the target FAILS",
+              r.returncode != 0 and "The pointer did not land" in r.stdout
+              and "Systemorph-MeshWeaver.Plugins-3581-1" in r.stdout,
+              f"rc={r.returncode} — a previous generation being live is not this publication being live")
+        check("…and the flat copy is untouched: nothing was disposed of for a publication nobody points at",
+              s.sealed() and len(s.files()) == EXPECTED_FILES,
+              f"flat: {denominator(s)}")
+
+    # ── 🚨 THE ONE INTERLEAVING THE ORDER CANNOT PREVENT: a producer still running a pre-phase-5
+    # ── publisher refreshes the flat copy — unseal, upload, verify, seal LAST — and its seal lands
+    # ── AFTER this disposal's deletes. The prefix would then be SEALED over a set this sweep has
+    # ── emptied: a complete-looking flat publication with files missing, which a torn pointer read
+    # ── would be served. There is no lease on this store, so the answer is a POSTCONDITION: read the
+    # ── sentinel again after the deletes and remove it, turning that into "being republished".
+    print("\nphase 5 — a legacy writer SEALS the flat copy inside the disposal:")
+    h.reset()
+    h.publish(core, "Systemorph/MeshWeaver", "3590")             # a flat copy to dispose of
+    reseal = (f'printf "Chess.zip\\n" > "{h.shelf_root}/{ACCOUNT}/{SHARE}/{DEST}/{SENTINEL}"')
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3591", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/architecture.txt",
+        "MOCK_AZ_HOOK_WHEN": "after",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-reseal",
+        "MOCK_AZ_HOOK_CMD": reseal,
+        **gen})
+    s = h.shelf()
+    check("the fixture really did re-seal the flat copy mid-disposal (not vacuous)",
+          (work / "fired-reseal").is_file(), "the hook fired on the last flat file's delete")
+    if not expect_defect:
+        check("the re-appeared seal is removed again, so no reader can be served an incomplete set",
+              r.returncode == 0 and not s.sealed(),
+              f"rc={r.returncode}, flat sealed={s.sealed()} — 'being republished' is the state readers handle")
+        check("…and it says so, naming the writer that is still refreshing the copy",
+              "was written again WHILE this disposal ran" in r.stderr,
+              "a postcondition that fires silently is indistinguishable from one that never fires")
+
+    # ── …and the SIBLING case, which must NOT be red: a newer publication takes the pointer in the
+    # ── gap between this run's pointer write and its read-back. Nothing is wrong — that run owns the
+    # ── prefix and its own disposal — so this one is `superseded`, exactly as the pre-pointer check
+    # ── reports it, and it disposes of nothing.
+    print("\nphase 5 — a NEWER publication takes the pointer between the write and the read-back:")
+    h.reset()
+    older5 = Bake(work, "older-5", "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5")
+    newer5 = Bake(work, "newer-5", "f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6")
+    # 🚨 A flat copy of THIRD-PARTY content: publishing `older5` here would make the run under test
+    # skip as already-published, and the case would pass having exercised nothing.
+    h.publish(core, "Systemorph/MeshWeaver", "3595")             # a flat copy at the prefix
+    inner = h.publish_command(newer5, "Systemorph/MeshWeaver", "3597", {
+        **gen, "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+        "GH_TOKEN": "stub", "MOCK_GH_AHEAD": newer5.source_sha})
+    r = h.publish(older5, "Systemorph/MeshWeaver", "3596", {
+        "MOCK_AZ_AFTER_UPLOAD_OF": POINTER,
+        "MOCK_AZ_AFTER_UPLOAD_CMD": inner,
+        "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+        "GH_TOKEN": "stub", "MOCK_GH_AHEAD": newer5.source_sha,
+        **gen})
+    s = h.shelf()
+    check("the fixture really did hand the pointer to the newer publication (not vacuous)",
+          s.pointer() == "Systemorph-MeshWeaver-3597-1" and inner_run_succeeded(work, "3597"),
+          f"_current={s.pointer()!r}, inner receipt: {inner_receipt(work, '3597')!r}")
+    if not expect_defect:
+        check("the run SUCCEEDS as superseded — a sibling winning the pointer is not this run failing",
+              r.returncode == 0 and "A newer publication took the pointer" in r.stdout
+              and "targets-superseded=1" in r.stdout,
+              f"rc={r.returncode}")
+        check("…and it disposes of nothing: the prefix belongs to the run that owns the pointer",
+              "disposing of the flat compatibility copy beside it" not in r.stdout,
+              "the loser of a pointer race must not delete bytes the winner is responsible for")
+
+    # ── 🚨 A FAILED pointer upload must stop the target where it fails. Until this change the
+    # ── per-target subshell ran as an `if` CONDITION, where bash suspends `set -e` for the whole body:
+    # ── the failed upload was followed by "this publication is now the live one".
+    print("\nphase 5 — the pointer upload FAILS:")
+    h.reset()
+    h.publish(core, "Systemorph/MeshWeaver", "3550")
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3551", {
+        "MOCK_AZ_FAIL_UPLOAD_OF": POINTER, **gen})
+    s = h.shelf()
+    check("the fixture really did fail the pointer upload (not vacuous)",
+          "simulated upload failure" in r.stderr and s.pointer() == "", f"_current={s.pointer()!r}")
+    if not expect_defect:
+        check("the target stops AT the failure — it never claims the publication is live",
+              r.returncode != 0 and "now the live one" not in r.stdout
+              and "disposing of the flat compatibility copy beside it" not in r.stdout,
+              f"rc={r.returncode}")
+        check("…and the flat copy is untouched",
+              s.sealed() and len(s.files()) == EXPECTED_FILES, f"flat: {denominator(s)}")
+
+    # ── The same suspended `set -e`, on the FLAT arm's seal: a failed `_complete` upload printed
+    # ── "sealed:" and was counted as a publication. Asserted on the receipt as well as the exit code.
+    print("\nthe seal upload FAILS (flat arm):")
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "3560", {
+        "MOCK_AZ_FAIL_UPLOAD_PATH": f"{DEST}/{SENTINEL}"})
+    s = h.shelf()
+    check("the fixture really did fail the seal upload (not vacuous)",
+          "simulated upload failure" in r.stderr and not s.sealed(), f"sealed={s.sealed()}")
+    if not expect_defect:
+        check("the target FAILS and never prints 'sealed:' for a seal that is not there",
+              r.returncode != 0 and f"sealed: {TARGET}/{DEST}/{SENTINEL}" not in r.stdout,
+              f"rc={r.returncode}")
+
+    # …and on the generation arm, where the next step would have moved the pointer to it.
+    print("\nthe seal upload FAILS (generation arm):")
+    h.reset()
+    h.publish(core, "Systemorph/MeshWeaver", "3570")
+    tok_unsealed = "Systemorph-MeshWeaver.Plugins-3571-1"
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3571", {
+        "MOCK_AZ_FAIL_UPLOAD_PATH": f"{DEST}/{tok_unsealed}/{SENTINEL}", **gen})
+    s = h.shelf()
+    check("the fixture really did leave the generation unsealed (not vacuous)",
+          tok_unsealed in s.generations() and not s.under(tok_unsealed).sealed(),
+          f"generations={s.generations()}")
+    if not expect_defect:
+        check("an unsealed generation is never pointed at, and the flat copy is untouched",
+              r.returncode != 0 and s.pointer() == "" and s.sealed()
+              and len(s.files()) == EXPECTED_FILES,
+              f"rc={r.returncode}, _current={s.pointer()!r}, flat: {denominator(s)}")
 
     # ── THE HEADLINE: interleave two publishers and neither directory can hold the other's bytes.
     print("\ngeneration layout — two publishers interleaved on one prefix:")
@@ -1176,12 +1532,15 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
               f"{len(gc.files())} and {len(gs.files())} of {EXPECTED_FILES}")
         check("the pointer names exactly ONE of them, and it is one that exists",
               s.pointer() in (tok_core, tok_sat), f"_current={s.pointer()!r}")
-        # The flat compatibility copy is the part that still races — the postcondition covers it
-        # exactly as today, and the run that loses it goes red. Asserted so nobody reads phase 4 as
-        # "the window is closed": it is closed for pointer-following readers only.
-        check("the flat copy still races, and is never sealed over a mix",
-              not s.sealed_mix(),
-              f"flat: {denominator(s)} — the compatibility copy is the phase-5 remainder")
+        # 🚨 Until phase 5 this asserted "the flat copy still races, and is never sealed over a mix":
+        # both runs rewrote the flat compatibility copy in place, and the loser went red. Phase 5
+        # removed that write, so the two runs share NO directory at all — and both SUCCEED.
+        check("nothing is written at the prefix itself any more, so there is nothing left to race",
+              not s.sealed() and s.files() == {},
+              f"flat: {denominator(s)}")
+        check("…and so NEITHER interleaved run goes red — an overlap no longer costs a publication",
+              r.returncode == 0 and inner_run_succeeded(work, "3102"),
+              f"outer rc={r.returncode}; inner receipt: {inner_receipt(work, '3102')!r}")
         check("…and the generation the pointer names is served whole regardless of what the flat copy holds",
               s.under(s.pointer()).sealed()
               and len(s.under(s.pointer()).files()) == EXPECTED_FILES,
@@ -1211,6 +1570,16 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
         "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
         "GH_TOKEN": "stub", "MOCK_GH_AHEAD": newer.source_sha,
     })
+    # 🚨 …and then a SEALED FLAT COPY of the newer bytes appears at the prefix — the state a
+    # producer still running a pre-phase-5 publisher leaves (a reconcile at an older platform-ref
+    # refreshes the copy), i.e. a flat copy ANOTHER run is serving. Without it the newer phase-5
+    # run has already disposed of the copy and "the superseded run did not delete it" could not be
+    # observed at all — the assertion below would pass on a shelf with nothing to delete.
+    prefix_dir = f"{h.shelf_root}/{ACCOUNT}/{SHARE}/{DEST}"
+    planted = work / "planted-flat-copy"
+    inner = (f'{inner}; cp "{prefix_dir}/{tok_new}"/* "{prefix_dir}"/ 2>/dev/null; '
+             f'mkdir -p "{prefix_dir}/modules"; cp "{prefix_dir}/{tok_new}"/modules/* "{prefix_dir}/modules"/; '
+             f'if [ -f "{prefix_dir}/{SENTINEL}" ]; then echo planted > "{planted}"; fi')
     r = h.publish(older, "Systemorph/MeshWeaver", "3701", {
         "MOCK_AZ_HOOK_ON": f"{DEST}/{tok_old}/{BUNDLES[1]}",
         "MOCK_AZ_HOOK_WHEN": "before",
@@ -1249,9 +1618,14 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
         check("the older run's generation is sealed and complete, just named by nothing",
               s.under(tok_old).sealed() and len(s.under(tok_old).files()) == EXPECTED_FILES,
               f"{tok_old}: {denominator(s.under(tok_old))} — retention collects it once it is past the window")
-        check("the FLAT compatibility copy was not refreshed with the older bytes either",
-              set(s.bakes_present()) - {"<marker>"} != {"older-content"},
-              f"flat: {denominator(s)} — pre-pointer readers must not be handed what the pointer refused")
+        check("the fixture really did plant a sealed flat copy of the NEWER bytes while the older run was in flight (not vacuous)",
+              inner_run_succeeded(work, "3702") and planted.is_file(),
+              f"inner receipt: {inner_receipt(work, '3702')!r}, planted={planted.is_file()} — observed "
+              "at the hook, so this reads what the older run was handed, not what it left")
+        check("the SUPERSEDED run disposes of nothing — the flat copy another run is serving is left sealed and whole",
+              s.sealed() and len(s.files()) == EXPECTED_FILES
+              and set(s.bakes_present()) - {"<marker>"} == {"newer-content"},
+              f"flat: {denominator(s)} — a run that lost the pointer race owns nothing at this prefix")
 
     # ── The writer must decide "already published" from the POINTED-TO directory, not the prefix.
     # Getting this wrong is the silent one: the writer would read the flat compatibility copy while

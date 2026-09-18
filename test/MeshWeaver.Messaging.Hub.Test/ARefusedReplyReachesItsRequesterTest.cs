@@ -46,12 +46,19 @@ public class ARefusedReplyReachesItsRequesterTest(ITestOutputHelper output) : Hu
 
     /// <summary>The responder: takes the request, replies to NOBODY (the detached-reply shape —
     /// the real one mints its verdict on a later turn), so the requester's callback stays pending
-    /// and this hub's own pump stays free to advance its phases.</summary>
-    private static MessageHubConfiguration Responder(MessageHubConfiguration c)
+    /// and this hub's own pump stays free to advance its phases. <paramref name="received"/>
+    /// completes when the request has been TAKEN — see <see cref="Arrange"/> for why the tests wait
+    /// on it.</summary>
+    private static MessageHubConfiguration Responder(MessageHubConfiguration c, AsyncSubject<Unit> received)
         => c
             .WithPostingIdentity(PostingIdentity.System)
             .WithTypes(typeof(SlowRequest), typeof(SlowAck), typeof(ParkTurn))
-            .WithHandler<SlowRequest>((_, d) => d.Processed());
+            .WithHandler<SlowRequest>((_, d) =>
+            {
+                received.OnNext(Unit.Default);
+                received.OnCompleted();
+                return d.Processed();
+            });
 
     /// <summary>A child whose parked turn holds its owner at <c>DisposeHostedHubs</c> — the owner
     /// cannot leave that phase until its hosted hubs report done, which is the state this test
@@ -80,16 +87,30 @@ public class ARefusedReplyReachesItsRequesterTest(ITestOutputHelper output) : Hu
                 .WithProperty(PostOptions.RequestId, requestId),
             responder.JsonSerializerOptions);
 
-    private (IMessageHub Responder, IMessageHub Requester, string RequestId, Task<IMessageDelivery> Response,
-        AsyncSubject<Unit> Parked, Func<bool> Released, Action Release) Arrange(CancellationToken ct)
+    /// <summary>
+    /// A requester with ONE pending request that the responder has TAKEN.
+    ///
+    /// <para>🚨 <b>Taken, not merely posted</b> (#4432). The request travels requester → mesh →
+    /// responder through queues, and every test here tears the responder down next. If that
+    /// teardown wins the race, the MESH routes the request to a host that is gone and answers the
+    /// requester itself — <c>NotFound: No route found for host refused-reply-responder/1. Last tried
+    /// in mesh/1</c> — which resolves the very callback the tests then assert on, before the reply
+    /// under test is ever delivered. That is correct routing (the request reached nobody), not the
+    /// refusal these tests pin; measured once on core's merge queue under load and never locally.
+    /// So the fixture waits until the responder's handler has run: the request has arrived, and
+    /// the only thing left to answer the callback is the reply.</para>
+    /// </summary>
+    private async Task<(IMessageHub Responder, IMessageHub Requester, string RequestId, Task<IMessageDelivery> Response,
+        AsyncSubject<Unit> Parked, Func<bool> Released, Action Release)> Arrange(CancellationToken ct)
     {
         var parked = new AsyncSubject<Unit>();
+        var received = new AsyncSubject<Unit>();
         var releaseChild = 0;
 
         var requester = Mesh.GetHostedHub(RequesterAddress, c => c
             .WithPostingIdentity(PostingIdentity.System)
             .WithTypes(typeof(SlowRequest), typeof(SlowAck)), HostedHubCreation.Always)!;
-        var responder = Mesh.GetHostedHub(ResponderAddress, Responder, HostedHubCreation.Always)!;
+        var responder = Mesh.GetHostedHub(ResponderAddress, c => Responder(c, received), HostedHubCreation.Always)!;
         responder.GetHostedHub(ChildAddress,
                 c => ParkedChild(c, parked, () => Volatile.Read(ref releaseChild) == 1), HostedHubCreation.Always)
             .Should().NotBeNull();
@@ -99,6 +120,9 @@ public class ARefusedReplyReachesItsRequesterTest(ITestOutputHelper output) : Hu
             .Observe((object)new SlowRequest(), o => o.WithTarget(ResponderAddress), requestId)!
             .FirstAsync()
             .Await(ct);
+        await received.Should().Within(TestTimeouts.Convergence).Emit(
+            "the responder must have TAKEN the request before a test tears it down — otherwise the "
+            + "mesh answers the requester NotFound for the request itself (#4432)");
 
         return (responder, requester, requestId, response, parked,
             () => Volatile.Read(ref releaseChild) == 1, () => Volatile.Write(ref releaseChild, 1));
@@ -113,7 +137,7 @@ public class ARefusedReplyReachesItsRequesterTest(ITestOutputHelper output) : Hu
     public async Task AtDisposeHostedHubs_ACorrelatedReply_IsAdmittedAndReachesItsRequester()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (responder, requester, requestId, response, parked, _, release) = Arrange(ct);
+        var (responder, requester, requestId, response, parked, _, release) = await Arrange(ct);
         try
         {
             responder.Post(new ParkTurn(), o => o.WithTarget(ChildAddress));
@@ -150,7 +174,7 @@ public class ARefusedReplyReachesItsRequesterTest(ITestOutputHelper output) : Hu
     public async Task PastShutDown_ARefusedReply_NacksTheRequesterTransiently_NotTheResponder()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (responder, requester, requestId, response, _, _, release) = Arrange(ct);
+        var (responder, requester, requestId, response, _, _, release) = await Arrange(ct);
         try
         {
             responder.Dispose();
@@ -192,7 +216,7 @@ public class ARefusedReplyReachesItsRequesterTest(ITestOutputHelper output) : Hu
     public async Task ARefusedDeliveryFailure_IsNotAnsweredWithAnotherOne()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (responder, requester, requestId, response, _, _, release) = Arrange(ct);
+        var (responder, requester, requestId, response, _, _, release) = await Arrange(ct);
         try
         {
             responder.Dispose();

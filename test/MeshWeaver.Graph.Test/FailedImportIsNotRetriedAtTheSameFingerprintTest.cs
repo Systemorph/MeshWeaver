@@ -35,6 +35,18 @@ namespace MeshWeaver.Graph.Test;
 /// re-importing. So only a pass whose failures were <b>every one</b> a content verdict records a
 /// final verdict; a single retryable failure among them keeps the ordinary Warning. The two tests
 /// below are that distinction, and the second is the one that could falsify the first.</para>
+///
+/// <para>🚨 <b>Updated for #4459/#4456 — the rule is unchanged, its GRANULARITY is not.</b> The
+/// memory of "these bytes cannot be written" moved from the content-addressed marker (a verdict
+/// about the PARTITION) to the per-node import manifest (a verdict about the NODE that earned it),
+/// because recording it per partition is what froze <c>Hosting</c> out of memex.systemorph.com over
+/// a single NUL byte: the next import answered <c>Skipped</c> without reading anything, and the
+/// operator's repair was refused with a sentence claiming the content had been recorded. So these
+/// tests now assert on <see cref="StaticRepoImportResult.WriteRequests"/> — the write requests
+/// actually issued — which is the quantity the memex-cloud storm was made of and the one thing the
+/// word <c>Skipped</c> was ever standing in for. The partition-level skip of a clean import
+/// (<see cref="ACleanImport_StillSucceedsAndStillShortCircuits"/>) is untouched.
+/// <see cref="ARefusedNodeDoesNotFreezeThePartitionTest"/> is the other side of this pair.</para>
 /// </summary>
 public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
@@ -92,9 +104,10 @@ public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper 
     /// <summary>
     /// 🚨 THE PIN. Import twice with the SAME content. The second pass must not touch the mesh.
     ///
-    /// <para>Pre-fix both passes return an importing outcome and re-run every upsert and every
-    /// compile; post-fix the second is <c>Skipped</c>, which is the same word the green short-circuit
-    /// uses — because it is the same fact: this fingerprint has a verdict.</para>
+    /// <para>Pre-#3146 both passes re-ran every upsert and every compile. The pin is that the second
+    /// pass issues NO write request at all — measured, not inferred from an outcome word, because a
+    /// word can stay right while the writes come back (#4459's fix re-imports where this used to
+    /// answer <c>Skipped</c>, and the storm protection now lives in the per-node refusal memory).</para>
     /// </summary>
     [Fact(Timeout = 300_000)]
     public async Task AContentVerdict_IsFinalForThatFingerprint()
@@ -118,12 +131,17 @@ public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper 
         // Same source, same fingerprint — the state memex-cloud was in on every webhook.
         var second = await StaticRepoImporter.ImportSource(Mesh, source)
             .FirstAsync().Timeout(240.Seconds()).Await(TestContext.Current.CancellationToken);
-        Output.WriteLine($"second = {second.Outcome}");
+        Output.WriteLine($"second = {second.Outcome} writeRequests={second.WriteRequests}");
 
-        second.Outcome.Should().Be("Skipped",
-            "the marker is content-addressed, so re-running re-reads the same nodes and re-derives "
-            + "the same refusal; doing it anyway cost memex-cloud 19 full passes in 3 h — ≈425 "
-            + "failing upserts plus a NodeType compile each — on a portal already at 8/8 replicas");
+        second.WriteRequests.Should().Be(0,
+            "the refusal is remembered against the node that earned it, so re-running re-reads the "
+            + "same bytes and issues NOTHING; doing it anyway cost memex-cloud 19 full passes in 3 h "
+            + "— ≈425 failing upserts plus a NodeType compile each — on a portal already at 8/8 "
+            + "replicas");
+        second.Outcome.Should().Be("ImportedWithContentErrors",
+            "and it still SAYS the partition is missing a node the source declares. Answering "
+            + "Skipped for the whole partition is what froze Hosting out of memex.systemorph.com "
+            + "over one NUL byte (#4459) — the refusal belongs to Nested, never to the partition");
     }
 
     /// <summary>
@@ -201,9 +219,10 @@ public class FailedImportIsNotRetriedAtTheSameFingerprintTest(ITestOutputHelper 
 
         var second = await StaticRepoImporter.ImportSource(Mesh, source)
             .FirstAsync().Timeout(240.Seconds());
-        Output.WriteLine($"second = {second.Outcome}");
+        Output.WriteLine($"second = {second.Outcome} writeRequests={second.WriteRequests}");
 
-        second.Outcome.Should().Be("Skipped",
-            "and it follows through: the marker is final, so the next trigger skips");
+        second.WriteRequests.Should().Be(0,
+            "and it follows through: the verdict is remembered against Flaky, so the next trigger "
+            + "re-issues nothing");
     }
 }

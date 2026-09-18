@@ -678,6 +678,16 @@ public static class PrebuiltBundleStore
             else if (identity.HasReadFault)
                 Keep(identity.Identity,
                     $"its seal could not be read ({identity.Sources.First(s => s.ReadFault is not null).ReadFault}) — unreadable is never unreferenced");
+            // 🚨 The same rule one field over, and phase 5 is what made it load-bearing at the
+            // IDENTITY level (#3461). A source whose `_current` could not be followed reads as
+            // UNSEALED once the flat compatibility copy is disposed of — so rule 3 below ("the
+            // newest sealed publication of this source") would stop protecting this identity on a
+            // reading that established nothing. The generation rules already keep every generation
+            // of such a source; this keeps the identity that holds them.
+            else if (identity.Sources.FirstOrDefault(s => s.PointerFault is not null) is { } faulted)
+                Keep(identity.Identity,
+                    $"which publication of '{faulted.Name}' applies is unknown ({faulted.PointerFault}) "
+                    + "— an inventory that could not be read licenses no deletion");
             else if (cleanMarkersOf.TryGetValue(identity.Identity, out var releases))
                 Keep(identity.Identity, $"named by release marker {releases}");
             else if (pinnedReasons.TryGetValue(identity.Identity, out var pinnedBy))

@@ -7,19 +7,20 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # The Supplied Navigation Rail
 
-Core's default left-hand index is **the tree under the page's index root** — the node one level
-below the partition (`Doc/Architecture` for every page under it, `Infrastructure/Inference` for its
-sub-pages, `{viewer}/Notes` inside a home). Every page of that tree shows the same index: the root's
-children in their declared order, an entry with children as a collapsible group, the groups on the
-reader's path open, and the page being read marked as current (`DefaultNodeNavigation`).
+Core's default left-hand index is **the tree of the page's Space** — its first path segment
+(`Infrastructure` for every page under it, `{viewer}` inside a home). Every page of the Space shows
+the same index: the Space's children in their declared order, an entry with children as a
+collapsible group, the groups on the reader's path open, and the page being read marked as current
+(`DefaultNodeNavigation`).
 
 It used to be **the current node's own children**, which was right on the root of a document tree
 and wrong one level down: a sub-page has no children, so the index vanished the moment the reader
 clicked into it, and nothing told them where they were (reported 2026-09-14 on
-`Infrastructure/Inference`). The second segment is the root because the first is the partition — a
-Space, a plugin, a viewer's home — whose own overview lists its content already; an index rooted
-there would put every document of the Space beside every page of every document. A page directly
-under the partition is its own root, so a childless one still renders with no rail.
+`Infrastructure/Inference`). A first fix rooted the index one level below the Space, which left the
+Space's own pages — `Infrastructure/Options` beside `Infrastructure/Inference` — outside every index
+again (reported 2026-09-15: "Infra has one; show it, with where we are"). **The root is the Space**:
+a Space is the document and its overview is the title page, so every page under it shows the one
+index of the Space, with the page being read marked and only the groups on the reader's path open.
 
 That default is also wrong for a course: a learner standing in lesson 2 must see the whole course,
 not the document tree the lesson happens to sit in, with the course's own notion of what a page is.
@@ -153,6 +154,29 @@ across pages and reloads; the button shows only on pages that have a rail, and w
 hidden it turns into the expand button. A shell that does not know the class leaves the splitter
 bar's own collapse chevron in charge. (The Blazor portal's half lives in MeshWeaver.Plugins:
 `NavRailStateService`, `NavRailPanePresentation`, and the toggle in `PortalLayoutBase`.)
+
+**One sidebar, one button.** The index rail is not the only left-hand sidebar a page can have: the
+Threads app (`/{user}/Chat`) and every full-page thread show their thread list in the same place. It
+joins the same toggle and the same state (2026-09-16, the maintainer: *"when side menu (on left) is
+collapsed … the expand button is still to the left consuming real estate … integrate the open button
+… in the top menu bar, similar to how safari is doing it"*). The rule for any left sidebar is
+therefore:
+
+- **Collapsed takes zero width.** Nothing stays behind on the left edge — no strip, no reveal
+  button, no splitter bar. The header button is the only way back, which is why it is always there
+  while the page has a sidebar.
+- **The button never moves.** It sits at the left end of the top bar in both states and only swaps
+  its icon (`PanelLeftContract` ↔ `PanelLeftExpand`) and its localized name (`menu.hideSidebar` ↔
+  `menu.showSidebar`). A sidebar carries no collapse control of its own while a shell hosts this one
+  — two controls for one state is how the residual strip came about.
+- **The state is the reader's, not the page's.** Hiding the thread list also hides a document's index,
+  the way Safari's sidebar button hides whichever sidebar the window shows; the choice follows the
+  reader across pages and reloads.
+- **A sidebar reports its presence** (`NavRailStateService.Attach`/`Detach`, reconciled after every
+  render) so the button shows only while there is something to toggle, and it resolves the service
+  OPTIONALLY: in a host with no shell toggle it keeps its own collapse and reveal controls rather than
+  becoming impossible to reopen. The thread list's fold is `ThreadNavPresentation` in
+  `MeshWeaver.Blazor.Chat`.
 
 ## Why the plan is a pure record
 

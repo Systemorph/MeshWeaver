@@ -390,7 +390,41 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                 .Select(comments => ToIssue(issue) with
                 {
                     Comments = comments.Select(ToComment).ToImmutableList(),
-                }));
+                    // Earned, not inherited: this is the one read that actually received the list.
+                    CommentsAreComplete = true,
+                })
+                // 🚨 The comments leg 404s for an issue that was TRANSFERRED: GitHub's redirect
+                // covers the issue resource and not its sub-resources, so the first leg already
+                // succeeded and carries the issue's new number and repository. Faulting the whole
+                // call here threw away a successful read of a real issue and made a transferred
+                // issue indistinguishable from a deleted one — measured 2026-09-17 on
+                // Systemorph/MeshWeaver#2950, now Systemorph/MeshWeaver.Plugins#1139, which is how
+                // Admin/_LogIncident/9b70b639c4e77af3 sat at Failed / "Not Found" from 2026-09-01
+                // (MeshWeaver#4629, MeshWeaver.Plugins#2028).
+                //
+                // Keep what was read and DECLARE the gap rather than swallowing it: a caller whose
+                // subject is the comments can still tell, because CommentsAreComplete says so.
+                // Only the comments leg is forgiven — a 404 on the ISSUE itself still faults.
+                // CommentsAreComplete stays at its default false — the comments are exactly what
+                // could not be read here.
+                .Catch((NotFoundException _) => Observable.Return(ToIssue(issue))));
+    }
+
+    /// <inheritdoc />
+    public IObservable<GitHubIssue?> FindIssueState(
+        string repositoryUrl, int number, string accessToken)
+    {
+        var (owner, repo) = ParseRepoUrl(repositoryUrl);
+        var client = Client(accessToken);
+        // One request, no comments: this answers the state question for a transferred issue too,
+        // and the emitted issue's Number/Url name its CURRENT home, so a caller holding a stale
+        // reference can re-point rather than re-file (MeshWeaver#4629).
+        return Http.InvokeObservable(ct => client.Issue.Get(owner, repo, number))
+            // No comments were requested, so CommentsAreComplete stays false by default.
+            .Select(issue => (GitHubIssue?)ToIssue(issue))
+            // The number names no issue at all — a real absence, and the one answer a caller may
+            // act on by clearing its link.
+            .Catch((NotFoundException _) => Observable.Return<GitHubIssue?>(null));
     }
 
     /// <inheritdoc />

@@ -45,6 +45,7 @@ public class ProbeSemanticsGuard
     private const string Deployment = "deploy/helm/templates/memex-portal/deployment.yaml";
     private const string ServiceDefaults = "memex/aspire/Memex.Portal.ServiceDefaults/ServiceDefaults.cs";
     private const string ProbeEndpoints = "memex/aspire/Memex.Portal.ServiceDefaults/ProbeEndpoints.cs";
+    private const string Values = "deploy/helm/values.yaml";
 
     /// <summary>
     /// 🚨 The invariant itself. Readiness answers "give my traffic to my siblings" and liveness
@@ -187,6 +188,20 @@ public class ProbeSemanticsGuard
                 + "a wedged pod is never restarted.");
 
             var body = match.Groups["body"].Value;
+
+            // 🚨 A probe path may be a VALUE rather than a literal (probes.startup.path, added with
+            // MeshWeaver#4588 so an environment that must move the startup probe does it in the
+            // repository instead of as a live `kubectl patch`). Resolve it here: the question this
+            // guard asks — which PREDICATE does the kubelet end up reading — is about the path that
+            // actually ships, and a guard that read `{{` would resolve nothing and fail on the
+            // wrong thing.
+            var templated = Regex.Match(body, @"\bpath:\s*\{\{(?<expr>.*?)\}\}");
+            if (templated.Success)
+            {
+                paths[probe] = ResolveTemplatedPath(probe, templated.Groups["expr"].Value);
+                continue;
+            }
+
             var inline = Regex.Match(body, @"httpGet:\s*\{[^}]*?\bpath:\s*(?<p>[^,}\s]+)");
             var block = Regex.Match(body, @"httpGet:\s*(?:\r?\n\s+(?!path:)\w+:.*)*\r?\n\s+path:\s*(?<p>\S+)");
             var hit = inline.Success ? inline : block;
@@ -245,6 +260,76 @@ public class ProbeSemanticsGuard
             + "found fewer, either the wiring moved or the guard stopped seeing it, and both are "
             + "'checked nothing'.");
         return wiring;
+    }
+
+    /// <summary>
+    /// The path a <c>{{ .Values.x.y.z | default "/p" }}</c> probe path actually ships, read out of
+    /// <c>deploy/helm/values.yaml</c>.
+    ///
+    /// <para>🚨 Both halves are asserted, because either alone would let the chart ship a path this
+    /// guard never saw: the values must DECLARE the key (a template whose value is absent renders
+    /// the <c>default</c>, which is a second place the path is stated), and the two must AGREE. A
+    /// disagreement is not cosmetic — it is a path that changes meaning depending on whether an
+    /// overlay happened to carry the key.</para>
+    /// </summary>
+    private static string ResolveTemplatedPath(string probe, string expression)
+    {
+        var key = Regex.Match(expression, @"\.Values\.(?<key>[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)");
+        Assert.True(key.Success,
+            $"{Deployment}'s {probe} path is a template expression this guard cannot resolve "
+            + $"('{{{{{expression}}}}}'). It resolves `.Values.<dotted key>` against {Values}; if "
+            + "the path is now computed some other way, teach this guard the new shape DELIBERATELY "
+            + "— a probe path nothing can resolve is a predicate nobody is checking.");
+
+        var declared = ValuesLeaf(key.Groups["key"].Value);
+        Assert.True(declared is not null,
+            $"{Deployment}'s {probe} reads .Values.{key.Groups["key"].Value}, but {Values} declares "
+            + "no such key. The chart would ship the template's `default`, so the path would be "
+            + "stated in one place and defaulted in another.");
+
+        var fallback = Regex.Match(expression, @"default\s+""(?<p>[^""]+)""");
+        if (fallback.Success)
+            Assert.True(fallback.Groups["p"].Value == declared,
+                $"{Deployment}'s {probe} defaults to '{fallback.Groups["p"].Value}' while {Values} "
+                + $"declares '{declared}'. The probe would then read a different path depending on "
+                + "whether an overlay carries the key — move both in one change.");
+
+        return declared!;
+    }
+
+    /// <summary>
+    /// The scalar at a dotted key in <c>values.yaml</c>, walked by INDENTATION. Deliberately not a
+    /// YAML parse: this file is read for one leaf, and a mis-walk must fail rather than guess, which
+    /// is what the callers assert on a null.
+    /// </summary>
+    private static string? ValuesLeaf(string dottedKey)
+    {
+        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Values));
+        var segments = dottedKey.Split('.');
+        var depth = 0;
+        var indent = -1;
+
+        foreach (var raw in lines)
+        {
+            if (raw.TrimStart().StartsWith('#') || raw.Trim().Length == 0) continue;
+            var thisIndent = raw.Length - raw.TrimStart().Length;
+            // Left the block we descended into: the key is absent HERE, and scanning on
+            // would find a same-named key under an unrelated parent and resolve to it.
+            // A resolver that guesses is worse than one that refuses — the callers assert
+            // on the null.
+            if (thisIndent <= indent) return null;
+
+            var m = Regex.Match(raw, @"^\s*(?<k>[A-Za-z0-9_]+):\s*(?<v>\S*)\s*$");
+            if (!m.Success || m.Groups["k"].Value != segments[depth]) continue;
+
+            if (depth == segments.Length - 1)
+                return m.Groups["v"].Value.Trim('"', '\'');
+
+            depth++;
+            indent = thisIndent;
+        }
+
+        return null;
     }
 
     private static string ExecutableLinesOf(string yaml) =>

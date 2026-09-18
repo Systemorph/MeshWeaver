@@ -1,17 +1,27 @@
 ---
 Name: The Sync-Ref Contract
 Category: Architecture
-Description: An UNATTENDED import reads a commit CI proved green; only a human-initiated "Update to latest" may read a branch tip. Why resolving a ref twice put sources no build had compiled onto two production portals for five hours, where each import path now gets its ref, and which one still does not.
+Description: An import of a repository whose bundles this instance runs lands on the commit those bundles were baked from — whoever asked, a person included (since 2026-09-17). Every other repository keeps the older rule — an unattended import reads a commit CI proved, a person may read a branch tip. Why resolving a ref twice put sources no build had compiled onto two production portals for five hours, and where each import path gets its ref.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><line x1="12" y1="3" x2="12" y2="9"/><line x1="12" y1="15" x2="12" y2="21"/><circle cx="12" cy="3" r="1.5"/><circle cx="12" cy="21" r="1.5"/></svg>
 ---
 
 # The Sync-Ref Contract
 
-**An unattended import reads a commit a build PROVED. Only a human-initiated "Update to latest" may
-read a branch tip.**
+**An import never puts a repository's sources ahead of the bytes this instance runs.** When a
+publication of the repository is sealed for this instance's framework identity, EVERY import of it —
+a green build, the seal's own arrival, a first import, the boot install, *and a person pressing
+**Update to latest** or **Re-import at this commit*** — lands on the commit that publication was
+baked from, or imports nothing and says why. For any other repository, an unattended import reads a
+commit a build PROVED, and a person may still read a branch tip.
 
-That is the whole rule. Everything below is why it has to be a rule rather than a habit, and what
-enforces it.
+That is the whole rule. Everything below is why it has to be a rule rather than a habit, what
+enforces it, and — because it once read differently — what changed on 2026-09-17 and what that costs.
+
+> 🚨 **Until 2026-09-17 this page said the opposite about people:** *"Only a human-initiated 'Update
+> to latest' may read a branch tip."* That exception is withdrawn (MeshWeaver#3845 hole 3, maintainer
+> decision). The section *The human exception, withdrawn* below says why, and names the consequence
+> an operator meets first: **recovery from a hold is what the hold names — roll the instance, or fix
+> the publishing lane — never a tip import.**
 
 "A build" means the repository's **content CI**, not any workflow that happened to finish green at
 the same commit. The webhook verifies the stable workflow file path:
@@ -142,8 +152,8 @@ Every import therefore has to answer "which tree?", and there are exactly two an
 
 | answer | resolved | correct for |
 |---|---|---|
-| the configured **branch** | inside the fetch, at whatever instant the fetch runs | a human clicking **Update to latest** — that is literally what they asked for |
-| an explicit **commit sha** | before the trigger is even decided | every machine trigger |
+| the configured **branch** | inside the fetch, at whatever instant the fetch runs | a person clicking **Update to latest** on a repository this instance runs **no** publication of — that is literally what they asked for |
+| an explicit **commit sha** | before the trigger is even decided | every machine trigger, and **every** import of a repository whose publication is sealed for this instance |
 
 The failure mode is not choosing the wrong one once. It is **resolving the ref twice**: deciding
 *whether* to import against one ref and *what* to import against another. A trigger that filters its
@@ -186,9 +196,9 @@ activity finished, CI on both repositories was green. A per-NodeType `Error` is 
 
 | path | trigger | ref it reads | why |
 |---|---|---|---|
-| `GitHubActivityExtensions.UpdateToLatestFromGitHub` | a person clicks **Update to latest**, or the MCP `git_hub_sync` `update` verb | the configured **branch** | the human is asking for latest and is present for the result |
-| `GitHubActivityExtensions.UpdateToProvenCommitFromGitHub` | `GitHubWebhookProcessor` on a green `workflow_run` | the run's **`head_sha`** | the tree CI proved, and the tree the candidates were selected against |
-| `GitHubActivityExtensions.ReimportFromGitHub` | a person names a commit | that **commitish** | stated by the caller |
+| `GitHubActivityExtensions.UpdateToLatestFromGitHub` | a person clicks **Update to latest** (`GitHubActionArea`), the MCP `git_hub_sync` `update` verb, or a first import of an unattributable repository | the commit **sealed** for this identity when the repository is attributable (**held** while that seal is torn, at an unknown commit, or disagreeing); the configured **branch** otherwise | `SealedSyncGate.DecideRequestedImport` — MeshWeaver#3845 hole 3, below |
+| `GitHubActivityExtensions.UpdateToProvenCommitFromGitHub` | `GitHubWebhookProcessor` on a green `workflow_run` | the run's **`head_sha`** when it is sealed for this identity or the repository is unattributable; otherwise the commit **sealed** for this identity (**held** while that seal is unusable) | `SealedSyncGate.DecideBuild` — the webhook lane, below |
+| `GitHubActivityExtensions.ReimportFromGitHub` | a person names a commit or a branch (`GitHubSyncSettingsTab` → **Re-import at this commit**) | the same as **Update to latest**, with the typed **commitish** in place of the branch | `SealedSyncGate.DecideRequestedImport` |
 | `PluginUpdateWatcher` → `PackageUpdateReconciler` | the same green build, via the `BuildCompletion` node | `BuildCompletion.HeadSha` | already correct before #1430 — this is the path GitSync now agrees with |
 | `ModuleDiscoveryService.FirstImport` | AutoSync provisions a new Space (boot, or a green build) | the commit **sealed** for this identity; the branch only for a repository this instance runs no publication of | `SealedSyncGate.DecideFirstImport` — MeshWeaver#3845 hole 2, below |
 | `InstanceAutoRegistrationService.InstallDefaults` — the **boot default install** (`preInstalled`, `InstallByDefault`, feature flags) | every boot, after the bake settles | the commit **sealed** for this identity; `PluginCatalog:Sources:N:Ref` only for a repository this instance runs no publication of; **held** while that repository's seal is torn | the same `DecideFirstImport`, since MeshWeaver#4259 — see "The lane the closure missed", below |
@@ -327,6 +337,44 @@ the commit they claim" was a true statement. The drift was the other writer.
 restores a declared node that is absent — and on its own that would have turned this into an
 every-boot flap: sync prunes, install restores, bake declines, sync prunes.
 
+🚨 **That flap is not hypothetical — it ran for eleven boots on a second partition, and it read as a
+self-heal.** Measured on memex.meshweaver.cloud 2026-09-16 (core `c84c6c05`, which predates this
+section's fix): `Feedback/_GitSync` (MeshWeaver.Plugins, `subdirectory: Feedback`) imports at
+`627fb3cd`, whose `Feedback/` tree has no `Source/FeedbackHandover.cs`; `Plugins/Feedback` 1.0.16
+(module `caffd87567c65b4f`, `installedFromRef: main`) declares it. The package's module hash never
+moved, so every boot took the hash-EQUAL exit, whose completeness check (MeshWeaver#3485) named the
+node ABSENT and re-installed it:
+
+```
+2026-09-16
+21:31:58Z  Feedback/_GitSync  Imported @ 627fb3cd          (v501; again 21:32:01Z, v502)
+21:33:16Z  boot install: "Package Feedback … 1 of 14 declared node(s) are ABSENT:
+           [Feedback/Feedback/Source/FeedbackHandover] … being REPAIRED"
+21:33:24Z  Plugins/Feedback record v28, installedFromRef: main   — the node is written back
+21:54:40Z  Feedback/_GitSync  Imported @ 627fb3cd          (v503) — and pruned again
+22:05Z     get Feedback/Feedback/Source/FeedbackHandover → Not found
+```
+
+The same line fired on eleven boots from 2026-09-13T22:02Z on — each one matched one-to-one by a
+`Plugins/Feedback` record version (v18…v28) stamped seconds later, and no record version without
+it — and each one re-opened or re-counted MeshWeaver#2387 through the log watcher's category fold. On 2026-09-14 the eight seconds between "named ABSENT" and the node's `lastModified` were read
+as a repair that WORKED, and the detection was demoted to a Warning on that basis (#4257): a
+read-back right after the write proves the write landed, never that it held. The control instance,
+whose `Feedback` listing carries no `_GitSync`, has one writer and holds the node. See
+[Log watch triage](../LogWatchTriage) → "A REOPEN is not a recurrence".
+
+**What closes it, and what delivers it.** `115e0a9d9c` (PR #4292) is the commit: it makes this lane
+list and install at the sealed commit, so both writers of `Feedback` land on one tree; `8b1e966985`
+(PR #4364) adds the ownership hold, and `4d5a084a8b` (PR #4257) moves the severity off the detection.
+Measured 2026-09-17, none of the three is an ancestor of memex.meshweaver.cloud's running core
+`c84c6c05`, and all three are ancestors of memex.systemorph.com's `afde4eab` — which is why only the
+former still emits it. The delivery is a **Roll of memex-cloud onto a sealed image containing
+`e76fa9f8f2`** (the newest of the three merges); nothing else closes it, and no further code change
+is required. Its preconditions already hold on that instance: `pluginCatalog.sources[0]` carries
+`repoPath: https://github.com/Systemorph/MeshWeaver.Plugins` (not a local checkout),
+`PreWarm__PrebuiltBundleRoot` is `/data/prebuilt-bundles`, and the seal is demonstrably readable
+there — its own `Feedback/_GitSync` prints *"identity sd608997…: 'plugins' is sealed at 627fb3cd"*.
+
 **The fix is the rule, applied to the lane that had missed it.** The boot install now asks
 `SealedSyncGate.DecideFirstImport` per configured git source — the very decision the first import
 takes — and lists *and* installs at its answer:
@@ -372,6 +420,94 @@ makes the two agree rather than introducing a new risk. Resolving the branch ins
 recoverable step backwards for landing a tree *no build ever proved* — which is what five hours of
 dark Store looked like.
 
+## The human exception, withdrawn (MeshWeaver#3845 hole 3)
+
+Until 2026-09-17 two GUI paths — and the MCP verb that shares their code — read whatever a person
+asked for, whatever the seal said:
+
+| path | what it read |
+|---|---|
+| `GitHubActionArea` → **Update from GitHub** (`op=update`), and MCP `git_hub_sync` `update` | `UpdateToLatestFromGitHub` → the configured branch, resolved at fetch time |
+| `GitHubSyncSettingsTab` → **Re-import at this commit** | `ReimportFromGitHub` → the typed commitish; the field's placeholder reads *"commit SHA or branch"*, so a tip was a legal entry |
+
+The rule then was *unattended reads a proven commit, a present human may read a tip*. It was written
+for #1430 — a ref resolved twice — and it is right about that. What it did not account for is the
+other half of #3583: **a person present for the result does not change what the result is.** A
+module repository's sources landing on a tree no bundle for this identity was baked from are declined
+on their source fingerprint and compiled from source (or fail to compile) exactly as they are when a
+webhook put them there; the NodeType leaves `AdoptedVerified` either way. The contract keyed the
+protection on *who asked* when the harm is keyed on *what lands*.
+
+**Now both paths ask the seal, in `DecideFirstImport`'s shape** (`SealedSyncGate.DecideRequestedImport`).
+The decision is taken inside the activity, so what was decided is on the activity's own log, in the
+viewer's language:
+
+| what the seal says for the Space's repository | what the import does |
+|---|---|
+| the index could not be READ | **imports nothing** — "cannot tell" is never "clear to proceed" (#3461) |
+| no publication of it is sealed for this identity | **exactly what was asked** — the branch, or the typed commitish. Hole 1's adjudication: a repository no lane publishes could never be released from a hold, so it is not held |
+| sealed, every attributable publication usable and agreeing on commit `C` | **imports `C`**. When `C` is not what was asked, a Warning line names both, so the activity ends *Warning* — never a quiet *Succeeded* for a tree nobody requested |
+| attributable but torn, at an unknown commit, or two seals disagreeing | **imports nothing**, and says which publication and why |
+
+Every hold and every redirect carries a second line naming the direction, from the same
+`SealedPublicationIndex.NewerLineThan` reading the webhook's hold note uses (#4063): when the registry
+has sealed a newer line this instance does not run, **roll this instance**; otherwise the Space
+advances when a newer commit is sealed for this identity by the publishing lane, or when the instance
+rolls onto a platform whose publication is. The line never picks one of those two when the release
+markers cannot place this instance on a line.
+
+### What it costs, stated rather than discovered
+
+- **Recovery from a hold is not a tip import any more.** It is what the hold names: roll the
+  instance, or fix the publishing lane. On 2026-09-14 this was the stated reason *not* to close the
+  hole (*"the escape hatch is gated by the thing you are escaping"*). It is now the contract, and
+  deliberately: an escape into a tree the instance cannot run is not a recovery.
+- **Re-import at this commit is still the repair for drift** — at the sealed commit. Typing the
+  sealed sha, or a prefix of it of seven or more characters, runs exactly as asked.
+- **The git-first loop on a module repository is slower.** Step 3 of that loop in
+  [GitHub Sync](../GitHubSync) — *Update to latest pulls the merged state back* — now pulls the merged
+  state only once it is sealed for this identity. Until then the Space stays on the sealed commit and
+  the activity says why. A repository this instance runs no publication of is unaffected.
+- **Every caller of the two extension methods is gated, not only the two buttons** — the MCP
+  `update` verb, and anything in the mesh that calls `UpdateToLatestFromGitHub`. That is a behaviour
+  change behind an unchanged signature, on purpose. There is **no flag** that reads a tip for an
+  attributable repository: `force` still means *discard local edits* and never selects the tree. A
+  bypass would be the fail-open this page exists to remove, with a parameter's name on it.
+
+### What is deliberately unchanged
+
+- `ModuleDiscoveryService.FirstImport` still decides for itself (`DecideFirstImport`) and calls
+  `UpdateToLatestFromGitHub` only for an unattributable repository, where this gate answers "as
+  asked" by construction.
+- A repository is attributed exactly as the webhook attributes it: by the seal's `repository.txt`
+  marker, or — for a seal that predates the marker — by commit (the typed sha, or the commit the Space
+  already sits on).
+- 🚨 **One residual, named.** Attribution compares the Space's STORED repository url. A url still
+  carrying a pre-rename name matches no marker until the webhook's rename repair
+  (`ConfigsTargeting` → `RepointToCanonical`) rewrites it on that repository's next delivery; until
+  then a person's update of that Space reads as asked.
+
+## The webhook lane lands on the seal — it no longer only holds
+
+The green-build webhook was the last unattended lane that asked the seal and, on "not sealed for this
+instance", merely **held**. The first import (#4212), the seal's arrival
+(`SealedPublicationSyncReconciler`, #4209) and the boot install (#4259) all LAND on the sealed commit.
+The webhook now does too (`SealedSyncGate.DecideBuild`):
+
+| the seal says for the build's repository | the webhook does |
+|---|---|
+| nothing attributable | import at `head_sha` — unchanged |
+| a sealed publication at `head_sha` | import at `head_sha` — unchanged |
+| sealed at `C ≠ head_sha`, every attributable publication usable and agreeing | **import at `C`** — unless the source already sits on `C` (then the hold is recorded on its config, naming `C`, as before), or `C` already carries a final verdict for this source (skipped — the same #4499 predicate the reconciler asks) |
+| torn, unknown commit, or disagreeing | hold — unchanged |
+
+Why this is safe: `C` is exactly the commit the reconciler imports the next time it reads the seal;
+the webhook simply stops waiting for that read. It can move a Space **backwards** — a Space imported
+at a tip before this change, under a seal at an older commit, returns to `C` — and that is the rule,
+not a side effect: afterwards the sources match the bytes. The census still counts the source as held
+for that build (`publication-seal` on `/health`): the build's commit did not arrive, and that is the
+fact the census states.
+
 ## The seal's attribution marker: whose CONTENT, never whose LANE
 
 `SealedSyncGate` holds a module-bearing repository's sources at the commit sealed for this
@@ -409,6 +545,14 @@ about in its own words — *"The CONTENT commit, not `$GITHUB_SHA`. They differ 
   green build imports at the payload's sha, and the unattended import refuses an empty one. It
   asserts on the ref that reaches `IGitHubRepoClient.Fetch` — not on a log line and not on a decision
   function — because the defect was precisely that the decision and the fetch disagreed.
+- `test/MeshWeaver.Hosting.Test/APersonsImportLandsOnTheSealTest.cs` pins the withdrawn human
+  exception on the same instrument — the ref that reaches `Fetch`: **Update to latest** and a
+  **Re-import** of a typed branch fetch the sealed commit, a torn seal fetches nothing and names the
+  publication, and a repository this instance runs no publication of still fetches the branch (the
+  control that keeps the other three from passing on a gate that blocks everything).
+  `HeldSourceSaysItIsHeldTest` pins the webhook landing on the seal, and the hold note a source
+  already on the seal records. The decisions themselves, both directions, are
+  `test/MeshWeaver.Documentation.Test/SealedSyncGateLandsOnTheSealTest.cs`.
 - On a live portal, the import's own activity names the commit; the sync source records it as
   `lastSyncCommitSha`, which is now the same value the webhook filtered on, so
   `GitHubWebhookProcessor.SkipReason`'s "already at this commit" compares like with like.

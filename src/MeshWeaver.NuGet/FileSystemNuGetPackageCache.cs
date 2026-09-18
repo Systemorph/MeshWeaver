@@ -105,15 +105,13 @@ public sealed class FileSystemNuGetPackageCache : INuGetPackageCache
                     await src.CopyToAsync(entryStream, ct);
                 }
             }
-            try
-            {
-                File.Move(tempPath, archivePath, overwrite: false);
+            // A RENAME, never File.Move(overwrite: false): that call COPIES into the archive path
+            // when its rename fails, so a replica hydrating at that moment would open a half-written
+            // zip — the one thing this cache promises never happens (#2190). False: another replica
+            // won the race and created the archive first; fine. Any other failure reaches the caller,
+            // which logs it — it is no longer mistaken for that race.
+            if (MeshWeaver.Utils.NoReplaceMove.TryMove(tempPath, archivePath))
                 _logger.LogInformation("Saved {Id} {Version} to filesystem cache", packageId, version);
-            }
-            catch (IOException)
-            {
-                // Another replica won the race and created the archive first; fine.
-            }
         }
         finally
         {

@@ -101,7 +101,9 @@ public static class NodeTypeLayoutAreas
             .AddLayout(layout => layout
                 .WithDefaultArea(OverviewArea)
                 .WithView(SearchArea, Search)  // standard instance search, wrapped in the shell
-                .WithView(OverviewArea, Overview)
+                // The NodeType page draws the standard header itself (OverviewContent →
+                // MeshNodeLayoutAreas.BuildHeader), so the framework adds no second line (#4500).
+                .WithNodePage(OverviewArea, Overview, NodePageProvenance.RenderedByThePage)
                 .WithView(ConfigurationArea, Configuration)
                 .WithView(HubConfigViewArea, HubConfigView)
                 .WithView(HubConfigEditArea, HubConfigEdit)

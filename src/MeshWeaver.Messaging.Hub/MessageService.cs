@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
@@ -143,19 +143,29 @@ public class MessageService : IMessageService
     private long turnSequence;
 
     /// <summary>
+    /// The framework's per-message deferral budget — see <see cref="deferralTimeout"/>, which is
+    /// what the hub actually uses.
+    /// </summary>
+    private static readonly TimeSpan DefaultDeferralTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Per-message deferral timeout. A message that sits in <see cref="deferredQueue"/>
     /// longer than this is failed back to the sender as a <see cref="DeliveryFailure"/>
     /// instead of hanging. Surfaces stuck-init scenarios (e.g. NodeType compile that
     /// never completes) as actionable errors rather than silent timeouts.
+    ///
+    /// <para>Per-hub, off <see cref="MessageHubConfiguration.WithDeferralTimeout"/>, defaulting to
+    /// <see cref="DefaultDeferralTimeout"/>. It is not a tuning knob — see that method's remarks
+    /// for why it is configurable at all.</para>
     /// </summary>
-    private static readonly TimeSpan DeferralTimeout = TimeSpan.FromSeconds(30);
+    private readonly TimeSpan deferralTimeout;
 
     /// <summary>
     /// Hard cap on the deferred backlog held behind closed init gates. A hub that is legitimately
     /// initialising drains its gate in well under a second, so it never accrues a deep deferred
     /// backlog. A backlog past this cap means the gate is STUCK — a client sync/cache hub whose
     /// <c>[Initialize]</c> never opens (the Safari sync-race wedge). Past the cap, every further
-    /// message would otherwise be queued AND armed with its own <see cref="DeferralTimeout"/> timer,
+    /// message would otherwise be queued AND armed with its own <see cref="deferralTimeout"/> timer,
     /// so a writer flooding a never-initialising hub accumulates deferred deliveries + timers without
     /// bound until the action block starves and <c>/healthz</c> times out — the confirmed OOM wedge.
     /// Past the cap we DROP overflow deferrals instead (see the deferral path). This is a stuck-gate
@@ -286,6 +296,7 @@ public class MessageService : IMessageService
                 (p, c) => c.Invoke(p)).AsyncDelivery;
         // Store gate names from configuration for tracking which gates are still open
         gates = new(hub.Configuration.InitializationGates);
+        deferralTimeout = hub.Configuration.DeferralTimeout ?? DefaultDeferralTimeout;
         if (hub.Configuration.StartupTimeout is not null)
             startupTimer = new(NotifyStartupFailure, null, hub.Configuration.StartupTimeout.Value, Timeout.InfiniteTimeSpan);
     }
@@ -308,10 +319,21 @@ public class MessageService : IMessageService
         // from this Timer callback (the old behaviour) was lost to the runtime
         // and produced false-negative CI passes — the messages just sat in the
         // deferred buffer until disposal.
-        var stillClosed = string.Join(",", gates.Keys);
+        var stillClosed = string.Join(",", gates.Keys.OrderBy(x => x, StringComparer.Ordinal));
         var reason = $"Message hub {Address} failed to initialize in {hub.Configuration.StartupTimeout} — gates still closed: [{stillClosed}]";
         logger.LogError(reason);
-        DrainDeferredDeliveries((delivery, _) => ReportFailure(delivery.WithProperty("Error", reason)));
+        // 🚨 TWO DIFFERENT FACTS, both named (#3712). The hub-level line above is about the HUB and
+        // a live read is right for it. The per-delivery answer is about THIS DELIVERY, and the set
+        // that held it is the one recorded when it was parked — `gates` has had every gate that
+        // opened in the meantime REMOVED from it, so a delivery parked behind [DataContextInit,
+        // MeshNodeInit] whose DataContextInit later opened is answered "gates still closed:
+        // [MeshNodeInit]" and the gate that held it for most of the budget is never named. The two
+        // sets together are the diagnosis — which gates it waited on, and which of them are still
+        // shut — so the drain carries `GatesAtDeferral` to every caller and this one uses it.
+        DrainDeferredDeliveries((delivery, gatesAtDeferral) => ReportFailure(
+            delivery.WithProperty("Error",
+                $"{reason}. {delivery.Message.GetType().Name} (id={delivery.Id}) was parked behind "
+                + $"initialization gates closed at deferral: [{gatesAtDeferral}]")));
     }
 
     /// <summary>
@@ -564,7 +586,7 @@ public class MessageService : IMessageService
     /// </param>
     private void AnswerUnreleasableDelivery(IMessageDelivery delivery, string reason, ErrorType errorType)
     {
-        if (!NackThroughParent(delivery, reason))
+        if (!NackThroughParent(delivery, reason, errorType))
             ReportFailure(delivery.WithProperty("Error", reason),
                 errorType != ErrorType.Unknown
                     ? errorType
@@ -718,9 +740,16 @@ public class MessageService : IMessageService
         // permanent leak, which is the exemption-outliving-its-reason defect (#3647) in a new
         // costume. Past that bound the honest act is to ANSWER the requester — see the refusal
         // branch in ScheduleNotify, which reports a correlated reply to the party it was FOR.
+        //
+        // 🚨 …and a request one of this hub's hosted hubs ACCEPTED before its own teardown is still
+        // carried OUT while this hub is disposing it (#3986): that phase is when the child is asked to
+        // go down, and its accepted backlog runs ahead of its own ShutdownRequest. Refusing it here
+        // discarded a person's click the portal had already taken. See
+        // MessageHub.CarriesAcceptedWorkOfAHostedHub for the bounds.
         if (runLevel >= MessageHubRunLevel.DisposeHostedHubs)
             return runLevel >= MessageHubRunLevel.ShutDown
-                   || !delivery.Properties.ContainsKey(PostOptions.RequestId);
+                   || (!delivery.Properties.ContainsKey(PostOptions.RequestId)
+                       && !(hub is MessageHub carrier && carrier.CarriesAcceptedWorkOfAHostedHub(delivery)));
 
         // ---- Tier 1: Quiescing ----
         if (delivery.Properties.ContainsKey(PostOptions.RequestId))
@@ -811,7 +840,22 @@ public class MessageService : IMessageService
     /// False when nothing could carry it (no live parent, or traffic nobody awaits), which is the
     /// caller's cue to fall back to <see cref="ReportFailure"/> if it can still post.
     /// </returns>
-    private bool NackThroughParent(IMessageDelivery delivery, string reason)
+    /// <param name="classification">
+    /// 🚨 The classification the CALLING SITE decided on, for the non-tombstone branch
+    /// (MeshWeaver#1174). <see cref="ErrorType.Unknown"/> means "not stated" and keeps the
+    /// historical <see cref="ErrorType.ShuttingDown"/>, which is right for every teardown caller.
+    /// It is WRONG for a caller whose condition is not a teardown — the stuck-gate overflow drop
+    /// is "no verdict was reached, retry", not "this address is going away" — and before this
+    /// parameter existed that caller's classification survived only on the
+    /// <see cref="ReportFailure"/> fallback and was silently replaced whenever a live parent took
+    /// the NACK, i.e. exactly when the answer did get through.
+    ///
+    /// <para>It NEVER overrides the tombstone branch: an address whose node was deleted is gone
+    /// for good, and <see cref="ErrorType.NotFound"/> plus <see cref="DeletedAddressMessage"/> is
+    /// the authoritative answer no caller may soften (#1029).</para>
+    /// </param>
+    private bool NackThroughParent(
+        IMessageDelivery delivery, string reason, ErrorType classification = ErrorType.Unknown)
     {
         // Every exit below is STAMPED on the request's trail (#4072). The dispose snapshot that
         // prints the trail is the one artefact a green run keeps, and until now it ended at the
@@ -884,7 +928,7 @@ public class MessageService : IMessageService
         // can catch it.
         var (errorType, message) = IsAddressDeleted()
             ? (ErrorType.NotFound, DeletedAddressMessage)
-            : (ErrorType.ShuttingDown, reason);
+            : (classification is ErrorType.Unknown ? ErrorType.ShuttingDown : classification, reason);
         try
         {
             // 🚨 A refused post does not throw — the parent's own teardown guard hands back a
@@ -1076,7 +1120,13 @@ public class MessageService : IMessageService
                 // in-process route would take it (every branch stamps the request's trail).
                 var posted = Post(new DeliveryFailure(delivery, message) { ErrorType = errorType },
                     new PostOptions(Address).ResponseFor(delivery));
-                return posted is { State: not MessageDeliveryState.Failed };
+                // 🚨 Ignored belongs with Failed, exactly as MeshExtensions.WasCarried says
+                // (MeshWeaver#1174). The storm breaker and the aggregate shedder refuse a post
+                // WITHOUT enqueueing anything and now say so in the returned envelope; before that
+                // this test could not see them, and a dropped NACK would have been reported to the
+                // intake gate as "carried" — the one reading that leaves the sender with nothing
+                // and nobody owing it an answer.
+                return posted is { WasAcceptedForDelivery: true };
             }
             catch (Exception ex)
             {
@@ -1954,6 +2004,47 @@ public class MessageService : IMessageService
                                         Address, deferredDepth, string.Join(",", gates.Keys), MaxDeferredMessages);
                                 MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} DROPPED_GATE_STUCK depth={deferredDepth}");
                                 fate?.Add($"DROPPED_GATE_STUCK depth={deferredDepth}", Address);
+                                // 🚨 ANSWER A SENDER THAT IS WAITING (MeshWeaver#1174). Bounding
+                                // memory is right; doing it SILENTLY to a request/response caller
+                                // is not. The justification written above — "a fire-and-forget
+                                // writer's retry isn't fed; a client re-syncs a fresh Full on
+                                // reconnect" — holds for the traffic it was written about and is
+                                // simply false for an awaited IRequest: nothing re-syncs a
+                                // CreateNodeRequest, so its caller burns its ENTIRE RequestTimeout
+                                // on a drop this hub had already decided. That is the silent-drop
+                                // half of MeshWeaver#1174 (`portal/nodeops-*` carries a
+                                // DataContextInit gate whose only bypass predicate is PingRequest,
+                                // so node CRUD IS deferrable here).
+                                //
+                                // Same primitive, same classification rules and the same
+                                // answer-once guards as the GATE_FAILED branch twenty lines above
+                                // — `AnswerUnreleasableDelivery` declines for anything nobody is
+                                // awaiting (`IsAwaitedBySender` inside `NackThroughParent`, and
+                                // `MayAnswer()` inside `ReportFailure`), so fire-and-forget
+                                // traffic keeps the historical silent drop and the
+                                // DeliveryFailure ping-pong cannot start.
+                                //
+                                // Unavailable, never Failed or NotFound: a stuck gate is "NO
+                                // VERDICT WAS REACHED", the address is fine and the same request
+                                // is meaningful again once the gate opens.
+                                //
+                                // 🚨 The awaited-by-sender question is asked HERE, not only
+                                // inside. AnswerUnreleasableDelivery's own guards do decline for
+                                // traffic nobody awaits — but only AFTER TryReportFailure has
+                                // logged its Warning, and the moment this branch runs at all is a
+                                // hub being FLOODED. One Warning per dropped filler is exactly the
+                                // cost the once-per-episode Error above exists to avoid, and the
+                                // same cost #1485 measured at ~1k Loki lines on a single dying
+                                // pod. Asking first keeps the answer for the deliveries that need
+                                // one, and the silence for the rest.
+                                if (IsAwaitedBySender(delivery))
+                                    AnswerUnreleasableDelivery(
+                                        delivery,
+                                        $"Deferred backlog in hub {Address} is at the {MaxDeferredMessages} cap behind "
+                                        + $"gate(s) [{string.Join(",", gates.Keys)}] that are not opening, so this "
+                                        + "delivery was dropped to bound memory. No verdict was reached — retry once "
+                                        + "the gate opens.",
+                                        ErrorType.Unavailable);
                                 return Observable.Return(delivery.Ignored());
                             }
                             logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
@@ -2144,10 +2235,10 @@ public class MessageService : IMessageService
     }
 
     /// <summary>
-    /// Tracks a deferred delivery and schedules a <see cref="DeferralTimeout"/>
+    /// Tracks a deferred delivery and schedules a <see cref="deferralTimeout"/>
     /// deadline. If the hub doesn't drain the message within the budget, posts a
     /// <see cref="DeliveryFailure"/> back to the sender with a diagnostic
-    /// listing the gates still closed — converts the "silent hang on stuck
+    /// naming the gates it was parked behind — converts the "silent hang on stuck
     /// init" failure mode into an actionable exception at the caller's await.
     /// </summary>
     private void ScheduleDeferralTimeout(IMessageDelivery delivery)
@@ -2172,7 +2263,7 @@ public class MessageService : IMessageService
             displaced.TimeoutCts.Dispose();
         }
         deferredDeliveries[delivery.Id] = tracker;
-        _ = Task.Delay(DeferralTimeout, cts.Token).ContinueWith(t =>
+        _ = Task.Delay(deferralTimeout, cts.Token).ContinueWith(t =>
         {
             if (t.IsCanceled) return;
             // 🚨 PAIR-EXACT claim, not TryRemove(id). The dictionary is written with the INDEXER, so
@@ -2183,16 +2274,49 @@ public class MessageService : IMessageService
             // ever retire the tracker it armed.
             if (!deferredDeliveries.TryRemove(new(delivery.Id, tracker))) return;
             cts.Dispose();
-            var stillClosed = string.Join(",", gates.Keys);
+            // 🚨 THE GATE NAMES COME FROM THE TRACKER, NOT FROM A FRESH READ (#3712).
+            //
+            // `gates` is not a record of what held this delivery — it is the set of gates that are
+            // closed RIGHT NOW, and OpenGate REMOVES an opened gate from it. So a report composed
+            // after the fact describes the hub at report time, never the delivery at park time, and
+            // the two disagree in exactly the case a reader most needs the answer.
+            //
+            // That is the same defect #3789 fixed one method away, and this site kept it: the
+            // discard at disposal used to re-read `gates.Keys` too, after `Dispose()` had opened
+            // every gate to release the buffers, so 364 production Errors alleged a delivery "still
+            // deferred behind its initialization gates []" — an empty list that reads as "nothing
+            // was holding it", which is the opposite of what happened
+            // (Admin/_LogIncident/d2249f800ffc2577, 2026-09-08 → 09-14, 13 pods). The tracker has
+            // carried `GatesAtDeferral` ever since; this was the one reader still not using it.
+            //
+            // Reachable here without any teardown at all: OpenGate restores the parked turns to the
+            // FRONT of the main queue but the tracker is retired only when the turn actually RUNS
+            // (ProcessDeferredMessage). A hub whose loop is busy across the open — a long handler, a
+            // restored backlog several hundred deep — therefore has live deliveries whose gates have
+            // all opened, and this timer then fired with an empty read and the sentence "without
+            // opening init gates []": no gate named, and the one claim it did make was false.
+            //
+            // So the RECORDED set is the subject of the sentence, and the live read becomes a second,
+            // separately-labelled fact — because the two together are the diagnosis. Still closed
+            // means the gate is stuck; all opened means the hub initialised and something is holding
+            // the turn loop, which is a different investigation and used to be indistinguishable.
+            var stillClosed = gates.Keys.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+            var sinceThen = stillClosed.Length == 0
+                ? "every gate it was parked behind has SINCE OPENED, so this hub did initialise and "
+                  + "the delivery's turn still never ran — look at what is holding the turn loop, "
+                  + "not at the gates"
+                : $"gate(s) [{string.Join(",", stillClosed)}] are STILL closed — likely a stuck "
+                  + "NodeType compile, a missing handler registration on the receiver, or a "
+                  + "dependency that never initialised";
             // 🚨 Unavailable, not the default Unknown. A hub that has not opened its init gates is
             // still STARTING — the read reached no verdict and the same request will succeed once
             // the gate opens, which is precisely ErrorType.Unavailable's contract ("no verdict was
             // reached … retryable by construction"). Reported as Unknown it was indistinguishable
             // from a handler defect, so every caller mapped it to a hard error instead of a retry.
             ReportFailure(delivery.WithProperty("Error",
-                    $"Hub {Address} deferred {delivery.Message.GetType().Name} (id={delivery.Id}) for >{DeferralTimeout.TotalSeconds:F0}s "
-                    + $"without opening init gates [{stillClosed}] — likely a stuck NodeType compile, "
-                    + $"missing handler registration on the receiver, or a dependency that never initialised."),
+                    $"Hub {Address} deferred {delivery.Message.GetType().Name} (id={delivery.Id}) for "
+                    + $">{deferralTimeout.TotalSeconds:F0}s; initialization gates closed at deferral: "
+                    + $"[{gatesAtDeferral}] — {sinceThen}."),
                 ErrorType.Unavailable);
         }, TaskScheduler.Default);
     }
@@ -2889,8 +3013,32 @@ public class MessageService : IMessageService
             return ReportFailure(posted);
         }
 
-        ScheduleNotify(posted, default);
-        return delivery;
+        // 🚨 THE INTAKE VERDICT IS RETURNED, NOT DISCARDED (MeshWeaver#1174).
+        //
+        // `ScheduleNotify` is where a post is REFUSED without being enqueued: the per-key storm
+        // breaker and the aggregate shedder both `return delivery.Ignored()` having queued
+        // nothing, and the teardown intake gate returns `Failed`/`FailedAndNacked`. Those are new
+        // records — `MessageDelivery.ChangeState` is `this with { State = state }` — so returning
+        // the pre-pipeline `delivery` below threw every one of those verdicts on the floor and
+        // handed the poster a `Submitted` delivery that had, in fact, been dropped.
+        //
+        // That made a shipped guard INERT rather than wrong-looking, which is worse.
+        // `MeshExtensions.WasCarried` — the claim-then-verify on both create-verdict posts —
+        // says in its own doc that `Ignored` "is the one that reads like a success: the storm
+        // breaker and the aggregate shedder return it WITHOUT enqueueing anything, so treating it
+        // as carried would claim the once-only gate, skip the parent fallback, and leave the
+        // caller waiting out its budget for a verdict that was dropped on the floor." It could
+        // never see one: every post — local or routed — passes through THIS ScheduleNotify, and
+        // its result never reached the caller. A verification step that cannot fail is not a
+        // verification step.
+        //
+        // Only a DROP is surfaced. The success path still hands back the same `Submitted`
+        // delivery it always did (`ScheduleNotify` returns `Forwarded()` there), so nothing that
+        // reads the returned envelope on the happy path changes.
+        var notified = ScheduleNotify(posted, default);
+        return notified.State is MessageDeliveryState.Ignored or MessageDeliveryState.Failed
+            ? notified
+            : delivery;
     }
     private readonly Lock locker = new();
 

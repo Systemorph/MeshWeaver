@@ -239,7 +239,7 @@ on:
 jobs:
   report:
     name: "The red has an audience: one issue, one signed event"
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     # A REQUIREMENT on every caller (a called workflow can only narrow its caller's grant), and it
     # REPLACES the defaults: `contents: read` is listed explicitly because a block that names only

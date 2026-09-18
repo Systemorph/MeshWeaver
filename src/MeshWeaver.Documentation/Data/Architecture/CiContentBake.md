@@ -290,14 +290,17 @@ image's framework identity**. Treat it as a missing artifact, never as "boots ar
 
 ### Where the files actually come from (measured on memex, 2026-08-22)
 
-There are two adoption sources, and only one of them is real today:
+There are two adoption sources. On the date in the heading exactly one of them was carrying anything —
+and which one is a property of the image and the volume in front of you, so the table is a
+READING, not a standing fact:
 
 | Source | State |
 |---|---|
 | `prebuilt/` **inside the image** (`ShippedPrebuiltBundles`) | **EMPTY** — `ls /app/prebuilt` returned 0 files on the running portal |
 | the published store on the shared volume, `/data/prebuilt-bundles/<identity>/` | **101 identities present** |
 
-So the store is the only lane that feeds adoption. A pod adopts iff its own identity is one of those
+So on that reading the store was the only lane feeding adoption — re-run the two `ls` commands
+above before assuming it still is. A pod adopts iff its own identity is one of those
 directories — and when it is not, it sweeps.
 
 ### Why the identity can be missing even though bakes are green
@@ -317,7 +320,9 @@ because the newest tag is always the one least likely to be baked yet.
 
 ### Checking it, in order
 
-1. `ls /app/prebuilt` on the pod — if empty, the image lane contributes nothing (it does not today).
+1. `ls /app/prebuilt` on the pod — if empty, the image lane is contributing nothing on THIS image.
+   🚨 Read it; do not carry an answer. Whether the image lane contributes has flipped before and
+   is a property of the image in front of you, not of the fleet.
 2. `ls /data/prebuilt-bundles | wc -l` — the store; then whether THIS image's identity is among them.
 3. The bake job's `bake published: identity=…` versus the instance's `heldReason` identity. Different
    values are the whole bug.
@@ -1445,6 +1450,10 @@ Pinned by `PlatformBakeLaneGuard.PlatformBake_ResolvesTheReleaseVersionOnce_AndE
 set that regresses a satellite reds that satellite's `main` alone instead of every open pull request.
 A **freeze** (`MW_PLATFORM_REF`) says which set to take, and overrides the ceiling, because the
 likeliest moment to need it is when `main` is red and has passed nothing recently.
+When the ceiling cannot be established the resolver REFUSES, and what that refusal says is its
+own subject: GitHub has served that listing a weeks-old page three times, and the old wording
+closed on "Fix main" — see
+[A Stale Run Listing Is Not a Broken Main](../StaleRunListingRefusals).
 
 Neither answers which sets a repository's **source** can still be compiled against. That is a third,
 independent fact, and a repository acquires it the moment it adopts a symbol from a newer set.

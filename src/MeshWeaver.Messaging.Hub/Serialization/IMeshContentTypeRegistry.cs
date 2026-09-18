@@ -355,43 +355,13 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
         // a wrongly-typed one is neither.
         if (nodeTypePath is not null
             && TryResolveByNodeType(nodeTypePath, out var exact)
-            && DiscriminatorAdmits(content, exact)
+            && ContentDiscriminator.Admits(content, exact)
             && Materialize(content, exact, options) is { } recovered)
             return recovered;
         // Then the name route, for a node with no NodeType or a type not yet activated in this
         // process. It still refuses a contested name — that refusal is what keeps a wrong answer
         // from being silently lossy.
         return TryRecover(content, options);
-    }
-
-    /// <summary>
-    /// True when <paramref name="content"/>'s own <c>$type</c> does not CONTRADICT
-    /// <paramref name="candidate"/> — the guard that stops the NodeType route from reshaping content
-    /// into a type its own discriminator disagrees with.
-    ///
-    /// <para><b>Absent is not contradicting.</b> Content written without a <c>$type</c> (a plain
-    /// JSON object) has nothing to disagree with, and the NodeType route is then the only answer
-    /// available — so it is admitted, exactly as before.</para>
-    ///
-    /// <para><b>The comparison is on the SHORT name, deliberately.</b> That is the framework's
-    /// existing recovery rule (<c>ObjectAsExtensions.As&lt;T&gt;</c>: "recover ONLY when the runtime
-    /// type has the SAME short name … a DIFFERENTLY-named type must stay null"), and it is what
-    /// keeps the whole point of the exact route intact: two packages that each ship a
-    /// <c>Currency</c> both carry <c>"$type":"Currency"</c>, each resolves to its OWN package's
-    /// CLR type through its own NodeType key, and both match here. A rebuild into a new collectible
-    /// assembly, and a declaration that moved namespace, match too — only a genuinely different
-    /// record name is refused.</para>
-    /// </summary>
-    private static bool DiscriminatorAdmits(JsonElement content, Type candidate)
-    {
-        if (!content.TryGetProperty("$type", out var typeProp)
-            || typeProp.ValueKind != JsonValueKind.String
-            || typeProp.GetString() is not { Length: > 0 } discriminator)
-            return true;
-
-        var lastDot = discriminator.LastIndexOf('.');
-        var shortName = lastDot >= 0 ? discriminator[(lastDot + 1)..] : discriminator;
-        return string.Equals(shortName, candidate.Name, StringComparison.Ordinal);
     }
 
     private object? Materialize(JsonElement content, Type contentType, JsonSerializerOptions options)

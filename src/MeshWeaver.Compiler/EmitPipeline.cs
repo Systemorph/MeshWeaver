@@ -38,35 +38,97 @@ public static class EmitPipeline
     /// the cap is named in the last entry rather than applied silently.</para>
     /// </summary>
     internal static IReadOnlyList<string> Warnings(IEnumerable<Diagnostic> diagnostics)
-    {
-        var warnings = diagnostics
+        => Report(Collect(diagnostics));
+
+    /// <summary>
+    /// The warnings a compile produced, STRUCTURED, deduped, ordered — and deliberately NOT capped.
+    ///
+    /// <para>🚨 The cap belongs to the <see cref="Report"/> rendering, never to the collection. A
+    /// build lane that ratchets on (type, diagnostic id) has to see every id the compile produced:
+    /// with the cap applied here, the 51st distinct warning of a type — which may be the only
+    /// <c>CS0219</c> among fifty <c>CS1591</c>s — would simply not exist as far as the gate is
+    /// concerned, and the gate would report a clean run. That is a truncation wearing a verdict's
+    /// colours. The activity log still gets the capped rendering; the counting does not.</para>
+    ///
+    /// <para>Deduped on the whole triple, so the ordering is identical to the one the formatted
+    /// list has always produced (<see cref="CompileWarning.Describe"/> is injective, so
+    /// distinct-then-sort over tuples and over their renderings agree).</para>
+    /// </summary>
+    /// <remarks>
+    /// 🚨 <see cref="CompileWarning.NotReported"/> is applied HERE, at the single point every
+    /// consumer reads warnings through, and it is the in-mesh compile's <c>NoWarn</c> — the parity
+    /// that makes "in-mesh C# is held to the standard <c>src/</c> is held to" true rather than
+    /// aspirational. A raw <see cref="CSharpCompilation"/> applies no <c>NoWarn</c> at all, so
+    /// before this filter the in-mesh compile was the ONLY compiler in the fleet reporting the .NET
+    /// SDK's own default suppressions (<c>CS1701</c>/<c>CS1702</c>, 95 baseline entries in
+    /// MeshWeaver.Plugins alone, unpayable by any author) and core's own <c>src/</c> doc-completeness
+    /// suppressions (<c>CS1591</c>/<c>CS1573</c>/<c>CS1712</c>). Filtering at collection rather than
+    /// through <c>WithSpecificDiagnosticOptions</c> is deliberate: the options are REFLECTED into
+    /// <see cref="GeneratedInputIdentity.OptionsFingerprint"/>, so suppressing there would change
+    /// the content key of every NodeType in the fleet and force one global recompile — a rollout
+    /// cost for a reporting decision.
+    /// </remarks>
+    internal static IReadOnlyList<CompileWarning> Collect(IEnumerable<Diagnostic> diagnostics)
+        => diagnostics
             .Where(d => d.Severity == DiagnosticSeverity.Warning && !d.IsSuppressed)
-            .Select(d => $"{d.Id}: {d.GetMessage()}{Where(d)}")
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(text => text, StringComparer.Ordinal)
+            .Where(d => !CompileWarning.IsNotReported(d.Id))
+            .Select(d => new CompileWarning(d.Id, d.GetMessage(), Where(d)))
+            .Distinct()
+            .OrderBy(w => w.Describe(), StringComparer.Ordinal)
             .ToList();
-        return warnings.Count <= MaxReportedWarnings
-            ? warnings
-            : warnings.Take(MaxReportedWarnings)
-                .Append($"… and {warnings.Count - MaxReportedWarnings} more warning(s) not listed.")
-                .ToList();
-    }
+
+    /// <summary>
+    /// Renders collected warnings for the compile ACTIVITY: one line each, capped, with the cap
+    /// NAMED in the last entry rather than applied silently — a truncation a reader cannot see is a
+    /// lie about how much was wrong.
+    /// </summary>
+    /// <param name="warnings">The collected warnings, already deduped and ordered.</param>
+    internal static IReadOnlyList<string> Report(IReadOnlyList<CompileWarning> warnings)
+        => warnings.Count <= MaxReportedWarnings
+            ? [.. warnings.Select(w => w.Describe())]
+            : [
+                .. warnings.Take(MaxReportedWarnings).Select(w => w.Describe()),
+                $"… and {warnings.Count - MaxReportedWarnings} more warning(s) not listed.",
+            ];
 
     /// <summary>Where a diagnostic is, when the compiler knows — the generated source is one
-    /// concatenated tree, so the line is the only locator a reader gets.</summary>
-    private static string Where(Diagnostic diagnostic)
+    /// concatenated tree, so the line is the only locator a reader gets. 0 when it has no source
+    /// location at all.</summary>
+    private static int Where(Diagnostic diagnostic)
         => diagnostic.Location.IsInSource
-            ? $" (line {diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1})"
-            : string.Empty;
+            ? diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1
+            : 0;
 
     /// <summary>How many distinct warnings reach the activity before the rest are counted instead
     /// of listed.</summary>
     internal const int MaxReportedWarnings = 50;
 
-    /// <summary>The canonical compilation options every dynamic NodeType compile uses.</summary>
+    /// <summary>
+    /// The canonical compilation options every dynamic NodeType compile uses.
+    ///
+    /// <para>🚨 <b>There is deliberately NO <c>GeneralDiagnosticOption</c> here, and there must
+    /// never be one.</b> This factory is shared by the CI bake AND by
+    /// <c>MeshNodeCompilationService</c> — the portal's RUNTIME compile, which every replica runs
+    /// for every NodeType on every boot. Promoting warnings to errors here would park every
+    /// NodeType carrying a missing doc comment, in production: parked ⇒ the pre-warmer refuses
+    /// readiness ⇒ the rollout stalls ⇒ no instance actions at all, which is an outage this fleet
+    /// has already spent a night recovering from. The warning STANDARD is a gate policy and lives
+    /// in the gate (<c>WarningBaseline</c> in the tester); the compiler stays lenient.</para>
+    ///
+    /// <para>🚨 <c>NullableContextOptions.Annotations</c> is the ANNOTATION context ONLY — never
+    /// <c>Enable</c>. Without it, authored source that correctly writes <c>string?</c> lands in a
+    /// tree with no <c>#nullable</c> directive and earns CS8632 ("the annotation for nullable
+    /// reference types should only be used in code within a '#nullable' annotations context") —
+    /// the platform emitting a warning into content it does not own, measured at 21 of 27 NodeTypes
+    /// on samples/Graph/Data. <c>Annotations</c> makes <c>?</c> mean what the author wrote and
+    /// turns on NO nullable analysis, so it adds not one diagnostic and cannot make a compile that
+    /// used to succeed fail. <c>Enable</c> would switch on the whole CS86xx family across every
+    /// in-mesh source in the fleet at once, which is a content decision nobody has made.</para>
+    /// </summary>
     internal static CSharpCompilationOptions CreateCompilationOptions()
         => new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
             .WithOptimizationLevel(OptimizationLevel.Debug)
+            .WithNullableContextOptions(NullableContextOptions.Annotations)
             .WithPlatform(Platform.AnyCpu);
 
     /// <summary>
@@ -230,7 +292,7 @@ public static class EmitPipeline
         var image = Bytes(dllImage);
         File.WriteAllBytes(dllPath, image);
 
-        return EmittedArtifact.For(dllPath, image, Warnings(emitResult.Diagnostics));
+        return EmittedArtifact.For(dllPath, image, Collect(emitResult.Diagnostics));
 
         // Expandable MemoryStreams created with the parameterless ctor expose their buffer, so the
         // common path hands out a span over it instead of copying a multi-megabyte image.

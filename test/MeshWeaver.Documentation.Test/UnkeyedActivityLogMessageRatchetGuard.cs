@@ -236,7 +236,25 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
         {
             // The inner CreateNodeResponse.Error — the create handler's own words, verbatim
             // upstream text no catalog of ours can carry.
-            ["src/MeshWeaver.Mesh.Contract/MeshExtensions.cs"] = 1,
+            //
+            // ── #4507: the CREATE and BULK-CREATE legs adopting the carrier ──────────────────
+            // Five more, and the reason each one is text this process did not author — or could
+            // not template — is written at the site. Every OTHER refusal on both legs is now
+            // Keyed, which is what the +26 catalog keys in this change are:
+            //   · the static/durable serve-collision diagnostic — DescribeStaticServeCollision
+            //     composes a branch-dependent operator report that ENUMERATES the claiming
+            //     providers and names host configuration keys; there is no fixed template;
+            //   · two `ex.Message` arms (singular and bulk InvalidOperationException) — a storage
+            //     adapter's or a validator's own throw;
+            //   · the bulk post-creation rollback report — ASSEMBLED from four counts, two
+            //     conditional clauses and a variable-length tail of per-node outcomes, so a
+            //     template could only hold it in one {detail} placeholder and translate nothing;
+            //   · the INodeValidator refusal in RunCreationValidatorsObs — the interface hands back
+            //     a plain string and its implementers (RLS, app-integrity, plugin-contributed) live
+            //     outside this repo, so the composing frame knows the sentence but never the key.
+            //     Keying a validator's refusal is that validator's change to make; the carrier is
+            //     ready for it, and this budget drops by one the day it happens.
+            ["src/MeshWeaver.Mesh.Contract/MeshExtensions.cs"] = 6,
 
             // ── #4373: the notification surface adopting the same carrier ────────────────────
             // The two COMPATIBILITY entry points (CreateNotification / Dispatch) and the email

@@ -40,10 +40,24 @@ from pathlib import Path
 
 WORKFLOW = ".github/workflows/main-cd.yml"
 MODULE_PACK_WORKFLOW = ".github/workflows/node-repo-module-pack.yml"
+AVAILABILITY = ".github/scripts/check-release-availability.sh"
 STEP_ID = "release"
+# 🚨 The ACR read `release` used to do MOVED to `gate` (MeshWeaver#4539) so that the seal probe and
+# the bake share ONE resolution of the release version. The cases moved with it — the harness
+# executes the step wherever it lives, which is the whole point of extracting by `id:`.
+BAKE_VERSION_STEP_ID = "bake_version"
+SEAL_STEP_ID = "seal"
 DECIDE_STEP_ID = "decide"
 VERDICT_STEP_ID = "verdict"
 HEAL_STEP_ID = "heal"
+# The registry probe the ledger's evidence comes from (MeshWeaver#4687). Extracted and EXECUTED
+# like every other step here: injecting its output into `decide` would leave the probe itself —
+# its `--query`, its repository list, its three branches — covered by nothing, which is the gap
+# Copilot named on that pull request.
+ATTEMPTED_STEP_ID = "attempted"
+# The step that discharges a deferral instead of promising one (MeshWeaver#4652): when a run lets
+# go of the delivery lane it asks whether main's HEAD still has a publisher, and creates one if not.
+HANDOFF_STEP_ID = "handoff"
 
 SHORT_SHA = "aaf95af"
 VERSION = "3.0.0-rc8.ci.6360"
@@ -63,6 +77,42 @@ if os.environ.get("AZ_FAIL"):
     sys.exit(1)
 
 argv = sys.argv[1:]
+
+# `acr repository show-tags` — the `attempted` step's staging-marker probe (MeshWeaver#4687).
+# Modelled PER REPOSITORY, because the whole point of that probe is that the three publishing
+# legs stage independently: AZ_TAGS is "<repo>=<tag>,<tag>;<repo>=…", and AZ_TAGS_FAIL names the
+# repositories whose read must FAIL, so a case can drive the unreadable arm for one leg alone.
+# The step's own --query does the prefix filter, exactly as jmespath would in az.
+if argv[:3] == ["acr", "repository", "show-tags"]:
+    repo = None
+    query = None
+    for i, a in enumerate(argv):
+        if a == "--repository":
+            repo = argv[i + 1]
+        if a == "--query":
+            query = argv[i + 1]
+    if repo is None or query is None:
+        sys.stderr.write("stub az: show-tags without --repository/--query\n")
+        sys.exit(97)
+    if repo in os.environ.get("AZ_TAGS_FAIL", "").split(","):
+        sys.stderr.write("ERROR: (ResponseError) the request could not be completed\n")
+        sys.exit(1)
+    tags = []
+    for entry in os.environ.get("AZ_TAGS", "").split(";"):
+        if not entry:
+            continue
+        name, _, values = entry.partition("=")
+        if name == repo:
+            tags = [v for v in values.split(",") if v]
+    try:
+        result = jmespath.compile(query).search(tags)
+    except JMESPathError as e:
+        sys.stderr.write(f"{e}\n")
+        sys.exit(1)
+    for row in result or []:
+        print(row)
+    sys.exit(0)
+
 if argv[:3] != ["acr", "manifest", "list-metadata"]:
     sys.stderr.write(f"stub az: unmodelled invocation {argv!r}\n")
     sys.exit(97)
@@ -136,10 +186,94 @@ echo "gh $*" >> "$GH_CALLS"
 #    can drive the "a failed close must not red a run that delivered" arm without also breaking
 #    the comment that has to survive it.
 case "$*" in
-  *"issue list"*) printf '%s' "${GH_ISSUE_RESULT:-}" ;;
+  # GH_LIST_FAIL makes the listing FAIL (Copilot on #4565): without `-e` an empty `$(gh issue list)`
+  # read as "no ledger yet", so the seal step CREATED a second ledger at count zero every hour.
+  *"issue list"*)
+    if [ -n "${GH_LIST_FAIL:-}" ]; then
+      echo "gh: HTTP 502 (https://api.github.com/repos/x/y/issues)" >&2
+      exit 1
+    fi
+    printf '%s' "${GH_ISSUE_RESULT:-}" ;;
+  # The seal step's attempt ledger (MeshWeaver#4539): `issue view --json comments --jq "[…] | length"`
+  # counts its marker comments. A case supplies the number the real `--jq` would have produced.
+  # Two markers are counted with two different needles, so the answers are separate: GH_SEAL_COUNT
+  # for the attempt marker, GH_STOPPED_COUNT for the one-shot "stopped" marker. Matching on the
+  # NEEDLE rather than on call order means a case cannot pass by accident if the step reorders them.
+  # 🚨 `${VAR-0}`, NOT `${VAR:-0}`. With the colon an explicitly EMPTY value would be replaced by
+  # the default, so the case that drives "the ledger could not be read" would silently hand the step
+  # a perfectly good `0` and pass having tested the opposite branch. (It did, once — which is why
+  # that case exists and why this comment does.) Without the colon, set-but-empty stays empty, which
+  # is exactly what `$(gh …)` yields when the call fails.
+  *"issue view"*)
+    if [ -n "${GH_VIEW_FAIL:-}" ]; then
+      echo "gh: HTTP 502 (https://api.github.com/repos/x/y/issues/1)" >&2
+      exit 1
+    fi
+    case "$*" in
+      # The seal step's RANK read (claim-then-rank, Copilot on #4565): where this run's claim sits among
+      # the pair's claims. Matched BEFORE `*cd-seal*`, whose needle the rank query also contains.
+      # Defaults to the count — "my claim is the newest" — and `${VAR-…}` keeps set-but-empty EMPTY, so
+      # a case can drive the unrankable arm.
+      *"index(true)"*)   printf '%s' "${GH_SEAL_RANK-${GH_SEAL_COUNT-0}}" ;;
+      *cd-seal-stopped*) printf '%s' "${GH_STOPPED_COUNT-0}" ;;
+      *cd-seal*)         printf '%s' "${GH_SEAL_COUNT-0}" ;;
+      *)                 printf '%s' "${GH_VIEW_RESULT-}" ;;
+    esac
+    ;;
+  # `gh issue create` prints the new issue's URL; the step takes the number off its tail.
+  *"issue create"*) printf '%s\n' "${GH_CREATE_RESULT:-https://github.com/o/r/issues/4242}" ;;
+  *"label create"*) ;;
+  # `gh workflow run` — the ONLY mutating call the `handoff` step makes (MeshWeaver#4652). Matched
+  # before the reads so a dispatch can never be answered by a run-list fixture, and recorded in
+  # GH_CALLS like everything else: "did this step actually ask GitHub to create a publisher" is the
+  # whole subject of its cases, and it is invisible in stdout. GH_DISPATCH_FAIL drives the arm where
+  # the dispatch is refused — the one state where the step must go RED rather than warn.
+  *"workflow run"*)
+    if [ -n "${GH_DISPATCH_FAIL:-}" ]; then
+      echo "gh: HTTP 403 (https://api.github.com/repos/x/y/actions/workflows/main-cd.yml/dispatches)" >&2
+      exit 1
+    fi ;;
+  # `commits/<sha>/check-runs` — HEAD's required check, which decides whether HEAD is publishable
+  # at all. Matched BEFORE `*commits/main*`: the handoff reads it by SHA, and a future edit that
+  # read it by ref would otherwise be answered by the tip stub and test nothing.
+  #
+  # 🚨 THERE IS NO PRE-COMPUTED ANSWER HERE, for the same reason GH_RUNS_FIXTURE exists: the whole
+  # discriminator is the step's own `--jq` — select by NAME, sort by `started_at`, take the LAST —
+  # and handing the step a ready-made "completed success" would leave every one of those decisions
+  # untested. A re-run appends a check run, so "take the last" is what stops an old red from
+  # shadowing a green (and an old green from shadowing a red, which is the direction that publishes
+  # an untested tree). Refuse rather than default: a stub that can answer without the filter is the
+  # defect. (Caught in review.)
+  *check-runs*)
+    if [ -n "${GH_CHECK_FAIL:-}" ]; then
+      echo "gh: HTTP 502 (https://api.github.com/repos/x/y/commits/abc/check-runs)" >&2
+      exit 1
+    fi
+    if [ -z "${GH_CHECKS_FIXTURE:-}" ]; then
+      echo "stub gh: a check-runs call with no GH_CHECKS_FIXTURE — the harness models the filter, not a verdict" >&2
+      exit 97
+    fi
+    prog=""
+    while [ $# -gt 0 ]; do
+      [ "$1" = "--jq" ] && prog="$2"
+      shift
+    done
+    if [ -z "$prog" ]; then
+      echo "stub gh: a check-runs call with no --jq — the harness models the filter, not the payload" >&2
+      exit 97
+    fi
+    jq -r "$prog" < "$GH_CHECKS_FIXTURE"
+    exit 0 ;;
   # Matched explicitly and BEFORE the reads below: a heal comment quotes a run URL, and a body
   # containing `actions/runs` would otherwise fall into the run-list arm and answer a fixture.
-  *"issue comment"*) ;;
+  # GH_COMMENT_FAIL makes the comment write FAIL (Copilot on #4565): the seal step's attempt marker is
+  # its budget, and an unwritten marker must stop the repair — never launch it uncounted.
+  *"issue comment"*)
+    if [ -n "${GH_COMMENT_FAIL:-}" ]; then
+      echo "gh: HTTP 403 (https://api.github.com/repos/x/y/issues/1/comments)" >&2
+      exit 1
+    fi
+    ;;
   *"issue close"*)
     if [ -n "${GH_CLOSE_FAIL:-}" ]; then
       echo "gh: HTTP 403 (https://api.github.com/repos/x/y/issues/1)" >&2
@@ -203,7 +337,12 @@ def die(msg: str):
 
 # ── running one case ────────────────────────────────────────────────────────────────────────
 def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: bool = False,
-             runs: list[dict] | None = None, calls_out: list[str] | None = None):
+             runs: list[dict] | None = None, calls_out: list[str] | None = None,
+             cwd: str | None = None, checks: list[dict] | None = None):
+    """Execute one extracted step. `cwd` runs it in a prepared tree — the seal step invokes
+    `.github/scripts/check-release-availability.sh` BY PATH, so a case that wants to drive the
+    probe's three outcomes puts its own script there. Nothing else about the step is rewritten;
+    the real body decides, from the real exit code and the real log."""
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         binp = tmp / "bin"
@@ -245,6 +384,15 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
         # silently change what a case measures.
         e.pop("GH_ISSUE_RESULT", None)
         e.pop("GH_CLOSE_FAIL", None)
+        for knob in ("AZ_TAGS", "AZ_TAGS_FAIL",
+                     "GH_SEAL_COUNT", "GH_STOPPED_COUNT", "GH_VIEW_RESULT", "GH_CREATE_RESULT",
+                     "GH_VIEW_FAIL", "GH_LIST_FAIL", "GH_COMMENT_FAIL", "GH_SEAL_RANK",
+                     "GH_DISPATCH_FAIL", "GH_CHECK_FAIL", "GH_CHECKS_FIXTURE"):
+            e.pop(knob, None)
+        # `RUNNER_TEMP` is where the seal step writes the probe's log. The runner always provides
+        # it; inherited from a developer's shell it would be absent and the step would fall back to
+        # /tmp, which is shared — two concurrent cases would read each other's log.
+        e["RUNNER_TEMP"] = str(tmp)
         e["GH_CALLS"] = str(calls)
         # Belt AND braces: the stub above shadows `gh` on PATH, and these leave a real `gh` — if one
         # is ever reached another way — with no credential to write with.
@@ -259,9 +407,14 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
             rf = tmp / "runs.json"
             rf.write_text(json.dumps({"workflow_runs": runs}))
             e["GH_RUNS_FIXTURE"] = str(rf)
+        # Same discipline as `runs`: a real `check_runs` payload the step's OWN `--jq` reduces.
+        if checks is not None:
+            cf = tmp / "checks.json"
+            cf.write_text(json.dumps({"check_runs": checks}))
+            e["GH_CHECKS_FIXTURE"] = str(cf)
         e.update(env)
 
-        p = subprocess.run(["bash", "-c", body], env=e, capture_output=True, text=True)
+        p = subprocess.run(["bash", "-c", body], env=e, cwd=cwd, capture_output=True, text=True)
         # What the step ASKED GitHub to do is the subject of the ledger cases: a step that prints
         # "closing" and calls no `gh issue close` is exactly the defect #3176 records, and it is
         # invisible in stdout.
@@ -377,6 +530,178 @@ def run_decide_cases(root, case) -> None:
     rc, log, outputs = run_step(body, {**reconcile, "REASON": "reconcile", "COMPLETE": "false", "GH_RUNS_RESULT": ""}, None)
     case("...and with nothing in flight the same reconcile still builds",
          rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # ── THE LEDGER RECORDS A FAILURE, NOT A CADENCE (MeshWeaver#4687) ────────────────────────
+    #
+    # 🚨 <b>109 issues of a 109-issue population recorded a delivery that had not failed.</b>
+    # `CD: main <sha> has an incomplete image set` says, in its body, *every self-updating install
+    # stays on the previous image*. Measured over every one ever filed: 28 were opened while the
+    # deployable set was COMPLETE and only the plugins pair tag was behind; of the 25 most recent
+    # of the rest, 19 were opened before any CD run for that commit had been created at all.
+    # Neither is a failure. The two cases below are the ones that would have failed before the
+    # fix, and each is paired with the control that fires the alarm — so "quieter" can never be
+    # mistaken for "muted".
+    #
+    # The subject is what the step ASKED GITHUB TO DO. A decision that prints nothing alarming and
+    # still calls `gh issue create` is exactly the defect, and it is invisible in stdout — so these
+    # read GH_CALLS.
+    ledger = {**reconcile, "REASON": "reconcile", "GH_VIEW_RESULT": "0", "GH_ISSUE_RESULT": ""}
+
+    calls: list[str] = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "true"}, None,
+                                calls_out=calls)
+    filed = [c for c in calls if "issue create" in c or "issue comment" in c]
+    case("a COMPLETE set whose only gap is the host pairing still publishes (#2622 unchanged)",
+         rc == 0 and "publish=true" in outputs and "bake_only=true" not in outputs,
+         f"rc={rc} out={outputs!r} log={log}")
+    case("...and files NOTHING on the ci-failure ledger — nothing was undelivered",
+         not filed, f"calls={filed!r} log={log}")
+    case("...and says so, so a reader is not left guessing why it built",
+         "cadence" in log.lower() and "deliverable" in log.lower(), f"log={log}")
+
+    # The control on that pair: without HOSTS_STALE a complete set is still the cheap bake-only
+    # tick. If these collapsed, every quiet hour would start building an image again.
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "false"}, None)
+    case("MUTATION CONTROL: a complete set with a CURRENT pairing is still bake-only, not a build",
+         rc == 0 and "bake_only=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    calls = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": "false"}, None,
+                                calls_out=calls)
+    filed = [c for c in calls if "issue create" in c or "issue comment" in c]
+    case("a green commit NO publisher has staged layers for is published, not alarmed about",
+         rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and nothing is written to the ci-failure ledger",
+         not filed, f"calls={filed!r} log={log}")
+
+    # 🚨 THE NEGATIVE CONTROL, and the reason this is not a mute. The SAME inputs, with the one
+    # fact that distinguishes a failure — a publisher already staged layers for this commit and
+    # never reached `promote` — must still open the issue and record the attempt.
+    calls = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": "true"}, None,
+                                calls_out=calls)
+    case("an ATTEMPTED delivery that left staging layers behind still files the ci-failure issue",
+         rc == 0 and any("issue create" in c for c in calls), f"calls={calls!r} log={log}")
+    case("...and still records the attempt against the budget",
+         any("issue comment" in c for c in calls) and "attempt 1/3" in log,
+         f"calls={calls!r} log={log}")
+    case("...and still publishes",
+         "publish=true" in outputs, f"out={outputs!r}")
+
+    # An UNANSWERED probe must fail towards the ledger: a registry read that did not complete is
+    # not evidence that nothing was attempted, and the cost of a missed delivery hole is higher
+    # than the cost of one extra comment.
+    calls = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": ""}, None,
+                                calls_out=calls)
+    case("an EMPTY attempt probe fails towards the ledger, never towards silence",
+         rc == 0 and any("issue create" in c for c in calls), f"calls={calls!r} log={log}")
+
+    # And the branch must not swallow the case it was never about: a commit whose required check
+    # settled RED still gets the blocked report, whatever the attempt probe says.
+    calls = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": "false",
+                                       "GREEN": "false", "CONCL": "failure", "AGE_MIN": "300",
+                                       "GH_ISSUE_RESULT": "77"}, None, calls_out=calls)
+    case("a settled-RED required check is still reported, attempt probe or not",
+         rc == 0 and "publish=false" in outputs and any("issue comment" in c for c in calls),
+         f"rc={rc} out={outputs!r} calls={calls!r} log={log}")
+
+    # 🚨 <b>A HOST REFRESH IS AN AUTOMATIC PUBLISH, SO IT IS BEHIND THE GREEN CHECK.</b>
+    # (Copilot on MeshWeaver#4687.) The stale-pair branch sits above the required-check guard,
+    # which is right for its neighbours — `bake_only` ships no image, `rebuild` is an operator's
+    # explicit dispatch — and was a hole here: a HEAD whose required check settled RED still has
+    # its old complete set, so COMPLETE is true, and the branch would have built and SHIPPED an
+    # untested tree for a cosmetic refresh.
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "true",
+                                       "GREEN": "false", "CONCL": "failure", "AGE_MIN": "300"}, None)
+    case("a stale host pairing on a RED required check publishes NOTHING",
+         rc == 0 and "publish=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and falls through to the bake, which builds no image",
+         "bake_only=true" in outputs, f"out={outputs!r} log={log}")
+    case("...and names the check rather than the pairing as the reason",
+         "untested" in log.lower(), f"log={log}")
+
+    # 🚨 <b>A STAGING TAG IS NOT EVIDENCE OF FAILURE WHILE ITS RUN IS ALIVE.</b>
+    # (Copilot on MeshWeaver#4687.) The in-flight tie-break filters to LOWER run ids so that two
+    # runs deciding at once cannot both defer — which means a NEWER run can be mid-publish here.
+    # Measured on `0dadacc`: the scheduled run was created 34 s BEFORE the genuine delivery run.
+    # Both probes run their OWN `--jq` over ONE real payload, so the id filters are executed, not
+    # asserted about.
+    newer_live = {
+        "id": 2000,  # > RUN_ID (1000): invisible to the older-only tie-break, visible to the ledger's
+        "name": "Continuous Delivery (main)",
+        "status": "in_progress",
+        "html_url": "https://example.invalid/actions/runs/2000",
+    }
+    calls = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": "true"}, None,
+                                runs=[newer_live], calls_out=calls)
+    case("a NEWER live run on this sha does NOT defer the publish (the tie-break is unchanged)",
+         rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and its staged layers are read as a publication in progress, so nothing is filed",
+         not [c for c in calls if "issue create" in c or "issue comment" in c],
+         f"calls={calls!r} log={log}")
+    case("...and the decision names the run it deferred the LEDGER to",
+         newer_live["html_url"] in log, f"log={log}")
+
+    # The control on that pair: the identical inputs with NO live run must still file. Without it,
+    # "does not file" would also pass if the ledger had simply been removed.
+    calls = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": "true"}, None,
+                                runs=[], calls_out=calls)
+    case("MUTATION CONTROL: with no live run the same staged layers DO open the issue",
+         rc == 0 and any("issue create" in c for c in calls), f"calls={calls!r} log={log}")
+
+
+# ── the ATTEMPTED step: the registry probe the ledger's evidence comes from ───────────────────
+def run_attempted_cases(root, case) -> None:
+    """
+    🚨 <b>A probe whose output is injected into the next step is covered by nothing.</b>
+
+    Every `decide` case above hands `ATTEMPTED` in as an environment value, so a malformed
+    `--query`, the wrong repository, or a broken empty/error branch would pass all of them while
+    the production probe answered the wrong thing every hour. (Copilot on MeshWeaver#4687.)
+    These execute the real step against a stub `az` that models `acr repository show-tags` per
+    repository, so the prefix filter and the repository list are the things under test.
+    """
+    body = extract_step(root, ATTEMPTED_STEP_ID)
+
+    # A stub is only evidence about what it stubs.
+    if "show-tags" not in body:
+        die(f"step `{ATTEMPTED_STEP_ID}` no longer reads the registry's tags — these cases would "
+            "pass having tested nothing. Update the harness with the step.")
+
+    env = {"SHORT": "abc1234"}
+
+    rc, log, outputs = run_step(body, env, None)
+    case("no staging tag anywhere answers `attempted=false` — nothing was tried",
+         rc == 0 and "attempted=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # 🚨 EACH publishing repository on its own. The three .NET legs stage in PARALLEL, so a run
+    # whose migration leg staged and whose portal leg died before its push leaves NO portal marker
+    # — and a probe that looked only at `memex-portal-ai` would answer "nothing was attempted"
+    # over exactly the torn set the ledger exists to record.
+    for repo in ("memex-portal-ai", "memex-migration", "mw-plugin-test"):
+        rc, log, outputs = run_step(
+            body, {**env, "AZ_TAGS": f"{repo}=staging-abc1234-777"}, None)
+        case(f"a staging tag in {repo} ALONE answers `attempted=true`",
+             rc == 0 and "attempted=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # The prefix filter is the step's own `--query`, executed by real jmespath: a staging tag for a
+    # DIFFERENT commit must not be read as this one's attempt.
+    rc, log, outputs = run_step(
+        body, {**env, "AZ_TAGS": "memex-portal-ai=staging-def5678-777,abc1234,3.0.0-ci.42"}, None)
+    case("a staging tag for ANOTHER commit is not this commit's attempt",
+         rc == 0 and "attempted=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # 🚨 FAILS TOWARDS THE ALARM, and only towards it: one unreadable repository is enough, because
+    # the cost of a spurious issue is a comment and the cost of a missed one is a silent hole.
+    rc, log, outputs = run_step(body, {**env, "AZ_TAGS_FAIL": "memex-migration"}, None)
+    case("an UNREADABLE repository answers `attempted=true`, never `false`",
+         rc == 0 and "attempted=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and says so as a warning naming the repository it could not read",
+         "::warning::" in log and "memex-migration" in log, f"log={log}")
 
 
 # ── the VERDICT step: the one that told main it was broken when it was not ───────────────────
@@ -559,6 +884,243 @@ def run_verdict_cases(root, case) -> None:
 
 
 # ── the HEAL step: the one that told a human to close an issue and then never closed one ─────
+def run_handoff_cases(root, case) -> None:
+    """
+    🚨 <b>MeshWeaver#4652 — the deferral nobody ever discharged.</b>
+
+    The push lane keeps ONE run in flight and ONE pending, and every arrival REPLACES the pending
+    one. That supersede rule is correct — measured over the 21.7 h to 2026-09-17T19:29Z, 77 push
+    arrivals against 14 runs that executed (35–107 min each, median ~67): not discarding would
+    serialize ~86 h of lane time into a 21.7 h window and delivery would fall behind without bound.
+
+    What the discard broke is the two liveness probes. A `pending` run has executed nothing
+    (`jobs.total_count == 0`) and GitHub may delete it, yet `gate` DEFERS to it and `verdict`
+    SUPPRESSES the stuck-delivery alarm on it — and neither ever learns it was discarded. Measured
+    on three consecutive hourly reconciles on 2026-09-17 (16:31Z, 17:26Z, 18:35Z): every one
+    deferred to a run cancelled minutes later with zero jobs, so the only backstop stood down on
+    every tick.
+
+    Narrowing the probe is not the fix — `pending` genuinely means "will build" when the run
+    survives (2026-09-10), and nothing observable AT PROBE TIME separates the two. The `handoff`
+    step moves the question to the one moment it IS answerable: when a run lets go of the lane, it
+    asks whether main's HEAD still has a publisher and creates one if not.
+
+    These cases pin the two things that make it worth anything — it must FIRE in the hole (a green
+    HEAD nobody is publishing) and it must NOT fire anywhere else, above all not on itself — plus
+    the two mutation controls that prove the cases could have failed.
+    """
+    body = extract_step(root, HANDOFF_STEP_ID)
+
+    # A stub is only evidence about what it stubs. If the step stops dispatching, stops probing for
+    # a successor, or stops reading HEAD's check, every case below would pass having tested nothing.
+    for needle, why in (
+        ("workflow run", "no longer dispatches, so the hole-closing arm tests nothing"),
+        ("actions/runs", "no longer probes for a successor, so the cost control tests nothing"),
+        ("check-runs", "no longer reads HEAD's required check, so the not-green arm tests nothing"),
+        ("sort_by(.started_at)", "no longer takes the LATEST check run, so a re-run reads as its first attempt"),
+        ("DELIVERY_LEGS", "no longer reads the shipping legs, so a run that promoted and then failed tests nothing"),
+        ("HANDOFF_ELIGIBLE", "lost the one-hop bound, so a deterministic failure loops forever"),
+    ):
+        if needle not in body:
+            die(f"step `{HANDOFF_STEP_ID}` {why} (missing `{needle}`). Update the harness with the step.")
+
+    HEAD = "aaaa111" + "0" * 33          # main's tip in every case below
+    BUILT = "bbbb222" + "0" * 33         # what the terminating run targeted
+    ME = 9000
+    REQUIRED = "Consolidate test results"
+    CLEAN_LEGS = "success skipped skipped skipped success success success success success success"
+
+    def chk(status: str, concl, started: str, name: str = REQUIRED) -> dict:
+        return {"name": name, "status": status, "conclusion": concl, "started_at": started}
+
+    GREEN = [chk("completed", "success", "2026-09-17T18:00:00Z")]
+
+    def handoff(**over):
+        """The shape of a run that has just let go of the lane without publishing HEAD."""
+        env = {
+            "SHA": BUILT, "PUBLISH": "false", "COMPLETE": "false", "PROMOTE_RESULT": "failure",
+            "DELIVERY_LEGS": CLEAN_LEGS,
+            "HANDOFF_ELIGIBLE": "true", "RUN_ID": str(ME), "REPO": "Systemorph/MeshWeaver",
+            "WORKFLOW_NAME": CD, "WORKFLOW_FILE": "main-cd.yml", "GH_TOKEN": "",
+            "GH_TIP_RESULT": HEAD,
+        }
+        env.update(over)
+        return env
+
+    def drive(env, runs, mutate=None, checks=None):
+        calls: list[str] = []
+        b = body
+        if mutate is not None:
+            needle, repl = mutate
+            if needle not in b:
+                die(f"the mutation control for `{HANDOFF_STEP_ID}` cannot apply: `{needle}` is no "
+                    "longer in the step. A control that cannot mutate proves nothing — re-point it.")
+            b = b.replace(needle, repl)
+        rc, log, outputs = run_step(b, env, None, runs=runs, calls_out=calls,
+                                    checks=GREEN if checks is None else checks)
+        dispatched = any("workflow run" in c for c in calls)
+        return rc, log, dispatched, calls
+
+    me = wf_run(ME, "in_progress", "2026-09-17T19:00:00Z")
+
+    # ── ARM 1: THE HOLE IT EXISTS TO CLOSE ───────────────────────────────────────────────────
+    # 2026-09-17T19:25:49Z, run 35261268480: it FAILED, main's HEAD was green, and the hourly tick
+    # would not have healed it — it defers whenever anything is queued. Nothing is queued here.
+    rc, log, dispatched, calls = drive(handoff(), [me])
+    case("a green HEAD with NO run queued or running gets a publisher dispatched",
+         rc == 0 and dispatched and "HANDED ON" in log, f"rc={rc} dispatched={dispatched} log={log}")
+    case("...and the dispatch names this workflow and main, not a guess",
+         any("workflow run main-cd.yml" in c and "--ref main" in c for c in calls), f"calls={calls}")
+
+    # 🚨 THE SELF-EXCLUSION CASE, and it is the one that would disable the drain forever. The
+    # terminating run is itself non-completed in the very list it reads (it is still running THIS
+    # step). Drop `.id != $RUN_ID` and every run finds itself a successor, hands nothing on, and
+    # the step becomes a green no-op in every state — strictly worse than not existing.
+    rc, log, dispatched, _ = drive(handoff(), [me], mutate=(".id != $RUN_ID and ", ""))
+    case("MUTATION CONTROL: without `.id != $RUN_ID` the step finds ITSELF and dispatches nothing",
+         not dispatched, f"dispatched={dispatched} log={log}")
+
+    # ── ARM 2: THE COST CONTROL — an inherited obligation is not a missing one ────────────────
+    # A queued run counts, and deliberately so: whichever run finally executes runs THIS step when
+    # it terminates. This is what keeps the common, saturated case at zero extra runs.
+    for status in ("pending", "queued", "in_progress"):
+        rc, log, dispatched, _ = drive(handoff(), [me, wf_run(9100, status, "2026-09-17T19:20:00Z")])
+        case(f"a {status} run on HEAD inherits the obligation — nothing is dispatched",
+             rc == 0 and not dispatched and "9100" in log, f"rc={rc} dispatched={dispatched} log={log}")
+
+    # A COMPLETED run on HEAD is not a successor — without the status filter every commit that ever
+    # had a CD run would read as covered.
+    rc, log, dispatched, _ = drive(handoff(), [me, wf_run(9100, "completed", "2026-09-17T18:00:00Z")])
+    case("a COMPLETED run on HEAD is not a successor", dispatched, f"dispatched={dispatched} log={log}")
+
+    # A live run of a DIFFERENT workflow on HEAD is not a publisher either — a Build-and-Test
+    # re-run must never be mistaken for one.
+    rc, log, dispatched, _ = drive(
+        handoff(), [me, wf_run(9100, "in_progress", "x", name="MeshWeaver Build and Test")])
+    case("a live run of ANOTHER workflow on HEAD is not a publisher",
+         dispatched, f"dispatched={dispatched} log={log}")
+
+    # ── ARM 3: NOTHING IS OWED WHEN THIS RUN IS HEAD'S PUBLICATION ───────────────────────────
+    rc, log, dispatched, _ = drive(
+        handoff(SHA=HEAD, PUBLISH="true", PROMOTE_RESULT="success"), [me])
+    case("a run that PUBLISHED main's HEAD hands nothing on",
+         rc == 0 and not dispatched, f"rc={rc} dispatched={dispatched} log={log}")
+
+    # 🚨 PROMOTE IS ONLY PHASE A. Run 35257430439 tagged nothing wrong and then died in
+    # `plugins-modules`; keyed on promote alone this step would have called that HEAD's publication
+    # and handed nothing on, in the exact case it exists for.
+    for leg, why in ((4, "plugins-modules"), (6, "publish-bake"), (5, "verify-images")):
+        legs = CLEAN_LEGS.split()
+        legs[leg] = "failure"
+        rc, log, dispatched, _ = drive(
+            handoff(SHA=HEAD, PUBLISH="true", PROMOTE_RESULT="success",
+                    DELIVERY_LEGS=" ".join(legs)), [me])
+        case(f"a run that promoted and then FAILED a later shipping leg still hands HEAD on ({why})",
+             rc == 0 and dispatched, f"rc={rc} dispatched={dispatched} log={log}")
+
+    # A CANCELLED shipping leg is the same fact as a failed one — the set was not finished.
+    legs = CLEAN_LEGS.split(); legs[0] = "cancelled"
+    rc, log, dispatched, _ = drive(
+        handoff(SHA=HEAD, PUBLISH="true", PROMOTE_RESULT="success", DELIVERY_LEGS=" ".join(legs)), [me])
+    case("a CANCELLED shipping leg counts as incomplete too", dispatched, f"log={log}")
+
+    # 🚨 …and `skipped` must NOT. Most legs skip on a bake-only or no-publish run; reading that as a
+    # failure would dispatch a publisher after every ordinary quiet tick.
+    rc, log, dispatched, _ = drive(
+        handoff(SHA=HEAD, PUBLISH="true", PROMOTE_RESULT="success",
+                DELIVERY_LEGS="success skipped skipped skipped success success skipped skipped skipped skipped"), [me])
+    case("a SKIPPED leg is not a failure — an ordinary publication still hands nothing on",
+         not dispatched, f"dispatched={dispatched} log={log}")
+
+    # 🚨 THE ANTI-LOOP ARM. A reconcile that found the set already complete takes the bake-only
+    # branch: publish=false, promote=skipped, complete=true, target == HEAD. Without the
+    # `COMPLETE` arm it would hand ITSELF on, and the dispatched run would do the same, forever.
+    rc, log, dispatched, _ = drive(
+        handoff(SHA=HEAD, PUBLISH="false", COMPLETE="true", PROMOTE_RESULT="skipped",
+                DELIVERY_LEGS="skipped skipped skipped skipped skipped skipped skipped skipped skipped skipped"),
+        [me])
+    case("a BAKE-ONLY run on HEAD hands nothing on (it would otherwise dispatch itself forever)",
+         rc == 0 and not dispatched, f"rc={rc} dispatched={dispatched} log={log}")
+
+    # ── ARM 4: THE ONE-HOP BOUND ────────────────────────────────────────────────────────────
+    # Exactly ARM 1's state, but this run arrived BY a handoff. A deterministic promote failure
+    # would otherwise dispatch a successor that fails the same way, without end.
+    rc, log, dispatched, _ = drive(handoff(HANDOFF_ELIGIBLE="false"), [me])
+    case("a run that was ITSELF dispatched never dispatches again (the chain is bounded at one hop)",
+         rc == 0 and not dispatched and "one hop" in log, f"rc={rc} dispatched={dispatched} log={log}")
+
+    rc, log, dispatched, _ = drive(handoff(HANDOFF_ELIGIBLE="false"), [me],
+                                   mutate=('if [ "$HANDOFF_ELIGIBLE" != "true" ]; then', "if false; then"))
+    case("MUTATION CONTROL: without the one-hop bound that same run DOES dispatch again",
+         dispatched, f"dispatched={dispatched} log={log}")
+
+    # ── ARM 5: ONLY A GREEN HEAD IS OWED ANYTHING — and the step's OWN --jq decides ──────────
+    # Every case here drives the real filter over a real `check_runs` payload: select by NAME,
+    # sort by `started_at`, take the LAST. A pre-computed verdict would test none of those.
+    for payload, why, want in (
+        ([chk("in_progress", None, "2026-09-17T18:00:00Z")], "still testing", False),
+        ([chk("completed", "failure", "2026-09-17T18:00:00Z")], "settled red", False),
+        ([], "no check run at all", False),
+        ([chk("completed", "success", "2026-09-17T18:00:00Z", name="Some other gate")],
+         "only ANOTHER check exists — the required one is absent", False),
+        ([chk("completed", "success", "2026-09-17T18:00:00Z"),
+          chk("completed", "failure", "2026-09-17T17:00:00Z", name="Some other gate")],
+         "an unrelated check is red but the required one is green", True),
+    ):
+        rc, log, dispatched, _ = drive(handoff(), [me], checks=payload)
+        case(f"HEAD with {why}: {'dispatches' if want else 'is not owed a publisher'}",
+             rc == 0 and dispatched == want, f"rc={rc} dispatched={dispatched} log={log}")
+
+    # 🚨 A RE-RUN APPENDS A CHECK RUN, so "take the LAST by started_at" is the whole of the
+    # re-run story. Both directions, because both are wrong in a way that matters: reading the
+    # older GREEN would publish a tree whose re-run went red.
+    rerun_green = [chk("completed", "failure", "2026-09-17T17:00:00Z"),
+                   chk("completed", "success", "2026-09-17T18:00:00Z")]
+    rerun_red = [chk("completed", "success", "2026-09-17T17:00:00Z"),
+                 chk("completed", "failure", "2026-09-17T18:00:00Z")]
+    rc, log, dispatched, _ = drive(handoff(), [me], checks=rerun_green)
+    case("a red check RE-RUN green is green — the LATEST run decides", dispatched, f"log={log}")
+    rc, log, dispatched, _ = drive(handoff(), [me], checks=rerun_red)
+    case("a green check RE-RUN red is RED — the latest decides in that direction too",
+         not dispatched, f"dispatched={dispatched} log={log}")
+    rc, log, dispatched, _ = drive(handoff(), [me], checks=rerun_red,
+                                   mutate=("sort_by(.started_at) | last", "sort_by(.started_at) | first"))
+    case("MUTATION CONTROL: taking the FIRST check run instead publishes a tree whose re-run went red",
+         dispatched, f"dispatched={dispatched} log={log}")
+
+    # ── ARM 6: AN UNANSWERED PROBE NEVER DISPATCHES, AND IS NEVER SILENT ────────────────────
+    # The opposite posture to `verdict`'s fail-closed, and for a reason worth stating: this step
+    # CREATES work. Guessing on an unanswered probe would cost a duplicate image set (#3376), and
+    # not dispatching degrades to the hourly reconcile — where delivery stood before it existed —
+    # rather than to silence. So: warn loudly, name the unanswered question, create nothing.
+    for knob, needle in (("GH_TIP_RESULT", "main's tip"),
+                         ("GH_CHECK_FAIL", "required check"),
+                         ("GH_RUNS_FAIL", "successor probe")):
+        env = handoff()
+        env[knob] = "" if knob == "GH_TIP_RESULT" else "1"
+        rc, log, dispatched, _ = drive(env, [me])
+        case(f"an unanswered {needle} dispatches nothing",
+             not dispatched, f"dispatched={dispatched} log={log}")
+        case(f"...and says so as a warning naming what went unanswered ({needle})",
+             "::warning::" in log and needle.split()[-1] in log, f"log={log}")
+
+    # ── ARM 7: A FAILED DISPATCH IS RED, NEVER A SHRUG ──────────────────────────────────────
+    # It only fires in the state where HEAD is green and nobody is publishing it, so a dispatch
+    # that could not be made leaves delivery with no producer. That is the stuck state, and it must
+    # page rather than decorate a green run.
+    rc, log, dispatched, _ = drive(handoff(GH_DISPATCH_FAIL="1"), [me])
+    case("a dispatch that FAILS reds the run rather than passing quietly",
+         rc != 0 and "::error::" in log, f"rc={rc} log={log}")
+    case("...and it names the permission to check and the manual remedy",
+         "actions: write" in log and "by hand" in log, f"log={log}")
+
+    # ── ARM 8: A RUN THAT NEVER HELD THE LANE OWES NOTHING ──────────────────────────────────
+    # A PR-triggered workflow_run, or a gate that died before resolving a target.
+    rc, log, dispatched, _ = drive(handoff(SHA=""), [me])
+    case("a run whose gate resolved no target hands nothing on",
+         rc == 0 and not dispatched, f"rc={rc} dispatched={dispatched} log={log}")
+
+
 def run_heal_cases(root, case) -> None:
     """
     🚨 <b>MeshWeaver#3176 — an alert that cannot be resolved stops being an alert.</b>
@@ -632,6 +1194,325 @@ def run_heal_cases(root, case) -> None:
          "::warning::" in log and "close" in log, f"log={log}")
     case("...and the heal comment is still written, so the delivery record survives",
          "gh issue comment 3176" in joined, f"calls={calls}")
+
+# ── the SEAL step: "does this sealed set still owe its plugins publication?" (#4539) ─────────
+#
+# 🚨 THE BROKEN STATE IS CONSTRUCTED, NOT ASSUMED. The lane being fixed "works" whenever nothing
+# is missing, so a case that only exercises the healthy path proves nothing. Every outcome below
+# is produced by a stub `check-release-availability.sh` that prints the REAL script's sentences and
+# exits with the REAL script's codes, and the step under test is extracted from the workflow and
+# executed against it — exit code, log parsing, ledger calls and all.
+#
+# 🚨 AND THE STUB IS PINNED TO THE REAL SCRIPT. A stub is only evidence about what it stubs: if the
+# probe ever reworded these lines, every case here would keep passing while the step stopped
+# recognising a definite absence and silently answered "nothing due" — the exact failure this whole
+# change exists to remove. So the phrases are asserted to still exist in the real script.
+SEAL_PHRASES = (
+    # the step parses the identity out of this line, and refuses to act without one
+    "identity resolved: ",
+    # the ONLY outcome that licenses a re-attempt
+    "are not available for framework identity",
+    # the refusal that means "the platform bake has not published this release yet" — keyed on its
+    # OWN wording: an empty marker shares the "CANNOT RESOLVE" prefix and must NOT read as pending
+    "has no marker at",
+    # the refusal that means "the marker's existence could not be established" (#4539 review) — the
+    # case the old script reported as "no marker", which the step then answered with a green
+    "exists could not be established",
+    # the refusal that means "the producer wrote a marker and recorded no identity" — a defect
+    "is empty — the producer recorded none",
+    # the refusal that means "the store could not be read" — a red, never a verdict
+    "CANNOT DETERMINE release availability",
+)
+
+IDENTITY = "s5ec352bb102e5a2275e3831a08ac0c8d"
+SEAL_VERSION = "3.0.0-ci.8765"
+
+
+def _probe_stub(kind: str) -> str:
+    """A stand-in for check-release-availability.sh reproducing one of its outcomes verbatim."""
+    resolved = f'echo "identity resolved: {IDENTITY} — from the release marker at acct/share/_releases/$1"'
+    bodies = {
+        # exit 0 — `plugins` IS sealed for this identity. The control.
+        "sealed": f'{resolved}\necho "release availability: all 1 source(s) are published for '
+                  f'identity {IDENTITY} (release $1)."\nexit 0',
+        # exit 1 — the measured #4539 state: the set is sealed, the publication is not there.
+        "absent": f'{resolved}\necho "::error::release availability: 1 of 1 source(s) are not '
+                  f'available for framework identity {IDENTITY} (release $1)."\nexit 1',
+        # exit 1 — no `_releases` marker at all: the platform bake has not published this release.
+        "unmarked": 'echo "::error::CANNOT RESOLVE a framework identity: release \'$1\' has no '
+                    'marker at acct/share/prebuilt-bundles/_releases/$1."\nexit 1',
+        # exit 1 — the MARKER's existence could not be established (auth / throttling / network).
+        # Before the #4539 review fix the real script reported this as "has no marker", and the step
+        # answered it NOT MEASURED — a storage outage read as a pending bake.
+        "marker-unreadable": 'echo "::error::CANNOT DETERMINE release availability: whether the '
+                             'release marker at acct/share/prebuilt-bundles/_releases/$1 exists could '
+                             'not be established (az returned \'<nothing>\')."\nexit 1',
+        # exit 1 — a marker EXISTS but carries no identity: the producer's defect, not a pending bake.
+        "empty": 'echo "::error::CANNOT RESOLVE a framework identity: the release marker for \'$1\' '
+                 'is empty — the producer recorded none."\nexit 1',
+        # exit 1 — the store could not be read. A refusal, in neither direction.
+        "unreadable": f'{resolved}\necho "::error::CANNOT DETERMINE release availability for '
+                      f'framework identity {IDENTITY} (release $1): 1 of 1 source(s) could not be '
+                      f'queried."\nexit 1',
+        # exit 1 — absent, but the identity line never printed. Must refuse, not act.
+        "nameless": 'echo "::error::release availability: 1 of 1 source(s) are not available for '
+                    'framework identity (release $1)."\nexit 1',
+    }
+    return "#!/usr/bin/env bash\n" + bodies[kind] + "\n"
+
+
+def run_seal_cases(root, case) -> None:
+    body = extract_step(root, SEAL_STEP_ID)
+
+    # A stub is only evidence about the call it stubs.
+    if AVAILABILITY.split("/")[-1] not in body:
+        die(f"step `{SEAL_STEP_ID}` no longer calls {AVAILABILITY} — the probe these cases drive is "
+            "no longer the seam under test, so every case below would pass vacuously.")
+    if "plugins_seal_due=" not in body:
+        die(f"step `{SEAL_STEP_ID}` no longer writes `plugins_seal_due` — the output the three "
+            "`plugins-*` jobs gate on is gone or renamed, so these cases test nothing.")
+    real = (root / AVAILABILITY).read_text()
+    for phrase in SEAL_PHRASES:
+        if phrase not in real:
+            die(f"{AVAILABILITY} no longer emits {phrase!r}, but step `{SEAL_STEP_ID}` still "
+                "classifies its answer by that text. The stubs below would keep passing while the "
+                "real lane stopped telling a definite absence from a refusal — re-point both.")
+
+    def seal(kind: str, **env):
+        """Run the step against one probe outcome, in a tree holding that stub."""
+        with tempfile.TemporaryDirectory() as td:
+            tree = Path(td)
+            scripts = tree / ".github" / "scripts"
+            scripts.mkdir(parents=True)
+            probe = tree / AVAILABILITY
+            probe.write_text(_probe_stub(kind))
+            probe.chmod(0o755)
+            calls: list[str] = []
+            base = {
+                "RELEASE_VERSION": SEAL_VERSION, "SHORT": "836d447", "PSHORT": "07bcf72",
+                "REPO": "Systemorph/MeshWeaver", "GH_TOKEN": "",
+                "RUN_URL": "https://example.invalid/run", "MAX_SEAL_ATTEMPTS": "3",
+                "BAKE_PUBLISH_TARGETS": "acct/share",
+            }
+            rc, log, outputs = run_step(body, {**base, **env}, None,
+                                        calls_out=calls, cwd=str(tree))
+            return rc, log, outputs, "\n".join(calls)
+
+    # ── 1. THE BROKEN STATE: sealed set, no `plugins` publication for its identity ──
+    rc, log, outputs, calls = seal("absent")
+    case("a sealed set whose `plugins` publication is ABSENT re-attempts the seal",
+         rc == 0 and "plugins_seal_due=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    # 🚨 Assert on the step's OWN verdict line, never on `log` as a whole: `log` also carries the
+    # probe's relayed "identity resolved: <id>" line, so `IDENTITY in log` held WHATEVER the step
+    # extracted — a mutation reading the wrong field (identity `—`) stayed green on 86 of 86.
+    case("...and it NAMES the framework identity it is acting on",
+         f"NOT sealed for `{IDENTITY}`" in log,
+         f"the verdict named the wrong identity, or none:\n{log}")
+    case("...and it records the attempt on the ledger before acting",
+         "issue comment" in calls and "cd-seal:836d447-p07bcf72" in calls,
+         f"no attempt marker was written; gh calls were:\n{calls}")
+
+    # ── 2. THE CONTROL: the publication IS there, so the lane must do NOTHING ──
+    # Without this, "it re-attempts" would also pass if it re-attempted unconditionally — which is
+    # the expensive, alarm-every-hour shape the probe exists to prevent.
+    rc, log, outputs, calls = seal("sealed")
+    case("a set whose `plugins` publication IS sealed re-attempts NOTHING",
+         rc == 0 and "plugins_seal_due=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it touches no ledger at all",
+         "issue comment" not in calls and "issue create" not in calls,
+         f"a healthy tick wrote to the ledger; gh calls were:\n{calls}")
+
+    # ── 3. REFUSALS ARE NOT VERDICTS, in either direction ──
+    rc, log, outputs, calls = seal("unreadable")
+    case("an UNREADABLE store fails RED rather than answering",
+         rc != 0, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it never claims the publication is fine",
+         "plugins_seal_due=true" not in outputs, f"out={outputs!r}")
+    case("...and it says the store could not be read, not that Plugins is at fault",
+         "CANNOT DETERMINE" in log or "could not ANSWER" in log, f"log={log}")
+
+    # A release with no marker yet is the platform bake's turn, not a defect: this tick writes it.
+    rc, log, outputs, calls = seal("unmarked")
+    case("a release with no `_releases` marker yet is NOT MEASURED, and is not a red",
+         rc == 0 and "plugins_seal_due=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it says so instead of folding into a silent pass",
+         "NOT MEASURED" in log, f"log={log}")
+    case("...and it writes no ledger entry for a measurement it did not take",
+         "issue comment" not in calls, f"gh calls were:\n{calls}")
+
+    # 🚨 The #4539 review finding. The marker's EXISTENCE could not be read — the case the old script
+    # folded into "has no marker". It must be RED, never NOT MEASURED.
+    rc, log, outputs, calls = seal("marker-unreadable")
+    case("a marker whose existence CANNOT be read fails RED, not NOT MEASURED",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it is not reported as a pending bake",
+         "NOT MEASURED" not in log, f"a storage outage was answered as a pending bake:\n{log}")
+
+    # An EMPTY marker shares the "CANNOT RESOLVE" prefix with the benign absent case. Keyed on the
+    # prefix, the step read a producer defect as "the bake has not run yet" and went green.
+    rc, log, outputs, calls = seal("empty")
+    case("an EMPTY release marker (producer recorded no identity) fails RED",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it is not reported as a pending bake",
+         "NOT MEASURED" not in log, f"a producer defect was answered as a pending bake:\n{log}")
+
+    # Absent, but the probe named no identity: acting would be acting on the wrong identity.
+    rc, log, outputs, calls = seal("nameless")
+    case("an absence with NO resolved identity refuses rather than acting",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # ── 3b. THE LEDGER FAILS CLOSED (Copilot on #4565) ──
+    # The attempt ledger IS the budget. A failed read must not look like "no ledger yet", and a failed
+    # write must not launch a repair that consumed no attempt — either way the three-per-pair bound is
+    # gone, silently, for as long as the API is unhappy. `set -e` is what enforces both.
+    rc, log, outputs, calls = seal("absent", GH_LIST_FAIL="1")
+    case("a FAILED ledger listing stops the step instead of reading as 'no ledger yet'",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it creates no second ledger issue",
+         "issue create" not in calls, f"a failed listing still created a ledger; gh calls were:\n{calls}")
+    rc, log, outputs, calls = seal("absent", GH_COMMENT_FAIL="1")
+    case("a FAILED attempt-marker write stops the repair — it never launches uncounted",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # ── 3c. THE BUDGET IS ATOMIC: claim, then rank (Copilot on #4565) ──
+    # Two overlapping reconciles both read a count of 2. Read-then-append let BOTH launch "3/3".
+    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="2", GH_SEAL_RANK="3")
+    case("a reconcile whose claim ranks PAST the budget stands down, though it read a count under it",
+         rc == 0 and "plugins_seal_due=false" in outputs and "standing down" in log,
+         f"rc={rc} out={outputs!r} log={log}")
+    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="2", GH_SEAL_RANK="2")
+    case("...while the reconcile whose claim ranks inside it proceeds as 3/3",
+         rc == 0 and "plugins_seal_due=true" in outputs and "3/3" in log, f"rc={rc} out={outputs!r} log={log}")
+    rc, log, outputs, calls = seal("absent", GH_SEAL_RANK="")
+    case("a claim that cannot be RANKED refuses rather than proceeding unbounded",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+    rc, log, outputs, calls = seal("absent")
+    # Split the log into CALLS, not lines: a `--body` spans several lines, so `issue comment` and its
+    # `cd-seal-run:` claim sit on DIFFERENT lines and a line-based search never finds the write.
+    records = re.split(r"\n(?=gh )", calls)
+    claim_at = next((i for i, r in enumerate(records)
+                     if r.startswith("gh issue comment") and "cd-seal-run:" in r), -1)
+    rank_at = next((i for i, r in enumerate(records)
+                    if r.startswith("gh issue view") and "index(true)" in r), -1)
+    case("...and the claim is WRITTEN before it is RANKED — read-then-write is the race itself",
+         0 <= claim_at < rank_at, f"claim at {claim_at}, rank read at {rank_at}; gh calls were:\n{calls}")
+
+    # ── 4. BOUNDED. The budget stops the re-attempt; it does not stop the reporting ──
+    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="3")
+    case("a spent re-attempt budget stops re-attempting",
+         rc == 0 and "plugins_seal_due=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it says so ONCE, with the stopped marker",
+         "cd-seal-stopped:836d447-p07bcf72" in calls, f"gh calls were:\n{calls}")
+    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="3", GH_STOPPED_COUNT="1")
+    case("...and having said it once, it does not say it again",
+         "issue comment" not in calls, f"it repeated the stop comment; gh calls were:\n{calls}")
+    # One BELOW the budget must still act — otherwise "bounded" would also pass if it never acted.
+    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="2")
+    case("...and the last attempt inside the budget still runs",
+         rc == 0 and "plugins_seal_due=true" in outputs and "3/3" in log,
+         f"rc={rc} out={outputs!r} log={log}")
+
+    # An unreadable ledger must not silently grant a fresh attempt every hour. Two shapes: the API
+    # call FAILS (gh exits non-zero, `$(…)` is empty), and it answers something that is not a count.
+    rc, log, outputs, calls = seal("absent", GH_VIEW_FAIL="1")
+    case("an unreadable attempt ledger refuses rather than defaulting the count to zero",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="null")
+    case("...and a non-numeric ledger answer is refused too, not coerced",
+         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # An empty release version cannot name an identity — refuse before probing anything.
+    rc, log, outputs, calls = seal("sealed", RELEASE_VERSION="")
+    case("an empty release version refuses instead of probing an unnamed release",
+         rc != 0 and "plugins_seal_due" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+
+# ── the BAKE_VERSION step: the ACR read that moved out of `publish-bake` (#4539) ──────────────
+def run_bake_version_cases(root, case) -> None:
+    body = extract_step(root, BAKE_VERSION_STEP_ID)
+    if "az acr manifest list-metadata" not in body:
+        die(f"step `{BAKE_VERSION_STEP_ID}` no longer calls `az acr manifest list-metadata` — the "
+            "stub these cases rely on is no longer the seam under test, so every case below would "
+            "pass vacuously. Update the harness with the step.")
+
+    base = {"SHORT_SHA": SHORT_SHA}
+
+    # 🚨 THE CASE THAT HAD NEVER SUCCEEDED, carried over verbatim from the step's old home. The
+    # repository holds 16 untagged manifests whose `tags` is null; before #2642 the query threw on
+    # the first of them and the step blamed promote.
+    rc, log, outputs = run_step(body, base, fixture(True))
+    case("the moved read recovers the version DESPITE 16 untagged manifests",
+         rc == 0 and f"version={VERSION}" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    rc, log, outputs = run_step(body, base, fixture(False))
+    case("a digest with no version tag is still a loud, accurate stop",
+         rc != 0 and "carries no version tag" in log, f"rc={rc} log={log}")
+
+    # 🚨 THE REGRESSION GUARD. A failing az must fail the step with AZ's message — never be
+    # converted into "there is no version tag" and blamed on promote.
+    rc, log, outputs = run_step(body, base, fixture(True), az_fail=True)
+    case("a FAILING az fails the moved read", rc != 0, f"rc={rc} log={log}")
+    case("a FAILING az is never reported as promote's fault",
+         "Fix promote" not in log and "carries no version tag" not in log,
+         f"the step blamed a healthy component for its own failed call:\n{log}")
+    case("a FAILING az surfaces az's own message", "az login" in log, f"log={log}")
+
+
+def plugins_leg_problems(workflow_text: str) -> list[str]:
+    """🚨 On a seal re-attempt `plugin-test-image` is SKIPPED, so `needs.plugin-test-image.outputs.version`
+    is the EMPTY STRING — and `test-image` / `platform-image` are REQUIRED inputs of the bake lane,
+    so an empty value does not even fail loudly: it yields `…/mw-plugin-test:` and the lane dies on
+    a manifest that can never resolve. `gate.image_tag` exists precisely so there is ONE place to
+    get this right; the workflow's own comment records SEVEN times a per-reference conditional got
+    it wrong. So: no `plugins-*` job may name the tester job's version output."""
+    import yaml
+
+    problems: list[str] = []
+    doc = yaml.safe_load(workflow_text)
+    for name, job in (doc.get("jobs") or {}).items():
+        if not name.startswith("plugins-"):
+            continue
+        if "plugin-test-image.outputs.version" in json.dumps(job):
+            problems.append(
+                f"{name} still reads `needs.plugin-test-image.outputs.version`, which is EMPTY on a "
+                "seal re-attempt (that job is skipped there). Use `needs.gate.outputs.image_tag`.")
+        cond = " ".join(str(job.get("if", "")).split())
+        if "plugins_seal_due" not in cond:
+            problems.append(
+                f"{name} has no `plugins_seal_due` arm in its `if:`, so the reconcile cannot repair "
+                "a sealed set whose plugins publication is missing (MeshWeaver#4539).")
+        elif not cond.startswith("always()"):
+            problems.append(
+                f"{name}'s `if:` does not start with `always()`, so it inherits `promote`'s skip on "
+                "the reconcile path and the repair is inert — the exact shape it is fixing.")
+        # 🚨 `always()` HAS TO BE PAID FOR. It stops a job inheriting a SKIP — and a skip is also
+        # what GitHub gives a job whose need FAILED. So once a job carries `always()`, every need
+        # whose OUTPUT it consumes must be asserted `== 'success'` by hand, or the job runs with
+        # that output EMPTY. For these legs that is not a loud failure: `platform-image-digest` and
+        # `tester-image-digest` are OPTIONAL inputs of the bake lane, which resolves the platform
+        # ITSELF when they are empty — so the bundles would be packed, quietly, against a set this
+        # run did not promote.
+        if cond.startswith("always()"):
+            consumed = {m for m in re.findall(r"needs\.([A-Za-z0-9_-]+)\.outputs\.", json.dumps(job))}
+            for dep in sorted(consumed):
+                if f"needs.{dep}.result == 'success'" not in cond:
+                    problems.append(
+                        f"{name} carries `always()` and consumes `needs.{dep}.outputs.*`, but its "
+                        f"`if:` never asserts `needs.{dep}.result == 'success'` — so a failed "
+                        f"`{dep}` lets this job run with that output empty instead of skipping.")
+        # `preflight` gates the run — it proves the external inputs exist — but exposes no output
+        # these legs READ, so the consumed-output rule above never saw it: an unasserted preflight
+        # stayed green while a FAILED preflight no longer stopped the leg (Copilot on #4565).
+        if cond.startswith("always()"):
+            needs = job.get("needs") or []
+            needs = [needs] if isinstance(needs, str) else needs
+            if "preflight" in needs and "needs.preflight.result == 'success'" not in cond:
+                problems.append(
+                    f"{name} carries `always()` and needs `preflight`, but its `if:` never asserts "
+                    "`needs.preflight.result == 'success'` — so a FAILED preflight (the inputs this run "
+                    "was never proven to have) no longer stops the leg.")
+    return problems
+
 
 def plugin_module_build_problems(workflow_text: str) -> list[str]:
     """The platform bake must have one compiler for every module it composes (#3732)."""
@@ -707,13 +1588,15 @@ def main() -> int:
             "step's real --jq filter over a workflow_runs fixture. Install jq.")
 
     body = extract_step(root, STEP_ID)
-    # A stub is only evidence about the call it stubs. If the step stopped making that call, the
-    # cases below would all pass while testing nothing.
-    if "az acr manifest list-metadata" not in body:
+    # A stub is only evidence about the seam it stubs. Since MeshWeaver#4539 this step no longer
+    # READS the registry — `gate.bake_version` does, and this step CHOOSES between the minted
+    # version and that recovered one, refusing rather than inventing. If it stopped reading the
+    # recovered value, every case below would pass while testing nothing.
+    if "RECOVERED" not in body:
         die(
-            f"step `{STEP_ID}` no longer calls `az acr manifest list-metadata` — the stub these "
-            "cases rely on is no longer the seam under test, so every case below would pass "
-            "vacuously. Update the harness with the step."
+            f"step `{STEP_ID}` no longer reads `RECOVERED` (gate's resolved release version) — the "
+            "seam these cases drive is gone, so they would pass vacuously. Either the read moved "
+            "back into this step (re-point BAKE_VERSION_STEP_ID) or the wiring broke."
         )
 
     failures: list[str] = []
@@ -776,49 +1659,96 @@ def main() -> int:
              for problem in workflow_narrowed_problems),
          "the mutation passed with workflow-level id-token: write")
 
-    base = {"RELEASE_VERSION": "", "BAKE_ONLY": "true", "SHORT_SHA": SHORT_SHA}
+    # 🚨 The three `plugins-*` jobs must be able to run on the reconcile path, and must not name an
+    # output that is empty there (MeshWeaver#4539). Asserted structurally, with its own mutation
+    # controls below — a guard that cannot fail is not a guard.
+    leg_problems = plugins_leg_problems(workflow_text)
+    case("every `plugins-*` job can run on a seal re-attempt, off `gate.image_tag`",
+         not leg_problems, "; ".join(leg_problems))
+    reverted_tag = workflow_text.replace(
+        "      test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.gate.outputs.image_tag }}",
+        "      test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.plugin-test-image.outputs.version }}",
+        1)
+    case("...and the guard catches a leg reaching for the SKIPPED tester job's version",
+         any("plugin-test-image.outputs.version" in p for p in plugins_leg_problems(reverted_tag)),
+         "the mutation passed with a leg reading an output that is empty on a re-attempt")
+    reverted_if = workflow_text.replace(
+        "       needs.gate.outputs.plugins_seal_due == 'true')",
+        "       needs.gate.outputs.publish == 'true')", 1)
+    case("...and the guard catches a leg losing its reconcile arm",
+         any("plugins_seal_due" in p for p in plugins_leg_problems(reverted_if)),
+         "the mutation passed with a leg that can never repair a half-sealed set")
+    unpaid_always = workflow_text.replace(
+        "      needs.plugins-bake-image.result == 'success' &&\n"
+        "      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||\n"
+        "       needs.gate.outputs.plugins_seal_due == 'true')\n"
+        "    permissions:",
+        "      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||\n"
+        "       needs.gate.outputs.plugins_seal_due == 'true')\n"
+        "    permissions:", 1)
+    case("...and the guard catches `always()` that does not assert a consumed need succeeded",
+         any("result == 'success'" in p and "plugins-bake-image" in p
+             for p in plugins_leg_problems(unpaid_always)),
+         "the mutation passed with a leg that runs on an EMPTY image digest — which the bake lane "
+         "silently replaces by resolving the platform itself")
+
+    unguarded_preflight = workflow_text.replace(
+        "      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&",
+        "      always() && needs.gate.result == 'success' &&", 1)
+    case("...and the guard catches `always()` that no longer stops on a FAILED preflight",
+         any("needs.preflight.result" in p for p in plugins_leg_problems(unguarded_preflight)),
+         "the mutation passed with a leg that runs after preflight failed — inputs never asserted")
+
+    base = {"RELEASE_VERSION": "", "BAKE_ONLY": "true", "SHORT_SHA": SHORT_SHA,
+            "RECOVERED": VERSION}
 
     # 1 ── A full run: portal-image minted the version, so nothing is read back.
     rc, log, outputs = run_step(body, {**base, "RELEASE_VERSION": "3.0.0-rc9.ci.1"}, fixture(True))
     case("a minted version passes straight through",
          rc == 0 and "version=3.0.0-rc9.ci.1" in outputs, f"rc={rc} out={outputs!r} log={log}")
 
-    # 2 ── THE CASE THAT HAD NEVER SUCCEEDED. Bake-only reconcile, and the repository holds 16
-    #      untagged manifests whose `tags` is null. Before #2642 the query threw on the first of
-    #      them, jmespath aborted the WHOLE query, az exited non-zero, `2>/dev/null || true`
-    #      turned that into an empty tag list, and the step blamed promote.
+    # 2 ── A bake-only reconcile takes the version `gate` resolved, and takes it VERBATIM.
     rc, log, outputs = run_step(body, base, fixture(True))
-    case("a bake-only reconcile recovers the version DESPITE 16 untagged manifests",
+    case("a bake-only reconcile publishes under the version gate resolved",
          rc == 0 and f"version={VERSION}" in outputs, f"rc={rc} out={outputs!r} log={log}")
 
-    # 3 ── The genuine "promote never armed it" case must still be loud, and must still say so.
-    rc, log, outputs = run_step(body, base, fixture(False))
-    case("a digest with no version tag is still a loud, accurate stop",
-         rc != 0 and "carries no version tag" in log, f"rc={rc} log={log}")
+    # 3 ── 🚨 An empty recovered version is a REFUSAL, not a fallback. Without this case, a wiring
+    #      break between `gate` and this step would publish a release marker under no version at
+    #      all — which is the shape the read it replaced was written to prevent.
+    rc, log, outputs = run_step(body, {**base, "RECOVERED": ""}, fixture(True))
+    case("an empty recovered version refuses rather than publishing under an unknown release",
+         rc != 0 and "no release to make available" in log, f"rc={rc} log={log}")
+    case("...and it points at the step that owns the resolution, not at promote",
+         "gate" in log, f"log={log}")
 
-    # 4 ── 🚨 THE REGRESSION GUARD. When az itself fails, the step must fail with az's message —
-    #      it must NOT convert the failure into "there is no version tag" and blame promote.
-    #      Reintroduce `2>/dev/null || true` on that read and this case goes red: `tags` becomes
-    #      empty, `version` becomes empty, and the step prints the promote accusation.
-    rc, log, outputs = run_step(body, base, fixture(True), az_fail=True)
-    case("a FAILING az fails the step", rc != 0, f"rc={rc} log={log}")
-    case("a FAILING az is never reported as promote's fault",
-         "Fix promote" not in log and "carries no version tag" not in log,
-         f"the step blamed a healthy component for its own failed call:\n{log}")
-    case("a FAILING az surfaces az's own message", "az login" in log, f"log={log}")
-
-    # 5 ── A non-bake-only run with no version is a refusal, not a read.
-    rc, log, outputs = run_step(body, {**base, "BAKE_ONLY": "false"}, fixture(True))
+    # 4 ── A non-bake-only run with no version is a refusal, not a read.
+    rc, log, outputs = run_step(body, {**base, "BAKE_ONLY": "false", "RECOVERED": ""}, fixture(True))
     case("no version on a non-bake-only run refuses rather than guessing",
          rc != 0 and "unknown release" in log, f"rc={rc} log={log}")
+
+    print()
+    print(f"── step `{BAKE_VERSION_STEP_ID}` ──")
+    run_bake_version_cases(root, case)
+
+    print()
+    print(f"── step `{SEAL_STEP_ID}` ──")
+    run_seal_cases(root, case)
 
     print()
     print(f"── step `{DECIDE_STEP_ID}` ──")
     run_decide_cases(root, case)
 
     print()
+    print(f"── step `{ATTEMPTED_STEP_ID}` ──")
+    run_attempted_cases(root, case)
+
+    print()
     print(f"── step `{VERDICT_STEP_ID}` ──")
     run_verdict_cases(root, case)
+
+    print()
+    print(f"── step `{HANDOFF_STEP_ID}` ──")
+    run_handoff_cases(root, case)
 
     print()
     print(f"── step `{HEAL_STEP_ID}` ──")
@@ -828,8 +1758,10 @@ def main() -> int:
     if failures:
         print(f"::error::{len(failures)} case(s) failed: {', '.join(failures)}")
         return 1
-    print(f"all cases passed against {WORKFLOW} steps `{STEP_ID}` + `{DECIDE_STEP_ID}` "
-          f"+ `{VERDICT_STEP_ID}` + `{HEAL_STEP_ID}` (extracted, not copied)")
+    print(f"all cases passed against {WORKFLOW} steps `{STEP_ID}` + `{BAKE_VERSION_STEP_ID}` "
+          f"+ `{SEAL_STEP_ID}` + `{DECIDE_STEP_ID}` + `{ATTEMPTED_STEP_ID}` "
+          f"+ `{VERDICT_STEP_ID}` + `{HANDOFF_STEP_ID}` + `{HEAL_STEP_ID}` "
+          f"(extracted, not copied)")
     return 0
 
 

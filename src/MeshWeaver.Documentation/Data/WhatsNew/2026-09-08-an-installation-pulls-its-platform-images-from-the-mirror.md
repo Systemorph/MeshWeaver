@@ -8,6 +8,12 @@ Order: -20260908
 
 # An installation pulls its platform images from the mirror
 
+> **Partly superseded (2026-09-17).** The consumer half below is what installations use today —
+> `selfUpdate.registry`, `portal.imagePullSecret`, the self-updater's registry listing and the
+> operator's pull credential — but the registry they point at is `cr.meshweaver.cloud`, a separate
+> registry service. The in-portal mirror and its `containerImages` settings were never switched on
+> in any portal and have been removed — see [The container image mirror settings that did nothing are gone](/Doc/WhatsNew/2026-09-17-the-container-image-mirror-settings-that-did-nothing-are-gone).
+
 The platform's container images — the portal and its database migration — used to be pulled from
 the upstream Azure Container Registry by every installation, which meant every installation held
 an upstream registry credential beside the plugin-registry key it already had. The read-through

@@ -75,6 +75,29 @@ public class ReleaseLinkGateTest : IDisposable
 
     // ── the hold: measured, named ───────────────────────────────────────────────────────────────
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TheCanonicalPortalSurfaceWinsOverAnAlphabeticallyEarlierSatellite(bool portalCarriesType)
+    {
+        var published = PublishedRoot(Version, Identity,
+            surface: portalCarriesType ? OlderPlatformSurface(Identity) : ThisPlatformSurface(Identity));
+        // Reproduce a satellite that sorts before the core publication, with the opposite answer.
+        Directory.Move(Path.Combine(published, Identity, "plugins"), Path.Combine(published, Identity, "aaa-satellite"));
+        AddRelease(published, Version, Identity,
+            surface: portalCarriesType ? ThisPlatformSurface(Identity) : OlderPlatformSurface(Identity), bundles: []);
+        Directory.Move(Path.Combine(published, Identity, "plugins"), Path.Combine(published, Identity, "meshweaver-content"));
+        var landed = Land(ViewPack, ModuleBindingMeshNode(ViewPack));
+        var verdict = Judge(published, Version,
+        [
+            new RequiredPackage("Views", "Views", HasContent: false)
+                { ModuleName = ViewPack, LandedModulePath = landed },
+        ]);
+        Assert.Equal(portalCarriesType, verdict.IsUpdatable);
+        if (!portalCarriesType)
+            Assert.Equal(PackageAvailabilityKind.ModuleUnloadable, Assert.Single(verdict.Blockers).Kind);
+    }
+
     /// <summary>
     /// 🚨 THE HOLD. The environment has landed a view pack built against THIS platform; the target
     /// publishes no build of it and its surface does not carry <c>MeshWeaver.Mesh.MeshNode</c>.

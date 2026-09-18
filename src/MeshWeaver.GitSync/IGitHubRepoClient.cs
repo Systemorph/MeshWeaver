@@ -148,6 +148,25 @@ public interface IGitHubRepoClient
     /// </summary>
     IObservable<GitHubIssue> GetIssue(string repositoryUrl, int number, string accessToken);
 
+    /// <summary>
+    /// The issue's live state at its CURRENT home — following a transfer — WITHOUT its comments.
+    /// Emits <c>null</c> when the number names no issue at all.
+    /// </summary>
+    /// <remarks>
+    /// 🚨 <b>Use this for a state question; use <see cref="GetIssue"/> only when the comments are
+    /// the point.</b> A caller that needs <c>State</c>/<c>ClosedAt</c> — the log-incident filer's
+    /// reopen decision is the whole of its need — pays one request instead of two and, more
+    /// importantly, still gets an answer for a TRANSFERRED issue, whose comments sub-resource 404s
+    /// while the issue itself redirects and answers 200 (Systemorph/MeshWeaver#4629).
+    ///
+    /// <para>The default implementation delegates to <see cref="GetIssue"/>, so no implementer is
+    /// obliged to do anything: a client that cannot distinguish the two reads keeps its old
+    /// behaviour, and only the Octokit client overrides it with the cheaper, redirect-tolerant
+    /// call.</para>
+    /// </remarks>
+    IObservable<GitHubIssue?> FindIssueState(string repositoryUrl, int number, string accessToken)
+        => GetIssue(repositoryUrl, number, accessToken).Select(issue => (GitHubIssue?)issue);
+
     /// <summary>Opens a new issue on GitHub and emits the created issue (with its assigned number).</summary>
     IObservable<GitHubIssue> CreateIssue(GitHubCreateIssueRequest request);
 

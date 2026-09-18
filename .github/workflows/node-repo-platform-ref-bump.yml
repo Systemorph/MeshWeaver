@@ -140,7 +140,7 @@ on:
 jobs:
   bump:
     name: Bump the platform pin
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: write
@@ -363,7 +363,7 @@ jobs:
     name: A failed bump is visible, not just red in an empty room
     needs: [bump]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     # REPLACES the caller's map for this job: no checkout, no push, no pull request here — the
     # alert only reads and writes issues. `issues: write` must be granted by the CALLER (a called

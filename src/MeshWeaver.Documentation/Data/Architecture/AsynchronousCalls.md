@@ -568,8 +568,9 @@ return Observable.CombineLatest(cellLookups)
 
 **Canonical callsites:**
 
-- `ThreadExecution.LoadFullConversationHistoryFromMesh` — N prior-cell loads for the agent's chat history per round.
-- `ThreadExecution.LoadPriorUserMessagesFromMesh` — post-restart resume after `AgentChatClient` cache miss.
+- `ThreadExecution.LoadFullConversationHistoryFromMesh` — N prior-cell loads for the agent's chat history per round. This covers post-restart resume too: a round executed after a restart takes the same path and loads the thread's history from the mesh, so there is no separate resume loader.
+
+🚨 **This list named a second callsite, `ThreadExecution.LoadPriorUserMessagesFromMesh` ("post-restart resume after `AgentChatClient` cache miss"), and that method had NO CALLERS in either repository** — measured 2026-09-16 (#4450). Worse than dead: it was the pre-#2226 shape of the loader above, ending in `.Catch(→ Array.Empty<ThreadMessage>())`, which is exactly the substitution #2226 removed from the live path because *"a silent wrong answer is strictly worse than a failed round"* — an agent answering a long thread as if it were brand new, with the round settling `COMPLETED` so nothing downstream could tell a context-less answer from a correct one. A documented-but-unreachable mechanism is a trap: the next person wiring up "resume" would have wired up the defect. The method is deleted (MeshWeaver.Plugins#1965); this note is what remains of it, so the same idea is not re-derived from the same page.
 
 **When NOT to fan-out at all:** if the consumer only needs a preview (a thumbnail card), don't load every cell to render a 60-char string. Return the synchronous data (title, count, last-modified) from the own node and delegate the preview to a `LayoutAreaControl` — the child hub activates lazily on the Blazor side when the tile becomes visible. Canonical: `ThreadLayoutAreas.Thumbnail` returns title + count immediately and embeds a `LayoutAreaControl(lastCellPath, "Streaming")` for the preview.
 

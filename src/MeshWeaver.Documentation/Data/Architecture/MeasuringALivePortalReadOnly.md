@@ -104,8 +104,50 @@ because their verdict used to live only in a boot log that nobody here is author
 | `required_modules` | a required module that is store-delivered and not here | Healthy |
 | `bundle_adoption` | prebuilt bundles the registry was meant to serve and this replica compiled instead | Healthy |
 | `nodetype_bake` | the readiness gate's own phase — **only when `gateBake` is on** | Healthy **or not registered** |
-| `bake-report` **(census)** | this replica's bake report: `total`/`baked`/`pending`, the per-state breakdown, the adoption-stamp count, and `ClassifiedFromLocalAdoption` — MeshWeaver#3703's verdict | **never** — Degraded when there is no report at all |
+| `bake-report` **(census)** | TWO readings in one sentence — the **plan** (`total`/`baked`/`pending`, the per-state breakdown, the adoption-stamp count, `ClassifiedFromLocalAdoption` — MeshWeaver#3703) *and* the **outcome census** (how many NodeTypes this replica has no usable assembly for, by partition — MeshWeaver#4645) | **never** — Degraded when there is no report at all |
 | `source-discovery` **(census)** | the batched source discovery's folded-change count and LARGEST inter-chunk gap against the completion window — MeshWeaver#3704's discriminator | **never** — Healthy and still printed when no pass ran |
+
+### 🚨 The PLAN and the OUTCOME are different questions, and `bake-report` now answers both
+
+Every number the bake report used to carry describes what the bake **intended**: how many NodeTypes
+the shared store already covers, how many are left to build, how many were classified from a record
+this process had already written. None of them answers the question somebody staring at a blank page
+actually has — *is there a NodeType this replica cannot serve?* A replica can publish a perfectly
+clean plan and then fail to compile half of it, and until MeshWeaver#4645 the only record of that
+was a boot log line nobody here is authorised to read.
+
+The **outcome census** is the second half of the same sentence. It records the terminal verdict the
+compiling sweep reached for each type — the same object the readiness gate judges, so the two can
+never disagree and it costs no extra I/O — and sorts them into four buckets that partition the
+population:
+
+| Bucket | Statuses | What it means here |
+|---|---|---|
+| **usable** | `Compiled`, `AlreadyBaked` | a usable assembly is on this replica |
+| **no usable assembly** | `CompileError`, `UpstreamFailed`, `NoSources`, `DeclaredSourcesMissing`, `UpstreamContentBroken` | the never-benign verdict — the type's content cannot be typed here, its layout areas are never registered, and every page that asks for one renders the area-not-found frame |
+| **unknown** | `TimedOut`, `UpstreamUnevaluated`, `Faulted` | the sweep did not find out — not healthy and not broken |
+| **withdrawn** | `Retired`, `Removed` | the repository withdrew the type; counted so the denominator reconciles, never as breakage |
+
+Three properties are deliberate, and each of them is a lesson from a census that misled somebody:
+
+* **It prints a reading whatever the status.** *"No sweep has reported here"*, *"a sweep reported and
+  every type it reached is servable"* and *"a sweep reported and N types are not"* are three
+  different sentences. An absent outcome may never read as a clean one.
+* **It always states its denominator** — how many types reached a verdict, of how many enumerated,
+  with the unknown and withdrawn counts beside them. A zero in the unusable count means *"nothing to
+  see"* only against both numbers; without them it equally means *"I could not look"*.
+* **An unclassified status counts as NO USABLE ASSEMBLY.** The classifier's default arm is the
+  indicting one, so a `PreWarmStatus` added later and not thought about surfaces as something to
+  look at instead of quietly joining the healthy count.
+
+🚨 **It says nothing about a type the sweep never reached, and the three ways that happens are
+three different sentences.** A replica that ran the adopt-only pass — adoption ran, the compiling
+sweep deliberately did not — reports `OUTCOME CENSUS (sweep not applicable)`: *nothing was compiled,
+on purpose*, which is a measurement with a known answer. A sweep that died partway reports
+`(sweep faulted)`, and has measured a PREFIX of its population. Only a replica where nothing
+reported at all gets `OUTCOME CENSUS: NO sweep has reported an outcome on this replica`, the absence
+of measurement. Collapsing the first into the third is the bug the census would otherwise have
+reintroduced in itself — these are honest readings, not gaps to work around.
 
 🚨 **Read a census line's SENTENCE, not just its status.** `bake-report: Degraded — NO bake report on
 this replica` and `bake-report: Degraded — the NodeType enumeration snapshot PREDATED …` are two
