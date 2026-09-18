@@ -4275,9 +4275,11 @@ public static class PackageInstaller
     /// separate lifecycle (delete it as a partition), which is why removing the record is safe even
     /// while its content is still in use.</para>
     ///
-    /// <para>A thin pass-through: an ABSENT record faults with the mesh's own "Node not found"
-    /// (the delete's contract), which the caller surfaces. That is the second admin clicking a card
-    /// the first one already removed — logged, never swallowed into a fake success.</para>
+    /// <para>A thin pass-through, and the ABSENT record is reported rather than thrown: the delete
+    /// is idempotent (#4668), so a record that was already gone emits <c>false</c> — the second
+    /// admin clicking a card the first one already removed gets no error, and the caller can still
+    /// see that this call removed nothing. It is never swallowed into a fake success: <c>true</c>
+    /// means THIS call removed the record and <c>false</c> means it was not there.</para>
     /// </summary>
     /// <param name="hub">The hub owning the mesh service.</param>
     /// <param name="packageId">The package id whose record to remove (the record's node id).</param>
@@ -4313,10 +4315,13 @@ public static class PackageInstaller
         // left running as System and the terminating thread is handed the caller's identity.
         return accessService.RunAsSystem(() => meshService.DeleteNode(recordPath))
             .Take(1)
-            // DeleteNode faults on a missing node rather than answering false, so a value here IS a
-            // removal — the caller's error path reports the absent-record case.
-            .Do(_ => logger?.LogInformation(
-                "[PackageInstaller] removed install record {Path}", recordPath));
+            // 🚨 READ THE VALUE. DeleteNode is idempotent (#4668): `false` says the record was
+            // already gone, and logging "removed" for it would report work that did not happen.
+            .Do(removed => logger?.LogInformation(
+                removed
+                    ? "[PackageInstaller] removed install record {Path}"
+                    : "[PackageInstaller] install record {Path} was already gone — nothing removed",
+                recordPath));
     }
 
     /// <summary>

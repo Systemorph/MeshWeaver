@@ -211,9 +211,11 @@ public sealed class NotificationRetentionLogonAction(NotificationRetention reten
     /// in step. 🚨 Never a raw <c>psql DELETE</c>: that bypasses the cache, and a portal would keep
     /// serving rows that are no longer in the database.
     ///
-    /// <para>A failure is per-ROW, not per-run: an already-deleted node (two devices signing in at
-    /// once, the second run's window still naming rows the first removed) answers NodeNotFound, and
-    /// that is exactly what idempotence looks like from here.</para>
+    /// <para>The already-deleted row — two devices signing in at once, the second run's window still
+    /// naming rows the first removed — is not a failure at all: the delete is idempotent (#4668) and
+    /// answers <c>false</c>, having removed nothing. The <c>Catch</c> below stays for the failures
+    /// that ARE per-ROW (a denial, a validator, a leaf that will not answer), so one bad row never
+    /// ends the run.</para>
     /// </summary>
     private static IObservable<Unit> Delete(IMeshService mesh, string path, ILogger? logger)
         => mesh.DeleteNode(path)

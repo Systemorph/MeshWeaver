@@ -1356,6 +1356,7 @@
   "activity.validation.memberInvalid": "{members} invalid: {error}",
   "activity.delete.notFound": "Node not found at path: {path}",
   "activity.delete.notFoundAtPath": "Node not found at path '{path}'",
+  "activity.delete.alreadyAbsent": "Nothing to delete at '{path}': the node was already gone.",
   "activity.delete.permissionDenied": "Delete permission denied for '{path}'",
   "activity.delete.permissionUnestablished": "The delete permission check for '{path}' could not be established: {detail}. This is an availability failure, NOT a decision about your access — the delete was not evaluated and may be retried.",
   "activity.delete.readOnlyProvider": "Cannot delete '{path}': it is served by the read-only storage provider '{provider}'. Nothing was deleted.",
