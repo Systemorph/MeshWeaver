@@ -152,6 +152,73 @@ which holds every silo's readiness probe down and stalls the rollout. Same asymm
 gate applies, and the opposite of `AssemblyCacheRetention`, where the wrong answer deletes
 bytes a running pod still needs.
 
+#### The convergence WINDOW, and which node it is asked about (#4729)
+
+Step 2's "deterministic election over data both sides have seen" only holds while both sides *have*
+seen the same data. A registration written milliseconds ago in the other cluster has not propagated
+yet, so a **fresh root election waits out `GrantSettleWindow` (5 s)** before it grants — long enough
+for a Postgres `NOTIFY` plus a mirror refresh (measured sub-second), after which every arbiter is
+electing from the same candidate set and computing the same winner, which makes concurrent grant
+writes idempotent. Five seconds once per build, against a bake measured in minutes.
+
+It is charged on **fresh root elections only**. A takeover is a different shape — the successor
+queue accumulated while the holder was alive and is long converged, and #1355's immediate-takeover
+property must not wait on a window. Chunks are excluded for a different reason: the root election
+already decided *the* builder, chunk claims arrive pre-arbitrated by it, and 37 chunks × 5 s would
+put minutes of pure waiting into a ~1m42s bake.
+
+🚨 **And it was charged on neither of the paths that need it.** `Arbitrate` decided "is this the
+root?" by comparing the path of the node it was HANDED against `Admin/Build`. The durable path never
+hands it that node — the whole point of the section above is that holder state lives on the claim
+LOCK — so `CommitGrant` hands it `Admin/Build/_Claim`. The comparison was false on every durable
+pass, and the window was skipped on **every host with an `IStorageAdapter`: every real deployment,
+and the only topology in which a second cluster exists to converge with**. The one path that still
+paid it was `GrantOnMirror` — a host with no durable store, hence one process and nobody to wait
+for.
+
+The evidence is a stopwatch reading rather than an argument.
+`MeshWeaver.Hosting.Test.TheSecondHoldersCompletionStillPublishesItsGoTest` drives **two** full root
+elections on a monolith mesh that does register an `IStorageAdapter`, and completed in **0.878 s**,
+where one window alone costs five seconds. Driven directly, the grant landed **42 ms** after the
+registration.
+
+It sat because the one test on the window —
+`BuildCoordinationTest.Arbitrate_FreshRootElection_WaitsOutTheSettleWindow`, in MeshWeaver.Plugins —
+hands `Arbitrate` a root node it builds itself. That is a true statement about the mirror path and
+says nothing at all about the other one: a unit test on a shape the production path never
+constructs.
+
+**The fix keeps ONE notion of "is this the root election", rather than two free to drift apart.**
+`BuildNodeType.IsRootElection(path)` answers for *either* record the decision can arrive on, and
+derives the lock's spelling from the root through the same `ClaimPath` that minted the lock:
+
+```csharp
+internal static bool IsRootElection(string? path) =>
+    string.Equals(path, RootPath, StringComparison.OrdinalIgnoreCase)
+    || string.Equals(path, ClaimPath(RootPath), StringComparison.OrdinalIgnoreCase);
+```
+
+The alternative — passing the Build path into `Arbitrate` as its own parameter — was rejected for
+the reason the defect exists: it puts the answer back in the callers' hands, two of them, each free
+to hand in the path of a different node. A `_Claim` *suffix* test was rejected too, as a second
+hand-written spelling of a path `ClaimPath` already derives.
+
+The durable pass's decision is now a named expression, `BuildNodeType.ArbitrateOnLock` — the sibling
+of `ArbitrateOnMirror`, for the same stated reason — so a test drives the composition the host runs,
+including the construction of a decision input carrying the LOCK's path.
+`MeshWeaver.Graph.Test.TheSettleWindowIsChargedOnTheDurablePathTest` asserts that both paths decide
+the same election the same way at the same instant, and that neither a chunk nor a takeover is ever
+held; `MeshWeaver.Hosting.Test.TheSettleWindowHoldsARootElectionOnADurableHostTest` measures it on a
+running mesh, as a LOWER bound on elapsed time and never an upper one — "and not much after" is a
+statement about how fast the runner is.
+
+**What it costs, and where.** Every root election on a deployed host now takes ~5 s longer than it
+did, which is exactly what #1424 budgeted and what every host without a database was already paying.
+The readiness probe a rollout waits on is gated by the GO, which follows the bake, so those five
+seconds are invisible there. Live build-coordination tests that drive a root election pay it too —
+in MeshWeaver.Plugins, `BuildCoordinationTest`'s claim-queue cases, whose own per-grant waits are
+budgeted at 15 s.
+
 ### 🚨 When may the claim be taken away — cluster MEMBERSHIP decides, not a clock
 
 A builder that dies mid-build must not wedge the fleet, so a claim has to be reclaimable. The
@@ -471,13 +538,14 @@ visible stamp on the node and the chunk plan — where a refused write costs a s
 the next write or the next pass restates, never a build that ends on nothing. The heartbeat's
 load-bearing half is the lock stamp, which is a compare-and-set and unaffected.
 
-🚨 **A separate defect, found while diagnosing this one and NOT fixed here:** `CommitGrant` hands
-`Arbitrate` the **claim-lock** node, while `Arbitrate`'s `GrantSettleWindow` guard requires
-`node.Path == RootPath`. The lock's path is `Admin/Build/_Claim`, so on every host that has an
-`IStorageAdapter` — i.e. every real deployment — #1424's convergence window never applies to a root
-election. `Arbitrate_FreshRootElection_WaitsOutTheSettleWindow` passes because it calls `Arbitrate`
-with the root node directly, which the durable path never does. It is an independent defect with its
-own blast radius (it changes grant timing fleet-wide) and wants its own change.
+🚨 **A separate defect, found while diagnosing this one and fixed in #4729:** `CommitGrant` handed
+`Arbitrate` the **claim-lock** node, while `Arbitrate`'s `GrantSettleWindow` guard required
+`node.Path == RootPath` — so on every host that has an `IStorageAdapter`, i.e. every real
+deployment, #1424's convergence window never applied to a root election. It is an independent defect
+with its own blast radius (it changes grant timing fleet-wide), so it got its own change; the
+account, the measurement and the reasoning about the budget are in
+[The convergence WINDOW, and which node it is asked about](#the-convergence-window-and-which-node-it-is-asked-about-4729)
+above.
 
 ### The PRE-WARMER has the same two doors — and it did not, until #3404
 
