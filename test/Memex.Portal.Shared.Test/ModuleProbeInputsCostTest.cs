@@ -38,6 +38,14 @@ namespace Memex.Portal.Shared.Test;
 /// test pins that they answer about DIFFERENT trees, which is what keeps the required-modules
 /// classification able to tell "the image has it" from "it landed and the landing did not
 /// finish".</para>
+///
+/// <para>🚨 <b>These readers run on an IMMEDIATE pool</b> (MeshWeaver#4655). The probe surface no
+/// longer takes a reading on the caller's thread — it schedules one on its <c>IIoPool</c> and
+/// answers from the last one taken — so a test about WHAT the reading costs would otherwise be a
+/// test about when a pool thread got scheduled. Running the pool inline keeps every assertion here
+/// about the memo and leaves the scheduling property to
+/// <see cref="ProbeAnswersWithoutWalkingTheVolumeTest"/>, which is the test that would fail if the
+/// walk ever came back onto a probe thread.</para>
 /// </summary>
 public class ModuleProbeInputsCostTest : IDisposable
 {
@@ -74,7 +82,7 @@ public class ModuleProbeInputsCostTest : IDisposable
     public async Task AnUnchangedVolume_IsReadOnce_AndEveryProbeSharesOneMemo()
     {
         await LandWave(ModuleA, ModuleB, ModuleC);
-        var pending = new PendingModuleActivations(root);
+        var pending = Reader();
 
         var first = pending.ReadProbeInputs();
         var second = pending.ReadProbeInputs();
@@ -97,7 +105,7 @@ public class ModuleProbeInputsCostTest : IDisposable
     public async Task ALanding_IsSeen_AndRetiresTheMemoWithIt()
     {
         await LandWave(ModuleA);
-        var pending = new PendingModuleActivations(root);
+        var pending = Reader();
 
         var before = pending.ReadProbeInputs();
         Assert.Equal(1, pending.DiskReads);
@@ -123,7 +131,7 @@ public class ModuleProbeInputsCostTest : IDisposable
     public async Task BothPredicatesAnswerAboutTheFilesystem()
     {
         await LandWave(ModuleA);
-        var pending = new PendingModuleActivations(root);
+        var pending = Reader();
 
         var inputs = pending.ReadProbeInputs();
         var landed = inputs.Activation!.Entries.Single(m =>
@@ -163,7 +171,7 @@ public class ModuleProbeInputsCostTest : IDisposable
     public async Task TheImageSideResolver_DoesNotAnswerForAMerelyLandedModule()
     {
         await LandWave(ModuleA);
-        var inputs = new PendingModuleActivations(root).ReadProbeInputs();
+        var inputs = Reader().ReadProbeInputs();
         var landed = inputs.Activation!.Entries.Single(m =>
             string.Equals(m.Name, ModuleA, StringComparison.OrdinalIgnoreCase));
 
@@ -189,12 +197,20 @@ public class ModuleProbeInputsCostTest : IDisposable
         await File.WriteAllTextAsync(entries, "{ this is not json",
             TestContext.Current.CancellationToken);
 
-        var inputs = new PendingModuleActivations(root).ReadProbeInputs();
+        var inputs = Reader().ReadProbeInputs();
 
         Assert.NotEmpty(inputs.Unreadable);
         Assert.Contains(inputs.Unreadable, reason =>
             reason.Contains(Path.GetFileName(entries), StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>
+    /// A reader whose pool runs its work inline, so a reading requested by a probe is TAKEN by the
+    /// time that probe returns. See the class remarks: the scheduling is pinned elsewhere; what is
+    /// pinned here is how many questions the volume is asked.
+    /// </summary>
+    private PendingModuleActivations Reader() =>
+        new(root) { IoPool = InlineIoPool.Instance };
 
     private static IReadOnlyList<string> EnabledNames(ModuleProbeInputs inputs) =>
         (inputs.Activation?.Entries ?? []).Select(m => m.Name).ToList();
