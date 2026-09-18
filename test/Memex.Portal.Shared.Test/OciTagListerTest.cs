@@ -337,6 +337,151 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         message.Should().Contain("PluginCatalog:Registries");
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    //  #4093 — a refusal that NAMES the host the operator has to declare
+    //
+    //  The rule is unchanged and stays unchanged: nothing below presents a key. What changes is
+    //  that the refusal stops sending an operator to look up a value their own PluginCatalog
+    //  already holds. Every test here asserts the disclosure control FIRST, so a change that turned
+    //  "we know which host you hold" into "so we will use it" — the rule rejected for #4093 — goes
+    //  red on the credential, not on a string.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 🚨 The fleet's shape with nothing declared: the refusal NAMES the one plugin registry this
+    /// installation is configured for, so the operator can write
+    /// <c>SelfUpdate:RegistryValidationUrl</c> without going to look the value up — and still
+    /// refuses. The two halves are the whole point: naming a host is not presenting a key to it.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnUndeclaredPairing_NamesTheOnePluginRegistryHeld_AndStillRefuses()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var fault = await Record.ExceptionAsync(() =>
+            Lister(RegistryHost).ListTags(Repository).FirstAsync().Timeout(Budget).Await(ct));
+
+        // 🚨 The control FIRST — a falsification must report the DISCLOSURE, never a missing word.
+        mirror.CredentialsSeen.Should().BeEmpty(
+            "knowing which host this installation holds a key for is not permission to present it — "
+            + "the message names the host, the check still refuses");
+        mirror.Requests.Should().Be(0);
+        var message = fault.Should().BeOfType<InvalidOperationException>().Which.Message;
+        message.Should().Contain(MirrorHost,
+            "the operator is told to declare a validator, and the host they would declare is in "
+            + "their own PluginCatalog — a refusal that withholds it sends them off to find it");
+        message.Should().Contain("SelfUpdate:RegistryValidationUrl",
+            "naming the host must not read as 'so we will use it': the key that closes this is still named");
+    }
+
+    /// <summary>
+    /// 🚨 BOUNDED AT TWO. With more than one registry configured the refusal names them ALL and
+    /// selects none — "there is exactly one, so present it" is the rule #4093 proposed and the
+    /// maintainer declined, and an installation holding two keys is precisely where selecting one
+    /// would hand registry A's credential to a host only B vouches for.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TwoConfiguredRegistries_AreBothNamed_AndNeitherIsPresented()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        catalog.Registries =
+        [
+            new PluginRegistryReference { Name = "A", Url = OtherRegistryUrl, Token = OtherRegistryKey },
+            new PluginRegistryReference { Name = "B", Url = MirrorUrl, Token = InstanceKey },
+        ];
+
+        var fault = await Record.ExceptionAsync(() =>
+            Lister(RegistryHost).ListTags(Repository).FirstAsync().Timeout(Budget).Await(ct));
+
+        mirror.CredentialsSeen.Should().BeEmpty("neither key is selected, so neither leaves");
+        mirror.Requests.Should().Be(0);
+        var message = fault.Should().BeOfType<InvalidOperationException>().Which.Message;
+        message.Should().Contain(MirrorHost).And.Contain(OtherRegistryHost,
+            "with two candidates the operator picks — the refusal lists them rather than guessing");
+    }
+
+    /// <summary>
+    /// 🚨 ZERO configured registries is its OWN sentence, not an empty list. "Declare the validator"
+    /// is the wrong instruction for an installation that holds no key at all: the first act is to
+    /// configure PluginCatalog, and a message naming neither leaves the operator nothing to do.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task NoConfiguredRegistryAtAll_SaysSo_RatherThanNamingNothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        catalog.Registries = [];
+
+        var fault = await Record.ExceptionAsync(() =>
+            Lister(RegistryHost).ListTags(Repository).FirstAsync().Timeout(Budget).Await(ct));
+
+        mirror.CredentialsSeen.Should().BeEmpty();
+        mirror.Requests.Should().Be(0);
+        var message = fault.Should().BeOfType<InvalidOperationException>().Which.Message;
+        message.Should().Contain("no plugin registry whose URL names a host",
+            "an installation holding nothing is told that, not told to declare a pairing it cannot hold");
+        message.Should().Contain("PluginCatalog:Registries");
+    }
+
+    /// <summary>
+    /// 🚨 SPOT THE TYPO. A declaration resolving to a host this installation holds no registry for is
+    /// one character away from working, and the refusal now shows both sides — what was declared and
+    /// what is actually configured — so "add a registry" and "fix the declaration" stop looking
+    /// alike. #4093's own two values differ only by a path (<c>/api/instances/token</c>), which
+    /// <c>HostOf</c> drops, so a mismatch that reaches here is always a real one.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ADeclarationNamingAnUnheldHost_AlsoNamesWhatThisInstallationDoesHold()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var fault = await Record.ExceptionAsync(() =>
+            Lister(RegistryHost, "https://mirrror.example.test/api/instances/token")
+                .ListTags(Repository).FirstAsync().Timeout(Budget).Await(ct));
+
+        mirror.CredentialsSeen.Should().BeEmpty(
+            "a declaration naming a host this installation holds no key for grants nothing");
+        mirror.Requests.Should().Be(0);
+        var message = fault.Should().BeOfType<InvalidOperationException>().Which.Message;
+        message.Should().Contain("mirrror.example.test", "what was declared");
+        message.Should().Contain(MirrorHost, "and what is actually configured, beside it");
+        message.Should().Contain("SelfUpdate:RegistryValidationUrl");
+    }
+
+    /// <summary>
+    /// 🚨 A MOUNT WHOSE URL CARRIES A CREDENTIAL IS NEVER NAMED. The listed hosts are read through
+    /// <c>SelfUpdateOptions.HostOf</c>, which refuses userinfo — so such a registry contributes
+    /// NOTHING to the message rather than being echoed with its key in it. The mount here is for a
+    /// THIRD host, so the existing credential-in-URL diagnosis (which fires only for the target or
+    /// its declared validator) cannot mask this: the message reaching the assertion is the one this
+    /// reader composed.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AMountWhoseUrlCarriesACredential_IsNeverEchoed_AndIsNotNamed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string secretInUrl = "mwi_never-this-value-in-a-message";
+        catalog.Registries =
+        [
+            new PluginRegistryReference
+            {
+                Name = "Third", Url = $"https://instance:{secretInUrl}@third.example.test",
+            },
+            new PluginRegistryReference { Name = "Plugins", Url = MirrorUrl, Token = InstanceKey },
+        ];
+
+        var fault = await Record.ExceptionAsync(() =>
+            Lister(RegistryHost).ListTags(Repository).FirstAsync().Timeout(Budget).Await(ct));
+
+        mirror.CredentialsSeen.Should().BeEmpty();
+        var message = fault.Should().BeOfType<InvalidOperationException>().Which.Message;
+        message.Should().NotContain(secretInUrl,
+            "this string reaches Loki and Admin/UpdatePolicy — a credential may never be in it");
+        message.Should().NotContain("third.example.test",
+            "a URL carrying userinfo names no host anywhere in this platform, so it names none here "
+            + "either — printing the host would be one edit away from printing the URL");
+        message.Should().Contain(MirrorHost, "the readable mount is still named");
+    }
+
     /// <summary>
     /// 🚨 NEGATIVE CONTROL for the DIAGNOSIS (#4094 review). A declaration that is SET but names no
     /// http(s) host — a userinfo-bearing value, a typo'd scheme — used to read as ABSENT: the
