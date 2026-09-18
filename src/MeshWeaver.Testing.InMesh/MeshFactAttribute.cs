@@ -3,10 +3,13 @@ using System;
 namespace MeshWeaver.Testing.InMesh;
 
 /// <summary>
-/// Marks a test case the in-mesh runner executes: a public instance method, parameterless, returning
-/// <c>void</c>, <see cref="System.Threading.Tasks.Task"/> or <see cref="System.Threading.Tasks.ValueTask"/>,
-/// on a class the <see cref="MeshTestRunner"/> instantiates with a <see cref="MeshTestContext"/> (or
-/// parameterless). The xunit <c>[Fact]</c> of the migrated suites, without xunit.
+/// Marks a test case the in-mesh runner executes: a public instance method, parameterless (or taking
+/// one trailing <see cref="System.Threading.CancellationToken"/>, which the runner cancels when the
+/// case's <see cref="TimeoutSeconds"/> elapse), returning <c>void</c>,
+/// <see cref="System.Threading.Tasks.Task"/> or <see cref="System.Threading.Tasks.ValueTask"/>, on a
+/// class the <see cref="MeshTestRunner"/> instantiates with a <see cref="MeshTestContext"/> (or
+/// parameterless). The xunit <c>[Fact]</c> of the migrated suites, without xunit. A timed case that
+/// never observes its token is reported as having IGNORED it (the xUnit1069 shape).
 /// </summary>
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
 public sealed class MeshFactAttribute : Attribute
