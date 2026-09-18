@@ -1,22 +1,30 @@
 ---
 Name: Peer Death Is Dated by Its Exception Class
 Category: Architecture
-Description: "A silo that is frozen and a silo that is gone produce DIFFERENT Orleans exceptions, so the changeover between them timestamps the crash to the second — measured on 2026-09-17, when one pod's SIGSEGV was filed as three separate issues because each replica's view of it was fingerprinted on its own."
+Description: "A silo that is frozen and a silo that is gone produce DIFFERENT Orleans exceptions, so the changeover between them dates the loss of reachability to the second — and with the container exit to corroborate it, the crash. Measured on 2026-09-17, when one pod's SIGSEGV was filed as three separate issues because each replica's view of it was fingerprinted on its own."
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/><path d="m4.9 4.9 14.2 14.2"/></svg>
 ---
 
 # Peer death is dated by its exception class
 
-> **A peer silo that is FROZEN and a peer silo that is GONE fail differently, and the changeover
-> between the two exception classes timestamps the death to the second.** A frozen process still
-> holds its sockets open, so calls to it hang and die on a client-side timeout. A dead process has
-> had its sockets closed by the kernel, so calls to it are refused immediately. When a log shows
-> `TimeoutException` stopping and `SiloUnavailableException` / `ConnectionFailedException` starting,
-> the boundary between them is the moment the peer's process actually exited — and everything before
-> it is the peer dying, not a defect where the log site is.
+> **A peer silo that is REACHABLE-BUT-MUTE and a peer silo that is GONE fail differently, and the
+> changeover between the two exception classes timestamps the transition to the second.** A process
+> that is frozen — writing a core dump, say — still holds its sockets open, so calls to it connect
+> and hang, and die on a client-side timeout. Once its sockets are gone the same calls are refused
+> at once. When a log shows `TimeoutException` stopping and
+> `SiloUnavailableException` / `ConnectionFailedException` starting, that boundary is when the peer
+> stopped being reachable — and everything before it is the peer failing, not a defect where the log
+> site is.
 
-This is the discriminator that settles "why did the silo drop?", and it is available from an ordinary
-red-log feed with no cluster access at all.
+🚨 **The transition dates a loss of reachability, not by itself a process exit.** A refusal is equally
+what a network partition, an iptables/routing change, a NetworkPolicy edit or an evicted endpoint
+produces while the peer is still running. Corroborate before calling it the exit: the container's
+`finishedAt`, a restart count, a new silo generation at the same address, or the peer's own last log
+line. In the case below the container exit is independently measured and lands **between** the last
+timeout and the first refusal, which is what promotes the reading from "unreachable" to "dead".
+
+With that corroboration the pair is the discriminator that settles "why did the silo drop?", and it
+is available from an ordinary red-log feed with no cluster access at all.
 
 ## The measured case, 2026-09-17
 
@@ -40,7 +48,7 @@ the only other silo in the namespace is `10.244.5.183`. **A = 10.244.5.183.**
 
 | UTC (2026-09-17) | Event | Basis |
 |---|---|---|
-| ~18:36:35 | **A takes a SIGSEGV**; `createdump` suspends every thread and begins writing | inferred — 30 s before the first logged placement timeout |
+| 18:36:35 → 18:37:05 | **A stops answering** — `createdump` suspends every thread and begins writing. The fault is somewhere in this 30 s window, not at its start: the request that first timed out was issued at ~18:36:35 and expired at 18:37:05, and a hang anywhere between the two produces the same line | bounded, not pinned — the operation-start clock is not in the log |
 | 18:37:05.302 | first of **8 `TimeoutException: Grain placement operation timed out`** on B, firing at 18:37:05 / 18:37:35 / 18:38:05 — one Polly 30 s budget apart | measured |
 | 18:38:04 | **A's container exits 139** (`reason=Error exitCode=139`) | measured (`kubectl describe`) |
 | 18:38:05.833 | **last** placement timeout on B | measured |
@@ -93,32 +101,37 @@ process logs least about its own death.
 
 ## The crash itself is a known fingerprint — and it had never been seen in production before
 
-🚨 **Do not re-theorise this crash. Compare its fingerprint first.**
-[Debugging Native Crashes](/Doc/Architecture/DebuggingNativeCrashes) already carries eight CI
-sightings between 2026-08-06 and 2026-08-18 of one fault: the GC heap walk dereferencing an object
-whose **MethodTable word is exactly zero**.
+🚨 **Do not re-theorise this crash, and do not fingerprint it on `si_addr`.**
+[Debugging Native Crashes](/Doc/Architecture/DebuggingNativeCrashes) carries **sixteen** dissected
+sightings between 2026-08-06 and 2026-09-11 of one fault — the runtime dereferencing an object whose
+**MethodTable word reads exactly zero**. What all sixteen share is:
 
 ```
-si_signo=11  si_code=1 (SEGV_MAPERR)  si_addr=0x0   TRAPNO=14  ERR=0x4  CR2=0x0
+SEGV_MAPERR · TRAPNO=14 · ERR=0x4 · RIP inside file-backed libcoreclr · MethodTable word == 0
 ```
 
-What the crashed portal wrote was `[createdump] … signo 11 (000b) code 0001 errno 0000 addr (nil)`
-— **`si_signo`, `si_code` and `si_addr` all match**, which is three of the four recorded fields. The
-remaining discriminators (`TRAPNO`, `ERR`, `CR2`, and the `RIP` RVA that should land in
-`background_sweep` or `plan_phase`) were not extracted when the issue was filed, and the dump is
-still on the instance's `memex-data` PVC. **Getting them is the whole next step**, and that page
-gives the recipe.
+🚨 **`si_addr` is explicitly NOT part of that fingerprint.** It is only the offset of the field being
+read through the zeroed header — `0x0` for `m_dwFlags` in fourteen sightings, `0x4` for `m_BaseSize`
+in two — and the page settles this as a measurement, from two dumps 33 hours apart on the same
+runtime binary. So the crashed portal's `[createdump] … signo 11 (000b) code 0001 errno 0000
+addr (nil)` establishes **`SIGSEGV` and `SEGV_MAPERR` and nothing more**; the `(nil)` is not
+corroboration, and reading it as such is the mistake this paragraph exists to stop.
 
-If they match, this is not a new defect: it is the CI crash family arriving on a **production
-portal** for the first time, and it should be tracked there rather than re-diagnosed.
+The fields that would actually decide it — `TRAPNO`, `ERR`, the `RIP` RVA, and whether the word at
+the cursor reads zero — were not extracted when the issue was filed, and the dump is still on the
+instance's `memex-data` PVC. **Getting them is the whole next step**, and that page gives the recipe.
 
-### The collectible-ALC reading is the wrong one here, and the reason is in the address
+If they match, this is not a new defect. It would also be the first time the family is seen outside
+a CI test host: all sixteen are `FutuRe.Test`, `GitSync.Test` and `Hosting.Orleans.Test`, and this
+would be a **production portal**.
 
-It is tempting — and it is what we reached for first — to blame ALC churn, because the workload
-supports it spectacularly. `NodeTypeRelease` nodes carry a store-wide `assemblyStoreVersion`, and
-each is a distinct compiled assembly (the artifact path embeds it, `Essentials_Email/v4136-…dll`,
-and consecutive releases of one NodeType carry different content hashes and *non-consecutive*
-numbers, so other NodeTypes consumed the numbers between):
+### What is NOT ruled out: a disposal overlapping a new instance
+
+The obvious reach is ALC churn, and this instance supplies it spectacularly. `NodeTypeRelease` nodes
+carry a store-wide `assemblyStoreVersion`, and each is a distinct compiled assembly (the artifact
+path embeds it, `Essentials_Email/v4136-…dll`, and consecutive releases of one NodeType carry
+different content hashes and *non-consecutive* numbers, so other NodeTypes consumed the numbers
+between):
 
 | Release | UTC | `assemblyStoreVersion` | rate since previous |
 |---|---|---|---|
@@ -134,22 +147,28 @@ of that NodeType, `truncated: false`). Every publishing build calls
 → `CompleteUnload()` → `Unload()`, so the portal was minting and retiring collectible load contexts
 at roughly one every eight seconds for hours before it died.
 
-🚨 **That is the workload, not the cause — and the dump forensics say so directly.** The RCA rejects
-the collectible-ALC reading three separate times, and the decisive ground is the faulting address:
-**a freed `LoaderAllocator` yields a non-null *unmapped* pointer, while this fault is at exactly
-`0x0`.** The 2026-08-17 sighting had eleven collectible NodeType ALCs live at the moment of the
-fault, and the page records the verdict plainly — *"that is the workload that grows gen2 free lists,
-not the cause"*. A high recompile rate is therefore a reason this instance faults sooner than a quiet
-one, not an explanation of the zero.
+🚨 **Read the RCA's elimination list carefully before concluding either way — two of its entries are
+flagged `⚠️ Unsound as written (2026-09-11)`, and they are exactly these two.**
 
-What actually zeroes the word is **explicitly unsettled** in that page, across all eight sightings.
-Anyone reopening this should start from its table of shapes, not from a fresh theory.
+- *Use-after-unload of a collectible ALC* was falsified three ways, **but those three arguments
+  exclude only "a freed collectible MethodTable being dereferenced"**. The zeroed word belongs to a
+  default-context object, so they are silent on **an unload IN PROGRESS** — and the `alc=1`
+  checkpoint cannot see a context that is unloading.
+- *A teardown-ordering race* was dismissed on clean `DISPOSE_DONE` records, **but `DISPOSE_DONE` is
+  written when `Unload()` has been requested, before any context is freed.** The page's own words:
+  *"A clean log is exactly what the overlap looks like."*
 
-> The standing guidance that a SIGSEGV in this codebase is *"a disposal overlapping a new instance,
-> not a runtime fault"* is about where to look for the **cause**; it does not convert this
-> `si_addr=0x0` fingerprint into a dangling-pointer use-after-unload, which is the one reading the
-> dumps have repeatedly excluded. Hold both: a disposal race remains a candidate for *what performs
-> the errant zero store*; a stale pointer *into an unloaded ALC* is not what faulted.
+So the standing guidance — that a SIGSEGV here is **a disposal overlapping a new instance**, not a
+runtime fault — is not contradicted by these dumps; it is the reading they leave open, and the
+correction is dated the same day. What is excluded is the narrower *stale pointer into an already
+unloaded ALC*. What zeroes the word remains unsettled across all sixteen sightings.
+
+That makes an instance retiring a collectible context **every 8.4 seconds** a live and relevant
+observation rather than mere background: it is a high rate of exactly the operation the open
+hypothesis turns on. It is not evidence that the hypothesis is right — the 2026-08-17 sighting had
+eleven collectible NodeType ALCs live and the page still calls that workload rather than cause — but
+anyone testing "does an unload overlap something still running" now has a production instance that
+does it hundreds of times an hour.
 
 ### The separate, real finding: this instance's recompile rate
 
