@@ -85,8 +85,9 @@ decides to.
 
 All three hold, or the check is RED:
 
-1. **The automatic review has landed** — a review by the reviewer account whose body is recognisably
-   a review.
+1. **The automatic review has landed** — a review by the reviewer account, at a non-`PENDING` state,
+   whose body is not a refusal. What makes it a review is *who posted it*, not how it is worded — see
+   **"Provenance, not presentation"** below for why, and what requiring a recognisable shape cost.
 2. **Every thread the reviewer started has a person's reply** — for every comment by the reviewer
    with no `in_reply_to_id`, at least one comment in that thread by an account of `type: User`
    (following `in_reply_to_id` to the root, so a reply to a reply counts).
@@ -128,12 +129,41 @@ classifies the body:
 | Body | Reading |
 |---|---|
 | names a refusal (`Copilot was unable to review …`, or `**Files reviewed:** 0/…`) | **refused** — not landed |
-| carries the heading `Pull request overview` (July: `## Pull request overview`; September: inside `<summary>`) | **landed** |
-| anything else, including an empty body | **unrecognised** — not landed, and the first line is printed |
+| any other text | **landed** |
+| no text at all | **unrecognised** — not landed |
 
-A refusal marker wins over the review marker. An unrecognised body is red rather than green because
-the check cannot tell, and cannot-tell is never a pass. If the reviewer changes its format, every pull
-request reads red naming the new first line, and the fix is one marker in the script.
+A refusal wins. Everything else the reviewer says is the review.
+
+### Provenance, not presentation — and what the other way cost
+
+**The body is read for one purpose: to separate a review from a refusal to review.** What makes a
+review a review is that the *reviewer account* posted it at a non-`PENDING` state. That is
+`is_reviewer` plus the state check, and the body has no part in it.
+
+Until 2026-09-18 `landed` additionally required the literal string `Pull request overview`, and this
+page said so, adding: *"If the reviewer changes its format, every pull request reads red naming the
+new first line, and the fix is one marker in the script."* The failure was therefore **foreseen and
+accepted** — sound reasoning for an *advisory* check, where a false red costs a reader a glance.
+
+Two things then happened within a day of each other. The check became a **required context**
+(ruleset `2128472`, 2026-09-17T21:15Z), and the reviewer dropped its overview block, posting a short
+verdict body instead — `### 🟢 Approval recommended`, `### 🟡 Changes recommended`,
+`### 🔵 Needs a closer look`, plus a sentence or two. The marker matched nothing. Six core pull
+requests were genuinely reviewed and every one read *"the automatic review has not landed"*.
+
+Promotion changed the cost of "cannot-tell is never a pass" from a glance to a **hard stop on every
+open pull request**, with no exit but a maintainer waiver — and answering the findings could not
+clear it, because the unanswered-threads check is a *second* reason and the review-landed reason
+stood regardless. A whole lane was blocked while the reviewer had in fact reviewed everything.
+
+**So the marker was removed rather than updated.** Chasing the format would have re-armed the same
+trap on the reviewer's next revision. A decorative substring is the reviewer's choice and can change
+without notice; the account id cannot.
+
+🚨 **The self-test could not have caught it.** All three review fixtures carried the marker, so the
+suite proved the rule only on the side of the change where it held — a control with no case on the
+other side. The fixtures now include the three bodies measured on 2026-09-18, and each is verified
+to go **red** if the marker rule is restored.
 
 ## When it is evaluated
 

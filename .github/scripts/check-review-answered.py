@@ -21,12 +21,14 @@ the question the merge never asked: has each finding been answered?
 
 THE RULE (all three must hold, or the check is RED — it never skips)
 --------------------------------------------------------------------
-1. The automatic review has LANDED. A review by the reviewer account counts only when its body is
-   recognisably a review. The reviewer posts its REFUSALS under the same account and in the same
-   endpoint — measured on #645–#654 (2026-07-2x): "Copilot was unable to review this pull request
-   because the user who requested the review has reached their quota limit." — so "a review by the
-   bot exists" would read a quota outage as "reviewed". A body that is neither a recognised review
-   nor a recognised refusal is RED as well: the check cannot tell, and cannot-tell is never a pass.
+1. The automatic review has LANDED. A review by the reviewer account at a non-PENDING state counts,
+   UNLESS its body is a refusal. The reviewer posts its REFUSALS under the same account and in the
+   same endpoint — measured on #645–#654 (2026-07-2x): "Copilot was unable to review this pull
+   request because the user who requested the review has reached their quota limit." — so "a review
+   by the bot exists" would read a quota outage as "reviewed", and that is the ONE thing the body is
+   read for. An unfamiliar body is a NEW FORMAT, not an absence: see "PROVENANCE, NOT PRESENTATION"
+   below for what requiring a recognisable shape cost on 2026-09-18. Only an EMPTY body is
+   unrecognised — there is then nothing to read as either a review or a refusal.
 2. Every inline thread the reviewer STARTED (a comment by the reviewer with no `in_reply_to_id`)
    has at least one reply by a non-bot account (`user.type == "User"`). A reply that says nothing
    counts; that limitation is known and accepted (the decision on #4299).
@@ -49,9 +51,27 @@ The reviewer posts under TWO logins with ONE account id:
   pulls/{n}/reviews    `copilot-pull-request-reviewer[bot]`  type Bot  id 175728472
   pulls/{n}/comments   `Copilot`                             type Bot  id 175728472
 It posted exactly one review per pull request on all 50 (the ruleset carries
-`review_on_push: false`), always at state COMMENTED. Recognised review bodies carry the heading
-"Pull request overview" — in July as `## Pull request overview`, since September inside
-`<summary>Pull request overview</summary>` under a verdict line (🟡/🟢/🔵).
+`review_on_push: false`), always at state COMMENTED.
+
+WHAT MAKES A REVIEW A REVIEW: PROVENANCE, NOT PRESENTATION
+----------------------------------------------------------
+A review counts as landed because the REVIEWER ACCOUNT posted it at a non-PENDING state — never
+because its body contains a particular phrase. The body is read for ONE purpose: to detect a
+REFUSAL, which is the reviewer declining to review rather than reviewing.
+
+This was learnt the expensive way. Until 2026-09-18 `landed` required the literal string
+"Pull request overview" (July `## Pull request overview`, September
+`<summary>Pull request overview</summary>`). That day the reviewer began posting a SHORT verdict
+body — `### 🟢 Approval recommended`, `### 🟡 Changes recommended`, `### 🔵 Needs a closer look`
+and two or three sentences, with no overview block at all — and the marker matched NOTHING. Six
+core pull requests were reviewed and every one of them read as "the automatic review has not
+landed", on a REQUIRED context, so answering the findings could not clear it and the only exit
+was a maintainer waiver. The self-test could not catch it: all three fixtures carried the marker,
+so the suite proved the rule only on the side of the change where it held.
+
+A decorative substring is the reviewer's formatting choice and can be revised without notice; the
+account id cannot. So `is_reviewer` + a non-PENDING state establishes the review, REFUSAL_MARKERS
+carve out the non-reviews, and a body that is merely unfamiliar is a review with a new format.
 
 USAGE
 -----
@@ -78,7 +98,6 @@ import time
 
 REVIEWER_ACCOUNT_ID = 175728472
 REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot"})
-REVIEW_MARKER = re.compile(r"Pull request overview", re.IGNORECASE)
 REFUSAL_MARKERS = (
     re.compile(r"\bCopilot (?:was unable|wasn't able|was not able|could not|couldn't|cannot|can't) (?:to )?review\b", re.IGNORECASE),
     re.compile(r"\bunable to review this pull request\b", re.IGNORECASE),
@@ -109,11 +128,18 @@ def first_line(text: str | None) -> str:
 
 
 def classify_review_body(body: str | None) -> str:
-    """'refused' | 'landed' | 'unrecognised'. A refusal marker wins over the review marker."""
+    """'refused' | 'landed' | 'unrecognised'. A refusal wins; anything else the reviewer says is
+    the review.
+
+    The caller has already established provenance (`is_reviewer`, state != PENDING), so the body
+    is examined ONLY to separate a review from a refusal to review. An unfamiliar format is a new
+    format, not an absence — see "PROVENANCE, NOT PRESENTATION" above for what keying this on a
+    presentation substring cost. Only a body with no text at all is unrecognised: there is then
+    nothing to read as either a review or a refusal."""
     text = body or ""
     if any(m.search(text) for m in REFUSAL_MARKERS):
         return "refused"
-    if REVIEW_MARKER.search(text):
+    if text.strip():
         return "landed"
     return "unrecognised"
 
@@ -524,6 +550,12 @@ REVIEW_BODY_SEPT = "### 🟡 Changes recommended\n\n<details>\n<summary>Pull req
 REVIEW_BODY_JULY = "## Pull request overview\n\nThis PR adjusts the Distributed portal's mesh-level content-collection…"
 REFUSAL_QUOTA = "Copilot was unable to review this pull request because the user who requested the review has reached their quota limit."
 REFUSAL_NO_FILES = "### 🔵 Needs a closer look\n\n<summary>Pull request overview</summary>\n\n- **Files reviewed:** 0/4 changed files"
+# The three bodies the reviewer actually posted on 2026-09-18 (#4725, #4728, #4721), verbatim in
+# shape: a verdict heading and a sentence or two, with NO overview block. Every one of these was a
+# real review that the pre-2026-09-18 marker rule classified as "not landed".
+REVIEW_BODY_APPROVE_0918 = "### 🟢 Approval recommended\n\nAll reviewed changes are covered and no unresolved blocking issues remain."
+REVIEW_BODY_CHANGES_0918 = "### 🟡 Changes recommended\n\nTwo small but concrete correctness issues were found in the updated BuildNodeType comments/logging."
+REVIEW_BODY_CLOSER_0918 = "### 🔵 Needs a closer look\n\nConditional `[JsonIgnore]` cases remain insufficiently covered and may omit editor-written values."
 
 
 def _review(body=REVIEW_BODY_SEPT, at="2026-09-14T12:22:44Z", user=REVIEWER_REVIEW_USER, state="COMMENTED", rid=1):
@@ -577,8 +609,22 @@ def self_test() -> int:
     case("quota refusal is not a review (#645 body)", (NOT_LANDED,), _pr(0), [_review(REFUSAL_QUOTA)], [],
          mention=("is a refusal", "reached their quota limit"))
     case("zero files reviewed is not a review", (NOT_LANDED,), _pr(0), [_review(REFUSAL_NO_FILES)], [])
-    case("an unrecognised body cannot be called a review", (NOT_LANDED,), _pr(0), [_review("Something new happened.")], [],
-         mention=("unrecognised body",))
+    # POLICY, changed 2026-09-18: an unfamiliar body is a NEW FORMAT, not an absence. This case
+    # asserted the opposite until the reviewer dropped its overview block and six reviewed core
+    # pull requests all read as "not landed" on a required context.
+    case("an unfamiliar body from the reviewer IS a review", GREEN, _pr(0), [_review("Something new happened.")], [],
+         mention=("automatic review landed",))
+    # The three real 2026-09-18 bodies. Each is RED under the old marker rule and GREEN now.
+    case("2026-09-18 body: approval recommended", GREEN, _pr(0), [_review(REVIEW_BODY_APPROVE_0918)], [],
+         mention=("automatic review landed",))
+    case("2026-09-18 body: changes recommended", GREEN, _pr(0), [_review(REVIEW_BODY_CHANGES_0918)], [],
+         mention=("automatic review landed",))
+    case("2026-09-18 body: needs a closer look", GREEN, _pr(0), [_review(REVIEW_BODY_CLOSER_0918)], [],
+         mention=("automatic review landed",))
+    # …and the verdict heading alone must not become a blanket pass: a refusal that happens to
+    # carry one is still a refusal, on the SAME heading as the third case above.
+    case("a 2026-09-18-shaped body that is a refusal is still refused", (NOT_LANDED,), _pr(0),
+         [_review("### 🔵 Needs a closer look\n\n- **Files reviewed:** 0/4 changed files")], [])
     case("an empty body cannot be called a review", (NOT_LANDED,), _pr(0), [_review("")], [])
     case("refusal, then a real re-review", GREEN, _pr(0),
          [_review(REFUSAL_QUOTA, rid=1), _review(rid=2, at="2026-09-14T14:00:00Z")], [])
