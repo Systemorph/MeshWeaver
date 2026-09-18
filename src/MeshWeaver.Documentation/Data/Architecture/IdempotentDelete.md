@@ -104,38 +104,86 @@ able to fail.
 
 ## The absence that is still a failure
 
-`NodeDeletionRejectionReason.NodeNotFound` did not go away. It is now reserved for an absence
-discovered **mid-operation**: a leaf that vanished under a cascade already in flight, surfacing as a
-routing failure from the commit stage. That is a different fact — the subtree may be partially
-removed, so it is not in the state the caller asked for, and the caller is told.
+`NodeDeletionRejectionReason.NodeNotFound` did not go away.
 
-`ValidateDeleteRequest` — the pre-flight *query*, "would this delete be allowed?" — also still
-answers `NodeNotFound` for an absent node. It is answering a question about the node, not carrying
-out a delete, and "there is no such node" is the correct answer to that question.
+`ValidateDeleteRequest` — the pre-flight *query*, "would this delete be allowed?" — still answers
+`NodeNotFound` for an absent node. It is answering a question about the node, not carrying out a
+delete, and "there is no such node" is the correct answer to that question. What a recursive delete
+then *does* with that answer is the subject of the next section.
 
-## 🚧 The same defect one level down, measured and NOT fixed here
+And a `NodeNotFound` still reaches a caller whenever the absence is not the plain one: a node the
+operation cannot see and the store still holds. That is a different fact — the subtree is not in the
+state the caller asked for — and the caller is told.
 
-A **recursive** delete plans its subtree by enumerating storage once, then asks every planned
-descendant, in a bulk-atomic pre-flight, whether it may be deleted. A leaf that a concurrent delete
-removes in that window still aborts the whole operation.
+## The same defect one level down — #4680
 
-This was reproduced while fixing #4668 — a storage adapter that removes one planned descendant after
-the plan is taken and before it is answered — and the repro **falsified the obvious fix**. The leg
-never reaches a `ValidateDeleteResponse` at all: the post to the now-absent address fails to route,
-and the refusal that comes out is
+A **recursive** delete plans its subtree by enumerating storage ONCE (stage 3), asks every planned
+descendant in a bulk-atomic pre-flight whether it may be deleted (stage 3b), and only then commits
+bottom-up (stage 4). **Both stages address that one snapshot**, so a concurrent delete that removes
+one of the planned leaves — at any moment after the enumeration is taken — left the operation
+holding a path that really was gone. The whole subtree delete was then refused over a node that was
+already in exactly the state the caller asked for: this page's own decision, one level down.
+
+### Why the obvious fix does not apply
+
+Relaxing the pre-flight's `NodeNotFound` verdict is **dead code for the dominant shape**. A repro —
+a storage adapter that removes one planned descendant after the enumeration is taken and before it
+is answered — showed the leg never reaches a `ValidateDeleteResponse` at all: with no row at the
+address and no activated per-node hub to short-circuit on, the post does not ROUTE, and the leg's
+fall-through reports
 
 ```text
 Cannot delete 'X/gone': No node found at 'X/gone'. Closest ancestor is 'X' (remainder='gone').
 This usually means the node is missing, has no NodeType, or has an invalid NodeType.
 ```
 
-That message is ambiguous by its own wording. Telling "already gone" apart from "its type will not
-load" needs a storage read the pre-flight does not take today, and that is a change to the
-bulk-atomic refusal semantics built by #1198 and #1446 — not a relaxed verdict. It is tracked
-separately as [#4680](https://github.com/Systemorph/MeshWeaver/issues/4680).
+The verdict half is not dead in general — routing short-circuits on an address whose hub is still
+activated, so such a descendant *is* delivered, reads null and answers `NodeNotFound` — but it is
+one of two vocabularies for the same fact, and **both of them are ambiguous**. The routing sentence
+names three different situations in one breath, and the last two ("has no NodeType", "has an invalid
+NodeType") are precisely what the bulk-atomic pre-flight exists to refuse *before any storage side
+effect fires* — the partially destroyed subtree of #1198 / #1446. A verdict, likewise, says what the
+handler could read, not that the row is gone.
 
-It is **not** on #4668's own path: `IMeshService.DeleteNode` leaves `IncludeSatellites` false, so a
-`_Comment` satellite is never part of a recursive plan.
+### The discriminator is the store of record
+
+`MeshExtensions.ConfirmDescendantGone` asks `IStorageAdapter.Exists(path)` and emits **confirmed
+gone**, never "exists":
+
+- **confirmed gone** — the descendant blocks nothing. The pre-flight passes it, and the commit leg
+  completes having removed nothing.
+- **still stored** — the original refusal stands, reason and message unchanged.
+- **the store could not answer** (an error, or no answer inside its own bound) — also "not confirmed
+  gone", so the refusal stands. The return value is *confirmed gone* rather than *exists* exactly so
+  that failing closed is structural: "I could not tell" has no way to read as "it was gone".
+
+It is a read on an **error path only** — taken for a leg that has already failed, never once per
+planned descendant — and it is bounded one rung inside the leg it runs in (it runs in that leg's
+`.Catch`, past the point the leg's own bound still covers), derived by `MeshOperationOptions.Nest`
+like every other rung on this path.
+
+### Both stages, because both address the same snapshot
+
+Fixing the pre-flight alone moves the failure one stage later, and that was measured too: the
+recursive delete then failed at the commit with `[DeleteNode] not-found … partial-deleted=0`. The
+commit leg takes the same reading, and when the leaf is confirmed gone it **emits nothing** — so the
+path is not recorded as removed, and the operation still says truthfully what *it* took away rather
+than claiming somebody else's removal.
+
+That cannot make a delete report success over a live node, and the reason is structural: "drained"
+is decided by [the drain](/Doc/Architecture/RecursiveDeleteDrain)'s own storage RE-ENUMERATION,
+which is independent of every leg's verdict. A path that is still there comes back as a survivor and
+is deleted in a follow-up pass; a subtree that never drains still fails loudly at
+`MaxDeleteDrainPasses`.
+
+`RecursiveDeleteVanishedDescendantTest` carries the pair. The second test is the discriminator: the
+same leaf, the same unroutable address, the same refusal wording — and a store of record that says
+the node IS there. The delete must still be refused and nothing removed. Without it the first test
+would pass equally well on a pre-flight that had simply been taught to ignore routing failures.
+
+This is **not** on #4668's own path: `IMeshService.DeleteNode` leaves `IncludeSatellites` false, so a
+`_Comment` satellite is never part of a recursive plan. It was found while fixing that one, and is
+tracked as [#4680](https://github.com/Systemorph/MeshWeaver/issues/4680).
 
 ## See also
 
