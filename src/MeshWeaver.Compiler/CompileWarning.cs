@@ -127,8 +127,11 @@ public readonly record struct CompileWarning(string Id, string Message, int Line
     public static readonly ImmutableHashSet<string> NotReported =
         ImmutableHashSet.Create(
             StringComparer.Ordinal,
-            "CS1701", "CS1702",                 // reference-set skew — the SDK's own default NoWarn
-            "CS1591", "CS1573", "CS1712");      // doc COMPLETENESS — core's src/ NoWarn
+            // 🚨 The two are suppressed for DIFFERENT reasons, and the comments say which — the
+            // SDK default does NOT apply to core (Directory.Build.props SETS NoWarn first; see the
+            // doc comment above). Reference-set skew is simply not PRODUCED by a project build.
+            "CS1701", "CS1702",                 // reference-set skew — measured absent from core's src/
+            "CS1591", "CS1573", "CS1712");      // doc COMPLETENESS — core's src/ NoWarn suppresses it
 
     /// <summary>
     /// Whether <paramref name="id"/> is one the in-mesh compile does not report — see
