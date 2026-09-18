@@ -201,7 +201,9 @@ self-updating install stays on the previous image"* for a commit no publisher ha
 
 ## The decision that is still open
 
-**This does not stop the rebuild loop, and stopping it needs a decision nobody has made.**
+**This does not stop the rebuild loop, and stopping it needs a decision nobody has made.** It is
+tracked on [#4688](https://github.com/Systemorph/MeshWeaver/issues/4688), which carries the same
+three options and the measurements below.
 
 The reconciler still rebuilds the portal image whenever `MeshWeaver.Plugins` `main` has moved —
 so, at 43–48 merges a day against an hourly tick, up to 24 full multi-arch builds a day, each

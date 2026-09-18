@@ -1054,8 +1054,9 @@ jobs:
           # rebuilds a day of trees that are often identical (measured: 418 publishing builds over
           # 340 distinct core commits; `0dadacc` was built three times in three hours on
           # 2026-09-17, minting ci.8883, ci.8885 and ci.8886 and moving its own sha tag twice).
-          # Whether a plugins merge should mint a portal image at all — and if so, on what
-          # cadence — is Doc/Architecture/CdLedgerRecordsFailures → "The decision that is still open".
+          # Whether a plugins merge should mint a portal image at all — and if so, on what cadence —
+          # is MeshWeaver#4688 and Doc/Architecture/CdLedgerRecordsFailures → "The decision that is
+          # still open". Three options are set out there; do not pick one here.
           if [ "$COMPLETE" = "true" ] && [ "${HOSTS_STALE:-false}" = "true" ] \
              && [ "${FORCE_REBUILD:-false}" != "true" ]; then
             decision true "🏠 main \`$SHORT\` HAS its complete, deliverable image set; only the host pairing is behind — the published portal image was built from an older MeshWeaver.Plugins commit. Refreshing it (#2622). This is CADENCE, not a delivery hole: no \`ci-failure\` issue is filed, and every install already has a current image to roll to."
