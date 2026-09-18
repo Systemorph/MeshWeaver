@@ -72,10 +72,13 @@ unrelated change cannot merge.
 > first.** `CS1572` is a `<param>` tag naming a parameter that **does not exist** — a tag that is
 > WRONG, so it belongs with the bugs and does reach the `warnings` ratchet. `CS1573` is a parameter
 > with **no** `<param>` tag — doc COMPLETENESS, suppressed for `src/` by `Directory.Build.props`
-> and therefore in `CompileWarning.NotReported`, where `EmitPipeline.Collect` drops it before the
-> inventory. **It can never reach either ratchet**, which is what the *Doc COMPLETENESS* row of the
-> parity table below records. Naming it here sent a reader after a code that is structurally unable
-> to appear, and never named the one that actually matters (#4737).
+> and therefore in `CompileWarning.NotReported`, where `EmitPipeline.Collect` filters it out before
+> the inventory is built. **A `CS1573` Roslyn emits can never enter the inventory, so it can never be
+> a NEW warning against either ratchet** — which is what the *Doc COMPLETENESS* row of the parity
+> table below records. (The guarantee is that filter, not the classifier: `WarningClasses.Of` is not
+> an enumerated list, so a `CS1573` written into a baseline BY HAND classifies as `Real` and fails as
+> a STALE entry.) Naming it here sent a reader after a code that is structurally unable to appear,
+> and never named the one that actually matters (#4737).
 
 ## The baseline, and why it can only shrink
 

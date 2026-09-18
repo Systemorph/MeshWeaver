@@ -19,8 +19,16 @@ public enum WarningClass
     ///
     /// <para>🚨 NOT <c>CS1573</c>, which is <c>CS1572</c>'s opposite and is easy to swap for it:
     /// a parameter with NO <c>&lt;param&gt;</c> tag is doc COMPLETENESS, it is in
-    /// <see cref="CompileWarning.NotReported"/>, and <c>EmitPipeline.Collect</c> drops it before the
-    /// inventory — so it can never reach this class at all.</para>
+    /// <see cref="CompileWarning.NotReported"/>, and <c>EmitPipeline.Collect</c> filters it out
+    /// before the inventory is built — so a <c>CS1573</c> Roslyn emits can never enter the warning
+    /// INVENTORY, and therefore can never be a NEW warning against either ratchet.</para>
+    ///
+    /// <para>That guarantee lives upstream, in the filter, and NOT in
+    /// <see cref="WarningClasses.Of(string)"/>, which is deliberately not an enumerated list: it
+    /// files every id that is not <see cref="CompileWarning.MissingDocComment"/> as
+    /// <see cref="WarningClass.Real"/>. So a <c>CS1573</c> written into a baseline file BY HAND does
+    /// land in this class — as a STALE entry, because the type it names compiled clean of a code the
+    /// inventory never sees, and stale entries fail the run too.</para>
     /// </summary>
     Real,
 
