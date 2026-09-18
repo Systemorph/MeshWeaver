@@ -50,6 +50,11 @@ SEAL_STEP_ID = "seal"
 DECIDE_STEP_ID = "decide"
 VERDICT_STEP_ID = "verdict"
 HEAL_STEP_ID = "heal"
+# The registry probe the ledger's evidence comes from (MeshWeaver#4687). Extracted and EXECUTED
+# like every other step here: injecting its output into `decide` would leave the probe itself —
+# its `--query`, its repository list, its three branches — covered by nothing, which is the gap
+# Copilot named on that pull request.
+ATTEMPTED_STEP_ID = "attempted"
 # The step that discharges a deferral instead of promising one (MeshWeaver#4652): when a run lets
 # go of the delivery lane it asks whether main's HEAD still has a publisher, and creates one if not.
 HANDOFF_STEP_ID = "handoff"
@@ -72,6 +77,42 @@ if os.environ.get("AZ_FAIL"):
     sys.exit(1)
 
 argv = sys.argv[1:]
+
+# `acr repository show-tags` — the `attempted` step's staging-marker probe (MeshWeaver#4687).
+# Modelled PER REPOSITORY, because the whole point of that probe is that the three publishing
+# legs stage independently: AZ_TAGS is "<repo>=<tag>,<tag>;<repo>=…", and AZ_TAGS_FAIL names the
+# repositories whose read must FAIL, so a case can drive the unreadable arm for one leg alone.
+# The step's own --query does the prefix filter, exactly as jmespath would in az.
+if argv[:3] == ["acr", "repository", "show-tags"]:
+    repo = None
+    query = None
+    for i, a in enumerate(argv):
+        if a == "--repository":
+            repo = argv[i + 1]
+        if a == "--query":
+            query = argv[i + 1]
+    if repo is None or query is None:
+        sys.stderr.write("stub az: show-tags without --repository/--query\n")
+        sys.exit(97)
+    if repo in os.environ.get("AZ_TAGS_FAIL", "").split(","):
+        sys.stderr.write("ERROR: (ResponseError) the request could not be completed\n")
+        sys.exit(1)
+    tags = []
+    for entry in os.environ.get("AZ_TAGS", "").split(";"):
+        if not entry:
+            continue
+        name, _, values = entry.partition("=")
+        if name == repo:
+            tags = [v for v in values.split(",") if v]
+    try:
+        result = jmespath.compile(query).search(tags)
+    except JMESPathError as e:
+        sys.stderr.write(f"{e}\n")
+        sys.exit(1)
+    for row in result or []:
+        print(row)
+    sys.exit(0)
+
 if argv[:3] != ["acr", "manifest", "list-metadata"]:
     sys.stderr.write(f"stub az: unmodelled invocation {argv!r}\n")
     sys.exit(97)
@@ -343,7 +384,8 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
         # silently change what a case measures.
         e.pop("GH_ISSUE_RESULT", None)
         e.pop("GH_CLOSE_FAIL", None)
-        for knob in ("GH_SEAL_COUNT", "GH_STOPPED_COUNT", "GH_VIEW_RESULT", "GH_CREATE_RESULT",
+        for knob in ("AZ_TAGS", "AZ_TAGS_FAIL",
+                     "GH_SEAL_COUNT", "GH_STOPPED_COUNT", "GH_VIEW_RESULT", "GH_CREATE_RESULT",
                      "GH_VIEW_FAIL", "GH_LIST_FAIL", "GH_COMMENT_FAIL", "GH_SEAL_RANK",
                      "GH_DISPATCH_FAIL", "GH_CHECK_FAIL", "GH_CHECKS_FIXTURE"):
             e.pop(knob, None)
@@ -488,6 +530,178 @@ def run_decide_cases(root, case) -> None:
     rc, log, outputs = run_step(body, {**reconcile, "REASON": "reconcile", "COMPLETE": "false", "GH_RUNS_RESULT": ""}, None)
     case("...and with nothing in flight the same reconcile still builds",
          rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # ── THE LEDGER RECORDS A FAILURE, NOT A CADENCE (MeshWeaver#4687) ────────────────────────
+    #
+    # 🚨 <b>109 issues of a 109-issue population recorded a delivery that had not failed.</b>
+    # `CD: main <sha> has an incomplete image set` says, in its body, *every self-updating install
+    # stays on the previous image*. Measured over every one ever filed: 28 were opened while the
+    # deployable set was COMPLETE and only the plugins pair tag was behind; of the 25 most recent
+    # of the rest, 19 were opened before any CD run for that commit had been created at all.
+    # Neither is a failure. The two cases below are the ones that would have failed before the
+    # fix, and each is paired with the control that fires the alarm — so "quieter" can never be
+    # mistaken for "muted".
+    #
+    # The subject is what the step ASKED GITHUB TO DO. A decision that prints nothing alarming and
+    # still calls `gh issue create` is exactly the defect, and it is invisible in stdout — so these
+    # read GH_CALLS.
+    ledger = {**reconcile, "REASON": "reconcile", "GH_VIEW_RESULT": "0", "GH_ISSUE_RESULT": ""}
+
+    calls: list[str] = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "true"}, None,
+                                calls_out=calls)
+    filed = [c for c in calls if "issue create" in c or "issue comment" in c]
+    case("a COMPLETE set whose only gap is the host pairing still publishes (#2622 unchanged)",
+         rc == 0 and "publish=true" in outputs and "bake_only=true" not in outputs,
+         f"rc={rc} out={outputs!r} log={log}")
+    case("...and files NOTHING on the ci-failure ledger — nothing was undelivered",
+         not filed, f"calls={filed!r} log={log}")
+    case("...and says so, so a reader is not left guessing why it built",
+         "cadence" in log.lower() and "deliverable" in log.lower(), f"log={log}")
+
+    # The control on that pair: without HOSTS_STALE a complete set is still the cheap bake-only
+    # tick. If these collapsed, every quiet hour would start building an image again.
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "false"}, None)
+    case("MUTATION CONTROL: a complete set with a CURRENT pairing is still bake-only, not a build",
+         rc == 0 and "bake_only=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    calls = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": "false"}, None,
+                                calls_out=calls)
+    filed = [c for c in calls if "issue create" in c or "issue comment" in c]
+    case("a green commit NO publisher has staged layers for is published, not alarmed about",
+         rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and nothing is written to the ci-failure ledger",
+         not filed, f"calls={filed!r} log={log}")
+
+    # 🚨 THE NEGATIVE CONTROL, and the reason this is not a mute. The SAME inputs, with the one
+    # fact that distinguishes a failure — a publisher already staged layers for this commit and
+    # never reached `promote` — must still open the issue and record the attempt.
+    calls = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": "true"}, None,
+                                calls_out=calls)
+    case("an ATTEMPTED delivery that left staging layers behind still files the ci-failure issue",
+         rc == 0 and any("issue create" in c for c in calls), f"calls={calls!r} log={log}")
+    case("...and still records the attempt against the budget",
+         any("issue comment" in c for c in calls) and "attempt 1/3" in log,
+         f"calls={calls!r} log={log}")
+    case("...and still publishes",
+         "publish=true" in outputs, f"out={outputs!r}")
+
+    # An UNANSWERED probe must fail towards the ledger: a registry read that did not complete is
+    # not evidence that nothing was attempted, and the cost of a missed delivery hole is higher
+    # than the cost of one extra comment.
+    calls = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": ""}, None,
+                                calls_out=calls)
+    case("an EMPTY attempt probe fails towards the ledger, never towards silence",
+         rc == 0 and any("issue create" in c for c in calls), f"calls={calls!r} log={log}")
+
+    # And the branch must not swallow the case it was never about: a commit whose required check
+    # settled RED still gets the blocked report, whatever the attempt probe says.
+    calls = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": "false",
+                                       "GREEN": "false", "CONCL": "failure", "AGE_MIN": "300",
+                                       "GH_ISSUE_RESULT": "77"}, None, calls_out=calls)
+    case("a settled-RED required check is still reported, attempt probe or not",
+         rc == 0 and "publish=false" in outputs and any("issue comment" in c for c in calls),
+         f"rc={rc} out={outputs!r} calls={calls!r} log={log}")
+
+    # 🚨 <b>A HOST REFRESH IS AN AUTOMATIC PUBLISH, SO IT IS BEHIND THE GREEN CHECK.</b>
+    # (Copilot on MeshWeaver#4687.) The stale-pair branch sits above the required-check guard,
+    # which is right for its neighbours — `bake_only` ships no image, `rebuild` is an operator's
+    # explicit dispatch — and was a hole here: a HEAD whose required check settled RED still has
+    # its old complete set, so COMPLETE is true, and the branch would have built and SHIPPED an
+    # untested tree for a cosmetic refresh.
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "true",
+                                       "GREEN": "false", "CONCL": "failure", "AGE_MIN": "300"}, None)
+    case("a stale host pairing on a RED required check publishes NOTHING",
+         rc == 0 and "publish=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and falls through to the bake, which builds no image",
+         "bake_only=true" in outputs, f"out={outputs!r} log={log}")
+    case("...and names the check rather than the pairing as the reason",
+         "untested" in log.lower(), f"log={log}")
+
+    # 🚨 <b>A STAGING TAG IS NOT EVIDENCE OF FAILURE WHILE ITS RUN IS ALIVE.</b>
+    # (Copilot on MeshWeaver#4687.) The in-flight tie-break filters to LOWER run ids so that two
+    # runs deciding at once cannot both defer — which means a NEWER run can be mid-publish here.
+    # Measured on `0dadacc`: the scheduled run was created 34 s BEFORE the genuine delivery run.
+    # Both probes run their OWN `--jq` over ONE real payload, so the id filters are executed, not
+    # asserted about.
+    newer_live = {
+        "id": 2000,  # > RUN_ID (1000): invisible to the older-only tie-break, visible to the ledger's
+        "name": "Continuous Delivery (main)",
+        "status": "in_progress",
+        "html_url": "https://example.invalid/actions/runs/2000",
+    }
+    calls = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": "true"}, None,
+                                runs=[newer_live], calls_out=calls)
+    case("a NEWER live run on this sha does NOT defer the publish (the tie-break is unchanged)",
+         rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and its staged layers are read as a publication in progress, so nothing is filed",
+         not [c for c in calls if "issue create" in c or "issue comment" in c],
+         f"calls={calls!r} log={log}")
+    case("...and the decision names the run it deferred the LEDGER to",
+         newer_live["html_url"] in log, f"log={log}")
+
+    # The control on that pair: the identical inputs with NO live run must still file. Without it,
+    # "does not file" would also pass if the ledger had simply been removed.
+    calls = []
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": "true"}, None,
+                                runs=[], calls_out=calls)
+    case("MUTATION CONTROL: with no live run the same staged layers DO open the issue",
+         rc == 0 and any("issue create" in c for c in calls), f"calls={calls!r} log={log}")
+
+
+# ── the ATTEMPTED step: the registry probe the ledger's evidence comes from ───────────────────
+def run_attempted_cases(root, case) -> None:
+    """
+    🚨 <b>A probe whose output is injected into the next step is covered by nothing.</b>
+
+    Every `decide` case above hands `ATTEMPTED` in as an environment value, so a malformed
+    `--query`, the wrong repository, or a broken empty/error branch would pass all of them while
+    the production probe answered the wrong thing every hour. (Copilot on MeshWeaver#4687.)
+    These execute the real step against a stub `az` that models `acr repository show-tags` per
+    repository, so the prefix filter and the repository list are the things under test.
+    """
+    body = extract_step(root, ATTEMPTED_STEP_ID)
+
+    # A stub is only evidence about what it stubs.
+    if "show-tags" not in body:
+        die(f"step `{ATTEMPTED_STEP_ID}` no longer reads the registry's tags — these cases would "
+            "pass having tested nothing. Update the harness with the step.")
+
+    env = {"SHORT": "abc1234"}
+
+    rc, log, outputs = run_step(body, env, None)
+    case("no staging tag anywhere answers `attempted=false` — nothing was tried",
+         rc == 0 and "attempted=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # 🚨 EACH publishing repository on its own. The three .NET legs stage in PARALLEL, so a run
+    # whose migration leg staged and whose portal leg died before its push leaves NO portal marker
+    # — and a probe that looked only at `memex-portal-ai` would answer "nothing was attempted"
+    # over exactly the torn set the ledger exists to record.
+    for repo in ("memex-portal-ai", "memex-migration", "mw-plugin-test"):
+        rc, log, outputs = run_step(
+            body, {**env, "AZ_TAGS": f"{repo}=staging-abc1234-777"}, None)
+        case(f"a staging tag in {repo} ALONE answers `attempted=true`",
+             rc == 0 and "attempted=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # The prefix filter is the step's own `--query`, executed by real jmespath: a staging tag for a
+    # DIFFERENT commit must not be read as this one's attempt.
+    rc, log, outputs = run_step(
+        body, {**env, "AZ_TAGS": "memex-portal-ai=staging-def5678-777,abc1234,3.0.0-ci.42"}, None)
+    case("a staging tag for ANOTHER commit is not this commit's attempt",
+         rc == 0 and "attempted=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
+    # 🚨 FAILS TOWARDS THE ALARM, and only towards it: one unreadable repository is enough, because
+    # the cost of a spurious issue is a comment and the cost of a missed one is a silent hole.
+    rc, log, outputs = run_step(body, {**env, "AZ_TAGS_FAIL": "memex-migration"}, None)
+    case("an UNREADABLE repository answers `attempted=true`, never `false`",
+         rc == 0 and "attempted=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and says so as a warning naming the repository it could not read",
+         "::warning::" in log and "memex-migration" in log, f"log={log}")
 
 
 # ── the VERDICT step: the one that told main it was broken when it was not ───────────────────
@@ -1525,6 +1739,10 @@ def main() -> int:
     run_decide_cases(root, case)
 
     print()
+    print(f"── step `{ATTEMPTED_STEP_ID}` ──")
+    run_attempted_cases(root, case)
+
+    print()
     print(f"── step `{VERDICT_STEP_ID}` ──")
     run_verdict_cases(root, case)
 
@@ -1541,7 +1759,7 @@ def main() -> int:
         print(f"::error::{len(failures)} case(s) failed: {', '.join(failures)}")
         return 1
     print(f"all cases passed against {WORKFLOW} steps `{STEP_ID}` + `{BAKE_VERSION_STEP_ID}` "
-          f"+ `{SEAL_STEP_ID}` + `{DECIDE_STEP_ID}` "
+          f"+ `{SEAL_STEP_ID}` + `{DECIDE_STEP_ID}` + `{ATTEMPTED_STEP_ID}` "
           f"+ `{VERDICT_STEP_ID}` + `{HANDOFF_STEP_ID}` + `{HEAL_STEP_ID}` "
           f"(extracted, not copied)")
     return 0
