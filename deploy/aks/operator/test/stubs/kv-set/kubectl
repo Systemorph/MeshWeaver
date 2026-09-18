@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for hosting-kv-set's sync-wait tests: `get secret <name> -o json` answers a
+# Secret whose ONE key carries HOSTING_KVS_SYNCED (base64) — the value the CSI driver "has synced" —
+# so a test can prove the wait compares by hash and returns only once they agree.
+#
+#   HOSTING_KVS_STATE     directory: kubectl.log (every argv)
+#   HOSTING_KVS_SYNCED    the plaintext the synced Secret carries under every key (default: stale)
+set -uo pipefail
+state="${HOSTING_KVS_STATE:?the kubectl stub needs HOSTING_KVS_STATE}"
+printf 'kubectl %s\n' "$*" >> "$state/kubectl.log"
+ns="" kind="" name="" key="${HOSTING_KVS_KEY:-Authentication__Microsoft__ClientSecret}"
+while [ $# -gt 0 ]; do case "$1" in -n) ns="${2:-}"; shift 2 ;; get) kind="${2:-}"; name="${3:-}"; shift 3 ;; *) shift ;; esac; done
+[ "$kind" = "secret" ] || { echo "kubectl stub: unexpected invocation: $*" >&2; exit 1; }
+value="$(printf '%s' "${HOSTING_KVS_SYNCED-stale-value}" | base64 | tr -d '\n')"
+printf '{"metadata":{"name":"%s","namespace":"%s"},"data":{"%s":"%s"}}\n' "$name" "$ns" "$key" "$value"
