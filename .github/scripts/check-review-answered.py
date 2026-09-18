@@ -160,15 +160,29 @@ class Waiver:
 
 @dataclasses.dataclass(frozen=True)
 class Verdict:
+    """🚨 `refused` is a SEPARATE field and not a substring of `reasons` on purpose (#4730).
+
+    "the reviewer refused", "the reviewer has not posted yet" and "the reviewer posted findings
+    nobody answered" are three different states with three different remedies, and until this field
+    existed all three printed the same sentence — one that tells the reader the review "usually
+    arrives minutes after the pull request opens" and to reply to threads. During the 2026-09-18
+    quota outage that sentence was on six pull requests for four hours, and every one of them was
+    unreviewable: there was nothing to wait for and nothing to reply to. Deriving it back out of the
+    reason text would be the presentation-keyed reading this file's own header warns about."""
+
     green: bool
     reasons: tuple[str, ...]
     notes: tuple[str, ...]
     unanswered: tuple[dict, ...]
+    #: First lines of the reviewer posts that were REFUSALS, when no review landed. Empty when a
+    #: review landed, when the reviewer has not posted at all, or when a waiver released the state.
+    refused: tuple[str, ...] = ()
 
 
 def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str | None = None) -> Verdict:
     reasons: list[str] = []
     notes: list[str] = []
+    refused: list[str] = []
 
     # 3 (checked first: an incomplete listing makes every other statement unreliable)
     reported = pr.get("review_comments")
@@ -196,6 +210,10 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
             notes.append(f"WAIVED: {why}. {message}")
         else:
             reasons.append(why + (f". {message}" if message else ""))
+            # Only when the state actually STANDS: a waived refusal is not an unreviewable pull
+            # request, it is a reviewed-enough one, and saying otherwise would re-create the
+            # confusion in the other direction.
+            refused += [first_line(r.get("body")) for k, r in kinds if k == "refused"]
 
     # 2 — is every thread the reviewer started answered?
     by_id = {c.get("id"): c for c in comments}
@@ -211,7 +229,8 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
     if unanswered:
         reasons.append(f"{len(unanswered)} of {len(roots)} thread(s) opened by the automatic reviewer have no reply from a person")
 
-    return Verdict(green=not reasons, reasons=tuple(reasons), notes=tuple(notes), unanswered=unanswered)
+    return Verdict(green=not reasons, reasons=tuple(reasons), notes=tuple(notes), unanswered=unanswered,
+                   refused=tuple(refused))
 
 
 def waiver_holder(waiver: Waiver, as_of: str | None) -> tuple[bool, str]:
@@ -435,7 +454,9 @@ def read_inputs(gh: Gh, number: int, as_of: str | None):
 
 def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_of: str | None) -> str:
     head = f"#{number} ({'draft' if pr.get('draft') else pr.get('state')}) head {str((pr.get('head') or {}).get('sha'))[:10]}"
-    lines = [f"check-review-answered: {head}{' as of ' + as_of if as_of else ''} — {'GREEN' if verdict.green else 'RED'}"]
+    state = "GREEN" if verdict.green else ("RED — UNREVIEWABLE (the reviewer REFUSED to review this pull request)"
+                                           if verdict.refused else "RED")
+    lines = [f"check-review-answered: {head}{' as of ' + as_of if as_of else ''} — {state}"]
     if author_role is not None:
         lines.append(f"  waiver path readable: author @{(pr.get('user') or {}).get('login')} holds `{author_role or 'none'}`")
     lines += [f"  {n}" for n in verdict.notes]
@@ -455,7 +476,18 @@ def guidance(verdict: Verdict) -> list[str]:
     threads that do not exist or to wait for a review that has already landed."""
     out: list[str] = []
     text = "\n".join(verdict.reasons)
-    if "has not landed" in text:
+    if verdict.refused:
+        # 🚨 NOT "the review must land" (#4730). The reviewer answered: it said no. Nothing that can
+        # be done TO this pull request changes that — there are no findings to reply to, and a push,
+        # a re-run or a new commit all re-ask a question that is being refused for a reason outside
+        # the pull request. Saying "it usually arrives minutes after the pull request opens" here is
+        # how an unreviewable pull request read as one that merely had to wait.
+        out.append("nothing on this pull request can answer this — the automatic reviewer REFUSED to review it "
+                   f"(\"{verdict.refused[0]}\"). There are no findings to reply to and no commit that changes the "
+                   "answer; pushing, re-running this check and replying to threads all leave it exactly here. It "
+                   "clears when the reviewer can review again — a maintainer re-requests the review then, or applies "
+                   f"the `{WAIVER_LABEL}` label — never an agent, and never automatically.")
+    elif "has not landed" in text:
         out.append("the automatic review must land. It usually arrives minutes after the pull request opens; if the "
                    "reviewer refused (quota) or cannot review this change, a maintainer re-requests the review, or applies "
                    f"the `{WAIVER_LABEL}` label to waive it — never an agent, and never automatically.")
@@ -469,7 +501,10 @@ def guidance(verdict: Verdict) -> list[str]:
 
 
 def summary_markdown(number: int, verdict: Verdict) -> str:
-    out = [f"### Automatic review answered — #{number}: {'✅ green' if verdict.green else '❌ red'}", ""]
+    state = ("✅ green" if verdict.green
+             else "❌ red — **unreviewable right now**: the reviewer refused to review this pull request"
+             if verdict.refused else "❌ red")
+    out = [f"### Automatic review answered — #{number}: {state}", ""]
     out += [f"- {r}" for r in verdict.reasons] + [f"- {n}" for n in verdict.notes]
     guide = guidance(verdict)
     if guide:
@@ -586,16 +621,23 @@ def self_test() -> int:
     failures = 0
     LISTING, NOT_LANDED, UNANSWERED = "comment listing", "has not landed", "have no reply from a person"
 
-    def case(name: str, expect: tuple[str, ...], pr, reviews, comments, waiver=NO_WAIVER, as_of=None, mention: tuple[str, ...] = ()):
+    def case(name: str, expect: tuple[str, ...], pr, reviews, comments, waiver=NO_WAIVER, as_of=None,
+             mention: tuple[str, ...] = (), says: tuple[str, ...] = (), never_says: tuple[str, ...] = ()):
+        """`says`/`never_says` assert what the READER is told — the guidance line and the step
+        summary — not just the verdict. #4730 was entirely about those two strings being wrong while
+        the verdict was right, so a case that checks only `reasons` cannot see it."""
         nonlocal failures
         v = evaluate(pr, reviews, comments, waiver, as_of)
         text = "\n".join(v.reasons + v.notes)
+        told = "\n".join(guidance(v)) + "\n" + summary_markdown(0, v)
         ok = (v.green == (not expect) and len(v.reasons) == len(expect)
-              and all(e in r for e, r in zip(expect, v.reasons)) and all(m in text for m in mention))
+              and all(e in r for e, r in zip(expect, v.reasons)) and all(m in text for m in mention)
+              and all(t in told for t in says) and not any(t in told for t in never_says))
         failures += 0 if ok else 1
         want = "green" if not expect else "red: " + " + ".join(expect)
         got = "green" if v.green else "red: " + " | ".join(v.reasons)
-        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={want}" + ("" if ok else f"\n               got={got}\n               notes={v.notes}"))
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={want}"
+              + ("" if ok else f"\n               got={got}\n               notes={v.notes}\n               told={told}"))
 
     three = [_comment(1), _comment(2), _comment(3)]
     answers = [_comment(11, PERSON, 1, "2026-09-14T13:00:00Z"), _comment(12, PERSON, 2, "2026-09-14T13:01:00Z"),
@@ -608,6 +650,21 @@ def self_test() -> int:
     case("review landed, no findings (July body)", GREEN, _pr(0), [_review(REVIEW_BODY_JULY)], [])
     case("quota refusal is not a review (#645 body)", (NOT_LANDED,), _pr(0), [_review(REFUSAL_QUOTA)], [],
          mention=("is a refusal", "reached their quota limit"))
+    # 🚨 #4730: the verdict above was always right; what the reader was TOLD was not. A refusal must
+    # name itself and must NOT be given the wait-for-it remedy, which is the sentence that put six
+    # unreviewable pull requests in a four-hour holding pattern on 2026-09-18.
+    case("a refusal TELLS the reader it is unreviewable, not that the review is coming",
+         (NOT_LANDED,), _pr(0), [_review(REFUSAL_QUOTA)], [],
+         says=("unreviewable right now", "REFUSED to review it", "pushing, re-running this check"),
+         never_says=("usually arrives minutes after",))
+    # The other side of the same change — a pull request the reviewer simply has not reached yet
+    # keeps the wait-for-it remedy and must NOT be called unreviewable.
+    case("no review yet still says the review is coming, and is NOT called unreviewable",
+         (NOT_LANDED,), _pr(0), [], [],
+         says=("usually arrives minutes after",), never_says=("unreviewable right now", "REFUSED to review it"))
+    # …and a WAIVED refusal is not unreviewable either: it is released, so the banner must not fire.
+    case("a waived refusal is not reported as unreviewable", GREEN, _pr(0, [WAIVER_LABEL]), [_review(REFUSAL_QUOTA)], [],
+         Waiver(True, (_labeled(PERSON),), {"rbuergi": "maintain"}), never_says=("unreviewable right now",))
     case("zero files reviewed is not a review", (NOT_LANDED,), _pr(0), [_review(REFUSAL_NO_FILES)], [])
     # POLICY, changed 2026-09-18: an unfamiliar body is a NEW FORMAT, not an absence. This case
     # asserted the opposite until the reviewer dropped its overview block and six reviewed core
