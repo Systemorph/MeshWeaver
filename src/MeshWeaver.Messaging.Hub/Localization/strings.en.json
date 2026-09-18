@@ -1,4 +1,4 @@
-{
+﻿{
   "common.new": "New",
   "common.edit": "Edit",
   "common.delete": "Delete",
@@ -1069,6 +1069,7 @@
   "apiTokens.revokeFailed": "Could not revoke the token.",
   "apiTokens.deleting": "Deleting",
   "apiTokens.deleted": "Deleted token",
+  "apiTokens.deleteAlreadyGone": "Nothing to delete — this token was already gone:",
   "apiTokens.deleteFailed": "Could not delete the token.",
   "instances.intro": "Register a MeshWeaver installation of your own and give it an instance key. The key identifies the installation — not you — so it never acts with your permissions.",
   "instances.registerHeading": "Register an installation",
