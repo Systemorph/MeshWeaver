@@ -409,6 +409,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [AKS](DeploymentAKS)
 - [Database Migration Procedure](DatabaseMigrationProcedure) — the schema moves before the image, every roll; the 2026-09-03 wedge behind a 200, the recovery, and why a migration deadlocks under load
 - [Container Apps](DeploymentContainerApps)
+- [In-cluster databases](InClusterDatabases) — each instance's PostgreSQL as its own Helm release: a CloudNativePG Cluster on a dedicated `db` node pool, primary and standby in two zones; why neither the chart's bundled Postgres nor the shared Flexible Server serves a client instance
 - [Local Dev Workflow](LocalDevWorkflow)
 - [Onboarding a New Environment](OnboardingNewEnvironment)
 - [Unclaimed Control-Plane Requests](UnclaimedControlPlaneRequests) — an InstanceAction at version 1 with an empty log means "queued", "nobody is listening" and "the operator died holding it" in the same bytes; the 2026-09-10 measurement, the `Ops/Status` staleness that DOES discriminate, and the acceptance signal that does not exist

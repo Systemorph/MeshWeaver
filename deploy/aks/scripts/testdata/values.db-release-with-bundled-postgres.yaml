@@ -1,0 +1,6 @@
+# REFUSAL control: a database release AND the bundled single-pod Postgres — two answers to "which
+# database". The chart must refuse, naming postgres.enabled.
+postgres:
+  enabled: true
+database:
+  release: pearl-db

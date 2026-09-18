@@ -63,7 +63,76 @@
 {{- /* The MESH database connection the half opens — the value rendered into its Secret. */ -}}
 {{- define "memex.meshConnectionString" -}}
 {{- $secrets := index .root.Values.secrets .half -}}
+{{- if include "memex.dbRelease" . -}}
+{{- /* The instance's own database release: a credential-free string naming its primary. The pod's
+       `env` (memex.dbReleaseEnv) supplies the real one with the generated credentials and
+       outranks this Secret; the value here exists so the gate below derives the SAME host. */ -}}
+{{- printf "Host=%s-rw;Port=5432;Database=%s" (include "memex.dbRelease" .) (include "memex.dbReleaseDatabase" .) -}}
+{{- else -}}
 {{- $secrets.ConnectionStrings__memex | default (printf "Host=memex-postgres-service;Port=5432;Username=postgres;Password=%s;Database=memex" $secrets.memex_postgres_password) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* ── The instance's OWN database release (values `database.*`, Doc/Architecture/InClusterDatabases) ──
+       `memex.dbRelease`         the memex-db release name, or "" when the shape is not in use;
+       `memex.dbReleaseDatabase` the database name (database.name, else the half's MEMEX_DATABASENAME);
+       `memex.dbReleaseSecret`   the Secret CloudNativePG writes the owner's credentials into;
+       `memex.dbReleaseEnv`      the env entries that compose the connection strings from it;
+       `memex.assertDatabaseRelease` the refusals — two answers to "which database" never render. */ -}}
+{{- define "memex.dbRelease" -}}
+{{- trim (toString ((.root.Values.database | default dict).release | default "")) -}}
+{{- end -}}
+
+{{- define "memex.dbReleaseDatabase" -}}
+{{- $config := index .root.Values.config .half | default dict -}}
+{{- trim (toString ((.root.Values.database | default dict).name | default ($config.MEMEX_DATABASENAME | default "memex"))) -}}
+{{- end -}}
+
+{{- define "memex.dbReleaseSecret" -}}
+{{- (.root.Values.database | default dict).appSecret | default (printf "%s-app" (include "memex.dbRelease" .)) -}}
+{{- end -}}
+
+{{- /* 🚨 Order matters: Kubernetes expands $(VAR) only from variables defined EARLIER in the same
+       container, so the two secretKeyRef entries come first. CloudNativePG generates an
+       alphanumeric password, so it needs no quoting inside the connection string. */ -}}
+{{- define "memex.dbReleaseEnv" -}}
+{{- if include "memex.dbRelease" . -}}
+{{- $secrets := index .root.Values.secrets .half | default dict -}}
+{{- $base := printf "Host=%s-rw;Port=5432;Database=%s;Username=$(MEMEX_DB_USER);Password=$(MEMEX_DB_PASSWORD)" (include "memex.dbRelease" .) (include "memex.dbReleaseDatabase" .) -}}
+- name: "MEMEX_DB_USER"
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "memex.dbReleaseSecret" . | quote }}
+      key: "username"
+- name: "MEMEX_DB_PASSWORD"
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "memex.dbReleaseSecret" . | quote }}
+      key: "password"
+- name: "ConnectionStrings__memex"
+  value: {{ $base | quote }}
+{{- if and (eq (include "memex.adoNetClustering" .) "true") (not $secrets.ConnectionStrings__orleans) }}
+- name: "ConnectionStrings__orleans"
+  value: {{ printf "%s;Search Path=orleans" $base | quote }}
+{{- end }}
+{{- end -}}
+{{- end -}}
+
+{{- define "memex.assertDatabaseRelease" -}}
+{{- $rel := include "memex.dbRelease" (dict "root" .) -}}
+{{- if $rel -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,48}[a-z0-9])?$" $rel) -}}
+{{- fail (printf "memex.assertDatabaseRelease: database.release '%s' is not a DNS label — it names the memex-db release whose Service '<release>-rw' the pods connect to." $rel) -}}
+{{- end -}}
+{{- if .Values.postgres.enabled -}}
+{{- fail (printf "memex.assertDatabaseRelease: database.release '%s' is exclusive with postgres.enabled — that would render this release's bundled single-pod Postgres AND point the pods at the separate release, two answers to 'which database'. Set postgres.enabled: false (Doc/Architecture/InClusterDatabases)." $rel) -}}
+{{- end -}}
+{{- range $half := list "memex_portal" "memex_migration" -}}
+{{- if (index $.Values.secrets $half | default dict).ConnectionStrings__memex -}}
+{{- fail (printf "memex.assertDatabaseRelease: database.release '%s' is exclusive with secrets.%s.ConnectionStrings__memex — both name the mesh database, and the pod's env would silently override the values string. Drop one." $rel $half) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- /* Is this deployment on AdoNet clustering? Read from the PORTAL's config for BOTH halves — the
@@ -99,6 +168,9 @@
 {{- $orleans := $secrets.ConnectionStrings__orleans -}}
 {{- if and (not $orleans) $secrets.ConnectionStrings__memex -}}
 {{- $orleans = printf "%s;Search Path=orleans" (trimSuffix ";" $secrets.ConnectionStrings__memex) -}}
+{{- end -}}
+{{- if and (not $orleans) (include "memex.dbRelease" .) -}}
+{{- $orleans = printf "%s;Search Path=orleans" (include "memex.meshConnectionString" .) -}}
 {{- end -}}
 {{- if and (not $orleans) (not .root.Values.postgres.enabled) -}}
 {{- fail (printf "memex.orleansConnectionString: '%s' runs AdoNet clustering on an EXTERNAL database (postgres.enabled is false) but names no database for cluster membership: neither secrets.%s.ConnectionStrings__orleans nor secrets.%s.ConnectionStrings__memex is set. The only value left would be the chart's in-cluster default Host=memex-postgres-service, a Service this release does not render — every new pod would then fail at silo start ('MembershipTableManager' failed to start … Name or service not known; MeshWeaver#3780). Supply the connection string in values: on a record-driven deploy that is the Key Vault values half (helm-values-<release>, layered by hosting-deploy --vault when the record declares vaultValuesKeys); on the helm-release lane it is layered as vault-values.yaml. Refusing to render." .half .half .half) -}}
@@ -139,7 +211,7 @@
        just spins (pearl, 2026-09-15). */ -}}
 {{- define "memex.meshProbeGroup" -}}
 {{- $secrets := index .root.Values.secrets .half | default dict -}}
-{{- if or .root.Values.postgres.enabled $secrets.ConnectionStrings__memex -}}
+{{- if or .root.Values.postgres.enabled $secrets.ConnectionStrings__memex (include "memex.dbRelease" .) -}}
 {{- include "memex.dbHostGroup" (include "memex.meshConnectionString" .) -}}
 {{- else -}}
 {{- $config := index .root.Values.config .half | default dict -}}
