@@ -9,9 +9,18 @@ Icon: BranchCompare
 
 `Chart Drift` compares what the chart *describes* against what the cluster *runs*
 (`deploy/aks/scripts/check-chart-drift.sh`, scheduled daily by `.github/workflows/chart-drift.yml`).
-It has been red every day since it first completed on 2026-08-26, and its report was ranked by a
-model of `helm upgrade` that **measurement does not support**. This page records the measurement, so
-the ranking is not re-derived from intuition every time somebody re-reads the backlog.
+Its report was ranked by a model of `helm upgrade` that **measurement does not support**. This page
+records the measurement, so the ranking is not re-derived from intuition every time somebody
+re-reads the backlog.
+
+> 🚨 **This page used to open by saying the gate "has been red every day since it first completed on
+> 2026-08-26". It had never completed.** Measured on
+> [#4640](https://github.com/Systemorph/MeshWeaver/issues/4640): 39 scheduled runs from 2026-08-15
+> to 2026-09-17, 39 failures, **zero** verdicts — the reds were a credential and then a render that
+> could not be made, never a comparison. The findings below are real; they come from LOCAL runs of
+> the same script, which is what made a claim about the scheduled gate so easy to write. The first
+> verdict the scheduled gate could actually produce dates from 2026-09-18, and what stopped it is
+> [Rendering a chart you are not allowed to fully configure](../ChartDriftRenderWithoutSecrets).
 
 ## The claim that was wrong
 

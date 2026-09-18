@@ -1,0 +1,57 @@
+# The shape `Chart Drift` actually faces — a record-driven AKS release rendered from the two value
+# sources a PUBLIC repository may hold, with the Key Vault half deliberately absent.
+#
+# This is `values.adonet-external-db-no-connection-string.yaml` (the #3780 refusal control) PLUS the
+# one thing the production overlays carry and it does not: `config.<half>.MEMEX_HOST`. That single
+# difference is what separates "the chart must refuse, and there is nothing to be done" from "the
+# chart must refuse, and a drift check can still render a comparable chart by supplying a
+# placeholder whose HOST is this committed, secret-free value rather than an invention".
+#
+# Both refusals stay live and both are asserted:
+#   * check-chart-invariants.sh asserts the file WITHOUT MEMEX_HOST fails `helm template`;
+#   * test-chart-drift-render.sh asserts this one renders through chart-drift-render.py, that the
+#     placeholder cannot reach any compared object, and that a chart which makes it reach one is
+#     caught.
+#
+# There is no credential here and there is nothing here to be one: every value below is either a
+# public hostname or a replica/storage shape. Modelled on the committed
+# `deployments/aks/<ns>/values.<release>.public.yaml` files in Systemorph/Memex, which are
+# themselves generated from the Hosting/Deployment record and secret-free by construction.
+replicas:
+  portal: 2
+keda:
+  enabled: false
+postgres:
+  enabled: false
+config:
+  memex_portal:
+    Deployment__Orleans__Clustering: "AdoNet"
+    MEMEX_HOST: "example-pg.postgres.database.azure.com"
+    MEMEX_PORT: "5432"
+    MEMEX_DATABASENAME: "memex"
+    MEMEX_USERNAME: "memexadmin"
+  memex_migration:
+    MEMEX_HOST: "example-pg.postgres.database.azure.com"
+    MEMEX_PORT: "5432"
+    MEMEX_DATABASENAME: "memex"
+    MEMEX_USERNAME: "memexadmin"
+persistence:
+  data:
+    claimName: "memex-data"
+    create: true
+    size: "128Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"
+  content:
+    claimName: "memex-content"
+    create: true
+    size: "64Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"
+    mountPath: "/mnt/content"
+  users:
+    claimName: "memex-users"
+    create: true
+    size: "32Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"
