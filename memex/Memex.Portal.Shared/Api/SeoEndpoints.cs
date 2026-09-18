@@ -129,6 +129,24 @@ public static class SeoEndpoints
     }
 
     /// <summary>
+    /// What <c>/api/sitemap.xml</c> actually answers, as ONE function the route calls and a test
+    /// can drive — the same shape as <see cref="IconResult"/>, and for the same reason: a test that
+    /// re-implements the mapping beside the route can agree with itself while the shipped answer is
+    /// wrong. The status code and the <c>Retry-After</c> header are part of the contract here, so
+    /// they are reached from the route's own decision or they are not tested at all.
+    ///
+    /// <para>Both failure arms land in the same place: the deliberate
+    /// <see cref="SitemapUndecidedException"/>, and anything the mesh read faulted on.</para>
+    /// </summary>
+    /// <param name="hub">The hub the enumeration runs against.</param>
+    /// <param name="http">The request — the 503 arm writes <c>Retry-After</c> on its response.</param>
+    /// <param name="baseUrl">The canonical public host every <c>&lt;loc&gt;</c> is built on.</param>
+    internal static IObservable<IResult> SitemapResult(IMessageHub hub, HttpContext http, string baseUrl) =>
+        BuildSitemap(hub, baseUrl)
+            .Select(xml => Results.Text(xml, "application/xml"))
+            .Catch<IResult, Exception>(ex => Observable.Return(SitemapUnavailable(hub, http, ex)));
+
+    /// <summary>
     /// 🚨 THE ANSWER FOR "I COULD NOT CHECK" — 503 with a <c>Retry-After</c>, and a warning naming
     /// the cause.
     ///
@@ -234,12 +252,7 @@ public static class SeoEndpoints
         app.MapGet("/sitemap.xml", ([FromServices] IMessageHub hub, HttpContext http, IConfiguration configuration, CancellationToken ct) =>
         {
             var baseUrl = PublicSite.CanonicalBaseUrl(configuration, http.Request);
-            return BuildSitemap(hub, baseUrl)
-                .Select(xml => Results.Text(xml, "application/xml"))
-                // The ONE place a failed enumeration becomes an answer — and the answer is 503,
-                // never a rendered urlset. Both arms land here: the deliberate
-                // SitemapUndecidedException, and anything the mesh read faulted on.
-                .Catch<IResult, Exception>(ex => Observable.Return(SitemapUnavailable(hub, http, ex)))
+            return SitemapResult(hub, http, baseUrl)
                 .FirstAsync()
                 .ObserveCompletion(LateFault(hub, "/sitemap.xml"), ct)!;
         }).AllowAnonymous();

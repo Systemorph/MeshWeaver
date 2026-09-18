@@ -6,6 +6,10 @@ using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive.Assertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.Primitives;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -109,7 +113,8 @@ public class SitemapUndecidedGateTest(ITestOutputHelper output) : MonolithMeshTe
     public async Task AnUndecidedGate_CarriesItsReasonOutInsteadOfLookingLikeAnEmptyPortal()
     {
         var surface = await SeoEndpoints.EnumeratePublished(Mesh)
-            .Timeout(TestTimeouts.Convergence);
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the published surface is enumerated", TestContext.Current.CancellationToken);
 
         Assert.Empty(surface.Pages);
         Assert.NotNull(surface.Undecided);
@@ -121,11 +126,39 @@ public class SitemapUndecidedGateTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact]
     public async Task TheSitemap_FaultsRatherThanRenderAZeroRootUrlset()
     {
+        // ObserveCompletion, not a direct `await` on the observable (#4754) and not Emit:
+        // Emit folds a source fault into ObservableAssertionException, which would turn an
+        // assertion about WHICH exception into one about a message substring.
         var thrown = await Assert.ThrowsAsync<SitemapUndecidedException>(
-            async () => await SeoEndpoints.BuildSitemap(Mesh, "https://www.example.test")
-                .Timeout(TestTimeouts.Convergence));
+            () => SeoEndpoints.BuildSitemap(Mesh, "https://www.example.test")
+                .Timeout(TestTimeouts.Convergence)
+                .ObserveCompletion(
+                    ex => Output.WriteLine($"sitemap faulted after the assertion settled: {ex}"),
+                    TestContext.Current.CancellationToken));
 
         Assert.Contains("PublicSpace", thrown.Reason);
+    }
+
+    /// <summary>
+    /// 🚨 The crawler-facing half, driven through the route's OWN decision rather than a
+    /// re-implementation beside it: <b>503</b> and a <c>Retry-After</c>. Both are the contract —
+    /// a 503 without the header tells a crawler nothing about when to come back, and the whole
+    /// argument for refusing here rather than serving an empty urlset is that 503 + Retry-After is
+    /// the wire's way of saying "ask again later". Without this test the status could regress to a
+    /// 200 or a 500, or the header could vanish, with every other assertion still green.
+    /// </summary>
+    [Fact]
+    public async Task TheRoute_Answers503WithARetryAfter_NotAnEmptySitemap()
+    {
+        var http = new DefaultHttpContext();
+
+        var result = await SeoEndpoints.SitemapResult(Mesh, http, "https://www.example.test")
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the route decides", TestContext.Current.CancellationToken);
+
+        var status = Assert.IsType<StatusCodeHttpResult>(result);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, status.StatusCode);
+        Assert.Equal("300", http.Response.Headers.RetryAfter.ToString());
     }
 }
 
@@ -154,16 +187,42 @@ public class SitemapDecidedEmptyTest(ITestOutputHelper output) : MonolithMeshTes
     public async Task NothingPublic_IsACensusOfZero_AndIsPublishedAsOne()
     {
         var surface = await SeoEndpoints.EnumeratePublished(Mesh)
-            .Timeout(TestTimeouts.Convergence);
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the published surface is enumerated", TestContext.Current.CancellationToken);
 
         Assert.Empty(surface.Pages);
         Assert.Null(surface.Undecided);
         Assert.False(surface.AssertsWhatItDidNotCheck);
 
         var xml = await SeoEndpoints.BuildSitemap(Mesh, "https://www.example.test")
-            .Timeout(TestTimeouts.Convergence);
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("a decided empty surface still renders a sitemap", TestContext.Current.CancellationToken);
 
         Assert.Contains("urlset", xml);
         Assert.DoesNotContain("<loc>", xml);
+    }
+
+    /// <summary>
+    /// The endpoint-level positive control for
+    /// <see cref="SitemapUndecidedGateTest.TheRoute_Answers503WithARetryAfter_NotAnEmptySitemap"/>:
+    /// the same route, the same empty page list, and a 200 — because here the emptiness was
+    /// decided. Paired deliberately, so "never serve a zero-root sitemap" cannot quietly become
+    /// "always 503 when empty" without one of the two going red.
+    /// </summary>
+    [Fact]
+    public async Task TheRoute_Serves200WithAnEmptyUrlset_WhenTheEmptinessWasDecided()
+    {
+        var http = new DefaultHttpContext();
+
+        var result = await SeoEndpoints.SitemapResult(Mesh, http, "https://www.example.test")
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the route decides", TestContext.Current.CancellationToken);
+
+        var content = Assert.IsType<ContentHttpResult>(result);
+        Assert.Equal("application/xml", content.ContentType);
+        Assert.Contains("urlset", content.ResponseContent!);
+        Assert.DoesNotContain("<loc>", content.ResponseContent!);
+        // No Retry-After: nothing here is temporary.
+        Assert.True(StringValues.IsNullOrEmpty(http.Response.Headers.RetryAfter));
     }
 }
