@@ -308,6 +308,15 @@ public record DeploymentContent
     [Description("Run an in-cluster Postgres (self-host only)")]
     public bool InClusterPostgres { get; init; }
 
+    /// <summary>
+    /// The instance's OWN database release — a CloudNativePG Cluster in its namespace on the
+    /// cluster's <c>db</c> pool (Doc/Architecture/InClusterDatabases). Present → the portal connects
+    /// to <c>{release}-rw</c> with credentials generated in-cluster; exclusive with
+    /// <see cref="InClusterPostgres"/>, <see cref="DatabaseServer"/> and <see cref="DatabaseHost"/>.
+    /// </summary>
+    [Description("The instance's own database release (in-cluster, CloudNativePG)")]
+    public InClusterDatabaseSpec? InClusterDatabase { get; init; }
+
     /// <summary>The migration image repository. Blank → the portal repository with <c>memex-portal-ai</c> replaced by <c>memex-migration</c> (the fleet's pairing).</summary>
     [Description("Migration image repository — blank derives it from the portal's")]
     public string? MigrationImageRepository { get; init; }

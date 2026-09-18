@@ -1,0 +1,62 @@
+{{- include "memexdb.validate" . -}}
+---
+# The instance's database: a CloudNativePG Cluster. The operator creates the pods, the PVCs, the
+# PodDisruptionBudgets and three Services — `<release>-rw` (the primary, what the portal connects
+# to), `-ro` and `-r` — and the Secret `<release>-app` holding the owner's generated credentials.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ .Release.Name | quote }}
+  labels:
+    {{- include "memexdb.labels" . | nindent 4 }}
+spec:
+  instances: {{ int .Values.instances }}
+  imageName: {{ .Values.image | quote }}
+  # A minor-version or configuration change restarts the standby first, then switches over.
+  primaryUpdateStrategy: unsupervised
+  enableSuperuserAccess: false
+  postgresql:
+    parameters:
+      {{- toYaml .Values.postgresql.parameters | nindent 6 }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.database | quote }}
+      owner: {{ .Values.owner | quote }}
+      {{- with .Values.extensions }}
+      postInitApplicationSQL:
+        {{- range . }}
+        - {{ printf "CREATE EXTENSION IF NOT EXISTS %s" . | quote }}
+        {{- end }}
+      {{- end }}
+  storage:
+    size: {{ .Values.storage.size | quote }}
+    storageClass: {{ .Values.storage.storageClass | quote }}
+  resources:
+    {{- toYaml .Values.resources | nindent 4 }}
+  affinity:
+    {{- with .Values.placement.nodeSelector }}
+    nodeSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.placement.tolerations }}
+    tolerations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    enablePodAntiAffinity: true
+    topologyKey: topology.kubernetes.io/zone
+    podAntiAffinityType: {{ .Values.placement.zoneAntiAffinity | quote }}
+  {{- if .Values.backup.enabled }}
+  # WAL archiving + base backups through the Barman Cloud plugin, as the pods' workload identity.
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ printf "%s-store" .Release.Name | quote }}
+  serviceAccountTemplate:
+    metadata:
+      annotations:
+        azure.workload.identity/client-id: {{ .Values.backup.workloadIdentityClientId | quote }}
+  inheritedMetadata:
+    labels:
+      azure.workload.identity/use: "true"
+  {{- end }}
