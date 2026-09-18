@@ -3303,6 +3303,47 @@ public static class MeshExtensions
                 o => o.ResponseFor(request));
         }
 
+        // 🚨 THE NODE WAS ALREADY GONE — a SUCCESS, and one that says what it did (#4668).
+        //
+        // The delete verb's postcondition is "no node exists at `path`". An absent node already
+        // satisfies it, so the only thing left to decide is what to TELL the caller — and until
+        // this, the answer was a NodeNotFound rejection that `IMeshService.DeleteNode` turned into
+        // `InvalidOperationException: Node not found: …`. That exception reached users: a second
+        // viewer of a collaborative document, whose comment marker was still on screen after
+        // someone else deleted the comment, clicked Delete and was told the thing they wanted gone
+        // could not be removed BECAUSE it was already gone. Same for a double-clicked button.
+        //
+        // It cannot be fixed by asking first. A client-side existence check is precisely the shape
+        // CreateOrUpdateNodeRequest exists to retire on the create side: the check's negative can
+        // be stale by the time the delete lands, and a point read of an absent node is itself a
+        // framework defect (it terminates the stream on a routing NotFound and arms the
+        // storm-breaker for that path). The operation is where the race is decidable, because the
+        // owning hub serialises it.
+        //
+        // 🚨 And it is NOT a swallow. The response says `AlreadyAbsent`, the activity log is
+        // Succeeded with an EMPTY AffectedPaths, and the log line is its own sentence — so a prune
+        // that removed nothing, or a mistyped path, is still legible to anyone who looks. Every
+        // OTHER delete failure is untouched: a denial, a validator refusal, a timeout, a
+        // cancellation and a mid-cascade NotFound all still fail exactly as loudly as before.
+        void PostAlreadyAbsent()
+        {
+            var absentLog = baseActivity with
+            {
+                Messages =
+                [
+                    new LogMessage($"Nothing to delete at '{path}': the node was already gone.",
+                            LogLevel.Information)
+                        .WithKey("activity.delete.alreadyAbsent", ("path", path))
+                ],
+                AffectedPaths = ImmutableList<string>.Empty,
+                End = DateTime.UtcNow,
+                Status = ActivityStatus.Succeeded
+            };
+            hub.Post(
+                DeleteNodeResponse.NothingToDelete() with { Log = absentLog },
+                o => o.ResponseFor(request));
+        }
+
         // Accumulator for per-node activity messages emitted by each leaf's
         // own delete handler (validator warnings, etc.) — surfaced in the
         // top-level activity log on success.
@@ -3337,12 +3378,15 @@ public static class MeshExtensions
             {
                 if (rootNode is null)
                 {
-                    logger.LogDebug("[DeleteNode] not-found path={Path}", path);
-                    PostFailed(
-                        $"Node not found at path: {path}",
-                        NodeDeletionRejectionReason.NodeNotFound,
-                        [new LogMessage($"Node not found at path: {path}", LogLevel.Error)
-                            .WithKey("activity.delete.notFound", ("path", path))]);
+                    // Information, at the same rung as the "[DeleteNode] succeeded" line below and
+                    // for the same reason: this IS the operation's outcome, and an operator reading
+                    // the delete's own log must be able to tell the two outcomes apart. One line
+                    // per delete either way — no new volume. See PostAlreadyAbsent.
+                    logger.LogInformation(
+                        "[DeleteNode] already-absent path={Path} — nothing to delete, postcondition "
+                        + "already held by={DeletedBy}",
+                        path, capturedRequest.DeletedBy ?? "system");
+                    PostAlreadyAbsent();
                     return Observable.Empty<System.Reactive.Unit>();
                 }
 
@@ -4525,6 +4569,20 @@ public static class MeshExtensions
                 var resp = d.Message as ValidateDeleteResponse;
                 if (resp is null || resp.IsValid)
                     return ((string, string, NodeDeletionRejectionReason)?)null;
+                // 🚨 KNOWN GAP, MEASURED AND DELIBERATELY NOT FIXED HERE — see #4680. A descendant
+                // that vanished between the plan and this fan-out still refuses the WHOLE recursive
+                // delete, which is #4668's defect one level down. It is NOT fixed by relaxing this
+                // verdict: a repro (an adapter removing one planned leaf after the enumeration is
+                // taken and before it is answered) showed the leg does not reach a
+                // ValidateDeleteResponse at all — the post to the absent address fails to ROUTE, so
+                // it lands in the Catch below as `Cannot delete 'X': No node found at 'X' …`. That
+                // message is ambiguous by its own wording ("missing, has no NodeType, or has an
+                // invalid NodeType"), so telling "already gone" from "its type will not load" needs
+                // a storage read the pre-flight does not take today — a change to the bulk-atomic
+                // refusal semantics of #1198/#1446, not a one-line relaxation. #4668's own path
+                // does not come through here: IMeshService.DeleteNode leaves IncludeSatellites
+                // false, so a `_Comment` satellite is never part of a recursive plan.
+                //
                 // 🚨 The descendant's OWN reason, not a blanket ValidationFailed (#1198). When its
                 // permission fold could not be established it says so, and that is the answer the
                 // operator needs — re-labelling it as a validation verdict is what makes the next

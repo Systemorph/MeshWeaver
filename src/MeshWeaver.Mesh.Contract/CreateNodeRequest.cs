@@ -500,9 +500,39 @@ public record DeleteNodeResponse
     public NodeDeletionRejectionReason? RejectionReason { get; init; }
 
     /// <summary>
+    /// True when there was NOTHING at <see cref="DeleteNodeRequest.Path"/> to delete: the node was
+    /// already gone when this request reached its owner, so this call removed nothing and
+    /// <see cref="Log"/> carries an empty <c>AffectedPaths</c>.
+    ///
+    /// <para>🚨 <b>This is a SUCCESS, and the distinction is the honest half of it</b> (#4668). The
+    /// delete verb's postcondition is "no node exists at that path", and an absent node already
+    /// satisfies it — refusing was the framework telling a user that the thing they asked to be rid
+    /// of could not be got rid of BECAUSE it was already gone. That refusal reached real people: two
+    /// viewers on one document, one deletes a comment, the other's still-rendered marker produces a
+    /// `Node not found` dialog for an action that was correct and is now complete. The race cannot
+    /// be closed by asking first — a client-side existence check is exactly the shape
+    /// <see cref="CreateOrUpdateNodeRequest"/> exists to retire on the create side, and its negative
+    /// can be stale by the time the delete lands.</para>
+    ///
+    /// <para><b>Reporting it is NOT optional.</b> "Already absent" and "removed it" are different
+    /// facts — a prune that expected to remove something and removed nothing is worth seeing, and a
+    /// mistyped path must not read as work done. Callers that only care about the postcondition
+    /// ignore this flag (that is the idempotent read); callers that care WHAT HAPPENED branch on it.
+    /// A response that simply swallowed the absence would be indistinguishable from a
+    /// swallowed error, which is the thing this must never become.</para>
+    /// </summary>
+    public bool AlreadyAbsent { get; init; }
+
+    /// <summary>
     /// Creates a successful deletion response.
     /// </summary>
     public static DeleteNodeResponse Ok() => new();
+
+    /// <summary>
+    /// The node was ALREADY gone, so nothing was removed — a success that says so. See
+    /// <see cref="AlreadyAbsent"/>.
+    /// </summary>
+    public static DeleteNodeResponse NothingToDelete() => new() { AlreadyAbsent = true };
 
     /// <summary>
     /// Creates a failed deletion response with an error message.
@@ -523,6 +553,14 @@ public enum NodeDeletionRejectionReason
 
     /// <summary>
     /// The node to delete was not found.
+    ///
+    /// <para>🚨 This is NO LONGER the answer to "the node was already gone when the request
+    /// arrived" — that outcome is a SUCCESS carrying
+    /// <see cref="DeleteNodeResponse.AlreadyAbsent"/> (#4668). What still reaches a caller as
+    /// <c>NodeNotFound</c> is an absence discovered MID-OPERATION — a leaf that vanished under a
+    /// cascade already in flight, surfacing as a routing failure from a subtree that may be
+    /// partially removed. That is a genuinely different fact from "there was nothing to do", and
+    /// its subtree is not in the state the caller asked for.</para>
     /// </summary>
     NodeNotFound,
 

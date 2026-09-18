@@ -85,9 +85,15 @@ public sealed class InstallRecordPartitionTeardownHandler(
                 : packageIds
                     .Select(packageId => PackageInstaller
                         .RemoveInstalledRecord(hub, packageId, logger)
-                        .Do(_ => logger?.LogInformation(
-                            "[PluginCatalog] removed the install record for '{PackageId}': its target "
-                            + "partition '{Partition}' was deleted by {User}",
+                        // 🚨 READ THE VALUE — `false` means the record was already gone (#4668), and
+                        // saying "removed" for it would report work that did not happen.
+                        .Do(removed => logger?.LogInformation(
+                            removed
+                                ? "[PluginCatalog] removed the install record for '{PackageId}': its "
+                                  + "target partition '{Partition}' was deleted by {User}"
+                                : "[PluginCatalog] the install record for '{PackageId}' was already "
+                                  + "gone when its target partition '{Partition}' was deleted by "
+                                  + "{User} — nothing removed",
                             packageId, partition, deletedBy ?? "system"))
                         .Catch<bool, Exception>(ex =>
                         {
