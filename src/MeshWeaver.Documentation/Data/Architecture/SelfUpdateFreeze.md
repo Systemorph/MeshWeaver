@@ -3,9 +3,9 @@ Name: Why the Fleet Stopped Rolling Itself
 Category: Architecture
 Description: >-
   The September 2026 self-update investigation, measured per instance. Four portals were not taking
-  new platform builds for four different reasons — three of them deliberate pins and approvals, one a
-  genuine defect — and none of them the reason the policy nodes appear to state. Plus the separate,
-  four-hour-old break in the producing half.
+  new platform builds for four different reasons — two deliberate pins awaiting an approval, two
+  separate defects — and none of them the reason the policy nodes appear to state. Plus the separate,
+  four-hour break in the producing half, since resolved.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M4.5 4.5l15 15"/></svg>
 ---
 
@@ -26,10 +26,11 @@ and lives in the producing half — see *The producing half* below.
 2026-09-11T08:57:47Z, and has been frozen ever since. The instance it is on has since moved *past*
 the target it names. Nothing has re-measured it and nothing will — see *A frozen hold is history*.
 
-**"The fleet is frozen."** Three of the four instances are not rolling themselves **by design** — two
-carry a deliberate `pinnedImageTag`, and the control instance's own verdict says in as many words
-that it hands the update over and waits for an approval. Exactly **one** instance carries a genuine
-defect.
+**"The fleet is frozen, for one reason."** Four instances, four causes. **Two are deliberate** — memex
+and pearl each carry a reviewed `pinnedImageTag`, and a candidate newer than the pin waits for an
+approval rather than patching unattended. **Two are defects, and they are different defects**:
+memex-cloud's policy record has lost its own policy, and build cannot list tags on its registry at
+all (MeshWeaver#4093). Neither is the module-compatibility hold the policy nodes appear to show.
 
 ## What was measured
 
@@ -42,14 +43,22 @@ instance **memex.systemorph.com**.
 | **memex-cloud** | memex.meshweaver.cloud | `3.0.0-ci.8411` (`c84c6c05`), pods from 2026-09-17 | 🚨 **defect** — its `Admin/UpdatePolicy` carries **no `policy` field at all**, which reads as `None`; the poller returns before listing the registry |
 | **memex** (control) | memex.systemorph.com | `fc8cd583`; record pins `3.0.0-ci.8710` | **by design** — it detects, hands the build to the control lane, and *"a newer tag waits for an approval in the mesh. This install does not patch itself."* |
 | **pearl** | pearl.meshweaver.cloud | `3.0.0-ci.8080` (`67cbbe0e`) | **by design** — `pinnedImageTag: 3.0.0-ci.8080`; and the instance-side policy node is a separate act from the record's `updatePolicy` |
-| **build** | build.meshweaver.cloud | `3.0.0-ci.8411` (`c84c6c05`) | **by design** — its images come from `cr.meshweaver.cloud`, where the self-updater cannot list tags at all (MeshWeaver#4093) |
+| **build** | build.meshweaver.cloud | `3.0.0-ci.8411` (`c84c6c05`) | 🚨 **defect** — its images come from `cr.meshweaver.cloud`, where the self-updater cannot list tags **at all** (MeshWeaver#4093); the pin is the workaround, not the reason |
 | **partnerre** | — | — | `Ops/Status/partnerre` is `Unknown`, last written 2026-09-15 — outside this measurement |
 
 Note also that **the images are moving**: memex-cloud and build both run `3.0.0-ci.8411`, and
 memex-cloud's pods started on 2026-09-17. The public instance took a newer image through the reviewed
 `pinnedImageTag` + helm route in the private `Systemorph/Memex` repo. "Nothing has rolled" is true of
-the **pull** mechanism and false of the **push** one, and conflating the two hides that two instances
+the **pull** mechanism and false of the **push** one, and conflating the two hides that memex and pearl
 are pinned deliberately.
+
+🚨 **A pin is not evidence of intent.** memex's and pearl's pins are reviewed decisions; build's is a
+*workaround* for MeshWeaver#4093, recorded as such in its own deployment record — *"the self-updater
+cannot check for updates on an instance whose images come from cr.meshweaver.cloud, so rolls go through
+the control instance until that lands."* The same field means "we chose this version" on one instance
+and "detection is broken here" on another, and only the record's own words tell them apart. That one
+matters more than it looks: build is the instance that compiles modules, and a build instance held
+behind the newest sealed platform produces bundles keyed to an identity the fleet has moved past.
 
 ## A frozen hold is history, not a hold
 
@@ -285,12 +294,13 @@ textbook "I could not look" is presented as a compatibility verdict.
 
 ## The producing half: the seal, and a cross-repo pair
 
-Separate from everything above, and four hours old at the time of writing.
+Separate from everything above, **opened at 06:29Z and closed at 10:15Z on 2026-09-18** — under four
+hours, and worth recording because the shape recurs and no gate can see it.
 
-`main-cd` still builds, promotes and verifies images — `3.0.0-ci.8906` through `8913` exist. What stops
-is **`Plugins: bake + seal the publication`**, which is `skipped` because the module suite ahead of it
-fails. Without that job an image set is published but **no sealed set is registered**, and a sealed set
-is what an install may adopt.
+`main-cd` kept building, promoting and verifying images throughout — `3.0.0-ci.8906` through `8913`
+exist. What stopped was **`Plugins: bake + seal the publication`**, `skipped` because the module suite
+ahead of it failed. Without that job an image set is published but **no sealed set is registered**, and
+a sealed set is what an install may adopt.
 
 One test, one assertion. Core `9da6e85cf7` (PR #4682, issue #4668), merged **05:43:08Z**, made deleting
 an already-absent node a *success*:
@@ -305,9 +315,20 @@ still expects the string `Error`. Ancestry pins the boundary exactly: the head o
 
 This is the **shape 7** cross-repo break named in `AGENTS.md` — a behaviour change behind an unchanged
 signature, which no surface gate can see by construction. The `Cross-repo pair` gate looks at removed
-public types and members; nothing here was removed. The counterpart exists and is open:
-**`Systemorph/MeshWeaver.Plugins#2059`**. Until it merges, every core `main-cd` run keeps skipping the
-seal.
+public types and members; nothing here was removed, so nothing was red until the suite ran.
+
+**Resolved.** The counterpart, `Systemorph/MeshWeaver.Plugins#2059`, **merged at 10:15:38Z**; core CD
+run **8916** (created 10:17:53Z) is the first to resolve `content-ref` at a Plugins main that carries
+it. Verify the recovery the way this page says to verify everything — **on the seal JOB, not the run's
+conclusion**:
+
+```bash
+gh api "repos/Systemorph/MeshWeaver/actions/runs/<id>/jobs?per_page=100" \
+  --jq '.jobs[] | select(.name | test("bake \\+ seal")) | "\(.name): \(.conclusion)"'
+```
+
+Run 8896 concluded `failure` and sealed; runs 8909 and 8914 concluded `success` with every build job
+skipped. Neither conclusion tells you whether a set exists.
 
 > **Not related:** `Combo verification (candidate × instance)` has been red since the workflow's first
 > run on 2026-09-07 because its three inputs — `vars.COMBO_VERIFY_SOURCES`, `secrets.COMBO_VERIFY_KEYS`,
@@ -319,7 +340,7 @@ seal.
 
 | thing | what it needs | kind |
 |---|---|---|
-| the seal | merge `MeshWeaver.Plugins#2059` | **an action**, in reach today |
+| the seal | ✅ done — `MeshWeaver.Plugins#2059` merged 10:15:38Z; confirm on run 8916's seal JOB | **an action**, taken |
 | memex-cloud | `policy: Continuous` + `pattern: 3.0.0-ci*` restored on its own `Admin/UpdatePolicy` | **a decision**, and a repair with a known half-life |
 | every instance | a bookkeeping write must never replace a record it could not materialize — refuse and log instead | **a code fix** |
 | memex, pearl | a newer tag than `pinnedImageTag` waits for an approval | **working as designed** — approve, or clear the pin deliberately |
