@@ -13,9 +13,14 @@ public enum WarningClass
     /// <summary>
     /// A REAL warning — unused code (<c>CS0219</c>), an unresolvable <c>cref</c>
     /// (<c>CS1574</c>/<c>CS1584</c>), a <c>&lt;param&gt;</c> tag naming a parameter that does not
-    /// exist (<c>CS1573</c>), an unreachable statement, a shadowed member. Every one of these is a
+    /// exist (<c>CS1572</c>), an unreachable statement, a shadowed member. Every one of these is a
     /// latent bug or a doc comment that is actively WRONG, and <c>src/</c> would not compile with
     /// it under <c>-warnaserror</c>.
+    ///
+    /// <para>🚨 NOT <c>CS1573</c>, which is <c>CS1572</c>'s opposite and is easy to swap for it:
+    /// a parameter with NO <c>&lt;param&gt;</c> tag is doc COMPLETENESS, it is in
+    /// <see cref="CompileWarning.NotReported"/>, and <c>EmitPipeline.Collect</c> drops it before the
+    /// inventory — so it can never reach this class at all.</para>
     /// </summary>
     Real,
 
