@@ -75,7 +75,7 @@ public class ProbeAnswersWithoutWalkingTheVolumeTest : IDisposable
     {
         await LandWave(StoreModule);
         var pool = new ControllableIoPool { Runs = false };
-        using var pending = new PendingModuleActivations(root) { IoPool = pool };
+        var pending = new PendingModuleActivations(root) { IoPool = pool };
 
         var inputs = pending.ReadProbeInputs();
 
@@ -102,7 +102,7 @@ public class ProbeAnswersWithoutWalkingTheVolumeTest : IDisposable
     {
         await LandWave(StoreModule);
         var pool = new ControllableIoPool();
-        using var pending = new PendingModuleActivations(root) { IoPool = pool };
+        var pending = new PendingModuleActivations(root) { IoPool = pool };
 
         // One reading, taken the way production takes it — on the pool, never by a probe.
         await pending.Refresh().Timeout(TestTimeouts.Convergence)
@@ -192,7 +192,7 @@ public class ProbeAnswersWithoutWalkingTheVolumeTest : IDisposable
     {
         await LandWave(StoreModule);
         var pool = new ControllableIoPool();
-        using var pending = new PendingModuleActivations(root) { IoPool = pool };
+        var pending = new PendingModuleActivations(root) { IoPool = pool };
         using var service = new ModuleVolumeReadingHostedService(pending);
 
         Assert.Equal(0, pending.DiskReads);
@@ -209,6 +209,75 @@ public class ProbeAnswersWithoutWalkingTheVolumeTest : IDisposable
         Assert.NotNull(inputs.Activation);
         Assert.NotSame(ModuleProbeInputs.VolumeNotRead, inputs.ResolvesFromDeployment);
         Assert.Contains(StoreModule, EnabledNames(inputs), StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// 🚨 <b>Every caller shares ONE walk — including the host-start reading, which overlaps the
+    /// first probes BY CONSTRUCTION</b> (Copilot's review of #4700).
+    ///
+    /// <para>The host-start reading used to call <c>Refresh()</c> directly, past the collapse. On a
+    /// booting pod the first <c>/health</c> arrives while that reading is still crawling the share,
+    /// so the probe's own request found nothing in flight and started a SECOND concurrent walk of
+    /// the slow volume — doubling the load exactly during the boot this change exists to rescue,
+    /// and leaving the two snapshots free to land in either order.</para>
+    ///
+    /// <para>A second walk is observable as a COUNT, which is why the pool counts what it is handed
+    /// rather than what it ran: with the pool refusing to run, the first reading never completes, so
+    /// anything arriving after it is unambiguously "did this start another one?".</para>
+    /// </summary>
+    [Fact]
+    public async Task ProbesDuringTheHostStartReading_JoinIt_RatherThanStartingASecondWalk()
+    {
+        await LandWave(StoreModule);
+        var pool = new ControllableIoPool { Runs = false };
+        var pending = new PendingModuleActivations(root) { IoPool = pool };
+        using var service = new ModuleVolumeReadingHostedService(pending);
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(1, pool.Scheduled);
+
+        // Two probes land while that reading is still in flight. Each asks for a reading; neither
+        // may start one.
+        pending.ReadProbeInputs();
+        pending.ReadProbeInputs();
+
+        Assert.Equal(1, pool.Scheduled);
+        Assert.Equal(0, pending.DiskReads);
+    }
+
+    /// <summary>
+    /// 🚨 <b>The pool's cancellation REACHES the walk</b> (Copilot's review of #4700). It used to be
+    /// discarded — <c>ReadDisk</c> took no token and enumerated the share regardless — so a teardown
+    /// only unsubscribed and left a pool worker holding the whole slow walk.
+    ///
+    /// <para>An already-cancelled token is the exact instrument: a walk that observes it performs no
+    /// enumeration at all (<c>DiskReads</c> stays 0) and ends as a cancellation; one that discards
+    /// it reads the volume and completes, which this assertion cannot mistake for the other.</para>
+    /// </summary>
+    [Fact]
+    public async Task ThePoolsCancellation_ReachesTheWalk_RatherThanBeingDiscarded()
+    {
+        await LandWave(StoreModule);
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        var pool = new ControllableIoPool { Token = cancelled.Token };
+        var pending = new PendingModuleActivations(root) { IoPool = pool };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => pending.Refresh().Timeout(TestTimeouts.Convergence)
+                .Await(TestContext.Current.CancellationToken));
+
+        Assert.Equal(1, pool.Scheduled);
+        Assert.Equal(0, pending.DiskReads);
+
+        // 🚨 And the cancellation is not latched: the promise cache evicts a faulted reading, so the
+        // pod that survives a cancelled sweep can still take one. Without that, one teardown-shaped
+        // blip would leave every later probe answering "not measured" for the life of the process.
+        pool.Token = CancellationToken.None;
+        await pending.Refresh().Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+        Assert.Equal(1, pending.DiskReads);
+        Assert.NotNull(pending.ReadProbeInputs().Activation);
     }
 
     private static IReadOnlyList<string> EnabledNames(ModuleProbeInputs inputs) =>
@@ -246,14 +315,30 @@ public class ProbeAnswersWithoutWalkingTheVolumeTest : IDisposable
         /// <summary>Nothing is bounded here; the cap is not what this test measures.</summary>
         public int CurrentInFlight => 0;
 
+        /// <summary>The token handed to the work — the seam that says whether the subject
+        /// RECEIVES the pool's cancellation or discards it.</summary>
+        public CancellationToken Token { get; set; } = CancellationToken.None;
+
         public IObservable<T> InvokeBlocking<T>(Func<CancellationToken, T> work)
             => Observable.Create<T>(observer =>
             {
                 Interlocked.Increment(ref scheduled);
                 if (!Runs)
                     return Disposable.Empty;
-                observer.OnNext(work(CancellationToken.None));
-                observer.OnCompleted();
+                // Faithful to the real pool: a throwing leaf becomes OnError, never an exception
+                // out of Subscribe — otherwise a cancelled walk would look like a broken promise
+                // rather than a cancelled one.
+                try
+                {
+                    var value = work(Token);
+                    observer.OnNext(value);
+                    observer.OnCompleted();
+                }
+                catch (Exception exception)
+                {
+                    observer.OnError(exception);
+                }
+
                 return Disposable.Empty;
             });
 

@@ -516,7 +516,7 @@ public sealed record ModuleFallback(
 /// the <see cref="IIoPool"/> for a new one. See that member for why a probe may never do the
 /// work.</para>
 /// </summary>
-public sealed class PendingModuleActivations(string moduleRoot) : IDisposable
+public sealed class PendingModuleActivations(string moduleRoot)
 {
     /// <summary>Constructs from configuration, resolving the writable module root once.</summary>
     public PendingModuleActivations(IConfiguration? configuration)
@@ -623,6 +623,15 @@ public sealed class PendingModuleActivations(string moduleRoot) : IDisposable
     /// all, and what it returns is a READING with a date rather than an answer computed now.
     /// (<c>Doc/Architecture/AProbeMustAnswerInsideItsOwnTimeout</c>.)</para>
     ///
+    /// <para>🚨 <b>Precisely: this MEMBER touches no file, and the two predicates it hands over are
+    /// lazy.</b> <see cref="ModuleProbeInputs.ResolvesFromDeployment"/> and
+    /// <see cref="ModuleProbeInputs.LandedDllExists"/> are memos forced by whoever calls them —
+    /// which is the classifier, on the caller's thread — so a probe still pays one existence probe
+    /// per DECLARED ENTRY the first time a snapshot is classified. That cost is a constant of the
+    /// deployment's <c>Modules:Required</c> list (a handful of entries), not a function of the
+    /// volume, and it is the difference this whole file is about: what moved off the probe is the
+    /// part that GROWS.</para>
+    ///
     /// <para>🚨 <b>Having taken no reading is NOT a clean reading, and it must never render as
     /// one.</b> Before the first refresh lands this returns <see cref="ModuleProbeInputs.NotRead"/>,
     /// whose image-side resolver is the <see cref="ModuleProbeInputs.VolumeNotRead"/> sentinel:
@@ -658,66 +667,64 @@ public sealed class PendingModuleActivations(string moduleRoot) : IDisposable
 
     /// <summary>
     /// Takes a reading of the module volume on <see cref="IoPool"/> and holds it for
-    /// <see cref="ReadProbeInputs"/>. COLD — the walk runs on <c>Subscribe</c>, never on call — and
-    /// it is a no-op costing three directory stats when the fingerprint has not moved, so a caller
-    /// may ask as often as it likes.
+    /// <see cref="ReadProbeInputs"/>. It is a no-op costing three directory stats when the
+    /// fingerprint has not moved, so a caller may ask as often as it likes.
     ///
     /// <para>This is the WORK half of the split this type exists to hold: the work runs here, on a
     /// bounded pool, where nothing has a five-second budget; the probe reads what it produced.</para>
+    ///
+    /// <para>🚨 <b>EAGER, and every caller shares ONE walk.</b> The reading is a promise-cached
+    /// one-shot (<see cref="PromiseSlot{TValue}"/> over <c>IIoPool.RunBlocking</c>, held as an
+    /// instance field): a caller arriving while a walk is running JOINS it rather than starting a
+    /// second. That is not an optimisation — the host-start reading and the first probes of a
+    /// booting pod overlap by construction on exactly the slow volume this type exists to keep off
+    /// the probe path, and two concurrent walks there would both pile onto the share AND let the
+    /// older snapshot land last. Nothing waits: joining hands back an observable, never a block.
+    /// The slot is retired when the walk ENDS, so the next caller takes a fresh reading; a walk
+    /// that faulted or that the pool refused outright is evicted by the cache itself, so one
+    /// transient failure cannot latch.</para>
     /// </summary>
-    /// <returns>A cold observable that emits once when the reading has been taken.</returns>
+    /// <returns>An observable that emits once when the reading has been taken — the in-flight one
+    /// when a walk is already running.</returns>
     public IObservable<Unit> Refresh() =>
-        IoPool.InvokeBlocking(_ =>
+        reading.GetOrCreate(() => IoPool.RunBlocking(token =>
         {
-            ReadDisk();
-            return Unit.Default;
-        });
+            try
+            {
+                ReadDisk(token);
+                return Unit.Default;
+            }
+            finally
+            {
+                // 🚨 Retired from INSIDE the work, not from the observable's terminal: that
+                // terminal is per-SUBSCRIBER, so a probe that went away early would retire a walk
+                // that is still running and let the next caller start a second one. The work ends
+                // exactly once per walk, which is what "one at a time" has to be measured against.
+                reading.Invalidate();
+            }
+        }));
 
-    private readonly SerialDisposable refreshSubscription = new();
-    private int refreshInFlight;
-
-    /// <summary>
-    /// Schedules a reading unless one is already in flight.
-    ///
-    /// <para>🚨 The collapse is what keeps this from becoming a queue. Probes arrive every few
-    /// seconds and a walk on a shared volume takes seconds, so an uncollapsed request per probe
-    /// would pile attempts onto a volume that is already the slow thing. One walk at a time; a
-    /// change that lands while one runs is picked up by the request the NEXT probe makes, which is
-    /// the same freshness bound this reader has always had (one probe interval).</para>
-    ///
-    /// <para>It is an <see cref="Interlocked"/> flag over a plain <c>int</c> — not a gate: nothing
-    /// ever waits on it. A caller that loses the race simply does not schedule, and
-    /// <c>Finally</c> clears it on completion, fault AND unsubscribe, so a faulted or torn-down
-    /// refresh cannot strand the flag and freeze every later reading.</para>
-    /// </summary>
-    private void RequestRefresh()
-    {
-        if (Interlocked.CompareExchange(ref refreshInFlight, 1, 0) != 0)
-            return;
-
-        // 🚨 The slot is published into the serial BEFORE the subscribe, not after it. An inline or
-        // very fast pool completes the leaf during Subscribe — which clears the flag and lets the
-        // next request schedule — and assigning the older subscription afterwards would then
-        // DISPOSE the newer, live reading. Publishing first makes the serial hold the requests in
-        // the order they were made, whatever the pool does.
-        var slot = new SingleAssignmentDisposable();
-        refreshSubscription.Disposable = slot;
-        slot.Disposable = Refresh()
-            .Finally(() => Volatile.Write(ref refreshInFlight, 0))
-            .Subscribe(
-                _ => { },
-                exception => Logger?.LogWarning(
-                    exception,
-                    "[ModuleActivation] taking a reading of the module volume under {ModuleRoot} "
-                    + "faulted — the probe keeps answering from the reading it has, and the next "
-                    + "probe asks again.", ModuleRootPath));
-    }
+    private readonly PromiseSlot<Unit> reading = new();
 
     /// <summary>
-    /// Detaches an in-flight reading. The pool's linked token is cancelled with it, so a walk
-    /// still crawling a slow volume stops instead of parking a mesh teardown.
+    /// Asks for a reading and observes nothing but its failure — what a PROBE wants: it is not
+    /// waiting for the answer, it is making sure the next probe has one.
+    ///
+    /// <para>A cancellation is the pool's teardown path rather than a fault (the pool links its own
+    /// token into every leaf), so it is recorded at <see cref="LogLevel.Debug"/> — a pod shutdown
+    /// must not emit a warning per reader — while anything else stays a warning. Neither is
+    /// swallowed into a pass: with no reading, <see cref="ReadProbeInputs"/> answers
+    /// <see cref="ModuleProbeInputs.NotRead"/> and the classification REFUSES.</para>
     /// </summary>
-    public void Dispose() => refreshSubscription.Dispose();
+    private void RequestRefresh() =>
+        Refresh().Subscribe(
+            _ => { },
+            exception => Logger?.Log(
+                exception is OperationCanceledException ? LogLevel.Debug : LogLevel.Warning,
+                exception,
+                "[ModuleActivation] taking a reading of the module volume under {ModuleRoot} did "
+                + "not complete — the probe keeps answering from the reading it has, and the next "
+                + "probe asks again.", ModuleRootPath));
 
     /// <summary>
     /// The current report. Recomputed per call — the state changes underneath a running process
@@ -783,13 +790,34 @@ public sealed class PendingModuleActivations(string moduleRoot) : IDisposable
             Directory.Exists(directory) ? Directory.GetLastWriteTimeUtc(directory) : DateTime.MinValue;
     }
 
-    private DiskSnapshot ReadDisk()
+    /// <summary>
+    /// Takes the reading. <paramref name="token"/> is the pool's own — <c>IIoPool</c> links its
+    /// teardown cancellation into every leaf — and it is observed BETWEEN the units of volume work,
+    /// which is the same granularity the modules GC states for its own pass ("between directories").
+    ///
+    /// <para>🚨 <b>What that does and does not promise.</b> A teardown arriving between the
+    /// fingerprint, the activation sidecar and the set index stops the walk there, so a drain no
+    /// longer waits out the whole of a slow share. It does NOT interrupt a single enumeration
+    /// already inside <c>ModuleActivationSidecar.Read</c> or <c>ModuleSetStore.Read</c>: those
+    /// enumerate and parse their own directories behind public signatures whose callers all sit
+    /// outside this type, so a per-FILE token is a change to them rather than to this one. Stated
+    /// rather than implied — the comment this replaced claimed a stop this code cannot make.</para>
+    ///
+    /// <para>A reading already gathered is PUBLISHED even when the token fires afterwards: the
+    /// volume work is done, the rest is arithmetic, and throwing it away would make the next probe
+    /// answer "not measured" for no gain.</para>
+    /// </summary>
+    /// <param name="token">The pool's cancellation, or <c>default</c> for the pull-on-demand
+    /// readers that have no pool leaf to cancel.</param>
+    private DiskSnapshot ReadDisk(CancellationToken token = default)
     {
         var fingerprint = DiskFingerprint.Of(ModuleRootPath);
         var current = snapshot;
         if (current is not null && current.Fingerprint == fingerprint)
             return current;
 
+        // ① Before the first enumeration — a cancelled walk must not START one.
+        token.ThrowIfCancellationRequested();
         Interlocked.Increment(ref diskReads);
         string? corrupt = null;
         var corruptions = ImmutableList.CreateBuilder<string>();
@@ -816,6 +844,9 @@ public sealed class PendingModuleActivations(string moduleRoot) : IDisposable
         {
             openFailure = exception;
         }
+        // ② Between the two enumerations — the second is a whole directory of set records, and a
+        // drain that has already waited out the first must not be made to wait out this one too.
+        token.ThrowIfCancellationRequested();
         var setNotes = ImmutableList.CreateBuilder<string>();
         var sets = openFailure is null && corrupt is null
             ? ModuleSetStore.Read(ModuleRootPath, setNotes.Add)

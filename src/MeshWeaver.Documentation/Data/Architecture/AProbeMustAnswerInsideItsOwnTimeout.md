@@ -192,13 +192,33 @@ which is the whole of the seconds above), over a synthetic module volume:
 
 | volume | walk, on the probe thread (before) | held read, on the probe thread (after) |
 |---|---|---|
-| 120 modules, 482 files | 21.4 / 22.3 / 22.4 / 24.2 / 28.0 ms | median **0.011 ms** over 200 probes |
-| 400 modules, 1,602 files | 49.6 / 54.8 / 58.3 / 59.2 / 61.4 ms | median **0.0075 ms** over 200 probes |
+| 120 modules, 482 files | 17.9 / 18.1 / 18.6 / 19.2 / 27.1 ms | median **0.0117 ms** over 200 probes |
+| 400 modules, 1,602 files | 48.2 / 48.9 / 50.6 / 51.4 / 56.4 ms | median **0.0074 ms** over 200 probes |
 
 🚨 **Read the columns, not the ratio.** The left column is what grows with the volume — 3.3× the
-files cost 2.4× the time, and memex's share is two orders of magnitude larger again. The right one
+files cost ~2.7× the time, and memex's share is two orders of magnitude larger again. The right one
 does not move, because it is no longer a function of the volume at all. A probe whose first reading
-does not exist yet measured **0.24 ms** and performed **zero** walks.
+does not exist yet measured **0.30 ms** and performed **zero** walks.
+
+### One walk at a time, and the token that ends it
+
+Two things the first cut of this got wrong, both found in review and both observable as a COUNT
+rather than a duration:
+
+- **The host-start reading took a walk of its own.** It called the refresh past the collapse, so the
+  first `/health` of a booting pod — which arrives while that reading is still crawling the share —
+  started a SECOND concurrent walk, on exactly the volume and exactly the minute this mechanism
+  exists to protect, with the two snapshots free to land in either order. The reading is now a
+  promise-cached one-shot (`PromiseSlot` over `IIoPool.RunBlocking`, an instance field): a caller
+  arriving while a walk runs JOINS it. Nothing waits — joining hands back an observable. The
+  regression test drives the host-start reading and two probes through a pool that refuses to run,
+  and counts what was handed over: **1** with the collapse, **3** without it.
+- **The pool's cancellation was discarded.** `ReadDisk` took no token, so a teardown only
+  unsubscribed while the walk ran on. It now observes the token between its units of volume work —
+  before the activation sidecar, and between it and the set index. It does **not** interrupt a
+  single enumeration already inside `ModuleActivationSidecar.Read` or `ModuleSetStore.Read`; a
+  per-file token is a change to those readers, whose callers all sit elsewhere. Stated rather than
+  implied, because the comment it replaced claimed a stop the code could not make.
 
 ### Having taken no reading is not a clean reading
 

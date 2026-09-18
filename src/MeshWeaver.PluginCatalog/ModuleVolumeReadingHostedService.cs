@@ -20,8 +20,14 @@ namespace MeshWeaver.PluginCatalog;
 /// first of those two; <see cref="PendingModuleActivations.ReadProbeInputs"/> refusing to walk is
 /// the second.</para>
 ///
-/// <para>🚨 <b>It cannot delay the listener and it gates nothing.</b> <see cref="StartAsync"/>
-/// subscribes a COLD observable that runs on the reader's <c>IIoPool</c> and returns immediately.
+/// <para>🚨 <b>It takes the reading through the SAME promise every probe uses</b>
+/// (<see cref="PendingModuleActivations.Refresh"/>), never a walk of its own. On a booting pod the
+/// host-start reading and the first probes overlap BY CONSTRUCTION, so a second entry point would
+/// mean two concurrent walks of the slow share — the thing this whole mechanism exists to avoid —
+/// with the older snapshot free to land last.</para>
+///
+/// <para>🚨 <b>It cannot delay the listener and it gates nothing.</b> <see cref="StartAsync"/> asks
+/// for the reading — scheduled on the reader's <c>IIoPool</c> — and returns immediately.
 /// If a probe arrives before the reading lands, it gets
 /// <see cref="ModuleProbeInputs.NotRead"/> — which classifies
 /// <see cref="RequiredModuleState.Unmeasured"/> and REFUSES, in microseconds, naming the reason.
@@ -96,10 +102,13 @@ public sealed class ModuleVolumeReadingHostedService : IHostedService, IDisposab
     /// <inheritdoc />
     public void Dispose()
     {
-        // Unsubscribing cancels the pooled leaf's linked token, so a reading still crawling a slow
-        // volume stops at its next check instead of parking the drain. The AsyncSubject is
-        // deliberately not disposed: a leaf mid-completion may still be delivering its terminal on
-        // a pool thread, and OnNext into a disposed subject throws where nothing can observe it.
+        // 🚨 This DETACHES this observer; it does not cancel the walk, and the comment here used to
+        // claim it did. The reading is a promise shared with every probe (PendingModuleActivations
+        // .Refresh), so no single subscriber owns its lifetime — what stops a walk crawling a slow
+        // share is the POOL's own teardown token, which IIoPool links into the leaf and ReadDisk
+        // observes between its units of work. The AsyncSubject is deliberately not disposed: a leaf
+        // mid-completion may still be delivering its terminal on a pool thread, and OnNext into a
+        // disposed subject throws where nothing can observe it.
         reading?.Dispose();
         reading = null;
     }
