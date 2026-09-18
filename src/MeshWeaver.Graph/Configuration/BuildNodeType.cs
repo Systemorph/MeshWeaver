@@ -299,18 +299,31 @@ public static class BuildNodeType
     {
         var pending = state?.RequestedClaims;
         var stoodDown = StoodDownHolder(state);
-        if (pending is not { Count: > 0 } && stoodDown is null)
+        var reports = state?.ReportedOutcomes;
+        if (pending is not { Count: > 0 } && stoodDown is null && reports is not { Count: > 0 })
             return null;
 
         var candidates = pending is null
             ? Enumerable.Empty<string>()
             : pending.Keys.OrderBy(k => k, StringComparer.Ordinal);
 
+        // 🚨 A REPORTED OUTCOME is actionable on its own, and for the same reason the stand-down
+        // mark is (#4708). It lands on a node with RequestedClaims EMPTY — the holder's own grant
+        // consumed its registration on the way in — so a trigger gated on a pending registration
+        // could not see it, and the GO would wait for the two-minute stale tick. It is part of the
+        // KEY rather than merely of the filter for the same reason too: the report arrives on a
+        // node whose other trigger fields did not move, so a key that omitted it would be swallowed
+        // by DistinctUntilChanged.
+        var reporters = reports is null
+            ? Enumerable.Empty<string>()
+            : reports.Keys.OrderBy(k => k, StringComparer.Ordinal);
+
         return string.Join(
             "|",
             candidates
                 .Append(state!.ClaimedBy ?? string.Empty)
-                .Append(stoodDown ?? string.Empty));
+                .Append(stoodDown ?? string.Empty)
+                .Concat(reporters));
     }
 
     /// <summary>
@@ -368,7 +381,7 @@ public static class BuildNodeType
         var options = hub.JsonSerializerOptions;
 
         if (storage is null)
-            return GrantOnMirror(workspace, options, membership, DateTime.UtcNow);
+            return GrantOnMirror(workspace, options, membership, DateTime.UtcNow, logger);
 
         var claimPath = ClaimPath(hub.Address.Path);
         return workspace.GetMeshNodeStream()
@@ -378,22 +391,50 @@ public static class BuildNodeType
             {
                 var state = mirror.ContentAs<BuildState>(options);
 
-                // 🚨 BOOKKEEPING BEFORE DECISION (#1193). A claim whose holder has stood down is
-                // not a claim — it names a process whose driver has already completed — and until
-                // it is released the build is free for nobody, however many candidates are queued.
-                // The candidate could not clear it itself (see ReleaseStoodDownClaim), so it is
-                // owed here. The release publishes on the mirror's change feed, which is this
-                // arbiter's own trigger, so the next candidate is elected immediately rather than
-                // at the slow tick — level-triggered, no timer, no retry. The mark's ARRIVAL is a
-                // trigger on the same feed for the same reason (see ArbitrationTrigger): it lands
-                // on a node with nothing queued, so a trigger that asked only about pending
-                // registrations would have left this pass waiting for the stale tick.
-                if (StoodDownHolder(state) is { } stoodDown)
+                // 🚨 BOOKKEEPING BEFORE DECISION (#1193, #4708). Two facts a holder can only STATE
+                // are owed here, and until they are applied the build is free for nobody however
+                // many candidates are queued.
+                //
+                // A claim whose holder has STOOD DOWN is not a claim — it names a process whose
+                // driver has already completed — and the candidate could not clear it itself (see
+                // ReleaseStoodDownClaim). A REPORTED OUTCOME is the terminal version of the same
+                // problem: the holder cannot decide on its own copy that it is still the holder, so
+                // it reports how its build ended and FoldReportedOutcomes publishes the GO, records
+                // a failure, and frees the claim — here, where the state is current.
+                //
+                // Both halves are composed into ONE serialised write, and both are no-ops when there
+                // is nothing to do, so a quiet node still costs nothing.
+                //
+                // 🚨 That write does NOT also grant: this pass frees the build and RETURNS. A
+                // durable grant is a compare-and-set against the claim LOCK — a storage read and a
+                // WriteIfVersion — and neither can happen inside a pure Update lambda, which is
+                // exactly why only GrantOnMirror composes fold-and-elect into one expression. The
+                // election happens on the NEXT pass, and this write is what wakes it: it publishes
+                // on the mirror's change feed, which is this arbiter's own trigger, and folding
+                // moves the trigger key (the holder cleared, the reporters gone) so
+                // DistinctUntilChanged cannot swallow it, while the candidate that was queued
+                // behind the holder is still queued and now grantable. Immediately, therefore, and
+                // not at the slow tick — level-triggered, no timer, no retry. Chaining the election
+                // on here instead would not make it one write; it would run a second pass against
+                // the candidate set this one read BEFORE the fold, racing the pass the write
+                // already triggers for the lock it has to win. Each fact's ARRIVAL is a trigger on
+                // the same feed for the same reason (see ArbitrationTrigger): it lands on a node
+                // with nothing queued, so a trigger that asked only about pending registrations
+                // would have left this pass waiting for the stale tick.
+                var stoodDown = StoodDownHolder(state);
+                if (stoodDown is not null || HasReportedOutcomes(state))
                     return workspace.GetMeshNodeStream()
-                        .Update(node => ReleaseStoodDownClaim(node, options, DateTime.UtcNow))
+                        .Update(node => FoldReportedOutcomes(
+                            ReleaseStoodDownClaim(node, options, DateTime.UtcNow), options, logger))
                         .Take(1)
-                        .SelectMany(_ => DropLockHeldByStoodDown(
-                            storage, options, logger, claimPath, stoodDown));
+                        .SelectMany(_ => stoodDown is null
+                            // A reported outcome needs no lock hand-back: the reporter drops its own
+                            // lock itself (ReportBuildOutcome chains ReleaseBuildClaim), and that
+                            // delete is conditional on still owning it, so a superseded builder's
+                            // report cannot release its successor's claim.
+                            ? Observable.Return(Unit.Default)
+                            : DropLockHeldByStoodDown(
+                                storage, options, logger, claimPath, stoodDown));
 
                 // Candidates come from THIS hub's mirror: a registration written milliseconds ago
                 // has not reached storage yet, and a cluster can only ever grant one of its own
@@ -417,12 +458,12 @@ public static class BuildNodeType
     /// </summary>
     private static IObservable<Unit> GrantOnMirror(
         IWorkspace workspace, System.Text.Json.JsonSerializerOptions options,
-        IClusterMembership? membership, DateTime now)
-        // Release-then-arbitrate, composed inside ONE lambda so the freed build is granted to the
-        // next candidate in the same serialised write rather than on a later tick. Both halves are
-        // no-ops when there is nothing to do, so a quiet node still costs nothing (#1193).
+        IClusterMembership? membership, DateTime now, ILogger? logger = null)
+        // Release-then-fold-then-arbitrate, composed inside ONE lambda so the freed build is granted
+        // to the next candidate in the same serialised write rather than on a later tick. Every half
+        // is a no-op when there is nothing to do, so a quiet node still costs nothing (#1193, #4708).
         => workspace.GetMeshNodeStream()
-            .Update(node => ArbitrateOnMirror(node, options, now, membership))
+            .Update(node => ArbitrateOnMirror(node, options, now, membership, logger))
             .Select(_ => Unit.Default);
 
     private static IObservable<Unit> CommitGrant(
@@ -564,9 +605,11 @@ public static class BuildNodeType
             return Observable.Return(Unit.Default);
 
         logger?.LogInformation(
-            "Build claim {ClaimPath}: {Holder} won the lock but had already STOOD DOWN before the "
-            + "grant could be published, so the build would have stayed locked to a live process "
-            + "that is no longer listening. Releasing the lock — the next candidate elects freely.",
+            "Build claim {ClaimPath}: {Holder} won the lock but the grant was REFUSED at publish "
+            + "time — it had already stood down, or an outcome the outgoing holder reported is not "
+            + "folded yet (#4708). Publishing anyway would lock the build to a process that is no "
+            + "longer listening, or discard a GO that was earned. Releasing the lock — the next "
+            + "pass applies what is owed and elects freely.",
             claimPath, granted.ClaimedBy);
 
         return storage.Read(claimPath, options)
@@ -749,6 +792,35 @@ public static class BuildNodeType
             && state.StoodDown?.ContainsKey(stoodDownWinner) == true)
             return node;
 
+        // 🚨 …and a THIRD refusal, for the terminal fact (#4708). A REPORTED OUTCOME is bookkeeping
+        // OWED before any election: until FoldReportedOutcomes applies it, this node still names the
+        // OUTGOING holder, and publishing a new grant over it would make the fold read that report
+        // as a SUPERSEDED builder's and refuse it — losing a GO that was genuinely earned, which is
+        // the very stall this whole change exists to end.
+        //
+        // ArbitrateDurably orders fold-before-decide — a pass that finds a report folds it and
+        // returns, and the pass its own write triggers is the one that elects — and GrantOnMirror
+        // goes further, composing the two into ONE lambda where nothing can come between them. The
+        // durable path cannot do that: a grant there is a compare-and-set against the lock, so it
+        // spans two storage round-trips between reading the candidate set and publishing here, and
+        // a report can commit inside that window. This lambda runs on the node's own serialised
+        // write path, so it is the last — and only — point that can still see that it did.
+        //
+        // A refused publication hands the lock straight back (HandBackAStoodDownGrant), so the next
+        // pass folds first and then elects; it cannot loop, because the fold CONSUMES every report
+        // it sees whether it applies it or refuses it. (A mirror this build cannot READ refuses
+        // everything on this node already — see the #3623 guard above — so the fold not clearing
+        // one there is that existing fail-stop, not a new one.)
+        if (state.ReportedOutcomes is { Count: > 0 })
+        {
+            logger?.LogDebug(
+                "Build node {Path}: holding the grant to {Holder} — {Count} reported outcome(s) are "
+                + "not folded yet, and electing over them would refuse a GO that was earned. The "
+                + "lock is handed back; the next pass folds first.",
+                node.Path, granted.ClaimedBy, state.ReportedOutcomes.Count);
+            return node;
+        }
+
         return node with
         {
             Content = state with
@@ -814,19 +886,27 @@ public static class BuildNodeType
     }
 
     /// <summary>
-    /// One arbitration pass on the MIRROR — release what is owed, then decide. The composition
-    /// <c>GrantOnMirror</c> runs, named so a test drives the same expression the host does rather
-    /// than a re-spelling of it that could drift.
+    /// One arbitration pass on the MIRROR — apply what the holders could only STATE, then decide.
+    /// The composition <c>GrantOnMirror</c> runs, named so a test drives the same expression the
+    /// host does rather than a re-spelling of it that could drift.
+    ///
+    /// <para>The order is the point: a stood-down claim is released and a reported outcome is
+    /// folded BEFORE <see cref="Arbitrate"/> looks at the claim, so the build a holder has just
+    /// finished with is free by the time the next candidate is elected — in the same serialised
+    /// write, not on a later tick.</para>
     /// </summary>
     /// <param name="node">The Build node as read inside the update lambda.</param>
     /// <param name="options">Serializer options for content recovery.</param>
     /// <param name="now">The decision instant.</param>
     /// <param name="membership">Cluster membership, or <c>null</c> where this host is in no cluster.</param>
-    /// <returns>The node after the pass — unchanged when there was nothing to release and nothing to grant.</returns>
+    /// <param name="logger">Diagnostics — a refused outcome report is invisible without it.</param>
+    /// <returns>The node after the pass — unchanged when there was nothing to apply and nothing to grant.</returns>
     public static MeshNode ArbitrateOnMirror(
         MeshNode node, System.Text.Json.JsonSerializerOptions options, DateTime now,
-        IClusterMembership? membership = null)
-        => Arbitrate(ReleaseStoodDownClaim(node, options, now), options, now, membership);
+        IClusterMembership? membership = null, ILogger? logger = null)
+        => Arbitrate(
+            FoldReportedOutcomes(ReleaseStoodDownClaim(node, options, now), options, logger),
+            options, now, membership);
 
     /// <summary>
     /// Releases a claim whose holder has STOOD DOWN, and prunes stand-down marks that have aged
@@ -908,6 +988,158 @@ public static class BuildNodeType
         && state.Status is BuildStatus.Planning
             ? holder
             : null;
+
+    /// <summary>
+    /// A holder STATING how its build ended — the holder's half of #4708, extracted so the patch it
+    /// actually ships can be driven from a test, exactly as <see cref="StandDown"/> is.
+    ///
+    /// <para><b>Unconditional, and that is the whole design.</b> There is no "am I still the
+    /// holder?" here, because this runs on a copy the writer does not own and the answer it would
+    /// get there can be stale — which is what made the write it replaces a silent no-op. The
+    /// outcome goes under the reporter's OWN key, so it is merge-safe against every other holder
+    /// and present in the patch whatever the writer's copy showed;
+    /// <see cref="FoldReportedOutcomes"/>, on the owning hub, decides what it implies.</para>
+    /// </summary>
+    /// <param name="node">The Build node as read inside the update lambda.</param>
+    /// <param name="content">The node's state as the typed write resolved it — <c>null</c> only
+    /// when the node carries no content yet (the typed overload faults on unreadable content, so a
+    /// report is never published over a state this build could not read).</param>
+    /// <param name="holder">The holder reporting the outcome.</param>
+    /// <param name="outcome">How the build ended.</param>
+    /// <returns>The node carrying the reporter's outcome.</returns>
+    public static MeshNode RecordOutcome(
+        MeshNode node, BuildState? content, string holder, BuildOutcome outcome)
+    {
+        var state = content ?? new BuildState();
+        return node with
+        {
+            Content = state with
+            {
+                ReportedOutcomes = (state.ReportedOutcomes
+                    ?? ImmutableDictionary<string, BuildOutcome>.Empty)
+                    .SetItem(holder, outcome),
+            }
+        };
+    }
+
+    /// <summary>
+    /// Whether any holder has REPORTED how its build ended and the report is still unconsumed.
+    /// Lets the durable path decide whether a fold is owed at all, without taking a write on every
+    /// quiet tick — the same job <see cref="StoodDownHolder"/> does for a stand-down.
+    /// </summary>
+    /// <param name="state">The Build node's state as this hub's mirror currently holds it.</param>
+    /// <returns><c>true</c> when <see cref="FoldReportedOutcomes"/> has something to do.</returns>
+    internal static bool HasReportedOutcomes(BuildState? state) =>
+        state?.ReportedOutcomes is { Count: > 0 };
+
+    /// <summary>
+    /// Applies the terminal outcomes holders have REPORTED, and consumes them — the arbiter's half
+    /// of #4708, and the reason <c>ReportBuildOutcome</c> is not a guarded write.
+    ///
+    /// <para>🚨 <b>A holder cannot decide whether it is still the holder.</b> It does not own this
+    /// node, so a <c>stream.Update</c> lambda it runs is evaluated against its OWN copy — this
+    /// hub's mirror, or the locally computed state its own predecessor on the stream cache's
+    /// per-path write queue handed forward. <c>UpdateBuildAsHolder</c> asked
+    /// <c>ClaimedBy == me</c> there and answered a stale copy by returning the node UNCHANGED, so
+    /// the write path posted NOTHING and completed the caller as a SUCCESS (<c>IsRecordNoOp</c>;
+    /// every line it logs is at <c>Debug</c>). The predecessor of a completion is very often
+    /// another completion, whose locally computed state carries <c>ClaimedBy = null</c> — exactly
+    /// the value that makes the next holder's guard fail — which is why all six measured failures
+    /// of <c>BuildCoordinationTest.ClaimQueue_Go_And_HolderGuard</c> were on the SECOND holder's GO
+    /// and never on the first. In production the same silence is a fingerprint with no GO,
+    /// <c>ObserveBuildGo</c> that never emits, and every silo's readiness probe held down.</para>
+    ///
+    /// <para><b>So the holder states a fact and this decides what it implies.</b> The arbiter
+    /// writes the Build node it OWNS, so this lambda is serialised against fresh state — and the
+    /// owner's state never regresses, which is the whole difference. The
+    /// superseded-builder property the old guard existed for is PRESERVED, not dropped: a report
+    /// from a holder this node no longer names is REFUSED, and refusing here is sound where
+    /// refusing at the writer was not.</para>
+    ///
+    /// <para>Every report seen is CONSUMED — applied or refused — so nothing accumulates and a
+    /// refused report is never re-judged against a later claim it has nothing to do with. At most
+    /// one report can apply per pass (applying one clears <see cref="BuildState.ClaimedBy"/>, so
+    /// every other report is refused against the same state), which makes the result independent of
+    /// the order the map enumerates in — and the REFUSAL WARNING with it: it names the holder this
+    /// node carried when the fold began, not the field the loop has since cleared.</para>
+    ///
+    /// <para>Pure over its inputs and returns the same node when there is nothing to do, so a
+    /// caller may run it on every pass for free. An UNREADABLE mirror is left untouched, exactly as
+    /// its three sibling deciders on this node do (#3623) — publishing over a default-valued state
+    /// would drop the live claim, every registration and every stand-down mark.</para>
+    /// </summary>
+    /// <param name="node">The Build node as read inside the update lambda.</param>
+    /// <param name="options">Serializer options for content recovery.</param>
+    /// <param name="logger">Diagnostics — a refusal is invisible without it.</param>
+    /// <returns>The node with every report folded and consumed, or the node unchanged.</returns>
+    public static MeshNode FoldReportedOutcomes(
+        MeshNode node, System.Text.Json.JsonSerializerOptions options, ILogger? logger = null)
+    {
+        if (node is null) return node!;
+        var state = node.ContentAs<BuildState>(options);
+        if (state?.ReportedOutcomes is not { Count: > 0 } reports)
+            return node;
+
+        // 🚨 The holder as the node NAMED IT when the fold began, captured because the loop below
+        // clears it. The refusal warning is written from this and never from `folded.ClaimedBy`:
+        // applying a report sets that to null, so a refusal logged AFTER the holder's own report was
+        // applied would say "held by <nobody>" — for a node that was held, and only when the map
+        // happened to enumerate the holder first. ImmutableDictionary specifies no order and string
+        // hashing is randomised per process, so the same two reports would name the holder on one
+        // run and nobody on the next. A diagnostic that is right half the time sends the next reader
+        // hunting a claim nobody dropped; the refusal it explains is itself order-independent (see
+        // the summary above), so its wording has to be too.
+        var holderAtFoldStart = state.ClaimedBy;
+
+        var folded = state;
+        foreach (var (reporter, outcome) in reports)
+        {
+            if (!string.Equals(folded.ClaimedBy, reporter, StringComparison.Ordinal))
+            {
+                // A superseded builder — or this holder's own report arriving twice, which the
+                // write path's CONFLICT re-attempt can produce after the first was already folded.
+                // The second reading is benign and must not be reported as a defect, so the two are
+                // told apart by the one observable that distinguishes them: whether the GO this
+                // report carries is already on the history.
+                var alreadyRecorded = outcome.Go is { } replayed
+                    && state.Ready?.ContainsKey(replayed.FrameworkVersion) == true;
+                if (alreadyRecorded)
+                    logger?.LogDebug(
+                        "Build node {Path}: report from {Reporter} re-read after its outcome was "
+                        + "already folded ({Fingerprint} is on the history) — consuming it again.",
+                        node.Path, reporter, outcome.Go!.FrameworkVersion);
+                else
+                    logger?.LogWarning(
+                        "Build node {Path}: REFUSING the outcome reported by {Reporter} — this node "
+                        + "named {Holder} as its holder when the fold began, so the reporter is a "
+                        + "superseded builder whose build must land on nothing. The report is "
+                        + "consumed; no GO is published and no claim is released.",
+                        node.Path, reporter, holderAtFoldStart ?? "<nobody>");
+                continue;
+            }
+
+            folded = folded with
+            {
+                Status = outcome.Error is null ? BuildStatus.Ready : BuildStatus.Failed,
+                // Stating the outcome states the error too: a build that ended cleanly has no
+                // error. Equivalent to the writes this replaces in every reachable state, because
+                // ApplyGrant already clears Error when it grants — so nothing that completes here
+                // can be carrying an older build's error to preserve.
+                Error = outcome.Error,
+                Ready = outcome.Go is { } go
+                    ? (folded.Ready ?? ImmutableDictionary<string, BuildGo>.Empty)
+                        .SetItem(go.FrameworkVersion, go)
+                    : folded.Ready,
+                WrittenPaths = outcome.WrittenPaths ?? folded.WrittenPaths,
+                ClaimedBy = null,
+                ClaimedByIdentity = null,
+                ClaimedAt = null,
+                HeartbeatAt = null,
+            };
+        }
+
+        return node with { Content = folded with { ReportedOutcomes = null } };
+    }
 
     /// <summary>
     /// The single decision procedure, pure over its inputs. Grants the earliest pending claim when
