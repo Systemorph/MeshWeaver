@@ -248,13 +248,19 @@ public static class SeoResolver
     /// instance's own card, saying only its name and host.</summary>
     public const string SiteCard = "/api/og.png";
 
-    /// <summary>Whether a share image URL is one the portal DRAWS — those are always
+    /// <summary>Whether a share image is one the portal DRAWS — those are always
     /// <see cref="OgCardRenderer.Width"/>×<see cref="OgCardRenderer.Height"/> PNGs, so the head
-    /// can declare the size; an authored image's dimensions are unknown here.</summary>
+    /// can declare the size; an authored image's dimensions are unknown here.
+    ///
+    /// <para>Takes the image as <see cref="ShareImage"/> returns it, BEFORE the head prefixes the
+    /// host: the drawn cards are the two ROOT-RELATIVE shapes this route serves and nothing else.
+    /// An authored absolute URL that happens to contain <c>/api/og/</c> on some other host is not
+    /// the portal's card, and a substring test would have declared its size as if it were.</para>
+    /// </summary>
     public static bool IsGeneratedCard(string? image) =>
         image is not null
-        && (image.Contains("/api/og/", StringComparison.OrdinalIgnoreCase)
-            || image.EndsWith(SiteCard, StringComparison.OrdinalIgnoreCase));
+        && (image.StartsWith("/api/og/", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(image, SiteCard, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The one media type that tells every consumer "this icon scales losslessly".</summary>
     private const string SvgMediaType = MeshNodeImageHelper.SvgMediaType;

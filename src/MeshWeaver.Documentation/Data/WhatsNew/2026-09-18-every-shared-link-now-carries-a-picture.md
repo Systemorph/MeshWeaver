@@ -1,6 +1,6 @@
 ---
 Name: Every shared link now carries a picture
-Category: Improvement
+Category: Feature
 Description: A page shared into iMessage, Slack, Teams or LinkedIn used to unfurl as a bare title beside the tiny site favicon. The card the portal draws for a page now shows the page's own mark, its description, its category, its price and where it lives — and a page with no mark of its own gets a badge, so no link ever shares as text on a dark rectangle.
 Icon: Image
 Order: -20260918

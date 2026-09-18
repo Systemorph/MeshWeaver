@@ -312,9 +312,13 @@ public class OgCardRendererTest
     public void IsGeneratedCard_RecognisesTheDrawnCards_AndNotAuthoredImages()
     {
         Assert.True(SeoResolver.IsGeneratedCard("/api/og/Chess.png"));
-        Assert.True(SeoResolver.IsGeneratedCard("https://memex.meshweaver.cloud/api/og/Edu/Courses.png"));
-        Assert.True(SeoResolver.IsGeneratedCard("https://memex.meshweaver.cloud" + SeoResolver.SiteCard));
+        Assert.True(SeoResolver.IsGeneratedCard("/api/og/Edu/Courses.png"));
+        Assert.True(SeoResolver.IsGeneratedCard(SeoResolver.SiteCard));
         Assert.False(SeoResolver.IsGeneratedCard("/api/content/Claims/content/og.png"));
+        // An authored ABSOLUTE url is never the portal's card, whatever its path says — declaring
+        // 1200×630 PNG for a banner on another host would be a lie the unfurler acts on.
+        Assert.False(SeoResolver.IsGeneratedCard("https://cdn.example/api/og/banner.jpg"));
+        Assert.False(SeoResolver.IsGeneratedCard("https://memex.meshweaver.cloud/api/og/Chess.png"));
         Assert.False(SeoResolver.IsGeneratedCard(null));
     }
 
