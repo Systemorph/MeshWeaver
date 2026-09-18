@@ -259,7 +259,21 @@ public static class TreeBake
         // sealed for the new framework identity, and every install then correctly declined to
         // self-update onto an image whose content had no bake (#2563) — a fleet held back by a
         // reference list, with nothing in the failure naming a reference.
-        var modules = LoadExternalModules(options);
+        // 🚨 A module that cannot be composed is a REFUSAL, not a crash (MeshWeaver.Plugins#2116).
+        // It used to escape to Program's last-resort handler, which prints
+        // `mw-plugin-test: FATAL — <exception.ToString()>` and exits 70 — a .NET stack where every
+        // other bake refusal (no packages, a host with no identity, two producers of one assembly
+        // name) is a sentence naming the argument, printed as `compile: FATAL — …` with exit 1.
+        // LoadExternalModules wraps EVERY failure, so this catch is total over its contract.
+        IReadOnlyList<InstalledModuleAssembly> modules;
+        try
+        {
+            modules = LoadExternalModules(options);
+        }
+        catch (InvalidOperationException refusal)
+        {
+            return new Report(processIdentity, [], [], refusal.Message);
+        }
         // 🚨 …and against the PLATFORM HOST's assemblies, not this process's (#3022). The tester
         // image's /app is a strict SUBSET of the portal's (measured on rc9.ci.7534: 88 vs 219
         // assemblies, 21 MeshWeaver.* only in the portal — Maps, AI, Indexing, the Blazor and
@@ -318,16 +332,6 @@ public static class TreeBake
     }
 
     /// <summary>
-    /// Loads the module entry assemblies the same way a mesh installs them —
-    /// <see cref="Assembly.LoadFrom(string)"/>, so they land in the Default ALC, file-backed, and
-    /// expose a <c>Location</c> the compiler can turn into a Roslyn <c>MetadataReference</c>.
-    ///
-    /// <para>🚨 A module that will not load is FATAL, never skipped. Skipping would produce the
-    /// precise failure this whole change exists to remove: a bake that silently compiled without a
-    /// module's types, reported the resulting misses as CONTENT errors, and named nothing about a
-    /// reference. Loud here, once, beats five red NodeTypes and a fleet that will not roll.</para>
-    /// </summary>
-    /// <summary>
     /// The compiler's NuGet hook is synchronous by contract (<see cref="NodeSetCompiler.Compile"/>
     /// takes a plain delegate), and the resolver is genuinely async, so this is the ONE place the
     /// bake lane blocks on it. Shared with the build verb so the production blocking-bridge
@@ -340,6 +344,23 @@ public static class TreeBake
             .GetAwaiter().GetResult()
             .AssemblyPaths;
 
+    /// <summary>
+    /// Loads the module entry assemblies the same way a mesh installs them —
+    /// <see cref="Assembly.LoadFrom(string)"/>, so they land in the Default ALC, file-backed, and
+    /// expose a <c>Location</c> the compiler can turn into a Roslyn <c>MetadataReference</c>.
+    ///
+    /// <para>🚨 A module that will not load is FATAL, never skipped. Skipping would produce the
+    /// precise failure this whole change exists to remove: a bake that silently compiled without a
+    /// module's types, reported the resulting misses as CONTENT errors, and named nothing about a
+    /// reference. Loud here, once, beats five red NodeTypes and a fleet that will not roll.</para>
+    ///
+    /// <para>🚨 …and a module that will not COMPOSE is fatal by the same rule and with the same
+    /// sentence. The doc above was attached to the wrong member for as long as it existed, which
+    /// is a fair summary of how far the rule reached: the translation covered
+    /// <see cref="Assembly.LoadFrom(string)"/> and stopped there, while the rest of the
+    /// composition — the name, the MVID, the version stamp — ran unattributed further down the
+    /// call chain (MeshWeaver.Plugins#2116).</para>
+    /// </summary>
     internal static IReadOnlyList<InstalledModuleAssembly> LoadExternalModules(Options options)
     {
         var paths = options.ModuleAssemblyPaths;
@@ -348,12 +369,31 @@ public static class TreeBake
         var loaded = new List<InstalledModuleAssembly>(paths.Count);
         foreach (var path in paths)
         {
-            Assembly assembly;
+            InstalledModuleAssembly module;
+            string composed;
             try
             {
-                assembly = Assembly.LoadFrom(Path.GetFullPath(path));
+                var assembly = Assembly.LoadFrom(Path.GetFullPath(path));
+                module = new InstalledModuleAssembly(assembly);
+                // 🚨 The module's whole IDENTITY is materialised HERE, inside the per-module unit,
+                // and not left to the first caller that happens to read it (MeshWeaver.Plugins#2116).
+                // `Version` used to be read much later — in ModuleVersionsOf, under BakeHost — and
+                // when the read threw, the failure escaped to Program's last-resort handler as
+                // `mw-plugin-test: FATAL — <reflection stack>`: no module name, no path, nothing
+                // saying WHICH --module argument caused it. Composing one module is one unit of
+                // work, so a failure anywhere in it names that unit.
+                composed =
+                    $"bake: module {assembly.GetName().Name} mvid={module.Mvid:N} "
+                    + $"version={module.Version ?? "unstamped"} — composed into the reference set";
             }
-            catch (Exception ex) when (ex is IOException or BadImageFormatException)
+            // 🚨 Catch EVERYTHING, deliberately. This was `when (ex is IOException or
+            // BadImageFormatException)`, which named the argument for the two shapes
+            // `Assembly.LoadFrom` throws and let every other shape through untranslated — and the
+            // shape that actually reached a caller was neither of them. A filter here is not an
+            // exemption for the rest; it is a message that covers the failures somebody already
+            // thought of. Nothing is swallowed: the cause rides as InnerException and the run
+            // still fails.
+            catch (Exception ex)
             {
                 // 🚨 Name BOTH provenances, because this list carries both and they have opposite
                 // fixes: an image-shipped module missing is a broken image build, while a mounted
@@ -361,17 +401,17 @@ public static class TreeBake
                 // own bug in miniature — an error naming the wrong cause. Mirrors the gate's
                 // message (PluginGateRunner) so the two lanes explain a missing module alike.
                 throw new InvalidOperationException(
-                    $"bake: module '{path}' could not be loaded — {ex.Message}. Modules this image "
+                    $"bake: module '{path}' could not be composed — {ex.GetType().Name}: "
+                    + $"{ex.Message}. Modules this image "
                     + "ships come from the MeshModulesPublish closure lane in "
                     + "MeshWeaver.PluginTester.csproj; modules passed with --module must exist at "
-                    + "the absolute path given (mount them into the container). A bake whose "
+                    + "the absolute path given, with their dependencies beside them (mount them "
+                    + "into the container). A bake whose "
                     + "modules are missing would resolve fewer types than the portal that consumes "
                     + "its bundles.", ex);
             }
-            loaded.Add(new InstalledModuleAssembly(assembly));
-            options.Output.WriteLine(
-                $"bake: module {assembly.GetName().Name} "
-                + $"mvid={assembly.ManifestModule.ModuleVersionId:N} — composed into the reference set");
+            loaded.Add(module);
+            options.Output.WriteLine(composed);
         }
         return loaded;
     }
