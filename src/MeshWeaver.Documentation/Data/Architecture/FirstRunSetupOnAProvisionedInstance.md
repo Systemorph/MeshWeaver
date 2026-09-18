@@ -192,6 +192,46 @@ and a mapping that names an object the vault does not hold fails the **whole CSI
 pod stays pending with no IP and no log line, not merely that one key. A name nobody can see is a
 name nobody can check.
 
+## The two live instances, and what the dialog builds for each
+
+Measured 2026-09-18. Both must be expressible in ONE dialog; the tier is what decides which pages
+exist at all.
+
+| | **PartnerRe** — enterprise | **Pearl** — SME |
+|---|---|---|
+| Estate | its own: tenant `e51e062f`, subscription, cluster, vault `memexaks-kv-i6gzgik26ydg` (prefix `memex-`), registry, GitHub App | none — hosted on our shared cluster, vault `Systemorph`, prefix `pearl-` |
+| Configuration lives in | `Systemorph/PartnerRe.Memex` → `deployments/aks/memex/values.memex.yaml` | the mesh record `Deployments/pearl` |
+| So "already provided" means | *declared in the client's repository* | *set on the deployment record* — 🚨 an SME client has no repository to be pointed at |
+| Provided (greyed, with vault object) | the two connections, `Ai__KeyProtection__MasterKey`, `Bootstrap__Secret`, `Hosting__PlatformWebhookSecret`, `PluginCatalog__RegistryToken`, `AzureFoundry__ApiKey`, `Anthropic__ApiKey`, `Authentication__Microsoft__ClientSecret`; sign-in client id, tenant, host, registries | `ConnectionStrings__memex`, `Ai__KeyProtection__MasterKey`, `Authentication__Microsoft__ClientSecret`, `PluginCatalog__RegistryToken`; sign-in client id; the `Plugins` mount |
+| Asked | the mail app (no `email` block exists there today, so invitations are undeliverable), any model key they bring | the OpenRouter key → `pearl-OpenRouter-ApiKey`, and mail |
+| Platform-provided, **no page at all** | — (its estate is its own) | database, storage, registry, certificates, DNS |
+
+**One vault object behind several keys is ONE field.** PartnerRe's registry token answers
+`PluginCatalog__RegistryToken` and two indexed `Registries__N__Token` keys; its Foundry key also
+answers `Embedding__ApiKey`. Rendering one field per key invites three different answers, which is
+the double-declaration hazard wearing another hat.
+
+**Three states, and the third is not a disabled box.** Provided (pre-populated, disabled, labelled
+with source and vault object), Asked (collected, written to that client's vault), or
+platform-provided — settled, with **no input rendered**. A greyed database field on the SME tier
+still invites *"why can I see this"*; the rule is that the database is fixed there.
+
+### Completion is what closes the window
+
+🚨 An instance nobody can administer has to be OPEN for the first person to get in. PartnerRe runs
+with `Features__Onboarding__InvitationOnly: "false"` today — a hole held open by hand. So the flow is:
+the setup link → the first authenticated user becomes global administrator → **completion switches
+onboarding back to invitation-only**. Not a note for somebody to remember: a window closed by the
+flow cannot be forgotten. It is closed *after* the invitation, because closing it first would refuse
+the very invitation that carries the instance to its new administrator.
+
+### The invite page may not appear to send
+
+Pearl's `email.enabled` is `false` deliberately — its overlay had borrowed the public instance's mail
+app, and a customer portal must not send through that. Until the instance has a mail registration of
+its own, an invitation is **recorded and not delivered**, and the page says so rather than reporting
+a send that did not happen.
+
 ## The plugin catalog in the wizard
 
 The wizard shows the catalog of the registry the instance is mounted on, lets the person select what
