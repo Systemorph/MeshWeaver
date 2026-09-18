@@ -459,6 +459,69 @@ def _leading_modifiers(declaration: str) -> tuple[set[str], str]:
     return modifiers, " ".join(tokens)
 
 
+def _code_without_literals(text: str) -> str:
+    """`text` with COMMENT and string/char-literal content blanked out, everything else in place.
+
+    🚨 Only braces that are CODE decide where a type's body is. Two shapes made the raw text lie
+    about that, both of them valid C# a reviewer would call ordinary (#4449 review):
+
+      * `public interface IMarker { /* marker */ }` — an empty inline body whose comment made the
+        "one line WITH members" refusal fire, so a perfectly scannable type ended the whole scan.
+      * a brace inside a literal on the declaration's own line (`$"{{"`, `'{'`, `@"a { b"`), which
+        counts toward the brace balance and can read as a body opening where none does.
+
+    Blanking preserves offsets, so `index`/`rindex` on the sanitized line still address the same
+    columns as the raw one. It is deliberately LINE-local and used only where the type declaration's
+    own body is classified: a comment or literal that runs past the line reads as "no code after
+    here", which is the conservative direction — the scan then looks at the next line rather than
+    inventing a body.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            break  # a line comment: nothing after it is code
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            end = text.find("*/", i + 2)
+            if end == -1:
+                break  # the comment runs past this line
+            out.append(" " * (end + 2 - i))
+            i = end + 2
+            continue
+        if ch in "\"'":
+            # `@` makes a string VERBATIM (`""` is the escape, `\\` is not); `$` only interpolates.
+            verbatim = False
+            k = i - 1
+            while k >= 0 and text[k] in "@$":
+                verbatim = verbatim or text[k] == "@"
+                k -= 1
+            j = i + 1
+            while j < n:
+                c = text[j]
+                if verbatim and ch == '"':
+                    if c == '"':
+                        if j + 1 < n and text[j + 1] == '"':
+                            j += 2
+                            continue
+                        break
+                    j += 1
+                    continue
+                if c == "\\":
+                    j += 2
+                    continue
+                if c == ch:
+                    break
+                j += 1
+            out.append(" " * (min(j, n - 1) - i + 1))
+            i = j + 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _brace_delta(text: str) -> int:
     return text.count("{") - text.count("}")
 
@@ -753,14 +816,48 @@ def parse_members(path: str, text: str) -> FileSurface:
         # `import bisect` is not worth it for ~1500 files: locate the declaration's line linearly.
         line_no = next(i for i in range(len(lines) - 1, -1, -1) if line_starts[i] <= m.start())
         # The declaration STATEMENT runs to the body's `{` or to a `;` (positional record, delegate).
+        #
+        # 🚨 A body can OPEN AND CLOSE on the declaration line — `public interface IMarker { }`,
+        # four of them in `src/` — and testing only for a TRAILING `{` walked straight past one.
+        # The scan then kept reading forward and adopted the NEXT type's body, so every member of
+        # that type was attributed to the marker: `NodeValidationContext`'s members were reported
+        # as members of `IOwnerEnforcedNodeValidator`, where they are public-by-default and
+        # OBLIGE an implementer — so adding one to the record fired the interface-addition gate
+        # (#4449), while the record itself scanned as having no members at all, which is the same
+        # mistake pointing the other way. The brace BALANCE of the line is what tells the two
+        # apart: > 0 opens a body that stays open, == 0 with a brace present is a body that
+        # already closed.
         statement_lines: list[str] = []
         body_open: int | None = None
         for i in range(line_no, min(line_no + 60, len(lines))):
             statement_lines.append(lines[i])
             stripped = lines[i].strip()
-            if stripped.endswith("{") or stripped == "{":
+            # 🚨 Braces inside a COMMENT or a LITERAL are not braces (#4449 review): `{ /* marker */ }`
+            # is an empty inline body, and `$"{{"` / `'{'` / `@"a { b"` open nothing at all.
+            # `_code_without_literals` preserves offsets, so the column arithmetic below is unchanged.
+            code = _code_without_literals(stripped)
+            if _brace_delta(code) > 0:
                 body_open = i
                 break
+            # 🚨 Only on the DECLARATION's own line. A balanced `{…}` on a CONTINUATION line is an
+            # interpolated string or an attribute, never a body — `NodeTypeParkedException`'s base
+            # call carries `$"NodeType '{path}' is PARKED …"` three lines below its declaration,
+            # and treating that as a body would refuse a perfectly ordinary type.
+            if i == line_no and "{" in code and "}" in code:
+                inner = code[code.index("{") + 1 : code.rindex("}")]
+                if inner.strip():
+                    # 🚨 A body written entirely on one line, WITH members. Nothing here reads it,
+                    # and reporting the type as memberless would spell "not checked" exactly like
+                    # "clean" — the one thing this file refuses to do. Measured 2026-09-16: zero
+                    # such types in core `src/`, so this refuses a shape nobody writes rather than
+                    # guessing at one.
+                    raise SystemExit(
+                        f"{path}:{i + 1}: a public type declares its whole body on one line with "
+                        f"members in it — `{stripped}`. The member scanner reads bodies line by "
+                        "line, so it can neither see those members nor honestly report none. Put "
+                        "the body on its own lines."
+                    )
+                break  # an EMPTY inline body: correctly scanned, and there is nothing to scan
             if stripped.endswith(";"):
                 break
         statement = " ".join(s.strip() for s in statement_lines)
@@ -2372,6 +2469,96 @@ def _index(files: dict[str, str]) -> Surface:
         _merge_members(protected_obligations, file_surface.protected_obligations)
     return Surface(decls, set(), assemblies, members, obligations, interfaces,
                    bases, protected_obligations)
+
+
+# ─────── #4449: a marker interface whose body is `{ }` must not adopt the next type's ───────
+#
+# 🚨 The shape that produced this: `parse_members` located a type's body by testing for a TRAILING
+# `{`, so `public interface IMarker { }` matched nothing and the scan kept reading forward until it
+# found the NEXT type's brace. Every member of that type was then indexed under the MARKER — where
+# members are public-by-default and oblige an implementer — so adding one property to
+# `NodeValidationContext` reported `IOwnerEnforcedNodeValidator.PartitionOwnership` as an
+# implementer-obliging addition and failed the gate on a member that is not on an interface at all.
+# Measured 2026-09-16: four such empty inline bodies in core `src/`, and zero with members in them.
+#
+# The case below fails against the pre-fix parser with an EXTRA `A:N.IMarker::Added`
+# (`implementer-obliging-added`) entry — a false positive that no author could have fixed on the
+# code side, which is the direction that makes a gate untrustworthy rather than merely noisy.
+MARKER_INLINE_BODY = (
+    "namespace N;\n"
+    "public interface IMarker { }\n"
+    "\n"
+    "public record Ctx\n"
+    "{\n"
+    "    public int Existing { get; init; }\n"
+    "}\n"
+)
+MARKER_INLINE_BODY_NEXT_TYPE_GROWS = (
+    "namespace N;\n"
+    "public interface IMarker { }\n"
+    "\n"
+    "public record Ctx\n"
+    "{\n"
+    "    public int Existing { get; init; }\n"
+    "    public int Added { get; init; }\n"
+    "}\n"
+)
+
+# 🚨 #4449 (review): the same shape with a COMMENT in the body, and a brace inside a LITERAL on the
+# declaration's own line. Both are ordinary C#; before `_code_without_literals` the first ended the
+# whole scan with "declares its whole body on one line with members in it" (a false positive no
+# author could fix on the code side) and the second could read a literal's brace as a body opening.
+MARKER_COMMENTED_INLINE_BODY = (
+    "namespace N;\n"
+    "public interface IMarker { /* nothing to implement */ }\n"
+    "\n"
+    "public record Ctx\n"
+    "{\n"
+    "    public int Existing { get; init; }\n"
+    "}\n"
+)
+MARKER_COMMENTED_INLINE_BODY_NEXT_TYPE_GROWS = MARKER_COMMENTED_INLINE_BODY.replace(
+    "    public int Existing { get; init; }\n",
+    "    public int Existing { get; init; }\n    public int Added { get; init; }\n",
+)
+BRACE_IN_LITERAL_DECLARATION = (
+    "namespace N;\n"
+    "public class Holder : Base($\"a {{ literal brace\")\n"
+    "{\n"
+    "    public int Existing { get; init; }\n"
+    "}\n"
+)
+BRACE_IN_LITERAL_DECLARATION_GROWS = BRACE_IN_LITERAL_DECLARATION.replace(
+    "    public int Existing { get; init; }\n",
+    "    public int Existing { get; init; }\n    public int Added { get; init; }\n",
+)
+
+SURFACE_TESTS += [
+    (
+        "🚨 #4449: an EMPTY inline body (`interface IMarker { }`) does not adopt the next type's "
+        "members — the addition belongs to the record, and obliges nobody",
+        {"src/A/Ctx.cs": MARKER_INLINE_BODY, "src/A/Keep.cs": KEEP_A},
+        {"src/A/Ctx.cs": MARKER_INLINE_BODY_NEXT_TYPE_GROWS, "src/A/Keep.cs": KEEP_A},
+        {},
+        {"A:N.Ctx::Added": "member-added"},
+    ),
+    (
+        "🚨 #4449 review: an inline body holding only a COMMENT is EMPTY — the scan neither refuses "
+        "the file nor adopts the next type's members",
+        {"src/A/Ctx.cs": MARKER_COMMENTED_INLINE_BODY, "src/A/Keep.cs": KEEP_A},
+        {"src/A/Ctx.cs": MARKER_COMMENTED_INLINE_BODY_NEXT_TYPE_GROWS, "src/A/Keep.cs": KEEP_A},
+        {},
+        {"A:N.Ctx::Added": "member-added"},
+    ),
+    (
+        "🚨 #4449 review: a brace inside a LITERAL on the declaration's own line opens no body — "
+        "the type's real body on the next line is still the one scanned",
+        {"src/A/Holder.cs": BRACE_IN_LITERAL_DECLARATION, "src/A/Keep.cs": KEEP_A},
+        {"src/A/Holder.cs": BRACE_IN_LITERAL_DECLARATION_GROWS, "src/A/Keep.cs": KEEP_A},
+        {},
+        {"A:N.Holder::Added": "member-added"},
+    ),
+]
 
 
 # ─────────────── #3489: the two shapes measured blind against the #3465 detector ───────────────

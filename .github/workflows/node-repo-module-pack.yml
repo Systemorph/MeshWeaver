@@ -307,16 +307,13 @@ name: node-repo module pack
 #     fallback, the Azure login, the ACR login and the `acr-*` secrets are GONE from `pack`, not
 #     guarded. The per-digest cache stays in `prepare` only, where it is what it always was — the
 #     accelerator that saves the registry pull on a hosted runner whose path string never moves.
-#   * `select`, `prepare`, `build-workspace` and `verify` stay on `ubuntu-latest` whatever the
-#     input says. `select` and `verify` are seconds of orchestration. `prepare` and
-#     `build-workspace` NEED DOCKER — `docker pull/save/load/run` of the platform and tester
-#     images; the compiler IS the image — and the aks-silos runners have NONE. Measured
-#     2026-09-12 in Systemorph/Memex `deployments/aks/ci-runners/arc-runner-scale-set-values.yaml`:
-#     no `containerMode:` at all (neither `dind` nor `kubernetes`), a single `runner` container
-#     from `ghcr.io/actions/actions-runner:2.337.0`, no dind sidecar, no socket mount. That image
-#     carries the `docker` CLI and no daemon, so every `docker …` there dies on the socket — a
-#     red, never a silent pass, but a leg that cannot run. Moving those two is not a `runs-on`
-#     edit; it is `containerMode: dind` on the scale set first.
+#   * `select`, `prepare`, `build-workspace` and `verify` ignore `runner`. `select` and `verify`
+#     are seconds of orchestration (`vars.MW_RUNNER`). `prepare` and `build-workspace` NEED DOCKER
+#     — `docker pull/save/load/run` of the platform and tester images; the compiler IS the image —
+#     and the plain aks-silos runners have NONE (no `containerMode:`, no dind sidecar, measured
+#     2026-09-12 in Systemorph/Memex `deployments/aks/ci-runners/arc-runner-scale-set-values.yaml`),
+#     so both go to the dind set: `prepare` on `vars.MW_RUNNER_DOCKER`, `build-workspace` on the
+#     `workspace-runner` input, whose default is that same variable.
 #
 # Two more facts about that runner image, both measured on Memex's `runner-proof.yml`:
 #   * it is NON-ROOT (`USER runner`, uid 1001; passwordless `sudo` exists). `actions/setup-dotnet`
@@ -352,15 +349,20 @@ name: node-repo module pack
 # needs more than 6 GiB is killed there, not slowed — so the first opt-in is a MEASUREMENT of one
 # job family, not a fleet switch.
 #
-# A caller opts in PER JOB FAMILY behind a repository variable, so the move is revertible in ONE
-# edit and never reaches a family nobody measured:
+# 💸 WHERE EVERY JOB OF THIS LANE RUNS (2026-09-17, "GitHub Actions cost is zero"): a called
+# workflow's hosted minutes bill the CALLER, and every caller but this repo's main-cd is private —
+# so no job here names a bare `ubuntu-latest`. Each resolves through an org variable of visibility
+# `private`, read from the CALLER's `vars` context: `MW_RUNNER` (aks-silos, no daemon) for
+# `select`/`verify` and as the DEFAULT of `runner` (`pack`/`tests`), `MW_RUNNER_DOCKER`
+# (aks-silos-dind) for `prepare` and as the DEFAULT of `workspace-runner`. This public repo cannot
+# see either variable, so main-cd's call falls back to the free hosted `ubuntu-latest`.
+# `check-reusable-workflow-runners.py` refuses a literal label. A caller may still pass its own,
+# falling back to a SELF-HOSTED label, never to `ubuntu-latest`:
 #
 #     with:
-#       runner: ${{ vars.MW_RUNNER_HEAVY || 'ubuntu-latest' }}
+#       runner: ${{ vars.MW_RUNNER_HEAVY || 'aks-silos' }}
 #
-# Unset, the variable resolves to `ubuntu-latest` and nothing changes. Every current caller — the
-# six satellites and this repo's main-cd — passes nothing and inherits that default. Doc:
-# Doc/Architecture/ModuleBuildArchitecture ("The pipeline, end to end", the 2026-09-12 note).
+# Doc: Doc/Architecture/SelfHostedRunners ("Where jobs run — GitHub Actions cost is zero").
 #
 # ──────────── Batched legs (`batch-size`, 2026-09-12) ────────────
 # 🚨 GitHub bills every job rounded UP to a whole minute, and most legs of this lane were shorter
@@ -677,6 +679,35 @@ on:
         required: false
         type: string
         default: ''
+      artifact-store:
+        description: >
+          Where the cross-run MODULE BUNDLE copy lives — the bytes a LATER run downloads when the
+          build ledger says a key is already built. Empty (the default) keeps them where they have
+          always been: a `module-bundle-<module>` GitHub artifact at 7-day retention, which is what
+          the public repo and any runner without our infra must keep using.
+
+            file:<dir>                              a writable share the runner pod mounts
+            azblob:<account>/<container>[/<prefix>]  Azure Blob via the ambient azure/login
+
+          🚨 WHY THIS INPUT EXISTS (maintainer, 2026-09-17: "we still incur cost for github actions
+          … please see that it goes to 0" · "when free capacity gone => defer to our infra"). Compute
+          already moved to our ARC runners and the org Actions budget is $0; storage is the last
+          billed line. Measured that day over the live artifact inventory: MeshWeaver.Plugins held
+          382 GB, of which 247 GB was `module-bundle-*` — and most of those bytes are DUPLICATES,
+          because a run that REUSES a bundle re-uploads the identical bytes under the same name for
+          its own consumers. 754 live copies of one module's bundle.
+
+          When a store is named, the durable copy goes there (content-addressed by the ledger's
+          build key, so identical bytes are written once) and the GitHub artifact stays — at
+          1-day retention, because it is then only a handoff between the jobs of ONE run. The
+          consumers (gate, compile-check, publish-bake) are untouched.
+
+          🚨 THE DEGRADE RULE: no store named ⇒ byte-for-byte today's behaviour. A store NAMED but
+          unusable on this runner is RED in the pack leg, never a quiet return to the old path —
+          see ci-artifact-store.py.
+        required: false
+        type: string
+        default: ''
       publication-run:
         description: Successful publishing run paired with publication-base and identical resolved toolchain inputs; permits reusing unchanged gate dependencies.
         required: false
@@ -719,34 +750,37 @@ on:
         description: >-
           The `runs-on` label for the HEAVY legs — `pack` (Module bundle) and `tests` (Module
           tests) — and nothing else; see "Where the heavy legs run" at the top of this file.
-          `ubuntu-latest` (the default) is exactly today's behaviour. `aks-silos` is the Systemorph
+          Omitted, it DEFAULTS to the caller's org variable vars.MW_RUNNER (aks-silos), falling
+          back to `ubuntu-latest` where that variable is invisible (this public repo's own calls,
+          which are free). `aks-silos` is the Systemorph
           org's self-hosted scale set: non-root, NO Docker, no preinstalled toolchain, 2 vCPU /
           6 GiB per runner — the two honouring jobs set DOTNET_INSTALL_DIR under /home/runner for
           it. Neither honouring job runs `docker` or touches a registry: `pack` takes the pinned
           image's /app from the runner's `/opt/platform/sha256-<tester hex>/platform-refs/` mount, else from the artifact
           `prepare` hands over, else fails RED naming both; `tests` consumes no image. Wire it
-          from a repository variable (`vars.MW_RUNNER_HEAVY`, falling back to `ubuntu-latest`
-          when unset — the header shows the expression) so the move is one edit to revert.
+          from a repository variable (vars.MW_RUNNER_HEAVY, falling back to a self-hosted label —
+          the header shows the expression) so the move is one edit to revert.
           `select`, `prepare`, `build-workspace` and `verify` ignore it — the middle two need a
-          Docker daemon the scale set does not have.
+          Docker daemon the plain scale set does not have.
         required: false
         type: string
-        default: ubuntu-latest
+        # An expression in a workflow_call input default may read `github`, `inputs` and `vars` —
+        # and `vars` is the CALLER's, so every `inputs.runner` below sees the resolved label.
+        default: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
       workspace-runner:
         description: >-
           The `runs-on` label for `build-workspace` — the ONE global build of every selected
           container entry, which `docker load`s the pinned platform image and `docker run`s it as
-          the compiler, so this label must serve a Docker daemon: `ubuntu-latest` (the default,
-          today's behaviour, a 4-core VM) or the org's Docker-capable self-hosted set
-          (`aks-silos-dind`, a dind sidecar on a 16-core D16). Measured 2026-09-13 on
+          the compiler, so this label must serve a Docker daemon: the org's Docker-capable
+          self-hosted set (`aks-silos-dind`, a dind sidecar on a 16-core D16 — the DEFAULT, through
+          the caller's org variable vars.MW_RUNNER_DOCKER) or `ubuntu-latest` (a 4-core VM, what
+          the default falls back to where that variable is invisible). Measured 2026-09-13 on
           MeshWeaver.Plugins#1756's full run: 7.1 min on the hosted 4-core, on the critical path
           of the gate (modules → pack → gate shard) — the 16-core set compiles the same workspace
-          in ~2.5 min. Wire it from a repository variable (`vars.MW_RUNNER_GATE`, the Docker set,
-          falling back to `ubuntu-latest`) so the move is one edit to revert. `prepare`, `select`
-          and `verify` ignore it.
+          in ~2.5 min. `prepare`, `select` and `verify` ignore it.
         required: false
         type: string
-        default: ubuntu-latest
+        default: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
       batch-size:
         description: >-
           How many modules ONE `pack` leg (and one `tests` leg) carries — see "Batched legs" at
@@ -860,7 +894,7 @@ jobs:
   # "pack everything", and it takes the second whenever it cannot be sure of the first.
   select:
     name: Select the affected bundles
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       # The helper is lane orchestration, while the workflow below is the exact definition GitHub
@@ -870,6 +904,7 @@ jobs:
       # predates it fails ONE preflight by name, instead of failing every pack leg inside a
       # subshell whose recorded reason names neither the helper nor the ref.
       MODULE_SET_CENSUS: ${{ github.workspace }}/build-logic/.github/scripts/module-set-census.py
+      ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
       EXECUTING_WORKFLOW: ${{ github.workspace }}/lane-definition/.github/workflows/node-repo-module-pack.yml
     outputs:
       # The matrix the pack job expands: the scope's selection, each entry annotated by the ledger
@@ -898,6 +933,9 @@ jobs:
       # One concrete tooling identity for every downstream job. An explicit input wins; otherwise
       # use the exact reusable-workflow commit resolved from the job context below.
       build-logic-ref: ${{ inputs.build-logic-ref || steps.workflow.outputs.sha }}
+      # Where this call's DURABLE module-bundle copy lives — `gha` (today's artifact) or an object
+      # store spec. Resolved once here; every pack leg reads this rather than deciding again.
+      artifact-store: ${{ steps.store.outputs.store }}
       # The matrix as GIVEN, for the workflow's `declared` output — never the selection above, which a
       # narrowed run shrinks; the publication lane's set-aside check needs the whole catalog.
       declared: ${{ inputs.modules }}
@@ -1003,7 +1041,40 @@ jobs:
           # 🚨 The diff is taken against the PR base, so the base commits must be present. A
           # shallow clone would make every range unresolvable — which the scope script turns into
           # a FULL pack rather than an empty one, but silently paying for 29 jobs is not the plan.
-          fetch-depth: 0
+          # The step below restores exactly that, quietly.
+          fetch-depth: 1
+      # 🚨 `fetch-depth: 0` writes ONE LOG LINE PER REF, and a content repo's refs are mostly TAGS:
+      # MeshWeaver.Plugins has 181 branches + 2,027 module-release tags, so this checkout alone printed
+      # ~2,208 `* [new branch]`/`* [new tag]` lines — measured 28.7% of every line that repo's CI wrote
+      # in a 73-job run. `actions/checkout` cannot be made quiet (`show-progress: false` drops
+      # `--progress`, which is the progress METER, not the ref-update TABLE; only `--quiet` drops that,
+      # and no input passes it). So: shallow checkout, then fetch exactly what `fetch-depth: 0` would
+      # have, quietly.
+      #
+      # 🚨 A NO-OP for every consumer, and that is the whole point — same objects, same branches, same
+      # tags, not shallow — so a tag read, a publication baseline and a merge-base all still resolve.
+      # Dropping `fetch-depth: 0` would NOT be a no-op; a verbosity change must not change a verdict.
+      # 🚨 `$HEAD_SHA` is in the refspec because on a pull request `actions/checkout` checks out
+      # `refs/pull/<n>/merge`, which `+refs/heads/*` does not name. Reachability makes it arrive
+      # anyway in every case measured — a same-repo PR's merge ref, and even a MERGED PR whose
+      # branch was deleted, both completed to 6,729+ commits — but that is an invariant nobody
+      # wrote down, and an unmerged fork head would not be reachable. Naming the commit costs one
+      # argument and removes the reasoning.
+      # The shallow re-check afterwards is not ceremony: a quiet success and a fetch that quietly did
+      # nothing would otherwise read the same, and every selector here narrows silently when it cannot
+      # see history.
+      - name: Full history and tags, quietly
+        run: |
+          set -euo pipefail
+          cd repo
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --quiet --tags --prune --no-recurse-submodules --unshallow origin '+refs/heads/*:refs/remotes/origin/*' "$HEAD_SHA"
+          else
+            git fetch --quiet --tags --prune --no-recurse-submodules origin '+refs/heads/*:refs/remotes/origin/*' "$HEAD_SHA"
+          fi
+          [ "$(git rev-parse --is-shallow-repository)" = "false" ] || { echo "::error::the repository is still SHALLOW after the history fetch — every selector that reads a tag, a publication baseline or a merge-base would now narrow silently. Refusing to continue."; exit 1; }
+          echo "full history: $(git rev-list --count HEAD) commit(s), $(git tag | wc -l | tr -d ' ') tag(s)"
       # A reusable workflow's `github` context belongs to its CALLER. The job context is the
       # identity of the reusable workflow that actually defines this job. Read the whole context
       # here because actionlint 1.7.x predates the workflow_* members and rejects direct property
@@ -1072,7 +1143,24 @@ jobs:
           python3 "$MODULE_SET_CENSUS" --self-test
           python3 build-logic/.github/scripts/module-build-key.py --self-test
           python3 build-logic/.github/scripts/module-build-ledger.py --self-test
+          # The object-store seam's rules — the degrade rule above all, which is the one that decides
+          # whether a repo without our infra still builds. Executed on every run of every caller,
+          # store or no store, because the mode this lane is NOT using is exactly the one nobody
+          # would notice rotting.
+          [ -f "$ARTIFACT_STORE_PY" ] || { echo "::error::the resolved build-logic ref carries no .github/scripts/ci-artifact-store.py. The artifact-store input needs it; when build-logic-ref is explicit, move it to a commit compatible with the loaded reusable workflow."; exit 1; }
+          python3 "$ARTIFACT_STORE_PY" --self-test
           python3 "$MODULE_PACK_BATCH" --self-test --workflow "$EXECUTING_WORKFLOW"
+      # ───────────── WHERE THIS RUN'S DURABLE BUNDLE COPY LIVES — decided ONCE ─────────────
+      # One answer for the whole call: `select` resolves it, every pack leg reads the output. Two
+      # legs resolving independently could disagree (a mount present on one node and not the next),
+      # and a ledger record written against one store and read against another is a reuse that
+      # fetches nothing. The resolution PRINTS its mode and why, into the job summary, so "it used
+      # GitHub artifacts" is never something you have to infer from an absence.
+      - name: Resolve the artifact store
+        id: store
+        env:
+          DECLARED: ${{ inputs.artifact-store }}
+        run: python3 "$ARTIFACT_STORE_PY" resolve --declared "$DECLARED"
       - name: Decide which module bundles this diff can reach
         id: scope
         env:
@@ -1130,6 +1218,11 @@ jobs:
           MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
           MW_LEDGER_LANE: ${{ steps.lane.outputs.id }}
           GH_TOKEN: ${{ github.token }}
+          # Which store THIS run resolved. The ledger only offers a record's object-store copy when
+          # it is in this store — a locator from another account or another mount is not something
+          # to guess at — and it probes the store rather than trusting the record, exactly as it
+          # already asks the API whether an artifact is still there.
+          MW_ARTIFACT_STORE: ${{ steps.store.outputs.store }}
           SCOPE_MODULES: ${{ steps.scope.outputs.modules }}
           COUNT: ${{ steps.scope.outputs.count }}
           PUBLISH: ${{ inputs.publish }}
@@ -1290,7 +1383,7 @@ jobs:
     name: Warm the shared build environment (once)
     needs: select
     if: needs.select.result == 'success' && needs.select.outputs.count != '0'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
     timeout-minutes: 45
     # Deliberately inherit the caller's token permissions. `basic` callers grant only the reads
     # they use; the platform CD's `oidc` caller additionally grants `id-token: write`. A called
@@ -1309,6 +1402,17 @@ jobs:
       # (the same "the checkout IS the platform" reading its bundle-identity block takes), and is
       # RED only when neither can be established.
       platform-version: ${{ steps.platform-version.outputs.version }}
+    env:
+      # The object-store seam (ci-artifact-store.py): where this run's same-run HANDOFFS go when a
+      # caller names a store. `select` resolved the store once; this job only reads it. With no
+      # store the two `if:`s below pick the GitHub artifact exactly as they always have.
+      ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
+      ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
+      # 🚨 A DETERMINISTIC KEY, so nothing has to be plumbed from producer to consumer: run id AND
+      # ATTEMPT, because a re-run must not read the previous attempt's handoff. The `runs/` prefix
+      # is what the store's lifecycle policy deletes after two days — see Doc/Architecture/
+      # CiArtifactStorage; a handoff between the jobs of one run is dead when the run is.
+      STORE_RUN_PREFIX: runs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}
     steps:
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
@@ -1341,12 +1445,19 @@ jobs:
       # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
       # with the other call's builder.
       - name: Hand the tool to the matrix
-        if: needs.select.outputs.build-modules != '[]'
+        if: needs.select.outputs.build-modules != '[]' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         uses: actions/upload-artifact@v7
         with:
           name: module-pack-tool-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/pack-tool
           retention-days: 1
+      - name: Hand the tool to the matrix (object store)
+        if: needs.select.outputs.build-modules != '[]' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        run: |
+          set -euo pipefail
+          tar -C "$RUNNER_TEMP/pack-tool" -cf "$RUNNER_TEMP/module-pack-tool.tar" .
+          python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
+            --key "$STORE_RUN_PREFIX/module-pack-tool.tar" --file "$RUNNER_TEMP/module-pack-tool.tar"
       - name: Restore the platform image tarball (per-digest cache)
         if: inputs.platform-image-digest != ''
         id: image-cache
@@ -1396,6 +1507,19 @@ jobs:
               || steps.refs-cache.outputs.cache-hit != 'true'
               || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
         run: bash build-logic/.github/scripts/acr-login.sh
+      # 💸 The self-hosted runner image (Systemorph/Memex deployments/aks/ci-runners/runner-image)
+      # ships no `zstd`, which `ubuntu-latest` does — and since 2026-09-17 this job lands on the dind
+      # set by default (vars.MW_RUNNER_DOCKER). A no-op wherever the binary exists; RED by name when it
+      # cannot be installed. Delete this step once the image bakes zstd.
+      - name: zstd on this runner (the platform image tarball's codec)
+        run: |
+          set -euo pipefail
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd is not on $RUNNER_NAME — installing it (the runner image should bake it)"
+            sudo apt-get update -qq || { echo "::error::apt-get update failed on $RUNNER_NAME, so zstd (the platform image tarball's codec) cannot be installed. Bake zstd into the runner image: Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile."; exit 1; }
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends zstd || { echo "::error::apt-get could not install zstd on $RUNNER_NAME. Bake it into the runner image: Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile."; exit 1; }
+          fi
+          zstd --version
       - name: Fill whichever cache is cold — the run's ONE trip to the registry
         if: >-
           inputs.platform-image-digest != ''
@@ -1479,12 +1603,19 @@ jobs:
           [ "$n" -gt 50 ] || { echo "::error::the platform's /app holds $n assemblies — not a platform image; refusing to hand it over"; exit 1; }
           echo "platform hand-over: $n assemblies from $DIGEST, $(du -h "$out/platform-refs.tar.gz" | cut -f1) gzipped"
       - name: Upload the platform's /app for the matrix
-        if: inputs.platform-image-digest != ''
+        if: inputs.platform-image-digest != '' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         uses: actions/upload-artifact@v7
         with:
           name: platform-refs-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/platform-refs-artifact
           retention-days: 1
+      - name: Upload the platform's /app for the matrix (object store)
+        if: inputs.platform-image-digest != '' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        run: |
+          set -euo pipefail
+          tar -C "$RUNNER_TEMP/platform-refs-artifact" -cf "$RUNNER_TEMP/platform-refs.tar" .
+          python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
+            --key "$STORE_RUN_PREFIX/platform-refs.tar" --file "$RUNNER_TEMP/platform-refs.tar"
           # Already gzipped — a second deflate pass buys nothing and costs the upload minutes.
           compression-level: 0
       # ───────── THE PLATFORM'S OWN VERSION — the denominator of the module FLOOR gate (#3554) ─────────
@@ -1589,6 +1720,17 @@ jobs:
     timeout-minutes: 30
     # Inherit for the same reason as `prepare`: OIDC is a caller-selected capability, while basic
     # callers must remain able to grant `actions: read` without also granting an identity token.
+    env:
+      # The object-store seam (ci-artifact-store.py): where this run's same-run HANDOFFS go when a
+      # caller names a store. `select` resolved the store once; this job only reads it. With no
+      # store the two `if:`s below pick the GitHub artifact exactly as they always have.
+      ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
+      ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
+      # 🚨 A DETERMINISTIC KEY, so nothing has to be plumbed from producer to consumer: run id AND
+      # ATTEMPT, because a re-run must not read the previous attempt's handoff. The `runs/` prefix
+      # is what the store's lifecycle policy deletes after two days — see Doc/Architecture/
+      # CiArtifactStorage; a handoff between the jobs of one run is dead when the run is.
+      STORE_RUN_PREFIX: runs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}
     steps:
       - name: Resolve the content repository's credential
         id: content-repo
@@ -1662,6 +1804,19 @@ jobs:
       - name: Keep lane tooling out of the global compiler's source mount
         if: inputs.acr-login == 'oidc'
         run: rm -rf build-logic-login
+      # 💸 The self-hosted runner image (Systemorph/Memex deployments/aks/ci-runners/runner-image)
+      # ships no `zstd`, which `ubuntu-latest` does — and since 2026-09-17 this job lands on the dind
+      # set by default (vars.MW_RUNNER_DOCKER). A no-op wherever the binary exists; RED by name when it
+      # cannot be installed. Delete this step once the image bakes zstd.
+      - name: zstd on this runner (the platform image tarball's codec)
+        run: |
+          set -euo pipefail
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd is not on $RUNNER_NAME — installing it (the runner image should bake it)"
+            sudo apt-get update -qq || { echo "::error::apt-get update failed on $RUNNER_NAME, so zstd (the platform image tarball's codec) cannot be installed. Bake zstd into the runner image: Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile."; exit 1; }
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends zstd || { echo "::error::apt-get could not install zstd on $RUNNER_NAME. Bake it into the runner image: Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile."; exit 1; }
+          fi
+          zstd --version
       # 🚨 `build-modules`, not `modules`: the ledger handed some entries a reusable bundle, and those
       # are NOT compiled here. The postcondition below is fed the SAME list — one enumerator.
       - name: Build every selected container entry in ONE workspace
@@ -1870,13 +2025,20 @@ jobs:
             python3 build-logic/.github/scripts/module-build-ledger.py record --key "$key" --status Failed --phase "$phase" --failure-file "$evidence" || true
           done < <(jq -r '.[] | select(.build == "container") | select(.ledger.key != null) | [.module, .project, .ledger.key] | @tsv' <<< "$MODULES")
       - name: Hand the workspace to the matrix
-        if: steps.build.outputs.built == 'true'
+        if: steps.build.outputs.built == 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         uses: actions/upload-artifact@v7
         with:
           name: workspace-build-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/module-build
           retention-days: 1
           if-no-files-found: error
+      - name: Hand the workspace to the matrix (object store)
+        if: steps.build.outputs.built == 'true' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        run: |
+          set -euo pipefail
+          tar -C "$RUNNER_TEMP/module-build" -cf "$RUNNER_TEMP/workspace-build.tar" .
+          python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
+            --key "$STORE_RUN_PREFIX/workspace-build.tar" --file "$RUNNER_TEMP/workspace-build.tar"
 
   # ═══════════ THE PACK LEGS — N MODULES PER RUNNER, ONE VERDICT PER MODULE (2026-09-12) ═══════════
   # 🚨 A BATCH IS A RUNNER-SHARING DEVICE, NOT A COUPLING. Every step below that used to read
@@ -1917,6 +2079,11 @@ jobs:
       # build logic, not platform source, and its two halves (here and in `verify`) must be the
       # same version or the receipt field and the reader disagree about its shape.
       MODULE_SET_CENSUS: ${{ github.workspace }}/build-logic/.github/scripts/module-set-census.py
+      ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
+      ARTIFACT_STORE: ${{ needs.select.outputs.artifact-store }}
+      # The same deterministic handoff prefix `prepare` and `build-workspace` wrote under — run id
+      # AND attempt, so a re-run never reads the previous attempt's bytes.
+      STORE_RUN_PREFIX: runs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}
       # The per-file static-asset assertion (#2384). 🚨 build-logic-ref, NOT platform-ref, for the
       # reason stated two lines above: the platform checkout may deliberately predate this lane, so
       # reading a gate the lane itself introduced out of THAT tree is a file-not-found on every
@@ -2208,7 +2375,7 @@ jobs:
             RUN_TESTS=true; [ "$(bk get --module "$MODULE" test)" != "false" ] || RUN_TESTS=false
             set +e
             ( set -euo pipefail
-              decision=build; key=""; need_test="$RUN_TESTS"; need_publish="$PUBLISH"; art_run=""; art_name=""; sha=""; holder=""
+              decision=build; key=""; need_test="$RUN_TESTS"; need_publish="$PUBLISH"; art_run=""; art_name=""; sha=""; holder=""; store_loc=""
               if [ "$ENTRY_REUSE" != "null" ] && [ -n "$ENTRY_REUSE" ]; then
                 decision=reuse; need_test=false; need_publish=false
                 art_run=$(jq -er '.runId' <<< "$ENTRY_REUSE")
@@ -2225,6 +2392,11 @@ jobs:
                   art_name=$(jq -r '.artifact.name // ""' <<< "$ENTRY_LEDGER")
                   sha=$(jq -r '.bundleSha256 // ""' <<< "$ENTRY_LEDGER")
                   holder=$(jq -r '.holder // ""' <<< "$ENTRY_LEDGER")
+                  # The DURABLE copy on our own infra, when the record names one AND `select`
+                  # resolved the same store (module-build-ledger.py refuses a locator from another
+                  # store rather than guessing). Empty ⇒ the GitHub artifact is the only copy and
+                  # the reuse leg downloads it exactly as it always has.
+                  store_loc=$(jq -r '.store.locator // ""' <<< "$ENTRY_LEDGER")
                   [ -n "$art_run" ] && [ -n "$art_name" ] || { echo "::error::the ledger said REUSE for $MODULE but named no bundle artifact — nothing to reuse; this is a select-step defect, not a build failure"; exit 1; }
                   echo "plan: REUSE $MODULE from run $art_run ($art_name, sha256 ${sha:-unrecorded}; holder $holder) — tests: $need_test, publish: $need_publish"
                 else
@@ -2239,7 +2411,7 @@ jobs:
                 echo "plan: $MODULE is packed but NOT tested — test-modules does not name it (its suite is not owed by this change set)"
               fi
               bk set --module "$MODULE" "decision=$decision" "key=$key" "need_test=$need_test" "need_publish=$need_publish" \
-                "art_run=$art_run" "art_name=$art_name" "sha=$sha" "holder=$holder"
+                "art_run=$art_run" "art_name=$art_name" "sha=$sha" "holder=$holder" "store_loc=$store_loc"
             )
             rc=$?
             set -e
@@ -2345,13 +2517,23 @@ jobs:
           done
           echo "mounted=false" >> "$GITHUB_OUTPUT"
       - name: Fetch the platform's /app (handed over by prepare)
-        if: inputs.platform-image-digest != '' && steps.platform-mount.outputs.mounted != 'true'
+        if: inputs.platform-image-digest != '' && steps.platform-mount.outputs.mounted != 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         id: platform-artifact
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           name: platform-refs-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/platform-refs-artifact
+      - name: Fetch the platform's /app (handed over by prepare) (object store)
+        if: inputs.platform-image-digest != '' && steps.platform-mount.outputs.mounted != 'true' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        id: platform-store
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/platform-refs-artifact"
+          python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
+            --locator "$ARTIFACT_STORE/$STORE_RUN_PREFIX/platform-refs.tar" --out "$RUNNER_TEMP/platform-refs.tar"
+          tar -C "$RUNNER_TEMP/platform-refs-artifact" -xf "$RUNNER_TEMP/platform-refs.tar"
       - name: The platform reference set — which source, verified
         if: inputs.platform-image-digest != ''
         id: platform
@@ -2360,7 +2542,10 @@ jobs:
           LANE: ${{ needs.select.outputs.lane }}
           MOUNTED: ${{ steps.platform-mount.outputs.mounted }}
           MOUNT_DIR: ${{ steps.platform-mount.outputs.dir }}
-          FETCHED: ${{ steps.platform-artifact.outcome }}
+          # Whichever fetch ran. A skipped step's `outcome` is the falsy empty string, so the
+          # `||` picks the one that executed — and when the mount hit, neither did and this is
+          # empty, which the refusal below renders as '<none>' rather than as a failure.
+          FETCHED: ${{ steps.platform-artifact.outcome || steps.platform-store.outcome }}
         run: |
           set -euo pipefail
           if [ "$MOUNTED" = true ]; then
@@ -2369,7 +2554,7 @@ jobs:
           else
             tarball="$RUNNER_TEMP/platform-refs-artifact/platform-refs.tar.gz"
             if [ "$FETCHED" != success ] || [ ! -f "$tarball" ]; then
-              echo "::error::no platform /app for $DIGEST on this runner ($RUNNER_NAME): no complete set under /opt/platform/sha256-<tester hex>/ pairs it (the runner's platform mount, Memex#316 — the step above says why) AND the run artifact platform-refs-$LANE could not be fetched (download outcome: ${FETCHED:-skipped}). 'Warm the shared build environment (once)' (job: prepare) uploads that artifact in this same run — if it is green, the artifact expired (retention 1 day) or this run was re-run past it; re-run the whole lane, never this leg alone. This job runs no docker and holds no registry credential, by design."
+              echo "::error::no platform /app for $DIGEST on this runner ($RUNNER_NAME): no complete set under /opt/platform/sha256-<tester hex>/ pairs it (the runner's platform mount, Memex#316 — the step above says why) AND the handoff prepare made for this run could not be fetched — the run artifact platform-refs-$LANE, or, when this caller names an object store, $STORE_RUN_PREFIX/platform-refs.tar in it (fetch outcome: ${FETCHED:-skipped}). 'Warm the shared build environment (once)' (job: prepare) uploads that artifact in this same run — if it is green, the artifact expired (retention 1 day) or this run was re-run past it; re-run the whole lane, never this leg alone. This job runs no docker and holds no registry credential, by design."
               exit 1
             fi
             stampfile="$RUNNER_TEMP/platform-refs-artifact/digest.txt"
@@ -2485,11 +2670,19 @@ jobs:
       # The global workspace build's outputs — every container entry's assemblies, closure
       # manifests and the one build log. Container packs consume THIS; sdk entries ignore it.
       - name: Fetch the global workspace build
-        if: ${{ steps.plan.outputs.fetch_workspace == 'true' }}
+        if: steps.plan.outputs.fetch_workspace == 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         uses: actions/download-artifact@v8
         with:
           name: workspace-build-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/workspace-build
+      - name: Fetch the global workspace build (object store)
+        if: steps.plan.outputs.fetch_workspace == 'true' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/workspace-build"
+          python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
+            --locator "$ARTIFACT_STORE/$STORE_RUN_PREFIX/workspace-build.tar" --out "$RUNNER_TEMP/workspace-build.tar"
+          tar -C "$RUNNER_TEMP/workspace-build" -xf "$RUNNER_TEMP/workspace-build.tar"
       # 🚨 `decision == build` on the build/pack/inspect trio is a MODE SWITCH on the ledger's
       # plan, not a skip-trapdoor: the reuse leg below runs in its place for the reuse modules, is
       # itself unconditional within its mode, verifies the bytes it fetched, and drops the same
@@ -2752,11 +2945,23 @@ jobs:
             HOLDER="$(bk get --module "$MODULE" holder)"
             PACKAGE="$(bk get --module "$MODULE" package)"
             VERSION="$(bk get --module "$MODULE" version)"
+            STORE_LOC="$(bk get --module "$MODULE" store_loc --default '')"
             set +e
             ( set -euo pipefail
               mkdir -p "$RUNNER_TEMP/bundles/$MODULE"
-              gh run download "$ART_RUN" -R "$GITHUB_REPOSITORY" -n "$ART_NAME" -D "$RUNNER_TEMP/bundles/$MODULE"
               bundle="$RUNNER_TEMP/bundles/$MODULE/MeshWeaver.Plugin.$PACKAGE.$VERSION.module.nupkg"
+              # 🚨 THE DURABLE COPY FIRST, when there is one. `select` only put a locator here if
+              # the record's store is the store THIS run resolved and the object is actually in it
+              # (module-build-ledger.py asked), so a `get` that fails now is a fault to name, not a
+              # reason to go looking somewhere else: the GitHub artifact it would fall back to is
+              # the SAME bytes at 1-day retention, and quietly preferring it would hide a store
+              # that has started losing objects. `get` verifies the sha256 in the locator itself.
+              if [ -n "${STORE_LOC:-}" ] && [ -n "${ARTIFACT_STORE:-}" ] && [ "$ARTIFACT_STORE" != gha ]; then
+                echo "reuse: fetching $MODULE from the object store — ${STORE_LOC%%#*}"
+                python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" --locator "$STORE_LOC" --out "$bundle"
+              else
+                gh run download "$ART_RUN" -R "$GITHUB_REPOSITORY" -n "$ART_NAME" -D "$RUNNER_TEMP/bundles/$MODULE"
+              fi
               if [ ! -f "$bundle" ]; then
                 found=$(find "$RUNNER_TEMP/bundles/$MODULE" -name '*.module.nupkg' | head -1)
                 echo "::error::run $ART_RUN's artifact $ART_NAME carries no MeshWeaver.Plugin.$PACKAGE.$VERSION.module.nupkg (found: ${found:-nothing}) — the ledger record and this checkout's manifest.lock disagree about the version; the key should have differed. Not reusing."
@@ -2785,11 +2990,19 @@ jobs:
       # across Plugins#1032). A missing artifact fails this download RED rather than quietly
       # rebuilding a maybe-different tool.
       - name: Fetch the module-pack tool (built once by prepare)
-        if: steps.plan.outputs.any_build == 'true'
+        if: steps.plan.outputs.any_build == 'true' && (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha')
         uses: actions/download-artifact@v8
         with:
           name: module-pack-tool-${{ needs.select.outputs.lane }}
           path: ${{ runner.temp }}/pack-tool
+      - name: Fetch the module-pack tool (built once by prepare) (object store)
+        if: steps.plan.outputs.any_build == 'true' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pack-tool"
+          python3 "$ARTIFACT_STORE_PY" get --store "$ARTIFACT_STORE" \
+            --locator "$ARTIFACT_STORE/$STORE_RUN_PREFIX/module-pack-tool.tar" --out "$RUNNER_TEMP/module-pack-tool.tar"
+          tar -C "$RUNNER_TEMP/pack-tool" -xf "$RUNNER_TEMP/module-pack-tool.tar"
 
       - name: Pack the module bundle
         id: pack
@@ -3096,7 +3309,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s1 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s1 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 2)
         if: steps.bundles.outputs.s2 != ''
@@ -3104,7 +3317,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s2 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s2 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 3)
         if: steps.bundles.outputs.s3 != ''
@@ -3112,7 +3325,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s3 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s3 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 4)
         if: steps.bundles.outputs.s4 != ''
@@ -3120,7 +3333,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s4 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s4 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 5)
         if: steps.bundles.outputs.s5 != ''
@@ -3128,7 +3341,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s5 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s5 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 6)
         if: steps.bundles.outputs.s6 != ''
@@ -3136,7 +3349,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s6 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s6 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 7)
         if: steps.bundles.outputs.s7 != ''
@@ -3144,7 +3357,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s7 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s7 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 8)
         if: steps.bundles.outputs.s8 != ''
@@ -3152,7 +3365,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s8 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s8 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 9)
         if: steps.bundles.outputs.s9 != ''
@@ -3160,7 +3373,7 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s9 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s9 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       - name: Upload the bundle artifact (slot 10)
         if: steps.bundles.outputs.s10 != ''
@@ -3168,13 +3381,51 @@ jobs:
         with:
           name: module-bundle-${{ steps.bundles.outputs.s10 }}
           path: ${{ runner.temp }}/bundles/${{ steps.bundles.outputs.s10 }}/*.module.nupkg
-          retention-days: 7
+          retention-days: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
           if-no-files-found: error
       # AFTER the uploads, never before: `Built` means "a later run can fetch this bundle", and the
       # record names the artifact the slot above just created — the uploads carry no
       # continue-on-error, so reaching this step means every slot that fired succeeded. Carries the
       # PLATFORM's identity as `prepare` resolved it (#931's producer half: the record says which
       # framework these bytes are for).
+      # ───────── THE DURABLE COPY — on OUR infra, when the caller named a store ─────────
+      # 🚨 WHY (maintainer, 2026-09-17: "we still incur cost for github actions … please see that it
+      # goes to 0"). The `module-bundle-<module>` artifact below is TWO things wearing one name: the
+      # handoff this run's own gate/compile-check/publish-bake read, and the copy a LATER run
+      # downloads when the ledger says the key is already built. Only the second needs to outlive
+      # the run — and it is the expensive one: measured over Plugins' live inventory that day, 247
+      # of 382 GB were `module-bundle-*`, most of them duplicates, because a run that REUSES a
+      # bundle re-uploads the identical bytes for its own consumers (754 live copies of one module).
+      # When a store is named the durable copy goes there, keyed by the ledger's BUILD KEY — a
+      # content address — so identical bytes are written once however many runs want them, and the
+      # artifact drops to 1-day retention because a handoff is all it still is.
+      # Skipped when the ledger is off: without a record nothing reuses across runs, so there is
+      # nothing for a durable copy to serve.
+      - name: Shelve the durable bundle copy (object store)
+        if: inputs.ledger == 'required' && needs.select.outputs.artifact-store != '' && needs.select.outputs.artifact-store != 'gha'
+        run: |
+          set -euo pipefail
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
+          mapfile -t modules < <(bk list --ok --where decision=build --where 'key!=' --where 'bundle!=')
+          [ "${#modules[@]}" -gt 0 ] || echo "no module in this batch has a freshly built bundle to shelve"
+          for MODULE in "${modules[@]}"; do
+            KEY="$(bk get --module "$MODULE" key)"
+            BUNDLE="$(bk get --module "$MODULE" bundle)"
+            set +e
+            ( set -euo pipefail
+              out="$RUNNER_TEMP/store-put-$MODULE.txt"
+              python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
+                --key "modules/${GITHUB_REPOSITORY//\//_}/$MODULE/$KEY/$(basename "$BUNDLE")" \
+                --file "$BUNDLE" | tee "$out"
+              loc=$(sed -n 's/^locator=//p' "$out" | tail -1)
+              [ -n "$loc" ] || { echo "::error::ci-artifact-store put printed no locator for $MODULE — the record would name no durable copy while the artifact drops to 1-day retention, which is how a reuse window disappears silently."; exit 1; }
+              bk set --module "$MODULE" "store_loc=$loc"
+            )
+            rc=$?
+            set -e
+            [ "$rc" -eq 0 ] || bk fail --module "$MODULE" --phase pack --reason "the bundle could not be shelved in $ARTIFACT_STORE (exit $rc; see above)"
+          done
+
       - name: Ledger — Built
         if: inputs.ledger == 'required'
         env:
@@ -3182,6 +3433,12 @@ jobs:
           MW_LEDGER_URL: ${{ inputs.registry-url }}
           MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
+          # 🚨 ONE expression, two readers: the `retention-days:` on the ten upload slots below and
+          # the `--retention-days` this record states. They were two independent literals until
+          # 2026-09-17 and nothing related them; now both read ARTIFACT_RETENTION, so a record can
+          # never outlive the artifact it names. 7 days when the artifact IS the durable copy; 1 day
+          # when a store holds it and the artifact is only this run's handoff.
+          ART_RETENTION: ${{ (needs.select.outputs.artifact-store == '' || needs.select.outputs.artifact-store == 'gha') && '7' || '1' }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
@@ -3190,10 +3447,12 @@ jobs:
             KEY="$(bk get --module "$MODULE" key)"
             BUNDLE="$(bk get --module "$MODULE" bundle)"
             VERSION="$(bk get --module "$MODULE" version)"
+            STORE_LOC="$(bk get --module "$MODULE" store_loc --default '')"
             set +e
             ( set -euo pipefail
               python3 build-logic/.github/scripts/module-build-ledger.py record --key "$KEY" --status Built \
-                --bundle "$BUNDLE" --artifact-name "module-bundle-$MODULE" --retention-days 7 \
+                --bundle "$BUNDLE" --artifact-name "module-bundle-$MODULE" --retention-days "$ART_RETENTION" \
+                ${STORE_LOC:+--bundle-locator "$STORE_LOC"} \
                 --version "$VERSION" ${PLATFORM_IDENTITY:+--platform-identity "$PLATFORM_IDENTITY"}
             )
             rc=$?
@@ -4507,7 +4766,7 @@ jobs:
     name: All selected bundles built
     needs: [select, pack, tests]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
     outputs:
       bundles-built: ${{ steps.verify.outputs.bundles_built }}

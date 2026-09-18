@@ -151,6 +151,29 @@ public interface IMessageDelivery
     bool SenderWasNacked => Properties.ContainsKey(SenderNackedProperty);
 
     /// <summary>
+    /// 🚨 <b>THE one acceptance predicate for the envelope <c>Post</c> hands back</b> — did a route
+    /// actually TAKE this delivery? <c>true</c> only when it was neither
+    /// <see cref="MessageDeliveryState.Failed"/> nor <see cref="MessageDeliveryState.Ignored"/>.
+    ///
+    /// <para><b>Why <see cref="MessageDeliveryState.Ignored"/> belongs with
+    /// <see cref="MessageDeliveryState.Failed"/>, and why this must be ONE predicate
+    /// (MeshWeaver#1174).</b> A post is refused in two shapes. <c>Failed</c> is the loud one — the
+    /// teardown guard, a post-pipeline rejection. <c>Ignored</c> is the one that READS LIKE A
+    /// SUCCESS: the per-key storm breaker and the aggregate shedder both return it having
+    /// enqueued NOTHING, deliberately without minting a <see cref="DeliveryFailure"/> (answering
+    /// them would feed the very loop they are breaking). A caller testing only for <c>Failed</c>
+    /// therefore records a DROPPED message as delivered — it marks a save as requested, claims a
+    /// verdict was carried, or skips its own late-dispatch fallback — and the party waiting for
+    /// that message waits out its whole budget with nobody owing it an answer.</para>
+    ///
+    /// <para>Four sites made that judgement independently and two of them got it wrong, which is
+    /// what makes this a shared member rather than a repeated expression: the rule is one rule,
+    /// and a fifth site added later must inherit it rather than re-derive it.</para>
+    /// </summary>
+    bool WasAcceptedForDelivery =>
+        State is not (MessageDeliveryState.Failed or MessageDeliveryState.Ignored);
+
+    /// <summary>
     /// The classification recorded by <see cref="Failed(string, ErrorType)"/>, or
     /// <paramref name="fallback"/> when the failing site recorded none.
     ///

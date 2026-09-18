@@ -35,7 +35,9 @@ public interface INodeValidator
 /// name, …) do NOT implement this marker and therefore run client-side, so
 /// <c>UpdateNode</c> surfaces their rejection before issuing the write.
 /// </summary>
-public interface IOwnerEnforcedNodeValidator { }
+public interface IOwnerEnforcedNodeValidator
+{
+}
 
 /// <summary>
 /// Context for node validation containing all relevant information.
@@ -85,6 +87,15 @@ public record NodeValidationContext
     /// removed while its partition stays".
     /// </summary>
     public string? DeleteCascadeRootPath { get; init; }
+
+    /// <summary>
+    /// The ONE resolution of "does this node's NodeType own its partition?" that the checks of THIS
+    /// operation share (<c>PartitionOwningTypes.OwnsPartitionOnce</c>). A fresh context is built per
+    /// operation, so the memo cannot outlive it or cross users; see
+    /// <see cref="PartitionOwnershipMemo"/> for why sharing it is a deliberate semantic change and
+    /// for the window that is deliberately NOT collapsed.
+    /// </summary>
+    public PartitionOwnershipMemo PartitionOwnership { get; init; } = new();
 }
 
 /// <summary>

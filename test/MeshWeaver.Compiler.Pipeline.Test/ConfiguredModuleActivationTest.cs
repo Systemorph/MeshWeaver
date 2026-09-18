@@ -159,8 +159,14 @@ public class ConfiguredModuleActivationTest
             .AddInMemoryCollection(overlay)
             .Build();
 
-    /// <summary>The image's list as it stands: seven entries, Social at index 5.</summary>
-    private static readonly string[] ImageBaseline =
+    /// <summary>
+    /// The image's list as <c>Memex.Portal.Distributed/appsettings.json</c> holds it: NINE entries,
+    /// Social at index 5. It was seven when the shadow check was written and is nine now — which is
+    /// the point of <see cref="AShorterDeploymentListLeavesTheImagesTailRequired"/> below: nothing
+    /// outside this repository can see the length, so "put your entry at the first free slot" is
+    /// advice that expires.
+    /// </summary>
+    private static readonly ImmutableArray<string> ImageBaseline =
     [
         "MeshWeaver.Blazor.Radzen.dll",
         "MeshWeaver.Blazor.Analysis.dll",
@@ -168,8 +174,38 @@ public class ConfiguredModuleActivationTest
         "MeshWeaver.Blazor.GoogleMaps.dll",
         "MeshWeaver.Speech.dll",
         "MeshWeaver.Social.dll",
+        "MeshWeaver.Blazor.Chat.dll",
+        "MeshWeaver.Markdown.Collaboration.dll",
         "MeshWeaver.AI.dll",
     ];
+
+    /// <summary>
+    /// What every fleet record names today — five, against the image's nine (the `memex`, `pearl`
+    /// and `memex-cloud` fixtures in <c>MeshWeaver.Deployment.Contract.Test</c>).
+    /// </summary>
+    private static readonly ImmutableArray<string> TheRecordsOwnList =
+    [
+        "MeshWeaver.Blazor.Radzen.dll",
+        "MeshWeaver.Blazor.Analysis.dll",
+        "MeshWeaver.Blazor.EntityViews.dll",
+        "MeshWeaver.Blazor.GoogleMaps.dll",
+        "MeshWeaver.Speech.dll",
+    ];
+
+    /// <summary>The overlay a record renders: one <c>Modules:Required:N</c> key per entry.</summary>
+    private static Dictionary<string, string?> Rendered(bool authoritative) =>
+        Rendered(authoritative, ImmutableArray<string>.Empty);
+
+    /// <summary>As above, for a deployment that renders entries.</summary>
+    private static Dictionary<string, string?> Rendered(bool authoritative, ImmutableArray<string> entries)
+    {
+        var overlay = new Dictionary<string, string?>(StringComparer.Ordinal);
+        for (var i = 0; i < entries.Length; i++)
+            overlay[$"Modules:Required:{i}"] = entries[i];
+        if (authoritative)
+            overlay[MeshBuilderModuleActivation.RequiredIsAuthoritativeKey] = "true";
+        return overlay;
+    }
 
     [Fact]
     public void AnOverlayEntryThatOverwritesABaselineRequirement_IsReported()
@@ -196,10 +232,13 @@ public class ConfiguredModuleActivationTest
     [Fact]
     public void AnOverlayEntryPastTheBaseline_AddsWithoutReplacing()
     {
-        // The fix, pinned: index 7 is the first free slot, so MCP is required IN ADDITION.
+        // Index 9 is the first free slot TODAY, so MCP is required IN ADDITION. It was index 7 when
+        // this was written, and memex-cloud's record still says 7 — which is now
+        // MeshWeaver.Markdown.Collaboration.dll. A free slot is not a property of the deployment;
+        // it is a property of an image the deployment cannot read.
         var config = ImagePlusOverlay(ImageBaseline, new Dictionary<string, string?>
         {
-            ["Modules:Required:7"] = "MeshWeaver.Mcp.dll",
+            ["Modules:Required:9"] = "MeshWeaver.Mcp.dll",
         });
 
         Assert.Empty(MeshBuilderModuleActivation.ShadowedRequired(config));
@@ -238,7 +277,181 @@ public class ConfiguredModuleActivationTest
     public void AnUnlayeredConfiguration_HasNothingToShadow()
     {
         // One source, no overrides — today's default, and it must stay silent.
-        Assert.Empty(MeshBuilderModuleActivation.ShadowedRequired(Config(ImageBaseline)));
+        Assert.Empty(MeshBuilderModuleActivation.ShadowedRequired(Config([.. ImageBaseline])));
+    }
+
+    // ───────── #4476: a deployment states the COMPLETE required set ─────────
+    //
+    // The by-index merge has a second, quieter half. ShadowedRequired above sees an entry a
+    // deployment REPLACED; nothing saw the entries a deployment never reached. A list shorter than
+    // the image's leaves the image's tail standing, and an EMPTY list leaves the image's whole list
+    // standing — so emptying a record's requiredModules does not relax the requirement, it restores
+    // it. Measured on pearl.meshweaver.cloud, 2026-09-16: `requiredModules: []` at 06:08:24Z, and
+    // the pod created by the re-provision that followed reported five required modules at 06:18:28Z.
+
+    [Fact]
+    public void AShorterDeploymentListLeavesTheImagesTailRequired()
+    {
+        // The mechanism, stated as it IS — this is the reading that has to change below. The record
+        // names five; the image names nine; indices 5..8 are never overridden and survive.
+        var config = ImagePlusOverlay(ImageBaseline, Rendered(authoritative: false, TheRecordsOwnList));
+
+        Assert.Equal(ImageBaseline, MeshBuilderModuleActivation.RequiredEntries(config));
+
+        // And nothing above could see it: no entry was REPLACED, so the shadow check is silent.
+        Assert.Empty(MeshBuilderModuleActivation.ShadowedRequired(config));
+
+        // The instrument that does see it names exactly the four the deployment never stated.
+        Assert.Equal(
+            ["MeshWeaver.Social.dll", "MeshWeaver.Blazor.Chat.dll",
+             "MeshWeaver.Markdown.Collaboration.dll", "MeshWeaver.AI.dll"],
+            MeshBuilderModuleActivation.UnstatedRequired(config));
+    }
+
+    [Fact]
+    public void ADeploymentThatStatesItsListIsComplete_RequiresExactlyThatList()
+    {
+        // Defect 2 of #4476: "these are the required modules". The image's tail does not apply, and
+        // no count, padding or knowledge of the image's length is needed to say so.
+        var config = ImagePlusOverlay(ImageBaseline, Rendered(authoritative: true, TheRecordsOwnList));
+
+        Assert.Equal(TheRecordsOwnList, MeshBuilderModuleActivation.RequiredEntries(config));
+        Assert.Empty(MeshBuilderModuleActivation.MissingRequired(
+            config, Resolve, path => TheRecordsOwnList.Any(m => path.EndsWith(m, StringComparison.Ordinal))));
+
+        // Nothing is "unstated" any more — the deployment stated the whole set — and nothing was
+        // shadowed: replacing the image's leading indices is the POINT of an authoritative list.
+        Assert.Empty(MeshBuilderModuleActivation.UnstatedRequired(config));
+        Assert.Empty(MeshBuilderModuleActivation.ShadowedRequired(config));
+    }
+
+    [Fact]
+    public void AnEmptyAuthoritativeList_RequiresNOTHING()
+    {
+        // Defect 1 of #4476, and the one an operator hits first: "require nothing". The deployment
+        // renders no entries at all and says its list is the complete set.
+        var config = ImagePlusOverlay(ImageBaseline, Rendered(authoritative: true));
+
+        Assert.Empty(MeshBuilderModuleActivation.RequiredEntries(config));
+        // exists: false for everything — if anything were still required it would be reported here.
+        Assert.Empty(MeshBuilderModuleActivation.MissingRequired(config, Resolve, _ => false));
+    }
+
+    [Fact]
+    public void AnAuthoritativeListMayStillPlaceAnEntryAtAnExplicitSlot()
+    {
+        // memex-cloud's shape: the five, plus MCP at a slot past them. Under an authoritative list
+        // the slot number stops mattering — 7 no longer silently un-requires whatever the image
+        // holds there, because the image's list does not apply at all.
+        var overlay = Rendered(authoritative: true, TheRecordsOwnList);
+        overlay["Modules:Required:7"] = "MeshWeaver.Mcp.dll";
+
+        Assert.Equal(
+            [.. TheRecordsOwnList, "MeshWeaver.Mcp.dll"],
+            MeshBuilderModuleActivation.RequiredEntries(ImagePlusOverlay(ImageBaseline, overlay)));
+    }
+
+    /// <summary>
+    /// 🚨 THE MEASUREMENT THAT PLACED THE NEGATIVE-SLOT RULE. A slot below zero is NOT an unbound
+    /// array entry: this reader enumerates the section's CHILDREN
+    /// (<c>GetSection("Modules:Required").GetChildren()</c>) rather than binding a CLR array, so an
+    /// injected <c>Modules:Required:-1</c> comes back like any other child and the module IS
+    /// required — on the Aspire route, which injects whatever <c>PortalConfig</c> emits.
+    ///
+    /// <para>The chart is the half that drops it: its literal-key block starts at 0, so in
+    /// Kubernetes the key reaches no container and the module is required by nobody. That makes a
+    /// negative slot the CEILING's question at the other end — works locally, disappears in the
+    /// cluster — and it is reported by <c>DeploymentPortalConfig.ChartModuleSlotProblems</c>, not by
+    /// the route-neutral positional rule. This case is why: the rule was first written as
+    /// "renders a key that binds to nothing on every route", which this configuration falsifies.</para>
+    ///
+    /// <para>It lives HERE rather than beside that rule because only this project sees both
+    /// assemblies — the renderer (MeshWeaver.Deployment.Contract) and the reader
+    /// (MeshWeaver.Mesh.Contract) — which is the same reason the key-spelling assertion lives
+    /// here.</para>
+    /// </summary>
+    [Fact]
+    public void ANegativeSlotIsDeliveredByTheASPIREReader_WhichIsWhyTheRuleIsTheCHARTS()
+    {
+        var overlay = Rendered(authoritative: false, TheRecordsOwnList);
+        overlay["Modules:Required:-1"] = "MeshWeaver.Mcp.dll";
+
+        var required = MeshBuilderModuleActivation.RequiredEntries(ImagePlusOverlay(ImageBaseline, overlay));
+
+        Assert.Contains("MeshWeaver.Mcp.dll", required);
+    }
+
+    [Fact]
+    public void ABlankedEntryInAnAuthoritativeList_IsStillNotRequired()
+    {
+        // Blanking keeps meaning what it always meant, and it composes with the authority claim.
+        var overlay = Rendered(authoritative: true, TheRecordsOwnList);
+        overlay["Modules:Required:1"] = "";
+
+        Assert.Equal(
+            ["MeshWeaver.Blazor.Radzen.dll", "MeshWeaver.Blazor.EntityViews.dll",
+             "MeshWeaver.Blazor.GoogleMaps.dll", "MeshWeaver.Speech.dll"],
+            MeshBuilderModuleActivation.RequiredEntries(ImagePlusOverlay(ImageBaseline, overlay)));
+    }
+
+    [Fact]
+    public void WithoutTheClaim_NothingChanges()
+    {
+        // The claim is opt-in on purpose: the image's list is the PLATFORM's floor (the AI engine,
+        // the chat renderer, the collaboration pack — each named there because losing it silently
+        // is a measured outage), and no record in the fleet states a complete set yet. Flipping the
+        // default would un-require four modules on every instance the day this shipped.
+        var config = ImagePlusOverlay(ImageBaseline, Rendered(authoritative: false, TheRecordsOwnList));
+
+        Assert.Equal(ImageBaseline.Length, MeshBuilderModuleActivation.RequiredEntries(config).Length);
+    }
+
+    [Fact]
+    public void TheRENDERERAndTheREADERSpellTheClaimTheSameWay()
+    {
+        // 🚨 The two halves live in assemblies that may not reference each other: the record renders
+        // from MeshWeaver.Deployment.Contract (ZERO MeshWeaver references by design — it ships
+        // inside the published Aspire package) and the host reads from MeshWeaver.Mesh.Contract, so
+        // the key is spelled TWICE. A rename on one side would silently stop the other from ever
+        // seeing the claim, and rendered-but-never-read is indistinguishable from not rendered:
+        // every record keeps behaving as a by-index overlay and nothing anywhere says why.
+        //
+        // This assertion lives HERE and not beside the renderer because this project sees BOTH
+        // assemblies (through MeshWeaver.PluginCatalog). The same two constants compared inside
+        // MeshWeaver.Deployment.Contract.Test would be the renderer against a literal — a check
+        // that cannot fail for the reason it exists.
+        Assert.Equal(
+            MeshBuilderModuleActivation.RequiredIsAuthoritativeKey,
+            MeshWeaver.Deployment.DeploymentPortalConfig.RequiredIsAuthoritativeKey);
+
+        // And the rendered ENV form is what the chart and the Aspire adapter put on the container.
+        Assert.Equal(
+            "Modules__RequiredIsAuthoritative",
+            MeshBuilderModuleActivation.RequiredIsAuthoritativeKey.Replace(":", "__"));
+    }
+
+    [Fact]
+    public void AnUnlayeredConfiguration_HasNothingUNSTATED()
+    {
+        // One source: the image's list IS the deployment's list. Reporting all nine would make the
+        // check noise on every host that layers nothing — a Monolith, a test mesh, the CLI.
+        Assert.Empty(MeshBuilderModuleActivation.UnstatedRequired(Config([.. ImageBaseline])));
+    }
+
+    [Fact]
+    public void ANonRootConfiguration_IsReadWholeAndClaimsNothing()
+    {
+        // A section handed around as IConfiguration carries no provider list, so neither the claim
+        // nor the unstated check can apply — and the reading must stay the plain merged array
+        // rather than silently becoming empty.
+        IConfiguration section = new ConfigurationBuilder()
+            .AddInMemoryCollection(ImageBaseline.Select((entry, i) =>
+                new KeyValuePair<string, string?>($"Outer:Modules:Required:{i}", entry)))
+            .Build()
+            .GetSection("Outer");
+
+        Assert.Equal(ImageBaseline, MeshBuilderModuleActivation.RequiredEntries(section));
+        Assert.Empty(MeshBuilderModuleActivation.UnstatedRequired(section));
     }
 
     // ───────── #3649: a generation that cannot load here falls back to the previous one ─────────

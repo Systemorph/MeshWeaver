@@ -28,6 +28,24 @@ public enum RequiredModuleState
     /// halves disagree and must move together — which is the one thing a rollout CAN fix, unlike
     /// <see cref="ExpectedLater"/>.</summary>
     Incompatible,
+
+    /// <summary>
+    /// 🚨 <b>This pod has not read the module volume, so it has no verdict about this module</b>
+    /// (MeshWeaver#4655) — and that is a different sentence from every state above, all of which
+    /// are findings. It is not <see cref="Present"/> (nothing says it is here), not
+    /// <see cref="Absent"/> (nothing says the build lost it) and emphatically not
+    /// <see cref="ExpectedLater"/>, which would be an unmeasured pod telling a rollout to carry on.
+    ///
+    /// <para>It is counted by <see cref="RequiredModuleStatus.Absent"/> on purpose: a caller that
+    /// only knows the older states still REFUSES on it. "I could not check" must cost what "I
+    /// checked and it is missing" costs, or the check that cannot run becomes the cheapest way to
+    /// pass — and a probe's answer is a rollout gate, so the expensive direction is the safe
+    /// one.</para>
+    ///
+    /// <para>It clears itself: the reading is in flight when this is reported, so the next probe
+    /// states the real verdict. Nothing has to act on it.</para>
+    /// </summary>
+    Unmeasured,
 }
 
 /// <summary>One required module's verdict, with the sentence an operator acts on.</summary>
@@ -213,6 +231,23 @@ public static class RequiredModuleStatus
                 continue;
             }
 
+            // 🚨 The LAST question answerable from in-process state has been asked, and everything
+            // below reads the VOLUME. If the caller handed over the unread-volume sentinel, this
+            // pod has not looked — so every branch below would be reading a `false` that means
+            // "nobody asked" as if it meant "not there", and the first of them would tell an
+            // operator the build lost a pack that is very probably sitting on the volume
+            // (MeshWeaver#4655). Say what is true instead: no verdict, and why.
+            if (ReferenceEquals(resolvesFromDeployment, ModuleProbeInputs.VolumeNotRead))
+            {
+                verdicts.Add(new RequiredModuleVerdict(
+                    entry!, name, RequiredModuleState.Unmeasured,
+                    "this pod has not read the module volume yet, so it cannot say whether this "
+                    + "module is here — it is not loaded in this process, and that is all that is "
+                    + "known. A reading is in flight; the next probe states the real verdict. "
+                    + "Nothing to do."));
+                continue;
+            }
+
             if (resolvesFromDeployment(entry!))
             {
                 verdicts.Add(new RequiredModuleVerdict(
@@ -274,10 +309,35 @@ public static class RequiredModuleStatus
         }
     }
 
-    /// <summary>Those a rollout must stall on — the image's own lost packs.</summary>
+    /// <summary>
+    /// Those a rollout must stall on — the image's own lost packs, <b>and</b> the ones this pod has
+    /// not been able to measure (<see cref="RequiredModuleState.Unmeasured"/>).
+    ///
+    /// <para>🚨 The second half is not a widening of "absent"; it is what stops the bucket from
+    /// becoming a trapdoor. A probe that has taken no reading has no findings at all, so every
+    /// finding-shaped bucket is empty, and a caller that reads "no absences, no incompatibilities"
+    /// would report Healthy over a volume nobody looked at. Folding the unmeasured verdicts in here
+    /// makes the refusal the DEFAULT for a caller that has never heard of the state — which is the
+    /// direction a rollout gate has to fail in. Use <see cref="Unmeasured"/> to tell the two apart
+    /// when the wording matters.</para>
+    /// </summary>
+    /// <param name="verdicts">The classification.</param>
+    /// <returns>The verdicts a rollout must not complete over.</returns>
     public static ImmutableList<RequiredModuleVerdict> Absent(
         IEnumerable<RequiredModuleVerdict> verdicts) =>
-        [.. (verdicts ?? []).Where(v => v.State == RequiredModuleState.Absent)];
+        [.. (verdicts ?? []).Where(v =>
+            v.State is RequiredModuleState.Absent or RequiredModuleState.Unmeasured)];
+
+    /// <summary>
+    /// Those this pod could not measure — no finding, only the admission that there is none. A
+    /// surface that wants to word the refusal correctly reads this first; a surface that does not
+    /// still refuses, because <see cref="Absent"/> counts them.
+    /// </summary>
+    /// <param name="verdicts">The classification.</param>
+    /// <returns>The verdicts taken over an unread volume.</returns>
+    public static ImmutableList<RequiredModuleVerdict> Unmeasured(
+        IEnumerable<RequiredModuleVerdict> verdicts) =>
+        [.. (verdicts ?? []).Where(v => v.State == RequiredModuleState.Unmeasured)];
 
     /// <summary>Those the store lane still owes — reported and named, never a rollout blocker.</summary>
     public static ImmutableList<RequiredModuleVerdict> ExpectedLater(

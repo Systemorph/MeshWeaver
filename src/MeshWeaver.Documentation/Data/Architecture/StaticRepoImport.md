@@ -221,10 +221,12 @@ The prune does not chunk: it rides the **first** delivery and carries `SyncConte
 A deterministic, order-independent hash over the source node set (children **+ the Space root**) **and the inline content files** the same import mirrors:
 
 ```
-for each source node:          line = path + "\0" + (Versioned ? version : sha256(content))
-for each inline content file:  line = "@content:" + node + "/" + collection + "/" + file + "\0" + sha256(bytes)
-sort lines by path                     // order MUST NOT affect the hash
-fingerprint = sha256( join(lines, "\n") )[..16]
+for each source node:          entry = (path, Versioned ? version : sha256(stable content fields))
+for each inline content file:  entry = ("@content:" + node + NUL + collection + NUL + targetPath + NUL + file,
+                                        sha256(bytes))
+sort entries by path                   // order MUST NOT affect the hash
+framed(v)   = utf8ByteCount(v) + ":" + v          // injective, so no separator is needed
+fingerprint = sha256( concat over entries of framed(path) + framed(token) )[..16]
 ```
 
 Changes iff a node or an inline content file is added, removed, or modified — including an edited welcome (the root is in the set). Helper: `PartitionSourceFingerprint.Compute`.
@@ -381,9 +383,21 @@ So the outcome now distinguishes **why** a pass failed:
 | outcome | lock status | next trigger at the SAME fingerprint |
 |---|---|---|
 | `Imported` | `Succeeded` | skips |
-| `ImportedWithContentErrors` | `Failed` | **skips**, logging the recorded verdict |
+| `ImportedWithContentErrors` | `Failed` | **re-imports** — but issues no write for the refused node |
 | `ImportedWithErrors` | `Warning` | re-imports |
 | `ImportedWithRefusedContent` / `ImportedWithBlockedCreates` | `Warning` | re-imports |
+
+🚨 **That `ImportedWithContentErrors` row changed, and the argument above is the reason it had to.**
+Until 2026-09-16 it read *"**skips**, logging the recorded verdict"* — the whole PARTITION skipped,
+on a marker written because a content verdict was earned. But a content verdict is earned by a
+**node**, and `ImportedWithContentErrors` means *"every failure was deterministic"*, not *"everything
+failed"*: forty files can land and one be refused. Recording that as a verdict about the partition is
+what froze `Hosting` out of `memex.systemorph.com` over a single unstorable byte, with the next
+import answering *"an earlier FULL import already recorded this exact content"* about content it had
+lost. The refusal is now remembered **per node**, in the import manifest, so the failing write is
+still never re-issued — #3146's measurement is unchanged — while the rest of the partition is
+evaluated again. Full account:
+[A Content Verdict Is Per Node](/Doc/Architecture/AContentVerdictIsPerNode).
 
 `ImportedWithContentErrors` is reached only when **every** failure in the pass was a content verdict
 (`StaticRepoImporter.IsContentVerdict`), and that is decided on the owner's **structured**

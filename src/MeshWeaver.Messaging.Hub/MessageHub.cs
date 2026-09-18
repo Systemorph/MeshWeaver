@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Linq.Expressions;
@@ -56,6 +56,13 @@ public sealed class MessageHub : IMessageHub
         string RequestType,
         Address? Target,
         long RegisteredAtTicks,
+        // 🚨 This hub's <see cref="Version"/> — its processed-message counter — at the moment the
+        // wait began. It is what turns the timeout's idleness claim from an INSTANTANEOUS SAMPLE
+        // into an INTERVAL FACT: `Version - RegisteredAtVersion` is exactly how many messages this
+        // hub handled while the request was outstanding. A hub that handled thousands cannot claim
+        // it "was idle while waiting" however empty its queue happens to be at the moment it gives
+        // up. See BuildTimeoutMessage.
+        long RegisteredAtVersion,
         // Opt-in sub-key from the request itself (IDiagnosticKeyed) — what makes N identical-looking
         // pending callbacks legible: N distinct keys is a fan-out, one key repeated is a retry loop.
         string? DiagnosticKey = null);
@@ -107,8 +114,22 @@ public sealed class MessageHub : IMessageHub
     private readonly HostedHubsCollection hostedHubs;
     private readonly AccessService accessService;
 
-    /// <summary>Monotonic counter, incremented once per message processed; used for ordering and disposal sequencing.</summary>
-    public long Version { get; private set; }
+    /// <summary>
+    /// Monotonic counter, incremented once per message processed; used for ordering and disposal
+    /// sequencing.
+    ///
+    /// <para>🚨 <b>Interlocked, because this is now read OFF the turn (MeshWeaver#1174).</b> It is
+    /// written on the hub's own turn thread and was a plain auto-property, which is correct only
+    /// while every reader is that same thread. <see cref="BuildTimeoutMessage"/> reads it from the
+    /// Rx timeout scheduler to report how many messages this hub handled while a request was
+    /// outstanding, and a plain read there establishes no visibility with the writing turn — it
+    /// could observe a stale value and report a busy hub as idle, which is the exact
+    /// misdiagnosis that measurement exists to remove. <see cref="Interlocked"/> on the
+    /// increment, the registration snapshot and the read makes the number mean what it says,
+    /// for a counter already on a once-per-message path.</para>
+    /// </summary>
+    public long Version => Interlocked.Read(ref version);
+    private long version;
 
     /// <summary>
     /// 🚨 <b>Who asked for this teardown (#3510).</b> <c>null</c> until a routed
@@ -280,7 +301,7 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     public void SetInitialVersion(long version)
     {
-        Version = version;
+        Interlocked.Exchange(ref this.version, version);
     }
 
     /// <summary>The hub's current lifecycle phase; advances through start, quiescing, and the disposal phases.</summary>
@@ -1087,7 +1108,7 @@ public sealed class MessageHub : IMessageHub
         CancellationToken cancellationToken
     ) => Observable.Defer(() =>
     {
-        ++Version;
+        Interlocked.Increment(ref version);
         var dispatchStartTicks = Stopwatch.GetTimestamp();
 
         var traceEnabled = logger.IsEnabled(LogLevel.Trace);
@@ -1569,6 +1590,38 @@ public sealed class MessageHub : IMessageHub
     /// an explicit unknown. A diagnostic that offers two buckets when there are three teaches the
     /// reader to pick the nearer one; naming what this hub could and could not observe is what makes
     /// it a measurement rather than a guess.</para>
+    ///
+    /// <para>🚨 <b>Three corrections, all measured on MeshWeaver#1174 (424 occurrences over a
+    /// month, and two triages sent to the wrong place by this very sentence).</b></para>
+    ///
+    /// <para><b>(1) The idleness claim was an INSTANTANEOUS SAMPLE asserted over an INTERVAL.</b>
+    /// The queue snapshot is read at the moment the wait gives up, and the sentence generalised it
+    /// across the whole <see cref="MessageHubConfiguration.RequestTimeout"/>: a hub saturated for
+    /// 59 seconds that drained in the 60th printed <i>"This hub was idle while waiting, so it
+    /// processed everything delivered to it"</i> — a claim the sample cannot support, and exactly
+    /// the class of answer that reads like a pass. <see cref="Version"/> is incremented once per
+    /// message handled, so the difference against the value captured at registration
+    /// (<c>PendingCallback.RegisteredAtVersion</c>) is the interval fact the sample is not: how
+    /// many messages this hub handled while the request was outstanding.</para>
+    ///
+    /// <para><b>(2) On a SELF-ADDRESSED request, all three candidates and the discriminator are
+    /// inapplicable.</b> The mesh's node CRUD runs on <c>portal/nodeops-{meshId}</c>, and
+    /// <c>MeshService</c> ISSUES those requests on that same hub — so sender and target are one
+    /// hub and the delivery never leaves it. There is then no routing leg to lose it and no reply
+    /// leg to lose the answer; "the target's own RunLevel and queue" are the numbers already
+    /// printed in this very sentence. Production read it literally and concluded the request
+    /// "never reached the queue" — which an empty queue at the give-up instant does not imply,
+    /// because the canonical mesh handlers return <c>Processed()</c> in a millisecond and owe
+    /// their reply from a DETACHED observable, leaving the queue empty while the reply is still
+    /// owed.</para>
+    ///
+    /// <para><b>(3) It said "this message cannot distinguish them" while the answer was one call
+    /// away.</b> <see cref="RequestFateLedger"/> is per hub TREE and records every stage this
+    /// delivery passed through — intake, gate, routing, handler entry, the handler's own detached
+    /// stages, the reply's journey — ending in a verdict that names which shape this is. The hub
+    /// building this message owns that ledger. Printing it costs one lookup and removes the whole
+    /// "go and measure the other end" step for every request whose target is in this tree (and for
+    /// a target outside it, the ledger says so in as many words).</para>
     /// </summary>
     private string BuildTimeoutMessage(string requestType, Address? target, string messageId)
     {
@@ -1586,28 +1639,61 @@ public sealed class MessageHub : IMessageHub
                          || snapshot.OpenGates > 0
                          || snapshot.CurrentMessage is not null;
 
+        // (1) The interval the sample cannot see. `null` only when the entry is already gone —
+        // then say "unknown" rather than print a number derived from nothing.
+        long? handledWhileWaiting = null;
+        lock (responseSubjects)
+        {
+            if (responseSubjects.TryGetValue(messageId, out var pending))
+                handledWhileWaiting = Version - pending.RegisteredAtVersion;
+        }
+        var handled = handledWhileWaiting is { } n
+            ? $"handledWhileWaiting={n}"
+            : "handledWhileWaiting=unknown";
+
         var state =
             $"This hub: RunLevel={RunLevel} Queue(buffer={snapshot.Buffer},deferred={snapshot.Deferred}," +
             $"openGates={snapshot.OpenGates},drainsInFlight={snapshot.DrainsInFlight}," +
-            $"draining={snapshot.Draining})" +
+            $"draining={snapshot.Draining},{handled})" +
             (snapshot.CurrentMessage is not null
                 ? $" Executing({snapshot.CurrentMessage}, {snapshot.CurrentMessageElapsedMs}ms)"
                 : string.Empty);
 
-        var verdict = callerBusy
-            ? "🚨 THIS HUB WAS NOT IDLE while waiting, so it cannot attribute the silence upstream: " +
-              "a response may have arrived and be queued behind the work above. Investigate THIS hub " +
-              "before the target."
-            : "This hub was idle while waiting, so it processed everything delivered to it and the " +
-              "silence is upstream of here. Cause is UNKNOWN between: the target never received the " +
-              "request (routing), the target received it and is wedged (a per-node hub that stops " +
-              "answering — MeshWeaver#2896), or the target answered and the reply was lost. This " +
-              "message cannot distinguish them; the target's own RunLevel and queue can.";
+        // (2) Sender and target are the same hub — the delivery never left, so two of the three
+        // candidates below cannot happen and the third's discriminator is already printed.
+        var selfAddressed = target is not null && (target with { Host = null }).Equals(Address);
+
+        var verdict = selfAddressed
+            ? "🚨 THIS HUB IS ALSO THE TARGET, so the request never left it: there is no routing leg "
+              + "that could have lost it and no reply leg that could have lost the answer, and "
+              + "\"the target's own RunLevel and queue\" are the numbers printed above. An empty "
+              + "queue here does NOT mean the request was never handled — the canonical mesh "
+              + "handlers return Processed() at once and owe their reply from a DETACHED "
+              + "observable, so a handler that ran and has not yet produced a terminal looks "
+              + "exactly like one that never ran. What is left is: the delivery was refused at "
+              + "this hub's own intake, or a handler took it and the work that owes the reply "
+              + "produced no terminal. The trail below says which."
+            : callerBusy
+                ? "🚨 THIS HUB WAS NOT IDLE while waiting, so it cannot attribute the silence upstream: " +
+                  "a response may have arrived and be queued behind the work above. Investigate THIS hub " +
+                  "before the target."
+                : "This hub is idle AT THE MOMENT IT GAVE UP — an instantaneous sample, which is why " +
+                  "handledWhileWaiting above is printed beside it: that is the interval fact, and a hub " +
+                  "that handled many messages was not idle throughout however empty its queue is now. " +
+                  "Cause is UNKNOWN between: the target never received the " +
+                  "request (routing), the target received it and is wedged (a per-node hub that stops " +
+                  "answering — MeshWeaver#2896), or the target answered and the reply was lost. Queue " +
+                  "state alone cannot distinguish them; the trail below can, and so can the target's " +
+                  "own RunLevel and queue.";
+
+        // (3) The stage trail this hub tree already recorded for THIS request, ending in its own
+        // verdict. Never throws; names its own absence when the target lives outside this tree.
+        var trail = this.DescribeRequestFate(messageId);
 
         return
             $"No response received in hub {Address} within {Configuration.RequestTimeout} " +
             $"for request {requestType} (id={messageId}) → target {target?.ToString() ?? "<unset>"}. " +
-            $"{state}. {verdict}";
+            $"{state}. {verdict} Trail: {trail}";
     }
 
     private System.Reactive.Subjects.AsyncSubject<IMessageDelivery> GetOrAddResponseSubject(
@@ -1632,6 +1718,7 @@ public sealed class MessageHub : IMessageHub
                     requestType,
                     target,
                     Stopwatch.GetTimestamp(),
+                    Version,
                     diagnosticKey);
                 responseSubjects[messageId] = entry;
                 // THE one place a hub starts awaiting a reply — so it is also the one place the
@@ -1645,6 +1732,107 @@ public sealed class MessageHub : IMessageHub
         }
     }
 
+
+    /// <summary>
+    /// 🚨 True when <paramref name="delivery"/> is a request one of THIS hub's hosted hubs ACCEPTED
+    /// before its own teardown began, now on its way OUT through this hub — which this hub must still
+    /// carry while it is disposing that very hub (Systemorph/MeshWeaver#3986).
+    ///
+    /// <para><b>The defect this closes.</b> A parent in <see cref="MessageHubRunLevel.DisposeHostedHubs"/>
+    /// refused every transit delivery (tier 2 of the teardown intake gate, and the route-up check in
+    /// <c>HierarchicalRouting</c>), on the stated ground that "the children are going down with it".
+    /// But that phase is exactly when the children are ASKED to go down: each one's
+    /// <c>ShutdownRequest</c> queues FIFO behind the work it already accepted, and that work runs
+    /// first — "teardown lets accepted work FINISH" (<c>Doc/Architecture/TeardownLayers</c>). So a
+    /// hosted hub still holding accepted outbound work when its parent reached this phase had that
+    /// work refused at the only door it has. Measured: a person's click, accepted by the stream's
+    /// <c>sync/{id}</c> hub while its queue was busy, then the per-circuit portal hub disposed on
+    /// circuit close — the click was refused with <c>cannot route ClickedEvent … its parent hub … is
+    /// shutting down (RunLevel=DisposeHostedHubs)</c> and never reached the owner
+    /// (<c>UserActionQueuedBehindABusySyncHubTest</c>).</para>
+    ///
+    /// <para><b>Why carrying it is safe, by construction rather than by a wait.</b> This hub does not
+    /// reach <see cref="MessageHubRunLevel.ShutDown"/> until every hosted hub has signalled
+    /// <c>DisposalCompleted</c>, and a hosted hub cannot complete before it has handed its accepted
+    /// backlog up — so the delivery is in this hub's queue before this hub's own ShutDown phase is
+    /// even posted, and leaves through its router while that router is still running. The answer comes
+    /// back through the reply exemption the gate already has, into the child's <c>Quiescing</c> drain,
+    /// which is waiting for exactly it. Nothing new waits, nothing is timed.</para>
+    ///
+    /// <para><b>Deliberately narrow — every clause is a reason, not a heuristic:</b>
+    /// <list type="bullet">
+    ///   <item>only while this hub is IN <see cref="MessageHubRunLevel.DisposeHostedHubs"/> — before it
+    ///     the gate is open, after it there are no children left whose work could still be owed;</item>
+    ///   <item>only a request its ORIGINATING hub holds a live response callback for — the receipt that
+    ///     hub's <c>Quiescing</c> drain is waiting on. A one-way <see cref="IRequest"/> posted without
+    ///     <c>Observe</c> has nobody waiting and keeps its historical drop, as does fire-and-forget; a
+    ///     REPLY already has its own exemption;</item>
+    ///   <item>only TRANSIT — a request addressed to THIS hub is new work for a hub that is going away
+    ///     and stays refused;</item>
+    ///   <item>only while the hosted hub handing it up is still BELOW <see cref="MessageHubRunLevel.Quiescing"/>.
+    ///     That is the acceptance fence, and it is structural rather than a snapshot: routing runs inside
+    ///     that hub's own turn, and it leaves <see cref="MessageHubRunLevel.Started"/> only by handling
+    ///     its own <c>ShutdownRequest</c>, which its <c>Dispose()</c> posts FIFO. So a delivery routed from
+    ///     a hub still below <c>Quiescing</c> was queued AHEAD of that request — accepted before its
+    ///     teardown — and one it takes on afterwards queues BEHIND it, is routed from <c>Quiescing</c>, and
+    ///     is refused here (<c>UserActionQueuedBehindABusySyncHubTest</c> pins both sides);</item>
+    ///   <item>only when this hub's PARENT still routes — in a whole-tree teardown the parent is going too,
+    ///     the request could only be dropped one hop later, and the requester is better served by the
+    ///     immediate transient refusal it gets today than by waiting out its quiesce budget for it.</item>
+    /// </list></para>
+    /// </summary>
+    /// <param name="delivery">The delivery being routed up to (or arriving at) this hub.</param>
+    /// <returns><c>true</c> when this hub must carry it despite disposing its hosted hubs.</returns>
+    internal bool CarriesAcceptedWorkOfAHostedHub(IMessageDelivery delivery)
+    {
+        if (RunLevel != MessageHubRunLevel.DisposeHostedHubs
+            || delivery.Properties.ContainsKey(PostOptions.RequestId)
+            || delivery.Target is not { } target
+            || (target with { Host = null }).Equals(Address with { Host = null })
+            || (messageService as MessageService)?.ParentHub is not { RunLevel: < MessageHubRunLevel.DisposeHostedHubs })
+            return false;
+        var (handedUpBy, originator) = HostedHubsThatSent(delivery.Sender);
+        return handedUpBy is { RunLevel: < MessageHubRunLevel.Quiescing }
+               && originator is MessageHub waiting
+               && waiting.AwaitsResponseTo(delivery.Id);
+    }
+
+    /// <summary>
+    /// True while this hub holds a live response callback for the request it posted with
+    /// <paramref name="messageId"/> — i.e. something here is still waiting for that answer.
+    /// </summary>
+    private bool AwaitsResponseTo(string? messageId)
+    {
+        if (string.IsNullOrEmpty(messageId))
+            return false;
+        lock (responseSubjects)
+            return responseSubjects.ContainsKey(messageId);
+    }
+
+    /// <summary>
+    /// The hosted hub of THIS hub that handed <paramref name="sender"/>'s delivery up, and the hub
+    /// that originally posted it (the same hub unless it came from further down), or <c>null</c>s.
+    /// The route-up stamps each parent onto the OUTERMOST host of the sender
+    /// (<c>AddressExtensions.WithHost</c>) — except a mesh parent, which is not stamped — so once
+    /// this hub's own stamp is peeled off, the outermost address left is the hosted hub that handed
+    /// it up and the innermost is the originator. Looked up level by level, never created.
+    /// </summary>
+    private (IMessageHub? HandedUpBy, IMessageHub? Originator) HostedHubsThatSent(Address? sender)
+    {
+        var levels = ImmutableList<Address>.Empty;
+        for (var level = sender; level is not null; level = level.Host)
+            levels = levels.Add(level with { Host = null });
+        var outermost = levels.Count - 1;
+        if (outermost >= 0 && levels[outermost].Equals(Address with { Host = null }))
+            outermost--;
+        if (outermost < 0)
+            return (null, null);
+        var handedUpBy = GetHostedHub(levels[outermost], c => c, HostedHubCreation.Never);
+        var originator = handedUpBy;
+        for (var i = outermost - 1; originator is not null && i >= 0; i--)
+            originator = originator.GetHostedHub(levels[i], HostedHubCreation.Never);
+        return (handedUpBy, originator);
+    }
 
     private IObservable<IMessageDelivery> ExecuteRequest(
         IMessageDelivery delivery,
@@ -3355,7 +3543,7 @@ public sealed class MessageHub : IMessageHub
             // (or Ignored from the storm breaker) instead of enqueueing. Claiming "delivered" on
             // that would suppress every remaining carrier for a callback that was never resolved.
             var accepted = requester.DeliverMessage(failure);
-            return accepted.State is not (MessageDeliveryState.Failed or MessageDeliveryState.Ignored);
+            return accepted.WasAcceptedForDelivery;
         }
         catch (ObjectDisposedException)
         {

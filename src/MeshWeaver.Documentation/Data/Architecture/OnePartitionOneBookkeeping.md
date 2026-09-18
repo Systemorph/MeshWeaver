@@ -1,7 +1,7 @@
 ---
 Name: One Partition, One Bookkeeping
 Category: Architecture
-Description: A partition written by both a GitSync source and the registry installer keeps two independent records of one mesh, and the second delta is computed against a record that stopped describing it — the measured Store mix of 1.10.3 and 1.11.1, the invariant, and the two gates that hold it.
+Description: A partition written by both a GitSync source and the registry installer keeps two independent records of one mesh, and whichever writer diffs second lands a mix — the measured Store mix of 1.10.3 and 1.11.1, the Hosting mix that blocked a roll, the invariant, and the gates that hold it.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5a1 1 0 0 1 1-1h6l2 2h6a1 1 0 0 1 1 1v2"/><path d="M3 10h18v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M9 15h6"/></svg>
 ---
 
@@ -11,7 +11,7 @@ A mesh partition can have **two writers that keep separate books about it**, and
 other's. When that happens the partition does not go wrong loudly — it ends up holding a MIX of two
 content identities that no CI ever compiled together, and every instrument involved reads as healthy.
 
-This page states the invariant, the measured case it was learned from, and the two gates that hold it.
+This page states the invariant, the two measured cases it was learned from, and the gates that hold it.
 
 ## The invariant
 
@@ -90,7 +90,7 @@ Three fixes suggest themselves. Two of them produce a consistent partition and a
 So the ownership question comes first, and the bookkeeping repair is what covers the lanes that still
 write such a partition *by design*.
 
-## The two gates
+## The gates
 
 ### `PartitionContentOwnership` — who owns this partition's content
 
@@ -154,6 +154,94 @@ answer.
 Such a partition is not left without a module: it has a delivery path already — the sealed
 publication its content is held to — and a human's manual Update lands both halves together.
 
+### Gate 1c — an unattended install never lands an UNPROVEN ref in such a partition
+
+Gates 1 and 1b hold the unattended *update*. The **boot default install** was left as a lane that
+writes such a partition *by design*, because [#4259](../DeclaredIsNotLanded) had pinned it to the
+sealed commit: two writers landing the SAME tree do not mix. That design has a residue, and the
+residue is where this class came back.
+
+`InstanceAutoRegistrationService.ProvenRef` can only attribute a seal to a **repository**. A source
+with no `RepoPath` — a remote registry, a registered `IPackageSource` — names no repository, so it
+answers *"no repository to attribute a seal to"* and the lane lists at the configured ref. The
+control instance's plugin source is exactly that, and its configured ref is the default, `HEAD`.
+
+#### What it cost the second time (measured, memex.systemorph.com, 2026-09-17, [#4588](https://github.com/Systemorph/MeshWeaver/issues/4588))
+
+1. **14:34:30Z** — the boot install stamped `Plugins/Hosting` 1.22.1 with **`installedFromRef: HEAD`**
+   and a 222-file map, having written `main`'s tree into `Hosting`.
+2. `Hosting/_GitSync` re-imports that same subdirectory every few minutes at the commit sealed for
+   the running framework — then `061976bc` (2026-09-15), which does not carry the five files only
+   `main` had, among them `Hosting/Issue/Source/FleetWatchCadence.cs`.
+3. Thirteen minutes later the record **claimed** that file and the node was **absent**;
+   `Hosting/DeploymentStatus` and `Hosting/InstanceAction` reported
+   `MISSING SOURCES: 1 of N declared source queries … matched NO nodes` and `CS0246`. The roll onto
+   the 3.0.0 candidate could not converge: the new replica's readiness refuses a type that regressed
+   on its image.
+4. **16:03Z** — the seal advanced to `d98fc2ac`. Its import is a delta **from the previous seal**,
+   so it wrote `Issue/Source/IssueLayoutAreas.cs` (changed between the two seals) and left
+   `Issue/Test/IssueTests.cs` alone (unchanged between them) — where the installer's `main` copy was
+   still sitting. The partition kept one file from each tree:
+
+```text
+CS0117 Error: 'IssueLayoutAreas' does not contain a definition for 'Facts'
+CS0117 Error: 'IssueLayoutAreas' does not contain a definition for 'StatusBadge'
+```
+
+🚨 **That step 4 is the reason gate 2 alone cannot close this class.** Gate 2 makes the INSTALLER's
+delta full; the mix here was produced by the OTHER writer's delta, which has the identical blind
+spot — it diffs its own baseline, not the mesh. Whichever writer diffs second lands a mix, so the
+remedy has to be the one the table above already names: **one writer**.
+
+#### The gate
+
+`InstanceAutoRegistrationService.Install` asks the ownership question for a candidate whose ref this
+boot could NOT prove, and holds where the installer does not own the content
+(`UnprovenRefHold`). `Undetermined` holds too, and the asymmetry is the point: a hold that was wrong
+is re-derived and lifted at the next boot, while an install that was wrong has already put a tree
+into a partition it does not own, which no later pass takes back.
+
+- **A proven ref is not held.** The seal named the commit, so the two writers land the same tree —
+  #4259's design, untouched, and the reason the gate keys on provenance rather than on "this
+  partition has a second writer".
+- **A hold is loud, and it is not spelt like a skip.** Nothing is fetched and no module is adopted;
+  the package is recorded as **HELD** — its own list on the summary and the seed ledger
+  (`DefaultInstallHold`), said once at Warning. A `DefaultInstallSkip` is an authorization this lane
+  can never obtain, and the summary renders those *"authorization, not retried"*; a hold is a fact
+  about THIS boot's ref and THIS partition's writer, re-derived from scratch on the next pass. One
+  list for both would advertise a permanent refusal where there is a transient one.
+- **The declared access is still re-asserted.** It is create-only and writes nothing in the steady
+  state, so withholding it would trade a content defect for an access one.
+- **Nothing is left without content.** The partition's own writer delivers it, at the commit sealed
+  for this instance, and a human's Update click remains the documented escape.
+
+#### Only a writer counts as a writer
+
+The question the installer asks is narrower than the compile control plane's, and the two are
+separate members of the same seam:
+
+| question | member | an `ExportOnly` source |
+|---|---|---|
+| *does this partition's content track an external source?* (#3583 — may I compile the live source?) | `IPartitionSourceTracking.IsTracked` | **yes** — the mesh IS the truth, so its live source is current and the type must compile rather than park |
+| *does anything else WRITE this partition's content?* (#4588 — may I install here?) | `IPartitionSourceTracking.ImportsContent` | **no** — `mesh → repo` rejects imports, so it can neither revert nor prune what an installer wrote |
+
+`ImportsContent` defaults to `IsTracked`, so a provider that cannot tell the directions apart keeps
+the conservative answer; the shipped GitHub provider overrides it and excludes `ExportOnly` alone.
+Collapsing them back into one bit would either hold an install for a writer that cannot write, or
+park a type whose sources are current.
+
+🚨 **The residues this leaves, both named:**
+
+- A source that is a **local checkout** keeps today's behaviour ([#3359](../SyncRefContract) — there
+  is no commit to pin and the operator IS the authority), so an operator who mirrors a working tree
+  into a partition they also connected to git still has two writers. That is a configuration a
+  person chose twice, like a human's Update click; it is not an unattended lane landing a tree
+  nobody asked for.
+- A **proven** ref is not compared against the repository the partition's own writer syncs. #4259's
+  design assumes they are the same repository — which is the fleet's shape — but a package whose
+  target partition is connected to a DIFFERENT repository would still get two writers with two
+  trees. Closing that needs a seam that can name the tracked repository, not just answer a bit.
+
 ### Gate 2 — a delta is never diffed against a baseline the installer does not own
 
 `CatalogLayoutAreas.InstallOrUpdateCore` consults the same verdict before choosing the incremental
@@ -162,9 +250,95 @@ incremental path is **not available**: a FULL install writes every file the pack
 a record that is true of the mesh again.
 
 This is what covers the lanes that still write such a partition by design — the seal-pinned boot
-install and a human's Update click — so no lane can diff against a record that has stopped describing
-the partition. The cost is one full package fetch, paid only when an update is actually landing (the
+install (gate 1c holds the UNPINNED one) and a human's Update click — so no lane can diff against a
+record that has stopped describing the partition. The cost is one full package fetch, paid only when an update is actually landing (the
 hash-equal skip path is untouched) and only on a synced partition.
+
+### Gate 1d — a PROVEN ref must still be the partition's OWN repository ([#4625](https://github.com/Systemorph/MeshWeaver/issues/4625))
+
+Gate 1c holds the boot install where the ref could not be *proven*. A proven ref is deliberately
+**not** held: the seal named a commit, so both writers are pinned and land the same tree. That rests
+on an assumption nothing verified — **that the two commits are trees of the SAME repository.**
+
+Where they are not — a package whose `targetPartition` is connected to a different repository, or to
+a different *subdirectory* of one — both writers are pinned, both are "proven", and they still land
+two different trees. Copilot's review of the gate-1c change spotted it in the change's own control
+arm, which configured exactly that mismatch.
+
+`IPartitionSourceTracking` gained `ImportingRepositories(partition)`, returning
+`TrackedRepositories` — identities as `owner/repo#subdirectory`, **with `Known` beside them** so
+that *"nothing imports here"* and *"I cannot tell you what imports here"* are never the same value.
+
+🚨 **The asymmetry is the OPPOSITE of gate 1c's, and deliberately.** Gate 1c holds on
+`Undetermined` because an unproven ref is cheap to hold — it is re-derived and lifted at the next
+boot. Here, *unknown* is the DEFAULT answer of every provider that has not implemented the member,
+so holding on it would hold every proven install on the fleet's normal shape and take
+[#4259](../SealedPublicationReads)'s lane offline. That cost is precisely why #4625 was filed rather
+than folded into the gate-1c change. So gate 1d holds **only on a definite disagreement** — both
+sides known, and no tracked identity matching.
+
+The subdirectory is part of the identity because a package sealed from `Systemorph/MeshWeaver.Plugins`
+and a partition synced from that repository's `Hosting` folder are two different trees — one of the
+two shapes #4625 names.
+
+## The sync side has the same blind spot, and its detector was unreachable ([#4620](https://github.com/Systemorph/MeshWeaver/issues/4620))
+
+The gates above stop the INSTALLER from diffing against a baseline it does not own. The sealed
+GitSync import has the identical blind spot from the other side: it is a delta between two
+**commits**, so it writes what moved between the previous sealed commit and the new one, and leaves
+everything else alone. That is correct exactly while the mesh equals the previous commit's tree.
+
+**Measured on memex.systemorph.com, 2026-09-17, in two partitions of nineteen.**
+
+| partition | what its sync said | what the partition held |
+|---|---|---|
+| `Hosting` | `lastSyncOutcome: Imported`, `lastAttemptWasFinal: true`, at `061976bc` | `Issue/Source/IssueLayoutAreas.cs` from `061976bc` beside `Issue/Test/IssueTests.cs` from `main` (the boot install's copy, 17:36:42Z). The test calls `IssueLayoutAreas.Facts`/`StatusBadge`/`SeverityBadge`, which `061976bc`'s view does not define ⇒ three `CS0117`s, for over a day |
+| `Crm` | `lastSyncOutcome: Skipped`, `lastAttemptWasFinal: true` | **fourteen** NodeTypes at `compilationStatus: Error` |
+
+`Crm` is the sharper of the two: **`Skipped` is the content-skip short-circuit, which answers
+without reading the partition at all.** So a "full re-import" is not the remedy either — at an
+unchanged fingerprint it returns `Skipped` having looked at nothing. Only a *reconciling* import
+(`ImportConflictPolicy.Reconcile`, which bypasses that short-circuit) re-reads.
+
+### The detector already existed — its input could not arrive
+
+`SealedSyncReconcile.DecideWithInventory` has always answered `ReconcileAtSealedCommit` for a source
+that claims the sealed commit while types baked from it were declined on their source fingerprint:
+*"the live sources have drifted from the commit they claim."* Its evidence is `declinedTypePaths`,
+a by-product of the **boot sweep's** bundle-adoption walk.
+
+🚨 **The one post-boot trigger passed `[]`.** `PublicationSealArrivalService` handed the reconciler
+an empty declined set, and an at-the-seal source with an empty set is its STEADY STATE — so after
+boot the branch could only ever take the "nothing was declined" exit. **The detector reported a
+clean partition it had never read.** Empty meant "I measured, and nothing had drifted"; the caller
+meant "I did not measure". Those are different facts and folding them disabled the gate.
+
+So `IPublicationSyncReconciler.Reconcile` now takes `IReadOnlyCollection<string>?`: **null means
+"I did not measure"**, and the reconciler measures for itself, where the bundle inventory already
+is. `SyncedPartitionDrift.Measure` compares each live NodeType's `CurrentSourceFingerprint` against
+what bundles for this identity record — no fetch, no disk walk, and it abstains (rather than
+reporting a clean partition) when the shelf is unreadable or nothing is comparable. It reports its
+denominator, so "0 drifted" is never read without "of how many".
+
+### Why not the other two answers
+
+- **Always re-import in full.** This is what the git-diff was introduced to stop — the memex-cloud
+  outage loop of 2026-07-23, where a routine push re-materialised whole partitions and stormed the
+  live compiler. And it would not even work, per `Crm` above: a full import at an unchanged
+  fingerprint never reads the partition.
+- **Rely on one writer.** Defensible once the unattended second writer is gone — except the `Crm`
+  mix involves no boot install at all, and both partitions' sync records read as success. A mix
+  nobody can detect is the worst of the three outcomes.
+
+### What the detection SAYS
+
+Naming it is half the fix, because #4588 cost a session precisely for want of a line that joins the
+three clocks. On drift the reconciler logs, at Warning, the partition, the repository and commit its
+sync claims, the sealed publication and framework identity, which types hold sources no bundle
+records — and **where to read the other writer**: the package whose `targetPartition` is this
+partition, and its `installedFromRef` / `installedAtUtc`. The installer's record is not read
+directly from here on purpose: it lives in `MeshWeaver.PluginCatalog`, which this layer deliberately
+does not reference, and reading it untyped would be the `.As<T>()` trap.
 
 ## What the fix deliberately does not do
 

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 
@@ -40,6 +41,29 @@ public sealed class GitCli(IoPoolRegistry ioPools, ILogger<GitCli>? logger = nul
         // Never spawn a process for work that has already been cancelled (the pool's token is
         // cancelled on unsubscribe): the git run could not be observed by anyone.
         ct.ThrowIfCancellationRequested();
+
+        // 🚨 AN EMPTY WORKING DIRECTORY IS REFUSED, NEVER INHERITED. `ProcessStartInfo` falls back
+        // to the CURRENT PROCESS's directory when `WorkingDirectory` is empty, so a caller that
+        // computed no path does not fail — it runs git against whatever directory the host process
+        // happens to be in. Measured 2026-09-15 on this machine: a test host running from a
+        // checkout of this repository left `init`/`seed` commits on its `main` and set
+        // `core.bare = true` on the shared config, which made every worktree of it answer
+        // "this operation must be run in a work tree". The blast radius is somebody's repository,
+        // and the symptom names neither git nor the caller. A path that is not there is refused the
+        // same way rather than reaching Process.Start, so the message names the caller's defect
+        // instead of a Win32 error.
+        if (string.IsNullOrWhiteSpace(workingDir))
+            throw new ArgumentException(
+                $"git {string.Join(' ', args)} was asked to run with no working directory. It is "
+                + "REFUSED rather than run: an empty WorkingDirectory makes the process inherit "
+                + "the HOST's current directory, so the command would act on whatever repository "
+                + "that happens to be — a checkout, a worktree, somebody's clone. Pass the "
+                + "directory the command is about.", nameof(workingDir));
+        if (!Directory.Exists(workingDir))
+            throw new ArgumentException(
+                $"git {string.Join(' ', args)} was asked to run in '{workingDir}', which does not "
+                + "exist. Create it first, or pass the directory the command is about.",
+                nameof(workingDir));
 
         var psi = new ProcessStartInfo("git")
         {

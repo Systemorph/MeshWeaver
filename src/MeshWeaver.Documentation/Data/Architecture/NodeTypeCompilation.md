@@ -1918,7 +1918,9 @@ until a human read `kubectl top`. The same stranded instances also produced the 
 old and new assemblies serving side by side (`$type` registration mismatches), pages wedged until
 the type and instance hubs were recycled by hand.
 
-The missing piece is **convergence**, and it is policy, not plumbing:
+The missing piece is **convergence**, and it is policy, not plumbing. What that default costs a
+reader who has just rolled a fix — and what a recycle can and cannot change about the bytes an
+instance binds — is [Stale State Until a Recycle](/Doc/Architecture/StaleStateUntilRecycle).
 `Modules:AutoRecycleOnStaleBuild` (#2192, default **off**) turns the banner's offer into an
 automatic self-recycle — when a NodeType publishes a usable build whose assembly differs from the
 one an instance bound, the instance posts its own `DisposeRequest`, re-activates on the new

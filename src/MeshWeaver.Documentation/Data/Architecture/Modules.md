@@ -439,6 +439,12 @@ immediately below. The rule is about not listing it in BOTH, not about one lane 
 `Required` is what turns an absence into a degraded readiness report rather than a silently
 model-less portal (no chat, no models, and `Provider/*` empty — the catalog is engine-projected).
 
+🚨 **`Modules:Required` is an ARRAY, and configuration merges arrays BY INDEX** — a deployment's own
+list replaces the image's entries one for one and leaves the rest standing, so a shorter list still
+requires the image's tail and an EMPTY list requires the image's list in full. A record says "these
+and only these" with the scalar claim described in
+[Required Module Authority](../RequiredModuleAuthority); read that before writing or emptying one.
+
 🚨 **`Memex.LocalMesh` is the exception that shows the rule.** The headless sidecar has no plugin
 catalog — no registry client, no auto-install — so a `Modules:Required` entry there would name a
 module nothing can ever land, and every chat send would be refused *"NodeType 'Thread' is not

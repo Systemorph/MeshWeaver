@@ -229,13 +229,11 @@ public class ModuleIdentityPublishGuard
         Assert.NotEqual("1", recipe.Groups["v"].Value);
     }
 
-    private static string JobBody(string job)
-    {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
-        var match = Regex.Match(text, @"\n  " + Regex.Escape(job) + @":\n(?<body>(?:(?:    .*|  #.*)\n|\n)+?)(?=  [a-z][a-z-]*:\n|\z)");
-        Assert.True(match.Success, $"{Lane} must have a `{job}` job");
-        return string.Join('\n', match.Groups["body"].Value.Split('\n').Where(l => !l.TrimStart().StartsWith('#')));
-    }
+    /// <summary>
+    /// One reader for all three lane guards — and one that names the line it refuses on rather
+    /// than reporting a missing job. See <see cref="WorkflowJobText"/>.
+    /// </summary>
+    private static string JobBody(string job) => WorkflowJobText.Body(Lane, job);
 
     private static string FindRepoRoot()
     {

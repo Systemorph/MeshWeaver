@@ -56,6 +56,37 @@ public class RouterTrafficRuleTest
         Assert.Null(RouterTrafficRule.RoleOf(Mesh, Mesh, new HeartBeatEvent()));
     }
 
+    private sealed record ACorrelatedRelease : ICorrelatedBySender;
+
+    /// <summary>
+    /// 🚨 #4489. A message the RECEIVER pairs with an earlier one by sender has no hop available:
+    /// re-posting it from an off-router hub — the one change that would silence the report — is
+    /// exactly what breaks the pairing. Reporting it is therefore a demand nobody may satisfy, which
+    /// is the shape that trains people to mute the channel.
+    /// </summary>
+    [Fact]
+    public void AMessageCorrelatedByItsSender_IsNeverReported()
+    {
+        Assert.Null(RouterTrafficRule.RoleOf(Mesh, "portal", new ACorrelatedRelease()));
+        Assert.Null(RouterTrafficRule.RoleOf("portal", Mesh, new ACorrelatedRelease()));
+        Assert.Null(RouterTrafficRule.RoleOf(Mesh, Mesh, new ACorrelatedRelease()));
+        // …and on the 3-argument form too, which is the signature shipped assemblies still bind to.
+        Assert.Null(RouterTrafficRule.RoleOf("portal", Mesh, new ACorrelatedRelease(), isResponse: false));
+    }
+
+    /// <summary>
+    /// The control, and the reason the exclusion is keyed on the marker rather than on "it looks
+    /// like a lifecycle message": an ordinary message carrying no such claim is still reported in
+    /// every one of those three positions. Widening this would silence the detector wholesale.
+    /// </summary>
+    [Fact]
+    public void AnOrdinaryMessageInTheSamePositions_IsStillReported()
+    {
+        Assert.Equal("target", RouterTrafficRule.RoleOf(Mesh, "portal", new object()));
+        Assert.Equal("sender", RouterTrafficRule.RoleOf("portal", Mesh, new object()));
+        Assert.Equal("sender AND target", RouterTrafficRule.RoleOf(Mesh, Mesh, new object()));
+    }
+
     [Fact]
     public void MatchIsExact_NotCaseInsensitiveOrPrefixed()
     {

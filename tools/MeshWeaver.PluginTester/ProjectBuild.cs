@@ -1282,8 +1282,14 @@ public static class ProjectBuild
             // Body-level warnings arrive from the emit (the single body pass); under
             // warnings-as-errors they were already escalated inside the Emit and threw. This is
             // the same no-warn policy gate as the declaration pass above, applied to the rest.
+            //
+            // 🚨 The emit's list is now UNCAPPED (it used to stop at 50 and append a
+            // "… and N more" pseudo-entry, which this loop printed and the count below counted as
+            // one warning). A project build's warning count is a verdict number — "RED, N
+            // warning(s)" — so an honest N matters more here than a short log, and the honest N is
+            // what the policy line now reports.
             foreach (var bodyWarning in artifact.Warnings)
-                sink.Warn($"[{name}] {bodyWarning}");
+                sink.Warn($"[{name}] {bodyWarning.Describe()}");
             warnings += artifact.Warnings.Count;
             if (artifact.Warnings.Count > 0 && !options.AllowWarnings)
             {

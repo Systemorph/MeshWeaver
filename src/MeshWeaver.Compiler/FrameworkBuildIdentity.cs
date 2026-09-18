@@ -373,6 +373,37 @@ public static class FrameworkBuildIdentity
     /// identity itself so the pre-warmer can log it beside the identity it announces.</summary>
     public static string? FrameworkVersionWarning => Resolved.Value.Warning;
 
+    /// <summary>
+    /// 🚨 <b>The identity a module PACKER reading this platform would STATE about it</b> — the
+    /// stamped commit identity (<c>g&lt;sha&gt;</c>) when the anchor carries one, else the anchor's
+    /// MVID. It is exactly what <c>MeshWeaver.Plugin.Build.FrameworkIdentity.ReadIdentity</c>
+    /// answers for this process's own <c>MeshWeaver.Compiler.dll</c>, which is the file every
+    /// module-pack lane reads to fill a bundle's <c>frameworkMvid</c>.
+    ///
+    /// <para><b>Why it is not <see cref="FrameworkVersion"/>, and why both exist.</b>
+    /// <see cref="FrameworkVersion"/> is the API-SURFACE identity (<c>s&lt;hash&gt;</c>) — the
+    /// staleness key for content this process COMPILES, resolved from the surface manifest beside
+    /// the app. A module bundle's bytes were compiled somewhere else, by a producer that had no
+    /// manifest to hash and stated the anchor's reading instead. The two are different SCHEMES of
+    /// the same fact, and comparing one against the other answers "different" for every pair,
+    /// whatever the bytes are: measured on memex.systemorph.com 2026-09-16, every store-landed
+    /// copy of a module the image also ships was declined against <c>s4b2836…</c> while stating
+    /// <c>gce971b2…</c> — a core commit — so the registry lane was shadowed for those modules no
+    /// matter what it published, and <c>/health</c> reported them as waiting for a restart that
+    /// re-ran the same comparison.</para>
+    ///
+    /// <para>So a consumer deciding about MODULE bytes compares like with like: a producer-stated
+    /// identity against this value, a surface identity against <see cref="FrameworkVersion"/>. See
+    /// <c>MeshWeaver.PluginCatalog.ModuleFrameworkIdentity</c>, which is the one place that rule
+    /// lives.</para>
+    /// </summary>
+    public static string ProducerStatedIdentity => ProducerStated.Value;
+
+    private static readonly Lazy<string> ProducerStated = new(() =>
+        Resolve(
+            StampedIdentityOf(typeof(FrameworkBuildIdentity).Assembly),
+            typeof(FrameworkBuildIdentity).Assembly.ManifestModule.ModuleVersionId.ToString("N")));
+
     private static readonly Lazy<(string Identity, string? Warning)> Resolved = new(() =>
         ResolveProcessIdentityWithDiagnostics(
             AppContext.BaseDirectory,

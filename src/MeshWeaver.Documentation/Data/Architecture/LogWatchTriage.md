@@ -160,17 +160,48 @@ about what reopened it:
 | [#2387](https://github.com/Systemorph/MeshWeaver/issues/2387) — category `MeshWeaver.PluginCatalog.InstanceAutoRegistrationService` | `[DefaultInstall] reconciled with FAILURES … FAILED: [Import]` — last seen **2026-09-02T07:43:52Z** | `Package Feedback … 1 of 14 declared node(s) are ABSENT … REPAIRED rather than skipped` — a **different method** in the same class |
 | [#1840](https://github.com/Systemorph/MeshWeaver/issues/1840) — category `MeshWeaver.Graph.Configuration.MeshNodeCompilationService` | `…/Northwind/AnalyticsCatalog` — a node that **no longer exists** on that portal | `rbuergi/OperationRequest`, `Hosting/InstanceAction` — unrelated NodeTypes |
 
-🚨 **And the line that reopened #2387 reported a SUCCESS.** `Feedback/Feedback/Source/FeedbackHandover`
-was named ABSENT at 22:02:37.818Z and its `lastModified` in the mesh is 22:02:45.036Z — the repair
-worked, eight seconds later. It was logged at `Error` because the severity was decided *before* the
-remedy ran, so every self-heal shipped a fault to Loki and minted an incident. That is fixed in the
-emitter (the detection is now a Warning and the Error moved onto the verified outcome), and the
-general rule it teaches is worth stating on its own:
+🚨 **The line that reopened #2387 was read as a SUCCESS on 2026-09-14 — and that reading was wrong.**
+`Feedback/Feedback/Source/FeedbackHandover` was named ABSENT at 22:02:37.818Z and its `lastModified`
+in the mesh was 22:02:45.036Z, eight seconds later. The write landed; the repair did not **hold**.
+Re-measured on memex.meshweaver.cloud 2026-09-16, the same node, at the same module version
+(`caffd87567c65b4f`), was named ABSENT on **eleven boots** — 2026-09-13T22:02Z through
+2026-09-16T21:33Z, each matched one-to-one by a `Plugins/Feedback` record version (v18…v28) — and at 22:05Z,
+thirty minutes after the last "repair", `get` answered `Not found`. What removed it each time is the
+every-boot flap [the Sync-Ref Contract](../SyncRefContract) predicted for two unattended writers of
+one partition: `Feedback/_GitSync` imports the partition at the sealed Plugins commit `627fb3cd`,
+whose tree has no `FeedbackHandover.cs`, and prunes it (imports at 21:31:58Z, 21:32:01Z and
+21:54:40Z that day); the boot default install lists `Plugins@main` (`installedFromRef: main`) and
+writes it back (record v28, 21:33:24Z). The control instance, which has no `Feedback/_GitSync`, holds
+the node. The portal ran core `c84c6c05` (2026-09-12), which carries neither the seal-pinned boot
+install (#4259, PR #4292) nor the one-bookkeeping rule (#4355, PR #4364) — so every one of those
+reopens was a delivery gap, not a recurrence, and not a self-heal either.
+
+The emitter was changed on the strength of the first reading (#4257: the detection is now a Warning
+and the Error moved onto an outcome read taken right after the install), and the rule it teaches
+stands — but only with the second half that this measurement adds:
 
 > **Never assert a severity on a DETECTION when a remedy is about to run.** A line that says "X is
-> missing, repairing" is an `Error` about a condition that is usually gone by the time anyone reads
-> it. Log the detection at Warning, re-observe after the remedy, and put the `Error` on the outcome
-> — where it can only fire when the remedy did not work, which is the fact worth an incident.
+> missing, repairing" is an `Error` about a condition that is often gone by the time anyone reads
+> it. Log the detection at Warning, re-observe after the remedy, and put the `Error` on the outcome.
+>
+> 🚨 **But an outcome read taken right after the remedy cannot see a writer that undoes it later.**
+> It proves the write landed, never that it held. The signature of a remedy that did not hold is the
+> DETECTION REPEATING at an unchanged version on consecutive runs — and once the detection is a
+> Warning and the outcome reads "landed whole", nothing ships that signature to an **incident**: the
+> Warning is still in the pod log and still readable through a `Logs` action, but this pipeline
+> ingests `fail:`/`crit:` only, so nothing files it, folds it or reopens on it. On an image carrying
+> #4257 without #4292 the flap above would have kept running with no ticket anywhere. Before calling
+> a repair successful, look for the same detection on the NEXT run.
+
+🚨 **That severity difference is also how you attribute an occurrence to an IMAGE.** The pre-#4257
+line is `fail:` and ends *"…so the install is being REPAIRED rather than skipped (MeshWeaver#3485)."*;
+the post-#4257 line is a Warning and ends *"…Whether the repair worked is reported separately, once
+it has (MeshWeaver#3485)."* So a sample carrying the first sentence was emitted by an image that does
+not contain `83cb0dd932`, whatever its pod name says — measured on this incident 2026-09-16: all ten
+retained samples (occurrences 54→63, through 22:54:35Z) carry it, and the only fleet portal without
+that commit was memex.meshweaver.cloud on core `c84c6c05`. **Read the LINE for the image, the
+`namespace`/`pods` fields for neither** — both portals name their deployment
+`memex-portal-deployment`, so the pod suffix discriminates nothing.
 
 **So the procedure on a reopened auto-filed issue is:**
 

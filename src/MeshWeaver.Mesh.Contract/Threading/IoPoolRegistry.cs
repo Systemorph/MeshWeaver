@@ -64,7 +64,18 @@ public sealed class IoPoolRegistry : IDisposable
         if (Volatile.Read(ref _disposing) != 0)
             return _refused.Value;
 
-        var pool = _pools.GetOrAdd(name, n => new IoPool(_options.MaxConcurrencyFor(n), _options.DrainTimeout, _options.DrainGrace));
+        // 🚨 A LOSING CANDIDATE MUST BE DISPOSED. ConcurrentDictionary.GetOrAdd does NOT promise the
+        // value factory runs once: on concurrent first use of a name two pools are built and only
+        // one is kept. The discarded one used to be garbage — a SemaphoreSlim and a scheduler nobody
+        // referenced — so nothing noticed. It no longer is: a pool owns a started `IoPool-cancel`
+        // thread from its constructor (#4448), and a thread is a GC ROOT that parks for the process's
+        // life unless someone disposes the pool that owns it. So the factory records what it built
+        // and anything that did not win the race is disposed, which wakes its canceller and lets it
+        // exit. Same reason the refusal path below disposes `raced`.
+        IoPool? candidate = null;
+        var pool = _pools.GetOrAdd(name, n => candidate = new IoPool(_options.MaxConcurrencyFor(n), _options.DrainTimeout, _options.DrainGrace));
+        if (candidate is not null && !ReferenceEquals(pool, candidate))
+            candidate.Dispose();
 
         // Re-check: disposal may have begun between the check above and the add, in which case our
         // pool went in after the snapshot was taken. Pull it back out and refuse — losing a pool
@@ -95,6 +106,38 @@ public sealed class IoPoolRegistry : IDisposable
     /// resolving a disposed scope.
     /// </summary>
     public int TotalInFlight => _pools.Values.Sum(p => p.CurrentInFlight);
+
+    /// <summary>
+    /// A reading of every pool that EXISTS right now — name, cap, in-flight, queue depth and the
+    /// wait distribution — creating none.
+    ///
+    /// <para>🚨 <b>This is the only honest way to read a pool, and <see cref="Get"/> is not one.</b>
+    /// <see cref="Get"/> is a resolver: handed a name no pool carries it MINTS one and hands it
+    /// back, brand new and therefore reporting nothing. So a readout built on <see cref="Get"/>
+    /// answers a typo, a renamed provider or a backend that is not wired at all with
+    /// <c>Samples = 0</c> — indistinguishable from a real, idle pool, and it leaves a phantom in the
+    /// registry besides. MeshWeaver#1198's whole history is instruments that answer confidently
+    /// wrong; the reading that decides a cap must not be one of them, so it enumerates rather than
+    /// asks.</para>
+    ///
+    /// <para>A point-in-time copy, ordered by name: the underlying dictionary is live and every
+    /// counter is lock-free, so the readings are individually consistent and the set is not a
+    /// transaction. That is the right trade for a diagnostic — a snapshot that took a lock would
+    /// make reading the pools a way to stall them.</para>
+    ///
+    /// <para>Empty once disposal has begun (<see cref="Dispose"/> clears the pools), which reads
+    /// correctly: a torn-down mesh has no pool queueing anybody.</para>
+    /// </summary>
+    public IReadOnlyList<IoPoolReading> Snapshot() =>
+        _pools
+            .Select(kv => new IoPoolReading(
+                kv.Key,
+                kv.Value.MaxConcurrency,
+                kv.Value.CurrentInFlight,
+                kv.Value.CurrentlyWaiting,
+                kv.Value.QueueWait))
+            .OrderBy(r => r.Name, StringComparer.Ordinal)
+            .ToArray();
 
     /// <summary>
     /// Completes once <see cref="TotalInFlight"/> reaches zero (polled), or after

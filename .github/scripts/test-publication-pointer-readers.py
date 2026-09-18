@@ -117,7 +117,7 @@ esac
 
 def stage(root: Path, *, pointer: str | None, generation: bool = True,
           source: str = SOURCE, gen_name: str = GENERATION,
-          flat: str = FLAT_BYTES, gen: str = GEN_BYTES) -> None:
+          flat: str = FLAT_BYTES, gen: str = GEN_BYTES, flat_copy: bool = True) -> None:
     """One publication prefix: a flat copy, and optionally a generation with the same names and
     different bytes.
 
@@ -126,9 +126,12 @@ def stage(root: Path, *, pointer: str | None, generation: bool = True,
     batch flattens BOTH publications and which one wins is `find` order — a control that passes by
     coincidence. The true flat layout is what every prefix on every share is today: a flat copy and
     no generation at all.
+
+    `flat_copy=False` is the PHASE-5 prefix (#3461): a generation publication has disposed of the
+    flat compatibility copy, so the prefix holds the pointer and its generations and nothing else.
     """
     prefix = root / ACCOUNT / SHARE / "prebuilt-bundles" / IDENTITY / source
-    staged = [(prefix, flat)]
+    staged = [(prefix, flat)] if flat_copy else []
     if generation:
         staged.append((prefix / gen_name, gen))
     for directory, payload in staged:
@@ -144,7 +147,9 @@ def stage(root: Path, *, pointer: str | None, generation: bool = True,
     # OVERWRITE each other when a recursive batch flattens them, so a mix of two publications can
     # be invisible to a count as well as to a reader — this asymmetric name is what makes the union
     # COUNTABLE, and it is the shape a real supersession has (a publication that dropped a bundle).
-    (prefix / "Legacy.zip").write_text(flat, encoding="utf-8")
+    if flat_copy:
+        (prefix / "Legacy.zip").write_text(flat, encoding="utf-8")
+    prefix.mkdir(parents=True, exist_ok=True)
     if pointer is not None:
         (prefix / "_current").write_text(pointer + "\n", encoding="utf-8")
 
@@ -473,6 +478,71 @@ def main() -> int:
               proc.returncode == 0 and "sealed:" in proc.stdout,
               "the fallback is this gate's previous behaviour and must be byte-for-byte intact",
               proc)
+
+        # ── 8. PHASE 5 (#3461): THE FLAT COPY IS GONE ─────────────────────────────────────
+        # A generation publication now DISPOSES of the flat compatibility copy once its pointer has
+        # landed, so the prefix a reader meets is the pointer and its generations — nothing to fall
+        # back on. Every reader must still read the pointed-at publication WHOLE (the property), and
+        # a pointer it cannot follow must never be reported as "the upstream has not published"
+        # (the refusal the #3583 wording is reserved for).
+        print("the phase-5 prefix — a pointer, its generation, and NO flat copy:")
+        root = base / "p5" / "remote"
+        stage(root, pointer=GENERATION, flat_copy=False)
+
+        proc, module = run_compose(base / "p5" / "compose", root)
+        check("compose-sealed-modules.sh composes the generation's module with no flat copy beside it",
+              proc.returncode == 0 and read(module) == GEN_BYTES,
+              f"composed {read(module)!r}, wanted {GEN_BYTES!r}", proc)
+
+        proc, bundle = run_seed(base / "p5" / "seed", root, body)
+        seeded = sorted(p.name for p in bundle.parent.glob("*.zip")) if bundle.parent.is_dir() else []
+        check("the gate's seed seeds exactly the generation's bundles with no flat copy beside it",
+              proc.returncode == 0 and read(bundle) == GEN_BYTES and seeded == [BUNDLE],
+              f"seeded {seeded} holding {read(bundle)!r}", proc)
+
+        proc = run_availability(base / "p5" / "avail", root)
+        check("check-release-availability.sh answers sealed with no flat copy beside the generation",
+              proc.returncode == 0 and "sealed:" in proc.stdout, "the live publication IS sealed", proc)
+
+        # 🚨 A pointer that EXISTS and cannot be followed, over a prefix whose flat copy is gone.
+        # Before phase 5 the fall-back landed on a sealed flat copy and answered "sealed"; now it
+        # lands on nothing. That is "which publication applies could not be read" — a torn read of
+        # the one small file write that replaces `_current` — and it must say so, never ABSENT.
+        for label, pointer in (("a DANGLING pointer", "Systemorph-MeshWeaver-9999-9"),
+                               ("a BLANK pointer", "   ")):
+            print(f"the phase-5 prefix with {label} and no flat copy:")
+            key = "p5-" + label.split()[1].lower()
+            root = base / key / "remote"
+            stage(root, pointer=pointer, flat_copy=False)
+            proc = run_availability(base / key / "avail", root)
+            out = proc.stdout + proc.stderr
+            check(f"check-release-availability.sh refuses {label} as CANNOT DETERMINE, never as an absent upstream",
+                  proc.returncode == 1 and "CANNOT DETERMINE" in out
+                  and "no sealed publication under" not in out and "3461" in out,
+                  "a faulted pointer over a disposed flat copy is an unreadable reading; answering "
+                  "'no sealed publication' sends the reader to an upstream that did publish (#3583)",
+                  proc)
+
+        # The control that keeps the two cases above honest: NO pointer and nothing sealed is a real
+        # absence, and must still be reported as one — or the gate could never say ABSENT again.
+        print("the phase-5 control — no pointer, nothing sealed:")
+        root = base / "p5-absent" / "remote"
+        (root / ACCOUNT / SHARE / "prebuilt-bundles" / IDENTITY / SOURCE).mkdir(parents=True)
+        proc = run_availability(base / "p5-absent" / "avail", root)
+        check("…and a prefix with no pointer and nothing sealed is still ABSENT, not undetermined",
+              proc.returncode == 1 and "no sealed publication under" in proc.stdout + proc.stderr
+              and "CANNOT DETERMINE" not in proc.stdout + proc.stderr,
+              "the fault split must not swallow the genuine absence", proc)
+
+        proc, _ = run_compose(base / "p5-dangling" / "compose",
+                              base / "p5-dangling" / "remote")
+        check("compose-sealed-modules.sh REFUSES a dangling pointer over a disposed flat copy",
+              proc.returncode != 0 and "no SEALED publication" in proc.stdout + proc.stderr,
+              "there is nothing to compose from, and composing nothing would be the silent failure", proc)
+
+        proc, _ = run_seed(base / "p5-dangling" / "seed", base / "p5-dangling" / "remote", body)
+        check("the gate's seed REFUSES a dangling pointer over a disposed flat copy",
+              proc.returncode != 0, "a seed of nothing is an empty seed, which the step refuses", proc)
 
     print("")
     if FAILURES:

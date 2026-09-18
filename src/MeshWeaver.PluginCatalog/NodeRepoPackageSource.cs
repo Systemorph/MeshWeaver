@@ -62,6 +62,41 @@ public sealed class NodeRepoPackageSource : IPackageSource
     private readonly string? defaultLicense;
 
     /// <summary>
+    /// The FILTERED fetch, when the caller has one — used by <see cref="ListPackages"/> so the
+    /// listing transfers only the files it parses instead of the whole repository (#4222).
+    ///
+    /// <para>🚨 It is deliberately separate from the plain <c>fetch</c> this type also holds, and
+    /// only the LISTING uses it: <see cref="FetchPackageFiles"/> needs a package's entire folder,
+    /// so narrowing that one would install an empty package. Absent (a test stub, a local
+    /// directory source) ⇒ the plain fetch, i.e. exactly the behaviour before this existed.</para>
+    /// </summary>
+    public Func<string, string, string?, string, Func<string, bool>, IObservable<RepoSnapshot>>?
+        NarrowFetch { get; init; }
+
+    /// <summary>
+    /// 🚨 The ONLY files <see cref="ListPackages"/> reads: each plugin folder's
+    /// <c>&lt;Plugin&gt;/index.json</c> root and its <c>&lt;Plugin&gt;/manifest.lock</c> sidecar.
+    /// This predicate and the two loops below must name the same set — a file the predicate omits
+    /// is a package the listing silently loses, so they are written against each other on purpose.
+    /// </summary>
+    internal static bool IsListingInput(string path)
+    {
+        var slash = path.IndexOf('/');
+        if (slash <= 0 || path.IndexOf('/', slash + 1) >= 0)
+            return false;
+        var name = path.AsSpan(slash + 1);
+        return name.Equals("index.json", StringComparison.OrdinalIgnoreCase)
+               || name.Equals(ModuleManifest.FileName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>The listing's read: narrow when this source was given a filtered fetch, the whole
+    /// repository when it was not.</summary>
+    private IObservable<RepoSnapshot> ListingFetch(string gitRef, string token)
+        => NarrowFetch is { } narrow
+            ? narrow(repoUrl, gitRef, null, token, IsListingInput)
+            : fetch(repoUrl, gitRef, null, token);
+
+    /// <summary>
     /// Creates a node-repo source with a FIXED token (default empty = anonymous). Convenience for
     /// tests and public repos; the registry uses the token-provider overload so the App installation
     /// token stays fresh.
@@ -78,7 +113,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
-        tokenProvider().SelectMany(token => fetch(repoUrl, gitRef, null, token))
+        tokenProvider().SelectMany(token => ListingFetch(gitRef, token))
             .Select(snapshot =>
             {
                 // The CI-maintained manifest sidecar (`<Plugin>/manifest.lock`): its moduleVersion

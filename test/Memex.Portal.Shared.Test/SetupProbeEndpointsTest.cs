@@ -49,15 +49,103 @@ public class SetupProbeEndpointsTest
     /// guard whose whole claim is "read the paths out of the chart" was really matching a
     /// hardcoded list, and a chart that added <c>/ready</c> would have sailed straight past it.
     /// Caught in review of #3246. Both forms are parsed now, and nothing is hardcoded.</para>
+    ///
+    /// <para>🚨 <b>And a path may be a VALUE</b> (<c>probes.startup.path</c>, MeshWeaver#4588). The
+    /// same drop was waiting one layer down: a <c>{{ … }}</c> expression captures as <c>{{</c>,
+    /// which does not start with <c>/</c>, so the old filter would have silently removed the
+    /// STARTUP probe from this guard's subject — leaving an overlay free to point it at a path the
+    /// setup host answers with 404, which parks every pod in startup forever. Templated paths are
+    /// resolved against <c>values.yaml</c>, and anything this parse cannot turn into a path FAILS
+    /// rather than being filtered away: a silent drop is how a guard stops covering something.</para>
     /// </summary>
     private static IReadOnlySet<string> ChartProbePaths()
     {
         var text = ChartDeployment();
         var inline = Regex.Matches(text, @"httpGet:\s*\{[^}]*?\bpath:\s*(?<p>[^,}\s]+)")
-            .Select(m => m.Groups["p"].Value.Trim());
+            .Select(m => Raw(text, m));
         var block = Regex.Matches(text, @"httpGet:\s*(?:\r?\n\s+(?!path:)\w+:.*)*\r?\n\s+path:\s*(?<p>\S+)")
-            .Select(m => m.Groups["p"].Value.Trim());
-        return inline.Concat(block).Where(p => p.StartsWith('/')).ToHashSet();
+            .Select(m => Raw(text, m));
+        return inline.Concat(block).Select(Resolve).ToHashSet();
+
+        // The raw token, plus enough of the line after it to carry a whole {{ … }} expression:
+        // the capture stops at the first whitespace, and a template expression has several.
+        static string Raw(string text, Match m)
+        {
+            var token = m.Groups["p"].Value.Trim();
+            if (!token.StartsWith("{{", StringComparison.Ordinal)) return token;
+            var line = text[m.Groups["p"].Index..];
+            var end = line.IndexOf("}}", StringComparison.Ordinal);
+            Assert.True(end > 0, $"an unterminated template expression in a probe path: {token}");
+            return line[..(end + 2)];
+        }
+    }
+
+    /// <summary>
+    /// A literal path, or the value a <c>{{ .Values.x.y.z | default "/p" }}</c> expression ships.
+    /// Asserted at every step: a path this cannot resolve is a probe nothing is checking, which is
+    /// strictly worse than a parse that fails loudly.
+    /// </summary>
+    private static string Resolve(string raw)
+    {
+        if (raw.StartsWith('/')) return raw;
+
+        Assert.True(raw.StartsWith("{{", StringComparison.Ordinal),
+            $"the chart names a probe path this guard cannot read: '{raw}'. Teach the parse the new "
+            + "shape DELIBERATELY — a path silently filtered out is a probe nothing covers.");
+
+        var key = Regex.Match(raw, @"\.Values\.(?<key>[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)");
+        Assert.True(key.Success,
+            $"the probe path expression '{raw}' names no .Values key this guard can resolve.");
+
+        var declared = ValuesLeaf(key.Groups["key"].Value);
+        Assert.True(declared is not null,
+            $"the chart reads .Values.{key.Groups["key"].Value} for a probe path, but "
+            + "deploy/helm/values.yaml declares no such key — the template's own `default` would "
+            + "ship, so the path is stated in one place and defaulted in another.");
+
+        var fallback = Regex.Match(raw, @"default\s+""(?<p>[^""]+)""");
+        if (fallback.Success)
+            Assert.True(fallback.Groups["p"].Value == declared,
+                $"the probe path defaults to '{fallback.Groups["p"].Value}' while values.yaml "
+                + $"declares '{declared}' — the probe would read a different path depending on "
+                + "whether an overlay carries the key.");
+
+        return declared!;
+    }
+
+    /// <summary>The scalar at a dotted key in <c>values.yaml</c>, walked by indentation.</summary>
+    private static string? ValuesLeaf(string dottedKey)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
+            dir = dir.Parent;
+        Assert.NotNull(dir);
+
+        var segments = dottedKey.Split('.');
+        var depth = 0;
+        var indent = -1;
+
+        foreach (var line in File.ReadAllLines(
+                     Path.Combine(dir!.FullName, "deploy", "helm", "values.yaml")))
+        {
+            if (line.TrimStart().StartsWith('#') || line.Trim().Length == 0) continue;
+            var thisIndent = line.Length - line.TrimStart().Length;
+            // Left the block we descended into: the key is absent HERE, and scanning on
+            // would find a same-named key under an unrelated parent and resolve to it.
+            // A resolver that guesses is worse than one that refuses — the callers assert
+            // on the null.
+            if (thisIndent <= indent) return null;
+
+            var m = Regex.Match(line, @"^\s*(?<k>[A-Za-z0-9_]+):\s*(?<v>\S*)\s*$");
+            if (!m.Success || m.Groups["k"].Value != segments[depth]) continue;
+
+            if (depth == segments.Length - 1) return m.Groups["v"].Value.Trim('"', '\'');
+
+            depth++;
+            indent = thisIndent;
+        }
+
+        return null;
     }
 
     /// <summary>How many probes the template declares at all — the premise the parse is checked against.</summary>

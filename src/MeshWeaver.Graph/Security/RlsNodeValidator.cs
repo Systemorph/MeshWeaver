@@ -281,7 +281,7 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
             return Observable.Return<NodeValidationResult?>(null);
 
         var authenticated = WellKnownUsers.IsAuthenticated(userId);
-        return PartitionOwningTypes.OwnsPartition(_hub, context.Node.NodeType)
+        return PartitionOwningTypes.OwnsPartitionOnce(_hub, context)
             .Select(owns => owns switch
             {
                 true when authenticated => NodeValidationResult.Valid(),

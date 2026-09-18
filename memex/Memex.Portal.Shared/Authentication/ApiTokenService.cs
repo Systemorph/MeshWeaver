@@ -806,6 +806,16 @@ internal class ApiTokenService(
     /// global index entry (fire-and-forget). The user-scoped delete goes
     /// through <see cref="IMeshService.DeleteNode"/>; this is the
     /// authoritative removal and the only outcome the caller observes.
+    ///
+    /// <para>🚨 The emitted <c>bool</c> is <b>what this call removed</b>, not whether it
+    /// completed. <c>true</c> means a token node was there and is now gone; <c>false</c> means
+    /// nothing was removed — the path was already absent (<see cref="IMeshService.DeleteNode"/>
+    /// answers <c>false</c> for that since MeshWeaver#4668), or the delete was refused and the
+    /// warning below names why. Both are quiet outcomes for a caller that only wants the token
+    /// gone, and that is exactly why the value must not be invented: a caller that can no longer
+    /// tell "removed it" from "there was nothing there" cannot detect a read that resolved the
+    /// wrong path, which is what <c>DeleteToken_ImmediatelyAfterCreate_RemovesTheNewToken</c>
+    /// exists to catch.</para>
     /// </summary>
     public IObservable<bool> DeleteToken(string tokenNodePath)
     {
@@ -813,8 +823,13 @@ internal class ApiTokenService(
 
         logger.LogInformation("Deleting API token at {Path}", tokenNodePath);
 
+        // 🚨 PASS THE VALUE THROUGH — never `.Select(_ => true)`. Before MeshWeaver#4668 an
+        // already-absent path FAULTED, so the Catch below produced the `false` and the projection
+        // was harmless. Now the same case EMITS `false`, and overwriting it with `true` would
+        // report a removal that never happened — and, worse, make every assertion that this call
+        // returned `true` vacuous, including the stale-read regression test that is the only thing
+        // watching for DeleteToken resolving a path the token is not at.
         var primary = nodeFactory.DeleteNode(tokenNodePath)
-            .Select(_ => true)
             .Catch<bool, Exception>(ex =>
             {
                 logger.LogWarning(ex, "DeleteToken failed for {Path}", tokenNodePath);

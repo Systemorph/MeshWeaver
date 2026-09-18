@@ -187,7 +187,26 @@ concurrency:
   # this group's single pending slot, and the cron did not fire at 07:23 or 08:23 at all (#2490).
   # Earlier a scheduled run that DID start was evicted with zero jobs by the one-pending-slot
   # rule. A no-op that holds the slot is the defect; keying the reconcile separately removes it.
-  group: main-cd-${{ github.event_name == 'schedule' && 'reconcile' || github.ref }}
+  #
+  # 🚨 A PLAIN `workflow_dispatch` BELONGS IN THE RECONCILE LANE, and until MeshWeaver#4652 it did
+  # not — it fell to the `github.ref` arm, i.e. into the PUSH lane, where a merge's arrival can
+  # discard it before it runs a single job. That matters because a dispatch is how the lane's
+  # handoff creates a publisher for a HEAD that has none (`delivery-verdict`'s `handoff` step), and
+  # a publisher GitHub may delete is not a publisher. A default dispatch and a schedule tick ask
+  # the registry the same question and take the same branches, so one superseding the other loses
+  # nothing.
+  #
+  # 🚨 `rebuild: true` IS NOT THAT, and it stays where it was. It is the operator's "the HOSTS
+  # changed, build it anyway" override (#2622) — an explicit request carrying an input no other
+  # entry can reproduce. Moving it here would put it in the single pending slot, where the next
+  # schedule tick replaces it and the request is silently dropped: the tick that survives takes
+  # `rebuild=false`, finds the set complete and no-ops, so the operator's button would appear to
+  # work and do nothing. Keeping it in the ref lane is not an endorsement of that lane — it is
+  # leaving an unrelated path exactly as it was rather than regressing it in passing. (Caught in
+  # review.) One consequence stays true and is NOT fixed here: a `rebuild` dispatch can still
+  # overlap a scheduled reconcile, which is the case the seal step's claim-then-rank workaround
+  # exists for — so that workaround is narrowed, never removed. Do not delete it.
+  group: main-cd-${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rebuild)) && 'reconcile' || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -399,6 +418,17 @@ jobs:
       # Reconcile found the images complete: no image build is due, but the content bake still
       # is — the images being present says nothing about whether the bundles are.
       bake_only: ${{ steps.decide.outputs.bake_only }}
+      # The version of the ALREADY-PROMOTED set, read off its portal image — empty on every
+      # publishing run, where `portal-image` mints the version instead. Resolved ONCE here because
+      # two consumers need it (the platform bake's release marker, and the seal probe) and because
+      # it is the key of the `_releases/<version>` marker that names this set's framework identity.
+      release_version: ${{ steps.bake_version.outputs.version }}
+      # 🚨 Does this sealed set still owe its `plugins` publication? (MeshWeaver#4539) Empty on every
+      # publishing run; on a bake-only reconcile it is `true` ONLY when the artifact store was
+      # ASKED, ANSWERED, and answered that `plugins` is not sealed for the identity the marker names
+      # — never on a refusal, and never past the re-attempt budget. The three `plugins-*` jobs read
+      # it, and nothing else may: it is a statement about ONE framework identity.
+      plugins_seal_due: ${{ steps.seal.outputs.plugins_seal_due }}
       # 🚨 THE tag every consumer of an image built for this commit must use — resolved ONCE, here.
       #
       # A publishing run reads its own staging tag, which exists only because this run pushed it.
@@ -501,11 +531,22 @@ jobs:
             # bash, so it would have worked here — and that is precisely the kind of difference
             # that makes a shell bug survive review and surface somewhere else. Reading line by
             # line is unambiguous in every shell.
+            # 🚨 `check_name=` — ASK THE API FOR THE CHECK, never filter a page of them in jq.
+            # `commits/<sha>/check-runs` pages at 100 and this repository puts FAR more than 100
+            # check-runs on a main commit (every workflow, every matrix leg, both probes, the
+            # combo verdict). Measured 2026-09-17 on `be8f452` (main's tip, 278 check-runs): page 1
+            # holds ZERO `Consolidate test results` and page 3 holds its two — so the unfiltered
+            # read answered `absent/none` for a commit whose required check had been green since
+            # 22:41Z, the walk skipped the tip, and every reconcile for six hours targeted its
+            # PARENT instead. That parent then spent its 3 heal attempts and delivery stopped with
+            # main green (#4526). The failure grows with the repository's own check volume, which
+            # is why it appeared now and why a bigger `per_page` is not the fix. `check_name`
+            # filters SERVER-side, so the answer cannot be truncated away.
             sha="$tip"
             while IFS= read -r candidate; do
               [ -n "$candidate" ] || continue
               read -r c_status c_concl < <(gh api \
-                "repos/${{ github.repository }}/commits/$candidate/check-runs?per_page=100" \
+                "repos/${{ github.repository }}/commits/$candidate/check-runs?per_page=100&check_name=Consolidate%20test%20results" \
                 --jq '[.check_runs[] | select(.name=="Consolidate test results")]
                       | sort_by(.started_at) | last // {}
                       | "\(.status // "absent") \(.conclusion // "none")"')
@@ -542,7 +583,10 @@ jobs:
           # which is indistinguishable from "never ran" if you only read the conclusion — and the
           # reconciler draws opposite conclusions from those two ("wait" vs "main cannot ship").
           # Sorted by started_at, not completed_at: an in-progress run has no completed_at.
-          read -r status concl < <(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100" \
+          # 🚨 `check_name=` for the same reason as the walk above: an unfiltered page of 100 is
+          # not the commit's check-runs on a busy main, and a truncated read here says `absent`
+          # about a check that is green (#4526).
+          read -r status concl < <(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100&check_name=Consolidate%20test%20results" \
             --jq '[.check_runs[] | select(.name=="Consolidate test results")]
                   | sort_by(.started_at) | last // {}
                   | "\(.status // "absent") \(.conclusion // "none")"')
@@ -679,6 +723,9 @@ jobs:
       - name: "Does main's HEAD already have a complete image set?"
         id: acr
         if: steps.target.outputs.reason == 'reconcile'
+        env:
+          SHORT: ${{ steps.target.outputs.short_sha }}
+          PLUGINS_SHORT: ${{ steps.plugins.outputs.plugins_short }}
         run: |
           set -uo pipefail
           # 🚨 The second argument is what lets a plugins-only host change be SEEN. Without it a
@@ -690,10 +737,79 @@ jobs:
           # the reconciler would publish forever. A completeness probe must never fail on a pointer a
           # later phase legitimately has not written. `verify-images` runs after phase C and is where
           # the pointer set is asserted. See Doc/Architecture/ImageTagContract.
-          if .github/scripts/check-image-set.sh "${{ steps.target.outputs.short_sha }}" "${{ steps.plugins.outputs.plugins_short }}"; then
-            echo "complete=true" >> "$GITHUB_OUTPUT"
+          #
+          # 🚨 THREE ANSWERS, NOT TWO (MeshWeaver#4687). Exit 2 means every image of the set is
+          # present and good and ONLY the pair tag is behind — the set is DELIVERABLE, the host
+          # pairing is stale. That used to arrive as exit 1, i.e. as "main's HEAD has no deployable
+          # image", and it is what made `gate` file 28 of the 109 `incomplete image set` issues ever
+          # opened over a set every install could already roll to.
+          # 🚨 `|| rc=$?`, never a bare call. GitHub's default shell for `run:` is
+          # `bash -eo pipefail`, and `set -uo pipefail` does not clear `-e` — so a bare invocation
+          # would kill the step on exit 1 and 2 alike, and the three-way answer below would only
+          # ever be reached for exit 0. The old `if …; then` form was exempt from `-e` because it
+          # was a condition; this one has to say so.
+          rc=0
+          .github/scripts/check-image-set.sh "$SHORT" "$PLUGINS_SHORT" || rc=$?
+          case "$rc" in
+            0) echo "complete=true"  >> "$GITHUB_OUTPUT"; echo "hosts_stale=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "complete=true"  >> "$GITHUB_OUTPUT"; echo "hosts_stale=true"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "complete=false" >> "$GITHUB_OUTPUT"; echo "hosts_stale=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+      # ── Has a publisher ALREADY TRIED this commit and not finished? (reconcile only) ────────
+      #
+      # 🚨 THE LEDGER RECORDS A DELIVERY THAT FAILED, NOT ONE THAT HAS NOT HAPPENED YET
+      # (MeshWeaver#4687). `decide`'s alarm branch used to fire on "main's HEAD has no image set
+      # right now", which is the NORMAL state of every commit between its required check going
+      # green and its publisher finishing — a window that is minutes wide for the run's creation
+      # alone and ~43 minutes wide for the build. Measured over the 25 most recent such issues:
+      # in 19 of them NO CD run for that commit had ever been created when the alarm was filed,
+      # in 3 the only prior run was a zero-job supersede cancellation, and in 3 a run was in flight
+      # that the probe below `decide` could not see because it was NEWER. None recorded a failure.
+      #
+      # The fingerprint of an attempt is in the registry, not in the API: every publishing leg
+      # pushes `staging-<sha>-<run_id>` BEFORE `promote` applies a single consumer-visible tag. So
+      # a staging tag for this sha, with no run live on it (`decide` checks that before it reaches
+      # the ledger), is exactly "a publisher started on this commit and did not finish" — which is
+      # #1026's shape and the thing the reconciler was built to shout about.
+      #
+      # 🚨 EVERY PUBLISHING REPOSITORY, NOT THE PORTAL ALONE (Copilot on MeshWeaver#4687). The
+      # three .NET legs run in PARALLEL and each stages into its own repository, so a run whose
+      # migration leg staged and whose portal leg died before its push leaves no portal marker at
+      # all — and a probe that looked only at `memex-portal-ai` would answer "nothing was
+      # attempted" over exactly the torn set the ledger exists to record. The list is the same one
+      # `check-image-set.sh` calls THE SET; keep the two together.
+      #
+      # 🚨 FAILS TOWARDS THE ALARM. A registry read this cannot complete answers `true`, because the
+      # cost of a spurious issue is one comment and the cost of a missed one is a silent delivery
+      # hole. It says which it did, so a reader is never guessing.
+      - name: "Has a publisher already attempted this commit? (the ledger's evidence)"
+        id: attempted
+        if: steps.target.outputs.reason == 'reconcile' && steps.acr.outputs.complete != 'true'
+        env:
+          SHORT: ${{ steps.target.outputs.short_sha }}
+        run: |
+          set -uo pipefail
+          found=""
+          unreadable=""
+          for repo in memex-portal-ai memex-migration mw-plugin-test; do
+            if tags=$(az acr repository show-tags -n meshweaver --repository "$repo" \
+                        --query "[?starts_with(@, 'staging-$SHORT-')]" -o tsv); then
+              if printf '%s' "$tags" | grep -q .; then
+                found="$found $repo:$(printf '%s' "$tags" | tr '\n' ' ')"
+              fi
+            else
+              unreadable="$unreadable $repo"
+            fi
+          done
+          if [ -n "$unreadable" ]; then
+            echo "attempted=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::could not read the staging tags for $SHORT in:$unreadable — answering 'a publisher has attempted it' so a genuine delivery hole is still recorded. The issue this files may therefore be about a commit nothing has tried yet; the registry read is what to check first."
+          elif [ -n "$found" ]; then
+            echo "attempted=true" >> "$GITHUB_OUTPUT"
+            echo "A publisher has already staged layers for $SHORT and did not finish:$found"
           else
-            echo "complete=false" >> "$GITHUB_OUTPUT"
+            echo "attempted=false" >> "$GITHUB_OUTPUT"
+            echo "No staging tag for $SHORT in any publishing repository — no publisher has started on this commit, so there is no failed delivery to record."
           fi
       # ── The decision, and (reconcile only) the ATTEMPT BUDGET ──────────────────────────────
       # A reconciler that cannot succeed must not grind forever. Persistent failure here means
@@ -799,6 +915,12 @@ jobs:
           CONCL: ${{ steps.required.outputs.conclusion }}
           AGE_MIN: ${{ steps.required.outputs.age_min }}
           COMPLETE: ${{ steps.acr.outputs.complete }}
+          # Deliverability and provenance, separately (MeshWeaver#4687). `COMPLETE` is now only ever
+          # about images an install can PULL; `HOSTS_STALE` is "the newest one was built from an
+          # older MeshWeaver.Plugins commit". `ATTEMPTED` is the ledger's evidence: has a publisher
+          # already staged layers for this commit and not finished?
+          HOSTS_STALE: ${{ steps.acr.outputs.hosts_stale }}
+          ATTEMPTED: ${{ steps.attempted.outputs.attempted }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SHA: ${{ steps.target.outputs.sha }}
           RUN_ID: ${{ github.run_id }}
@@ -850,7 +972,17 @@ jobs:
             INFLIGHT=""
           fi
           if [ -n "$INFLIGHT" ]; then
-            decision false "⏳ An older run of this workflow is still publishing \`$SHORT\`: $INFLIGHT — deferring, so one commit yields ONE image set (MeshWeaver#3376). If that run fails, the next reconcile tick heals HEAD."
+            # 🚨 THE SENTENCE USED TO END "If that run fails, the next reconcile tick heals HEAD."
+            # That was true of a run that FAILS and false of the far commoner outcome: the run is
+            # DISCARDED by the one-pending-slot rule, having executed nothing, and the next tick
+            # simply defers to whatever is queued by then. Measured 2026-09-17 — the deferral
+            # targets of the 16:31Z, 17:26Z and 18:35Z ticks were all cancelled with zero jobs
+            # within minutes, and the reconcile said this each time. What actually discharges the
+            # deferral is `delivery-verdict`'s `handoff` step (MeshWeaver#4652): whichever run
+            # finally holds the lane checks, as it lets go, whether HEAD still has a publisher and
+            # dispatches one if not. Say that, because a reader acting on the old sentence would
+            # wait an hour for a heal that was never coming.
+            decision false "⏳ An older run of this workflow is still publishing \`$SHORT\`: $INFLIGHT — deferring, so one commit yields ONE image set (MeshWeaver#3376). That run may instead be DISCARDED by the one-pending-slot rule without executing anything; either way the run that ends up holding the lane hands HEAD on when it releases it (\`handoff\`, MeshWeaver#4652), so this deferral does not rest on the queued run surviving."
             exit 0
           fi
 
@@ -920,6 +1052,49 @@ jobs:
           # `rebuild` stays as the operator escape hatch (it is still the only way to force a
           # rebuild for a reason no tag encodes), but it is no longer the ONLY way this case is
           # noticed, which is what made it a structural no-op before.
+          # 🚨 A STALE HOST PAIRING IS CADENCE, NOT A DELIVERY HOLE (MeshWeaver#4687), and this
+          # branch exists so that the two stop sharing a verdict — and a ledger entry.
+          #
+          # `HOSTS_STALE` means every image of the set resolved and only `<core>-p<plugins>` is
+          # behind, i.e. main's HEAD is fully deliverable and the newest portal image was built from
+          # an older MeshWeaver.Plugins commit. This run publishes exactly as it did before — the
+          # #2622 behaviour is unchanged, byte for byte — but it does NOT touch the `ci-failure`
+          # ledger, because there is nothing to record: no delivery failed, no install is held back,
+          # and the issue this used to file said in as many words that one was.
+          #
+          # 🚨 IT DOES NOT CONVERGE, AND THAT IS A CADENCE QUESTION THIS BRANCH DELIBERATELY DOES
+          # NOT ANSWER. MeshWeaver.Plugins `main` took 25/42/39/61/48/48/18/43 merges a day over
+          # 2026-09-10…17 — a mean interval near 36 minutes — and a CD publish takes ~43, so the
+          # pair tag this run writes usually names a plugins commit already superseded by the time
+          # `verify-images` reads it back. Ticks therefore keep finding it stale (measured directly:
+          # three consecutive ticks on ONE unchanged core commit resolved three DIFFERENT plugins
+          # HEADs, which does not depend on the rate at all). That is up to 24 full multi-arch
+          # rebuilds a day of trees that are often identical (measured: 418 publishing builds over
+          # 340 distinct core commits; `0dadacc` was built three times in three hours on
+          # 2026-09-17, minting ci.8883, ci.8885 and ci.8886 and moving its own sha tag twice).
+          # Whether a plugins merge should mint a portal image at all — and if so, on what cadence —
+          # is MeshWeaver#4688 and Doc/Architecture/CdLedgerRecordsFailures → "The decision that is
+          # still open". Three options are set out there; do not pick one here.
+          #
+          # 🚨 IT IS AN AUTOMATIC PUBLISH, SO IT IS BEHIND THE GREEN CHECK (Copilot on
+          # MeshWeaver#4687). This branch sits ABOVE the required-check guard further down, which
+          # is correct for its neighbours — `bake_only` publishes no image, and `rebuild` is an
+          # operator's explicit dispatch — and would have been a hole here: a HEAD whose
+          # `Consolidate test results` had settled RED still has its old, complete image set, so
+          # `COMPLETE` is true, and this branch would have built and shipped an untested tree. CD
+          # must never publish one. Not green ⇒ fall through to `bake_only`, which re-asserts the
+          # content bake and builds nothing.
+          if [ "$COMPLETE" = "true" ] && [ "${HOSTS_STALE:-false}" = "true" ] \
+             && [ "$GREEN" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
+            decision true "🏠 main \`$SHORT\` HAS its complete, deliverable image set; only the host pairing is behind — the published portal image was built from an older MeshWeaver.Plugins commit. Refreshing it (#2622). This is CADENCE, not a delivery hole: no \`ci-failure\` issue is filed, and every install already has a current image to roll to."
+            exit 0
+          fi
+          if [ "$COMPLETE" = "true" ] && [ "${HOSTS_STALE:-false}" = "true" ] \
+             && [ "$GREEN" != "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
+            echo "bake_only=true" >> "$GITHUB_OUTPUT"
+            decision false "🛑 main \`$SHORT\`'s host pairing is behind, but \`Consolidate test results\` is \`$CONCL\` — refusing to build an untested tree for a cosmetic refresh. The deliverable set is intact; re-asserting the content bake only."
+            exit 0
+          fi
           if [ "$COMPLETE" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
             echo "bake_only=true" >> "$GITHUB_OUTPUT"
             decision false "✅ main \`$SHORT\` already has a complete image set — no image build; re-asserting the content bake (publication is idempotent)"
@@ -946,6 +1121,67 @@ jobs:
           # unhealable state worth waking someone for.
           if [ "$PENDING" = "true" ] || { [ "$GREEN" != "true" ] && [ "$AGE_MIN" -lt 120 ]; }; then
             decision false "⏳ \`Consolidate test results\` on $SHORT is \`$CONCL\` and the commit is ${AGE_MIN} min old — waiting for CI, nothing to reconcile yet"
+            exit 0
+          fi
+
+          # 🚨 THE LEDGER RECORDS A DELIVERY THAT FAILED, NOT ONE THAT HAS NOT HAPPENED YET
+          # (MeshWeaver#4687). Everything below this line writes to the `ci-failure` issue, and for
+          # a year the only thing it asked before doing so was "is the set in ACR right now?" —
+          # which is the normal state of every green commit whose publisher has not finished. There
+          # are two such windows and both are wide: GitHub takes minutes to CREATE the
+          # `workflow_run` delivery run after the required check concludes (measured 3m37s on
+          # `ecc544a`, 2026-09-17: check green 15:29:08, CD run created 15:32:54 — and the tick
+          # decided at 15:30:05, in between), and the build itself takes ~43 more.
+          #
+          # Measured over the 25 most recent `incomplete image set` issues: 19 were filed when NO CD
+          # run for that commit had ever been created, 3 when the only prior one was a zero-job
+          # supersede cancellation (which AGENTS.md says cannot have torn a set), and 3 while a
+          # NEWER run was mid-publish and therefore invisible to the older-runs-only probe above.
+          # Not one recorded a delivery that had failed. 109 issues of a 109-issue population
+          # carried a body reading *every self-updating install stays on the previous image*.
+          #
+          # `ATTEMPTED` is the positive evidence, read from the registry rather than from a clock:
+          # a `staging-<sha>-<run_id>` tag exists, so a publisher STARTED on this commit and did not
+          # reach `promote`. Without one, this tick is not repairing anything — it IS the publisher,
+          # exactly as it is for a commit the push lane never got a run for. It publishes and says
+          # so, and the ledger stays clean for the failure it was built to name.
+          #
+          # 🚨 The attempt BUDGET therefore starts one tick later than it used to: a first,
+          # ledger-free publish that dies leaves the staging tags that make the NEXT tick file the
+          # issue and count attempt 1. Four builds instead of three before `cd-unhealed`, for a
+          # commit that genuinely cannot build — and the run that dies is still a `CD failed on
+          # main` alert in its own right, from the `verdict` job, which this does not touch.
+          # 🚨 A STAGING TAG IS NOT EVIDENCE OF FAILURE WHILE ITS RUN IS STILL ALIVE (Copilot on
+          # MeshWeaver#4687). The in-flight probe at the top of this step filters to runs with a
+          # LOWER id on purpose — two runs deciding at once would otherwise both defer and neither
+          # would publish. That tie-break rule is right, and it means a NEWER run can be mid-publish
+          # right here: on `0dadacc` the scheduled run was created 34 s BEFORE the genuine delivery
+          # run, so the newer one was invisible to it. Three of the 25 issues measured were exactly
+          # that, and if the newer run has reached its staging push, `ATTEMPTED` is true over a
+          # publication that is going perfectly well.
+          #
+          # So the ledger asks a SECOND question, and it is deliberately NOT the tie-break's: is ANY
+          # run of this workflow live on this sha, newer or older, other than me? This decides only
+          # whether to WRITE — never whether to publish — so it cannot re-create the mutual deferral
+          # the id filter exists to prevent.
+          #
+          # 🚨 FAILS TOWARDS THE ALARM, like the staging probe: an unanswered read is treated as
+          # "nobody else is publishing", so a genuine hole is still recorded, and it says so.
+          if LIVE_ANY=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA&per_page=60" \
+                          --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id != $RUN_ID and .status != \"completed\")] | .[0] // empty | .html_url"); then
+            :
+          else
+            echo "::warning::the live-run probe failed (exit $?) — cannot tell whether another run is publishing $SHORT, so the ledger is written as if none were. A spurious entry is the worst case; a missed delivery hole would be worse."
+            LIVE_ANY=""
+          fi
+
+          if [ "$GREEN" = "true" ] && { [ "${ATTEMPTED:-true}" != "true" ] || [ -n "$LIVE_ANY" ]; }; then
+            if [ -n "$LIVE_ANY" ]; then
+              why="run $LIVE_ANY is live on this exact commit, so its staged layers are a publication IN PROGRESS"
+            else
+              why="NO publisher has started on it (no \`staging-$SHORT-*\` layers in any publishing repository)"
+            fi
+            decision true "📦 main \`$SHORT\` is green and has no image set, and $why — so nothing has failed. Publishing it; the \`ci-failure\` ledger is for a delivery that was ATTEMPTED and did not finish, and stays untouched."
             exit 0
           fi
 
@@ -1036,12 +1272,277 @@ jobs:
             "main's HEAD is missing part of its image set in ACR (that run's annotations name which repositories), so this run is publishing the full set for \`$SHORT\`. The commit whose CD run originally failed is NOT re-published — it is superseded by HEAD on purpose: the version tag comes from the BUILDING run's number, so re-publishing older code would mint a higher \`-ci.<n>\` for it and roll every install backwards.")"
           decision true "🔁 reconcile attempt $n/$MAX_ATTEMPTS — publishing the full image set for \`$SHORT\`"
 
+      # ── Which RELEASE is the already-promoted set? (bake-only reconcile only) ──────────────
+      # 🚨 MOVED HERE FROM `publish-bake`'s `release` step (MeshWeaver#4539), and the move is the
+      # point: `gate` owns every other publish decision in this workflow and resolves each fact
+      # ONCE — see `image_tag`'s comment above for the seven times a per-reference re-derivation of
+      # one fact was wrong. The version is now needed by TWO consumers (the platform bake's release
+      # marker, and the seal probe below), and two independent ACR reads of it is exactly the shape
+      # that comment exists to forbid.
+      #
+      # 🚨 IT RUNS ONLY ON THE BAKE-ONLY PATH, so the publishing path is byte-for-byte unchanged:
+      # there `portal-image` MINTS the version (3.0.0-ci.<run#>) and `publish-bake` takes it
+      # directly, exactly as before. That is also why the move does not widen the blast radius —
+      # on the reconcile path `gate` failing and `publish-bake` failing have the same consequence
+      # (nothing publishes; the next tick tries again), and on the publishing path this step is
+      # not reached at all.
+      #
+      # The version is not recomputable (it carries the ORIGINAL run's number), but it is RECORDED:
+      # promote's Phase C arms the release as `memex-portal-ai:<version>` on the same digest Phase A
+      # tagged `<short-sha>` — the very tags SelfUpdateHostedService rolls from. No version tag on
+      # that digest means the release was never armed, and a bake cannot make available what was
+      # never promoted: that is a loud stop, never a fallback to "identity only" or an invented
+      # version.
+      # 🚨 `id: bake_version`, NOT `release`: `publish-bake` still owns a step called `release`, and
+      # `test-cd-steps.py` extracts a step by `id:` across EVERY job — two steps sharing one id
+      # would hand the harness whichever it met first, silently. Distinct ids, distinct cases.
+      - name: "Resolve the release version of the already-promoted set (bake-only)"
+        id: bake_version
+        if: steps.decide.outputs.bake_only == 'true'
+        env:
+          SHORT_SHA: ${{ steps.target.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          # 🚨 Two failure shapes live in this one read, and the second cost nine hours.
+          #
+          # `tags` is NULL on an untagged manifest — the orphaned per-platform children an index
+          # push leaves behind (16 of memex-portal-ai's 2101 manifests on 2026-08-29). jmespath's
+          # contains() THROWS on null instead of returning false, and the throw aborts the WHOLE
+          # query, so ONE orphan makes this unable to find any tag at all. `tags &&` short-circuits
+          # those rows out before contains() ever sees them.
+          #
+          # And do NOT swallow az's stderr. This read used to end `2>/dev/null || true`, which
+          # turned "the query crashed with an invalid-jmespath error" into "there is no version
+          # tag" — so the error below blamed promote, which was working perfectly: it had armed
+          # memex-portal-ai:<sha> → <version> on one digest, exactly as designed. Nine scheduled
+          # reconciles (2026-08-28 22:12Z → 08-29 05:26Z) died pointing at the healthy half of CD.
+          # An error that names a HEALTHY component as the culprit is worse than a silent failure;
+          # it is a silent failure with directions attached. Let az fail the step with its own
+          # message, so the next reader debugs the query and not promote.
+          tags=$(az acr manifest list-metadata --registry meshweaver --name memex-portal-ai \
+                   --query "[?tags && contains(tags, '${SHORT_SHA}')].tags[]" -o tsv)
+          version=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+' <<<"$tags" | grep -vx "$SHORT_SHA" | head -1 || true)
+          if [ -z "$version" ]; then
+            echo "::error::memex-portal-ai:${SHORT_SHA} carries no version tag (tags on that digest: $(tr '\n' ' ' <<<"$tags")) — promote's Phase C never armed a release for this sha, so there is no release to make available. Fix promote; do not publish a marker for an invented version."
+            exit 1
+          fi
+          echo "release version $version (recovered from memex-portal-ai:${SHORT_SHA}'s tag set — bake-only reconcile)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # ── IS THE `plugins` PUBLICATION ACTUALLY THERE FOR THIS SET? (MeshWeaver#4539) ─────────
+      # 🚨 THE PLATFORM SEAL AND THE PLUGINS PUBLICATION CAN COME APART, AND NOTHING HEALED THAT.
+      # The platform seal is the TRIO — promote, verify, platform bake — and nothing else (maintainer
+      # rule, 2026-09-12, stated in resolve-platform.py). So the three `plugins-*` jobs can fail or
+      # be skipped while the set seals, and every satellite then resolves that newest sealed set and
+      # asks for `plugins` under ITS framework identity, which nobody published.
+      #
+      # Measured 2026-09-16 (#4539): CD 8765 promoted, verified and baked `3.0.0-ci.8765`, then lost
+      # `plugins-modules` to `dial tcp 51.12.25.82:443: connect: connection refused` pulling the
+      # tester image; `plugins-bake` was skipped; identity `s5ec352bb…` got no `plugins` publication,
+      # and four satellites reddened in the same second. The hole did not heal itself: #2452 gave the
+      # PLATFORM bake a reconcile path, but the three plugins jobs stayed `publish == 'true'`-only,
+      # so every hourly tick re-asserted the platform bake and left the publication missing. What
+      # healed it was a coincidence — MeshWeaver.Plugins merged, and its own CI republished.
+      #
+      # 🚨 AND IT IS NOT A ONE-OFF. Sweeping the 200 CD runs of 2026-09-14 → 09-17: NINE sets sealed
+      # with their Plugins seal not `success`. Three from infrastructure (the ACR refusal above; a
+      # failed registry push inside the seal, 8711; a failed promoted-digest resolve, 8601) and SIX
+      # from a genuine Plugins red (module tests / bundle build: 8599, 8647, 8663, 8666, 8670, 8674).
+      #
+      # 🚨 WHY THIS REPAIRS THE SET RATHER THAN REFUSING TO SEAL IT. Making the seal all-or-nothing —
+      # no platform set until its Plugins publication exists — removes the broken state, and it was
+      # rejected on that same measurement. Six of those nine were Plugins' OWN red, so core would
+      # have sealed NOTHING for each of those windows: a MeshWeaver.Plugins unit test would freeze
+      # the portal image every AKS install self-updates to, which is a strictly worse outage than the
+      # one being fixed. It also reverses the dated maintainer rule above and hands Plugins a veto
+      # over the platform's delivery — the dependency direction `PlatformNeverDependsOnPluginsGuard`
+      # forbids and `satellite-compat` below already refuses in exactly these words. And it could not
+      # even be an invariant: Plugins' own CI publishes for the same identity at any later time, so
+      # "sealed ⇒ published" is not a property core can maintain alone.
+      # The whole decision, its measurement and what this does NOT cover: Doc/Architecture/CdReconcilesThePluginsSeal.
+      #
+      # 🚨 THE PROBE NAMES THE IDENTITY, because an "is it sealed?" question that does not is
+      # answering confidently about something else. A seal is per FRAMEWORK IDENTITY (`s<hash>`, the
+      # API-surface hash of the portal's reference assemblies); the identity is a property of the
+      # BINARIES and cannot be computed from a tag or a commit (#1725); and the one thing outside the
+      # image that knows it is the `_releases/<version>` marker `publish-bake-bundles.sh` writes. So
+      # this asks `check-release-availability.sh <version> plugins` — the SAME script, against the
+      # SAME store, that `publish-bake` already uses for `meshweaver-content` and that `release.yml`
+      # already uses for BOTH sources. CD asking about only half of what it ships was the whole gap.
+      #
+      # 🚨 RECONCILE ONLY, and that is not a hole in coverage. On a publishing run the three legs run
+      # unconditionally and `delivery-verdict` reds the run when any of them did not reach `success`
+      # — the state is SEEN there already. It is the tick AFTER that had no instrument at all.
+      #
+      # 🚨 AND IT CANNOT PUBLISH BACKWARDS. On this path the plugins sha is PINNED BY THE PROBE THAT
+      # PUT US HERE: `bake_only` means `check-image-set.sh` found the pair tag
+      # `memex-portal-ai:<core-short>-p<plugins-short>` for plugins HEAD *now*, so the promoted set
+      # was built from exactly the commit a re-attempt would bake. A plugins merge moves HEAD, the
+      # pair tag stops resolving, the set reads INCOMPLETE and the ordinary full-publish path takes
+      # over instead. On top of that the publisher's own never-seal-backwards compare
+      # (publish-bake-bundles.sh, credentialled by the CONTENT repo's token since #4152) still runs,
+      # untouched by this change.
+      - name: "Is `plugins` sealed for the identity this set resolves?"
+        id: seal
+        if: steps.decide.outputs.bake_only == 'true'
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          RELEASE_VERSION: ${{ steps.bake_version.outputs.version }}
+          SHORT: ${{ steps.target.outputs.short_sha }}
+          PSHORT: ${{ steps.plugins.outputs.plugins_short }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          MAX_SEAL_ATTEMPTS: "3"
+        run: |
+          # 🚨 `-e` IS ON, and the two places that must survive a non-zero say so explicitly with
+          # `|| …`. Without it every `gh` read here fails OPEN: a transient `gh issue list` would
+          # yield an empty issue number and this step would CREATE A SECOND LEDGER ISSUE — once an
+          # hour, for as long as the API is unhappy. `decide` above holds the same discipline for
+          # the same reason.
+          set -euo pipefail
+          verdict() { echo "plugins_seal_due=$1" >> "$GITHUB_OUTPUT"; echo "$2"; echo "### $2" >> "$GITHUB_STEP_SUMMARY"; }
+
+          if [ -z "${RELEASE_VERSION:-}" ]; then
+            echo "::error::the bake-only path produced no release version, so the \`_releases/<version>\` marker has no key and this set's framework identity cannot be named. Refusing to probe: an availability answer that does not name the identity is an answer about some other identity. Read the 'Resolve the release version' step above."
+            exit 1
+          fi
+
+          # ── The probe. THREE outcomes, and only one of them licenses a re-attempt ──
+          # 🚨 Its `::error::` annotations are relayed as plain text (the `sed`) and NOTHING else
+          # about its output is touched. Here the script is asked a QUESTION whose "no" is this
+          # lane's ordinary, expected finding — the repair follows in the same run — so its red is
+          # not this step's verdict. The verdict is the annotation this step emits itself, over the
+          # script's whole log printed verbatim. Its EXIT CODE is what branches.
+          log="${RUNNER_TEMP:-/tmp}/plugins-availability.log"
+          # The probe's non-zero is an ANSWER, not a step failure — `|| probe=$?` is what exempts
+          # this one command from `-e`, and nothing else in this step is exempt.
+          probe=0
+          .github/scripts/check-release-availability.sh "$RELEASE_VERSION" plugins > "$log" 2>&1 || probe=$?
+          sed 's/^::error:://' "$log"
+          # awk exits on the FIRST match and reads the file itself: no pipe, so no SIGPIPE — `sed | head -1`
+          # under `pipefail` exits 141 whenever sed writes past head's one line, and `-e` would then
+          # abort this step on a log that merely printed the identity twice.
+          identity=$(awk '/^identity resolved: /{print $3; exit}' "$log")
+
+          if [ "$probe" -eq 0 ]; then
+            verdict false "✅ \`plugins\` IS sealed for \`${identity:-?}\` (release \`$RELEASE_VERSION\`) — nothing to re-attempt."
+            exit 0
+          fi
+          # 🚨 A REFUSAL IS NOT A VERDICT, in EITHER direction. The script distinguishes "CANNOT
+          # RESOLVE" / "CANNOT DETERMINE" (it could not ask its question) from "N of M source(s) are
+          # not available" (it asked, and the answer was no). Only the second says anything about the
+          # publication. Reporting a refusal as "nothing due" is the trapdoor AGENTS.md forbids;
+          # acting on one would bake against an identity nobody established.
+          #
+          # The one refusal that is NOT a defect is "no marker for this release at all": that means
+          # the PLATFORM content bake has never published for this version, which is precisely what
+          # `publish-bake` is running to fix on this same tick. The Plugins seal is judged on the
+          # NEXT tick, an hour later, by which time the marker exists — self-clearing, with no timer
+          # and no retry written here, and said out loud rather than folded into a green.
+          #
+          # 🚨 Match it by its OWN wording — `has no marker at` — never the shared `CANNOT RESOLVE`
+          # prefix. An EMPTY marker opens with the same prefix and is not "the bake has not run yet":
+          # the producer WROTE a marker and recorded no identity, which no later tick repairs. Keyed on
+          # the prefix, that producer defect was read as a pending bake and answered with a green.
+          if ! grep -q 'are not available for framework identity' "$log"; then
+            if grep -q 'has no marker at' "$log"; then
+              verdict false "⏭️ NOT MEASURED: release \`$RELEASE_VERSION\` has no \`_releases/\` marker yet, so this set's framework identity is not established and nothing can be said about its \`plugins\` publication. The platform bake on THIS tick writes that marker; the next reconcile judges the seal."
+              exit 0
+            fi
+            echo "::error::the availability probe could not ANSWER for release \`$RELEASE_VERSION\` (exit $probe) — see its CANNOT DETERMINE line above. Cannot determine is not clear to proceed, and it is not 'nothing to do' either: with the artifact store unreadable, nothing here says whether \`plugins\` is published for this set. Fix the access (az login / BAKE_PUBLISH_TARGETS / the share)."
+            exit 1
+          fi
+          if [ -z "$identity" ]; then
+            echo "::error::the probe reported \`plugins\` absent but printed no resolved identity, so the finding names no identity and cannot be acted on. Refusing — naming the identity is the one thing a seal check must never get wrong."
+            exit 1
+          fi
+
+          # ── BOUNDED. A re-attempt is repair, not a retry loop ──────────────────────────────
+          # The bake is DETERMINISTIC for this pair (see the pinning note above), so it either failed
+          # on infrastructure — three of the nine — and will likely pass, or on Plugins' own content —
+          # six of the nine — and will fail identically for as long as that commit is HEAD. A fourth
+          # attempt on the same pair buys no information and costs ~30 min of runner time an hour, so
+          # the budget is 3 PER PAIR and the slot is consumed when an attempt STARTS. A new core sha
+          # or a new plugins sha resets it naturally — and a new plugins sha makes the set incomplete
+          # anyway, which is the ordinary full-publish path.
+          #
+          # Its own label, NOT the `ci-failure` ledger: that one CLOSES ITSELF when an image heal
+          # succeeds (#3176), and an image heal says nothing about a publication — sharing it would
+          # silently grant a fresh budget on an unrelated event.
+          key="$SHORT-p$PSHORT"
+          count_seal() {
+            gh issue view "$1" --repo "$REPO" --json comments \
+              --jq "[.comments[] | select(.body | contains(\"$2\"))] | length"
+          }
+          gh label create cd-plugins-seal --repo "$REPO" \
+            --description "A sealed platform set whose Plugins publication is missing for its framework identity" \
+            --color D93F0B --force >/dev/null || echo "::warning::could not ensure the cd-plugins-seal label (continuing — the ledger is the comment, not the label)"
+          issue=$(gh issue list --repo "$REPO" --label cd-plugins-seal --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+          if [ -z "$issue" ]; then
+            url=$(gh issue create --repo "$REPO" --label cd-plugins-seal \
+              --title "CD: a sealed platform set has no \`plugins\` publication for its identity" \
+              --body "A core CD run sealed a platform set — promote, verify and the platform bake all succeeded — while its \`Plugins: bake + seal the publication for this identity\` leg did not. Every satellite resolves the newest sealed set and then asks for \`plugins\` under that set's framework identity, so each one holds until the publication exists. The reconciler re-attempts the seal; this issue collects those attempts. Closing it grants a fresh budget.")
+            issue="${url##*/}"
+          fi
+          attempts=$(count_seal "$issue" "<!-- cd-seal:$key -->")
+          case "${attempts:-}" in
+            ''|*[!0-9]*)
+              echo "::error::could not read the attempt ledger on issue #$issue (got '${attempts:-<nothing>}'). An attempt that is not written down is an attempt that can be repeated forever, so this refuses rather than defaulting the count to zero."
+              exit 1 ;;
+          esac
+          if [ "$attempts" -ge "$MAX_SEAL_ATTEMPTS" ]; then
+            if [ "$(count_seal "$issue" "<!-- cd-seal-stopped:$key -->")" = "0" ]; then
+              gh issue comment "$issue" --repo "$REPO" --body "$(printf '%s\n\n%s\n\n%s' \
+                "<!-- cd-seal-stopped:$key -->" \
+                "🛑 **Re-attempts STOPPED for \`$key\`** after $MAX_SEAL_ATTEMPTS, with \`plugins\` still unpublished for framework identity \`$identity\` (release \`$RELEASE_VERSION\`)." \
+                "The bake is deterministic for this pair, so a further attempt would fail the same way: read the \`Plugins: pack …\` / \`Plugins: bake + seal …\` legs of the linked runs. A merge in MeshWeaver.Plugins moves the pair and grants a fresh budget on its own; so does closing this issue. Until then every satellite holds on this identity — which is the gate working, not a second fault.")"
+            fi
+            verdict false "🛑 \`plugins\` is NOT sealed for \`$identity\` (release \`$RELEASE_VERSION\`) and the re-attempt budget for \`$key\` is spent ($MAX_SEAL_ATTEMPTS) — not retrying. See the \`cd-plugins-seal\` issue."
+            exit 0
+          fi
+          # 🚨 CLAIM, THEN RANK (Copilot on #4565). Reading the count and then appending is not atomic:
+          # `schedule` runs in the `reconcile` concurrency group but `workflow_dispatch` in the ref-based
+          # one, so two reconciles can overlap, both read 2 and both launch "3/3". So this run writes its
+          # claim FIRST, then re-reads every claim for the pair in the order the SERVER recorded them and
+          # proceeds only if its own falls inside the budget. GitHub assigns that order, so both racers
+          # compute the same answer and at most $MAX_SEAL_ATTEMPTS ever proceed — under any overlap,
+          # without touching the workflow's concurrency model. A losing claim still counts afterwards.
+          claim="<!-- cd-seal-run:${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1} -->"
+          gh issue comment "$issue" --repo "$REPO" --body "$(printf '%s\n%s\n\n%s\n\n%s' \
+            "<!-- cd-seal:$key -->" "$claim" \
+            "🔁 **Re-attempt claim for the Plugins seal for \`$key\`** ([run]($RUN_URL)) — its rank among this pair's claims decides whether it proceeds." \
+            "The platform set for \`$SHORT\` is sealed, but the artifact store holds no sealed \`plugins\` publication for its framework identity \`$identity\` (release \`$RELEASE_VERSION\`). This run re-bakes and re-seals that one leg; no image is rebuilt and no tag moves.")"
+          rank=$(gh issue view "$issue" --repo "$REPO" --json comments \
+            --jq "[.comments[] | select(.body | contains(\"<!-- cd-seal:$key -->\"))] | map(.body | contains(\"$claim\")) | index(true)")
+          case "${rank:-}" in
+            ''|*[!0-9]*)
+              echo "::error::wrote this run's seal claim on issue #$issue but could not rank it among the pair's claims (got '${rank:-<nothing>}'). A claim that cannot be ranked cannot be bounded, so this refuses rather than proceeding."
+              exit 1 ;;
+          esac
+          n=$((rank + 1))
+          if [ "$n" -gt "$MAX_SEAL_ATTEMPTS" ]; then
+            verdict false "🛑 another reconcile claimed the last attempt for \`$key\` first (this run's claim ranked $n against a budget of $MAX_SEAL_ATTEMPTS) — standing down, not retrying."
+            exit 0
+          fi
+          verdict true "🔁 re-attempt $n/$MAX_SEAL_ATTEMPTS — \`plugins\` is NOT sealed for \`$identity\` (release \`$RELEASE_VERSION\`), so this reconcile bakes and seals it."
+
   portal-image:
     name: "Build + push portal-ai image"
     # Gate: a commit whose required check is green, resolved by `gate` (push OR reconcile).
     needs: gate
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    # 🚨 30 minutes covers what this job now does, and the cr mirror moved OUT of it on purpose
+    # (`portal-image-mirror` below). Measured on the last run that finished (#8767, 2026-09-16):
+    # build + push the multi-arch image to ACR 20.8 min, identity readback and the reference-set
+    # gate 0.4 min — and then 7.5 min of mirroring a 2 GiB manifest to cr.meshweaver.cloud, which
+    # took the job to 28.7 min against this 30-minute cap. One minute of headroom is not headroom:
+    # on the night of 2026-09-16→17 three consecutive reconciles (attempts 1/3, 2/3 and 3/3 for
+    # `03919a6`) were killed at exactly 30:00 with the mirror still copying, `promote` never ran,
+    # and the heal budget was spent on runs that were progressing normally (#4526). Two jobs, two
+    # budgets — not one bigger number.
     timeout-minutes: 30
     outputs:
       version: ${{ steps.vars.outputs.version }}
@@ -1245,22 +1746,8 @@ jobs:
           done
           echo "::error::portal-ai publish failed on all 3 attempts with no compiler diagnostics — read the LAST attempt's output above. A registry blob-upload failure there (the CONTAINER-10xx family) means the connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
           exit 1
-      # 🚨 THE SAME MANIFEST, TO THE FLEET'S OWN REGISTRY — right after the ACR push, in this job
-      # (Doc/Architecture/ContainerRegistryInMemex). Still the staging tag only: a name no consumer
-      # selects, on cr exactly as on ACR, so the all-or-nothing gate `promote` applies is unchanged
-      # — promote mirrors every consumer-visible tag to cr the same way. The digest is read BACK
-      # off cr and compared to ACR's; a mismatch fails this leg RED, because a digest-pinned
-      # consumer (MW_IMAGE_DIGEST, platform-image-digest) must resolve the identical object on
-      # either registry. Login is by the publisher account; its password is asserted by preflight.
-      - name: Log in to the fleet registry (publisher)
-        env:
-          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
-        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
-      - name: Mirror portal-ai (staging tag) to the fleet registry — same manifest, digest verified
-        run: >
-          .github/scripts/mirror-image-to-registry.sh
-          "${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
-          "${{ env.REGISTRY }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
+      # 🚨 The mirror of this manifest to the fleet registry is `portal-image-mirror`, a job of its
+      # own — it used to be two steps here, and see this job's `timeout-minutes` for what that cost.
       # 🚨 The publish SUCCEEDING is not evidence the image identifies itself correctly — that is
       # exactly the state that shipped for a week (see the version note above). So the version is
       # read back out of the pushed image config, per architecture, before anything selectable is
@@ -1322,6 +1809,61 @@ jobs:
           for d in "${dirs[@]}"; do
             .github/scripts/check-platform-reference-set.sh "$d" .github/workflows/main-cd.yml
           done
+
+  # 🚨 THE SAME MANIFEST, TO THE FLEET'S OWN REGISTRY (Doc/Architecture/ContainerRegistryInMemex),
+  # in a job of its own with a budget of its own. Still the staging tag only: a name no consumer
+  # selects, on cr exactly as on ACR, so the all-or-nothing gate `promote` applies is unchanged —
+  # promote mirrors every consumer-visible tag to cr the same way. The digest is read BACK off cr
+  # and compared to ACR's; a mismatch fails this leg RED, because a digest-pinned consumer
+  # (MW_IMAGE_DIGEST, platform-image-digest) must resolve the identical object on either registry.
+  #
+  # 🚨 WHY IT IS NOT A STEP OF `portal-image` any more. It was, and the two shared one 30-minute
+  # cap: 20.8 min of build and ACR push plus 7.5 min of mirroring left ~1 minute of headroom
+  # (#8767, the last run that finished). On 2026-09-16→17 the mirror ran 9.7, 9.7 and 11.5 minutes
+  # in three consecutive reconciles and every one of them was killed at exactly 30:00 with the copy
+  # still in flight — so `promote` never ran, the image set stayed incomplete, and the reconciler's
+  # 3-attempt heal budget was spent on runs that were progressing normally. Delivery stopped with
+  # main green (#4526). The fix is two budgets, not a bigger one: a build that overruns and a
+  # mirror that overruns are different faults and now fail as different jobs, each naming itself.
+  #
+  # 🚨 `promote` needs THIS job, so the ordering the old step gave for free is kept: nothing
+  # consumer-visible is tagged until cr holds the identical manifest. 25 minutes is ~3× the
+  # measured copy; reaching it means the copy is STUCK, not slow (AGENTS.md) — read the registry,
+  # never this number.
+  portal-image-mirror:
+    name: "Mirror portal-ai to the fleet registry"
+    needs: [gate, portal-image]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      # Sparse: this job needs the two registry-login scripts and the mirror script, not the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # buildx reads registry credentials from ~/.docker/config.json, which is what both of these
+      # logins write — one store, both registries. The ACR side is the SOURCE of the copy.
+      - name: ACR login
+        # Bounded transport retry — the bare one-liner died on `context deadline exceeded`
+        # (2026-08-30 23:43) OUTSIDE the publish retry and blocked delivery. See the script.
+        run: bash .github/scripts/acr-login.sh
+      - name: Log in to the fleet registry (publisher)
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      - name: Mirror portal-ai (staging tag) to the fleet registry — same manifest, digest verified
+        run: >
+          .github/scripts/mirror-image-to-registry.sh
+          "${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
+          "${{ env.REGISTRY }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
 
   migration-image:
     name: "Build + push migration image"
@@ -1555,7 +2097,7 @@ jobs:
 
   promote:
     name: "Promote: tag the full set (all-or-nothing)"
-    needs: [gate, portal-image, migration-image, plugin-test-image]
+    needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -2124,6 +2666,17 @@ jobs:
           docker run --rm --init --platform ${{ matrix.docker_platform }} -v "$STAGE/app:/portal:ro" \
             --entrypoint /app/mw-plugin-test "$BAKE_IMAGE" \
             framework-identity /portal --expect "$BAKED"
+          # Equal framework identities do NOT imply equal host closures. The tester carries
+          # fewer assemblies than the portal, and the release gate reads this source first.
+          # Publish the measured PORTAL surface, including its seeded module entry assemblies,
+          # using the same image and architecture whose identity was just verified above.
+          docker cp "$cid:/usr/share/dotnet/shared" "$STAGE/shared"
+          docker run --rm --init --platform ${{ matrix.docker_platform }} \
+            -v "$STAGE:/portal:ro" -v "$BAKE_DIR:/bake" \
+            --entrypoint /app/mw-plugin-test "$BAKE_IMAGE" \
+            platform-surface /portal/app --shared-frameworks /portal/shared \
+            --output /bake/platform-surface.json
+          test -s "$BAKE_DIR/platform-surface.json"
           {
             echo "### 🔑 Bake address verified"
             echo "- \`$BAKED\` — resolved by BOTH the bake host and the promoted \`memex-portal-ai\` image (linux/amd64)"
@@ -2150,11 +2703,20 @@ jobs:
       # reconcile reads the version back off the promoted image. No version tag on that digest
       # means the release was never armed, and a bake cannot make available what was never
       # promoted: that is a loud stop, never a fallback to "identity only" or an invented version.
-      - name: "Resolve the release version this bake belongs to (bake-only: read it off the promoted image)"
+      #
+      # 🚨 THAT READ NOW LIVES IN `gate` (`bake_version`, MeshWeaver#4539) and arrives here as
+      # `RECOVERED`. It moved because a SECOND consumer appeared — the seal probe, which needs the
+      # same version to name this set's framework identity — and two independent ACR resolutions of
+      # one fact is the shape `gate.image_tag`'s comment exists to forbid. What did NOT move is this
+      # step's job: choose between the minted version and the recovered one, and REFUSE rather than
+      # publish under an unknown release. Both refusals below are unchanged, and `test-cd-steps.py`
+      # still executes this step and the moved read, each against its own cases.
+      - name: "Resolve the release version this bake belongs to (bake-only: the version `gate` read off the promoted image)"
         id: release
         env:
           RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
           BAKE_ONLY: ${{ needs.gate.outputs.bake_only }}
+          RECOVERED: ${{ needs.gate.outputs.release_version }}
           SHORT_SHA: ${{ needs.gate.outputs.short_sha }}
         run: |
           set -euo pipefail
@@ -2167,31 +2729,18 @@ jobs:
             echo "::error::portal-image produced no version and this is not a bake-only run — refusing to publish under an unknown release."
             exit 1
           fi
-          # 🚨 Two failure shapes live in this one read, and the second cost nine hours.
-          #
-          # `tags` is NULL on an untagged manifest — the orphaned per-platform children an index
-          # push leaves behind (16 of memex-portal-ai's 2101 manifests on 2026-08-29). jmespath's
-          # contains() THROWS on null instead of returning false, and the throw aborts the WHOLE
-          # query, so ONE orphan makes this unable to find any tag at all. `tags &&` short-circuits
-          # those rows out before contains() ever sees them.
-          #
-          # And do NOT swallow az's stderr. This read used to end `2>/dev/null || true`, which
-          # turned "the query crashed with an invalid-jmespath error" into "there is no version
-          # tag" — so the error below blamed promote, which was working perfectly: it had armed
-          # memex-portal-ai:<sha> → <version> on one digest, exactly as designed. Nine scheduled
-          # reconciles (2026-08-28 22:12Z → 08-29 05:26Z) died pointing at the healthy half of CD.
-          # An error that names a HEALTHY component as the culprit is worse than a silent failure;
-          # it is a silent failure with directions attached. Let az fail the step with its own
-          # message, so the next reader debugs the query and not promote.
-          tags=$(az acr manifest list-metadata --registry meshweaver --name memex-portal-ai \
-                   --query "[?tags && contains(tags, '${SHORT_SHA}')].tags[]" -o tsv)
-          version=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+' <<<"$tags" | grep -vx "$SHORT_SHA" | head -1 || true)
-          if [ -z "$version" ]; then
-            echo "::error::memex-portal-ai:${SHORT_SHA} carries no version tag (tags on that digest: $(tr '\n' ' ' <<<"$tags")) — promote's Phase C never armed a release for this sha, so there is no release to make available. Fix promote; do not publish a marker for an invented version."
+          # 🚨 An EMPTY recovered version is a REFUSAL, not a fallback. `gate.bake_version` is a hard
+          # stop on its own (no version tag on the promoted digest is a loud error there, naming
+          # promote's Phase C), so an empty value reaching here means that step did not run or did
+          # not answer — and publishing a release marker for a version nobody resolved is exactly
+          # what the read it replaced was written to prevent. Do NOT re-add a local ACR read as a
+          # "safety net": two resolutions of one fact is the defect, not the protection.
+          if [ -z "${RECOVERED:-}" ]; then
+            echo "::error::this is a bake-only reconcile but \`gate\` resolved no release version for ${SHORT_SHA} — so there is no release to make available and no identity to publish under. Read gate's 'Resolve the release version of the already-promoted set' step: it fails loudly when promote's Phase C never armed a release for this sha, and this step must never invent one."
             exit 1
           fi
-          echo "release version $version (recovered from memex-portal-ai:${SHORT_SHA}'s tag set — bake-only reconcile)"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release version $RECOVERED (resolved by gate from memex-portal-ai:${SHORT_SHA}'s tag set — bake-only reconcile)"
+          echo "version=$RECOVERED" >> "$GITHUB_OUTPUT"
 
       - name: "Publish bundles to every portal target"
         env:
@@ -2534,10 +3083,36 @@ jobs:
   # graph (node-repo-module-pack checks the content repo out THREE times), so a plugins merge
   # landing mid-run could seal bundles from a tree the shipped image does not contain — the one
   # thing this section exists to guarantee, quietly not guaranteed.
+
   plugins-modules:
     name: "Plugins: pack the module bundles the bake composes"
     needs: [preflight, gate, promote, plugins-bake-image]
-    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    # 🚨 Two ways in, and the second is MeshWeaver#4539 — the same shape `publish-bake` above got
+    # from #2452, for the same reason and with the same `always()`:
+    #   * a real publish — the images were promoted, pack the bundles the bake composes;
+    #   * a RECONCILE whose image set is complete and whose `plugins` publication is MISSING for the
+    #     identity those images resolve (`gate.plugins_seal_due`, which names that identity, refuses
+    #     to answer on a refusal, and bounds the attempts). NEVER on an ordinary bake-only tick: a
+    #     re-pack costs ~30 min, and the probe is what keeps this off every tick where nothing is
+    #     wrong — it is a precondition, not a schedule.
+    # `always()` is required because `promote` is SKIPPED on the reconcile path — without it this
+    # job inherits the skip and the fix is inert, which is the exact shape it is fixing.
+    #
+    # 🚨 `preflight` is asserted too, though nothing reads its outputs: it is the GATE that proves this
+    # run's external inputs exist. `always()` stops a job inheriting a failed need's skip, so without
+    # this a FAILED preflight no longer stopped the Plugins legs — on the reconcile path they baked
+    # with inputs nobody had asserted (Copilot on #4565). A gating need is paid for like a consumed one.
+    # 🚨 AND `always()` MUST BE PAID FOR: it also stops this job inheriting the skip of a need that
+    # FAILED, so every need whose OUTPUT this job consumes has to be asserted by hand. Without the
+    # `plugins-bake-image` clause a failed digest resolution would run this job with EMPTY
+    # `platform-image-digest` / `tester-image-digest` — and those are OPTIONAL inputs of the lane,
+    # which resolves the platform ITSELF when they are empty. So it would not fail loudly; it would
+    # quietly pack the bundles against a set this run did not promote.
+    if: >-
+      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&
+      needs.plugins-bake-image.result == 'success' &&
+      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||
+       needs.gate.outputs.plugins_seal_due == 'true')
     permissions:
       contents: read
       id-token: write
@@ -2598,7 +3173,11 @@ jobs:
   plugins-bake-image:
     name: "Plugins: resolve this run's tester + portal image digests"
     needs: [preflight, gate, plugin-test-image, promote]
-    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    # Same two ways in as `plugins-modules` above (MeshWeaver#4539), same `always()`, same reason.
+    if: >-
+      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&
+      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||
+       needs.gate.outputs.plugins_seal_due == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -2632,11 +3211,18 @@ jobs:
         run: bash .github/scripts/acr-login.sh
       - name: Resolve the promoted tester image's digest
         id: digest
+        # 🚨 `gate.image_tag`, NEVER `plugin-test-image.outputs.version` (MeshWeaver#4539). On a
+        # seal re-attempt `plugin-test-image` is SKIPPED, so that output is the empty string and
+        # every reference below would reach for `mw-plugin-test:` — a tag that cannot resolve. That
+        # is exactly the trap `image_tag` was minted for: read its comment in `gate`'s outputs, which
+        # records the seven times a per-reference conditional got this wrong. `image_tag` is the
+        # staging tag on a publishing run and the already-PROMOTED short-sha tag on a reconcile, so
+        # this line is correct on both paths and there is no second place to remember.
         env:
-          VERSION: ${{ needs.plugin-test-image.outputs.version }}
+          VERSION: ${{ needs.gate.outputs.image_tag }}
         run: |
           set -euo pipefail
-          [ -n "${VERSION:-}" ] || { echo "::error::plugin-test-image produced no version — cannot name the image the Plugins bake must target"; exit 1; }
+          [ -n "${VERSION:-}" ] || { echo "::error::gate produced no image tag — cannot name the image the Plugins bake must target"; exit 1; }
           ref="meshweaver.azurecr.io/mw-plugin-test:${VERSION}"
           digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' | tr -d '"')
           case "$digest" in sha256:*) ;; *) echo "::error::could not resolve a digest for $ref (got '$digest') — the promoted set is not readable"; exit 1 ;; esac
@@ -2654,7 +3240,14 @@ jobs:
   plugins-bake:
     name: "Plugins: bake + seal the publication for this identity"
     needs: [preflight, gate, plugin-test-image, promote, plugins-modules, plugins-bake-image]
-    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    # Same two ways in as `plugins-modules` above (MeshWeaver#4539), same `always()`, same reason —
+    # plus the ordinary requirement that its own inputs actually ran: on the reconcile path
+    # `plugins-modules` and `plugins-bake-image` are what `always()` no longer waits for implicitly.
+    if: >-
+      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&
+      needs.plugins-modules.result == 'success' && needs.plugins-bake-image.result == 'success' &&
+      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||
+       needs.gate.outputs.plugins_seal_due == 'true')
     permissions:
       contents: read
       id-token: write
@@ -2664,13 +3257,17 @@ jobs:
       content-ref: ${{ needs.gate.outputs.plugins_sha }}
       bake-source: plugins
       module-artifacts: module-bundle-MeshWeaver.{AI,Markdown.Collaboration,Maps,Payments.Stripe}
-      test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.plugin-test-image.outputs.version }}
+      # 🚨 `gate.image_tag`, NEVER `plugin-test-image.outputs.version` — see `plugins-bake-image`'s
+      # digest step for why (MeshWeaver#4539). `test-image` and `platform-image` are REQUIRED inputs
+      # of the lane, so an empty version here does not even fail loudly: it produces `…/mw-plugin-test:`
+      # and the lane dies on a manifest it can never resolve.
+      test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.gate.outputs.image_tag }}
       image-digest: ${{ needs.plugins-bake-image.outputs.digest }}
       # 🚨 The PORTAL of this run's promoted set (MeshWeaver#3022): the tester EXECUTES the bake,
       # the portal SUPPLIES its reference set, its identity and the gate's runtime. The bake's
       # identity is the portal's by construction — the address check that #1814 needed becomes
       # an invariant the lane asserts rather than a comparison that can lose.
-      platform-image: meshweaver.azurecr.io/memex-portal-ai:${{ needs.plugin-test-image.outputs.version }}
+      platform-image: meshweaver.azurecr.io/memex-portal-ai:${{ needs.gate.outputs.image_tag }}
       platform-image-digest: ${{ needs.plugins-bake-image.outputs.platform_digest }}
       bake-publish-targets: ${{ vars.BAKE_PUBLISH_TARGETS }}
       platform-ref: ${{ needs.gate.outputs.sha }}
@@ -2678,8 +3275,10 @@ jobs:
       # run-named directory, sealed there, and `_current` — written after the seal — says which one
       # applies. The prefix is never mutated in place again for a reader that follows the pointer,
       # which is every portal (`ShippedPrebuiltBundles.PublicationDirectoryOf`) and both Azure-direct
-      # readers. The flat compatibility copy is still written and still sealed, so a reader that
-      # cannot follow a pointer sees exactly what it sees today.
+      # readers. 🚨 Since PHASE 5 the flat compatibility copy is DISPOSED OF rather than refreshed —
+      # `_complete` first, then its files, and only once `_current` has moved and been read back —
+      # so the prefix is not mutated in place for ANY reader. The deployment census that gated that
+      # is in Doc/Architecture/SealedPublicationGenerations (five records, 2026-09-17).
       #
       # 🚨 WHY THIS DOES NOT HAVE TO BE CO-ORDINATED WITH MeshWeaver.Plugins, whose `publish-bake`
       # is the OTHER producer of this prefix. Since MeshWeaver#4249 the layout belongs to the PREFIX:
@@ -2963,7 +3562,7 @@ jobs:
 
   verify-images:
     name: "Verify every image shipped"
-    needs: [gate, portal-image, migration-image, plugin-test-image, promote]
+    needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote]
     if: always() && needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -3118,7 +3717,7 @@ jobs:
     name: "CD delivered, or had a good reason not to"
     # 🚨 Every delivery leg is a NEED, not just [gate, promote]. The verdict cannot assert that a
     # publish actually happened while it can only see two of the nine jobs that make it happen.
-    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote,
+    needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote,
             publish-bake, notify-platform-update, verify-images,
             plugins-modules, plugins-bake-image, plugins-bake,
             satellite-compat-image, satellite-compat]
@@ -3127,12 +3726,22 @@ jobs:
     timeout-minutes: 5
     # Job-level permissions REPLACE the workflow-level map, so every one this job needs is here:
     #   contents — `commits/main`, the tip resolution that tells "superseded" from "stuck"
+    #   checks   — `commits/<head>/check-runs`, the handoff's publishability read. 🚨 NOT covered by
+    #              `contents`: the Checks API needs its own scope, `gate` declares it for the very
+    #              same call, and without it this probe 403s, takes the fail-safe warning path and
+    #              NEVER dispatches — the whole handoff would be inert behind a green tick, which is
+    #              precisely the "reads like a pass" defect it exists to close. (Caught in review.)
     #   actions  — `actions/runs?head_sha=…`, the live-publication probe that tells "a publish is
-    #              in flight" from "nobody is publishing" (MeshWeaver#3513)
-    # It checks out nothing and pushes nothing, so id-token and packages are deliberately absent.
+    #              in flight" from "nobody is publishing" (MeshWeaver#3513); WRITE because the
+    #              handoff step below dispatches this workflow when it is leaving main's HEAD
+    #              without a publisher (MeshWeaver#4652). `actions: write` is the least grant that
+    #              allows a dispatch — there is no narrower "dispatch only" scope. The step calls
+    #              exactly one mutating command, `gh workflow run` on THIS workflow and `--ref main`.
+    # It checks out nothing and pushes no code, so id-token and packages are deliberately absent.
     permissions:
       contents: read
-      actions: read
+      checks: read
+      actions: write
     steps:
       - name: A green, incomplete main must never end a reconcile unpublished
         id: verdict
@@ -3347,6 +3956,7 @@ jobs:
           LEGS: >-
             preflight=${{ needs.preflight.result }}
             portal-image=${{ needs.portal-image.result }}
+            portal-image-mirror=${{ needs.portal-image-mirror.result }}
             migration-image=${{ needs.migration-image.result }}
             plugin-test-image=${{ needs.plugin-test-image.result }}
             promote=${{ needs.promote.result }}
@@ -3368,6 +3978,45 @@ jobs:
             exit 1
           fi
           echo "every delivery leg ran and succeeded: $LEGS"
+
+      # 🚨 AND A RECONCILE THAT REPAIRED SOMETHING MUST BE JUDGED TOO (MeshWeaver#4539).
+      #
+      # The step above is `publish == 'true'`-only, and the first step's reconcile branch fires only
+      # on an INCOMPLETE set — while `bake_only` is by definition the COMPLETE-set branch. So a
+      # bake-only tick was judged by NOTHING: its legs could fail or skip and the run's verdict job
+      # was silent about it. That is the same "a skipped leg ticks like a delivered one" defect the
+      # step above exists to close, on the path that now performs repairs.
+      #
+      # Two legs on that path, and each is judged only when it was DUE:
+      #   * `publish-bake` runs on every bake-only tick, so it is always judged;
+      #   * the three `plugins-*` legs run only when `gate.plugins_seal_due` is `true` — when it is
+      #     not, they are correctly `skipped` and naming them would cry wolf on every hourly tick.
+      # `gate` itself is not listed: this job cannot reach this step with a gate that did not run
+      # (the first step refuses an empty verdict), and `bake_only` is one of its outputs.
+      - name: A reconcile that re-asserted anything must have RUN those legs
+        if: needs.gate.outputs.bake_only == 'true'
+        env:
+          SEAL_DUE: ${{ needs.gate.outputs.plugins_seal_due }}
+          BAKE_LEGS: >-
+            publish-bake=${{ needs.publish-bake.result }}
+          SEAL_LEGS: >-
+            plugins-modules=${{ needs.plugins-modules.result }}
+            plugins-bake-image=${{ needs.plugins-bake-image.result }}
+            plugins-bake=${{ needs.plugins-bake.result }}
+        run: |
+          set -euo pipefail
+          legs="$BAKE_LEGS"
+          if [ "$SEAL_DUE" = "true" ]; then legs="$legs $SEAL_LEGS"; fi
+          bad=""
+          for kv in $legs; do
+            name="${kv%%=*}"; res="${kv#*=}"
+            if [ "$res" != "success" ]; then bad="$bad $name=$res"; fi
+          done
+          if [ -n "$bad" ]; then
+            echo "::error::this reconcile re-asserted the content bake${SEAL_DUE:+ (plugins seal due: $SEAL_DUE)}, but these legs did not run to success:$bad. A reconcile that did not complete its repair leaves the state it was started to heal: with a missing \`plugins\` publication every satellite holds on this set's framework identity, and with a missing platform bake every pod Roslyn-compiles shipped content at boot. Read the named job."
+            exit 1
+          fi
+          echo "every reconcile leg that was due ran and succeeded: $legs (plugins seal due: ${SEAL_DUE:-false})"
 
       # ─────────── Compatibility: every satellite's NodeTypes against this set ───────────
       # The legs are `satellite-compat`'s (see that job): RED on a break, NOT blocking. This step
@@ -3525,6 +4174,171 @@ jobs:
             echo "### ❌ INCONCLUSIVE — gate=${GATE_RESULT} produced no verdict; this run is red above" >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # ───────────── THE LANE HANDS HEAD ON WHEN IT LETS GO OF IT (MeshWeaver#4652) ─────────────
+      # 🚨 A DEFERRAL IS A PROMISE. THIS IS THE STEP THAT KEEPS IT.
+      #
+      # The push lane is one concurrency group with `cancel-in-progress: false`, so GitHub holds
+      # ONE run in flight and ONE pending, and every further arrival REPLACES the pending one. That
+      # supersede rule is CORRECT and must stay — measured over the 21.7 h to 2026-09-17T19:29Z:
+      # 77 push-lane arrivals (median gap 8.3 min) against 14 runs that actually executed, whose
+      # wall clocks ran 35–107 min (median ~67). Not discarding would serialize 77 × ~67 min ≈ 86 h
+      # of lane time into a 21.7 h window: the lane would fall behind without bound and every
+      # publication would ship a commit hours stale. Discarding queued work is the only reason the
+      # lane keeps up at all — it ran 16.1 h busy out of 21.7 h, 74 % saturated.
+      #
+      # What is NOT correct is what the discard does to the two liveness probes. A run that is
+      # `pending` has executed nothing — measured: `jobs.total_count == 0` — and GitHub may delete
+      # it without ever running it. Both probes nevertheless read it as "a publication is in
+      # flight": `gate`'s #3376 probe DEFERS to it, and `delivery-verdict`'s #3513 probe SUPPRESSES
+      # the stuck-delivery alarm on it. Neither ever learns that the run it trusted was discarded.
+      # Measured on three consecutive hourly reconciles on 2026-09-17 — every one of them:
+      #   16:31Z run 35247143507 → deferred to 35246058388 → cancelled 16:37:35Z
+      #   17:26Z run 35252772696 → deferred to 35252764043 → cancelled 17:30:35Z, jobs.total_count 0
+      #   18:35Z run 35259738026 → deferred to 35259392545 → cancelled 18:42:33Z, jobs.total_count 0
+      # so the ONLY backstop for a failed or discarded cycle stood down, silently, on every tick.
+      #
+      # 🚨 THE FIX IS NOT TO NARROW THE PROBE. "Pending" genuinely means "will build" whenever the
+      # run survives (2026-09-10, workflow_run 34506317727 did), and a pending run has no job count
+      # to tell the two apart — the ambiguity is irreducible AT PROBE TIME. It is not irreducible
+      # AT RELEASE TIME: the run holding the lane is the one party that can see both what it built
+      # and what HEAD is now, and it sees it at the exact moment the lane frees. So the obligation
+      # is DISCHARGED here rather than promised there, and it needs no carrier, no marker and no
+      # state store — which is what the Continuous Delivery contract requires.
+      #
+      # 🚨 BOUNDED AT ONE HOP, BY CONSTRUCTION — this is a drain, never a retry loop. A run that was
+      # ITSELF dispatched does not dispatch again (`HANDOFF_ELIGIBLE` below), so one terminating
+      # lane holder produces at most ONE extra run. Without that, a deterministic promote failure
+      # would hand itself on forever; with it, the chain stops and `verdict` reds exactly as it does
+      # today. The dispatched run is additionally budgeted by the existing per-commit heal ledger
+      # (MAX_ATTEMPTS), which it consumes like any other reconcile.
+      #
+      # 🚨 IT COSTS ALMOST NOTHING, because it is gated on the state that makes a handoff MEAN
+      # something: HEAD's required check already GREEN, and no run of this workflow queued or
+      # running on HEAD. A green HEAD normally already has its own `workflow_run` CD run, so the
+      # probe finds a successor and this step dispatches nothing. It fires in precisely the two
+      # holes: HEAD's run was DISCARDED, or it EXECUTED AND FAILED. Everything else exits in three
+      # API reads inside a job that was running anyway.
+      - name: Hand main's HEAD on if this run is leaving it without a publisher
+        id: handoff
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          WORKFLOW_FILE: main-cd.yml
+          SHA: ${{ needs.gate.outputs.sha }}
+          PUBLISH: ${{ needs.gate.outputs.publish }}
+          COMPLETE: ${{ needs.gate.outputs.complete }}
+          PROMOTE_RESULT: ${{ needs.promote.result }}
+          # 🚨 EVERY SHIPPING LEG, not `promote` alone — promote is only phase A, the image TAGS.
+          # A run can tag the set and still fail afterwards in the bake or the Plugins bundle legs,
+          # which is EXACTLY the shape that stalled delivery on 2026-09-17 (run 35257430439 failed
+          # in `plugins-modules` well past promote). Keyed on promote alone, this step would call
+          # such a run "HEAD's publication", exit before the successor probe, and hand nothing on —
+          # silently, in the one case it was built for. (Caught in review.)
+          #
+          # The criterion for membership is "a failure here means HEAD's PUBLICATION is incomplete".
+          # Three needs are deliberately absent: `preflight`/`gate` (their failure leaves SHA empty,
+          # which exits above), `notify-platform-update` (the release EVENT — satellites do not
+          # learn, and rebuilding publishes nothing new), and `satellite-compat*` (the per-build
+          # COMPATIBILITY measurement, whose red this file twice states means "DELIVERY COMPLETED").
+          DELIVERY_LEGS: >-
+            ${{ needs.portal-image.result }} ${{ needs.portal-image-mirror.result }}
+            ${{ needs.migration-image.result }} ${{ needs.plugin-test-image.result }}
+            ${{ needs.promote.result }} ${{ needs.verify-images.result }}
+            ${{ needs.publish-bake.result }} ${{ needs.plugins-modules.result }}
+            ${{ needs.plugins-bake-image.result }} ${{ needs.plugins-bake.result }}
+          # 🚨 The one-hop bound. A run that arrived BY a handoff must not emit another, or a
+          # deterministic failure becomes an unbounded dispatch loop. Computed here rather than in
+          # the body because the body may carry no `${{ }}` — `test-cd-steps.py` extracts this step
+          # by its `id:` and refuses a body it would have to rewrite.
+          HANDOFF_ELIGIBLE: ${{ github.event_name != 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+          say() { echo "$1"; echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
+
+          # `gate` resolves a target for BOTH entry paths, so an EMPTY one means the gate never ran
+          # (a PR-triggered workflow_run) or died before resolving it. Either way this run never
+          # held the delivery lane and is leaving nothing behind.
+          if [ -z "${SHA:-}" ]; then
+            echo "no target commit — this run never held the delivery lane, so it hands nothing on."
+            exit 0
+          fi
+          if [ "$HANDOFF_ELIGIBLE" != "true" ]; then
+            echo "this run was itself dispatched — it does not hand on again (the chain is bounded at one hop). If HEAD is still unpublished, the hourly reconcile and the next merge's run both reach it, and \`verdict\` reds if nobody does."
+            exit 0
+          fi
+
+          # main's HEAD *now*. The gate's reading was taken before any leg ran; asking again is the
+          # whole point — the lane is about to be free and HEAD has usually moved.
+          if ! HEAD=$(gh api "repos/$REPO/commits/main" --jq '.sha') || [ -z "$HEAD" ]; then
+            echo "::warning::could not resolve main's tip, so this run cannot tell whether it is leaving HEAD without a publisher. NOT dispatching — this degrades to the hourly reconcile, which is where delivery stood before this step existed, rather than to silence. The API failure is the bug to chase."
+            exit 0
+          fi
+          SHORT_HEAD="${HEAD:0:9}"
+
+          # Did any SHIPPING leg fail? A `skipped` leg is not a failure — most of them skip on a
+          # bake-only or a no-publish run, which is the ordinary case. Only `failure` and
+          # `cancelled` mean this run did not finish what it started.
+          case " $DELIVERY_LEGS " in
+            *" failure "*|*" cancelled "*) DELIVERY_INCOMPLETE=true ;;
+            *)                             DELIVERY_INCOMPLETE=false ;;
+          esac
+
+          # Nothing is owed when this run IS HEAD's publication — either it shipped the set, or the
+          # gate found one already complete and took the bake-only branch. Two arms are
+          # load-bearing. Without the `COMPLETE` one a bake-only reconcile on HEAD would hand itself
+          # on forever; without `DELIVERY_INCOMPLETE` a run that tagged the set and then failed a
+          # later leg would count as HEAD's publication and hand nothing on.
+          if [ "$HEAD" = "$SHA" ] && [ "$DELIVERY_INCOMPLETE" != "true" ] \
+             && { { [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; } || [ "$COMPLETE" = "true" ]; }; then
+            echo "nothing owed — this run is main's HEAD ($SHORT_HEAD) publication (publish=$PUBLISH promote=$PROMOTE_RESULT complete=$COMPLETE, every shipping leg clean)."
+            exit 0
+          fi
+
+          # 🚨 Only a GREEN head is publishable, so only a green head can be owed anything. Same
+          # instrument and same filter as `gate`'s own read, deliberately: a handoff that disagreed
+          # with the gate about what "green" means would dispatch runs the gate then declines.
+          if ! CHECK=$(gh api "repos/$REPO/commits/$HEAD/check-runs?per_page=100&check_name=Consolidate%20test%20results" \
+                         --jq '[.check_runs[] | select(.name=="Consolidate test results")]
+                               | sort_by(.started_at) | last // {}
+                               | "\(.status // "absent") \(.conclusion // "none")"'); then
+            echo "::warning::could not read the required check on main's tip $SHORT_HEAD, so this run cannot tell whether HEAD is publishable. NOT dispatching — the hourly reconcile remains. Chase the API failure."
+            exit 0
+          fi
+          read -r C_STATUS C_CONCL <<< "$CHECK"
+          if [ "$C_STATUS" != "completed" ] || [ "$C_CONCL" != "success" ]; then
+            echo "nothing owed — main's HEAD $SHORT_HEAD is not publishable yet (\`Consolidate test results\` → $C_STATUS/$C_CONCL). The workflow_run that fires when it settles green IS HEAD's publisher; inventing one now would only be declined."
+            exit 0
+          fi
+
+          # Is anybody else on HEAD? A queued run counts here — not because queuing is a promise,
+          # but because it inherits this obligation: whichever run finally executes runs this same
+          # step when IT terminates. That is what closes the loop the discard used to open.
+          if ! SUCCESSOR=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD&per_page=50" \
+                             --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id != $RUN_ID and .status != \"completed\")]
+                                   | sort_by(.id) | .[0] // empty
+                                   | \"\(.id) \(.status)\""); then
+            echo "::warning::the successor probe on main's tip $SHORT_HEAD failed, so this run cannot tell whether HEAD already has a publisher. NOT dispatching — a dispatch on an unanswered probe would be a guess that costs a duplicate image set (MeshWeaver#3376). The hourly reconcile remains; chase the API failure."
+            exit 0
+          fi
+          if [ -n "$SUCCESSOR" ]; then
+            read -r S_ID S_STATUS <<< "$SUCCESSOR"
+            echo "nothing owed — run $S_ID is \`$S_STATUS\` on main's HEAD $SHORT_HEAD and inherits the obligation: when it terminates it runs this same step. If GitHub discards it instead, the arrival that replaced it targets a newer HEAD and hands THAT on."
+            exit 0
+          fi
+
+          # HEAD is green, has no complete publication from this run, and NOTHING is queued or
+          # running for it. That is the state the hourly tick was supposed to catch and has been
+          # standing down on. Say it, then create the publisher.
+          say "### 🔁 HANDED ON — main's HEAD \`$SHORT_HEAD\` is green and has NO run of this workflow queued or running, so this run is leaving it without a publisher. Dispatching one now rather than waiting up to an hour for the reconcile tick (which stands down whenever a queued run exists — measured 3 of 3 ticks on 2026-09-17)."
+          if ! gh workflow run "$WORKFLOW_FILE" --repo "$REPO" --ref main; then
+            echo "::error::main's HEAD \`$SHORT_HEAD\` is GREEN, has no complete image set from this run and NOTHING queued or running to publish it — and the dispatch that would have created its publisher FAILED. Delivery is left with no producer but the hourly reconcile, which stands down whenever a queued run appears. Check that this job still holds \`actions: write\`, then dispatch \`$WORKFLOW_FILE\` on main by hand."
+            exit 1
+          fi
+          say "   Dispatched \`$WORKFLOW_FILE\` on \`main\`. It enters the RECONCILE lane (so the push lane cannot discard it), resolves HEAD itself, and consumes the same per-commit heal budget as any other reconcile. It will NOT hand on again — the chain is bounded at one hop."
+
   alert-on-failure:
     name: "Alert: CD failed on main"
     # delivery-verdict is in this list ON PURPOSE: it is the job that turns the two
@@ -3538,7 +4352,7 @@ jobs:
     # per-build compatibility measurement that replaced the per-build satellite wave, it does not
     # block the publish, and a red nobody is paged for is the 03:00 discovery it exists to prevent.
     # Its verdict artifacts are read below so the alert names the satellite and the types.
-    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote, verify-images, publish-bake, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
+    needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote, verify-images, publish-bake, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5

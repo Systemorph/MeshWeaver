@@ -3,8 +3,12 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
+using MeshWeaver.AI;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
+using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -139,6 +143,295 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// 🚨 <b>The RUNTIME pin for <see href="https://github.com/Systemorph/MeshWeaver/issues/4463">#4463</see>
+    /// — the operator recycle (the Recycle tool / Compile button).</b>
+    ///
+    /// <para><b>Why the source ratchet is not enough on its own.</b> Every other test of this verb
+    /// drives it through a <c>SessionHubFactory</c> hub, whose non-mesh address makes
+    /// <c>NodeOperationIssuingHub()</c> the IDENTITY FUNCTION — so none of them executes the branch
+    /// #4463 is about, and reverting <c>RecycleCore</c> to <c>hub.Post</c> would leave them all
+    /// green. <c>RouterAsNodeOperationOriginRatchetGuard</c> would catch the revert, but it reads
+    /// SOURCE; this reads what the detector actually logged, which is the artefact production
+    /// produced.</para>
+    ///
+    /// <para><b>The shape is production's.</b> #4463's line was posted from
+    /// <c>MeshWeaver.AI.MeshOperations+&lt;&gt;c__DisplayClass95_0.&lt;RecycleCore&gt;b__3</c> with
+    /// <c>sender: mesh/…</c> — an agent-surface <c>MeshOperations</c> built over the DI-injected
+    /// hub, which in the mesh's root container IS the router. <c>new MeshOperations(Mesh)</c> is
+    /// that, verbatim.</para>
+    ///
+    /// <para><b>The positive anchor is not decoration.</b> The verb REFUSES rather than posting when
+    /// the release-request stamp is denied, and a refusal emits no <c>DisposeRequest</c> at all — so
+    /// "no router traffic" would be trivially true of a recycle that never ran. Asserting
+    /// <c>status=Recycled</c> first is what makes the silence below mean something.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnOperatorRecycleIssuedFromTheRootMeshHub_NeverPostsTheTeardownAsTheRouter()
+    {
+        var path = await SeedNode("RouterTrafficOperatorRecycleProbe");
+
+        var answer = await new MeshOperations(Mesh).Recycle(path)
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        using var envelope = JsonDocument.Parse(answer);
+        envelope.RootElement.GetProperty("status").GetString().Should().Be("Recycled",
+            "the verb has to have RUN — it answers a refusal without posting any DisposeRequest at "
+            + "all, and 'no router traffic' is trivially true of an operation that never happened");
+
+        DumpReports();
+        TeardownOrigins().Should().BeEmpty(
+            "#4463: the teardown was POSTED with the mesh hub as sender, from this exact frame. "
+            + "RecycleCore must issue it on NodeOperationIssuingHub(), which is the identity "
+            + "function for every non-router caller and the off-router execution hub for this one");
+        TeardownReports().Should().BeEmpty(
+            "and the receiving hub must not see the router at an end of the teardown either");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The same runtime pin for the framework's ONE recycle surface,
+    /// <c>HubRecycleExtensions.RecycleNode</c>.</b> Its own tests deliberately drive it through
+    /// <c>RequestHub</c> — again a non-mesh address, again the seam as identity — so a regression to
+    /// <c>hub.Post</c> would keep them green. This is the root-hub branch, with the router-traffic
+    /// capture as the instrument.
+    ///
+    /// <para>The positive anchor here is the emission itself: <c>RecycleNode</c> answers only once
+    /// the address has served a read again, so a node coming back proves the teardown was posted,
+    /// executed, and the hub re-activated.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARecycleNodeIssuedFromTheRootMeshHub_NeverPostsTheTeardownAsTheRouter()
+    {
+        var path = await SeedNode("RouterTrafficRecycleNodeProbe");
+
+        var node = await Mesh.RecycleNode(path)
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        node.Should().NotBeNull(
+            "RecycleNode answers only once the recycled address serves a read again, so this "
+            + "emission is the proof that the teardown was actually posted and executed");
+
+        DumpReports();
+        TeardownOrigins().Should().BeEmpty(
+            "a teardown issued from the root hub makes the ROUTER the sender of a work delivery — "
+            + "the #4463 shape, one call frame further out");
+        TeardownReports().Should().BeEmpty(
+            "and the receiving hub must not see the router at an end of the teardown either");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The RUNTIME pin for #1140's remaining half — a NON-lifecycle delivery on a field the
+    /// class itself has declared router-capable.</b>
+    ///
+    /// <para><b>Why this is a different test from the recycle ones above.</b> Those drive
+    /// <c>DisposeRequest</c>, the one message on their receiver that the message-keyed source
+    /// ratchet can see. <c>DataChangeRequest</c> is not a lifecycle message and never will be — no
+    /// framework handler registers it as one — so nothing in
+    /// <c>RouterAsNodeOperationOriginRatchetGuard</c>'s derived denominator covers it. It is
+    /// nevertheless posted from the SAME <c>hub</c> field that <c>MeshNodeEditor.Move</c> hops ten
+    /// lines below it, to a per-node address, and therefore produced exactly #1140's receiver-side
+    /// line: <c>RawJson has the mesh hub as sender (sender: mesh/…, target: &lt;node path&gt;)</c>.
+    /// One class, one field, two messages, and only one of them was hopped.</para>
+    ///
+    /// <para><b>And why the SOURCE ratchet is not enough on its own, again.</b> Every other test of
+    /// this editor drives it through a session or client hub, where both seams are the IDENTITY
+    /// FUNCTION — so reverting <c>MeshNodeEditor.Update</c> to <c>hub.Post</c> leaves them all
+    /// green. <c>new MeshNodeEditor(Mesh, path)</c> is the root-hub branch, and this reads what the
+    /// detector actually logged rather than what the source says.</para>
+    ///
+    /// <para><b>What it pins is the OUTCOME, not the mechanism — which is why it survived the
+    /// mechanism changing under it.</b> The first fix hopped the bespoke post onto the issuing seam;
+    /// the review round replaced it with the canonical
+    /// <c>workspace.GetMeshNodeStream(path).Update(…)</c>, whose cache hub is off the router by
+    /// construction. Measured across that change, this edit now emits NO router-traffic record at
+    /// all rather than a correctly-addressed one — the exchange stopped existing rather than moving.
+    /// Either way the assertion is the same and a revert to <c>hub.Post</c> reproduces #1140's line
+    /// from this exact frame.</para>
+    ///
+    /// <para><b>The positive anchor is not decoration.</b> <c>Update</c> RETURNS WITHOUT WRITING
+    /// when its <c>BehaviorSubject</c> has not yet seen the node (<c>if (current is null) return;</c>),
+    /// so "no router traffic" would be trivially true of an editor that never got its first
+    /// snapshot. Awaiting the node — and then the edited value coming back through the same live
+    /// subscription — is what makes the silence below mean something. It is also the only thing that
+    /// would catch the write being dropped outright: the stream's <c>Update</c> is a COLD
+    /// observable, so an unsubscribed one silently does nothing.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ANodeEditIssuedFromTheRootMeshHub_NeverPostsTheDataChangeAsTheRouter()
+    {
+        var path = await SeedNode("RouterTrafficEditorProbe");
+        const string edited = "Edited by the router-traffic probe";
+
+        using var editor = new MeshNodeEditor(Mesh, path);
+
+        // The editor posts nothing until its own subscription has delivered a snapshot, so wait for
+        // the condition rather than for a duration.
+        await editor.Node.FirstAsync().Await(TestContext.Current.CancellationToken);
+
+        editor.Update(n => n with { Name = edited });
+
+        var applied = await editor.Node
+            .Where(n => n.Name == edited)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        applied.Name.Should().Be(edited,
+            "the edit has to have LANDED — Update returns without writing anything at all when the "
+            + "editor has no snapshot yet, and its stream write is a COLD observable, so 'no router "
+            + "traffic' is trivially true of a write that never happened");
+
+        DumpReports();
+        // 🚨 The ORIGIN side is asserted WHOLESALE, and that is a measurement rather than optimism:
+        // this seeded edit emits zero origin records today, and the origin line names its own call
+        // site — so any record here is both a real violation and immediately actionable, which is
+        // exactly the assertion worth being strict about.
+        Origins().Should().BeEmpty(
+            "#1140: an edit driven from the ROOT mesh hub must put the router on no end of any "
+            + "delivery it causes. Before the fix this frame produced `DataChangeRequest … sender: "
+            + "mesh/{id}` straight from MeshNodeEditor.Update; the write now goes through the node's "
+            + "own stream, whose cache hub is off the router by construction");
+        // The RECEIVER side stays filtered on the write exchange. It reports a routed payload as
+        // RawJson, so it cannot attribute a line to a caller — a blanket assertion there would red
+        // on any unrelated pre-existing line and teach the next reader to widen it rather than read
+        // it.
+        Reports().Where(r => r.MessageType is nameof(DataChangeRequest) or nameof(DataChangeResponse)
+                        or nameof(PatchDataChangeRequest))
+            .Should().BeEmpty(
+                "and neither end of the write exchange may be the router at the receiving hub "
+                + "either — the reply addressed back at mesh/{id} is #1140's second production line");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The RUNTIME pin for the SUBSCRIPTION family —
+    /// <see href="https://github.com/Systemorph/MeshWeaver/issues/4614">#4614</see>,
+    /// <see href="https://github.com/Systemorph/MeshWeaver/issues/4615">#4615</see> and
+    /// <see href="https://github.com/Systemorph/MeshWeaver/issues/4617">#4617</see>, which are ONE
+    /// defect seen from both ends.</b>
+    ///
+    /// <para>Production filed three tickets, minutes apart, off one <c>PearlTechnology/CompanyProfile</c>
+    /// render on <c>memex</c> at 2026-09-17 12:58:47Z:</para>
+    ///
+    /// <code>
+    /// ORIGIN: SubscribeRequest  … as sender (sender: mesh/q8f5…, target: PearlTechnology/CompanyProfile)
+    /// ORIGIN: SubscribeAck      … as target (sender: PearlTechnology/CompanyProfile, target: mesh/q8f5…)
+    /// ORIGIN: StreamEndedEvent  … as target (sender: PearlTechnology/CompanyProfile, target: mesh/q8f5…)
+    /// </code>
+    ///
+    /// <para>The second and third are not separate defects and cannot be fixed where they are
+    /// posted: the owner answers <c>ResponseFor(delivery)</c> and fans out to
+    /// <c>request.Subscriber</c>, both of which ARE the subscribe's sender. So the only address in
+    /// the family a caller chooses is the one the <c>SubscribeRequest</c> leaves from — and the
+    /// remedy the origin line SUGGESTS (<c>ReadIssuingHub()</c>) is not available for it, because
+    /// <c>portal/reads-{meshId}</c> registers no handlers: it would receive the fan-out and route it
+    /// nowhere. <c>StreamSubscribingHub()</c> is the data-wired seam that can actually be a
+    /// subscriber.</para>
+    ///
+    /// <para><b>Why the source ratchets cannot see this.</b> <c>SubscribeRequest</c> is not a
+    /// lifecycle message, so the message-keyed guard's derived denominator excludes it; and the
+    /// receiver-keyed guard reads POSTS, while this delivery is created inside
+    /// <c>JsonSynchronizationStream.CreateExternalClient</c> on whatever hub the caller's WORKSPACE
+    /// belongs to — a workspace is scoped per hub, so the choice is made by
+    /// <c>hub.GetWorkspace()</c>, which is not a post at all.</para>
+    ///
+    /// <para><b>The positive anchor is not decoration.</b> <c>RenderArea</c> answers
+    /// <c>"Not found: …"</c> / <c>"Error: …"</c> as ordinary emissions WITHOUT opening any stream,
+    /// and its last gate faults before subscribing when the budget is spent — so "no router
+    /// traffic" is trivially true of a render that never subscribed. Requiring a real
+    /// <c>{areas, data}</c> frame is what makes the silence below mean something.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARenderAreaIssuedFromTheRootMeshHub_NeverSubscribesAsTheRouter()
+    {
+        var path = await SeedNode("RouterTrafficRenderAreaProbe");
+
+        var frame = await new MeshOperations(Mesh)
+            .RenderArea(path, MeshNodeLayoutAreas.OverviewArea)
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        frame.Should().StartWith("{",
+            "the render has to have RUN — a 'Not found: …' / 'Error: …' answer is returned without "
+            + "opening any stream at all, and 'no router traffic' is trivially true of a "
+            + "subscription that never happened");
+        using var envelope = JsonDocument.Parse(frame);
+        envelope.RootElement.TryGetProperty("areas", out var areas).Should().BeTrue(
+            "the frame the verb promises is the owner's materialised {areas, data} snapshot — "
+            + "anything else means the subscribe did not complete and the assertions below would "
+            + "be measuring an operation that never reached the owner");
+        areas.ValueKind.Should().Be(JsonValueKind.Object);
+
+        DumpReports();
+        SubscriptionOrigins().Should().BeEmpty(
+            "#4614/#4615/#4617: a layout-area render driven from the ROOT mesh hub must not make "
+            + "the router the SUBSCRIBER of a synchronization stream. The subscribe's sender is "
+            + "also the address the owner acks, fans out to and announces the end of — and the hub "
+            + "that must host the sync/{streamId} sub-hub those frames are routed to — so it has to "
+            + "be StreamSubscribingHub(), the identity function for every non-router caller");
+        SubscriptionReports().Should().BeEmpty(
+            "and the receiving hubs must not see the router at an end of the subscription either");
+    }
+
+    /// <summary>
+    /// The subscription family, at the ORIGIN site — which always carries the real CLR type, so
+    /// this filter is exact there. Narrow on purpose: this test pins ONE defect, and a blanket
+    /// "no router traffic anywhere" assertion would red on any unrelated pre-existing line and
+    /// teach the next reader to widen it rather than read it.
+    /// </summary>
+    private RouterTrafficRecord[] SubscriptionOrigins() =>
+        Origins().Where(r => IsSubscriptionFamily(r.MessageType)).ToArray();
+
+    /// <summary>
+    /// The same family at the RECEIVER site, plus <c>RawJson</c> — which is what a routed delivery
+    /// is reported as there, and is exactly the shape #1140's production lines carry. Including it
+    /// is safe here rather than blanket: xUnit builds a fresh instance (and a fresh capture) per
+    /// test method, so the only traffic in this record set is the seed create and this one render.
+    /// </summary>
+    private RouterTrafficRecord[] SubscriptionReports() =>
+        Reports().Where(r => IsSubscriptionFamily(r.MessageType) || r.MessageType == "RawJson")
+            .ToArray();
+
+    /// <summary>
+    /// 🚨 EVERY message the owner addresses at <c>request.Subscriber</c>, in one place so the two
+    /// filters above cannot drift apart. <c>StreamErrorEvent</c> is in the list although this
+    /// render's happy path never emits one: the owner posts it to the same address as the rest
+    /// (<c>JsonSynchronizationStream.cs:1604</c>), so a regression that left only the error leg
+    /// pointed at the router would otherwise pass unseen (Copilot on #4622).
+    /// </summary>
+    private static bool IsSubscriptionFamily(string messageType) =>
+        messageType is nameof(SubscribeRequest) or nameof(SubscribeAck)
+            or nameof(DataChangedEvent) or nameof(StreamEndedEvent)
+            or nameof(StreamErrorEvent) or nameof(UnsubscribeRequest);
+
+    /// <summary>The node the recycle targets has to exist before it can be torn down.</summary>
+    private async Task<string> SeedNode(string id)
+    {
+        var created = await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateNode(new MeshNode(id, TestPartition) { Name = id, NodeType = "Markdown" })
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+        created.Path.Should().Be($"{TestPartition}/{id}",
+            "a recycle of a node that was never created would tear nothing down and emit no "
+            + "traffic, making the assertions that follow vacuous");
+        return created.Path;
+    }
+
+    /// <summary>
+    /// 🚨 Filtered on the TEARDOWN specifically, not on "any record". The origin site always carries
+    /// the real CLR type, so this is exact there; the receiver side reports a routed payload as
+    /// <c>RawJson</c>, so the companion filter below also counts a record whose ends match the
+    /// teardown's. Keeping the filter narrow is deliberate: these two tests pin ONE defect, and a
+    /// blanket "no router traffic anywhere" assertion would red on any unrelated pre-existing line
+    /// and teach the next reader to widen it rather than read it.
+    /// </summary>
+    private RouterTrafficRecord[] TeardownOrigins() =>
+        Origins().Where(r => r.MessageType == nameof(DisposeRequest)).ToArray();
+
+    private RouterTrafficRecord[] TeardownReports() =>
+        Reports().Where(r => r.MessageType == nameof(DisposeRequest)).ToArray();
+
+    /// <summary>
     /// 🚨 THE NEGATIVE CONTROL, and it is not optional. The measurement above reads "no records" as
     /// "the seam held" — a reading that is valid only if this fixture's capture provider is really
     /// in the mesh's logging pipeline and the detector is really armed on these hubs. So make the
@@ -189,6 +482,64 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
             "a call site that does not name the caller is the property #1140 was missing — the "
             + "receiver-side line already carries the two addresses, and four re-filings over a "
             + "month could not turn them into a call site");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The premise the whole rule rests on: adopting a seam is NEVER a behaviour change.</b>
+    ///
+    /// <para>"Hop every targeted post off a router-capable receiver" is a RULE rather than a
+    /// judgement call for exactly one reason — both seams are the IDENTITY FUNCTION for any hub
+    /// whose address type is not the mesh type, so a site already off the router is byte-for-byte
+    /// unaffected and only a site that is not is corrected. That premise is stated in
+    /// <c>RouterAsRouterCapableReceiverRatchetGuard</c>, in both allow files, in
+    /// Doc/Architecture/RouterTrafficDetection and at every call site that adopts a seam — and
+    /// until this test nothing measured it.</para>
+    ///
+    /// <para>It is what makes the swaps no runtime test reaches safe to make at all: several of the
+    /// exchanges this class covers (the script dispatch, the content-collection reads) have no
+    /// end-to-end suite, and every existing test of them runs through a session or client hub. If
+    /// the seams are the identity there, those swaps changed nothing for them; if they are not,
+    /// every one of those sites silently moved hub and the claim in the comments is false. Asserted
+    /// on REFERENCE identity, not on address equality: a second hub at the same address would still
+    /// be a different actor with a different action block.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void EverySeam_IsTheIdentityFunction_ForAHubThatIsNotTheRouter()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var client = GetClient();
+        client.Address.Type.Should().NotBe(Mesh.Address.Type,
+            "the premise is about a NON-router hub, so this fixture has to hand us one — if the "
+            + "client's address type ever became the mesh type, the assertions below would be "
+            + "measuring the router and passing for the wrong reason");
+
+        client.NodeOperationIssuingHub().Should().BeSameAs(client,
+            "NodeOperationIssuingHub must return the hub UNCHANGED off the router — otherwise every "
+            + "site that adopted it moved its deliveries to a different action block, and 'this is "
+            + "a no-op wherever the router is not reached' is false in every comment that says it");
+        client.ReadIssuingHub().Should().BeSameAs(client,
+            "and the same for ReadIssuingHub, which is the seam most of #1140's remaining sites "
+            + "adopted");
+        client.StreamSubscribingHub().Should().BeSameAs(client,
+            "and the same for StreamSubscribingHub (#4614) — this one carries the MOST weight, "
+            + "because the subscriber address is not just where a reply lands: it is the key the "
+            + "owner's per-subscriber bookkeeping and the workspace's remote-stream cache use, so a "
+            + "seam that silently moved a non-router subscriber would re-key every live stream");
+
+        // …and the other half: ON the router both seams must hand back something ELSE, or the hop
+        // is a no-op there too and nothing was fixed.
+        Mesh.NodeOperationIssuingHub().Should().NotBeSameAs(Mesh,
+            "on the ROUTER the seam has to actually move the delivery's origin — a seam that is the "
+            + "identity function everywhere is decoration");
+        Mesh.ReadIssuingHub().Should().NotBeSameAs(Mesh,
+            "the read seam likewise");
+        Mesh.StreamSubscribingHub().Should().NotBeSameAs(Mesh,
+            "and the subscription seam, which is what takes the router off #4614/#4615/#4617's "
+            + "whole delivery family");
+        Mesh.StreamSubscribingHub().Should().NotBeSameAs(Mesh.ReadIssuingHub(),
+            "and it must be a DIFFERENT hub from the read seam — portal/reads-{meshId} registers no "
+            + "handlers by design, so it has no RouteStreamMessage route and could never deliver the "
+            + "owner's fan-out to the sync/{streamId} sub-hub");
     }
 
     /// <summary>The receiver-side lines — <c>ROUTER_TRAFFIC:</c>, logged in <c>DeliverMessage</c>.</summary>

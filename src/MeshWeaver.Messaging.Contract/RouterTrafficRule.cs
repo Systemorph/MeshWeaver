@@ -1,4 +1,4 @@
-namespace MeshWeaver.Messaging;
+﻿namespace MeshWeaver.Messaging;
 
 /// <summary>
 /// Whether a delivery involves the ROOT MESH HUB — the router — as an end, and in which role.
@@ -42,6 +42,22 @@ public static class RouterTrafficRule
         // Heartbeats ARE the router's own job — routing liveness, not work. Type check, not a name
         // match: a rename must not silently turn this exclusion off.
         if (message is HeartBeatEvent)
+            return null;
+
+        // The sender is what the RECEIVER correlates this delivery by, so there is no hop that
+        // would silence the report without breaking the pairing — see ICorrelatedBySender, which
+        // documents what implementing it claims. Same reason as the two exclusions around it: a
+        // report nobody may act on trains people to mute the channel. Declared by the message's own
+        // type rather than matched here by name, so the exclusion travels with the contract and a
+        // rename cannot quietly turn it off (#4489).
+        //
+        // 🚨 Reaches the caller that still holds the TYPE. ReportRouterTrafficOrigin does (it runs
+        // at Post); ReportRouterTraffic runs at the top of DeliverMessage, BEFORE RouteMessageAsync
+        // unpacks, so a cross-hub delivery arrives as RawJson and matches nothing here. That is a
+        // property of every cross-hub delivery rather than of this exclusion, and it is stated in
+        // RouterTrafficDetection.md rather than worked around by putting a detector concern into
+        // the wire format.
+        if (message is ICorrelatedBySender)
             return null;
 
         var targetIsRouter = string.Equals(targetAddressType, AddressExtensions.MeshType, StringComparison.Ordinal);

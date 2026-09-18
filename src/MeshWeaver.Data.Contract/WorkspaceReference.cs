@@ -100,7 +100,22 @@ public record CollectionReference(string Name) : WorkspaceReference<InstanceColl
 /// </summary>
 /// <param name="References">The references to aggregate.</param>
 public record AggregateWorkspaceReference(params WorkspaceReference<EntityStore>[] References)
-    : WorkspaceReference<EntityStore>;
+    : WorkspaceReference<EntityStore>
+{
+    // 🚨 See CollectionsReference below for why every collection-bearing reference declares these
+    // two by hand (Systemorph/MeshWeaver#3432): a WorkspaceReference is a CACHE KEY, and the
+    // compiler-generated equality for an array member is REFERENCE equality, which no cache can hit.
+    /// <summary>Determines equality by the aggregated reference sequence.</summary>
+    /// <param name="other">The reference to compare against.</param>
+    /// <returns>True if the reference sequences are equal; otherwise false.</returns>
+    public virtual bool Equals(AggregateWorkspaceReference? other) =>
+        other is not null && References.SequenceEqual(other.References);
+
+    /// <summary>Returns a hash code derived from the aggregated references.</summary>
+    /// <returns>The hash code.</returns>
+    public override int GetHashCode() =>
+        References.Aggregate(17, (a, b) => a ^ b.GetHashCode());
+}
 
 /// <summary>
 /// Reference to a set of named collections, reducing to an <see cref="EntityStore"/> of just those collections.
@@ -135,6 +150,20 @@ public record CombinedStreamReference(params StreamIdentity[] References) : Work
     /// <returns>The stream identities joined by commas.</returns>
     public override string ToString() =>
         string.Join(", ", References.Select(r => r.ToString()));
+
+    // 🚨 See CollectionsReference above (Systemorph/MeshWeaver#3432). The compiler-generated
+    // equality for a `StreamIdentity[]` member is REFERENCE equality, so two value-identical
+    // combined references are never Equals — and a WorkspaceReference is a cache key.
+    /// <summary>Determines equality by the combined stream-identity sequence.</summary>
+    /// <param name="other">The reference to compare against.</param>
+    /// <returns>True if the identity sequences are equal; otherwise false.</returns>
+    public virtual bool Equals(CombinedStreamReference? other) =>
+        other is not null && References.SequenceEqual(other.References);
+
+    /// <summary>Returns a hash code derived from the combined stream identities.</summary>
+    /// <returns>The hash code.</returns>
+    public override int GetHashCode() =>
+        References.Aggregate(17, (a, b) => a ^ b.GetHashCode());
 }
 
 /// <summary>

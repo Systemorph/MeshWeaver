@@ -60,10 +60,12 @@ schema(s)".
 | 1 | **Notification bell + panel** — `NotificationCenter.razor` / `NotificationCenterPanel.razor` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Portal`) | was `nodeType:Notification sort:CreatedAt-desc` — unanchored, unbounded, LIVE | `notifications` | **DONE** — [Addressed Notifications](/Doc/Architecture/AddressedNotifications) (#3156/#3216/#3238). Two pinned legs, `namespace:{viewer}/_Notification` and (global admins only) `namespace:Admin/_Notification`; the grace-list line is deleted |
 | 2 | **Security fold globals** — `SecurityQueries.Roles` / `.Memberships` / `.GatedNodes(type)` (per gated type!) via `PermissionEvaluator` | `nodeType:Role scope:subtree … complete`, `nodeType:GroupMembership …`, `nodeType:{gated} …` | `mesh_nodes` | **To eliminate** — see plan 2 |
 | 3 | **Root-scope grants/policies** — `SecurityQueries.RootAssignments` / `.RootPolicy` | `namespace:_Access nodeType:AccessAssignment …` / `path:_Policy nodeType:PartitionAccessPolicy …` | `system_access.access` / — | **Done** 2026-09-02 (#2194) — the grants leg never fanned out (the router pins `_Access` to its registered schema); the policy leg was `namespace: id:_Policy`, path-less, and DID fan out 179×/5 min for a row that cannot exist on Postgres — now read by path, see below |
-| 4 | `node_type ILIKE $1` wildcard — **named**: MeshWeaver.SocialMedia's `ScheduledPostWatcher` (the scheduled-post watch, not the `PostStatsRefresher`/`PastPostIngestJob` the incident guessed) | was `nodeType:*Post select:…content,lastModifiedBy`, path-less | `mesh_nodes` | **Anchored** 2026-09-07 (`MeshWeaver.SocialMedia@e11bd39`, #3545) — `ScheduledPostWatcher.PostsQuery(partition)` reads `namespace:{partition} scope:descendants nodeType:*Post …`, one query per publishing partition, and its armed-timer listing is path-anchored too |
+| 4 | `node_type ILIKE $1` wildcard — **named**: MeshWeaver.SocialMedia's `ScheduledPostWatcher` (the scheduled-post watch, not the `PostStatsRefresher`/`PastPostIngestJob` the incident guessed) | was `nodeType:*Post select:…content,lastModifiedBy`, path-less | `mesh_nodes` | **Anchored** 2026-09-07 (`MeshWeaver.SocialMedia@e11bd39`, #3545) — `ScheduledPostWatcher.PostsQuery(partition)` reads `namespace:{partition} scope:descendants nodeType:*Post …`, one query per publishing partition, and its armed-timer listing is path-anchored too. **Package delivered** (measured 2026-09-16): memex-cloud's `Plugins/SocialMedia` package reads `1.1.13` / `moduleVersion 74a3ad3c14fa15da` — the lock at `MeshWeaver.SocialMedia@5d0be6e` (2026-09-12), a descendant of the anchoring commit, whose own lock was `1.1.8` / `18e38b37eb61779d`. Whether every pod LOADED that module build is a `[ModuleLoad]` log read, not taken here |
 | 5 | `Admin/Menu/{X}` per-render route misses | point probes | `mesh_nodes` | **Fixed** 2026-08-29 (`83b1892be`, anchored existence query) |
 | 6 | **Hosting fleet pages + build broadcaster** (MeshWeaver.Plugins) — `HostingAdminLayoutAreas.Snapshot` (nine call sites on the Fleet and Fleet Console pages), `FleetConsoleLogic.*Query`, `PlatformBuildInboxWatcher.DeploymentsQuery` | was `nodeType:Hosting/Deployment[ scope:subtree]` and four siblings, bare | `mesh_nodes` | **Declared** 2026-09-15 (MeshWeaver.Plugins#1918, #3545) — a deployment record lives wherever its owner lives, so the set of partitions IS the answer: `MeshWideQuery.Declare`/`OfType`. On a refusing host the bare form faulted and the snapshot rendered an EMPTY fleet |
 | 7 | **Portal search box** (MeshWeaver.Plugins) — Blazor `MeshSearch`, the unbound `SearchBoxView`, portal-next `SearchBar` | was `source:accessed scope:descendants … context:search limit:N` and `*{text}* scope:descendants context:search is:main limit:50`, bare, per debounced keystroke | `mesh_nodes` + `user_activities` | **Declared** 2026-09-15 (MeshWeaver.Plugins#1918, #3545) — it searches everything the viewer can read; RLS still narrows the union. Cheaper still: narrow the accessed leg to the partitions the viewer's UserActivity rows name |
+| 8 | **Marketing event hub page** (MeshWeaver.SocialMedia) — `MarketingEventHubLayoutAreas.ObserveEvents` | was `nodeType:Marketing/Event limit:2000`, bare, then filtered to the hub by path prefix IN CODE, per render | `mesh_nodes` | **Anchored** 2026-09-17 (MeshWeaver.SocialMedia#195/#196, #3545) — `namespace:{hub} scope:descendants nodeType:Marketing/Event limit:2000`. Not only cost: the limit counted the MESH's events before the prefix filter ran, so past 2 000 events the rows cut could be this hub's own and the page left out events that exist |
+| 9 | **Hosting boards + the four operator scripts + three catalog reads** (MeshWeaver.Plugins) — the 11 `*LayoutAreas` boards, `Hosting/Script/{refresh-status,ingest-logs,detect-issues,report-modules}`, `DataModelExplorerLogic`, `CourseCatalogLayoutAreas`, `AppTileRefresh`, `SourceNodePurge`, `SystemRemoval` | was `nodeType:Hosting/{Backup,Build,Deployment,DeploymentStatus,InstanceAction,Issue,LogEntry,ModuleInventory,ConfigAudit,BackupStore,RepoHealth} scope:subtree …` and five bare catalog reads | `mesh_nodes` | **Anchored / declared** 2026-09-17 (MeshWeaver.Plugins#1993, #3545) — boards read the partition of the node they render on (their own summaries always said "in this partition"), the scripts read the two record homes `FleetWatch.RosterQueries` reads, and the catalog reads DECLARE. `SystemRemoval`'s dependents check was REFUSED on a CI mesh, so removing a package failed |
 
 🚨 **Rows 6 and 7 were invisible to the static census, and that is the lesson of #3545.**
 MeshWeaver.Plugins' `UnanchoredQueryAllowFileTest` and `ShellQueryShapesTest` scan `src/` — the
@@ -77,9 +79,34 @@ its `*Post` title whatever anybody fixed. The identity now keeps `nodeType:` ter
 box, still shares one fingerprint with every other such caller. Read an unanchored incident's
 **samples**, never its title.
 
+🚨 **Merged and published is not running — measured 2026-09-16, and it is why #3545 still
+reopens.** `Admin/_LogIncident/d4c8f6f74ecfa422` is the pre-change identity (category + event id +
+exception type; its `normalizedDetail` is empty), and it was still advancing at 21:21Z with 5 723
+occurrences. So the running log watcher still computes the old fingerprint, and every unanchored
+query from every caller still lands on #3545. None of its ten retained samples (20:49–21:21Z) is the
+row-4 shape:
+
+- 7 are the `FleetWatch` roster from before MeshWeaver.Plugins#1766
+  (`nodeType:Hosting/Deployment scope:subtree -status:Decommissioned select:path,id limit:500`).
+- 2 are a bare `nodeType:Hosting/Deployment`.
+- 1 is an operator `search` (`name:*Social* …`). #4274 refuses that shape, but the incident's
+  namespace is memex-cloud, whose image (core `c84c6c05`) predates that change.
+
+None of the 75 lines the bot quoted in its 25 reopen comments since 2026-09-12 is `nodeType:*Post`
+either. Ten samples out of thousands cannot prove that one caller has gone quiet, and a pod that
+never loaded the fixed module would still report under the same id. So a #3545 reopen is
+**inconclusive** about row 4 either way: every unanchored caller shares it, so it cannot show a
+regression, and it cannot show the absence of one. Only a sample names the caller. Before acting on
+one:
+
+1. Check whether the old id still advances. While it does, the per-caller incidents cannot exist.
+2. Read the query quoted in the newest sample on the incident node. Do not go by the issue title or
+   the lines in a reopen comment. Name the caller that sends that query.
+
 Each of these small sets is **tiny and rarely changing** — the fold's global reads return under
 ~50 rows; the bell's thousands of rows are its own defect — fetched the most expensive way the
 storage layer has, per render.
+
 
 ### What #3093 changed underneath this census
 
@@ -151,6 +178,97 @@ multiplier from every fan-out that survives, and it is independent of anchoring.
   (`Pinned` / `Unroutable` / `FanOut`), pins the four measured `path:-` shapes as never-the-fold's,
   and mirrors the global-satellite registry; `SecurityQueryRootLegRegistryTest` asserts that mirror
   against the real registry of a running mesh.
+
+## The 2026-09-16/17 content sweep, and the census that now covers it
+
+Rows 8 and 9 came from a sweep of the NODE CONTENT of the six satellite repositories plus
+MeshWeaver.Plugins: every `nodeType:` string literal in a NodeType's `Source/*.cs` and in an
+executable `Code` node's `content.code`, judged by the same predicate the planner uses. That
+predicate is `PostgreSqlPartitionedMeshQuery.Judge` over `ParsedQuery.IsSufficientlySpecified`, and
+it SERVES a query on any of four grounds — a concrete `path:`/`namespace:` first segment, several
+`path:`s (`ParsedQuery.Paths`), a wildcard-namespace filter (`ExtractNamespacePatterns`), or
+`partitions:all` — plus a fifth outside it, a registered `QueryRoutingRule` that names the partition
+the text does not (`nodeType:User` → `Auth`). Content
+is the blind spot rows 6 and 7 named: it compiles at RUNTIME, so `dotnet build` never sees it and
+`UnanchoredQueryAllowFileTest`, which scans `src/`, never read it.
+
+**The census now covers it.** `UnanchoredContentQueryCensusTest`
+(`src/MeshWeaver.Hosting.PostgreSql.Test`, MeshWeaver.Plugins) applies that predicate to every
+module folder's sources and scripts, and its negative control feeds it the exact pre-fix board and
+script lines — the script's inside a Code node's JSON — and asserts they are flagged while their
+anchored, declared and rule-pinned forms are not.
+
+**What the sweep found, beyond rows 8 and 9:**
+
+| Where | Shape | Verdict |
+|---|---|---|
+| MeshWeaver.Plugins `ProviderSetupAreas` (2 reads) | `nodeType:ModelProvider sort:name limit:100`, `nodeType:LanguageModel sort:name limit:400`, per render of the Providers page | **Open — needs a product call.** The page's own text names two homes (`Provider/{Name}`, `{you}/_Memex/{Name}`) while `ChatClientCredentialResolver.BuildModelQueries` also reads `{space}/Provider` for the context partitions. RECOMMENDATION: reuse `BuildModelQueries`' shape — the global `Provider` catalog + `{viewer}/_Memex` + `{context}/Provider` — so the settings page and the resolver answer the same question; the call the maintainer owns is whether an ADMIN's page should also list providers in spaces they administer but are not in (a fourth leg, or a deliberate "no") |
+| MeshWeaver.Plugins `CouponEditArea.PackageQuery` | `nodeType:Store/Plugin` as a picker's `Queries` | **Declared 2026-09-17** (MeshWeaver.Plugins#2023) — and the reasoning is worth keeping, because the reach would have made this picker WORSE: a package root IS a partition, so the reach's two grounds (the coupon's own space, the `Store` partition the type id names) are exactly the two places a package root never lives. `partitions:all`, the same statement `StoreCatalogLayoutAreas.PluginFeedQuery` makes about the same set, is the honest one. Its census row went stale and was deleted — the ratchet working as designed |
+| MeshWeaver.Crm `CrmQueries.AllClients` / `.OpenPipeline` / `.AllOpportunities` / `.AllInteractions` | `nodeType:Crm/{Client,Opportunity,Interaction} scope:subtree`, the board's roster and pipeline | **Open.** Genuinely mesh-wide (a client IS a partition) and the code says so in prose — but it does not DECLARE it, so a CI mesh refuses it and production reports it at Error. The fix is `partitions:all`, not an anchor |
+| MeshWeaver.Reinsurance `RecordSupport.Scope` (`ILS/Source/RecordSupport.cs`) | `IlsQueries.DealQueries("")` when a record page's path is not under a deal — `IlsPaths.DealOfTranche` answers null and the empty string is passed on, so the legs carry `namespace:` with no first segment | **Open, an edge case.** Every shipped record hub sits under `…/Deals/{deal}/{tranche}/`, so it should not arise — but the failure mode if it does is a mesh-wide union from a render path, where refusing to read at all is the honest answer. A guard on an empty deal path closes it |
+| `[MeshNode("nodeType:X")]` picker attributes — 191 lines in MeshWeaver.Reinsurance, 19 in MeshWeaver.Crm, 15 in MeshWeaver.Manufacturing, 2 in MeshWeaver.Education, plus the `WithQueries(…)` pickers in MeshWeaver.Plugins | the attribute's query, sent verbatim by `MeshNodePickerView` (plus the typed text) on every dropdown open | **Resolved 2026-09-17 in the PICKER** (MeshWeaver.Plugins#2011) — see "The picker resolves its own reach" below |
+
+
+### The picker resolves its own reach (2026-09-17)
+
+The biggest population the sweep found was not a caller but a CLASS: **227 `[MeshNode("nodeType:X")]`
+declarations** across the satellites. A picker is declared by naming the TYPE it offers, and that
+statement says nothing about WHERE those nodes live — so `MeshNodePickerView` sent the text verbatim
+and every dropdown open ran the lock-bomb shape. On a host whose policy REFUSES it, the view's own
+`Catch` turned the refusal into an empty dropdown: the picker offered nothing and said nothing.
+
+Anchoring 227 attributes would have been the wrong shape, and `{node.namespace}` is not the fix
+either (it resolves to the edited node's own path, which searches one node's subtree). The attribute
+is a statement about the TYPE; **where to look is the picker's question**, and `PickerQueryReach`
+(MeshWeaver.Plugins, `src/MeshWeaver.Blazor.Graph`) answers it where the query is built — one
+anchored leg per reach:
+
+1. every location the TYPE DECLARES (`NodeTypeDefinition.InstanceLocations` → `INodeTypeInstanceLocations`);
+2. the partition of the node being EDITED;
+3. the partition of the picked type (`Reinsurance/Currency` → `Reinsurance`).
+
+Two shapes are left exactly as written: a query the planner already reads as specified
+(`ParsedQuery.IsSufficientlySpecified`), and one a `QueryRoutingRule` pins — **`nodeType:User` is
+served from `Auth`**, so anchoring it to the edited partition would break the user pickers rather
+than fix them. When nothing can be named at all, the query goes out unchanged: fail-open, slow,
+never silently partial, exactly as `INodeTypeInstanceLocations` promises.
+
+🚨 **It narrows what a picker OFFERS, and that is the point.** A picker exists to offer what you can
+reference from HERE; a node living outside the three reaches is no longer offered, and an author who
+needs it has three ways to say so — declare the type's instance locations (best: it fixes every
+picker of that type at once and narrows the planner's fan-outs too), spell the reach in the
+attribute, or declare `partitions:all` where every partition genuinely is the answer. What is not on
+that list is keeping the silent fan-out, because a dropdown is a render path. Checked against the
+measured homes: `Reinsurance/Currency`, `LineOfBusiness` and `Ifrs17/AocType` live in the module
+partition (reach 3), `ILS/Tranche` under `ILS/Deals` (3), `Reinsurance/Broker` in
+`ReinsuranceDemo/Brokers` (reach 2 while editing there) and `Reinsurance/Samples` (3).
+
+🚨 **It narrows only a query that NAMES a type, and the copy/move picker is why.** A destination
+picker asks `context:create` — no type, no anchor — and *somewhere else* is precisely what a
+destination means; narrowing it to the partition being edited would have broken the one picker whose
+purpose is to leave it. So the resolution rewrites only the declaration class it exists for, and the
+three destination pickers (`CopyViews`, `MoveViews`, `MeshDataSourceLayoutAreas`) now DECLARE
+`partitions:all` instead of being unanchored — which also takes them out of the refuse-at-runtime
+class they were in before any of this. A wildcard or alternation type (`nodeType:*Post`,
+`nodeType:(A OR B)`) names no one type either, so the reach stays out of it rather than guessing.
+
+The guards are `PickerQueryReachTest` (the project that owns the picker; every leg asserted against
+the planner's own predicate, the pre-fix shapes as the negative control) and, in the content census,
+`ThePickerResolvesItsReach` — the picker exemption is only sound while the view sends the RESOLVED
+queries, so the census checks that rather than trusting its own comment.
+
+**Two blind spots of the content census, stated rather than hidden.** The predicate is a line
+window, so an unrelated `path:`/`namespace:` within four lines hides a literal: MeshWeaver.Plugins'
+`AiSettingsAreas` "visible models" read (`nodeType:LanguageModel sort:name limit:200`, beside an
+anchored settings read) and `MailboxAreas.Query`'s empty-scope branch are both unanchored and both
+invisible to it. And a query assembled without a `"nodeType:…"` literal is not a candidate at all.
+
+**Corrections to the `unanchored-queries.allow` rows, from the same sweep** (each still listed, so
+each is still debt): `DeviceSeed`'s instances live at `Instance/{id}`, not "the device user's
+partition", so that row anchors rather than declares; `TokenUsageSettingsTab` is admin-only and
+groups by person, so anchoring it to the viewer's partition — what its line suggests — would break
+it, and it should declare; and nothing in MeshWeaver.Plugins calls `ChatHistorySelector`'s query any
+more, so that row's caller can be deleted rather than fixed.
 
 ## The elimination plan
 

@@ -33,7 +33,9 @@ namespace MeshWeaver.Graph.Test;
 /// <para>🚨 <b>Every bound on that start-up is LARGER than the budget waiting on it</b>, which is
 /// the ordering <c>ReadBudget</c>'s own remarks forbid — <i>"a bound nested inside another bound
 /// must be able to fire FIRST, because it is the only one that knows WHICH read starved"</i>:
-/// <c>MessageService.DeferralTimeout</c> 30 s, <c>MessageHub.DefaultInitializationTimeout</c> 120 s,
+/// <c>MessageService</c>'s per-message deferral budget 30 s (its default;
+/// <c>MessageHubConfiguration.WithDeferralTimeout</c>),
+/// <c>MessageHub.DefaultInitializationTimeout</c> 120 s,
 /// <c>RoutingServiceBase</c> path resolution 30 s, <c>MessageHubGrain.FirstNodeResolutionTimeout</c>
 /// 30 s. The reader's 10 s therefore ALWAYS fires first, so no inner bound can ever deliver its
 /// diagnosis and every occurrence of Cause C wears Cause A's signature. Full elimination, and the

@@ -1,12 +1,15 @@
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Graph.Security;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Parsers;
@@ -774,23 +777,96 @@ public static class PluginGateRunner
     /// is after the compile gate passed, so it binds the release just verified, deterministically.
     /// The Tests-area convention (self-contained static suites that throw on failure) is what
     /// makes the host instance interchangeable.</para>
+    ///
+    /// <para>🚨 <b>Where the probe is created is decided by the TYPE, not by a constant</b>
+    /// (issue #4602). An instance of a type whose <see cref="NodeTypeDefinition.OwnsPartition"/> is
+    /// <c>true</c> IS a partition root, so its path is just its id — and since
+    /// <c>693feae92</c>/<c>ae0f706b3</c> the create-validation chain REFUSES a nested one for every
+    /// owning type, not only <c>Space</c>. Building <c>{typePath}/GateProbe</c> unconditionally
+    /// therefore stopped being creatable: MeshWeaver.Crm <c>main</c> went red on <c>Crm/Client</c>
+    /// with <c>Cannot create 'Crm/Client/GateProbe' … must be created at the top level</c>, its
+    /// <c>publish-bake</c> never ran, and every merged change became unshippable. The ownership
+    /// question is asked through <see cref="PartitionOwningTypes.OwnsPartitionWithoutActivating"/>
+    /// — the SAME resolution <see cref="OwnsPartitionProvisioningValidator"/> consults on a nested
+    /// create — so the gate and the validator cannot disagree about a type, whatever the answer is
+    /// and whichever of the two routes (static registry, durable row) produced it. Exempting the
+    /// gate from validation was the alternative and is the wrong one: the probe exists to exercise
+    /// the same create a real instance gets.</para>
     /// </summary>
     private static IObservable<string> CreateTestsProbe(GateMesh harness, string typePath)
     {
         var meshService = harness.ServiceProvider.GetRequiredService<IMeshService>();
-        var probePath = $"{typePath}/GateProbe";
-        var probe = new MeshNode("GateProbe", typePath)
+        var access = harness.ServiceProvider.GetRequiredService<AccessService>();
+        return PartitionOwningTypes.OwnsPartitionWithoutActivating(harness.Mesh, typePath)
+            .Select(owns => BuildTestsProbe(typePath, ownsPartition: owns is true))
+            // RunAsSystem, never Observable.Using(access.ImpersonateAsSystem, …): the hand-written
+            // shape enters the AsyncLocal scope on the SUBSCRIBING thread and leaves it on
+            // whichever thread the create terminates on, so the subscriber stays latched as
+            // system-security (#1790). The sealed helper enters at Subscribe, leaves on the way
+            // out of that same Subscribe, and delivers every notification under the subscriber's
+            // own identity.
+            .SelectMany(probe => access.RunAsSystem(() => meshService.CreateNode(probe)))
+            .Select(created => created.Path);
+    }
+
+    /// <summary>
+    /// The probe node for <paramref name="typePath"/>: nested under the type when instances of it
+    /// are ordinary content, TOP-LEVEL when the type owns its partition.
+    /// </summary>
+    private static MeshNode BuildTestsProbe(string typePath, bool ownsPartition)
+    {
+        var id = TestsProbeId(typePath, ownsPartition);
+        var ns = ownsPartition ? string.Empty : typePath;
+        var path = ownsPartition ? id : $"{typePath}/{id}";
+        return new MeshNode(id, ns)
         {
             Name = "Gate Probe",
             NodeType = typePath,
-            MainNode = probePath,
+            MainNode = path,
             State = MeshNodeState.Active,
         };
-        var access = harness.ServiceProvider.GetRequiredService<AccessService>();
-        return Observable.Using(
-                () => access.ImpersonateAsSystem(),
-                _ => meshService.CreateNode(probe))
-            .Select(created => created.Path);
+    }
+
+    /// <summary>
+    /// The probe's id.
+    ///
+    /// <para>🚨 <b>A top-level probe's id has to carry the disambiguation the namespace used to
+    /// give it for free.</b> Nested, the id is the constant <c>GateProbe</c> and uniqueness comes
+    /// entirely from <c>{typePath}/</c>; at the top level there is no namespace, and ONE gate run
+    /// covers every NodeType of a repo in a single in-process mesh — so two partition-owning types
+    /// would collide on one <c>GateProbe</c> path, and the second create would fail as
+    /// already-exists. The id therefore embeds the type path.</para>
+    ///
+    /// <para>The id becomes the PARTITION NAME (and so the backing schema name), so it is built to
+    /// satisfy <see cref="PartitionDefinition.IsValidPartitionSegment"/> by construction: every
+    /// character outside <c>[letter|digit|.|-|_]</c> becomes <c>_</c>, and the <c>GateProbe</c>
+    /// prefix guarantees the leading letter.</para>
+    ///
+    /// <para>🚨 <b>The digest is UNCONDITIONAL, because the sanitisation is not injective</b>
+    /// (review on #4618). Every disallowed character collapses to <c>_</c>, so <c>Estate/A/B</c>
+    /// and a type literally named <c>Estate/A_B</c> — both valid literal type paths — sanitise to
+    /// the SAME string. Appending the digest only when the name got too long left exactly that
+    /// collision open, and it would surface as the second owning type's probe failing
+    /// already-exists: the very failure this method exists to prevent, one door along. Hashing the
+    /// UNSANITISED path keeps the two apart whatever the sanitiser does to them.</para>
+    ///
+    /// <para>Budget: <c>GateProbe</c> (9) + head + <c>_</c> + 8 hex = 63 bytes ⇒ head ≤ 45, so a
+    /// long path is cut and the digest still closes it. Deterministic on purpose — a run's report
+    /// names the probe, and a Guid would make two runs of the same repo unreadable side by
+    /// side.</para>
+    /// </summary>
+    /// <param name="typePath">The NodeType path the probe instantiates.</param>
+    /// <param name="ownsPartition">Whether that type owns its partition.</param>
+    /// <returns>The probe node's id.</returns>
+    internal static string TestsProbeId(string typePath, bool ownsPartition)
+    {
+        if (!ownsPartition)
+            return "GateProbe";
+
+        var sanitized = string.Concat(typePath.Select(c =>
+            char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' ? c : '_'));
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(typePath)))[..8];
+        return "GateProbe" + sanitized[..Math.Min(45, sanitized.Length)] + "_" + digest;
     }
 
     /// <summary>

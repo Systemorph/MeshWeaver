@@ -103,6 +103,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: deploy/aks/scripts/test-chart-drift-compare.sh
 
+      # The other half of the drift checker, and the half that was dark. The comparator above was
+      # already covered here; the RENDER was not, and a render that could not complete is what made
+      # `Chart Drift` fail 39 of 39 runs without ever producing a verdict (MeshWeaver#4640).
+      #
+      # 🚨 The property this asserts is the NEGATIVE one. chart-drift-render.py can only render at
+      # all by supplying a placeholder for a secret this repository must never hold, and the whole
+      # design rests on no compared object depending on it. So two of the four cases POISON the
+      # chart until the placeholder does reach a compared object, and require the render to go RED
+      # naming it — a test that only asserted "it renders" would pass just as happily on a version
+      # that had lost the ability to notice. No cluster, no credentials, no network.
+      - name: Assert the chart-drift render proves its placeholder cannot reach the comparison
+        if: ${{ !cancelled() }}
+        run: deploy/aks/scripts/test-chart-drift-render.sh
+
       - name: Assert observability installation refuses ephemeral or unverified storage
         if: ${{ !cancelled() }}
         run: python3 deploy/aks/scripts/test-observability-storage.py

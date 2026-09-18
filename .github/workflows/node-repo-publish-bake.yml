@@ -298,6 +298,24 @@ on:
         required: false
         type: string
         default: 'plugin-gate.allow'
+      warning-baseline-file:
+        description: >-
+          The in-mesh WARNING debt this repo carries, passed as --warning-baseline
+          (repo-relative). It arms TWO shrink-only ratchets over the NodeType compiles: one over
+          the real warnings (CS0219, CS1574, …) and a separate one over CS1591, a missing XML doc
+          comment. Lines are `<NodeType path> <diagnostic id>`; an unlisted pair fails the bake and
+          a listed pair whose type compiled clean is stale and fails it too, so the debt can only
+          shrink. See Doc/Architecture/InMeshWarningStandard in the platform repo.
+
+          EMPTY (the default) is OBSERVE-ONLY and is the deliberate adoption path: the bake still
+          MEASURES every warning, prints the folded inventory and says by name that it enforced
+          nothing, so an unadopted repo is visibly unguarded rather than silently so — and none of
+          the satellites goes red on the day this lands. To adopt: run one bake with
+          `MW_LOG_LEVEL=Information`, paste the `warnings: baseline …` lines into a file, commit it
+          and name it here.
+        required: false
+        type: string
+        default: ''
       publication-layout:
         description: >-
           Where a publication is written under
@@ -307,9 +325,10 @@ on:
           into its OWN directory named by the publisher's run-unique token, sealed there, and a
           one-line `_current` pointer — written after the seal — says which one applies. Two
           publishers never write the same bytes, so a mix becomes unrepresentable rather than
-          merely detectable. The flat copy is still written for readers that predate pointer
-          resolution, and THAT copy still races: this layout closes the window for
-          pointer-following readers only.
+          merely detectable. Since MeshWeaver#3461 phase 5 the flat copy at the prefix is DISPOSED
+          OF once the pointer has moved and been read back — its `_complete` first, then the files
+          the publisher positively identifies — so nothing is written at the prefix in place any
+          more and the window is closed for every reader, not only pointer-following ones.
 
           `flat` (the historical layout): that directory IS the publication, replaced IN PLACE —
           unseal, upload over the live files, re-seal. Two publishers interleaved on one prefix can
@@ -343,9 +362,9 @@ on:
           which is the reason the default moved rather than five one-line PRs being opened.
 
           🚨 A flat caller on a migrated prefix NEVER takes the prefix back. Retiring or
-          re-pointing would move consumers backwards: the pointer is moved BEFORE the flat
-          compatibility copy is refreshed, so a run seeing an older flat copy could skip and
-          expose bytes older than the generation it displaced.
+          re-pointing would move consumers backwards: a run seeing an older flat copy — or, since
+          phase 5, none at all — could skip and expose bytes older than the generation it
+          displaced, or nothing.
 
           Retention is implemented (MeshWeaver#3959) and registered in the portal hosts, so
           generations under a retained identity are collected once nothing names them and they are
@@ -534,7 +553,7 @@ on:
 jobs:
   publish-bake:
     name: Bake + publish NodeType assemblies to portal storage
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
     # 🚨 A LITERAL, never an input: the fleet cap is 45 minutes for every job (check-workflow-timeouts.py
     # refuses an expression here because a caller-supplied bound cannot be proven by reading the file).
     # Measured 2026-09-02 the bake runs ~20 min; past 45 it is stuck, not slow.
@@ -1541,6 +1560,7 @@ jobs:
         env:
           STAGE_MODULES: ${{ inputs.stage-modules }}
           ALLOW_FILE: ${{ inputs.allow-file }}
+          WARNING_BASELINE_FILE: ${{ inputs.warning-baseline-file }}
           BAKE_SCOPE: ${{ steps.scope.outputs.scope || 'full' }}
           BAKE_MODULES: ${{ steps.scope.outputs.mount }}
           HOST_DIR: ${{ steps.host.outputs.dir }}
@@ -1581,6 +1601,15 @@ jobs:
               mkdir -p "$NARROW/$(dirname "$ALLOW_FILE")"
               cp "$GITHUB_WORKSPACE/$ALLOW_FILE" "$NARROW/$ALLOW_FILE"
             fi
+            # The warning baseline travels into a narrowed mount for the same reason the allow
+            # file does: the tester reads it from /repo, and a baseline the narrowed stage does
+            # not carry would make the bake refuse a path it was given (never silently proceed).
+            # 🚨 It is NOT narrowed in content — an entry naming a type this shard did not bake is
+            # reported UNVERIFIABLE, never stale, so the whole file is correct on every shard.
+            if [ -n "${WARNING_BASELINE_FILE:-}" ] && [ -f "$GITHUB_WORKSPACE/$WARNING_BASELINE_FILE" ]; then
+              mkdir -p "$NARROW/$(dirname "$WARNING_BASELINE_FILE")"
+              cp "$GITHUB_WORKSPACE/$WARNING_BASELINE_FILE" "$NARROW/$WARNING_BASELINE_FILE"
+            fi
             REPO_MOUNT="$NARROW"
             echo "narrowed bake: $BAKE_MODULES"
           else
@@ -1593,6 +1622,18 @@ jobs:
           chmod 777 "$BAKE"
           ALLOW_ARGS=()
           [ -n "${ALLOW_FILE:-}" ] && ALLOW_ARGS=(--allow "/repo/${ALLOW_FILE}")
+          # The in-mesh warning ratchets. Absent = OBSERVE-ONLY: the bake still measures and
+          # reports, and prints which mode it ran in, so an unadopted repo is visibly unguarded
+          # rather than indistinguishable from a clean one.
+          #
+          # 🚨 An `if`, not an `A && B` list: the default here is EMPTY, so the test FAILS on every
+          # unadopted caller — and this file already records that such a list aborts a step under
+          # `set -e` (see the STAGE_MODULES loop above). The neighbouring ALLOW_ARGS line survives
+          # only because its input defaults non-empty.
+          WARN_ARGS=()
+          if [ -n "${WARNING_BASELINE_FILE:-}" ]; then
+            WARN_ARGS=(--warning-baseline "/repo/${WARNING_BASELINE_FILE}")
+          fi
           # `--init` for the same reason as the gate's run (#1741): as a container's PID 1 the
           # tester cannot be killed by the SIGABRT its own runtime raises on a crash — the kernel
           # discards the signal (SIGNAL_UNKILLABLE) and the process spins at 100% CPU instead of
@@ -1620,7 +1661,7 @@ jobs:
             -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
             --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll compile /repo \
             --app /app --shared-frameworks /usr/share/dotnet/shared \
-            "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
+            "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
             --output /bake --source-sha "${{ steps.content.outputs.sha }}"
 
           # ══ 2. THE GATE — a mesh RUNNING AS THE PORTAL, CONSUMING the bake above ════════════
@@ -1740,6 +1781,27 @@ jobs:
           "$BAKE_CARRY_TARGET"
           "${{ steps.identity.outputs.identity }}"
           "${{ inputs.bake-source }}"
+      # 🚨 A PYTHON WITH `venv` + `pip`, because publish-bake-bundles.sh builds its own venv and
+      # installs its PINNED Azure SDKs into it (the script owns that install on purpose — see its
+      # header: a workflow-side install would leave a satellite whose ref is newer than its pin
+      # running a script whose dependency nobody installed). The self-hosted ARC image ships
+      # python3 3.12 WITHOUT ensurepip/venv, so from the moment every private repo's jobs moved to
+      # `aks-silos*` (2026-09-17) this step died with "The virtual environment was not created
+      # successfully because ensurepip is not available … apt install python3.12-venv" and NO
+      # satellite could publish: MeshWeaver.Crm run 35199593887 and MeshWeaver.Manufacturing run
+      # 35205340142 both failed here while every other job in the run was green. `setup-python`
+      # brings its own interpreter WITH pip on any runner — hosted or ours — so the script's venv
+      # works everywhere; on a hosted runner the tool cache already carries it, so it costs nothing
+      # there. Not `sudo apt-get install python3-venv`: that needs root and the archive, and would
+      # silently be the only thing standing between the fleet and a failed publication.
+      # Delete this step when the runner image bakes python3-venv (Systemorph/Memex
+      # deployments/aks/ci-runners/runner-image/Dockerfile) — the script asserts its own pins
+      # afterwards (`sdk-check`), so a wrong interpreter is RED here, never a later "unreadable".
+      - name: Python with venv + pip for the publish script
+        if: steps.scope.outputs.scope != 'none'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
       - name: Publish bundles to every portal target
         id: publish
         if: steps.scope.outputs.scope != 'none'
@@ -1886,7 +1948,7 @@ jobs:
     name: Register the publication with memex
     needs: publish-bake
     if: needs.publish-bake.result == 'success' && needs.publish-bake.outputs.published == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read

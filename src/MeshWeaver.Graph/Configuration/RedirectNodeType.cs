@@ -63,7 +63,10 @@ public static class RedirectNodeType
         => configuration
             .AddLayout(layout => layout
                 .WithDefaultArea(MeshNodeLayoutAreas.OverviewArea)
-                .WithView(MeshNodeLayoutAreas.OverviewArea, Overview)
+                // The "this moved" page draws the standard header itself (BuildOverview →
+                // MeshNodeLayoutAreas.BuildHeader), so the framework adds no second line (#4500).
+                .WithNodePage(MeshNodeLayoutAreas.OverviewArea, Overview,
+                    NodePageProvenance.RenderedByThePage)
                 .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateLayoutArea.Create));
 
     /// <summary>

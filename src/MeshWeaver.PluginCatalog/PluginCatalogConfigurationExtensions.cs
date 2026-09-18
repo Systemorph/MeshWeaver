@@ -191,6 +191,15 @@ public static class PluginCatalogConfigurationExtensions
                 .AddSingleton(sp => new PendingModuleActivations(
                     ModuleRoot.Resolve(sp.GetService<IConfiguration>()))
                 {
+                    // 🚨 MeshWeaver#4655 — the pool every reading of the volume is TAKEN on, so no
+                    // probe thread ever walks it. Without this line the reader falls back to the
+                    // unbounded pool: still off the caller's thread (the property this fix is), but
+                    // outside the mesh's own IO budget, which is where a walk of a shared network
+                    // volume belongs.
+                    IoPool = sp.GetService<Mesh.Threading.IoPoolRegistry>()
+                        ?.Get(Mesh.Threading.IoPoolNames.FileSystem)
+                        ?? Mesh.Threading.IoPool.Unbounded,
+                    Logger = sp.GetService<ILogger<PendingModuleActivations>>(),
                     // 🚨 #3538 — the modules MeshBuilder.InstallAssemblies refused: its link probe
                     // declined them, or their registration threw. Without this set they read as
                     // PENDING, and every surface promises a restart that re-runs the same
@@ -204,7 +213,32 @@ public static class PluginCatalogConfigurationExtensions
                     // generation the set activates is not the one loaded), and every surface
                     // promises a restart that falls back again.
                     FallbackModules = [.. sp.GetServices<FallbackModule>()],
+                    // 🚨 MeshWeaver#4550 — the two inputs that tell the boot's #4161 DECLINE from an
+                    // ordinary pending update. Without them a declined generation reads as "landed
+                    // but not yet loaded" and every surface promises a restart that re-runs the same
+                    // comparison: measured on memex.systemorph.com 2026-09-16, eight modules named
+                    // that way across a restart that could not clear one of them. The names come
+                    // from the SAME configuration key the boot loader reads, and the identities are
+                    // the two readings this platform states about itself — the surface identity it
+                    // compiles content against, and the producer reading a module packer takes off
+                    // its anchor, which is the scheme every bundle in the fleet states in.
+                    ImageShippedModules = sp.GetService<IConfiguration>() is { } moduleConfiguration
+                        ? MeshBuilderModuleActivation.BaselineModuleNames(moduleConfiguration)
+                        : ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase),
+                    PlatformIdentities =
+                    [
+                        Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                        MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedIdentity,
+                    ],
                 })
+                // 🚨 MeshWeaver#4655 — takes the FIRST reading of the module volume at host start,
+                // so the startup probe finds one rather than being the caller that pays for it.
+                // Registered HERE, beside the reader, because the two are one mechanism: a reading
+                // taken into a different instance would warm a snapshot no probe reads. It cannot
+                // delay the listener (it subscribes a pooled observable and returns) and gates
+                // nothing — a probe that beats it answers 'not measured' and REFUSES, in
+                // microseconds, which is the honest answer and clears itself.
+                .AddModuleVolumeReading()
                 // The COUNT that proves the distribution lane works (#1782 gap 4). Adoption's only
                 // evidence used to be a log line, and the most important miss — "the registry does
                 // not advertise this package for my lane" — had no line at all. With lazy

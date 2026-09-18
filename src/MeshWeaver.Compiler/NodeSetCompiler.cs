@@ -100,7 +100,27 @@ public static class NodeSetCompiler
         string DllPath,
         string? PdbPath,
         CompileInputs Inputs,
-        ImmutableSortedDictionary<string, string> Dependencies);
+        ImmutableSortedDictionary<string, string> Dependencies)
+    {
+        /// <summary>
+        /// The warnings this compile produced — structured, deduped and UNCAPPED.
+        ///
+        /// <para>🚨 They used to be dropped on the floor HERE, one layer below where they were
+        /// dropped before (#3993 made the emit collect them for the runtime activity; this method
+        /// still discarded <c>artifact.Warnings</c> without reading it). That is why a bake could
+        /// report every NodeType green while the very same source compiled under
+        /// <c>-warnaserror</c> in <c>src/</c> would not build: in-mesh C# was the only C# in the
+        /// fleet with no warning standard at all, and the missing XML doc comments accumulated
+        /// behind a verdict that never looked.</para>
+        ///
+        /// <para>🚨 An init-only PROPERTY, not a primary-constructor parameter: adding a defaulted
+        /// parameter to a public record's primary ctor changes its ARITY, which is the binary break
+        /// <c>scripts/check-record-signatures.py</c> refuses (the same rule
+        /// <c>AllowEntry.Intermittent</c> and <c>GateFailure.Outcome</c> record). Defaulting to
+        /// empty keeps every existing construction meaning exactly what it meant.</para>
+        /// </summary>
+        public ImmutableArray<CompileWarning> Warnings { get; init; } = [];
+    }
 
     /// <summary>
     /// Resolves everything a compile of <paramref name="typeNode"/> would consume, WITHOUT
@@ -279,7 +299,10 @@ public static class NodeSetCompiler
             inputs,
             CompiledDependencies.Compute(
                 ReferencedAssemblyNames(artifact.DllPath), dependencyIdOf, toolchainId,
-                GeneratedInputDigestOf(inputs, generatorPaths)));
+                GeneratedInputDigestOf(inputs, generatorPaths)))
+        {
+            Warnings = [.. artifact.Warnings],
+        };
     }
 
     /// <summary>
