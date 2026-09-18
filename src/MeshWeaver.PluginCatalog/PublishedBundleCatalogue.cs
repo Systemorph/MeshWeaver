@@ -282,66 +282,26 @@ public static class PublishedBundleCatalogue
 
     public static SealedBundleFloor EverSealedBundles(string? publishedRoot, ILogger? logger = null)
     {
-        // 🚨 "I could not look" is NOT "there is nothing here", and the difference decides the
-        // verdict: an unreadable root must HOLD (Indeterminate), while a readable root that holds
-        // no publication is the one stated applicability exemption. A configured root that does not
-        // EXIST is the mis-mount / mistyped-path case — the deployment declares it consumes CI
-        // bakes and its storage is not there — so it is a refusal, never an exemption. Collapsing
-        // the two is the same vacuity this whole method exists to remove.
-        if (string.IsNullOrWhiteSpace(publishedRoot))
-            return SealedBundleFloor.Unreadable(
-                $"no published bundle root is configured ({ShippedPrebuiltBundles.PublishedRootConfigKey})");
-        if (!Directory.Exists(publishedRoot))
-            return SealedBundleFloor.Unreadable(
-                $"the configured published bundle root '{publishedRoot}' does not exist — this "
-                + "deployment declares that it consumes CI bakes, so an absent root is an "
-                + "unreadable one (a volume that did not mount, or a mistyped path), not evidence "
-                + "that nothing is published. Cannot determine ≠ clear to proceed.");
+        if (RootRefusal(publishedRoot) is { } rootRefusal)
+            return SealedBundleFloor.Unreadable(rootRefusal);
 
         var bundles = new List<string>();
         var identities = 0;
         try
         {
-        foreach (var identityDirectory in Directory.EnumerateDirectories(publishedRoot)
-                     .OrderBy(d => d, StringComparer.Ordinal))
-        {
-            // The release-marker directory holds version→identity FILES, never a publication.
-            // Skipping it by name keeps "how many identities published" honest — it would
-            // contribute no bundles either way, but it would not be an identity.
-            if (string.Equals(
-                    Path.GetFileName(identityDirectory),
-                    ReleaseMarkerDirectoryName,
-                    StringComparison.Ordinal))
-                continue;
-            // The sentinel's DECLARATION, not a per-bundle presence check — see DeclaredBundlesOf
-            // for why the denominator must be both inclusive and cheap.
-            var declaredHere = new List<string>();
-            foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory)
+            foreach (var identityDirectory in Directory.EnumerateDirectories(publishedRoot!)
                          .OrderBy(d => d, StringComparer.Ordinal))
             {
-                // 🚨 A POINTER THAT CANNOT BE FOLLOWED SHRINKS THIS DENOMINATOR, and a smaller
-                // denominator is the one direction that EXEMPTS a package from the gate (#3461
-                // phase 5). Until the flat compatibility copy was disposed of, the fall-back landed
-                // on a sealed copy and this read what that source declares; now it lands on a
-                // source directory holding nothing, so the source silently declares NOTHING. The
-                // floor is the set of packages that must carry a sealed bake, so reading it short
-                // clears a release that should hold — cannot determine ≠ clear to proceed.
-                var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, logger);
-                var declared = DeclaredBundlesOf(pointer.Directory);
-                if (declared is null && pointer.Fault is not null)
-                    return SealedBundleFloor.Unreadable(
-                        $"the publication pointer of '{sourceDirectory}' could not be followed "
-                        + $"({pointer.Fault}) and no sealed publication sits behind it, so what that "
-                        + "source declares could not be read — the floor would be SMALLER than what "
-                        + "is published, which exempts a package instead of holding it (#3461)");
-                if (declared is not null)
-                    declaredHere.AddRange(declared);
+                if (IsReleaseMarkerDirectory(identityDirectory))
+                    continue;
+                var declaration = DeclaredBundlesUnderIdentity(identityDirectory, logger);
+                if (declaration.Refusal is not null)
+                    return SealedBundleFloor.Unreadable(declaration.Refusal);
+                if (declaration.Declared.Count == 0)
+                    continue;
+                identities++;
+                bundles.AddRange(declaration.Declared);
             }
-            if (declaredHere.Count == 0)
-                continue;
-            identities++;
-            bundles.AddRange(declaredHere);
-        }
         }
         catch (Exception ex)
         {
@@ -354,6 +314,84 @@ public static class PublishedBundleCatalogue
                 $"the published bundle root '{publishedRoot}' could not be read ({ex.Message})");
         }
         return new SealedBundleFloor(ReleaseArtifacts.Of(bundles).SealedBundles, identities);
+    }
+
+    /// <summary>
+    /// Why the published root itself cannot be read, or null when it can.
+    ///
+    /// <para>🚨 "I could not look" is NOT "there is nothing here", and the difference decides the
+    /// verdict: an unreadable root must HOLD (Indeterminate), while a readable root that holds no
+    /// publication is the one stated applicability exemption. A configured root that does not EXIST
+    /// is the mis-mount / mistyped-path case — the deployment declares it consumes CI bakes and its
+    /// storage is not there — so it is a refusal, never an exemption. Collapsing the two is the same
+    /// vacuity <see cref="EverSealedBundles"/> exists to remove. Shared with
+    /// <see cref="SealedBundleFloorCache"/> so the cached reading and the full walk cannot drift
+    /// about what an absent root means.</para>
+    /// </summary>
+    internal static string? RootRefusal(string? publishedRoot) =>
+        string.IsNullOrWhiteSpace(publishedRoot)
+            ? $"no published bundle root is configured ({ShippedPrebuiltBundles.PublishedRootConfigKey})"
+            : !Directory.Exists(publishedRoot)
+                ? $"the configured published bundle root '{publishedRoot}' does not exist — this "
+                  + "deployment declares that it consumes CI bakes, so an absent root is an "
+                  + "unreadable one (a volume that did not mount, or a mistyped path), not evidence "
+                  + "that nothing is published. Cannot determine ≠ clear to proceed."
+                : null;
+
+    /// <summary>
+    /// The release-marker directory holds version→identity FILES, never a publication. Skipping it
+    /// by name keeps "how many identities published" honest — it would contribute no bundles either
+    /// way, but it would not be an identity.
+    /// </summary>
+    internal static bool IsReleaseMarkerDirectory(string directory) =>
+        string.Equals(Path.GetFileName(directory), ReleaseMarkerDirectoryName, StringComparison.Ordinal);
+
+    /// <summary>
+    /// What ONE framework-identity directory declares — the per-identity leaf of
+    /// <see cref="EverSealedBundles"/>, factored out so <see cref="SealedBundleFloorCache"/> can call
+    /// exactly this code for the identities it has not read before. Never throws for a per-source
+    /// condition it has an answer for; an enumeration fault is left to the caller's own catch, which
+    /// is what turns it into a named refusal over the whole root.
+    /// </summary>
+    /// <param name="identityDirectory">A <c>&lt;root&gt;/&lt;identity&gt;</c> directory.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static IdentityDeclaration DeclaredBundlesUnderIdentity(
+        string identityDirectory, ILogger? logger)
+    {
+        // The sentinel's DECLARATION, not a per-bundle presence check — see DeclaredBundlesOf
+        // for why the denominator must be both inclusive and cheap.
+        var declaredHere = new List<string>();
+        var sources = 0;
+        var sealedSources = 0;
+        foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory)
+                     .OrderBy(d => d, StringComparer.Ordinal))
+        {
+            sources++;
+            // 🚨 A POINTER THAT CANNOT BE FOLLOWED SHRINKS THIS DENOMINATOR, and a smaller
+            // denominator is the one direction that EXEMPTS a package from the gate (#3461
+            // phase 5). Until the flat compatibility copy was disposed of, the fall-back landed
+            // on a sealed copy and this read what that source declares; now it lands on a
+            // source directory holding nothing, so the source silently declares NOTHING. The
+            // floor is the set of packages that must carry a sealed bake, so reading it short
+            // clears a release that should hold — cannot determine ≠ clear to proceed.
+            var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, logger);
+            var declared = DeclaredBundlesOf(pointer.Directory);
+            if (declared is null && pointer.Fault is not null)
+                return new IdentityDeclaration(
+                    [],
+                    false,
+                    $"the publication pointer of '{sourceDirectory}' could not be followed "
+                    + $"({pointer.Fault}) and no sealed publication sits behind it, so what that "
+                    + "source declares could not be read — the floor would be SMALLER than what "
+                    + "is published, which exempts a package instead of holding it (#3461)");
+            if (declared is not null)
+            {
+                sealedSources++;
+                declaredHere.AddRange(declared);
+            }
+        }
+        return new IdentityDeclaration(
+            declaredHere, sources > 0 && sealedSources == sources, null);
     }
 
     /// <summary>
@@ -1046,6 +1084,23 @@ public sealed record PublishedReleaseCatalogue(
     /// <summary>A listing that could not be made — the fail-safe constructor.</summary>
     public static PublishedReleaseCatalogue Unreadable(string reason) => new([], reason);
 }
+
+/// <summary>
+/// What ONE framework-identity directory declares, as
+/// <see cref="PublishedBundleCatalogue.DeclaredBundlesUnderIdentity"/> read it.
+/// </summary>
+/// <param name="Declared">The bundle names every SEALED source under the identity lists, as the
+/// sentinels spell them (extensions still on — <see cref="ReleaseArtifacts.Of"/> normalises).</param>
+/// <param name="EverySourceSealed">Whether the identity holds at least one source and EVERY source
+/// under it carried a seal — i.e. whether this reading is FINISHED rather than caught mid-publication.
+/// 🚨 It is what makes the reading safe to remember: a publisher creates a source directory and
+/// writes its sentinel LAST, and that write does not move the identity directory's own stamp, so a
+/// reading taken in that window would otherwise be frozen declaring nothing.</param>
+/// <param name="Refusal">Why the identity could not be read, or null when it was. 🚨 Non-null is a
+/// HOLD for the whole floor and is NEVER remembered by <see cref="SealedBundleFloorCache"/>: a
+/// cached refusal would latch one transient share fault into a permanent freeze.</param>
+internal sealed record IdentityDeclaration(
+    IReadOnlyList<string> Declared, bool EverySourceSealed, string? Refusal);
 
 /// <summary>
 /// 🚨 The deployment gate's DENOMINATOR (#3441) — what a published root has ever demonstrably been

@@ -3,6 +3,7 @@ using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.Hosting.SelfUpdate;
+using MeshWeaver.PluginCatalog;
 
 namespace Memex.Portal.Shared.SelfUpdate;
 
@@ -30,6 +31,13 @@ public static class SelfUpdateConfiguration
             // kubectl set image via /api/plugins/is-updatable), and a gate wired for only one of
             // them is not a gate. Platform-neutral (a query plus file-system reads).
             services.AddSingleton<ReleaseAvailabilityService>();
+            // 🚨 The gate's DENOMINATOR, remembered per framework identity (#4742). A mesh-scoped
+            // singleton, so its lifetime is the mesh's and nothing survives disposal: the published
+            // root is append-only, and re-walking every identity it has ever held — on a network
+            // share, inside the verdict budget — is what held memex.meshweaver.cloud six days behind
+            // main while CD kept sealing. Registered beside the gate rather than inside it so the
+            // poller, /api/plugins/is-updatable and CD's post-promote assertion share one reading.
+            services.AddSingleton<SealedBundleFloorCache>();
             // 🚨 The COMBO gate (#2274): "can that image still serve the modules this instance has
             // landed?" — the question an artifact check cannot answer, and the one that would have
             // caught the memex.systemorph.com trap. Registered unconditionally and for the same

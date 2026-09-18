@@ -5,7 +5,8 @@ Description: >-
   The September 2026 self-update investigation, measured per instance. Four portals were not taking
   new platform builds for four different reasons — two deliberate pins awaiting an approval, two
   separate defects — and none of them the reason the policy nodes appear to state. Plus the separate,
-  four-hour break in the producing half, since resolved.
+  four-hour break in the producing half, and the availability read whose cost grew with the artifact
+  store until it timed out on every candidate — both since resolved.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M4.5 4.5l15 15"/></svg>
 ---
 
@@ -222,6 +223,52 @@ seal recovers and the newest tag clears on the first read. If the timeout surviv
 set, the cause is the denominator's size and not the candidate walk, and the remedy moves from "the
 seal" to "the store". Either way the next reading decides it, and the two do not look alike.
 
+### The prediction RAN, and it went the way that moves the remedy to the store
+
+The seal recovered at 10:15Z and `3.0.0-latest` moved at ~16:35Z. The timeout survived it. Measured on
+**memex.meshweaver.cloud**'s own `Admin/UpdatePolicy`, on two freshly sealed candidates, after the
+instance's policy was restored to `Continuous` / `3.0.0-ci*` at 18:17Z:
+
+| check | trigger | verdict |
+|---|---|---|
+| 18:45:36Z | `BuildCompletion` | `HOLDING 3.0.0-ci.8931 — the artifact catalogue for release 3.0.0-ci.8931 could not be read (the availability check did not answer within 60s)` |
+| 19:16:36Z | `BuildCompletion` | `HOLDING 3.0.0-ci.8932 — … could not be read (the availability check did not answer within 60s)` |
+
+Two consecutive checks, two candidates sealed minutes earlier, the same timeout. By the prediction's
+own test that is the **denominator**, not the candidate walk — and the cost was not theoretical: the
+public instance served `3.0.0-ci.8411` (`c84c6c05`, 2026-09-12), **1,198 commits behind `main`**, while
+CD sealed a fresh set every half hour and its `Promote: tag the full set` job stayed green. Eight Store
+NodeTypes sat at `compilationStatus: Error` there as a result, `Store/Catalog` and `Store/Order` among
+them, on the instance where subscriptions happen. Filed as
+[MeshWeaver#4742](https://github.com/Systemorph/MeshWeaver/issues/4742).
+
+**Fixed at the read, not at the bound.** `SealedBundleFloorCache` — a mesh-scoped singleton the
+availability gate and the roll selector share — remembers what each framework-identity directory
+declared, so a tick still enumerates the root once (a new identity is always seen, a pruned one always
+drops out) and descends only into the identities it has not read before. Two signals decide that, and
+they close different windows: the identity directory's own write stamp, which moves when a source is
+ADDED under it (a satellite baking against a platform identity core sealed earlier); and whether every
+source under it was SEALED, which is the window the stamp cannot see, because a publisher writes the
+completion sentinel last and INSIDE the source directory. Anything less than a finished reading is
+re-read next tick.
+
+🚨 **Fail-closed, clause by clause**, because a cache that turned a hold into a roll would be far worse
+than the freeze it removed. A refusal — an absent root, an unfollowable publication pointer, an
+enumeration fault — is **never** remembered, so one transient share fault cannot latch into a permanent
+verdict. Nothing about the CANDIDATE is cached: the target's own publication, its marker, its surface
+and its module set are read fresh per candidate per tick, and only the denominator's *history* — the
+part #3441 made monotone on purpose — is remembered. And the one direction the cache can err in is a
+**larger** denominator (a remembered contribution whose seal has since been removed), which can only
+HOLD. The one reading it does not refresh is a source republished in place under an identity already
+settled; closing that would cost one stat per source per tick, which is the growth the fix exists to
+remove.
+
+`SelfUpdate__AvailabilityAnswerBudget` is now a configuration key with the same 60 s fail-closed
+default, rendered by the portal ConfigMap. 🚨 **It is the secondary half and never the fix** — a knob
+for an instance whose share is genuinely slow, not a remedy for a read that grows. Widening a bound
+over an append-only store buys a longer freeze with the same ending, which is what the section below
+already said and is why it is worth repeating here.
+
 🚨 **Do not read this timeout as the thing standing between the control instance and a roll.** It is
 not, and the same node said so eight hours earlier: at 01:02Z it *did* answer, *did* select
 `3.0.0-ci.8886`, *did* hand it over — and still did not patch itself, because the candidate is newer
@@ -281,6 +328,22 @@ An append-only store, a monotone walk over all of it, and a fixed 60 s budget do
 particular build. They fail once the store is big enough, and then on every build after that.
 **Raising the budget is not the remedy** — it exists to convert a stall into an honest answer, and a
 bigger one buys a longer freeze with the same ending.
+
+**Measured, on the fastest hardware the read will ever see** (a local APFS SSD, three sources per
+identity, `SealedBundleFloorCacheTest`'s own fixture shape), which is why the shape matters more than
+the numbers:
+
+| identity directories | walk every tick | remembered, warm |
+|---|---|---|
+| 50 | 13–22 ms | 0.60 ms |
+| 200 | 56–95 ms | 1.71 ms |
+| 800 | 250–355 ms | 2.96 ms |
+
+The walk costs about **0.3 ms per identity** and the remembered read about **3.7 µs** — the root
+listing, and nothing else. On Azure Files over SMB each of the walk's roughly ten round trips per
+identity costs milliseconds rather than microseconds, which is how a store a few thousand identities
+deep reaches 60 s while the same store answers in one listing once it is remembered. The growth is the
+point: the first column has a slope and the second does not.
 
 ### The timeout hold reports itself on the wrong side
 
@@ -345,7 +408,7 @@ skipped. Neither conclusion tells you whether a set exists.
 | every instance | a bookkeeping write must never replace a record it could not materialize — refuse and log instead | **a code fix** |
 | memex, pearl | a newer tag than `pinnedImageTag` waits for an approval | **working as designed** — approve, or clear the pin deliberately |
 | every instance | `PreWarm__PrebuiltBundleRetention__Delete` | **an operations decision**, from a ledger line, after confirming the protected set covers every instance and every CI gate pinning an older platform build |
-| the availability gate | answer inside its budget over a store that only grows | **a code fix** — the denominator is monotone over an append-only store and does not need re-walking every tick |
+| the availability gate | answer inside its budget over a store that only grows | ✅ **done** — `SealedBundleFloorCache` (#4742) remembers each identity's declaration, so a tick descends only into the identities it has not read; `SelfUpdate__AvailabilityAnswerBudget` is the secondary knob, never the fix |
 | a timeout hold | record `heldIndeterminate: true` | **a code fix**, one call site |
 | build | MeshWeaver#4093 — list tags on `cr.meshweaver.cloud` | **a code fix**, already tracked |
 
