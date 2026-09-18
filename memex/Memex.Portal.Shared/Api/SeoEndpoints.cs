@@ -182,7 +182,14 @@ public static class SeoEndpoints
     /// and crawlers refetch cards aggressively; the strong ETag is the render's own hash, so a
     /// renamed node produces a new card rather than a stale one.</para>
     /// </summary>
-    private static void MapShareCard(IEndpointRouteBuilder app) =>
+    private static void MapShareCard(IEndpointRouteBuilder app)
+    {
+        // The instance's own card — what a page that is no public node shares with (the home
+        // page, a private node): the site name and host, nothing read from the mesh, so there is
+        // nothing here the anonymous gate would have to withhold.
+        app.MapGet("/api/og.png", ([FromServices] OgCardRenderer renderer, HttpContext http) =>
+            PngResult(http, renderer.RenderSite(http.Request.Host.Host))).AllowAnonymous();
+
         app.MapGet("/api/og/{**path}", (
             [FromServices] IMessageHub hub, [FromServices] OgCardRenderer renderer, HttpContext http, string path,
             CancellationToken ct) =>
@@ -191,7 +198,7 @@ public static class SeoEndpoints
             if (nodePath.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
                 nodePath = nodePath[..^4];
             if (nodePath.Length == 0)
-                return Task.FromResult(Results.NotFound());
+                return Task.FromResult(PngResult(http, renderer.RenderSite(http.Request.Host.Host)));
 
             return SeoResolver.Resolve(hub, nodePath)
                 .Select(data => data is null
@@ -201,6 +208,7 @@ public static class SeoEndpoints
                 .FirstAsync()
                 .ObserveCompletion(LateFault(hub, $"/api/og/{nodePath}"), ct)!;
         }).AllowAnonymous();
+    }
 
     /// <summary>
     /// 🚨 THE RASTER FAVICON — <c>/api/icon/{node}.png?size=N</c>.
@@ -304,15 +312,40 @@ public static class SeoEndpoints
         return Results.File(png, "image/png");
     }
 
-    private static IResult CardResult(HttpContext http, OgCardRenderer renderer, SeoPageData data)
+    private static IResult CardResult(HttpContext http, OgCardRenderer renderer, SeoPageData data) =>
+        PngResult(http, renderer.Render(CardContent(data)));
+
+    /// <summary>
+    /// Everything the card says about a node, read off the node the resolver already gated:
+    /// name, description (with the catalog-copy fallbacks), category or type as the eyebrow, its
+    /// own mark through the SAME backplate policy the favicon route draws
+    /// (<see cref="SeoResolver.ResolveIconSvg"/>), the price when it sells something, and the
+    /// path. Internal so a test reads the endpoint's own mapping rather than re-deriving it.
+    /// </summary>
+    internal static OgCardContent CardContent(SeoPageData data)
     {
         var node = data.Node;
-        var png = renderer.Render(
-            node.Name ?? node.Id,
-            data.Description,
-            string.IsNullOrWhiteSpace(node.Category) ? node.NodeType : node.Category,
-            node.Path);
+        var price = SeoResolver.ContentDecimal(node, "price");
+        return new OgCardContent
+        {
+            Title = node.Name ?? node.Id,
+            Description = data.Description,
+            Eyebrow = string.IsNullOrWhiteSpace(node.Category) ? TypeLeaf(node.NodeType) : node.Category,
+            IconSvg = SeoResolver.ResolveIconSvg(node),
+            Price = price is > 0m
+                ? $"{SeoResolver.ContentString(node, "currency") ?? "CHF"} {price.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}"
+                : null,
+            Path = node.Path,
+            AccentSeed = node.Path,
+        };
+    }
 
+    /// <summary>The last segment of a node type — <c>Store/Plugin</c> reads as "Plugin" on the card.</summary>
+    private static string? TypeLeaf(string? nodeType) =>
+        string.IsNullOrWhiteSpace(nodeType) ? null : nodeType[(nodeType.LastIndexOf('/') + 1)..];
+
+    private static IResult PngResult(HttpContext http, byte[] png)
+    {
         var etag = $"\"{Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(png))}\"";
         if (string.Equals(http.Request.Headers.IfNoneMatch.ToString(), etag, StringComparison.Ordinal))
             return Results.StatusCode(StatusCodes.Status304NotModified);

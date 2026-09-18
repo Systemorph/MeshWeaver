@@ -1,8 +1,11 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
+using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Seo;
 using MeshWeaver.Mesh;
+using SkiaSharp;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -91,6 +94,150 @@ public class OgCardRendererTest
         Assert.Equal(630, height);
     }
 
+    // ── The picture: the node's mark, or the default badge ─────────────────────────────────
+
+    private const string RedTile =
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'><rect width='48' height='48' rx='10' fill='#ff0000'/></svg>";
+
+    /// <summary>The pixel at the centre of the icon square, where the mark or the badge is drawn.</summary>
+    private static SKColor IconCentre(byte[] png)
+    {
+        using var bitmap = SKBitmap.Decode(png) ?? throw new InvalidOperationException("not a decodable PNG");
+        return bitmap.GetPixel(OgCardRenderer.IconLeft + (OgCardRenderer.IconSize / 2), (int)OgCardRenderer.ContentCentreY);
+    }
+
+    private static int Luminance(SKColor c) => ((c.Red * 299) + (c.Green * 587) + (c.Blue * 114)) / 1000;
+
+    private static OgCardContent Content(string? iconSvg = null, string? price = null, string title = "Store") =>
+        new()
+        {
+            Title = title,
+            Description = "Courses, domain plugins, agents and tools.",
+            Eyebrow = "Platform",
+            IconSvg = iconSvg,
+            Price = price,
+            Path = "Store",
+            AccentSeed = "Store",
+        };
+
+    /// <summary>
+    /// 🚨 THE POINT OF THE CARD. The Store shared into iMessage as a bare title beside the tiny
+    /// site favicon (2026-09-18): the card had no picture on it. A node's own mark is drawn LARGE
+    /// on the right — a red tile lands red pixels where the icon square is.
+    /// </summary>
+    [Fact]
+    public void WithAnIcon_TheMarkIsDrawnLarge()
+    {
+        using var renderer = NewRenderer();
+
+        var centre = IconCentre(renderer.Render(Content(iconSvg: RedTile)));
+
+        Assert.True(centre.Red > 200 && centre.Green < 60 && centre.Blue < 60,
+            $"expected the red tile at the icon square's centre, got {centre}");
+    }
+
+    /// <summary>A node with no mark still shares with a picture: the default badge — a bright
+    /// accent tile carrying the page's initial — not the dark ground.</summary>
+    [Fact]
+    public void WithoutAnIcon_ADefaultBadgeIsDrawn()
+    {
+        using var renderer = NewRenderer();
+        var png = renderer.Render(Content());
+
+        var centre = IconCentre(png);
+        using var bitmap = SKBitmap.Decode(png);
+        var ground = bitmap.GetPixel(OgCardRenderer.IconLeft + (OgCardRenderer.IconSize / 2), OgCardRenderer.Height - 6);
+
+        Assert.Equal(255, centre.Alpha);
+        Assert.True(Luminance(centre) > 100, $"badge centre {centre} is as dark as the ground");
+        Assert.True(Luminance(ground) < 60, $"the ground {ground} should be dark");
+    }
+
+    /// <summary>An authored icon that does not parse is a content defect, not a card failure:
+    /// the badge is drawn instead and the card is still a valid PNG.</summary>
+    [Theory]
+    [InlineData("<svg><rect")]
+    [InlineData("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'></svg>")]
+    public void AnUnusableIcon_FallsBackToTheBadge(string svg)
+    {
+        using var renderer = NewRenderer();
+
+        var png = renderer.Render(Content(iconSvg: svg));
+
+        var (width, height) = PngSize(png);
+        Assert.Equal(1200, width);
+        Assert.Equal(630, height);
+        Assert.True(Luminance(IconCentre(png)) > 100, "no picture at all on the card");
+    }
+
+    [Fact]
+    public void APrice_AndAnIcon_ChangeTheBytes()
+    {
+        using var renderer = NewRenderer();
+
+        var plain = renderer.Render(Content());
+        var priced = renderer.Render(Content(price: "CHF 490"));
+        var marked = renderer.Render(Content(iconSvg: RedTile));
+
+        Assert.NotEqual(plain, priced);
+        Assert.NotEqual(plain, marked);
+    }
+
+    /// <summary>The instance card a non-node page shares with: a valid card that names the
+    /// instance and nothing else.</summary>
+    [Fact]
+    public void SiteCard_IsA1200x630Png_AndDiffersByHost()
+    {
+        using var renderer = NewRenderer();
+
+        var one = renderer.RenderSite("memex.meshweaver.cloud");
+        var (width, height) = PngSize(one);
+        Assert.Equal(1200, width);
+        Assert.Equal(630, height);
+        Assert.NotEqual(one, renderer.RenderSite("memex.systemorph.com"));
+        Assert.NotEmpty(renderer.RenderSite(null));
+    }
+
+    // ── The endpoint's mapping: what of the node reaches the card ──────────────────────────
+
+    private static MeshNode Typed(string path, string nodeType, string? category, string? icon, object? content) =>
+        new(path) { NodeType = nodeType, Category = category, Icon = icon, Content = content };
+
+    /// <summary>Everything the node can say reaches the card: name, description, category, its
+    /// backplated mark, a price with its currency, and the path.</summary>
+    [Fact]
+    public void CardContent_ReadsEverythingOffTheNode()
+    {
+        var node = Typed("Claims", "Store/Plugin", "Insurance", RedTile,
+            JsonSerializer.SerializeToElement(new { price = 490, currency = "CHF", description = "Claims, moved to the age of agents." }));
+        node = node with { Name = "Claims Deepfield" };
+
+        var card = SeoEndpoints.CardContent(new SeoPageData(node, SeoResolver.ExtractDescription(node), SeoResolver.ShareImage(node)));
+
+        Assert.Equal("Claims Deepfield", card.Title);
+        Assert.Equal("Claims, moved to the age of agents.", card.Description);
+        Assert.Equal("Insurance", card.Eyebrow);
+        Assert.Contains("fill='#ff0000'", card.IconSvg);
+        Assert.Equal("CHF 490", card.Price);
+        Assert.Equal("Claims", card.Path);
+    }
+
+    /// <summary>Without a category the eyebrow is the type's LEAF — "Plugin", not "Store/Plugin";
+    /// a free page carries no price chip; a URL icon is not inline markup and yields the badge.</summary>
+    [Fact]
+    public void CardContent_LeafType_NoPriceWhenFree_NoSvgForAUrlIcon()
+    {
+        var node = Typed("Edu", "Store/Plugin", null, "/api/content/Edu/icon.png",
+            JsonSerializer.SerializeToElement(new { price = 0 }));
+
+        var card = SeoEndpoints.CardContent(new SeoPageData(node, null, SeoResolver.ShareImage(node)));
+
+        Assert.Equal("Plugin", card.Eyebrow);
+        Assert.Null(card.Price);
+        Assert.Null(card.IconSvg);
+        Assert.Equal("Edu", card.Title);
+    }
+
     /// <summary>
     /// The accent is the thing that makes a row of shared links read as one family: stable per
     /// node (the same page always shares in the same colour) and drawn from the fixed palette, so
@@ -145,7 +292,7 @@ public class OgCardRendererTest
         var node = Node(new PluginLike(), "AgenticPrimer");
 
         Assert.Null(SeoResolver.ExtractImage(node));
-        Assert.Equal("/api/og/AgenticPrimer", SeoResolver.ShareImage(node));
+        Assert.Equal("/api/og/AgenticPrimer.png", SeoResolver.ShareImage(node));
     }
 
     /// <summary>An authored image always wins over the generated one.</summary>
@@ -159,12 +306,24 @@ public class OgCardRendererTest
 
     /// <summary>A bare filename cannot be a share image — it would resolve against whatever path
     /// the crawler happened to fetch — so it falls through to the generated card.</summary>
+    /// <summary>The head declares a size only for the card the portal DRAWS — an authored image's
+    /// dimensions are unknown to it.</summary>
+    [Fact]
+    public void IsGeneratedCard_RecognisesTheDrawnCards_AndNotAuthoredImages()
+    {
+        Assert.True(SeoResolver.IsGeneratedCard("/api/og/Chess.png"));
+        Assert.True(SeoResolver.IsGeneratedCard("https://memex.meshweaver.cloud/api/og/Edu/Courses.png"));
+        Assert.True(SeoResolver.IsGeneratedCard("https://memex.meshweaver.cloud" + SeoResolver.SiteCard));
+        Assert.False(SeoResolver.IsGeneratedCard("/api/content/Claims/content/og.png"));
+        Assert.False(SeoResolver.IsGeneratedCard(null));
+    }
+
     [Fact]
     public void ARelativeImage_IsRejected_AndFallsBack()
     {
         var node = Node(new PluginLike(OgImage: "og.png"), "Chess");
 
         Assert.Null(SeoResolver.ExtractImage(node));
-        Assert.Equal("/api/og/Chess", SeoResolver.ShareImage(node));
+        Assert.Equal("/api/og/Chess.png", SeoResolver.ShareImage(node));
     }
 }

@@ -5,6 +5,38 @@ using SkiaSharp;
 namespace Memex.Portal.Shared.Seo;
 
 /// <summary>
+/// Everything the share card can say about one page — read off the <c>MeshNode</c> by the
+/// endpoint, never authored a second time. Init-only properties, no primary constructor: a
+/// record's primary constructor is a binary contract with every module compiled against it (see
+/// <see cref="PageIcon.Rel"/>), and this shape will grow as nodes learn to say more about themselves.
+/// </summary>
+public sealed record OgCardContent
+{
+    /// <summary>The headline — the node's name.</summary>
+    public required string Title { get; init; }
+
+    /// <summary>The supporting text — the node's description, abstract or tagline.</summary>
+    public string? Description { get; init; }
+
+    /// <summary>The small label above the title — the node's category, else its type.</summary>
+    public string? Eyebrow { get; init; }
+
+    /// <summary>The node's own mark as inline <c>&lt;svg&gt;</c> markup (backplated), drawn large
+    /// on the card. Null draws the default badge instead, so every card carries a picture.</summary>
+    public string? IconSvg { get; init; }
+
+    /// <summary>A price label such as <c>CHF 490</c>, shown as a chip; null for pages that sell nothing.</summary>
+    public string? Price { get; init; }
+
+    /// <summary>The node path, printed in the footer so a card lifted into a feed still says WHERE
+    /// on the instance it points.</summary>
+    public string? Path { get; init; }
+
+    /// <summary>Stable string (the node path) the accent colour is derived from.</summary>
+    public string AccentSeed { get; init; } = "";
+}
+
+/// <summary>
 /// Draws the 1200×630 share card a public page falls back to when it has authored no image of
 /// its own — so "this page has an Open Graph card" is the DEFAULT, not something each page has to
 /// remember to do.
@@ -13,6 +45,13 @@ namespace Memex.Portal.Shared.Seo;
 /// to carry an authored image, and in practice no store plugin ever did (the resolver read
 /// <c>poster</c>/<c>thumbnail</c> while <c>PluginContent</c> declares <c>ogImage</c> — the names
 /// never met). Every share of every public page was a bare text link.</para>
+///
+/// <para><b>What it draws.</b> Whatever the node can say about itself: category as the eyebrow,
+/// name as the title, description, a price chip for something that is for sale, the node's OWN
+/// mark rendered large on the right, and the instance name plus the path in the footer. A node
+/// with no mark gets a default badge — a rounded tile in the card's accent carrying the page's
+/// initial — so no card is ever text on a dark rectangle (2026-09-18: the Store shared into
+/// iMessage as a bare title, and the tiny site favicon was the only picture on the bubble).</para>
 ///
 /// <para><b>Why Skia, and why a font file.</b> The <c>NoDependencies</c> native build links no
 /// fontconfig and no freetype, so the portal image needs nothing apt-installed and its base image
@@ -26,15 +65,35 @@ namespace Memex.Portal.Shared.Seo;
 /// </summary>
 public sealed class OgCardRenderer : IDisposable
 {
-    private const int Width = 1200;
-    private const int Height = 630;
+    /// <summary>The card's pixel width — the Open Graph recommended size, declared in the head as <c>og:image:width</c>.</summary>
+    public const int Width = 1200;
+
+    /// <summary>The card's pixel height — declared in the head as <c>og:image:height</c>.</summary>
+    public const int Height = 630;
+
     private const int Margin = 84;
+
+    /// <summary>The edge of the square the icon (or default badge) is drawn in.</summary>
+    internal const int IconSize = 264;
+
+    /// <summary>Gap between the text column and the icon square.</summary>
+    private const int IconGap = 64;
+
+    /// <summary>Left edge of the icon square — the text column ends <see cref="IconGap"/> before it.</summary>
+    internal const int IconLeft = Width - Margin - IconSize;
+
+    /// <summary>Vertical centre of the content band (below the rule, above the footer).</summary>
+    internal const float ContentCentreY = (Margin + (Height - Margin - 30f)) / 2f;
+
+    private static readonly SKColor Paper = new(0xF8, 0xFA, 0xFC);
+    private static readonly SKColor Muted = new(0x94, 0xA3, 0xB8);
+    private static readonly SKColor Faint = new(0x64, 0x74, 0x8B);
 
     private readonly SKTypeface typeface;
     private readonly string siteName;
 
     /// <summary>Creates the renderer, decoding the embedded font once.</summary>
-    /// <param name="siteName">The instance name printed as the card's eyebrow.</param>
+    /// <param name="siteName">The instance name printed in the card's footer.</param>
     public OgCardRenderer(string siteName)
     {
         this.siteName = string.IsNullOrWhiteSpace(siteName) ? "Memex" : siteName.Trim();
@@ -52,26 +111,55 @@ public sealed class OgCardRenderer : IDisposable
     /// Renders the card as PNG bytes. Pure: same inputs → same bytes, which is what lets the
     /// endpoint serve a strong ETag and let crawlers cache hard.
     /// </summary>
-    /// <param name="title">The headline — the node's name.</param>
-    /// <param name="description">The supporting line; may be null or empty.</param>
-    /// <param name="eyebrow">Small label above the title (category or node type); may be null.</param>
-    /// <param name="accentSeed">Stable string (the node path) the accent colour is derived from.</param>
-    public byte[] Render(string title, string? description, string? eyebrow, string accentSeed)
+    public byte[] Render(OgCardContent card)
     {
         var info = new SKImageInfo(Width, Height, SKColorType.Rgba8888, SKAlphaType.Premul);
         using var surface = SKSurface.Create(info);
-        Draw(surface.Canvas, title, description, eyebrow, AccentFor(accentSeed));
+        Draw(surface.Canvas, card, AccentFor(card.AccentSeed));
         using var image = surface.Snapshot();
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
         return data.ToArray();
     }
 
-    private void Draw(SKCanvas canvas, string title, string? description, string? eyebrow, SKColor accent)
+    /// <summary>
+    /// Renders the card from its parts. Kept for callers compiled against the four-argument shape;
+    /// new callers pass an <see cref="OgCardContent"/>, which is the only way to reach the icon,
+    /// the price chip and the path.
+    /// </summary>
+    /// <param name="title">The headline — the node's name.</param>
+    /// <param name="description">The supporting line; may be null or empty.</param>
+    /// <param name="eyebrow">Small label above the title (category or node type); may be null.</param>
+    /// <param name="accentSeed">Stable string (the node path) the accent colour is derived from.</param>
+    public byte[] Render(string title, string? description, string? eyebrow, string accentSeed) =>
+        Render(new OgCardContent
+        {
+            Title = title,
+            Description = description,
+            Eyebrow = eyebrow,
+            AccentSeed = accentSeed,
+        });
+
+    /// <summary>
+    /// The card for a page that is no public node — the home page, a route the resolver does not
+    /// know, a node the anonymous gate withholds. It says only what is already public: the
+    /// instance's name and host. Nothing about the node the request named reaches it.
+    /// </summary>
+    /// <param name="host">The host the page was served from, printed as the description.</param>
+    public byte[] RenderSite(string? host) =>
+        Render(new OgCardContent
+        {
+            Title = siteName,
+            Description = string.IsNullOrWhiteSpace(host) ? null : host.Trim(),
+            AccentSeed = siteName,
+        });
+
+    private void Draw(SKCanvas canvas, OgCardContent card, SKColor accent)
     {
         canvas.Clear(new SKColor(0x0B, 0x11, 0x20));
 
-        // Ground: a dark vertical gradient, then a wide accent glow anchored bottom-left so the
-        // card reads as lit rather than flat-filled.
+        // Ground: a dark vertical gradient, then two accent glows — a wide one bottom-left so the
+        // card reads as lit rather than flat-filled, and a fainter one behind the icon so the mark
+        // sits on a halo instead of floating on black.
         using (var bg = new SKPaint())
         {
             bg.Shader = SKShader.CreateLinearGradient(
@@ -88,34 +176,171 @@ public sealed class OgCardRenderer : IDisposable
                 null, SKShaderTileMode.Clamp);
             canvas.DrawRect(new SKRect(0, 0, Width, Height), glow);
         }
+        using (var halo = new SKPaint())
+        {
+            halo.Shader = SKShader.CreateRadialGradient(
+                new SKPoint(IconLeft + (IconSize / 2f), ContentCentreY), IconSize * 1.25f,
+                [accent.WithAlpha(0x30), accent.WithAlpha(0x00)],
+                null, SKShaderTileMode.Clamp);
+            canvas.DrawRect(new SKRect(0, 0, Width, Height), halo);
+        }
 
         // The accent rule: the one hard edge on the card, and the thing that makes a row of
         // shared links read as one family.
         using (var rule = new SKPaint { Color = accent, IsAntialias = true })
             canvas.DrawRect(new SKRect(0, 0, Width, 10), rule);
 
+        DrawIcon(canvas, card, accent);
+        DrawText(canvas, card, accent);
+        DrawFooter(canvas, card);
+    }
+
+    // ── The picture ────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The node's own mark, or the default badge when it has none this can draw. Either way a
+    /// picture — the whole point of the card over a text link.
+    /// </summary>
+    private void DrawIcon(SKCanvas canvas, OgCardContent card, SKColor accent)
+    {
+        var box = new SKRect(IconLeft, ContentCentreY - (IconSize / 2f), IconLeft + IconSize, ContentCentreY + (IconSize / 2f));
+
+        // A soft shadow under whatever is drawn, so the mark reads as a tile lying on the card.
+        using (var shadow = new SKPaint { IsAntialias = true, Color = new SKColor(0, 0, 0, 0x66) })
+        {
+            shadow.MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 18);
+            canvas.DrawRoundRect(new SKRect(box.Left + 6, box.Top + 14, box.Right + 6, box.Bottom + 14), 56, 56, shadow);
+        }
+
+        if (TryDrawSvg(canvas, card.IconSvg, box))
+            return;
+        DrawDefaultBadge(canvas, card, accent, box);
+    }
+
+    /// <summary>
+    /// Draws inline svg scaled to fit <paramref name="box"/>, centred, through the SAME rasterizer
+    /// the favicon route uses — so a mark that parses but paints nothing (an empty root) is
+    /// refused here too, instead of leaving the icon square blank behind a picture that "exists".
+    /// False when there is no svg or it cannot be drawn — an authored icon that fails here is a
+    /// content defect, but the card is the wrong place to surface it; the caller draws the badge.
+    /// </summary>
+    private static bool TryDrawSvg(SKCanvas canvas, string? svg, SKRect box)
+    {
+        if (string.IsNullOrWhiteSpace(svg))
+            return false;
+        try
+        {
+            // Rendered at twice the box and downsampled, so curved marks keep their edges.
+            using var image = IconRasterizer.RenderImage(svg, IconSize * 2);
+            if (image is null)
+                return false;
+            using var paint = new SKPaint { IsAntialias = true };
+            canvas.DrawImage(image, box, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), paint);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The default picture: a rounded tile in the card's accent carrying the page's initial — the
+    /// same idea as the per-instance favicon badge, at share-card scale. Drawn from the title so
+    /// two icon-less pages still share with two different pictures.
+    /// </summary>
+    private void DrawDefaultBadge(SKCanvas canvas, OgCardContent card, SKColor accent, SKRect box)
+    {
+        using (var tile = new SKPaint { IsAntialias = true })
+        {
+            tile.Shader = SKShader.CreateLinearGradient(
+                new SKPoint(box.Left, box.Top), new SKPoint(box.Right, box.Bottom),
+                [accent, Darken(accent, 0.62f)],
+                null, SKShaderTileMode.Clamp);
+            canvas.DrawRoundRect(box, 56, 56, tile);
+        }
+        // A thin lighter rim so the tile has an edge against the halo behind it.
+        using (var rim = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2, Color = Paper.WithAlpha(0x40) })
+            canvas.DrawRoundRect(box, 56, 56, rim);
+
+        if ((Initial(card.Title) ?? Initial(siteName)) is not { } letter)
+            return;
+        using var font = new SKFont(typeface, 150) { Embolden = true };
+        using var ink = new SKPaint { IsAntialias = true, Color = Paper };
+        var metrics = font.Metrics;
+        var baseline = box.MidY - ((metrics.Ascent + metrics.Descent) / 2f);
+        canvas.DrawText(letter, box.MidX, baseline, SKTextAlign.Center, font, ink);
+    }
+
+    /// <summary>The first letter or digit of <paramref name="text"/>, upper-cased; null when it
+    /// opens with nothing the embedded font can be trusted to draw (an emoji, punctuation).</summary>
+    private static string? Initial(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+        foreach (var rune in text.Trim().EnumerateRunes())
+        {
+            if (Rune.IsLetterOrDigit(rune) && rune.IsBmp)
+                return Rune.ToUpperInvariant(rune).ToString();
+            return null;
+        }
+        return null;
+    }
+
+    private static SKColor Darken(SKColor colour, float factor) =>
+        new((byte)(colour.Red * factor), (byte)(colour.Green * factor), (byte)(colour.Blue * factor), colour.Alpha);
+
+    // ── The words ──────────────────────────────────────────────────────────────────────────
+
+    private void DrawText(SKCanvas canvas, OgCardContent card, SKColor accent)
+    {
         using var ink = new SKPaint { IsAntialias = true };
-        var textWidth = (float)(Width - (Margin * 2));
+        var textWidth = (float)(IconLeft - IconGap - Margin);
 
-        // Lay the block out BEFORE drawing any of it, so the whole thing can be centred in the
-        // space between the top rule and the footer. Top-anchoring looks composed only when a
-        // description happens to be long; a bare title (no description authored — the common case
-        // for a Space) left a dead third of the card empty and read as unfinished.
-        var hasEyebrow = !string.IsNullOrWhiteSpace(eyebrow);
+        // Lay the block out BEFORE drawing any of it, so the whole thing can be centred beside the
+        // icon. Top-anchoring looks composed only when a description happens to be long; a bare
+        // title (no description authored — the common case for a Space) left a dead third of the
+        // card empty and read as unfinished.
+        var eyebrow = OneLine(card.Eyebrow);
+        var hasEyebrow = eyebrow.Length > 0;
         const float EyebrowBlock = 66f;
-        var titleLines = FitLines(title, 68, 44, 3, textWidth, out var titleSize);
-        var titleLeading = titleSize * 1.14f;
-        var descLines = string.IsNullOrWhiteSpace(description)
-            ? []
-            : Wrap(description!, new SKFont(typeface, 30), textWidth, 2);
-        const float DescLeading = 42f;
-
-        var blockHeight = (hasEyebrow ? EyebrowBlock : 0)
-                          + (titleLines.Count * titleLeading)
-                          + (descLines.Count > 0 ? 34 + (descLines.Count * DescLeading) : 0);
+        const float DescSize = 28f;
+        const float DescLeading = 40f;
+        const float DescGap = 30f;
+        using var descFont = new SKFont(typeface, DescSize);
+        var description = OneLine(card.Description);
+        var price = OneLine(card.Price);
+        const float ChipHeight = 50f;
+        const float ChipGap = 30f;
 
         var areaTop = (float)Margin;
         var areaBottom = Height - Margin - 30f;          // above the footer line
+        var fixedHeight = (hasEyebrow ? EyebrowBlock : 0) + (price.Length > 0 ? ChipGap + ChipHeight : 0);
+
+        // The band is a budget, not a suggestion: a long title, a long description and a price
+        // chip together overflowed into the footer (the first course card drawn). The title gets
+        // up to three lines; if that leaves no room for at least two lines of description, the
+        // title is refitted to two lines (ellipsized) — a card that names the page and says what
+        // it is beats one that finishes the name and says nothing.
+        var titleText = OneLine(card.Title);
+        var titleLines = FitLines(titleText, 68, 44, 3, textWidth, out var titleSize);
+        var titleLeading = titleSize * 1.14f;
+        var descRoom = areaBottom - areaTop - fixedHeight - (titleLines.Count * titleLeading) - DescGap;
+        if (description.Length > 0 && descRoom < 2 * DescLeading && titleLines.Count > 2)
+        {
+            titleLines = FitLines(titleText, 68, 44, 2, textWidth, out titleSize);
+            titleLeading = titleSize * 1.14f;
+            descRoom = areaBottom - areaTop - fixedHeight - (titleLines.Count * titleLeading) - DescGap;
+        }
+        var descMaxLines = Math.Clamp((int)Math.Floor(descRoom / DescLeading), 0, 3);
+        var descLines = description.Length == 0 || descMaxLines == 0
+            ? []
+            : Wrap(description, descFont, textWidth, descMaxLines);
+
+        var blockHeight = fixedHeight
+                          + (titleLines.Count * titleLeading)
+                          + (descLines.Count > 0 ? DescGap + (descLines.Count * DescLeading) : 0);
+
         var y = areaTop + Math.Max(0, ((areaBottom - areaTop) - blockHeight) / 2f);
 
         if (hasEyebrow)
@@ -123,13 +348,13 @@ public sealed class OgCardRenderer : IDisposable
             using var eyebrowFont = new SKFont(typeface, 23);
             ink.Color = accent;
             y += 24;
-            canvas.DrawText(Spaced(eyebrow!.ToUpperInvariant()), Margin, y, SKTextAlign.Left, eyebrowFont, ink);
+            canvas.DrawText(Spaced(eyebrow.ToUpperInvariant()), Margin, y, SKTextAlign.Left, eyebrowFont, ink);
             y += EyebrowBlock - 24;
         }
 
         using (var titleFont = new SKFont(typeface, titleSize) { Embolden = true })
         {
-            ink.Color = new SKColor(0xF8, 0xFA, 0xFC);
+            ink.Color = Paper;
             foreach (var line in titleLines)
             {
                 y += titleLeading;
@@ -139,9 +364,8 @@ public sealed class OgCardRenderer : IDisposable
 
         if (descLines.Count > 0)
         {
-            using var descFont = new SKFont(typeface, 30);
-            ink.Color = new SKColor(0x94, 0xA3, 0xB8);
-            y += 34;
+            ink.Color = Muted;
+            y += DescGap;
             foreach (var line in descLines)
             {
                 y += DescLeading;
@@ -149,13 +373,59 @@ public sealed class OgCardRenderer : IDisposable
             }
         }
 
-        // Footer: the instance, so a card lifted into a feed still says where it came from.
-        using (var footFont = new SKFont(typeface, 24))
+        if (price.Length > 0)
         {
-            ink.Color = new SKColor(0x64, 0x74, 0x8B);
-            canvas.DrawText(siteName, Margin, Height - Margin + 10, SKTextAlign.Left, footFont, ink);
+            y += ChipGap;
+            DrawChip(canvas, price, Margin, y, ChipHeight, accent);
         }
     }
+
+    /// <summary>A pill in the accent — the price, the one number worth putting on the picture.</summary>
+    private void DrawChip(SKCanvas canvas, string text, float left, float top, float height, SKColor accent)
+    {
+        using var font = new SKFont(typeface, 25) { Embolden = true };
+        const float PadX = 22f;
+        var width = font.MeasureText(text) + (PadX * 2);
+        var rect = new SKRect(left, top, left + width, top + height);
+
+        using (var fill = new SKPaint { IsAntialias = true, Color = accent.WithAlpha(0x26) })
+            canvas.DrawRoundRect(rect, height / 2, height / 2, fill);
+        using (var stroke = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2, Color = accent })
+            canvas.DrawRoundRect(rect, height / 2, height / 2, stroke);
+
+        using var ink = new SKPaint { IsAntialias = true, Color = accent };
+        var metrics = font.Metrics;
+        var baseline = rect.MidY - ((metrics.Ascent + metrics.Descent) / 2f);
+        canvas.DrawText(text, left + PadX, baseline, SKTextAlign.Left, font, ink);
+    }
+
+    /// <summary>Footer: the instance on the left, the path on the right — so a card lifted into a
+    /// feed still says where it came from and where on it.</summary>
+    private void DrawFooter(SKCanvas canvas, OgCardContent card)
+    {
+        var baseline = Height - Margin + 10f;
+        using var ink = new SKPaint { IsAntialias = true, Color = Faint };
+        using var footFont = new SKFont(typeface, 24);
+        canvas.DrawText(siteName, Margin, baseline, SKTextAlign.Left, footFont, ink);
+
+        var path = OneLine(card.Path);
+        if (path.Length == 0)
+            return;
+        var crumbs = path.Replace("/", "  ›  ");
+        var room = Width - (Margin * 2) - footFont.MeasureText(siteName) - 60;
+        using var pathFont = new SKFont(typeface, 22);
+        var shown = Wrap(crumbs, pathFont, room, 1);
+        if (shown.Count > 0)
+            canvas.DrawText(shown[0], Width - Margin, baseline, SKTextAlign.Right, pathFont, ink);
+    }
+
+    // ── Layout helpers ─────────────────────────────────────────────────────────────────────
+
+    /// <summary>Collapses any whitespace run (a markdown paragraph break, a tab) to one space.</summary>
+    private static string OneLine(string? text) =>
+        string.IsNullOrWhiteSpace(text)
+            ? ""
+            : string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     /// <summary>
     /// The largest size in [<paramref name="min"/>, <paramref name="max"/>] at which

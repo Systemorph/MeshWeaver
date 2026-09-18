@@ -190,14 +190,20 @@ public static class SeoResolver
     }
 
     /// <summary>
-    /// The page description for meta tags: the node's Description, else the content's
-    /// <c>abstract</c>/<c>description</c> member (untyped — content arrives as JSON here).
+    /// The page description for meta tags and the share card: the node's Description, else the
+    /// content's <c>abstract</c>/<c>description</c>, else the sales copy a catalog root carries
+    /// instead — <c>tagline</c>, <c>summary</c>, <c>headline</c> (the Store root has a headline and
+    /// a tagline and no description, so its card and its <c>og:description</c> were empty). Both
+    /// content shapes (typed record, untyped JSON) resolve through <see cref="ContentString"/>.
     /// </summary>
     public static string? ExtractDescription(MeshNode node) =>
         FirstNonEmpty(
             node.Description,
             ContentString(node, "abstract"),
-            ContentString(node, "description"));
+            ContentString(node, "description"),
+            ContentString(node, "tagline"),
+            ContentString(node, "summary"),
+            ContentString(node, "headline"));
 
     /// <summary>
     /// The AUTHORED share image, or null when the node carries none (the caller then falls back to
@@ -229,7 +235,26 @@ public static class SeoResolver
     /// for it. Never null — "this page has an Open Graph card" is the default, not an opt-in.
     /// </summary>
     public static string ShareImage(MeshNode node) =>
-        ExtractImage(node) ?? $"/api/og/{node.Path}";
+        ExtractImage(node) ?? GeneratedCard(node.Path);
+
+    /// <summary>
+    /// The generated card's URL for one node path. The <c>.png</c> suffix is deliberate: some
+    /// unfurlers (iMessage's LinkPresentation among them) weigh an extension when deciding whether
+    /// an <c>og:image</c> is a picture, and the route accepts the suffix.
+    /// </summary>
+    public static string GeneratedCard(string nodePath) => $"/api/og/{nodePath.Trim('/')}.png";
+
+    /// <summary>The card for a page that is no public node (the home page, a private node) — the
+    /// instance's own card, saying only its name and host.</summary>
+    public const string SiteCard = "/api/og.png";
+
+    /// <summary>Whether a share image URL is one the portal DRAWS — those are always
+    /// <see cref="OgCardRenderer.Width"/>×<see cref="OgCardRenderer.Height"/> PNGs, so the head
+    /// can declare the size; an authored image's dimensions are unknown here.</summary>
+    public static bool IsGeneratedCard(string? image) =>
+        image is not null
+        && (image.Contains("/api/og/", StringComparison.OrdinalIgnoreCase)
+            || image.EndsWith(SiteCard, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The one media type that tells every consumer "this icon scales losslessly".</summary>
     private const string SvgMediaType = MeshNodeImageHelper.SvgMediaType;
