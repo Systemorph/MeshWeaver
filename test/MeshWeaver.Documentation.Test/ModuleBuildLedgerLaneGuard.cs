@@ -283,6 +283,55 @@ public class ModuleBuildLedgerLaneGuard
             Assert.Contains(prefix, JobBody(job), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// 🚨 EVERY store operation ASSERTS WHICH STORE IT IS STANDING ON (#4761).
+    ///
+    /// <para><c>file:/ci-artifacts</c> is a PATH, and the lane's jobs do not all run on the same
+    /// runner pool: <c>select</c> and <c>verify</c> take <c>MW_RUNNER</c> while <c>prepare</c> takes
+    /// <c>MW_RUNNER_DOCKER</c>, and on this cluster each pool's namespace provisions its OWN Azure
+    /// Files share behind that one path. A producer therefore wrote a 1.46 GB workspace build that
+    /// eight consumers, thirteen seconds later, could not see — with byte-identical
+    /// <c>ARTIFACT_STORE</c> and <c>STORE_RUN_PREFIX</c> printed on both sides.</para>
+    ///
+    /// <para><c>resolve</c> emits the store's IDENTITY (the mount source, read from the kernel) once
+    /// in <c>select</c>, and every <c>put</c> and <c>get</c> passes it back as
+    /// <c>--expect-store-id</c>, so a runner on a different share is RED at the run's FIRST store
+    /// operation. Dropping that flag from one call site would restore exactly the shape that hid the
+    /// defect — a green producer and an unexplained absence somewhere else — and nothing in a green
+    /// run would show it, because the check only speaks when the mounts disagree.</para>
+    /// </summary>
+    [Fact]
+    public void EveryStoreOperation_AssertsTheStoreIdentityTheRunResolved()
+    {
+        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+
+        // `select` resolves it once and publishes it; a per-job resolution could disagree, which is
+        // the whole point — two jobs CAN be on two different shares.
+        Assert.Contains("artifact-store-id: ${{ steps.store.outputs.store-id }}", text, StringComparison.Ordinal);
+
+        // Every job that names the store also carries its identity — otherwise `$ARTIFACT_STORE_ID`
+        // expands empty, and an empty value is refused by the script rather than passing quietly.
+        var withStore = Regex.Matches(text, @"\n      ARTIFACT_STORE: \$\{\{ needs\.select\.outputs\.artifact-store \}\}").Count;
+        var withIdentity = Regex.Matches(text, @"\n      ARTIFACT_STORE_ID: \$\{\{ needs\.select\.outputs\.artifact-store-id \}\}").Count;
+        Assert.Equal(withStore, withIdentity);
+        Assert.Equal(3, withStore);
+
+        // 🚨 THE COUNT IS THE GUARD. Every launch of the helper's put/get verbs carries the flag —
+        // asserting only that the flag appears SOMEWHERE would go on passing while a new call site,
+        // or an edited old one, moved bytes unchecked.
+        var operations = Regex.Matches(text, @"""\$ARTIFACT_STORE_PY"" (?:put|get) --store").Count;
+        var asserted = Regex.Matches(text, @"--expect-store-id ""\$ARTIFACT_STORE_ID""").Count;
+        Assert.True(operations > 0, "the lane must still move bytes through ci-artifact-store.py");
+        Assert.Equal(operations, asserted);
+
+        // And the script must still OFFER the flag at the pin this lane fetches: a build-logic ref
+        // that predates it would fail every store step on an unknown argument.
+        var helper = File.ReadAllText(Path.Combine(FindRepoRoot(), ".github/scripts/ci-artifact-store.py"));
+        Assert.Contains("--expect-store-id", helper, StringComparison.Ordinal);
+        Assert.Contains("def store_id(self)", helper, StringComparison.Ordinal);
+        Assert.Contains("_verify_written", helper, StringComparison.Ordinal);
+    }
+
     /// <summary>Occurrences of <paramref name="needle"/> inside the pack job — the retention
     /// expression uses the same text, and it is not one of the three handoff guards.</summary>
     private static int CountInPack(string text, string needle) =>
