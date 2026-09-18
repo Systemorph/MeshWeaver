@@ -129,7 +129,9 @@ It makes the cost **attributable**. It does not make `/health` fast, and it deli
 raise `timeoutSeconds`: a bigger timeout would move the cliff without removing it — and on the
 instance measured above the number was still climbing while the page was being written, so the
 cliff moves by itself. The real fix is
-whatever the timing line names — and the shape that fix takes is already settled here.
+whatever the timing line names — and the shape that fix takes is already settled here. (What it
+named was `required_modules`; see "Memoising the work is not moving it" below for what that took,
+in two steps, and which half of it is still open.)
 
 ## What the timing line named, and what it cost first
 
@@ -161,6 +163,65 @@ MeshWeaver.Plugins).
 crash that restarted the pods was incidental; a container that cannot pass startup cannot recover,
 and `maxUnavailable: 0` — correct, and what makes a roll zero-downtime — means the ingress had no
 backend at all once the serving pods were gone.
+
+## Memoising the work is not moving it, and the difference is the two probes that matter
+
+The memo above answers a different question from the one the probe budget asks. It made the walk
+happen *once per change of the volume* instead of once per probe — and left the probe as the caller
+who performs it. Two callers are still exactly that caller, and between them they are every occasion
+that decides a rollout:
+
+| when the memo is cold | which probe pays it |
+|---|---|
+| nothing has been read yet | the **FIRST** probe of a fresh pod — i.e. the `startupProbe`, the one whose timeout a container cannot recover from |
+| a module has just landed | the first probe after the module lane did the thing this check exists to report |
+
+So "the first probe is slow instead of all of them" is not a smaller version of the same fix; on the
+first row it is the whole defect, and on the second it is a gate that goes over budget precisely
+while someone is watching a delivery.
+
+[#4655](https://github.com/Systemorph/MeshWeaver/issues/4655) removes the shape rather than the
+frequency. `PendingModuleActivations.ReadProbeInputs()` now performs **no filesystem call at all**:
+it returns the last reading this process TOOK and asks `IIoPool` for a new one, and
+`ModuleVolumeReadingHostedService` takes the first reading at host start, where nothing has a
+five-second budget. The work has an owner, and the owner is not a probe — which is the rule the
+section below already states for the rest of the endpoint.
+
+Measured locally (APFS SSD; the share's per-round-trip cost is three orders of magnitude higher,
+which is the whole of the seconds above), over a synthetic module volume:
+
+| volume | walk, on the probe thread (before) | held read, on the probe thread (after) |
+|---|---|---|
+| 120 modules, 482 files | 21.4 / 22.3 / 22.4 / 24.2 / 28.0 ms | median **0.011 ms** over 200 probes |
+| 400 modules, 1,602 files | 49.6 / 54.8 / 58.3 / 59.2 / 61.4 ms | median **0.0075 ms** over 200 probes |
+
+🚨 **Read the columns, not the ratio.** The left column is what grows with the volume — 3.3× the
+files cost 2.4× the time, and memex's share is two orders of magnitude larger again. The right one
+does not move, because it is no longer a function of the volume at all. A probe whose first reading
+does not exist yet measured **0.24 ms** and performed **zero** walks.
+
+### Having taken no reading is not a clean reading
+
+The window before the first reading lands is short and it is real, and the one thing it must not do
+is read as a pass. An unread volume answers `false` to "does this module resolve from the image?" —
+which is indistinguishable, at the call site, from a module the build genuinely lost. Reported as
+that, the first probe of every pod would tell an operator to go and fix a build that is fine.
+
+So the unread case is its own verdict. `ModuleProbeInputs.NotRead` carries the
+`ModuleProbeInputs.VolumeNotRead` sentinel as its image-side resolver; `RequiredModuleStatus.Classify`
+recognises it and answers `RequiredModuleState.Unmeasured` for every entry its **in-process** evidence
+does not already settle — a module loaded in this process is still `Present`, which is what keeps
+the state from becoming a blanket. And `RequiredModuleStatus.Absent` **counts** `Unmeasured`, so a
+caller that has never heard of the new state still refuses: "I could not check" costs what "I
+checked and it is missing" costs, because the expensive direction is the safe one for a rollout
+gate. The state clears itself — the reading is in flight while it is reported.
+
+**Still to move, and named rather than assumed:** `pending_module_activation` calls
+`PendingModuleActivations.Read()`, which is the pull-on-demand reader and still walks a cold or
+changed volume on its caller's thread. The host-start reading warms the same snapshot, so in
+practice it finds one — but "in practice" is a race, not a property, and the durable fix is the
+portal half in MeshWeaver.Plugins: both probes read the reading, and `required_modules`'s own
+top-line sentence says "not measured" instead of inheriting the absent branch's wording.
 
 ## Where the probe may point, and what moving it costs
 
@@ -267,7 +328,7 @@ its per-call work:
 |---|---|
 | **reads a registry or a counter** — cost independent of the mesh | `content-types`, `bake-report`, `source-discovery`, `publication-seal`, `bundle_adoption`, `entitlement_anchor`, `nodetype_bake`, `process_progress`, `pending_module_activation` (memoised by [#3664](https://github.com/Systemorph/MeshWeaver/issues/3664)) |
 | **one bounded call per probe** — live IO, but a constant | `db_version` (one round trip), `storage_capacity` and `data_volume_free_space` (one `statfs` per *configured path*, 11–14 ms measured) |
-| **per declared entry, per probe** | `required_modules` — and it is the only one |
+| **per declared entry, per probe** | `required_modules` — and it is the only one. Since [#4655](https://github.com/Systemorph/MeshWeaver/issues/4655) it is in the first row: it reads a reading a background owner takes |
 
 So the defect was singular on this endpoint, and it is now fixed at the root rather than tuned. Two
 things next to it are the same shape and are worth naming rather than filing:
