@@ -67,6 +67,25 @@ public record GitHubIssue
 
     /// <summary>The issue's comments, populated on a detailed sync (empty on a list sync).</summary>
     public ImmutableList<GitHubIssueComment> Comments { get; init; } = ImmutableList<GitHubIssueComment>.Empty;
+
+    /// <summary>
+    /// Whether <see cref="Comments"/> is the WHOLE comment list, or merely everything that could be
+    /// read (Systemorph/MeshWeaver#4629).
+    ///
+    /// <para>🚨 An empty <see cref="Comments"/> means "this issue has no comments" only while this
+    /// is <c>true</c>. GitHub's transfer redirect covers the issue resource and NOT its
+    /// sub-resources, so a TRANSFERRED issue answers 200 for itself and 404 for its comments —
+    /// measured 2026-09-17 on <c>Systemorph/MeshWeaver#2950</c>, which now lives at
+    /// <c>Systemorph/MeshWeaver.Plugins#1139</c>. The read that produced that pair is a successful
+    /// read of a real issue, and discarding it is what made a transferred issue indistinguishable
+    /// from a deleted one for every caller.</para>
+    ///
+    /// <para>Defaults to <c>true</c>, the same shape and for the same reason as
+    /// <c>RepoSnapshot.ListingIsComplete</c>: a partial answer declares itself rather than passing
+    /// as a complete one, so a caller that needs the comments can tell, and a caller that needs only
+    /// the issue's state is not denied an answer it did receive.</para>
+    /// </summary>
+    public bool CommentsAreComplete { get; init; } = true;
 }
 
 /// <summary>A single comment on a GitHub issue (or pull request — a PR is an issue).</summary>
