@@ -768,9 +768,16 @@ jobs:
       #
       # The fingerprint of an attempt is in the registry, not in the API: every publishing leg
       # pushes `staging-<sha>-<run_id>` BEFORE `promote` applies a single consumer-visible tag. So
-      # a staging tag for this sha, with no older run live (`decide` checks that first, and does so
-      # before it reaches the ledger), is exactly "a publisher started on this commit and did not
-      # finish" — which is #1026's shape and the thing the reconciler was built to shout about.
+      # a staging tag for this sha, with no run live on it (`decide` checks that before it reaches
+      # the ledger), is exactly "a publisher started on this commit and did not finish" — which is
+      # #1026's shape and the thing the reconciler was built to shout about.
+      #
+      # 🚨 EVERY PUBLISHING REPOSITORY, NOT THE PORTAL ALONE (Copilot on MeshWeaver#4687). The
+      # three .NET legs run in PARALLEL and each stages into its own repository, so a run whose
+      # migration leg staged and whose portal leg died before its push leaves no portal marker at
+      # all — and a probe that looked only at `memex-portal-ai` would answer "nothing was
+      # attempted" over exactly the torn set the ledger exists to record. The list is the same one
+      # `check-image-set.sh` calls THE SET; keep the two together.
       #
       # 🚨 FAILS TOWARDS THE ALARM. A registry read this cannot complete answers `true`, because the
       # cost of a spurious issue is one comment and the cost of a missed one is a silent delivery
@@ -782,18 +789,27 @@ jobs:
           SHORT: ${{ steps.target.outputs.short_sha }}
         run: |
           set -uo pipefail
-          if tags=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai \
-                      --query "[?starts_with(@, 'staging-$SHORT-')]" -o tsv); then
-            if printf '%s' "$tags" | grep -q .; then
-              echo "attempted=true" >> "$GITHUB_OUTPUT"
-              echo "A publisher has already staged layers for $SHORT and did not finish: $(printf '%s' "$tags" | tr '\n' ' ')"
+          found=""
+          unreadable=""
+          for repo in memex-portal-ai memex-migration mw-plugin-test; do
+            if tags=$(az acr repository show-tags -n meshweaver --repository "$repo" \
+                        --query "[?starts_with(@, 'staging-$SHORT-')]" -o tsv); then
+              if printf '%s' "$tags" | grep -q .; then
+                found="$found $repo:$(printf '%s' "$tags" | tr '\n' ' ')"
+              fi
             else
-              echo "attempted=false" >> "$GITHUB_OUTPUT"
-              echo "No staging tag for $SHORT — no publisher has started on this commit, so there is no failed delivery to record."
+              unreadable="$unreadable $repo"
             fi
-          else
+          done
+          if [ -n "$unreadable" ]; then
             echo "attempted=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::could not read the staging tags for $SHORT — answering 'a publisher has attempted it' so a genuine delivery hole is still recorded. The issue this files may therefore be about a commit nothing has tried yet; the registry read is what to check first."
+            echo "::warning::could not read the staging tags for $SHORT in:$unreadable — answering 'a publisher has attempted it' so a genuine delivery hole is still recorded. The issue this files may therefore be about a commit nothing has tried yet; the registry read is what to check first."
+          elif [ -n "$found" ]; then
+            echo "attempted=true" >> "$GITHUB_OUTPUT"
+            echo "A publisher has already staged layers for $SHORT and did not finish:$found"
+          else
+            echo "attempted=false" >> "$GITHUB_OUTPUT"
+            echo "No staging tag for $SHORT in any publishing repository — no publisher has started on this commit, so there is no failed delivery to record."
           fi
       # ── The decision, and (reconcile only) the ATTEMPT BUDGET ──────────────────────────────
       # A reconciler that cannot succeed must not grind forever. Persistent failure here means
@@ -1059,9 +1075,24 @@ jobs:
           # Whether a plugins merge should mint a portal image at all — and if so, on what cadence —
           # is MeshWeaver#4688 and Doc/Architecture/CdLedgerRecordsFailures → "The decision that is
           # still open". Three options are set out there; do not pick one here.
+          #
+          # 🚨 IT IS AN AUTOMATIC PUBLISH, SO IT IS BEHIND THE GREEN CHECK (Copilot on
+          # MeshWeaver#4687). This branch sits ABOVE the required-check guard further down, which
+          # is correct for its neighbours — `bake_only` publishes no image, and `rebuild` is an
+          # operator's explicit dispatch — and would have been a hole here: a HEAD whose
+          # `Consolidate test results` had settled RED still has its old, complete image set, so
+          # `COMPLETE` is true, and this branch would have built and shipped an untested tree. CD
+          # must never publish one. Not green ⇒ fall through to `bake_only`, which re-asserts the
+          # content bake and builds nothing.
           if [ "$COMPLETE" = "true" ] && [ "${HOSTS_STALE:-false}" = "true" ] \
-             && [ "${FORCE_REBUILD:-false}" != "true" ]; then
+             && [ "$GREEN" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
             decision true "🏠 main \`$SHORT\` HAS its complete, deliverable image set; only the host pairing is behind — the published portal image was built from an older MeshWeaver.Plugins commit. Refreshing it (#2622). This is CADENCE, not a delivery hole: no \`ci-failure\` issue is filed, and every install already has a current image to roll to."
+            exit 0
+          fi
+          if [ "$COMPLETE" = "true" ] && [ "${HOSTS_STALE:-false}" = "true" ] \
+             && [ "$GREEN" != "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
+            echo "bake_only=true" >> "$GITHUB_OUTPUT"
+            decision false "🛑 main \`$SHORT\`'s host pairing is behind, but \`Consolidate test results\` is \`$CONCL\` — refusing to build an untested tree for a cosmetic refresh. The deliverable set is intact; re-asserting the content bake only."
             exit 0
           fi
           if [ "$COMPLETE" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
@@ -1120,8 +1151,37 @@ jobs:
           # issue and count attempt 1. Four builds instead of three before `cd-unhealed`, for a
           # commit that genuinely cannot build — and the run that dies is still a `CD failed on
           # main` alert in its own right, from the `verdict` job, which this does not touch.
-          if [ "$GREEN" = "true" ] && [ "${ATTEMPTED:-true}" != "true" ]; then
-            decision true "📦 main \`$SHORT\` is green and has no image set, and NO publisher has started on it (no \`staging-$SHORT-*\` layers in ACR) — so nothing has failed. Publishing it; the \`ci-failure\` ledger is for a delivery that was ATTEMPTED and did not finish, and stays untouched."
+          # 🚨 A STAGING TAG IS NOT EVIDENCE OF FAILURE WHILE ITS RUN IS STILL ALIVE (Copilot on
+          # MeshWeaver#4687). The in-flight probe at the top of this step filters to runs with a
+          # LOWER id on purpose — two runs deciding at once would otherwise both defer and neither
+          # would publish. That tie-break rule is right, and it means a NEWER run can be mid-publish
+          # right here: on `0dadacc` the scheduled run was created 34 s BEFORE the genuine delivery
+          # run, so the newer one was invisible to it. Three of the 25 issues measured were exactly
+          # that, and if the newer run has reached its staging push, `ATTEMPTED` is true over a
+          # publication that is going perfectly well.
+          #
+          # So the ledger asks a SECOND question, and it is deliberately NOT the tie-break's: is ANY
+          # run of this workflow live on this sha, newer or older, other than me? This decides only
+          # whether to WRITE — never whether to publish — so it cannot re-create the mutual deferral
+          # the id filter exists to prevent.
+          #
+          # 🚨 FAILS TOWARDS THE ALARM, like the staging probe: an unanswered read is treated as
+          # "nobody else is publishing", so a genuine hole is still recorded, and it says so.
+          if LIVE_ANY=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA&per_page=60" \
+                          --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id != $RUN_ID and .status != \"completed\")] | .[0] // empty | .html_url"); then
+            :
+          else
+            echo "::warning::the live-run probe failed (exit $?) — cannot tell whether another run is publishing $SHORT, so the ledger is written as if none were. A spurious entry is the worst case; a missed delivery hole would be worse."
+            LIVE_ANY=""
+          fi
+
+          if [ "$GREEN" = "true" ] && { [ "${ATTEMPTED:-true}" != "true" ] || [ -n "$LIVE_ANY" ]; }; then
+            if [ -n "$LIVE_ANY" ]; then
+              why="run $LIVE_ANY is live on this exact commit, so its staged layers are a publication IN PROGRESS"
+            else
+              why="NO publisher has started on it (no \`staging-$SHORT-*\` layers in any publishing repository)"
+            fi
+            decision true "📦 main \`$SHORT\` is green and has no image set, and $why — so nothing has failed. Publishing it; the \`ci-failure\` ledger is for a delivery that was ATTEMPTED and did not finish, and stays untouched."
             exit 0
           fi
 

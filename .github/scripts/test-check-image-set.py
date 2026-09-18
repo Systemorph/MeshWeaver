@@ -95,6 +95,21 @@ print(os.environ['INDEX'])
         self.assertIn("DELIVERABLE", result.stdout)
         self.assertEqual(set(calls), EXPECTED_TAGS, "every other identity is still asserted")
 
+    def test_an_UNREADABLE_pair_read_is_exit_1_not_a_stale_pairing(self):
+        # 🚨 Exit 2 PROMISES that everything else was verified and only the pairing is behind, and
+        # `gate` acts on that promise — complete, no ledger entry, refresh. A 503 or a refused pull
+        # establishes nothing about the tag, so reading it as "merely behind" would be the same
+        # answer-that-reads-like-a-pass this change exists to remove, one layer down. Azure CLI
+        # exits 3 for ResourceNotFoundError; anything else stays RED. (Copilot on MeshWeaver#4687.)
+        for code, diagnostic in ((1, "ERROR: response status 503 Service Unavailable"),
+                                 (2, "ERROR: registry operation was refused")):
+            with self.subTest(code=code):
+                result, _ = self.check(PAIR_TAG, diagnostic, code)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("::error::", result.stdout)
+                self.assertNotIn("::notice::", result.stdout)
+                self.assertIn("could not be READ", result.stdout)
+
     def test_a_stale_pair_is_a_notice_never_an_error_annotation(self):
         # An `::error::` on a job that then succeeds is how a run's annotation list stops being
         # read. The condition is still printed, and still summarised — just not as a failure.

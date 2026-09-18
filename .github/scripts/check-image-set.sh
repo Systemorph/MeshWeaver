@@ -4,7 +4,8 @@
 #
 #   .github/scripts/check-image-set.sh <short-sha> [<plugins-short-sha>] [--pointers <version>]
 #   exit 0 = complete   exit 1 = something is missing / malformed / could not be verified
-#   exit 2 = every image of the set is present and good, and ONLY the pair tag is behind
+#   exit 2 = every image of the set is present and good, and the pair tag is CONFIRMED ABSENT
+#            (az exit 3 = ResourceNotFoundError). An unreadable pair read is exit 1, never 2.
 #
 # 🚨 EXIT 2 IS DELIVERABILITY vs PROVENANCE, AND THEY WERE CONFLATED FOR 109 ALARMS
 # (MeshWeaver#4687). The three sha-tagged indexes are what an install PULLS; the pair tag is a
@@ -199,7 +200,19 @@ if [ -n "$PLUGINS_SHA" ]; then
     ok "memex-portal-ai:$pair — built from plugins $PLUGINS_SHA"
   else
     status=$?
-    stale "memex-portal-ai:$pair could not be verified in ACR (az exit $status) — see the registry diagnostic above. The pair tag must identify the image built from plugins $PLUGINS_SHA (#2622). The deployable set is UNAFFECTED: every image above resolved, so nothing is holding an install back."
+    # 🚨 ONLY A CONFIRMED ABSENCE IS STALE (Copilot on MeshWeaver#4687). Exit 2 PROMISES that every
+    # deliverability image was verified and only the pairing is behind, and `gate` acts on that
+    # promise: it marks the set complete, writes nothing to the ledger, and refreshes. A 503, a
+    # refused pull or an expired credential establishes NOTHING about the tag — reading it as
+    # "merely behind" is exactly the answer-that-reads-like-a-pass this whole change exists to
+    # remove, one layer down. Azure CLI exits 3 for ResourceNotFoundError and 1/2 for everything
+    # else, so the discriminator is the code, never the absence of an answer: anything but 3 stays
+    # on the exit-1 path, RED, naming the failed read.
+    if [ "$status" -eq 3 ]; then
+      stale "memex-portal-ai:$pair is not in ACR (az exit $status — the manifest is absent, not unreadable). The pair tag must identify the image built from plugins $PLUGINS_SHA (#2622). The deployable set is UNAFFECTED: every image above resolved, so nothing is holding an install back."
+    else
+      report "memex-portal-ai:$pair could not be READ in ACR (az exit $status) — see the registry diagnostic above. That is not the same as the pair tag being behind: an unreadable registry establishes nothing, so this is a failed verification and not a stale host pairing (#2622)."
+    fi
   fi
 fi
 

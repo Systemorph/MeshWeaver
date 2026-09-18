@@ -82,6 +82,31 @@ Across the retained staging tags: **418 publishing builds over 340 distinct core
 rebuilds of trees that already had a complete, deliverable set. That is a floor, not a total; a
 staging tag can age out.
 
+### The same cycle, measured live
+
+The historical count says what happened. One full cycle was also watched as it ran, on
+2026-09-18, which is the same mechanism with no archaeology in it:
+
+| time (Z) | event |
+|---|---|
+| 02:38 | CD run #8892 publishes `3e7dc7f`. Every publishing job green, `Verify every image shipped` included. Pair tag `3e7dc7f-p752c379`. |
+| 03:55 | `MeshWeaver.Plugins` `main` advances to `2648215`. |
+| 04:33 | The tick demands `3e7dc7f-p2648215`, does not find it, files [#4678](https://github.com/Systemorph/MeshWeaver/issues/4678). |
+| 05:01 | The heal writes `3e7dc7f-p2648215` and `3.0.0-ci.8895`. |
+| 05:06 | #4678 self-closes — *"main's HEAD now has the complete image set … verified against ACR"*. |
+| 05:30 | The next tick demands `3e7dc7f-pefb2449`, files [#4686](https://github.com/Systemorph/MeshWeaver/issues/4686). **24 minutes after the heal was confirmed.** |
+
+That run's `gate` annotations name one artifact and one only:
+
+```text
+memex-portal-ai:3e7dc7f-pefb2449 could not be verified in ACR (az exit 3)
+```
+
+`3e7dc7f`, `memex-migration:3e7dc7f` and `mw-plugin-test:3e7dc7f` all resolved, both architectures,
+in the same job — and `3e7dc7f-p752c379` and `3e7dc7f-p2648215` were both still in the registry at
+05:30. Nothing was deleted; the heal wrote exactly the tag it was asked for; the question simply
+changed underneath it.
+
 ### Window 2 — a publisher that has not been created yet
 
 The other window has nothing to do with plugins. `gate`'s only wait condition was
@@ -151,34 +176,58 @@ not heal" are very different bugs and neither is this one.
 
 ```text
 exit 0  complete, and paired with the plugins commit asked about
-exit 1  an image of the set is missing, malformed, or could not be read  → NOT DELIVERABLE
-exit 2  every image is present and good; only the pair tag is behind     → DELIVERABLE, HOSTS STALE
+exit 1  an image of the set is missing or malformed, OR any read failed   → NOT DELIVERABLE
+exit 2  every image present and good, pair tag CONFIRMED ABSENT (az 3)    → DELIVERABLE, HOSTS STALE
 ```
 
-Ordering is the contract: a run that lost a leg **and** whose plugins HEAD moved exits 1, never 2 —
-exit 2 asserts the set is intact, and saying that over a torn set is the one failure the file exists
-to prevent. Both are non-zero, so `verify-images` and `release.yml`, which simply *run* the script,
-keep today's behaviour exactly: a pair tag a run just wrote and cannot read back is still red there.
-Only `gate` inspects the code.
+Two things make exit 2 safe to act on, and both were added after review caught them missing.
 
-**A stale host pairing publishes, silently.** `gate` still rebuilds — [#2622](https://github.com/Systemorph/MeshWeaver/issues/2622)
-is unchanged, and the *publish* decision is byte-for-byte what it was — but it says what it is doing
-and writes nothing to the ledger, the same discipline the batching path already follows.
+**Ordering**: a run that lost a leg **and** whose plugins HEAD moved exits 1, never 2 — exit 2
+asserts the set is intact, and saying that over a torn set is the one failure the file exists to
+prevent.
 
-**The ledger requires evidence of an attempt.** The fingerprint is in the registry, not in the API:
-every publishing leg pushes `staging-<sha>-<run_id>` **before** `promote` applies a single
-consumer-visible tag. A staging tag for this sha, with no older run live, is exactly *a publisher
-started on this commit and did not finish* — which is
-[#1026](https://github.com/Systemorph/MeshWeaver/issues/1026)'s shape and what the reconciler was
-built to shout about. Without one, the tick is not repairing anything: it **is** the publisher, and
-it says so.
+**Only a CONFIRMED absence counts.** Exit 2 *promises* that every deliverability image was verified,
+and `gate` acts on that promise: complete, no ledger entry, refresh. A 503, a refused pull or an
+expired credential establishes nothing about the tag, so treating it as "merely behind" would be
+this same defect one layer down — an unreadable answer read as a benign one. Azure CLI exits **3**
+for `ResourceNotFoundError` and 1 or 2 for everything else, so the discriminator is the code, never
+the absence of an answer; anything but 3 stays RED, naming the failed read.
 
-It is a positive, clock-free condition. No grace period, no retry, no widened bound — a delivery
-that has not started is a different fact from a delivery that failed, and the probe asks which.
+Both are non-zero, so `verify-images` and `release.yml`, which simply *run* the script, keep today's
+behaviour exactly: a pair tag a run just wrote and cannot read back is still red there. Only `gate`
+inspects the code.
 
-The probe **fails towards the alarm**: an unreadable registry answers "attempted", because one extra
-comment costs less than a missed delivery hole, and the warning names the read so a reader is never
-guessing.
+**A stale host pairing publishes, silently — and only on a green HEAD.**
+`gate` still rebuilds ([#2622](https://github.com/Systemorph/MeshWeaver/issues/2622) is unchanged)
+but says what it is doing and writes nothing to the ledger, the discipline the batching path already
+follows. The branch sits above the required-check guard, which is right for its neighbours —
+`bake_only` ships no image, `rebuild` is an operator's explicit dispatch — and was a hole here: a
+HEAD whose check settled **red** still has its old complete set, so `COMPLETE` is true and an
+unguarded refresh would have built and shipped an untested tree. Not green ⇒ fall through to
+`bake_only`, which builds nothing.
+
+**The ledger requires evidence of an attempt, and evidence that nobody is mid-publish.** The
+fingerprint is in the registry, not in the API: every publishing leg pushes `staging-<sha>-<run_id>`
+**before** `promote` applies a single consumer-visible tag, and the probe reads **all three
+publishing repositories** — the .NET legs run in parallel, so a run whose migration leg staged and
+whose portal leg died before its push leaves no portal marker at all, which is exactly the torn set
+the ledger exists to record. That is
+[#1026](https://github.com/Systemorph/MeshWeaver/issues/1026)'s shape. Without a marker, the tick is
+not repairing anything: it **is** the publisher, and it says so.
+
+A marker is not evidence of failure while its run is still alive, though. The in-flight tie-break at
+the top of `decide` filters to runs with a *lower* id on purpose — two runs deciding at once would
+otherwise both defer and neither would publish — so a **newer** run can be mid-publish right here
+(on `0dadacc` the scheduled run was created 34 s *before* the genuine delivery run; 3 of the 25
+issues measured were that). The ledger therefore asks a second question the tie-break deliberately
+does not: is **any** run of this workflow live on this sha, other than me? It decides only whether to
+WRITE, never whether to publish, so it cannot re-create the mutual deferral the id filter prevents.
+
+It is a positive, clock-free condition throughout. No grace period, no retry, no widened bound — a
+delivery that has not started is a different fact from a delivery that failed, and the probes ask
+which. Both **fail towards the alarm**: an unreadable registry answers "attempted", an unanswered
+run probe answers "nobody else is publishing", because one extra comment costs less than a missed
+delivery hole — and each says which, so a reader is never guessing.
 
 ### What this costs
 
@@ -189,19 +238,33 @@ three before `cd-unhealed`, for a commit that genuinely cannot build. The run th
 
 ## The controls
 
-Both are in the existing harnesses, which **extract** the real step and the real script rather than
-restating them, and both were run against the pre-fix tree to confirm they fail there.
+Both live in the existing harnesses, which **extract** the real step and the real script rather than
+restating them.
 
-`test-check-image-set.py` — a missing pair tag alone is exit 2 and a `::notice::`, a missing image
-outranks it, and a complete correctly-paired set is still exit 0 (the inert control, so "exit 2"
-cannot pass by being answered unconditionally). Two of the four fail before the fix.
+`test-check-image-set.py` — a *confirmed absent* pair tag alone is exit 2 and a `::notice::`; an
+**unreadable** pair read (503, refused) is exit 1 and an `::error::`; a missing image outranks a
+stale pair; and a complete correctly-paired set is still exit 0 (the inert control, so "exit 2"
+cannot pass by being answered unconditionally).
 
 `test-cd-steps.py` — the `decide` step's cases assert what it **asked GitHub to do**, read from the
 recorded `gh` calls, because a decision that prints nothing alarming and still calls
 `gh issue create` is precisely the defect and is invisible in stdout. A host-stale set publishes and
-files nothing; a green commit with no staged layers publishes and files nothing; **the same inputs
-with `ATTEMPTED=true` still open the issue and still record the attempt**; an empty probe fails
-towards the ledger; a settled-red required check is still reported. Three fail before the fix,
+files nothing; the same set on a **red** required check publishes *nothing at all*; a green commit
+with no staged layers publishes and files nothing; a **newer live run** on the sha suppresses the
+ledger entry without touching the publish decision; and three mutation controls pin the other
+direction — `ATTEMPTED=true` with no live run still opens the issue and still records attempt 1/3,
+an empty probe still fails towards the ledger, and a settled-red check is still reported.
+
+`test-cd-steps.py` also **executes the registry probe itself**, against a stub `az` that models
+`acr repository show-tags` per repository. Without that the probe's `--query`, its repository list
+and its three branches would be covered by nothing — every `decide` case hands `ATTEMPTED` in as an
+environment value, so a malformed query would pass all of them while the production probe answered
+wrongly every hour. The cases: nothing staged anywhere ⇒ `false`; a marker in **each** of the three
+repositories *alone* ⇒ `true`; a marker for a *different* commit ⇒ `false` (the prefix filter is the
+step's own, run through real jmespath); one unreadable repository ⇒ `true`, with a warning naming
+it.
+
+Run against the pre-fix tree: two of the script cases and three of the `decide` cases fail there,
 including the one that shows the old step calling `gh issue create` with the body *"every
 self-updating install stays on the previous image"* for a commit no publisher had touched.
 
