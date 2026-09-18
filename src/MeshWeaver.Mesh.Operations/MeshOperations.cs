@@ -2712,7 +2712,14 @@ public class MeshOperations
                 var capturedPath = resolvedPath;
                 perPath = perPath.Add(
                     mesh.DeleteNode(capturedPath)
-                        .Select(_ => $"Deleted: {capturedPath}")
+                        // 🚨 READ THE VALUE — `false` means the node was ALREADY gone and this call
+                        // removed nothing (#4668). Deleting what is already absent is a success (the
+                        // verb's postcondition holds either way), but reporting it as "Deleted:" would
+                        // tell an agent that a path it mistyped had been cleaned up. The honest line
+                        // is what lets the caller tell a completed delete from a no-op.
+                        .Select(removed => removed
+                            ? $"Deleted: {capturedPath}"
+                            : $"Nothing to delete at {capturedPath}: it was already absent.")
                         .Catch((Exception ex) =>
                         {
                             logger.LogWarning(ex, "Error deleting {Path}", capturedPath);

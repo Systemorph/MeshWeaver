@@ -341,6 +341,26 @@ def run_jobs_of(fetch: Fetch, repo: str, run_id: int) -> list[dict]:
         page += 1
 
 
+def run_jobs_of_attempt(fetch: Fetch, repo: str, run_id: int, attempt: int) -> list[dict]:
+    """Every job record of ONE attempt of a run.
+
+    🚨 `/actions/runs/{id}/jobs` answers with the LATEST attempt's records, and a partial re-run
+    (`rerun-failed-jobs`) re-creates a record for every job of the new attempt — including the ones
+    it did not re-run — carrying NONE of the earlier attempt's annotations (#4491). An annotation
+    therefore belongs to an ATTEMPT, not to a run, and a reader that wants one has to say which.
+    """
+    jobs: list[dict] = []
+    page = 1
+    while True:
+        data = fetch(f"/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs"
+                     f"?per_page=100&page={page}")
+        rows = list(data.get("jobs") or [])
+        jobs += rows
+        if len(rows) < 100 or len(jobs) >= int(data.get("total_count") or 0):
+            return jobs
+        page += 1
+
+
 def run_jobs(fetch: Fetch, run_id: int) -> list[dict]:
     return run_jobs_of(fetch, CORE_REPO, run_id)
 
@@ -840,7 +860,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
     """
     notes: list[str] = []
     best: int | None = None
-    predating = unreadable = silent = ambiguous = 0
+    predating = unreadable_runs = silent = ambiguous = 0
     data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
                  f"?branch=main&status=success&per_page={limit}")
     # The event filter is applied HERE, not in the query: the API takes ONE event, and every event
@@ -866,27 +886,102 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
             or (f"https://github.com/{repo}/actions/runs/{run_id}" if run_id else ""),
             age_hours=((now() - _created(newest)) / 3600
                        if newest and _created(newest) is not None else None),
-            predating=predating, unreadable=unreadable, silent=silent, ambiguous=ambiguous)
+            predating=predating, unreadable=unreadable_runs, silent=silent,
+            ambiguous=ambiguous)
 
     if not runs:
         notes.append(f"no successful run of {SATELLITE_CD_WORKFLOW} on {repo} main "
                      f"({'/'.join(MAIN_EVENTS_THAT_VOUCH)}) in the newest {limit} — nothing to "
                      "read a passed set from")
         return Ceiling(None, notes, ceiling_refusal(evidence()))
+    # 🚨 THE BOUND COUNTS RUNS, NOT NOTES (Copilot review, #4493). It used to read
+    # `len(notes) >= limit`, which was a proxy for "runs examined" only while every run emitted
+    # exactly one note. The attempt fallback below emits a SECOND note for the run it rescues, so
+    # the proxy would stop the walk after as few as six runs of twelve — dropping up to half the
+    # evidence and, because `best` is a max over the runs examined, answering with a LOWER ceiling
+    # or a false RED. That is the very failure this function exists to prevent, so the counter is
+    # now the thing it claims to be.
+    examined = 0
     for run in runs:
         run_id = int(run["id"])
-        jobs = [j for j in run_jobs_of(fetch, repo, run_id) if j.get("name") == PLATFORM_REF_JOB]
-        if not jobs:
+        examined += 1
+        # 🚨 NEWEST ATTEMPT FIRST, then older ones (#4491). `/runs/{id}/jobs` serves the latest
+        # attempt, and after a partial re-run every job of that attempt has a FRESH record — the
+        # carried-over `Resolve the released platform` among them — with none of the annotations
+        # the attempt that actually ran it published. Reading only the latest attempt therefore
+        # loses the run's contribution to the ceiling while the run still reads `success`, and the
+        # satellite then holds every pull request on an older set and says `main` has not passed on
+        # the newer one, which is FALSE. Measured 2026-09-16 on MeshWeaver.Plugins: run 35073843357
+        # resolved 3.0.0-ci.8721, died on an artifact-service 403, was re-run to success — attempt
+        # 1's job carried the annotation, attempt 2's record for the same job carried zero.
+        #
+        # The NEWEST attempt that carries one wins, so a genuine re-resolution (a full re-run, or a
+        # re-run OF this job) still decides; an older attempt is consulted only where the newer
+        # record is silent, which is exactly the carried-over case.
+        #
+        # 🚨 AN UNREADABLE ATTEMPT IS NOT A SILENT ONE (Copilot review, #4493). Only a response
+        # that came back and carried no matching annotation licenses the walk to an older attempt.
+        # A read that FAILED proves nothing about what that attempt published — and the newer
+        # attempt is exactly the one that may hold a genuine RE-RESOLUTION — so falling back on it
+        # would publish an older attempt's stale verdict under a note asserting the newer one
+        # carried none. That note would be false in the same way #4491's "main has not passed on
+        # it yet" was false. So any unreadable attempt STOPS the walk and SKIPS the run, which is
+        # this module's standing discipline: a run whose annotation cannot be read is skipped and
+        # said so, never guessed at. `best` is a max over the other runs, so one unreadable run
+        # costs a data point, never a wrong ceiling.
+        attempt_rows: list[dict] | None = None
+        searched = 0
+        unreadable: str | None = None
+        latest_attempt = max(1, int(run.get("run_attempt") or 1))
+        for attempt in range(latest_attempt, 0, -1):
+            try:
+                jobs_of = (run_jobs_of(fetch, repo, run_id) if attempt == latest_attempt
+                           else run_jobs_of_attempt(fetch, repo, run_id, attempt))
+            except ResolutionError as error:
+                unreadable = f"attempt {attempt} jobs unreadable ({error})"
+                break
+            jobs = [j for j in jobs_of if j.get("name") == PLATFORM_REF_JOB]
+            if not jobs:
+                # 🚨 THE FALLBACK IS LICENSED BY A LOST ANNOTATION, NOT BY A MISSING JOB (Copilot
+                # review, #4493). #4491's case is narrow and specific: the job IS present in the
+                # latest attempt's records and its annotation list is EMPTY, because a partial
+                # re-run re-created the record without it. A latest attempt that does not carry
+                # the job at all is a different thing entirely — nothing establishes that this run
+                # resolved a platform set, and an older attempt's annotation would be asserted on
+                # its behalf. Skipping the run is what this reader did before #4491 and is still
+                # right; only the empty-annotation case may walk backwards.
+                if attempt == latest_attempt:
+                    break
+                continue
+            searched += 1
+            try:
+                annotations = fetch(f"/repos/{repo}/check-runs/{int(jobs[0]['id'])}/annotations")
+            except ResolutionError as error:
+                unreadable = f"attempt {attempt} annotations unreadable ({error})"
+                break
+            candidate = (annotations if isinstance(annotations, list)
+                         else annotations.get("annotations") or [])
+            if any(NOTICE_TITLE in str(row.get("title") or "") for row in candidate):
+                attempt_rows = candidate
+                if attempt != latest_attempt:
+                    notes.append(
+                        f"main run {run_id}: attempt {latest_attempt} carries no "
+                        f"`{NOTICE_TITLE}` annotation (a partial re-run re-creates the record "
+                        f"without it) — read from attempt {attempt}, which published one (#4491)")
+                break
+        # The unreadable branch is FIRST: with the walk stopping on the error, an unreadable latest
+        # attempt also leaves `searched == 0`, and "no `Resolve the released platform` job" would
+        # then be the wrong sentence for it — the job may well be there, we could not look.
+        if unreadable is not None:
+            unreadable_runs += 1
+            notes.append(f"main run {run_id}: {unreadable} — skipped. An unreadable attempt is not "
+                         "a silent one, so no older attempt is consulted for this run")
+            continue
+        if attempt_rows is None and searched == 0:
             predating += 1
             notes.append(f"main run {run_id}: no `{PLATFORM_REF_JOB}` job — skipped")
             continue
-        try:
-            annotations = fetch(f"/repos/{repo}/check-runs/{int(jobs[0]['id'])}/annotations")
-        except ResolutionError as error:
-            unreadable += 1
-            notes.append(f"main run {run_id}: annotations unreadable ({error}) — skipped")
-            continue
-        rows = annotations if isinstance(annotations, list) else annotations.get("annotations") or []
+        rows = attempt_rows or []
         # 🚨 EVERY matching annotation is read, and DISAGREEMENT is a refusal (#1826). This used to
         # take the FIRST match and break — and the list it reads is one the job's own self-test
         # steps write into: `test-platform-resolution.py` went through `emit`, so its FIXTURE set
@@ -912,11 +1007,28 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
         found = distinct[0] if distinct else None
         if found is None:
             silent += 1
-            notes.append(f"main run {run_id}: no `{NOTICE_TITLE}` annotation — skipped")
+            # 🚨 "PRESENT BUT UNPARSEABLE" IS NOT "ABSENT" (Copilot review, #4493). `named` filters
+            # on the title AND the set pattern, so an annotation carrying the production title
+            # whose message names no set lands here too — and reported as "no annotation" it hides
+            # exactly the case worth seeing: a malformed notice, or a schema change that moved the
+            # set out of the message. `rows` is non-empty only when some attempt DID carry a
+            # title-matching annotation, so the two branches separate cleanly.
+            titled = [row for row in rows if NOTICE_TITLE in str(row.get("title") or "")]
+            if titled:
+                first = str(titled[0].get("message") or "")
+                notes.append(
+                    f"main run {run_id}: {len(titled)} `{NOTICE_TITLE}` annotation(s) are PRESENT "
+                    f"but none names a set matching `{NOTICE_SET.pattern}` (first message: "
+                    f"{first[:120]!r}) — skipped. An annotation that does not PARSE is not an "
+                    "absent one, and only this sentence tells them apart")
+            else:
+                notes.append(
+                    f"main run {run_id}: no `{NOTICE_TITLE}` annotation on any of its "
+                    f"{searched} attempt(s) carrying a `{PLATFORM_REF_JOB}` job — skipped")
             continue
         notes.append(f"main run {run_id} passed on core CD #{found}")
         best = found if best is None else max(best, found)
-        if len(notes) >= limit:
+        if examined >= limit:
             break
     if best is None:
         # 🚨 THE REFUSAL NAMES WHAT IT READ, AND ORDERS ITS REMEDIES BY IT (#4664). Three times now
@@ -2256,6 +2368,193 @@ def self_test() -> int:
     _ceiling_case("a page returning NO rows while declaring total_count>0 is named a bad READ, "
                   "not an empty history",
                   _contradicting, None, "contradicts itself")
+
+    # ── 🚨 AN ANNOTATION BELONGS TO AN ATTEMPT, NOT TO A RUN (#4491) ────────────────────────────
+    # `/runs/{id}/jobs` serves the LATEST attempt. After `rerun-failed-jobs`, GitHub re-creates a
+    # record for every job of the new attempt — including the ones it did not re-run — carrying
+    # none of the earlier attempt's annotations. The run still reads `success`, so its contribution
+    # to the ceiling vanishes silently and the satellite pins every pull request to an older set
+    # while stating, falsely, that `main` has not passed on the newer one.
+    #
+    # Measured 2026-09-16 on MeshWeaver.Plugins: run 35073843357 resolved 3.0.0-ci.8721, died on an
+    # artifact-service 403 (`FinalizeArtifact`, tests failed: 0), was re-run and concluded success.
+    # Attempt 1's `Resolve the released platform` job carried the annotation; attempt 2's record
+    # for the same, NOT-re-run job carried zero. Every open PR then resolved 8716 — including the
+    # one adopting a core capability that only exists from 8721 on.
+    def _fetch_attempts(latest: str | None, earlier: str | None, attempts: int = 2) -> Fetch:
+        """A run re-run `attempts` times: the latest attempt's record and attempt 1's disagree."""
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 556, "created_at": "2026-09-14T08:00:00Z", "run_attempt": attempts},
+                ]}
+            # The ATTEMPT-scoped endpoint must be asked for by path — a reader that keeps using
+            # `/runs/{id}/jobs` never reaches this branch and sees only the latest attempt.
+            if "/attempts/1/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 701, "name": PLATFORM_REF_JOB}]}
+            if "/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 702, "name": PLATFORM_REF_JOB}]}
+            for job_id, named in ((701, earlier), (702, latest)):
+                if f"/check-runs/{job_id}/annotations" in path:
+                    return {"annotations": [] if named is None else [
+                        {"title": NOTICE_TITLE, "message": f"{named} — core {B[:9]}"}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("a partial re-run erases the annotation from the latest attempt — the earlier "
+                  "attempt that published it is read instead (#4491)",
+                  _fetch_attempts(latest=None, earlier="3.0.0-ci.8721"), 8721, "8721")
+    _ceiling_case("…and the note SAYS it fell back, naming the attempt, so the log is not silent "
+                  "about where the number came from",
+                  _fetch_attempts(latest=None, earlier="3.0.0-ci.8721"), 8721,
+                  "read from attempt 1")
+    _ceiling_case("a genuine RE-RESOLUTION still decides — the NEWEST attempt carrying an "
+                  "annotation wins, never the oldest",
+                  _fetch_attempts(latest="3.0.0-ci.8730", earlier="3.0.0-ci.8721"), 8730, "8730")
+    _ceiling_case("…and that case does NOT claim a fallback happened",
+                  _fetch_attempts(latest="3.0.0-ci.8730", earlier="3.0.0-ci.8721"), 8730,
+                  "main run 556 passed on core CD #8730")
+    _ceiling_case("no attempt carrying the job published one ⇒ still skipped, and the note counts "
+                  "the attempts searched rather than implying one was never looked at",
+                  _fetch_attempts(latest=None, earlier=None), None, "2 attempt(s)")
+
+    # ── 🚨 AN UNREADABLE ATTEMPT IS NOT A SILENT ONE (Copilot review, #4493) ────────────────────
+    # The fallback above is licensed by a response that came back and carried no matching
+    # annotation. A read that FAILED licenses nothing: the newer attempt is the one that may hold a
+    # genuine re-resolution, so consulting an older one would publish a stale verdict under a note
+    # asserting the newer attempt carried none — false in exactly the way #4491's own sentence was
+    # false. The three cases below are the guard; the two #4491 cases above are the control that
+    # shows the fallback itself is still live and was not simply disabled.
+    def _fetch_attempt_unreadable(where: str, earlier: str = "3.0.0-ci.8203") -> Fetch:
+        """The LATEST attempt cannot be read; attempt 1 carries an OLDER annotation."""
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 557, "created_at": "2026-09-14T08:00:00Z", "run_attempt": 2}]}
+            if "/attempts/1/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 711, "name": PLATFORM_REF_JOB}]}
+            if "/jobs" in path:
+                if where == "jobs":
+                    raise ResolutionError("GET /jobs: HTTP 500 (GitHub server error) (a fixture)")
+                return {"total_count": 1, "jobs": [{"id": 712, "name": PLATFORM_REF_JOB}]}
+            if "/check-runs/712/annotations" in path:
+                raise ResolutionError("GET /annotations: HTTP 500 (GitHub server error) (a fixture)")
+            if "/check-runs/711/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE,
+                                         "message": f"{earlier} — core {B[:9]}"}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("the latest attempt's JOB LISTING is unreadable ⇒ the run is SKIPPED, never "
+                  "answered from an older attempt's stale verdict",
+                  _fetch_attempt_unreadable("jobs"), None, "jobs unreadable")
+    _ceiling_case("the latest attempt's ANNOTATIONS are unreadable ⇒ the run is SKIPPED too",
+                  _fetch_attempt_unreadable("annotations"), None, "annotations unreadable")
+    _ceiling_case("…and the note says an unreadable attempt is not a silent one, so nobody reads "
+                  "the skip as `this attempt published nothing`",
+                  _fetch_attempt_unreadable("annotations"), None,
+                  "An unreadable attempt is not a silent one")
+
+    # ── 🚨 THE BOUND COUNTS RUNS, NOT NOTES (Copilot review, #4493) ─────────────────────────────
+    # `len(notes) >= limit` was a proxy for "runs examined" only while every run emitted exactly
+    # one note. The attempt fallback emits a SECOND note for each run it rescues, so twelve such
+    # runs reach the bound after SIX — and `best` being a max over the runs examined, the answer is
+    # the highest set among the first half. Here the newest set is on the LAST of twelve runs, so a
+    # note-counting bound answers 8203 where the true ceiling is 8250.
+    def _fetch_many_fallback_runs(count: int, base: int, last: int) -> Fetch:
+        """`count` runs, each re-run once so its latest attempt lost the annotation."""
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 600 + i, "created_at": "2026-09-14T08:00:00Z", "run_attempt": 2}
+                    for i in range(count)]}
+            for i in range(count):
+                if f"/runs/{600 + i}/attempts/1/jobs" in path:
+                    return {"total_count": 1,
+                            "jobs": [{"id": 6000 + i * 10 + 1, "name": PLATFORM_REF_JOB}]}
+                if f"/runs/{600 + i}/jobs" in path:
+                    return {"total_count": 1,
+                            "jobs": [{"id": 6000 + i * 10 + 2, "name": PLATFORM_REF_JOB}]}
+                if f"/check-runs/{6000 + i * 10 + 1}/annotations" in path:
+                    named = last if i == count - 1 else base
+                    return {"annotations": [{"title": NOTICE_TITLE,
+                                             "message": f"3.0.0-ci.{named} — core {B[:9]}"}]}
+                if f"/check-runs/{6000 + i * 10 + 2}/annotations" in path:
+                    return {"annotations": []}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("twelve runs that each fell back emit two notes apiece — every one is still "
+                  "examined, so the newest set on the LAST of them is the ceiling",
+                  _fetch_many_fallback_runs(MAIN_RUNS_EXAMINED, 8203, 8250), 8250, "8250")
+
+    # ── 🚨 THE FALLBACK IS LICENSED BY A LOST ANNOTATION, NOT A MISSING JOB (review, #4493) ─────
+    # #4491's case is the job being PRESENT with an EMPTY annotation list. A latest attempt that
+    # does not carry the job at all establishes nothing about what this run resolved, and reviving
+    # an older attempt's annotation would assert a set on its behalf. That run is skipped, as it
+    # was before #4491 — the two cases must not share a branch.
+    def _fetch_attempt_without_job(earlier: str = "3.0.0-ci.8203") -> Fetch:
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 558, "created_at": "2026-09-14T08:00:00Z", "run_attempt": 2}]}
+            if "/attempts/1/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 721, "name": PLATFORM_REF_JOB}]}
+            if "/jobs" in path:                       # the LATEST attempt carries some other job
+                return {"total_count": 1, "jobs": [{"id": 722, "name": "Something else"}]}
+            if "/check-runs/721/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE,
+                                         "message": f"{earlier} — core {B[:9]}"}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("a latest attempt that does not carry the platform-ref job at all ⇒ the run is "
+                  "SKIPPED, not answered from an older attempt that did",
+                  _fetch_attempt_without_job(), None, f"no `{PLATFORM_REF_JOB}` job")
+
+    # ── 🚨 PRESENT-BUT-UNPARSEABLE IS NOT ABSENT (review, #4493) ────────────────────────────────
+    # An annotation carrying the production title whose message names no set reaches the same dead
+    # end as no annotation at all. Reported as "no annotation" it hides a malformed notice or a
+    # schema change — the one case where the reader most needs to know something WAS published.
+    def _fetch_unparseable(message: str) -> Fetch:
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str) -> dict:
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [{"id": 559, "created_at": "2026-09-14T08:00:00Z"}]}
+            if "/jobs" in path:
+                return {"total_count": 1, "jobs": [{"id": 731, "name": PLATFORM_REF_JOB}]}
+            if "/check-runs/731/annotations" in path:
+                return {"annotations": [{"title": NOTICE_TITLE, "message": message}]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("a `Platform for this run` annotation whose message names no set ⇒ still no "
+                  "ceiling, but the note says PRESENT and unparseable, never absent",
+                  _fetch_unparseable("the platform set is now reported elsewhere"), None,
+                  "are PRESENT but none names a set")
+    _ceiling_case("…and it quotes the message, so a schema change is diagnosable from the log "
+                  "alone",
+                  _fetch_unparseable("the platform set is now reported elsewhere"), None,
+                  "the platform set is now reported elsewhere")
 
     # ── 🚨 THE CEILING IS READ OUT OF A LIST THE SELF-TEST ALSO WRITES INTO (#1826) ─────────────
     # `Resolve the released platform` runs `resolve-platform.py --self-test` and

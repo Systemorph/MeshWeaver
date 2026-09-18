@@ -131,6 +131,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Read Path Minted a Hub Per Read](ReadPathStreamMinting) — a live in-process census decomposed a replica's `sync/` hubs into their holders and pinned the growth on the read path: a constant configuration took `GetDataRequest` out of the stream cache, so every read left a permanent hub behind (six reads, six hubs, measured on the running portal)
 - [A Reference That Cannot Be a Key](AReferenceThatCannotBeAKey) — the same defect through the other door: a record whose member is a collection is compared BY REFERENCE, so the reference can never hit the stream cache at all; every one of a replica's 311 `sync/` hubs attributed to its minting stream, and the duplicates split into "cache bypassed" and "key unhittable" by comparing the reference objects on the heap. Carries the census script, because the last two were lost
 - [The Recursive-Delete Drain](RecursiveDeleteDrain) — the plan is a snapshot the removals may exceed, the completion check must include the ROOT, and the stage bound measures progress, not duration
+- [Deleting What Is Already Gone](IdempotentDelete) — an absent node already satisfies the delete's postcondition, so the delete succeeds and reports that it removed nothing; why checking existence first cannot close the race, and which absences are still failures
 - [Business Rules & Calculations](BusinessRules)
 - [Data Versioning Strategies](DataVersioning)
 - [Mesh Graph Architecture](MeshGraph)
