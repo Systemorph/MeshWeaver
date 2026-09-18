@@ -201,14 +201,17 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
         // The observable half of the same statement, and the one the incident was about: nothing
         // may stand at the user's bare path, because the onboarding username probe reads exactly
         // that path and refuses a name any node occupies.
-        var root = await Mesh.GetWorkspace().GetMeshNodeStream(NotOnboarded)
-            .Select(node => (MeshNode?)node)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(5))
-            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+        //
+        // 🚨 Asserted on the OUTCOME, never on a nullable read. A `MeshNode?` that came back null
+        // would also be what a timeout or a transport failure looks like, so the assertion would
+        // pass without establishing anything — the very collapse this fix is about. Absent is a
+        // positive statement: routing said NotFound.
+        var outcome = await Mesh.GetMeshNodeOutcome(
+                NotOnboarded, TimeSpan.FromSeconds(5), ReadTimeoutBehavior.EmitNull)
             .FirstAsync()
             .Await(TestContext.Current.CancellationToken);
-        root.Should().BeNull("the logon run must not have materialised the caller's partition root");
+        outcome.Status.Should().Be(NodeReadStatus.Absent,
+            "the logon run must not have materialised the caller's partition root");
     }
 
     // ---------------------------------------------------------------- helpers

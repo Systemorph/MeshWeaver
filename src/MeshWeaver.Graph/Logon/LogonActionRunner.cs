@@ -97,13 +97,19 @@ public sealed class LogonActionRunner(IMessageHub hub, ILogger<LogonActionRunner
                 .SelectMany(ordered => ordered.Length == 0
                     ? Observable.Return(Unit.Default)
                     : ReadProfile(userPath)
-                        .SelectMany(profile => profile.Exists
-                            ? ordered
-                                .Where(a => IsPending(a, profile.User))
+                        .SelectMany(outcome => outcome.Status switch
+                        {
+                            // The only arm that RUNS anything. Every other status — Absent,
+                            // DeleteInProgress, Unavailable — falls through to the arm that writes
+                            // nothing, which is the discipline NodeReadStatus exists to enforce.
+                            NodeReadStatus.Present => ordered
+                                .Where(a => IsPending(a, outcome.Node.ContentAs<User>(
+                                    hub.JsonSerializerOptions, logger)))
                                 .Select(a => RunOne(a, context, access))
                                 .Concat()
-                                .DefaultIfEmpty(Unit.Default)
-                            : NothingToRunWithoutAProfile(userPath))))
+                                .DefaultIfEmpty(Unit.Default),
+                            _ => NothingToRunWithoutAProfile(userPath, outcome),
+                        })))
             .TakeLast(1)
             .Timeout(RunBudget)
             .Catch<Unit, Exception>(ex =>
@@ -123,32 +129,29 @@ public sealed class LogonActionRunner(IMessageHub hub, ILogger<LogonActionRunner
         || !user.CompletedLogonActions.ContainsKey(action.Id);
 
     /// <summary>
-    /// The user's own profile node. Read through the shared per-node handle — never
+    /// The user's own profile node, as an INTERROGABLE one-shot read — never
     /// <c>QueryAsync</c>, which is the lagged index and would answer with pre-migration state
     /// (<c>Doc/Architecture/CqrsAndContentAccess</c>).
     ///
-    /// <para>🚨 <b>"No node" and "a node whose content did not deserialize" are different answers,
-    /// and only this method can tell them apart.</b> It used to answer <c>null</c> for both, and
-    /// <see cref="IsPending"/> reads a null profile as "the ledger is empty, so every run-once
-    /// action is still pending" — which is right for a real user with an unreadable profile and
-    /// catastrophic for a caller who has no profile at all. See
-    /// <see cref="NothingToRunWithoutAProfile"/>.</para>
+    /// <para>🚨 <b><see cref="MeshNodeStreamExtensions.GetMeshNodeOutcome"/>, not
+    /// <c>GetMeshNodeStream</c> and not <c>GetMeshNode</c>.</b> This runner is precisely the caller
+    /// the outcome read was built for: "not there" leads to a WRITE here (a run-once action with an
+    /// empty ledger seeds), so genuinely-absent, delete-in-flight and could-not-be-read must not
+    /// arrive as one <c>null</c>. It used to take a LIVE point subscription on the user's path and
+    /// <c>Take(1)</c> it — a missing-node stream on every first logon, and a null that meant three
+    /// different things. See <see cref="NothingToRunWithoutAProfile"/> for what that cost.</para>
+    ///
+    /// <para><see cref="ReadTimeoutBehavior.EmitNull"/> keeps a stalled read OUT of the caller's
+    /// fault channel — it arrives as <see cref="NodeReadStatus.Unavailable"/>, which this runner
+    /// treats as "run nothing this logon", never as "absent". A logon must not fail because the
+    /// mesh was slow.</para>
     /// </summary>
-    private IObservable<ProfileRead> ReadProfile(string userPath) =>
-        hub.GetWorkspace().GetMeshNodeStream(userPath)
-            .Where(node => node is not null)
-            .Take(1)
-            .Timeout(ProfileReadBound)
-            .Select(node => new ProfileRead(true, node.ContentAs<User>(hub.JsonSerializerOptions, logger)))
-            .Catch<ProfileRead, Exception>(ex =>
-            {
-                logger?.LogWarning(ex, "Logon actions: could not read profile {User}", userPath);
-                return Observable.Return(ProfileRead.Absent);
-            });
+    private IObservable<NodeReadOutcome> ReadProfile(string userPath) =>
+        hub.GetMeshNodeOutcome(userPath, ProfileReadBound, ReadTimeoutBehavior.EmitNull);
 
     /// <summary>
-    /// The run for a signed-in caller who has NO profile node: nothing runs, and that is the whole
-    /// fix.
+    /// The run for a caller whose profile did not come back <see cref="NodeReadStatus.Present"/>:
+    /// nothing runs, and that is the whole fix.
     ///
     /// <para>🚨 <b>A logon action must never be the thing that creates a user's partition.</b>
     /// Measured on a brand-new instance (PartnerRe, 2026-09-18 10:04Z): the first person signed in
@@ -169,29 +172,27 @@ public sealed class LogonActionRunner(IMessageHub hub, ILogger<LogonActionRunner
     /// nothing may be written on its behalf. Onboarding creates the partition root; until it has,
     /// there is no one here to migrate.</para>
     ///
-    /// <para>The deliberate cost: a REAL user whose profile read times out under load also skips
-    /// this logon's actions, where it used to re-run every run-once action against a null ledger.
-    /// Skipping is the safe direction — actions are idempotent and at-least-once by design, so they
-    /// run on the next logon — and it is strictly better than re-running them against a profile we
-    /// could not read.</para>
+    /// <para>The deliberate cost: a REAL user whose profile read stalls or whose delete is in
+    /// flight also skips this logon's actions, where it used to re-run every run-once action
+    /// against a null ledger. Skipping is the safe direction — actions are idempotent and
+    /// at-least-once by design, so they run on the next logon — and it is strictly better than
+    /// re-running them against a profile we could not read.</para>
     /// </summary>
-    private IObservable<Unit> NothingToRunWithoutAProfile(string userPath)
+    private IObservable<Unit> NothingToRunWithoutAProfile(string userPath, NodeReadOutcome outcome)
     {
-        logger?.LogInformation(
-            "Logon actions: no profile node at '{User}' — nothing runs. A signed-in caller with no "
-            + "profile has not onboarded yet; seeding one would materialise their partition and "
-            + "claim the very username onboarding is about to ask them for.",
-            userPath);
+        if (outcome.Status == NodeReadStatus.Absent)
+            logger?.LogInformation(
+                "Logon actions: no profile node at '{User}' — nothing runs. A signed-in caller with "
+                + "no profile has not onboarded yet; seeding one would materialise their partition "
+                + "and claim the very username onboarding is about to ask them for.",
+                userPath);
+        else
+            logger?.LogWarning(
+                outcome.Failure,
+                "Logon actions: the profile at '{User}' read back {Status} — nothing runs this "
+                + "logon. The actions are idempotent and at-least-once, so they run on the next one.",
+                userPath, outcome.Status);
         return Observable.Return(Unit.Default);
-    }
-
-    /// <summary>What the profile read found: whether the node EXISTS, and its content when it did.</summary>
-    /// <param name="Exists">False only when no node could be read at the user's path at all.</param>
-    /// <param name="User">The deserialized profile; null when the node exists but its content did not bind.</param>
-    private readonly record struct ProfileRead(bool Exists, User? User)
-    {
-        /// <summary>No node at the user's path — the not-yet-onboarded caller.</summary>
-        public static readonly ProfileRead Absent = new(false, null);
     }
 
     /// <summary>
