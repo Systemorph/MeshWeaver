@@ -18,6 +18,7 @@
 # its PRESENCE is checked here.
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-db-release"
 
 namespace="" release="" database="" owner="memex" instances="2" size="32Gi"
