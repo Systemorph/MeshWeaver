@@ -1,7 +1,8 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.Logging;
@@ -37,11 +38,17 @@ namespace MeshWeaver.Hosting.Test;
 /// alone. Asking a question the seam has no business asking, and then filing the answer as a fault,
 /// is what turned a legitimate write into four incidents in twelve days.</para>
 ///
-/// <para>🚨 The two counterparty tests are load-bearing. The gate must NOT swallow the #3056 cure
+/// <para>🚨 The counterparty tests are load-bearing. The gate must NOT swallow the #3056 cure
 /// (a same-short-named record from another collectible assembly must still be recovered) nor the
 /// discriminator-less recovery (bytes that name no type contradict nothing, so they are admitted).
-/// A fix that skipped the recovery on every update would pass the two tests above and fail both of
-/// these.</para>
+/// A fix that skipped the recovery on every update would pass the defect tests and fail every one
+/// of these.</para>
+///
+/// <para>🚨 Both JSON shapes are covered, and that is not symmetry for its own sake.
+/// <c>MeshNode.Content</c> takes three shapes — a live instance, a <see cref="JsonElement"/> read
+/// from storage, and the as-written <see cref="System.Text.Json.Nodes.JsonObject"/> DOM — and the
+/// DOM reaches its own <c>Deserialize</c> branch. A guard tested on <see cref="JsonElement"/> alone
+/// would leave the reshaping live on the shape nothing measured (Copilot review, #4679).</para>
 ///
 /// <para><b>No mocking.</b> The conversion is measured through the REAL hub's
 /// <see cref="JsonSerializerOptions"/> — the seam takes them as a parameter for exactly that
@@ -184,6 +191,58 @@ public class NodeUpdateContentTypeChangeTest(ITestOutputHelper output) : HubTest
     }
 
     /// <summary>
+    /// 🚨 THE DEFECT, IN THE OTHER JSON SHAPE. <c>MeshNode.Content</c> takes three shapes, and the
+    /// as-written <see cref="JsonObject"/> DOM — content a writer built as a node rather than
+    /// parsed from storage — is one of the three <c>ObjectAsExtensions</c> names. It reaches
+    /// <c>JsonNode.Deserialize</c> by its own branch, so a guard that covered only
+    /// <see cref="JsonElement"/> would leave the reshaping live on the shape nothing tested
+    /// (Copilot review, #4679).
+    /// </summary>
+    [Fact]
+    public void DomContentWhoseDiscriminatorNamesAnotherRecord_IsNotReboundIntoTheProposedOne()
+    {
+        var stored = JsonNode.Parse(
+            $$"""{"$type":"{{nameof(ProbeEmailContent)}}","to":"counterparty@example.com","subject":"Due diligence"}""")!;
+        var logger = new RecordingLogger();
+
+        var result = NodeUpdatePipeline.WithExistingContentTyped(
+            Proposed(new ProbeMarkdownContent("# Edited")),
+            Stored(stored),
+            GetHost().JsonSerializerOptions,
+            logger);
+
+        result.Content.Should().BeSameAs(stored,
+            "the DOM shape carries a $type exactly as stored bytes do, and it deserialises into the "
+            + "proposed record just as silently — so the guard has to read it, not only JsonElement");
+        logger.Entries.Where(e => e.Level >= LogLevel.Error).Should().BeEmpty(
+            "nothing failed here either. Captured: {0}",
+            string.Join(" | ", logger.Entries.Select(e => $"{e.Level}: {e.Text}")));
+    }
+
+    /// <summary>
+    /// 🚨 ITS COUNTERPARTY — the DOM shape must still convert when its own <c>$type</c> names the
+    /// proposed record, for the same reason <see cref="ContentWhoseDiscriminatorNamesTheProposedRecord_IsStillTyped"/>
+    /// gives: narrowing the recovery must not take the #3056 cure with it.
+    /// </summary>
+    [Fact]
+    public void DomContentWhoseDiscriminatorNamesTheProposedRecord_IsStillTyped()
+    {
+        var logger = new RecordingLogger();
+
+        var result = NodeUpdatePipeline.WithExistingContentTyped(
+            Proposed(new ProbeMarkdownContent("# Edited")),
+            Stored(JsonNode.Parse(
+                $$"""{"$type":"{{nameof(ProbeMarkdownContent)}}","subject":"Due diligence"}""")!),
+            GetHost().JsonSerializerOptions,
+            logger);
+
+        result.Content.Should().BeOfType<ProbeMarkdownContent>(
+            "an admitted DOM payload takes the same recovery an admitted JsonElement does");
+        ((ProbeMarkdownContent)result.Content!).Subject.Should().Be("Due diligence",
+            "and carries the node's real stored values across, not defaults");
+    }
+
+    /// <summary>
     /// 🚨 COUNTERPARTY TWO — absent is not contradicting. Bytes that name no type disagree with
     /// nothing, and the proposal is then the only evidence available; refusing here would break
     /// every legitimate discriminator-less recovery the seam exists for.
@@ -210,7 +269,14 @@ public class NodeUpdateContentTypeChangeTest(ITestOutputHelper output) : HubTest
     /// </summary>
     private sealed class RecordingLogger : ILogger
     {
-        public List<(LogLevel Level, string Text, Exception? Exception)> Entries { get; } = [];
+        /// <summary>
+        /// 🚨 Immutable, reassigned per record — the collections policy holds in <c>test/</c> too
+        /// (Copilot review, #4679). The seam under test is a pure function called on the test
+        /// thread, so there is no concurrent writer to serialise; what the policy buys here is that
+        /// a captured <see cref="Entries"/> cannot be mutated behind an assertion's back.
+        /// </summary>
+        public ImmutableList<(LogLevel Level, string Text, Exception? Exception)> Entries { get; private set; } =
+            ImmutableList<(LogLevel, string, Exception?)>.Empty;
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
@@ -219,6 +285,6 @@ public class NodeUpdateContentTypeChangeTest(ITestOutputHelper output) : HubTest
         public void Log<TState>(
             LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter) =>
-            Entries.Add((logLevel, formatter(state, exception), exception));
+            Entries = Entries.Add((logLevel, formatter(state, exception), exception));
     }
 }

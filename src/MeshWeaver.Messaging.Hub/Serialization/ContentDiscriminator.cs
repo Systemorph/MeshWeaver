@@ -28,7 +28,9 @@ namespace MeshWeaver.Mesh.Services;
 /// SAME short name … a DIFFERENTLY-named type must stay null"). It keeps two packages that each ship
 /// a <c>Currency</c> working — both carry <c>"$type":"Currency"</c> and each resolves to its OWN
 /// package's CLR type — and it matches a rebuild into a new collectible assembly and a declaration
-/// that moved namespace. Only a genuinely different record name is refused.</para>
+/// that moved namespace. Only a genuinely different record name is refused. (A discriminator is
+/// namespaced at most, never assembly-qualified; see <c>ShortNameOf</c> for why that is load-bearing
+/// rather than a gap.)</para>
 /// </summary>
 public static class ContentDiscriminator
 {
@@ -77,9 +79,21 @@ public static class ContentDiscriminator
 
     /// <summary>
     /// The record name a <c>$type</c> discriminator names — the segment after the last <c>.</c>, so
-    /// an assembly-qualified or namespaced discriminator compares as the bare record does. Private:
-    /// this is the rule's own vocabulary, and a public surface nothing calls is one more thing that
-    /// can never be deleted (in-mesh callers are invisible to the compiler).
+    /// a NAMESPACED discriminator compares as the bare record does.
+    ///
+    /// <para>🚨 Namespaced, not assembly-qualified, and the difference is a contract not an
+    /// oversight (Copilot review, #4679): this takes the suffix after the last <c>.</c> and nothing
+    /// else, so <c>"Ns.Foo, SomeAssembly"</c> would yield <c>"Foo, SomeAssembly"</c> and match no
+    /// <c>Type.Name</c>. It never sees one. A mesh <c>$type</c> is written assembly-name-free —
+    /// <c>ResolvedContentType.TypeName</c> is
+    /// documented as "the resolved type's <c>AssemblyQualifiedName</c>-FREE full name" — which is
+    /// also why a collectible re-compile matches here at all: the assembly is exactly the part that
+    /// differs between two builds of the same record, and a discriminator that carried it could
+    /// never match across them. Teaching this to strip an assembly suffix would not widen the rule,
+    /// it would change what three seams admit on evidence no mesh produces.</para>
+    ///
+    /// <para>Private: the rule's own vocabulary. A public surface nothing calls is one more thing
+    /// that can never be deleted — in-mesh callers are invisible to the compiler.</para>
     /// </summary>
     private static string? ShortNameOf(string? discriminator)
     {
