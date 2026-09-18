@@ -87,6 +87,14 @@ public static class IoPoolNames
     public const string Process = "Process";
 
     /// <summary>
+    /// The cases of a NodeType's <c>Tests</c> area (<c>MeshWeaver.Testing.InMesh.MeshTestRunner</c>).
+    /// A case runs as ONE leaf on this pool so that the runner's bound cancels it through the pool's
+    /// linked token rather than abandoning it — capped at one, because the runner executes cases
+    /// one after another on the shared mesh.
+    /// </summary>
+    public const string Tests = "Tests";
+
+    /// <summary>
     /// Prefix for per-Postgres-storage-<b>provider</b> pools (<c>pg:{providerName}</c>). Capped at
     /// ONE in-flight WRITE. See <see cref="IoPoolOptions.MaxConcurrencyFor"/>.
     ///
@@ -298,6 +306,7 @@ public sealed record IoPoolOptions
             IoPoolNames.Ai => Ai,
             IoPoolNames.Query => Query,
             IoPoolNames.Layout => Layout,
+            IoPoolNames.Tests => 1,
             IoPoolNames.AgentStore => AgentStore,
             IoPoolNames.Routing => Routing,
             IoPoolNames.Compile => Compile,
