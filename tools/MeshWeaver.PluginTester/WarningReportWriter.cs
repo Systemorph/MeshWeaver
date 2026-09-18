@@ -76,8 +76,9 @@ public static class WarningReportWriter
         output.WriteLine(
             $"{Prefix} {inert.Count} INERT baseline entr(ies) naming "
             + string.Join(", ", codes)
-            + " — the in-mesh compile no longer reports these (CompileWarning.NotReported: the .NET "
-            + "SDK's own default NoWarn, and core's src/ doc-completeness NoWarn). They tolerate "
+            + " — the in-mesh compile no longer reports these (CompileWarning.NotReported: "
+            + "reference-set skew, which a project build does not produce, and doc completeness, "
+            + "which core's src/ NoWarn suppresses). They tolerate "
             + "nothing and fail nothing. Delete the lines.");
     }
 
