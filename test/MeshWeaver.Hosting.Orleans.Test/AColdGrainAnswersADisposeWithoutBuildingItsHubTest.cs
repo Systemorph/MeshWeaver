@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,13 +19,20 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// On Orleans a grain is activated by ANY call, so the question "is this hub instantiated?" is
 /// answered inside the grain: a <see cref="DisposeRequest"/> that reaches an activation which never
 /// built its hub is answered <c>Ignored</c> and builds nothing — observable as the address never
-/// registering a stream on the silo's routing service, which is what a built hub does first. A read
-/// then builds the hub, and the same request recycles it.
+/// being ADDED to any silo's hosted-hub collection, which is what a built hub does
+/// (<c>MessageHubGrain.CompleteActivation</c> → <c>meshHub.TryGetHostedHub</c>). A read then builds
+/// the hub, and the same request recycles it.
 /// </summary>
 public class AColdGrainAnswersADisposeWithoutBuildingItsHubTest(ITestOutputHelper output)
     : OrleansMeshTestBase(output)
 {
-    private static readonly TimeSpan NothingHappensWindow = TimeSpan.FromSeconds(3);
+    /// <summary>
+    /// 🚨 The window a NEGATIVE assertion always spends in full, so it is short — and derived, not
+    /// guessed: <c>Quick</c> is already the "a local activation would have happened by now" class,
+    /// and a grain's deferred hub build is one turn inside it. CI-scaled with everything else,
+    /// which a literal could never be.
+    /// </summary>
+    private static TimeSpan NothingIsBuiltWithin => TestTimeouts.Quick / 4;
 
     private IMessageHub SiloMesh => SiloMeshAt(0);
 
@@ -45,6 +54,18 @@ public class AColdGrainAnswersADisposeWithoutBuildingItsHubTest(ITestOutputHelpe
         return null;
     }
 
+    /// <summary>
+    /// 🚨 The observable form of <see cref="LiveHub"/>: every silo's
+    /// <c>HostedHubsCollection.HubAdded</c>, merged and filtered to this address. Same collections
+    /// <see cref="LiveHub"/> reads, so "a hub was built for this address on SOME silo" has a signal
+    /// rather than having to be inferred from a table read taken after an arbitrary pause.
+    /// </summary>
+    private IObservable<IMessageHub> HubBuiltOnAnySilo(Address address) =>
+        Enumerable.Range(0, Cluster.Silos.Count)
+            .Select(i => SiloMeshAt(i).ServiceProvider.GetRequiredService<HostedHubsCollection>().HubAdded)
+            .Merge()
+            .Where(h => (h.Address with { Host = null }).Equals(address));
+
     [Fact(Timeout = 120_000)]
     public async Task AColdGrain_BuildsNoHub_ForADispose_AndALiveOne_IsRecycled()
     {
@@ -61,6 +82,13 @@ public class AColdGrainAnswersADisposeWithoutBuildingItsHubTest(ITestOutputHelpe
         var path = $"cold/{Guid.NewGuid():N}";
         var address = new Address(path);
         var meshService = SiloMesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        // REPLAY-backed and connected BEFORE anything is posted: HubAdded is hot, and a grain
+        // builds its hub on its own turn — a subscriber that attaches afterwards sees nothing and
+        // a negative assertion over it would pass having observed nothing.
+        var builtSomewhere = HubBuiltOnAnySilo(address).Replay(1);
+        using var watching = builtSomewhere.Connect();
+
         await access.RunAsSystem(() => meshService.CreateNode(MeshNode.FromPath(path) with
         {
             Name = "A node nobody has opened",
@@ -70,23 +98,27 @@ public class AColdGrainAnswersADisposeWithoutBuildingItsHubTest(ITestOutputHelpe
         LiveHub(address).Should().BeNull(
             "the precondition: creating a node builds no hub on any silo");
 
-        // 1. A dispose to a COLD address. Negative test — the claim is that nothing is built, so the
-        //    window is bounded and then the silo's own stream table is read.
+        // 1. A dispose to a COLD address builds nothing — asserted on the build signal itself.
         issuing.Post(new DisposeRequest { Reason = "cascade probe onto a cold grain" }, o => o.WithTarget(address));
-        await Task.Delay(NothingHappensWindow, ct);
-        LiveHub(address).Should().BeNull(
+        await builtSomewhere.Should().NotEmit(NothingIsBuiltWithin,
             "the grain answers a DisposeRequest before its deferred hub build runs — a recycle makes "
             + "an ACTIVATION re-read, and an address with none is already in the state a recycle "
-            + "produces; a cascade over every instance of a type relies on this costing nothing");
+            + "produces; a cascade over every instance of a type relies on this costing nothing",
+            ct);
+        LiveHub(address).Should().BeNull("…and every silo's hosted-hub table agrees");
 
-        // 2. A read builds the hub (the stream appears); the same request then recycles it, and the
+        // 2. A read builds the hub (the signal fires); the same request then recycles it, and the
         //    next read builds a fresh one.
         (await access.RunAsSystem(() => SiloMesh.GetMeshNode(path, TestTimeouts.Convergence)).FirstAsync().Await(ct)).Should().NotBeNull();
-        var live = LiveHub(address);
-        live.Should().NotBeNull("a read is what instantiates the hub");
+        var live = await builtSomewhere.Should().Within(TestTimeouts.Convergence).Emit(
+            "🚨 the POSITIVE CONTROL for the assertion above — the same merged stream, the same "
+            + "filter, the same address. A read DOES build the hub, so this emits; without it a "
+            + "NotEmit over a stream that can never emit would pass having proved nothing at all");
+        LiveHub(address).Should().BeSameAs(live,
+            "a read is what instantiates the hub, and the signal names the hub the silo holds");
 
         issuing.Post(new DisposeRequest { Reason = "recycle the live grain" }, o => o.WithTarget(address));
-        await live!.DisposalCompleted.FirstOrDefaultAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await live.DisposalCompleted.FirstOrDefaultAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         live.RunLevel.Should().Be(MessageHubRunLevel.Dead, "a live hub IS torn down by the same request");
 
         (await access.RunAsSystem(() => SiloMesh.GetMeshNode(path, TestTimeouts.Convergence)).FirstAsync().Await(ct)).Should().NotBeNull();

@@ -563,8 +563,39 @@ Three properties, each load-bearing:
 |---|---|
 | **Derived ONCE, at the main node** | Every fanned-out request carries `CascadedFrom`, and `HandleDispose` never cascades a request that carries it. A cycle among NodeTypes (`A` shares from `B`, `B` from `A`) is therefore one wave, not a storm. |
 | **Only what was instantiated is recycled** | The set comes from the index — every instance the mesh knows — but WHICH of them is live is a fact of the routing layer, and it is answered there: `MonolithRoutingService.RouteImpl` returns a `DisposeRequest` to an address with no registered stream `Ignored` without creating a hub, and `MessageHubGrain.DeliverMessage` answers one that reaches an activation which never built its hub `Ignored` and releases the activation. So a type with ten thousand instances and three open pages recycles three hubs. |
-| **The check reads the ENVELOPE, not the type** | A delivery that crossed a hub boundary is still `RawJson` at the router and at the grain — it is deserialised only inside the target's `MessageService` — so `delivery.Message is DisposeRequest` matches an in-process post and nothing else (measured: the typed test never fired on Orleans and a cold grain built its hub for a dispose after all). Both sites go through `DisposeRequestEnvelope.TryRead`, which reads `$type`, `reason` and `cascadedFrom` off the packaged frame. |
+| **The check reads the ENVELOPE, not the type** | A delivery that crossed a hub boundary is still `RawJson` at the router and at the grain — it is deserialised only inside the target's `MessageService` — so `delivery.Message is DisposeRequest` matches an in-process post and nothing else (measured: the typed test never fired on Orleans and a cold grain built its hub for a dispose after all). Both sites go through `DisposeRequestEnvelope.TryRead`, which reads `$type`, `reason` and `cascadedFrom` off the packaged frame. 🚨 It matches the discriminator EXACTLY — see below. |
 | **The hub build is deferred to the first non-dispose delivery** | Orleans activates a grain for ANY call; until this change that call also built the hub (node resolution, NodeType binding, assembly load). `OnActivateAsync` now COMPOSES the build and `EnsureActivationStarted` RUNS it on the first delivery that needs a hub. The self-routed own-address read the build issues arrives at `DeliverMessage` after the build has started, so it parks on `HubReady` exactly as before. |
+
+### 🚨 The envelope matches the registry's discriminators, never a suffix
+
+`DisposeRequestEnvelope` runs where **no hub has read the frame yet**, so it is the only thing between
+an arbitrary sender's JSON and a routing decision taken on that sender's word. Stripping the namespace
+off `$type` and accepting any final segment accepted `Attacker.DisposeRequest` as readily as the real
+thing — and the router's dispose branch deliberately builds **no hub**, so naming your own type was a
+way to suppress the activation a delivery to a cold address would otherwise cause. (It could not reach
+`HandleDispose`, which is a different and larger claim: that path needs the registry to RESOLVE the
+discriminator, and an unregistered one is failed in `MessageService.DeserializeDelivery` as *"type 'X'
+is not registered in this hub's TypeRegistry"*.)
+
+The accepted set is therefore exactly the two names `TypeRegistry` serves for the type, derived from
+the type rather than written out: the **canonical** one it emits (`typeByName` is keyed by
+`Type.Name`) and the dot-joined **full name** it accepts on the way in
+(`TypeRegistry.IndexFullNameAlias`). Suffix-matching a type name is not authentication.
+
+### 🚨 An enumeration leg that failed is not a leg that answered "none"
+
+The network is read from the index in legs — one for the NodeType definitions, one per type for its
+instances. A leg that times out or errors used to be caught into an **empty list**, which made
+"this type has no live instances" and "nobody could find out" the same value: the cascade reported
+success while every live hub for that type stayed on the old assembly, and a partial failure was
+indistinguishable from a clean pass — the one outcome nobody re-checks.
+
+Each leg now answers an `EnumerationLeg` that carries its `Failure`, and `NodeTypeRecycleCascade.Compose`
+folds them into a `DependencyNetworkResult` with an `Incomplete` list beside the addresses. The cascade
+still fans out to what it DID derive — those activations are genuinely stale, and a partial recycle
+beats none — but an incomplete one logs at **`Error`**, naming every leg it lost and saying that an
+unknown number of live hubs must be recycled by hand. An empty `Incomplete` is the only value that
+means "this was the whole network".
 
 What this does NOT do, deliberately: it recompiles nothing (the Recycle tool's forced release stamp on
 the definition still does that, for the definition alone — a dependent recompiles through

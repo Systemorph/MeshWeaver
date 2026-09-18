@@ -11,6 +11,38 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
+/// One enumeration leg's answer: the instances of <paramref name="Type"/> as the index served them,
+/// or — when <paramref name="Failure"/> is set — the reason the leg could not be read at all.
+///
+/// <para>🚨 <b>These are two different answers and this type exists to keep them apart.</b> A
+/// timeout on the index used to be caught into an EMPTY instance list, so "this type has no live
+/// instances" and "nobody could find out" reached the cascade as the same value — and the recycle
+/// then reported success over hubs that went on serving the assembly they were born with. A
+/// partial failure that reads like a clean pass is worse than a loud one: it is the one outcome
+/// nobody re-checks.</para>
+/// </summary>
+/// <param name="Type">The NodeType whose instances were asked for.</param>
+/// <param name="Instances">What the index served — empty when <paramref name="Failure"/> is set.</param>
+/// <param name="Failure">Why the leg could not be enumerated, or <c>null</c> when it was.</param>
+public sealed record EnumerationLeg(string Type, ImmutableList<string> Instances, string? Failure = null);
+
+/// <summary>
+/// What a cascade derived — and, separately, what it could NOT derive.
+/// </summary>
+/// <param name="Addresses">The addresses to fan out to, from the legs that ANSWERED. Recycling
+/// these is still worth doing when another leg failed: every address here is genuinely stale.</param>
+/// <param name="Incomplete">One sentence per leg that FAILED, naming it and why. 🚨 An empty list
+/// is the ONLY value that means "<see cref="Addresses"/> is the whole network"; a non-empty one
+/// means an unknown number of live hubs were never reached and must be recycled by hand.</param>
+public sealed record DependencyNetworkResult(
+    ImmutableList<string> Addresses,
+    ImmutableList<string> Incomplete)
+{
+    /// <summary>True only when every enumeration leg answered — see <see cref="Incomplete"/>.</summary>
+    public bool IsComplete => Incomplete.IsEmpty;
+}
+
+/// <summary>
 /// The one real <see cref="RecycleCascade"/>: a routed <see cref="DisposeRequest"/> on a NodeType
 /// DEFINITION's hub tears down the definition's whole dependency network, so an operator recycles
 /// the main bit and nothing else.
@@ -35,10 +67,16 @@ namespace MeshWeaver.Graph.Configuration;
 /// never cascades again — a cycle among NodeTypes cannot turn one recycle into a storm. The requests
 /// are posted from the mesh's node-operation issuing hub, never from the definition hub itself: a
 /// dying hub cannot deliver its own last frame.</para>
+///
+/// <para>🚨 <b>And a leg that could not be read is never silence.</b> Every enumeration answers an
+/// <see cref="EnumerationLeg"/>, and a failed one is carried to the end as
+/// <see cref="DependencyNetworkResult.Incomplete"/> rather than collapsing into an empty list. The
+/// cascade still fans out to what it DID find — those activations really are stale — but it says, at
+/// <c>Error</c>, that the recycle did not reach everything and names which leg it lost.</para>
 /// </summary>
 public static class NodeTypeRecycleCascade
 {
-    /// <summary>How long the type enumeration and each instance enumeration may take before the cascade gives up on that leg and logs it.</summary>
+    /// <summary>How long the type enumeration and each instance enumeration may take before the cascade gives up on that leg and reports it.</summary>
     public static readonly TimeSpan EnumerationBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>
@@ -68,26 +106,24 @@ public static class NodeTypeRecycleCascade
         ArgumentNullException.ThrowIfNull(types);
         ArgumentException.ThrowIfNullOrWhiteSpace(nodeTypePath);
         var dependencies = NodeTypeDependencyGraph.Build(types);
-        var dependents = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var reverse = ImmutableDictionary.CreateBuilder<string, ImmutableList<string>>(StringComparer.OrdinalIgnoreCase);
         foreach (var (type, deps) in dependencies)
             foreach (var dependency in deps)
-            {
-                if (!dependents.TryGetValue(dependency, out var list))
-                    dependents[dependency] = list = [];
-                list.Add(type);
-            }
+                reverse[dependency] = reverse.TryGetValue(dependency, out var list)
+                    ? list.Add(type)
+                    : ImmutableList.Create(type);
 
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { nodeTypePath };
-        var queue = new Queue<string>();
-        queue.Enqueue(nodeTypePath);
-        while (queue.Count > 0)
+        var visited = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+        visited.Add(nodeTypePath);
+        var pending = ImmutableQueue.Create(nodeTypePath);
+        while (!pending.IsEmpty)
         {
-            var current = queue.Dequeue();
-            if (!dependents.TryGetValue(current, out var next))
+            pending = pending.Dequeue(out var current);
+            if (!reverse.TryGetValue(current, out var next))
                 continue;
             foreach (var type in next)
                 if (visited.Add(type))
-                    queue.Enqueue(type);
+                    pending = pending.Enqueue(type);
         }
         visited.Remove(nodeTypePath);
         return visited.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToImmutableList();
@@ -105,7 +141,8 @@ public static class NodeTypeRecycleCascade
         IReadOnlyList<string> dependents,
         IReadOnlyDictionary<string, IReadOnlyList<string>> instancesByType)
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { nodeTypePath };
+        var seen = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+        seen.Add(nodeTypePath);
         var result = ImmutableList.CreateBuilder<string>();
         foreach (var type in dependents)
             if (seen.Add(type))
@@ -119,34 +156,86 @@ public static class NodeTypeRecycleCascade
     }
 
     /// <summary>
+    /// Folds the enumeration legs into the network to fan out to AND the list of legs that could not
+    /// be read. Pure over its inputs — this is where "an error is not an empty answer" is decided,
+    /// so it is decided somewhere a test can reach without a mesh.
+    ///
+    /// <para>A failed leg contributes NO addresses (there are none to contribute) and one sentence
+    /// to <see cref="DependencyNetworkResult.Incomplete"/>. A leg that answered an EMPTY list
+    /// contributes nothing to either: a type with no live instances is a complete answer.</para>
+    /// </summary>
+    /// <param name="nodeTypePath">The type being recycled.</param>
+    /// <param name="dependents">From <see cref="DependentsOf"/> — empty when <paramref name="dependentsFailure"/> is set.</param>
+    /// <param name="dependentsFailure">Why the NodeType enumeration failed, or <c>null</c> when it answered.</param>
+    /// <param name="legs">One per type asked for — the type itself and each dependent.</param>
+    public static DependencyNetworkResult Compose(
+        string nodeTypePath,
+        IReadOnlyList<string> dependents,
+        string? dependentsFailure,
+        IReadOnlyList<EnumerationLeg> legs)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(nodeTypePath);
+        ArgumentNullException.ThrowIfNull(dependents);
+        ArgumentNullException.ThrowIfNull(legs);
+
+        var answered = legs
+            .Where(l => l.Failure is null)
+            .ToImmutableDictionary(
+                l => l.Type,
+                l => (IReadOnlyList<string>)l.Instances,
+                StringComparer.OrdinalIgnoreCase);
+
+        var incomplete = ImmutableList.CreateBuilder<string>();
+        if (dependentsFailure is not null)
+            incomplete.Add(
+                $"the NodeType definitions of the mesh could not be enumerated ({dependentsFailure}), so the "
+                + $"DEPENDENTS of '{nodeTypePath}' are unknown — neither they nor their instances are in this network");
+        foreach (var leg in legs)
+            if (leg.Failure is not null)
+                incomplete.Add(
+                    $"the instances of '{leg.Type}' could not be enumerated ({leg.Failure}), so its live "
+                    + "instance hubs are NOT recycled");
+
+        return new DependencyNetworkResult(
+            NetworkAddresses(nodeTypePath, dependents, answered),
+            incomplete.ToImmutable());
+    }
+
+    /// <summary>
     /// Enumerates the dependency network of <paramref name="nodeTypePath"/> from the index, as system:
     /// every NodeType definition (for the dependents), then the instances of the type and of each
-    /// dependent. Emits ONE list of addresses and completes; a failed leg is logged and contributes
-    /// nothing rather than faulting the cascade.
+    /// dependent. Emits ONE <see cref="DependencyNetworkResult"/> and completes.
+    ///
+    /// <para>🚨 A leg that times out or errors is RECORDED, never folded into an empty answer — see
+    /// <see cref="Compose"/>. The cascade must be able to tell "no live instances" from "nobody could
+    /// find out", because only the second one leaves stale hubs behind.</para>
     /// </summary>
-    public static IObservable<IReadOnlyList<string>> DependencyNetwork(IMessageHub hub, string nodeTypePath)
+    /// <param name="hub">The hub whose services enumerate — the definition hub.</param>
+    /// <param name="nodeTypePath">The type being recycled.</param>
+    public static IObservable<DependencyNetworkResult> DependencyNetwork(IMessageHub hub, string nodeTypePath)
     {
         ArgumentNullException.ThrowIfNull(hub);
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeTypeRecycleCascade));
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
 
-        IObservable<IReadOnlyList<string>> Instances(string type) =>
+        IObservable<EnumerationLeg> Instances(string type) =>
             accessService.RunAsSystem(() => meshService
                     .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.Declare($"nodeType:{type}"))
                         with { Limit = MeshQueryRequest.NoLimit })
                     .Take(1)
                     .Timeout(EnumerationBudget))
-                .Select(change => (IReadOnlyList<string>)change.Items
+                .Select(change => new EnumerationLeg(type, change.Items
                     .Where(n => !string.IsNullOrEmpty(n.Path) && n.State == MeshNodeState.Active)
                     .Select(n => n.Path!)
-                    .ToImmutableList())
-                .Catch<IReadOnlyList<string>, Exception>(ex =>
+                    .ToImmutableList()))
+                .Catch<EnumerationLeg, Exception>(ex =>
                 {
-                    logger?.LogWarning(ex,
+                    logger?.LogError(ex,
                         "[RecycleCascade] Enumerating the instances of {Type} failed — its live instance "
-                        + "hubs keep their activations until recycled by hand", type);
-                    return Observable.Return<IReadOnlyList<string>>(ImmutableList<string>.Empty);
+                        + "hubs keep their activations until recycled by hand. This leg is reported as "
+                        + "INCOMPLETE rather than as zero instances", type);
+                    return Observable.Return(new EnumerationLeg(type, ImmutableList<string>.Empty, Describe(ex)));
                 });
 
         return accessService.RunAsSystem(() => meshService
@@ -156,28 +245,35 @@ public static class NodeTypeRecycleCascade
             .Select(change => change.Items
                 .Where(n => !string.IsNullOrEmpty(n.Path) && n.State == MeshNodeState.Active)
                 .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(
+                .ToImmutableDictionary(
                     g => g.Key,
                     g => g.First().ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger),
                     StringComparer.OrdinalIgnoreCase))
-            .Select(types => DependentsOf(types, nodeTypePath))
-            .Catch<ImmutableList<string>, Exception>(ex =>
+            .Select(types => new DependentsLeg(DependentsOf(types, nodeTypePath), null))
+            .Catch<DependentsLeg, Exception>(ex =>
             {
-                logger?.LogWarning(ex,
+                logger?.LogError(ex,
                     "[RecycleCascade] Enumerating the NodeTypes failed — the dependents of {Type} are "
-                    + "not recycled; its own instances still are", nodeTypePath);
-                return Observable.Return(ImmutableList<string>.Empty);
+                    + "not recycled; its own instances still are. This leg is reported as INCOMPLETE "
+                    + "rather than as 'no dependents'", nodeTypePath);
+                return Observable.Return(new DependentsLeg(ImmutableList<string>.Empty, Describe(ex)));
             })
-            .SelectMany(dependents => dependents.Prepend(nodeTypePath)
-                .Select(type => Instances(type).Select(instances => (Type: type, Instances: instances)))
+            .SelectMany(head => head.Dependents.Prepend(nodeTypePath)
+                .Select(Instances)
                 .Concat()
                 .ToList()
-                .Select(legs => NetworkAddresses(
-                    nodeTypePath,
-                    dependents,
-                    legs.ToDictionary(l => l.Type, l => l.Instances, StringComparer.OrdinalIgnoreCase))))
-            .Select(x => (IReadOnlyList<string>)x);
+                .Select(legs => Compose(nodeTypePath, head.Dependents, head.Failure, legs.ToImmutableList())));
     }
+
+    /// <summary>The NodeType enumeration's answer: the dependents, or why they could not be read.</summary>
+    private sealed record DependentsLeg(ImmutableList<string> Dependents, string? Failure);
+
+    /// <summary>
+    /// What an incomplete leg is reported AS. The exception type is kept: a
+    /// <c>TimeoutException</c> at the enumeration budget and a refusal from the store need
+    /// different remedies, and a bare message cannot tell a reader which one happened.
+    /// </summary>
+    private static string Describe(Exception ex) => $"{ex.GetType().Name}: {ex.Message}";
 
     /// <summary>
     /// What the seam runs on the recycle's turn: derive the network off-turn and post one cascaded
@@ -197,19 +293,40 @@ public static class NodeTypeRecycleCascade
 
         DependencyNetwork(definitionHub, nodeTypePath)
             .Subscribe(
-                network =>
+                result =>
                 {
-                    logger?.LogInformation(
-                        "[RecycleCascade] {Type}: {Count} address(es) in its dependency network — each "
-                        + "live activation among them is recycled; the rest are no-ops at the router "
-                        + "and instantiate nothing", nodeTypePath, network.Count);
-                    foreach (var path in network)
+                    // Fan out to what WAS derived first: those activations are stale whatever
+                    // happened on another leg, and a partial recycle beats none.
+                    foreach (var path in result.Addresses)
                         issuing.Post(
                             new DisposeRequest { Reason = reason, CascadedFrom = nodeTypePath },
                             o => o.WithTarget(new Address(path)));
+
+                    if (result.IsComplete)
+                    {
+                        logger?.LogInformation(
+                            "[RecycleCascade] {Type}: {Count} address(es) in its dependency network — each "
+                            + "live activation among them is recycled; the rest are no-ops at the router "
+                            + "and instantiate nothing", nodeTypePath, result.Addresses.Count);
+                        return;
+                    }
+
+                    // 🚨 Error, not Information with a smaller number. An incomplete cascade reads
+                    // EXACTLY like a complete one from the outside — the operator's recycle returns,
+                    // the definition hub goes down, and some instance hubs quietly go on serving the
+                    // assembly they were born with. The only thing that distinguishes the two is
+                    // this line, so it names every leg that was lost.
+                    logger?.LogError(
+                        "[RecycleCascade] {Type}: the recycle is INCOMPLETE. {Count} address(es) were "
+                        + "recycled, but {FailedCount} enumeration leg(s) could not be read, so an "
+                        + "unknown number of live hubs keep serving the assembly they were born with "
+                        + "and must be recycled by hand: {Legs}",
+                        nodeTypePath, result.Addresses.Count, result.Incomplete.Count,
+                        string.Join(" | ", result.Incomplete));
                 },
-                ex => logger?.LogWarning(ex,
-                    "[RecycleCascade] {Type}: deriving the dependency network faulted — its live "
-                    + "activations keep serving until each is recycled by hand", nodeTypePath));
+                ex => logger?.LogError(ex,
+                    "[RecycleCascade] {Type}: deriving the dependency network faulted — NOTHING in its "
+                    + "dependency network was recycled, and its live activations keep serving until each "
+                    + "is recycled by hand", nodeTypePath));
     }
 }

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json.Nodes;
 
 namespace MeshWeaver.Messaging;
@@ -39,6 +40,29 @@ public static class DisposeRequestEnvelope
         }
     }
 
+    /// <summary>
+    /// 🚨 The <c>$type</c> discriminators that name <see cref="DisposeRequest"/> — EXACTLY the two
+    /// the <c>TypeRegistry</c> serves for this type, and nothing else.
+    ///
+    /// <para><b>Why not the final segment of the name.</b> This check runs where no hub has read
+    /// the frame yet, so it is the only thing standing between an arbitrary sender's JSON and a
+    /// routing decision taken on that sender's word. Stripping the namespace and accepting any
+    /// suffix accepted <c>Attacker.DisposeRequest</c> as readily as the real one — a sender's own
+    /// string deciding how the router treats its delivery. Matching the registry's own two names
+    /// puts the decision back on the platform: <c>TypeRegistry</c> keys its canonical map by
+    /// <c>Type.Name</c> (the discriminator it EMITS) and indexes the dot-joined full name as an
+    /// input-side alias (<c>TypeRegistry.IndexFullNameAlias</c>), so these two strings are what a
+    /// legitimate <see cref="DisposeRequest"/> can arrive as — on either host, for either
+    /// serializer path.</para>
+    ///
+    /// <para>Derived from the type rather than written out, so a namespace move carries them with
+    /// it instead of silently narrowing this to the short name alone.</para>
+    /// </summary>
+    private static readonly ImmutableHashSet<string> Discriminators = ImmutableHashSet.Create(
+        StringComparer.Ordinal,
+        typeof(DisposeRequest).Name,
+        (typeof(DisposeRequest).FullName ?? typeof(DisposeRequest).Name).Replace('+', '.'));
+
     private static bool NamesDisposeRequest(string content, out JsonObject node)
     {
         node = null!;
@@ -48,12 +72,8 @@ public static class DisposeRequestEnvelope
         {
             if (JsonNode.Parse(content) is not JsonObject jo
                 || !jo.TryGetPropertyValue("$type", out var type)
-                || type?.ToString() is not { } typeName)
-                return false;
-            var name = typeName;
-            var dot = name.LastIndexOf('.');
-            if (dot >= 0) name = name[(dot + 1)..];
-            if (!string.Equals(name, nameof(DisposeRequest), StringComparison.Ordinal))
+                || type?.ToString() is not { } typeName
+                || !Discriminators.Contains(typeName))
                 return false;
             node = jo;
             return true;

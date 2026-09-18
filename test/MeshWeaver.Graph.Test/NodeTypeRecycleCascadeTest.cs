@@ -95,6 +95,117 @@ public class NodeTypeRecycleCascadeTest
 
         network.Should().Equal(["Edu/Lesson"],
             "an enumeration leg that answered nothing contributes nothing — the dependent's own hub "
-            + "is still recycled, and its instances are recycled by hand if that leg had failed");
+            + "is still recycled, and a type with no instances is a COMPLETE answer");
+    }
+
+    private static EnumerationLeg Answered(string type, params string[] instances) =>
+        new(type, instances.ToImmutableList());
+
+    private static EnumerationLeg Failed(string type, string why) =>
+        new(type, ImmutableList<string>.Empty, why);
+
+    /// <summary>
+    /// 🚨 <b>The control for "an error must never read like a clean pass".</b> Two composes over
+    /// legs that produce the SAME address list: one where a type genuinely has no instances, one
+    /// where its enumeration failed. Before the failure was carried through, both produced the
+    /// identical answer and the cascade reported success over hubs that stayed on the old assembly.
+    /// The addresses still match — that is the point — and only <c>IsComplete</c> separates them.
+    /// </summary>
+    [Fact]
+    public void AFailedLeg_AndAnEmptyOne_ProduceTheSameAddresses_AndOppositeVerdicts()
+    {
+        var dependents = NodeTypeRecycleCascade.DependentsOf(Types, "Store/Core");
+
+        var clean = NodeTypeRecycleCascade.Compose("Store/Core", dependents, null,
+        [
+            Answered("Store/Core", "Admin/Store"),
+            Answered("Store/Licensing"),
+            Answered("Store/Order", "rbuergi/_Orders/1"),
+            Answered("Store/Catalog"),
+        ]);
+
+        var lost = NodeTypeRecycleCascade.Compose("Store/Core", dependents, null,
+        [
+            Answered("Store/Core", "Admin/Store"),
+            Failed("Store/Licensing", "TimeoutException: The operation has timed out."),
+            Answered("Store/Order", "rbuergi/_Orders/1"),
+            Answered("Store/Catalog"),
+        ]);
+
+        lost.Addresses.Should().Equal(clean.Addresses,
+            "a failed leg contributes no addresses — exactly like an empty one, which is why the "
+            + "address list ALONE can never tell the two apart");
+
+        clean.IsComplete.Should().BeTrue("every leg answered");
+        lost.IsComplete.Should().BeFalse(
+            "one leg did not, so an unknown number of Store/Licensing instance hubs keep serving "
+            + "the assembly they were born with — the cascade must not report this as a clean pass");
+        lost.Incomplete.Should().ContainSingle()
+            .Which.Should().Contain("Store/Licensing").And.Contain("TimeoutException",
+                "and it must name WHICH leg was lost and why, or nobody can recycle the remainder by hand");
+    }
+
+    /// <summary>
+    /// A failed leg does not stop the cascade fanning out to the addresses that WERE derived: those
+    /// activations are stale whatever happened elsewhere, and a partial recycle beats none. The
+    /// dependent's own TYPE hub is among them — it is its INSTANCE leg that failed.
+    /// </summary>
+    [Fact]
+    public void AFailedLeg_StillLeavesEveryDerivedAddressInTheNetwork()
+    {
+        var dependents = NodeTypeRecycleCascade.DependentsOf(Types, "Store/Core");
+
+        var result = NodeTypeRecycleCascade.Compose("Store/Core", dependents, null,
+        [
+            Answered("Store/Core", "Admin/Store"),
+            Failed("Store/Licensing", "TimeoutException: The operation has timed out."),
+            Answered("Store/Order", "rbuergi/_Orders/1"),
+            Answered("Store/Catalog"),
+        ]);
+
+        result.Addresses.Should().Contain("Store/Licensing",
+            "the dependent TYPE's own hub comes from the dependency walk, not from the instance leg");
+        result.Addresses.Should().Contain(["Admin/Store", "rbuergi/_Orders/1"],
+            "and every instance another leg did answer is still recycled");
+    }
+
+    /// <summary>
+    /// When the NodeType enumeration itself fails, the dependents are UNKNOWN — not "none". The
+    /// type's own instances are still recycled, and the answer says which half is missing.
+    /// </summary>
+    [Fact]
+    public void AFailedTypesLeg_SaysTheDependentsAreUnknown_AndStillRecyclesTheOwnInstances()
+    {
+        var result = NodeTypeRecycleCascade.Compose(
+            "Store/Core",
+            ImmutableList<string>.Empty,
+            "TimeoutException: The operation has timed out.",
+            [Answered("Store/Core", "Admin/Store")]);
+
+        result.Addresses.Should().Equal(["Admin/Store"],
+            "with no dependents derivable, the type's own instances are all that can be reached");
+        result.IsComplete.Should().BeFalse(
+            "an empty dependent list from a FAILED walk is not the same answer as a leaf type's "
+            + "genuinely empty one");
+        result.Incomplete.Should().ContainSingle()
+            .Which.Should().Contain("DEPENDENTS").And.Contain("TimeoutException");
+    }
+
+    /// <summary>
+    /// The positive control for the three above: a fully answered compose is COMPLETE and says
+    /// nothing is missing. Without this, reporting every compose as incomplete would pass them all.
+    /// </summary>
+    [Fact]
+    public void EveryLegAnswering_IsAComplete_AndSilent_Result()
+    {
+        var result = NodeTypeRecycleCascade.Compose(
+            "Edu/Course",
+            NodeTypeRecycleCascade.DependentsOf(Types, "Edu/Course"),
+            null,
+            [Answered("Edu/Course", "rbuergi/Courses/Intro"), Answered("Edu/Lesson")]);
+
+        result.IsComplete.Should().BeTrue();
+        result.Incomplete.Should().BeEmpty();
+        result.Addresses.Should().Equal(["Edu/Lesson", "rbuergi/Courses/Intro"]);
     }
 }

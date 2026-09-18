@@ -58,6 +58,58 @@ public class DisposeRequestEnvelopeTest
         read.Should().BeNull();
     }
 
+    /// <summary>
+    /// 🚨 A discriminator that merely ENDS in the type's name is a SENDER's string, not the
+    /// platform's. This reader runs before any hub has read the frame, so it is what decides
+    /// whether the router treats a delivery as a recycle — and that answer must come from the two
+    /// names <c>TypeRegistry</c> actually serves for <see cref="DisposeRequest"/> (its canonical
+    /// <c>Type.Name</c> and its dot-joined full name), never from a suffix.
+    ///
+    /// <para>What the loose form cost: a frame nobody registered still reached the router's
+    /// dispose branch, which answers <c>Ignored()</c> and deliberately builds NO hub — so a sender
+    /// could suppress the activation a delivery to a cold address would otherwise cause, by naming
+    /// its own type. (It could not reach <c>HandleDispose</c>: that needs the registry to RESOLVE
+    /// the discriminator, and an unregistered one is failed in
+    /// <c>MessageService.DeserializeDelivery</c> as "not registered in this hub's TypeRegistry".)</para>
+    /// </summary>
+    [Theory]
+    [InlineData("""{"$type":"Attacker.DisposeRequest","reason":"teardown, please"}""")]
+    [InlineData("""{"$type":"MyDisposeRequest"}""")]
+    [InlineData("""{"$type":"MeshWeaver.Messaging.Evil.DisposeRequest"}""")]
+    [InlineData("""{"$type":"Some.Deep.Namespace.DisposeRequest"}""")]
+    [InlineData("""{"$type":"disposerequest"}""")]
+    public void ATypeNameThatMerelyEndsInTheDiscriminator_IsNotADispose(string content)
+    {
+        DisposeRequestEnvelope.TryRead(Delivery(new RawJson(content)), out var read).Should().BeFalse(
+            "suffix-matching a type name is not authentication — only the discriminators the "
+            + "TypeRegistry serves for DisposeRequest name a DisposeRequest");
+        read.Should().BeNull();
+    }
+
+    /// <summary>
+    /// The POSITIVE control for the theory above, and for the two the <c>[Theory]</c> at the top of
+    /// this file already reads: narrowing the match to NOTHING would pass every negative case, so
+    /// the accepted set is pinned to what <c>TypeRegistry</c> serves — <c>Type.Name</c> as the
+    /// canonical map's key, the dot-joined full name as <c>IndexFullNameAlias</c>'s input alias.
+    /// </summary>
+    [Fact]
+    public void TheAcceptedDiscriminators_AreTheOnesTheTypeRegistryServes()
+    {
+        var canonical = typeof(DisposeRequest).Name;
+        var fullName = typeof(DisposeRequest).FullName!;
+
+        canonical.Should().Be("DisposeRequest", "TypeRegistry keys its canonical map by Type.Name");
+        fullName.Should().Be("MeshWeaver.Messaging.DisposeRequest",
+            "and indexes the dot-joined full name as the input-side alias");
+
+        DisposeRequestEnvelope.TryRead(
+                Delivery(new RawJson($$"""{"$type":"{{canonical}}"}""")), out _)
+            .Should().BeTrue("the canonical name is the discriminator the registry EMITS");
+        DisposeRequestEnvelope.TryRead(
+                Delivery(new RawJson($$"""{"$type":"{{fullName}}"}""")), out _)
+            .Should().BeTrue("the full name is the alias it accepts on the way IN");
+    }
+
     [Fact]
     public void ATypedNonDispose_IsNotADispose()
     {
