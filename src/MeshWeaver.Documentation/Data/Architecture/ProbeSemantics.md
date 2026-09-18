@@ -126,7 +126,7 @@ Two, because they can fail for different reasons and neither can see what the ot
 | `ProbeSeparationTest` | `test/Memex.Portal.Shared.Test` | drives the paths the **chart** names over real HTTP through the real `MapDefaultEndpoints`, with a `live`-tagged check reporting Unhealthy: liveness must answer 503 *and* readiness 200 |
 | invariant 9 | `deploy/aks/scripts/check-chart-invariants.py` | the same separation on the **rendered** manifest, per values combination — where an overlay could re-merge what the template separates |
 
-Both C# guards run inside `Consolidate test results`, the one required check. Both read the paths out
+Both C# guards run inside `Consolidate test results`, the required check for TESTS (it is no longer the ONLY required context — `Automatic review answered` is required too since 2026-09-17; see AGENTS.md). Both read the paths out
 of the chart rather than restating them: a restatement would agree with itself while the deployment
 probed something else.
 
@@ -154,6 +154,31 @@ kubectl -n <ns> exec deploy/memex-portal-deployment -- \
 Until a namespace has had that `helm upgrade`, `check-chart-drift.sh` will legitimately report
 `DIFFERS readinessProbe` against it — the chart is the authoritative side and the drift is the work
 not yet done, not a defect in either.
+
+## The startup probe's path is a value, and the default is load-bearing
+
+`probes.startup.path` defaults to `/health` and `deployment.yaml` renders it. It became a value on
+2026-09-17, after a break-glass `kubectl patch` moved it to `/ready` to bring a control instance
+back up: a path changed live is undone by the next `helm upgrade` with nobody deciding to undo it,
+so the choice belongs where it is reviewed.
+
+**The default is not a preference.** Two properties hang off the startup probe reading `/health`,
+and both are invisible when they stop working:
+
+- **the NodeType bake gate.** `nodetype_bake` is tagged neither (see above), so it lands on `/health`
+  alone and the startup probe is its only reader. Move the probe and `PreWarm__GateReadiness` goes on
+  being configured and goes on reporting healthy.
+- **no traffic to a booting pod.** The startup probe is what holds readiness on the heavy path until
+  the mesh is up; on `/ready` a pod is "started" as soon as the process accepts a socket.
+
+`PreWarmGateReadinessGuard` fails the chart that arms the gate on any other path, and invariant 10b
+in `check-chart-invariants.py` fails the same shape on the *rendered* manifest, where an overlay can
+arm a gate the chart does not. Invariant 10 already refuses readiness and startup sharing one path.
+
+🚨 **And the reason the patch was needed in the first place is the rule one page over**: `/health` is
+an aggregate census whose cost grows with the mesh, the startup probe's budget is fixed, and a
+startup timeout is the one probe failure a pod cannot recover from. See
+[A probe must answer inside its own timeout](../AProbeMustAnswerInsideItsOwnTimeout).
 
 ## Adding a health check
 

@@ -19,9 +19,41 @@ maintainer's visible waiver. It is the build of option B on #4299, decided by th
 
 - Workflow: `.github/workflows/review-answered.yml`
 - Predicate and self-test: `.github/scripts/check-review-answered.py`
-- Status: **REQUIRED** on `main` since 2026-09-17. Measured on ruleset 2128472 that day: it requires
-  **two** contexts, `Consolidate test results` **and** `Automatic review answered`. The Rollout
-  section below is now the record of how it got here, not a plan.
+- Status: 🚨 **REQUIRED on `main` since 2026-09-17** — measured that evening on ruleset 2128472,
+  which now lists `Automatic review answered` beside `Consolidate test results`. The Rollout section
+  below is kept as the record of how it got there; it is no longer the current state.
+
+🚨 **What being required FEELS like, because it is not obvious from the outside.** An unanswered
+thread leaves the pull request `mergeable_state: blocked` with every build green — and `blocked` is
+the same word REST returns for a pull request merely waiting its turn in the queue. Three pull
+requests sat green, armed and silently OUTSIDE the merge queue for ~45 minutes on the evening this
+landed, and nothing in the REST view distinguished that from progress. If a green, armed pull
+request is not merging, read this check before anything else, and read the merge queue ITSELF rather than
+`mergeable_state` — the queue is one of the two things REST cannot express:
+
+```bash
+gh api graphql -f query='{repository(owner:"Systemorph",name:"MeshWeaver"){
+  mergeQueue(branch:"main"){entries(first:20){totalCount nodes{position state
+  pullRequest{number}}}}}}'
+```
+
+A `totalCount` that does not contain your pull request, while other pull requests merge through it,
+is the reading that separates "held" from "waiting".
+
+🚨 **It is answered by replying ON the thread**, and nothing else does it:
+
+```bash
+gh api "repos/Systemorph/MeshWeaver/pulls/<n>/comments/<comment-id>/replies" -f body='…'
+```
+
+🚨 Quote the path. Unquoted, the shell reads `<n>` as a redirection and the command fails
+before `gh` runs — which looks like a broken instruction rather than a quoting mistake.
+
+🚨 **And answering every thread is NECESSARY, NOT SUFFICIENT.** The verdict branch protection
+reads can still be an older failure taken on the same head, while the check's own newest run says
+GREEN. The remedy — re-run the check's `pull_request` run — the measurement behind it, and what was
+changed so it stops happening are below, under **"The check's log says GREEN and the pull request
+is still BLOCKED"**.
 
 ## Why: a review was advisory
 

@@ -139,6 +139,13 @@ COMBOS=(
   # A whitespace-only maintainer: the one render where "only when set" can be observed failing, if
   # the template stops trimming. The evidence check asserts it renders NO maintainer key.
   "a whitespace-only operator maintainer (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-maintainer-blank.yaml"
+  # 🚨 The NodeType bake gate ARMED (MeshWeaver#4588). Invariant 10b asserts an armed gate has a
+  # reader — the startupProbe on /health — and no combination above arms it, so without this fixture
+  # that invariant runs on nothing and reports clean. It became reachable when probes.startup.path
+  # stopped being a literal in the template; the evidence check below asserts this render really
+  # does arm the gate, so "the invariant passed" and "the invariant had no subject" stay different
+  # sentences.
+  "the NodeType bake gate armed (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.bake-gate-armed.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -207,6 +214,19 @@ for combo in "a whitespace-only operator maintainer (fixture)" "self-host (neutr
 done
 if [ "$executor_evidence" -eq 3 ]; then
   ok "the executor reaches the ConfigMap with the operator Job off; the maintainer renders trimmed, and only when set"
+fi
+
+# The bake-gate evidence (MeshWeaver#4588). Invariant 10b — an armed PreWarm__GateReadiness must
+# have a reader, i.e. a startupProbe on /health — is CONDITIONAL, so it is satisfied just as well by
+# a set of renders where nothing ever arms the gate. Read the fixture by NAME and assert it actually
+# armed it, and that the startup probe it rendered is the one that reads the gate.
+gate_render="$(render_of "the NodeType bake gate armed (fixture)")"
+if [ -f "$gate_render" ] \
+   && grep -q '^  PreWarm__GateReadiness: "true"$' "$gate_render" \
+   && grep -q 'path: /health' "$gate_render"; then
+  ok "the bake-gate fixture arms PreWarm__GateReadiness and renders the startupProbe that reads it"
+else
+  report "the bake-gate fixture did not render PreWarm__GateReadiness=\"true\" with a /health startupProbe — invariant 10b then had no subject, and 'no contradictions' would mean 'nothing was armed'"
 fi
 
 # ---------------------------------------------------------------------------

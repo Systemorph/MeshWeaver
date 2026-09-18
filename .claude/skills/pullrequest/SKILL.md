@@ -117,7 +117,7 @@ green CI image. So `main`'s CI is not a formality — it is the source of the im
 > merge only on `conclusion == SUCCESS`** (step 3). Do NOT use `gh run watch` — it polls REST and
 > drains the shared token budget into 403s that masquerade as CI-red.
 
-**"Consolidate test results" is the required check** (ruleset `main pr protection`) — GitHub now blocks
+**"Consolidate test results" is A required check** (ruleset `main pr protection`; `Automatic review answered` is the other, since 2026-09-17) — GitHub now blocks
 the merge until it reports green, so the gate above is mechanical as well as a rule. Require nothing
 else from that workflow: `Build solution (once)` and the shards are legitimately **skipped** when the
 run reuses an already-green tree, and a skipped *required* check blocks the merge forever.
@@ -286,7 +286,7 @@ never finished. Poll the `MeshWeaver Build and Test` suite specifically (step 3 
 
 Two further gotchas:
 
-- **`Consolidate test results` is the required check** — and the ONLY one to require. `Build solution
+- **`Consolidate test results` is the required check for TESTS** — but NOT the only required context: `Automatic review answered` joined it on 2026-09-17, and an unanswered review thread leaves a green PR `blocked` and silently OUTSIDE the merge queue. Answer it by replying ON each thread (`gh api "repos/{owner}/{repo}/pulls/{n}/comments/{id}/replies" -f body=…`); a PR-level comment does not count. `Build solution
   (once)` and the shards are legitimately *skipped* when a run reuses an already-green tree, and a
   skipped required check blocks the merge forever.
 - **Also check the clock before declaring a job stuck.** GitHub timestamps are UTC; a local-time
