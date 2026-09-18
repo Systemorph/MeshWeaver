@@ -267,22 +267,34 @@ Read the **tail** of the awaited **statement**, not a marker on a line:
 
 #### The guidance was self-contradicting, and the defect quotes the losing half
 
-This is why the shape spread. Until 2026-09-18 **four** places prescribed it —
+This is why the shape spread. Until 2026-09-18 the repo prescribed it in **seven places across
+five files** —
 
+> A test now awaits the observable directly under a timeout  — **What's New, 2026-08-30**, *"No ToTask, ever"* — **the origin**
+>
 > Await the observable directly with a `.Timeout(...)`.  — `AGENTS.md`
 >
 > `// ✅ await the observable DIRECTLY (Rx's own awaiter), bounded so a hang is a failure`  — `/async` skill
 >
-> Await the observable directly with a `.Timeout(...)` — see …  — `/testing` skill
+> Await the observable directly with a `.Timeout(...)` — see …  — `/testing` skill (and again in its `HubTestBase` row)
 >
-> Await the observable directly (`await …FirstAsync().Timeout(…)`)  — [Asynchronous Calls](../AsynchronousCalls)
+> A test awaits the observable directly with a `.Timeout(...)`.  — [Asynchronous Calls](../AsynchronousCalls), in a bullet
+>
+> Await the observable directly (`await …FirstAsync().Timeout(…)`)  — the same page, in the paragraph below it
 
 — while **four others** (this page's section 0, [Writing Tests](../WritingTests),
 [Reactive Test Assertions](../ReactiveTestAssertions), [Script Execution](../ScriptExecution)) said
-the exact opposite and correctly. Both halves were written after the same ruling. All four of the
-first group are corrected in the change that adds this section; **a wrong sentence in guidance is how
-a shape propagates faster than a sweep removes it**, and `MeshTestContext`'s doc comment is that
-sentence arriving at a site as an assurance.
+the exact opposite and correctly. Both halves were written after the same 2026-08-30 ruling, and the
+retraction that produced the ruling is itself where the replacement advice went wrong — which is why
+the What's New entry above carries a correction note rather than a silent edit.
+
+🚨 **The count grew during review of the very change that corrected it**, and that is worth recording:
+the first pass fixed `AsynchronousCalls`' paragraph and left the BULLET four lines above it saying
+the opposite, on the same page. A page that says both things propagates the bad half, because the
+sentence with a copyable shape in it is the one that gets followed. **When you correct guidance,
+re-grep the corrected file** — the occurrence you already know about is not the denominator.
+**A wrong sentence in guidance is how a shape propagates faster than a sweep removes it**, and
+`MeshTestContext`'s doc comment is that sentence arriving at a site as an assurance.
 
 The inventory it produced is `test/DirectObservableAwaitSites.allow` — **228 sites in 67 files**
 (223 in `test/`, 5 in one `memex/` ASP.NET controller), seeded and shrink-only. Note the `memex/`

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -172,7 +173,8 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     /// whatever it is, and walks balanced brackets so a chain spread over four lines is ONE
     /// expression.</para>
     /// </summary>
-    private static readonly string[] DirectAwaitZeroRoots = ["src", "tools", "samples", "clients"];
+    private static readonly ImmutableArray<string> DirectAwaitZeroRoots =
+        ["src", "tools", "samples", "clients"];
 
     /// <summary>
     /// The trees carrying a seeded inventory for the direct-await shape, measured 2026-09-18.
@@ -184,7 +186,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     /// the opposite and correctly. This change corrects the four; the inventory they produced may
     /// only shrink.</para>
     /// </summary>
-    private static readonly string[] DirectAwaitRatchetedRoots = ["memex", "test"];
+    private static readonly ImmutableArray<string> DirectAwaitRatchetedRoots = ["memex", "test"];
 
     private const string DirectAwaitAllowFileName = "DirectObservableAwaitSites.allow";
 
@@ -207,23 +209,24 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     /// chain's tail in practice. Measured against this repo 2026-09-18: no Task-returning
     /// <c>Timeout</c>, <c>Do</c> or <c>Catch</c> exists anywhere in it.</para>
     /// </summary>
-    private static readonly HashSet<string> ObservableTails = new(StringComparer.Ordinal)
-    {
-        // Reducers — the shape a reducer-keyed scan already finds.
-        "FirstAsync", "FirstOrDefaultAsync", "LastAsync", "LastOrDefaultAsync",
-        "SingleAsync", "SingleOrDefaultAsync", "ElementAt", "ElementAtOrDefault",
-        // 🚨 …and the operators that end a chain when the reducer is EARLIER or ABSENT. This half is
-        // the whole point: `await source.Take(1).Timeout(Deadline)` has no reducer in tail position.
-        "Take", "TakeLast", "TakeWhile", "TakeUntil", "Skip", "SkipLast", "SkipWhile", "SkipUntil",
-        "Where", "Select", "SelectMany", "Timeout", "ToList", "ToArray", "ToDictionary",
-        "Buffer", "Window", "Sample", "Throttle", "DelaySubscription", "Do", "Finally",
-        "Catch", "Retry", "OnErrorResumeNext", "StartWith", "Concat", "Merge", "Zip",
-        "CombineLatest", "WithLatestFrom", "Amb", "Publish", "RefCount", "Replay",
-        "Materialize", "Dematerialize", "Scan", "Aggregate", "Count", "Sum", "Average",
-        "Min", "Max", "Distinct", "DistinctUntilChanged", "DefaultIfEmpty", "IgnoreElements",
-        "ObserveOn", "SubscribeOn", "Switch", "TimeInterval", "Timestamp", "Cast", "OfType",
-        "GroupBy", "ToObservable", "AsObservable",
-    };
+    private static readonly ImmutableHashSet<string> ObservableTails =
+        ImmutableHashSet.Create(StringComparer.Ordinal,
+        [
+            // Reducers — the shape a reducer-keyed scan already finds.
+            "FirstAsync", "FirstOrDefaultAsync", "LastAsync", "LastOrDefaultAsync",
+            "SingleAsync", "SingleOrDefaultAsync", "ElementAt", "ElementAtOrDefault",
+            // 🚨 …and the operators that end a chain when the reducer is EARLIER or ABSENT. This half is
+            // the whole point: `await source.Take(1).Timeout(Deadline)` has no reducer in tail position.
+            "Take", "TakeLast", "TakeWhile", "TakeUntil", "Skip", "SkipLast", "SkipWhile", "SkipUntil",
+            "Where", "Select", "SelectMany", "Timeout", "ToList", "ToArray", "ToDictionary",
+            "Buffer", "Window", "Sample", "Throttle", "DelaySubscription", "Do", "Finally",
+            "Catch", "Retry", "OnErrorResumeNext", "StartWith", "Concat", "Merge", "Zip",
+            "CombineLatest", "WithLatestFrom", "Amb", "Publish", "RefCount", "Replay",
+            "Materialize", "Dematerialize", "Scan", "Aggregate", "Count", "Sum", "Average",
+            "Min", "Max", "Distinct", "DistinctUntilChanged", "DefaultIfEmpty", "IgnoreElements",
+            "ObserveOn", "SubscribeOn", "Switch", "TimeInterval", "Timestamp", "Cast", "OfType",
+            "GroupBy", "ToObservable", "AsObservable",
+        ]);
 
     /// <summary>The <c>await</c> keyword, word-bounded so <c>Await</c> and <c>awaited</c> are not it.</summary>
     private static readonly Regex AwaitKeyword =
@@ -895,6 +898,17 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
         Assert.Equal(0, CountDirectObservableAwaitsIn(
             "var x = await hub.Observe<Request, Response>(r).Take(1).Await(ct);"));
 
+        // 🚨 GROUPED, which the first version of TailMemberOf could not see at all: the leading `(`
+        // put every member access at depth ≥ 1 and the tail came back null, so the shape could be
+        // added under parentheses and pass the zero rule. Raised in review of the change that
+        // introduced this rule.
+        Assert.Equal(1, CountDirectObservableAwaitsIn("await (source.Take(1).Timeout(budget));"));
+        Assert.Equal(1, CountDirectObservableAwaitsIn("var x = await ((source.Take(1).Timeout(budget)));"));
+        // …and the strip must NOT swallow a group that is only the RECEIVER of the chain, or the
+        // real tail would be lost and a genuine offender would read as clean.
+        Assert.Equal(1, CountDirectObservableAwaitsIn("await (a ? b : c).Take(1).Timeout(budget);"));
+        Assert.Equal(0, CountDirectObservableAwaitsIn("await (source.Take(1).Timeout(d)).Await(ct);"));
+
         // The SANCTIONED bridges, which must never be flagged — the false positive that would get
         // the whole rule suppressed, since every fix this guard asks for produces one of these.
         Assert.Equal(0, CountDirectObservableAwaitsIn("await source.Take(1).Timeout(d).Await(ct);"));
@@ -1136,9 +1150,18 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     /// <summary>
     /// The LAST member accessed at the expression's own depth — its tail. Null when the expression
     /// ends in something that is not a member access (a bare identifier, a constructor call).
+    ///
+    /// <para>🚨 A FULLY-enclosing parenthesis pair is stripped first, repeatedly. Without that,
+    /// <c>await (source.Take(1).Timeout(budget));</c> puts every member access at depth ≥ 1 and the
+    /// tail comes back null — a direct observable await could be added under parentheses and the
+    /// zero rule would never see it. The strip is deliberately narrow: it applies only when the
+    /// OPENING paren's match is the expression's LAST character, so <c>await (a ? b : c).Take(1)</c>
+    /// keeps its real tail instead of being stripped down to the condition.</para>
     /// </summary>
     private static string? TailMemberOf(string expression)
     {
+        expression = StripEnclosingParentheses(expression);
+
         var depth = 0;
         string? tail = null;
 
@@ -1162,6 +1185,22 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
         }
 
         return tail;
+    }
+
+    /// <summary>
+    /// Removes parenthesis pairs that enclose the WHOLE expression, so a grouped chain's members are
+    /// read at depth 0. Only a pair whose opening paren matches the final character is removed, and
+    /// the check repeats so <c>((x.Take(1)))</c> unwraps fully.
+    /// </summary>
+    private static string StripEnclosingParentheses(string expression)
+    {
+        var trimmed = expression.Trim();
+
+        while (trimmed.Length > 1 && trimmed[0] == '('
+               && MatchingClose(trimmed, 0) == trimmed.Length - 1)
+            trimmed = trimmed[1..^1].Trim();
+
+        return trimmed;
     }
 
     /// <summary>
