@@ -18,7 +18,14 @@ public class InClusterDatabaseTest
     {
         var d = Pearl.WithDatabase("pearl", server: "memexaks-pg", username: "memexadmin");
         Assert.Null(DeploymentPortalConfig.DatabaseRelease(d));
-        Assert.Equal("memexaks-pg.postgres.database.azure.com", DeploymentPortalConfig.DatabaseHost(d));
+        // The managed-database SUFFIX appears here as the expected RETURN of a pure derivation over
+        // an in-memory record, never as something this test connects to. TestsAreLocalOnlyGuard's
+        // own summary excludes exactly this ("It deliberately does NOT flag cloud endpoint
+        // STRINGS"), but its pattern list carries the bare suffix, so the sanctioned trailing
+        // marker is what reconciles the two. Nothing in this file opens a connection or constructs
+        // a client: every assertion reads DeploymentPortalConfig, which is string manipulation over
+        // the record. The marker must sit on THIS line — the guard filters line by line.
+        Assert.Equal("memexaks-pg.postgres.database.azure.com", DeploymentPortalConfig.DatabaseHost(d)); // local-only-guard:allow
         Assert.Equal("memexadmin", DeploymentPortalConfig.DatabaseUsername(d));
     }
 
