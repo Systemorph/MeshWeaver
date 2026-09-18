@@ -65,15 +65,18 @@ public class ATransferredIssueIsNotLostTest
     [Fact]
     public void AnIssueDeclaresWhetherItsCommentListIsWhole()
     {
-        var whole = new GitHubIssue { Number = 1 };
-        Assert.True(whole.CommentsAreComplete,
-            "a read that returned the comments must not look partial — the default is the complete answer");
-        Assert.Empty(whole.Comments);
+        // 🚨 The DEFAULT is "not complete", and that direction is the point: most reads never ask
+        // for comments (ListIssues maps every row through the same projection and leaves the list
+        // empty), so a default of true would have those rows claim an empty list is the whole story.
+        var unasked = new GitHubIssue { Number = 1 };
+        Assert.False(unasked.CommentsAreComplete,
+            "an issue that was never read WITH its comments must not claim its empty list is whole");
+        Assert.Empty(unasked.Comments);
 
-        var partial = whole with { CommentsAreComplete = false };
-        Assert.False(partial.CommentsAreComplete);
-        Assert.Empty(partial.Comments);
-        Assert.NotEqual(whole, partial);
+        // Only a read that actually received the list says so.
+        var whole = unasked with { CommentsAreComplete = true };
+        Assert.True(whole.CommentsAreComplete);
+        Assert.NotEqual(unasked, whole);
     }
 
     /// <summary>A client that implements only the members it needs — the shape every stub in this

@@ -80,12 +80,17 @@ public record GitHubIssue
     /// read of a real issue, and discarding it is what made a transferred issue indistinguishable
     /// from a deleted one for every caller.</para>
     ///
-    /// <para>Defaults to <c>true</c>, the same shape and for the same reason as
-    /// <c>RepoSnapshot.ListingIsComplete</c>: a partial answer declares itself rather than passing
-    /// as a complete one, so a caller that needs the comments can tell, and a caller that needs only
-    /// the issue's state is not denied an answer it did receive.</para>
+    /// <para>🚨 Defaults to <c>false</c>, and the direction is the whole point: MOST reads never ask
+    /// for comments at all — <c>ListIssues</c> maps every row through the same projection and leaves
+    /// <see cref="Comments"/> empty. A default of <c>true</c> would have those list snapshots claim
+    /// their empty list is the whole story, which is the same confusion one level up. Only the read
+    /// that actually received a comment list sets this, so "complete" is always something a reader
+    /// EARNED rather than something it inherited. This is the opposite default from
+    /// <c>RepoSnapshot.ListingIsComplete</c>, for the opposite reason: a snapshot is normally built
+    /// from a full clone and is complete unless told otherwise, while an issue normally arrives
+    /// without its comments.</para>
     /// </summary>
-    public bool CommentsAreComplete { get; init; } = true;
+    public bool CommentsAreComplete { get; init; }
 }
 
 /// <summary>A single comment on a GitHub issue (or pull request — a PR is an issue).</summary>
