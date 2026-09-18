@@ -127,8 +127,9 @@ numbers, so other NodeTypes consumed the numbers between):
 | `Essentials/Email/…185613` | 18:56:13 | 4150 | 14 in 45 m (A already dead) |
 | `Essentials/Email/…193655` | 19:36:55 | 4192 | 42 in 41 m |
 
-`Essentials/Email` alone was recompiled **47 times on 2026-09-17**, against one to six times a day
-for the rest of that week and **zero on 09-16**. Every publishing build calls
+`Essentials/Email` alone was recompiled **47 times on 2026-09-17** — against a maximum of **seven**
+on any other day back to 08-30, and **zero on 09-16** (counted over the complete 79-release history
+of that NodeType, `truncated: false`). Every publishing build calls
 `EvictSupersededContexts(nodeName, keep: ctx)` → `UnloadContext` → `NodeAssemblyLoadContext.Dispose()`
 → `CompleteUnload()` → `Unload()`, so the portal was minting and retiring collectible load contexts
 at roughly one every eight seconds for hours before it died.
