@@ -269,8 +269,17 @@ def waiting_would_help(verdict: Verdict) -> bool:
     pull request whose review raises NO findings would otherwise keep the red from its `opened`
     evaluation until somebody pushed again. The wait is bounded, it ends RED, and it is the only
     reason this check does not need a person to press anything.
+
+    🚨 A REFUSAL IS NOT WAITED FOR, and reading that off the prose was wrong (#4730 review). The
+    refusal reason is spelled "the automatic review has not landed — the reviewer posted, but not a
+    review: …", so the substring test above accepted it and `--wait-for-review 15` slept a quarter
+    of an hour printing "waiting for the automatic review" at a reviewer that had already answered:
+    it said no. Nothing arrives during that wait by construction, the run then contradicts its own
+    summary, and it spends a runner for it. The structured field is the discriminator — the same
+    reason `Verdict.refused` exists rather than being derived back out of the text.
     """
     return (not verdict.green
+            and not verdict.refused
             and len(verdict.reasons) == 1
             and "has not landed" in verdict.reasons[0])
 
@@ -629,7 +638,10 @@ def self_test() -> int:
         nonlocal failures
         v = evaluate(pr, reviews, comments, waiver, as_of)
         text = "\n".join(v.reasons + v.notes)
-        told = "\n".join(guidance(v)) + "\n" + summary_markdown(0, v)
+        # 🚨 render() is IN here (#4730 review). Without it the run headline — the first of the
+        # three surfaces the doc promises — could be deleted with every case still green.
+        told = ("\n".join(guidance(v)) + "\n" + summary_markdown(0, v) + "\n"
+                + render(0, pr, v, None, as_of))
         ok = (v.green == (not expect) and len(v.reasons) == len(expect)
               and all(e in r for e, r in zip(expect, v.reasons)) and all(m in text for m in mention)
               and all(t in told for t in says) and not any(t in told for t in never_says))
@@ -655,16 +667,19 @@ def self_test() -> int:
     # unreviewable pull requests in a four-hour holding pattern on 2026-09-18.
     case("a refusal TELLS the reader it is unreviewable, not that the review is coming",
          (NOT_LANDED,), _pr(0), [_review(REFUSAL_QUOTA)], [],
-         says=("unreviewable right now", "REFUSED to review it", "pushing, re-running this check"),
+         says=("RED — UNREVIEWABLE", "unreviewable right now", "REFUSED to review it",
+               "pushing, re-running this check"),
          never_says=("usually arrives minutes after",))
     # The other side of the same change — a pull request the reviewer simply has not reached yet
     # keeps the wait-for-it remedy and must NOT be called unreviewable.
     case("no review yet still says the review is coming, and is NOT called unreviewable",
          (NOT_LANDED,), _pr(0), [], [],
-         says=("usually arrives minutes after",), never_says=("unreviewable right now", "REFUSED to review it"))
+         says=("usually arrives minutes after",),
+         never_says=("unreviewable right now", "REFUSED to review it", "RED — UNREVIEWABLE"))
     # …and a WAIVED refusal is not unreviewable either: it is released, so the banner must not fire.
     case("a waived refusal is not reported as unreviewable", GREEN, _pr(0, [WAIVER_LABEL]), [_review(REFUSAL_QUOTA)], [],
-         Waiver(True, (_labeled(PERSON),), {"rbuergi": "maintain"}), never_says=("unreviewable right now",))
+         Waiver(True, (_labeled(PERSON),), {"rbuergi": "maintain"}),
+         never_says=("unreviewable right now", "RED — UNREVIEWABLE"))
     case("zero files reviewed is not a review", (NOT_LANDED,), _pr(0), [_review(REFUSAL_NO_FILES)], [])
     # POLICY, changed 2026-09-18: an unfamiliar body is a NEW FORMAT, not an absence. This case
     # asserted the opposite until the reviewer dropped its overview block and six reviewed core
@@ -753,6 +768,10 @@ def self_test() -> int:
     # waiting_would_help — only an ARRIVING input is waited for
     for name, expect, pr_, reviews_, comments_, waiver_ in [
         ("wait: only the review is missing", True, _pr(0), [], [], NO_WAIVER),
+        # 🚨 THE REGRESSION CASE (#4730 review). A refusal ALONE — the row above it passes for the
+        # wrong reason, because the unanswered thread is a second reason and any second reason
+        # already defeats the wait. Before the structured check, this one slept 15 minutes.
+        ("no wait: the review REFUSED and that is the only reason", False, _pr(0), [_review(REFUSAL_QUOTA)], [], NO_WAIVER),
         ("no wait: the review refused AND a thread is unanswered", False, _pr(1), [_review(REFUSAL_QUOTA)], [_comment(1)], NO_WAIVER),
         ("no wait: only a thread is unanswered", False, _pr(1), [_review()], [_comment(1)], NO_WAIVER),
         ("no wait: the listing was incomplete", False, _pr(9), [_review()], [], NO_WAIVER),
