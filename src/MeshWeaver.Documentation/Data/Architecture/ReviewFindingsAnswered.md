@@ -363,6 +363,12 @@ git push
 
 Prefer the re-run above: it changes no history and cannot carry anything with it.
 
+**Measured on #4652** (2026-09-17), the first time the remedy was used: `BLOCKED` / rollup
+`FAILURE` → `CLEAN` / rollup `SUCCESS` / `isInMergeQueue: true`, within a minute of the re-run.
+Re-arming auto-merge first did **not** clear it — the rollup was not stale in the usual sense, it
+was citing a real, still-current failure taken in a suite nobody reads. Measured again on #4662
+(2026-09-18): two `pull_request` runs re-run, both green, `blocked` → `clean` and into the queue.
+
 🚨 **This re-run is legitimate, and it is not "re-run and see".** The check reads LIVE state, and
 that state genuinely changed when the replies landed: the first evaluation was correct when it ran,
 and so is the second. This is the one case where re-running a red is the right response rather than
