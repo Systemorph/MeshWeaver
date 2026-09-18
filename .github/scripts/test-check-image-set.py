@@ -22,8 +22,11 @@ EXPECTED_TAGS = {
 }
 
 
+PAIR_TAG = "memex-portal-ai:abcdef1-p1234567"
+
+
 class ImageSetTests(unittest.TestCase):
-    def check(self, failed_tag="", diagnostic="", exit_code=0, index=INDEX):
+    def check(self, failed_tag="", diagnostic="", exit_code=0, index=INDEX, failed_tags=()):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             az = root / "az"
@@ -33,14 +36,15 @@ from pathlib import Path
 tag = sys.argv[sys.argv.index('--name') + 1]
 with Path(os.environ['CALLS']).open('a') as log:
     log.write(tag + '\\n')
-if tag == os.environ['FAILED_TAG']:
+if tag in os.environ['FAILED_TAGS'].split(','):
     print(os.environ['DIAGNOSTIC'], file=sys.stderr)
     sys.exit(int(os.environ['EXIT_CODE']))
 print(os.environ['INDEX'])
 """)
             az.chmod(0o755)
+            failed = ",".join(failed_tags) if failed_tags else failed_tag
             env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
-                   "FAILED_TAG": failed_tag, "DIAGNOSTIC": diagnostic,
+                   "FAILED_TAGS": failed, "DIAGNOSTIC": diagnostic,
                    "EXIT_CODE": str(exit_code), "INDEX": json.dumps(index),
                    "CALLS": str(root / "calls"), "GITHUB_STEP_SUMMARY": str(root / "summary")}
             result = subprocess.run(["bash", str(SCRIPT), "abcdef1", "1234567", "--pointers", "3.0.0-ci.42"],
@@ -56,7 +60,7 @@ print(os.environ['INDEX'])
         self.assertIn("All images exist", result.stdout)
 
     def test_registry_errors_remain_red_and_keep_the_actual_diagnostic(self):
-        for tag in ("memex-migration:main", "memex-portal-ai:abcdef1-p1234567"):
+        for tag in ("memex-migration:main", PAIR_TAG):
             for code, diagnostic in ((3, "ERROR: MANIFEST_UNKNOWN: tag does not exist"),
                                      (1, "ERROR: response status 503 Service Unavailable"),
                                      (2, "ERROR: registry operation was refused")):
@@ -75,6 +79,46 @@ print(os.environ['INDEX'])
         result, _ = self.check(index={"manifests": INDEX["manifests"][:1]})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not a linux amd64+arm64 image index", result.stdout)
+
+    # ── deliverability vs provenance (MeshWeaver#4679) ──────────────────────────────────────
+    #
+    # 🚨 THE CASE THAT WOULD HAVE FAILED BEFORE THE FIX. A missing pair tag used to exit 1 —
+    # the same answer a torn image set gives — so `gate` read "main's HEAD has no deployable
+    # image" over a set every install could already roll to, and filed
+    # `CD: main <sha> has an incomplete image set` saying so. 28 of the 109 such issues ever
+    # opened were exactly this, including three for `0dadacc` in three consecutive hours on
+    # 2026-09-17, each closed by a "successful heal" half an hour later.
+
+    def test_a_missing_pair_tag_alone_is_exit_2_not_a_torn_set(self):
+        result, calls = self.check(PAIR_TAG, "ERROR: MANIFEST_UNKNOWN: tag does not exist", 3)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("DELIVERABLE", result.stdout)
+        self.assertEqual(set(calls), EXPECTED_TAGS, "every other identity is still asserted")
+
+    def test_a_stale_pair_is_a_notice_never_an_error_annotation(self):
+        # An `::error::` on a job that then succeeds is how a run's annotation list stops being
+        # read. The condition is still printed, and still summarised — just not as a failure.
+        result, _ = self.check(PAIR_TAG, "ERROR: MANIFEST_UNKNOWN: tag does not exist", 3)
+        self.assertNotIn("::error::", result.stdout)
+        self.assertIn("::notice::", result.stdout)
+        self.assertIn("az exit 3", result.stdout)
+
+    def test_a_missing_image_outranks_a_stale_pair(self):
+        # 🚨 The ordering IS the contract: exit 2 asserts the set is intact, so a run that lost a
+        # leg AND whose plugins HEAD moved must still exit 1. Without this, the fix would hand
+        # `gate` "deliverable" over a torn set — the one failure the file exists to prevent.
+        result, _ = self.check(
+            failed_tags=("memex-migration:abcdef1", PAIR_TAG),
+            diagnostic="ERROR: MANIFEST_UNKNOWN: tag does not exist", exit_code=3)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("::error::", result.stdout)
+
+    def test_a_complete_and_correctly_paired_set_is_still_exit_0(self):
+        # The inert control: without it, "a stale pair is exit 2" would also pass if the script
+        # had started answering 2 unconditionally.
+        result, _ = self.check()
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn("::notice::", result.stdout)
 
 
 if __name__ == "__main__":

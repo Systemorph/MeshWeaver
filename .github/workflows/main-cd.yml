@@ -723,6 +723,9 @@ jobs:
       - name: "Does main's HEAD already have a complete image set?"
         id: acr
         if: steps.target.outputs.reason == 'reconcile'
+        env:
+          SHORT: ${{ steps.target.outputs.short_sha }}
+          PLUGINS_SHORT: ${{ steps.plugins.outputs.plugins_short }}
         run: |
           set -uo pipefail
           # 🚨 The second argument is what lets a plugins-only host change be SEEN. Without it a
@@ -734,10 +737,63 @@ jobs:
           # the reconciler would publish forever. A completeness probe must never fail on a pointer a
           # later phase legitimately has not written. `verify-images` runs after phase C and is where
           # the pointer set is asserted. See Doc/Architecture/ImageTagContract.
-          if .github/scripts/check-image-set.sh "${{ steps.target.outputs.short_sha }}" "${{ steps.plugins.outputs.plugins_short }}"; then
-            echo "complete=true" >> "$GITHUB_OUTPUT"
+          #
+          # 🚨 THREE ANSWERS, NOT TWO (MeshWeaver#4679). Exit 2 means every image of the set is
+          # present and good and ONLY the pair tag is behind — the set is DELIVERABLE, the host
+          # pairing is stale. That used to arrive as exit 1, i.e. as "main's HEAD has no deployable
+          # image", and it is what made `gate` file 28 of the 109 `incomplete image set` issues ever
+          # opened over a set every install could already roll to.
+          # 🚨 `|| rc=$?`, never a bare call. GitHub's default shell for `run:` is
+          # `bash -eo pipefail`, and `set -uo pipefail` does not clear `-e` — so a bare invocation
+          # would kill the step on exit 1 and 2 alike, and the three-way answer below would only
+          # ever be reached for exit 0. The old `if …; then` form was exempt from `-e` because it
+          # was a condition; this one has to say so.
+          rc=0
+          .github/scripts/check-image-set.sh "$SHORT" "$PLUGINS_SHORT" || rc=$?
+          case "$rc" in
+            0) echo "complete=true"  >> "$GITHUB_OUTPUT"; echo "hosts_stale=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "complete=true"  >> "$GITHUB_OUTPUT"; echo "hosts_stale=true"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "complete=false" >> "$GITHUB_OUTPUT"; echo "hosts_stale=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+      # ── Has a publisher ALREADY TRIED this commit and not finished? (reconcile only) ────────
+      #
+      # 🚨 THE LEDGER RECORDS A DELIVERY THAT FAILED, NOT ONE THAT HAS NOT HAPPENED YET
+      # (MeshWeaver#4679). `decide`'s alarm branch used to fire on "main's HEAD has no image set
+      # right now", which is the NORMAL state of every commit between its required check going
+      # green and its publisher finishing — a window that is minutes wide for the run's creation
+      # alone and ~43 minutes wide for the build. Measured over the 25 most recent such issues:
+      # in 19 of them NO CD run for that commit had ever been created when the alarm was filed,
+      # in 3 the only prior run was a zero-job supersede cancellation, and in 3 a run was in flight
+      # that the probe below `decide` could not see because it was NEWER. None recorded a failure.
+      #
+      # The fingerprint of an attempt is in the registry, not in the API: every publishing leg
+      # pushes `staging-<sha>-<run_id>` BEFORE `promote` applies a single consumer-visible tag. So
+      # a staging tag for this sha, with no older run live (`decide` checks that first, and does so
+      # before it reaches the ledger), is exactly "a publisher started on this commit and did not
+      # finish" — which is #1026's shape and the thing the reconciler was built to shout about.
+      #
+      # 🚨 FAILS TOWARDS THE ALARM. A registry read this cannot complete answers `true`, because the
+      # cost of a spurious issue is one comment and the cost of a missed one is a silent delivery
+      # hole. It says which it did, so a reader is never guessing.
+      - name: "Has a publisher already attempted this commit? (the ledger's evidence)"
+        id: attempted
+        if: steps.target.outputs.reason == 'reconcile' && steps.acr.outputs.complete != 'true'
+        env:
+          SHORT: ${{ steps.target.outputs.short_sha }}
+        run: |
+          set -uo pipefail
+          if tags=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai \
+                      --query "[?starts_with(@, 'staging-$SHORT-')]" -o tsv); then
+            if printf '%s' "$tags" | grep -q .; then
+              echo "attempted=true" >> "$GITHUB_OUTPUT"
+              echo "A publisher has already staged layers for $SHORT and did not finish: $(printf '%s' "$tags" | tr '\n' ' ')"
+            else
+              echo "attempted=false" >> "$GITHUB_OUTPUT"
+              echo "No staging tag for $SHORT — no publisher has started on this commit, so there is no failed delivery to record."
+            fi
           else
-            echo "complete=false" >> "$GITHUB_OUTPUT"
+            echo "attempted=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::could not read the staging tags for $SHORT — answering 'a publisher has attempted it' so a genuine delivery hole is still recorded. The issue this files may therefore be about a commit nothing has tried yet; the registry read is what to check first."
           fi
       # ── The decision, and (reconcile only) the ATTEMPT BUDGET ──────────────────────────────
       # A reconciler that cannot succeed must not grind forever. Persistent failure here means
@@ -843,6 +899,12 @@ jobs:
           CONCL: ${{ steps.required.outputs.conclusion }}
           AGE_MIN: ${{ steps.required.outputs.age_min }}
           COMPLETE: ${{ steps.acr.outputs.complete }}
+          # Deliverability and provenance, separately (MeshWeaver#4679). `COMPLETE` is now only ever
+          # about images an install can PULL; `HOSTS_STALE` is "the newest one was built from an
+          # older MeshWeaver.Plugins commit". `ATTEMPTED` is the ledger's evidence: has a publisher
+          # already staged layers for this commit and not finished?
+          HOSTS_STALE: ${{ steps.acr.outputs.hosts_stale }}
+          ATTEMPTED: ${{ steps.attempted.outputs.attempted }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SHA: ${{ steps.target.outputs.sha }}
           RUN_ID: ${{ github.run_id }}
@@ -974,6 +1036,31 @@ jobs:
           # `rebuild` stays as the operator escape hatch (it is still the only way to force a
           # rebuild for a reason no tag encodes), but it is no longer the ONLY way this case is
           # noticed, which is what made it a structural no-op before.
+          # 🚨 A STALE HOST PAIRING IS CADENCE, NOT A DELIVERY HOLE (MeshWeaver#4679), and this
+          # branch exists so that the two stop sharing a verdict — and a ledger entry.
+          #
+          # `HOSTS_STALE` means every image of the set resolved and only `<core>-p<plugins>` is
+          # behind, i.e. main's HEAD is fully deliverable and the newest portal image was built from
+          # an older MeshWeaver.Plugins commit. This run publishes exactly as it did before — the
+          # #2622 behaviour is unchanged, byte for byte — but it does NOT touch the `ci-failure`
+          # ledger, because there is nothing to record: no delivery failed, no install is held back,
+          # and the issue this used to file said in as many words that one was.
+          #
+          # 🚨 IT DOES NOT CONVERGE, AND THAT IS A CADENCE QUESTION THIS BRANCH DELIBERATELY DOES
+          # NOT ANSWER. MeshWeaver.Plugins `main` takes 43–48 merges a day — a median interval of
+          # about 30 minutes — and a CD publish takes ~43, so the pair tag this run writes names a
+          # plugins commit that has already been superseded by the time `verify-images` reads it
+          # back. Every tick therefore finds the pairing stale again. That is 24 full multi-arch
+          # rebuilds a day of trees that are often identical (measured: 418 publishing builds over
+          # 340 distinct core commits; `0dadacc` was built three times in three hours on
+          # 2026-09-17, minting ci.8883, ci.8885 and ci.8886 and moving its own sha tag twice).
+          # Whether a plugins merge should mint a portal image at all — and if so, on what
+          # cadence — is Doc/Architecture/CdLedgerRecordsFailures → "The decision that is still open".
+          if [ "$COMPLETE" = "true" ] && [ "${HOSTS_STALE:-false}" = "true" ] \
+             && [ "${FORCE_REBUILD:-false}" != "true" ]; then
+            decision true "🏠 main \`$SHORT\` HAS its complete, deliverable image set; only the host pairing is behind — the published portal image was built from an older MeshWeaver.Plugins commit. Refreshing it (#2622). This is CADENCE, not a delivery hole: no \`ci-failure\` issue is filed, and every install already has a current image to roll to."
+            exit 0
+          fi
           if [ "$COMPLETE" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
             echo "bake_only=true" >> "$GITHUB_OUTPUT"
             decision false "✅ main \`$SHORT\` already has a complete image set — no image build; re-asserting the content bake (publication is idempotent)"
@@ -1000,6 +1087,38 @@ jobs:
           # unhealable state worth waking someone for.
           if [ "$PENDING" = "true" ] || { [ "$GREEN" != "true" ] && [ "$AGE_MIN" -lt 120 ]; }; then
             decision false "⏳ \`Consolidate test results\` on $SHORT is \`$CONCL\` and the commit is ${AGE_MIN} min old — waiting for CI, nothing to reconcile yet"
+            exit 0
+          fi
+
+          # 🚨 THE LEDGER RECORDS A DELIVERY THAT FAILED, NOT ONE THAT HAS NOT HAPPENED YET
+          # (MeshWeaver#4679). Everything below this line writes to the `ci-failure` issue, and for
+          # a year the only thing it asked before doing so was "is the set in ACR right now?" —
+          # which is the normal state of every green commit whose publisher has not finished. There
+          # are two such windows and both are wide: GitHub takes minutes to CREATE the
+          # `workflow_run` delivery run after the required check concludes (measured 3m37s on
+          # `ecc544a`, 2026-09-17: check green 15:29:08, CD run created 15:32:54 — and the tick
+          # decided at 15:30:05, in between), and the build itself takes ~43 more.
+          #
+          # Measured over the 25 most recent `incomplete image set` issues: 19 were filed when NO CD
+          # run for that commit had ever been created, 3 when the only prior one was a zero-job
+          # supersede cancellation (which AGENTS.md says cannot have torn a set), and 3 while a
+          # NEWER run was mid-publish and therefore invisible to the older-runs-only probe above.
+          # Not one recorded a delivery that had failed. 109 issues of a 109-issue population
+          # carried a body reading *every self-updating install stays on the previous image*.
+          #
+          # `ATTEMPTED` is the positive evidence, read from the registry rather than from a clock:
+          # a `staging-<sha>-<run_id>` tag exists, so a publisher STARTED on this commit and did not
+          # reach `promote`. Without one, this tick is not repairing anything — it IS the publisher,
+          # exactly as it is for a commit the push lane never got a run for. It publishes and says
+          # so, and the ledger stays clean for the failure it was built to name.
+          #
+          # 🚨 The attempt BUDGET therefore starts one tick later than it used to: a first,
+          # ledger-free publish that dies leaves the staging tags that make the NEXT tick file the
+          # issue and count attempt 1. Four builds instead of three before `cd-unhealed`, for a
+          # commit that genuinely cannot build — and the run that dies is still a `CD failed on
+          # main` alert in its own right, from the `verdict` job, which this does not touch.
+          if [ "$GREEN" = "true" ] && [ "${ATTEMPTED:-true}" != "true" ]; then
+            decision true "📦 main \`$SHORT\` is green and has no image set, and NO publisher has started on it (no \`staging-$SHORT-*\` layers in ACR) — so nothing has failed. Publishing it; the \`ci-failure\` ledger is for a delivery that was ATTEMPTED and did not finish, and stays untouched."
             exit 0
           fi
 
