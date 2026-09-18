@@ -28,9 +28,11 @@ the target it names. Nothing has re-measured it and nothing will — see *A froz
 
 **"The fleet is frozen, for one reason."** Four instances, four causes. **Two are deliberate** — memex
 and pearl each carry a reviewed `pinnedImageTag`, and a candidate newer than the pin waits for an
-approval rather than patching unattended. **Two are defects, and they are different defects**:
-memex-cloud's policy record has lost its own policy, and build cannot list tags on its registry at
-all (MeshWeaver#4093). Neither is the module-compatibility hold the policy nodes appear to show.
+approval rather than patching unattended. **Two are stuck, and for different reasons**:
+memex-cloud's policy record has lost its own policy — a live defect — and build cannot list tags on
+its registry at all, which is **not** an outstanding code defect but an undeclared pairing
+(MeshWeaver#4093; the platform half merged on 2026-09-12, see below). Neither is the
+module-compatibility hold the policy nodes appear to show.
 
 ## What was measured
 
@@ -43,7 +45,7 @@ instance **memex.systemorph.com**.
 | **memex-cloud** | memex.meshweaver.cloud | `3.0.0-ci.8411` (`c84c6c05`), pods from 2026-09-17 | 🚨 **defect** — its `Admin/UpdatePolicy` carries **no `policy` field at all**, which reads as `None`; the poller returns before listing the registry |
 | **memex** (control) | memex.systemorph.com | `fc8cd583`; record pins `3.0.0-ci.8710` | **by design** — it detects, hands the build to the control lane, and *"a newer tag waits for an approval in the mesh. This install does not patch itself."* |
 | **pearl** | pearl.meshweaver.cloud | `3.0.0-ci.8080` (`67cbbe0e`) | **by design** — `pinnedImageTag: 3.0.0-ci.8080`; and the instance-side policy node is a separate act from the record's `updatePolicy` |
-| **build** | build.meshweaver.cloud | `3.0.0-ci.8411` (`c84c6c05`) | 🚨 **defect** — its images come from `cr.meshweaver.cloud`, where the self-updater cannot list tags **at all** (MeshWeaver#4093); the pin is the workaround, not the reason |
+| **build** | build.meshweaver.cloud | `3.0.0-ci.8411` (`c84c6c05`) | 🚨 **stuck, but not on platform code** — its images come from `cr.meshweaver.cloud`, where the self-updater refuses to list tags because nothing on its record declares which portal validates its key (MeshWeaver#4093). The platform half shipped 2026-09-12; what is owed is a declaration and a roll — see below |
 | **partnerre** | — | — | `Ops/Status/partnerre` is `Unknown`, last written 2026-09-15 — outside this measurement |
 
 Note also that **the images are moving**: memex-cloud and build both run `3.0.0-ci.8411`, and
@@ -59,6 +61,34 @@ the control instance until that lands."* The same field means "we chose this ver
 and "detection is broken here" on another, and only the record's own words tell them apart. That one
 matters more than it looks: build is the instance that compiles modules, and a build instance held
 behind the newest sealed platform produces bundles keyed to an identity the fleet has moved past.
+
+### build: the platform half landed on 2026-09-12; the declaration did not
+
+🚨 **"Cannot list tags on `cr.meshweaver.cloud`" has read as an outstanding platform defect since
+2026-09-12, and it is not one.** The rule that lets an installation present its `mwi_` key to a
+container registry validated by *another* portal — the fleet's shape, where `cr.meshweaver.cloud`
+forwards the key to `memex.meshweaver.cloud` — merged that day as `830c8c402`
+([The Self-Update Registry Credential](../SelfUpdateRegistryCredential)), with the fleet's shape
+pinned on both sides by `OciTagListerTest`: declared, it resolves and lists; undeclared, it refuses
+and the key does not leave.
+
+What is left is **two statements on a record and a roll**, in this order, and neither is a platform
+change:
+
+1. `SelfUpdate__RegistryValidationUrl: "https://memex.meshweaver.cloud/api/instances/token"` in
+   `extraPortalConfig` on `Deployments/build` and `Deployments/pearl` — the registry record's own
+   `validationUrl`, restated on the consumer. Measured 2026-09-18 on the control instance:
+   `Deployments/build` (v21) carries neither key.
+2. A roll onto an image whose core sha has `830c8c402` as an ancestor. Both instances run
+   `3.0.0-ci.8411` (`c84c6c05`), which **predates** it — so on those pods the declaration is an env
+   var nothing reads. Declaring first is harmless and does not help until the roll.
+
+**The pairing is a DECLARATION on purpose.** `RegistrySpec.ValidationUrl` lives on the record of the
+instance that *hosts* the registry, so a consumer cannot look it up, and both shortcuts the issue
+originally proposed were declined: resolving by whatever endpoint the registry *names* lets the party
+receiving the credential choose which of the installation's keys to redirect, and "exactly one mount
+carries a key, so present it" is, for the one-mount shape most of the fleet is, simply dropping the
+check. The refusal names the host the operator must declare — read it, do not re-derive the rule.
 
 ## A frozen hold is history, not a hold
 
@@ -347,7 +377,7 @@ skipped. Neither conclusion tells you whether a set exists.
 | every instance | `PreWarm__PrebuiltBundleRetention__Delete` | **an operations decision**, from a ledger line, after confirming the protected set covers every instance and every CI gate pinning an older platform build |
 | the availability gate | answer inside its budget over a store that only grows | **a code fix** — the denominator is monotone over an append-only store and does not need re-walking every tick |
 | a timeout hold | record `heldIndeterminate: true` | **a code fix**, one call site |
-| build | MeshWeaver#4093 — list tags on `cr.meshweaver.cloud` | **a code fix**, already tracked |
+| build, pearl | MeshWeaver#4093 — `SelfUpdate__RegistryValidationUrl` on the record, then a roll onto an image carrying `830c8c402` or later | **a config change and a roll** — NOT a code fix; the platform half merged 2026-09-12 |
 
 ## How to read these instruments
 
