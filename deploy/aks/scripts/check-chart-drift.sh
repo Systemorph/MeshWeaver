@@ -136,8 +136,17 @@
 # cluster fails RED rather than quietly comparing against nothing.
 #
 # Per-env values files live in the PRIVATE Systemorph/Memex repo, not here — point -f at your
-# checkout of them. Render with the SAME -f list the deploy uses, or you are diffing against a
-# chart nobody deployed.
+# checkout of them.
+#
+# 🚨 THIS HEADER USED TO SAY "Render with the SAME -f list the deploy uses, or you are diffing
+# against a chart nobody deployed", and that instruction cannot be followed — which is why this
+# check produced no verdict at all for 34 days (MeshWeaver#4640). A record-driven deploy layers
+# THREE sources; the third is the Key Vault values half, and a check in a public repository may
+# never hold it. The rule that replaces it is narrower and is now MEASURED on every run rather than
+# asserted here: render from the sources you may hold, and prove the compared objects do not depend
+# on the ones you may not (chart-drift-render.py). A source the comparison does not read cannot
+# change the comparison — but that is a claim about today's chart, so it is re-established each run
+# instead of being written down once.
 set -uo pipefail
 
 NS="" ; RELEASE="" ; CHART="" ; VIA="kubectl" ; RG="" ; AKS="" ; EXPECT_PATCH=""
@@ -222,12 +231,28 @@ trap 'rm -rf "$WORK"' EXIT
 
 # ---------------------------------------------------------------------------
 # DESIRED — what the chart says. A render failure is RED: it is the whole left-hand side.
+#
+# 🚨 THE RENDER IS TWO OF THE DEPLOY'S THREE VALUE SOURCES, AND THAT IS PERMANENT (MeshWeaver#4640).
+# A record-driven deploy layers the chart's values.yaml, the committed secret-free overlay, and the
+# Key Vault values half that carries the connection strings. A check running in a PUBLIC repository
+# may hold the first two and must never hold the third — publishing it is the leak the overlays were
+# moved to the private Systemorph/Memex repo to prevent. From that subset the chart REFUSES to
+# render (#3780's guard, which is right: a `helm upgrade` fed the record's render without the vault
+# half manufactured an orleans string pointing at a Service the release does not run, and killed
+# every new pod at silo start). That refusal is why this check failed 39 of 39 runs between
+# 2026-08-15 and 2026-09-17 without ever producing a verdict.
+#
+# So the render is delegated to chart-drift-render.py, which supplies an OBVIOUSLY FAKE placeholder
+# for exactly that input and then PROVES, every run, that none of the compared objects depends on
+# it — by rendering twice with two different placeholders and requiring the compared objects to be
+# identical. Read that file's header before changing anything here: the proof is default-deny, and a
+# chart change that makes a compared field a function of a secret reddens it by name rather than
+# widening silently. Nothing about #3780's refusal is weakened; check-chart-invariants.sh still
+# asserts on every pull request that the chart refuses the render that caused it.
 # ---------------------------------------------------------------------------
-helm_args=( template "$RELEASE" "$CHART" --namespace "$NS" )
-for v in ${VALUES[@]+"${VALUES[@]}"}; do helm_args+=( -f "$v" ); done
-if ! helm "${helm_args[@]}" > "$WORK/desired.yaml" 2> "$WORK/helm.err"; then
-  echo "::error::helm template FAILED — cannot determine what the chart describes:"
-  cat "$WORK/helm.err"
+render_args=( --chart "$CHART" --namespace "$NS" --release "$RELEASE" --out "$WORK/desired.yaml" )
+for v in ${VALUES[@]+"${VALUES[@]}"}; do render_args+=( -f "$v" ); done
+if ! python3 "$SELF_DIR/chart-drift-render.py" "${render_args[@]}"; then
   exit 1
 fi
 
