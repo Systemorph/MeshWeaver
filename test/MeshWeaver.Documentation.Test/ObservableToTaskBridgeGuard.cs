@@ -145,6 +145,94 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
 
     private const string ProductionBlockingAllowFileName = "ProductionBlockingBridgeSites.allow";
 
+    // ── The COMPILER-SYNTHESIZED bridge: `await <an observable>` ──────────────────────────────────
+
+    /// <summary>
+    /// Roots held at ZERO for the direct-await shape.
+    ///
+    /// <para>🚨 <b>Why this rule had to be added at all, and why it is the same lesson twice.</b>
+    /// Everything above finds a bridge that EXISTS IN SOURCE — Rx's <c>.ToTask(</c>, or a
+    /// <c>TaskCompletionSource</c> someone typed. <c>await source</c> is the same bridge with
+    /// nothing to find: the compiler calls Rx's <c>GetAwaiter()</c> extension, which builds an
+    /// <see cref="System.Reactive.Subjects.AsyncSubject{T}"/> and completes the continuation from
+    /// inside <c>OnCompleted</c> — INLINE on the signalling thread, exactly as the banned bridge
+    /// does. <c>InlineResumptionMechanismTest</c> has measured both since 2026-08-30 and its own
+    /// remarks call the swap "a no-op dressed as a fix"; this class exempted that file so it could
+    /// keep demonstrating the shape, and then never looked for the shape anywhere else.</para>
+    ///
+    /// <para>🚨 <b>And the instrument that DID look was keyed on the wrong thing.</b>
+    /// <see cref="HubReachableAsyncGuard.NoNewAwaitOfAMeshRead"/> counts an <c>await</c> only when
+    /// its expression NAMES a mesh entry point, so a generic helper that takes the observable as a
+    /// PARAMETER is invisible to it by construction — the mesh call sits at the caller, which does
+    /// not await. That is how <c>MeshTestContext.First</c> sat at
+    /// <c>await source.Take(1).Timeout(Deadline)</c> under a doc comment asserting the opposite
+    /// ("Rx's own awaiter — no task bridge") with every guard in this repo green. A sweep keyed on
+    /// a REDUCER (<c>await …FirstAsync()</c>) missed it for a second, independent reason: the
+    /// statement has no reducer in that position at all. So this rule reads the expression's TAIL,
+    /// whatever it is, and walks balanced brackets so a chain spread over four lines is ONE
+    /// expression.</para>
+    /// </summary>
+    private static readonly string[] DirectAwaitZeroRoots = ["src", "tools", "samples", "clients"];
+
+    /// <summary>
+    /// The trees carrying a seeded inventory for the direct-await shape, measured 2026-09-18.
+    ///
+    /// <para><c>test/</c> carries 223 sites in 66 files and <c>memex/</c> 5 in one — and they are
+    /// not an accident: <c>AGENTS.md</c>, the <c>/async</c> skill, the <c>/testing</c> skill and
+    /// <c>Doc/Architecture/AsynchronousCalls</c> all PRESCRIBED "await the observable directly with
+    /// a <c>.Timeout(...)</c>" as the replacement for <c>.ToTask()</c>, while four other pages said
+    /// the opposite and correctly. This change corrects the four; the inventory they produced may
+    /// only shrink.</para>
+    /// </summary>
+    private static readonly string[] DirectAwaitRatchetedRoots = ["memex", "test"];
+
+    private const string DirectAwaitAllowFileName = "DirectObservableAwaitSites.allow";
+
+    /// <summary>The seeded inventory's size for <see cref="DirectAwaitRatchetedRoots"/>.</summary>
+    private const int DirectAwaitTotalBudget = 228;
+
+    /// <summary>
+    /// The member names that END an expression whose static type is an
+    /// <see cref="IObservable{T}"/>. A whitelist, deliberately: <c>await X</c> compiles for a Task
+    /// too, and nothing textual can tell the two apart in general — so the rule fires only on a
+    /// tail it can NAME as Rx. That trades false negatives (safe: a site is missed) for zero false
+    /// positives (fatal: a rule that reds legitimate code gets suppressed, and a suppressed rule is
+    /// worse than none).
+    ///
+    /// <para>🚨 The LINQ-shaped names (<c>Select</c>, <c>Count</c>, <c>ToList</c>, …) are safe to
+    /// list because an <see cref="System.Collections.Generic.IEnumerable{T}"/> is not awaitable —
+    /// if it compiled under an <c>await</c>, it was Rx. The names deliberately NOT here are the ones
+    /// a TASK-returning member also carries: <c>Delay</c> (<c>Task.Delay</c>), and Rx's creation
+    /// operators (<c>Timer</c>, <c>Interval</c>, <c>Create</c>, <c>Defer</c>, …), which are never a
+    /// chain's tail in practice. Measured against this repo 2026-09-18: no Task-returning
+    /// <c>Timeout</c>, <c>Do</c> or <c>Catch</c> exists anywhere in it.</para>
+    /// </summary>
+    private static readonly HashSet<string> ObservableTails = new(StringComparer.Ordinal)
+    {
+        // Reducers — the shape a reducer-keyed scan already finds.
+        "FirstAsync", "FirstOrDefaultAsync", "LastAsync", "LastOrDefaultAsync",
+        "SingleAsync", "SingleOrDefaultAsync", "ElementAt", "ElementAtOrDefault",
+        // 🚨 …and the operators that end a chain when the reducer is EARLIER or ABSENT. This half is
+        // the whole point: `await source.Take(1).Timeout(Deadline)` has no reducer in tail position.
+        "Take", "TakeLast", "TakeWhile", "TakeUntil", "Skip", "SkipLast", "SkipWhile", "SkipUntil",
+        "Where", "Select", "SelectMany", "Timeout", "ToList", "ToArray", "ToDictionary",
+        "Buffer", "Window", "Sample", "Throttle", "DelaySubscription", "Do", "Finally",
+        "Catch", "Retry", "OnErrorResumeNext", "StartWith", "Concat", "Merge", "Zip",
+        "CombineLatest", "WithLatestFrom", "Amb", "Publish", "RefCount", "Replay",
+        "Materialize", "Dematerialize", "Scan", "Aggregate", "Count", "Sum", "Average",
+        "Min", "Max", "Distinct", "DistinctUntilChanged", "DefaultIfEmpty", "IgnoreElements",
+        "ObserveOn", "SubscribeOn", "Switch", "TimeInterval", "Timestamp", "Cast", "OfType",
+        "GroupBy", "ToObservable", "AsObservable",
+    };
+
+    /// <summary>The <c>await</c> keyword, word-bounded so <c>Await</c> and <c>awaited</c> are not it.</summary>
+    private static readonly Regex AwaitKeyword =
+        new(@"\bawait\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary><c>await foreach</c> / <c>await using</c> — statements, not an awaited expression.</summary>
+    private static readonly Regex AwaitStatementForm =
+        new(@"^\s+(?:foreach|using)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     /// <summary>
     /// The ONE exemption from the <c>.ToTask(</c> scan, and it is not an escape hatch: the test
     /// whose entire PURPOSE is to demonstrate the banned shape's behaviour, by measuring that it
@@ -659,6 +747,189 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
             + string.Join("\n", failures));
     }
 
+    // ── The direct-await rules ───────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 🚨 <c>await &lt;an observable&gt;</c> is at ZERO in <see cref="DirectAwaitZeroRoots"/>, with no
+    /// allow file and no line to add.
+    ///
+    /// <para>The site this rule was written for is <c>MeshWeaver.Testing.InMesh.MeshTestContext</c>
+    /// — <c>await source.Take(1).Timeout(Deadline)</c>, under a doc comment offering <i>"Rx's own
+    /// awaiter — no task bridge"</i> as the SAFETY property. That assembly is the IN-MESH harness:
+    /// its cases execute inside the running portal, so the thread that signals is a hub's action
+    /// block or a grain's turn scheduler, and the remainder of every case that called it continued
+    /// there. Nothing in this repo saw it: no <c>.ToTask(</c>, no <c>TaskCompletionSource</c>, and
+    /// no mesh entry point named in the awaited expression for
+    /// <see cref="HubReachableAsyncGuard"/> to key on.</para>
+    ///
+    /// <para><b>The fix at a site</b> is <c>.Await(ct)</c>
+    /// (<c>MeshWeaver.Messaging.ObservableAwait</c>) or <c>.ObserveCompletion(reportLateFault, ct)</c>
+    /// — both complete through a <c>TaskCompletionSource</c> built with
+    /// <c>RunContinuationsAsynchronously</c>, which is the one line that stops the inline resume —
+    /// or, better, staying reactive and subscribing.</para>
+    /// </summary>
+    [Fact]
+    public void NoProductionCodeAwaitsAnObservableDirectly()
+    {
+        var root = SourceScan.FindRepoRoot();
+        var found = ScanDirectAwaits(root, DirectAwaitZeroRoots);
+
+        Assert.True(found.Count == 0,
+            "🚨 `await <an observable>` is Rx's own awaiter, and it is NOT a safe alternative to "
+            + "`.ToTask()` — it is the SAME defect with nothing in source to grep for. Rx's awaiter "
+            + "is an AsyncSubject<T> that completes its continuation from inside OnCompleted, so "
+            + "the caller resumes INLINE on whichever thread signalled (a hub action block, a "
+            + "grain's turn scheduler, an Rx trampoline), and because `await` captures "
+            + "TaskScheduler.Current every later await in the same method inherits it (#2301, "
+            + "#2377). InlineResumptionMechanismTest measures both sides.\n"
+            + "Fix the site: `.Await(ct)` (MeshWeaver.Messaging.ObservableAwait) or "
+            + "`.ObserveCompletion(reportLateFault, ct)` — or stay reactive and Subscribe. There is "
+            + "no allow file for this root set.\n"
+            + string.Join("\n", found
+                .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .Select(kv => $"  {kv.Key} ({kv.Value})")));
+    }
+
+    /// <summary>
+    /// The shrinking half for <see cref="DirectAwaitRatchetedRoots"/>: 228 sites that GUIDANCE asked
+    /// for. Four pages told authors to "await the observable directly with a <c>.Timeout(...)</c>"
+    /// as the way OFF <c>.ToTask()</c>; this change corrects them, and the inventory they produced
+    /// may only shrink.
+    /// </summary>
+    [Fact]
+    public void NoNewDirectObservableAwaitInTheTreesStillBeingSwept()
+    {
+        var root = SourceScan.FindRepoRoot();
+        var allowed = SourceScan.ReadAllowFile(
+            Path.Combine(root, "test", DirectAwaitAllowFileName), DirectAwaitAllowFileName);
+        var found = ScanDirectAwaits(root, DirectAwaitRatchetedRoots);
+
+        var failures = new List<string>();
+
+        foreach (var (file, count) in found.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            if (!allowed.TryGetValue(file, out var budget))
+                failures.Add(
+                    $"  NEW SITE   {file} ({count}) — `await <an observable>` resumes the caller "
+                    + "INLINE on the signalling thread, exactly as `.ToTask()` does. Wait through "
+                    + "`.Await(ct)` or `.ObserveCompletion(reportLateFault, ct)`, or assert through "
+                    + "MeshWeaver.Reactive.Assertions (`await x.Should().Within(...).Emit(...)`). "
+                    + "Do NOT add a line to " + DirectAwaitAllowFileName + ".");
+            else if (count > budget)
+                failures.Add(
+                    $"  MORE       {file} ({count} > {budget} allowed) — a site was ADDED to a file "
+                    + "that already carries the shape.");
+        }
+
+        var total = allowed.Values.Sum();
+        if (total > DirectAwaitTotalBudget)
+            failures.Add(
+                $"  TOTAL      {total} allowances > {DirectAwaitTotalBudget} budgeted — the "
+                + "inventory GREW. Adding a line to " + DirectAwaitAllowFileName + " is not a fix.");
+
+        foreach (var (file, budget) in allowed.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            var count = found.GetValueOrDefault(file, 0);
+            if (count < budget)
+                output.WriteLine(
+                    $"STALE (please tidy): {file} — {count} found, {budget} allowed. "
+                    + $"{(count == 0 ? "Delete the line" : $"Lower it to {count}")} and lower "
+                    + $"DirectAwaitTotalBudget by {budget - count}.");
+        }
+
+        Assert.True(failures.Count == 0,
+            "Rx's awaiter is an AsyncSubject<T> that completes its continuation from inside "
+            + "OnCompleted, so `await source…` resumes on the producer's thread — the same defect "
+            + "`.ToTask()` was banned for. These trees are mid-sweep: the inventory may shrink, "
+            + "never grow.\n" + string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// 🚨 THE FALSIFICATION for the direct-await matcher, re-run every CI run against planted text.
+    /// Both directions, because this matcher's two plausible failures are opposite and both are
+    /// silent: reading the tail too NARROWLY reports a clean tree (that is how the site this rule
+    /// exists for was missed), and truncating the expression too EAGERLY reports an already-fixed
+    /// site as an offender.
+    ///
+    /// <para>The <c>,</c>-inside-a-generic case is not hypothetical. A scanner that ends the
+    /// awaited expression at the first comma turns
+    /// <c>await source.Select&lt;TIn, TOut&gt;(f).Await(ct)</c> — already converted — into a tail of
+    /// <c>Select</c>, i.e. an offender. The parallel sweep of MeshWeaver.Plugins hit exactly
+    /// that.</para>
+    /// </summary>
+    [Fact]
+    public void TheDirectAwaitMatcherSeesWhatItClaimsTo()
+    {
+        // 🚨 THE SITE ITSELF, verbatim from the revision that shipped it. This is the assertion the
+        // rule was watched RED on: with MeshTestContext.First reverted, the file is under
+        // DirectAwaitZeroRoots and NoProductionCodeAwaitsAnObservableDirectly fails naming it.
+        Assert.Equal(1, CountDirectObservableAwaitsIn(
+            "public async Task<T> First<T>(IObservable<T> source) =>\n"
+            + "    await source.Take(1).Timeout(Deadline);"));
+
+        // The reducer spellings a reducer-keyed scan already finds…
+        Assert.Equal(1, CountDirectObservableAwaitsIn("var n = await stream.FirstAsync();"));
+        Assert.Equal(1, CountDirectObservableAwaitsIn("var n = await stream.FirstOrDefaultAsync();"));
+        Assert.Equal(1, CountDirectObservableAwaitsIn("var n = await stream.LastOrDefaultAsync();"));
+        // …and the tails it does not.
+        Assert.Equal(1, CountDirectObservableAwaitsIn("await stream.FirstAsync().Timeout(budget);"));
+        Assert.Equal(1, CountDirectObservableAwaitsIn("await stream.Where(x => x is not null).Take(1);"));
+        Assert.Equal(1, CountDirectObservableAwaitsIn("var all = await stream.ToList();"));
+
+        // Spelled across lines — one expression, which a line-keyed grep cannot see.
+        Assert.Equal(1, CountDirectObservableAwaitsIn(
+            "var node = await workspace\n    .GetMeshNodeStream(path)\n    .Take(1)\n"
+            + "    .Timeout(TestTimeouts.Convergence);"));
+
+        // Nested in an argument list: the comma ENDS the awaited expression, so the following
+        // argument's own chain is never read as this await's tail.
+        Assert.Equal(0, CountDirectObservableAwaitsIn(
+            "Assert.Equal(await ThingAsync(), other.Take(1));"));
+
+        // 🚨 …but a comma inside a GENERIC ARGUMENT LIST does not, or an already-converted site
+        // reads as an offender. Both orderings, because the skip has to work mid-chain too.
+        Assert.Equal(0, CountDirectObservableAwaitsIn(
+            "var x = await source.Select<TIn, TOut>(f).Await(ct);"));
+        Assert.Equal(1, CountDirectObservableAwaitsIn(
+            "var x = await hub.Observe<Request, Response>(r).Take(1).Timeout(budget);"));
+        Assert.Equal(0, CountDirectObservableAwaitsIn(
+            "var x = await hub.Observe<Request, Response>(r).Take(1).Await(ct);"));
+
+        // The SANCTIONED bridges, which must never be flagged — the false positive that would get
+        // the whole rule suppressed, since every fix this guard asks for produces one of these.
+        Assert.Equal(0, CountDirectObservableAwaitsIn("await source.Take(1).Timeout(d).Await(ct);"));
+        Assert.Equal(0, CountDirectObservableAwaitsIn(
+            "await source.FirstAsync().ObserveCompletion(ex => Log(ex), ct);"));
+        Assert.Equal(0, CountDirectObservableAwaitsIn(
+            "await joined.ObserveCompletion(LateFault(description, report), cts.Token);"));
+        Assert.Equal(0, CountDirectObservableAwaitsIn(
+            "await x.Should().Within(TestTimeouts.Convergence).Emit(\"the node arrives\");"));
+
+        // Genuine Task awaits — a rule that flagged these would be a ban on `await`.
+        Assert.Equal(0, CountDirectObservableAwaitsIn("await httpClient.GetStringAsync(url);"));
+        Assert.Equal(0, CountDirectObservableAwaitsIn("await Task.Delay(300, ct);"));
+        Assert.Equal(0, CountDirectObservableAwaitsIn("await pool.Invoke(ct => Work(ct));"));
+        Assert.Equal(0, CountDirectObservableAwaitsIn("await foreach (var x in source) { }"));
+        Assert.Equal(0, CountDirectObservableAwaitsIn("await using var scope = Open();"));
+
+        // Prose and string literals quoting the shape — every remark in this repo does that, and a
+        // matcher that counted them would ratchet against its own documentation.
+        Assert.Equal(0, CountDirectObservableAwaitsIn(
+            "// await source.Take(1).Timeout(Deadline) is the defect this file is about."));
+        Assert.Equal(0, CountDirectObservableAwaitsIn(
+            "var doc = \"await source.Take(1).Timeout(Deadline)\";"));
+
+        // Non-vacuity against the REAL tree: the ratcheted roots must actually yield sites, or the
+        // ratchet above is passing on an empty scan.
+        var root = SourceScan.FindRepoRoot();
+        Assert.True(ScanDirectAwaits(root, DirectAwaitRatchetedRoots).Count > 0,
+            "The direct-await scanner found NO site anywhere under "
+            + string.Join(", ", DirectAwaitRatchetedRoots) + ". Either the sweep finished — in "
+            + "which case move those roots into DirectAwaitZeroRoots, empty "
+            + DirectAwaitAllowFileName + " and delete this assertion — or the scanner is broken, "
+            + "which would make the ratchet pass on no evidence.");
+    }
+
     /// <summary>
     /// Blocking bridges in production code: <c>.Wait()</c> and <c>.GetAwaiter().GetResult()</c>.
     ///
@@ -779,6 +1050,146 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
             .Where(x => x.Count > 0)
             .Where(x => !ExemptPinningFiles.Contains(x.Relative, StringComparer.Ordinal))
             .ToDictionary(x => x.Relative, x => x.Count, StringComparer.Ordinal);
+
+    private static Dictionary<string, int> ScanDirectAwaits(string root, IEnumerable<string> roots) =>
+        SourceScan.SourceFiles(root, roots)
+            .Select(f => (Relative: SourceScan.Relative(root, f),
+                          Count: ReadOrEmpty(f) is { } t ? CountDirectObservableAwaitsIn(t) : 0))
+            .Where(x => x.Count > 0)
+            .Where(x => !ExemptPinningFiles.Contains(x.Relative, StringComparer.Ordinal))
+            .ToDictionary(x => x.Relative, x => x.Count, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Counts <c>await</c>s whose expression's TAIL names an Rx operator — i.e. the compiler
+    /// synthesized Rx's <c>AsyncSubject</c> awaiter for it.
+    ///
+    /// <para>Statement-aware rather than line-aware, which is the whole difference between this and
+    /// a grep. The awaited expression runs from the keyword until a <c>;</c>, a <c>,</c> or a
+    /// closing bracket AT ITS OWN DEPTH — so a chain spread over four lines is one expression, and
+    /// the NEXT argument in a call is not part of this one. A <c>&lt;…&gt;</c> that follows an
+    /// identifier and contains only what a generic argument list may contain is absorbed whole, so
+    /// its commas do not end the expression; without that,
+    /// <c>await source.Select&lt;TIn, TOut&gt;(f).Await(ct)</c> truncates to a tail of
+    /// <c>Select</c> and an already-converted site reads as an offender.</para>
+    /// </summary>
+    internal static int CountDirectObservableAwaitsIn(string source)
+    {
+        var code = SourceScan.MaskCommentsAndStrings(source);
+        var count = 0;
+
+        foreach (Match keyword in AwaitKeyword.Matches(code))
+        {
+            var after = keyword.Index + keyword.Length;
+            if (AwaitStatementForm.IsMatch(code[after..Math.Min(code.Length, after + 12)]))
+                continue;
+
+            if (TailMemberOf(AwaitedExpression(code, after)) is { } tail
+                && ObservableTails.Contains(tail))
+                count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>The awaited expression, brackets balanced and generic argument lists absorbed.</summary>
+    private static string AwaitedExpression(string code, int start)
+    {
+        var depth = 0;
+        var i = start;
+
+        while (i < code.Length)
+        {
+            var c = code[i];
+
+            if (c is '(' or '[' or '{') { depth++; i++; continue; }
+
+            if (c is ')' or ']' or '}')
+            {
+                if (depth == 0) break;
+                depth--;
+                i++;
+                continue;
+            }
+
+            if (c == ';')
+            {
+                if (depth == 0) break;
+                i++;
+                continue;
+            }
+
+            if (c == ',' && depth == 0) break;
+
+            if (c == '<' && depth == 0 && i > start && IsIdentifierChar(code[i - 1])
+                && SkipGenericArguments(code, i) is { } past)
+            {
+                i = past;
+                continue;
+            }
+
+            i++;
+        }
+
+        return code[start..i];
+    }
+
+    /// <summary>
+    /// The LAST member accessed at the expression's own depth — its tail. Null when the expression
+    /// ends in something that is not a member access (a bare identifier, a constructor call).
+    /// </summary>
+    private static string? TailMemberOf(string expression)
+    {
+        var depth = 0;
+        string? tail = null;
+
+        for (var i = 0; i < expression.Length; i++)
+        {
+            var c = expression[i];
+
+            if (c is '(' or '[' or '{') depth++;
+            else if (c is ')' or ']' or '}') depth--;
+            else if (c == '<' && depth == 0 && i > 0 && IsIdentifierChar(expression[i - 1])
+                     && SkipGenericArguments(expression, i) is { } past)
+                i = past - 1;
+            else if (c == '.' && depth == 0)
+            {
+                var j = i + 1;
+                while (j < expression.Length && char.IsWhiteSpace(expression[j])) j++;
+                var from = j;
+                while (j < expression.Length && IsIdentifierChar(expression[j])) j++;
+                if (j > from) tail = expression[from..j];
+            }
+        }
+
+        return tail;
+    }
+
+    /// <summary>
+    /// The index just past the <c>&gt;</c> closing a generic argument list opened at
+    /// <paramref name="open"/>, or null when this <c>&lt;</c> is a comparison. Discriminated by
+    /// CONTENT: only what may appear between the angle brackets of a type argument list is
+    /// accepted, so <c>if (a &lt; b &amp;&amp; c &gt; d)</c> is rejected on the <c>&amp;</c>.
+    /// </summary>
+    private static int? SkipGenericArguments(string code, int open)
+    {
+        var depth = 1;
+
+        for (var i = open + 1; i < code.Length; i++)
+        {
+            var c = code[i];
+            if (c == '<') depth++;
+            else if (c == '>')
+            {
+                if (--depth == 0) return i + 1;
+            }
+            else if (!(IsIdentifierChar(c) || c is '.' or ',' or ' ' or '?' or '[' or ']'))
+                return null;
+        }
+
+        return null;
+    }
+
+    private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
     private static Dictionary<string, int> ScanBlocking(string root, IEnumerable<string> roots) =>
         SourceScan.SourceFiles(root, roots)
@@ -951,6 +1362,16 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
                 $"{relative} is exempted from this guard but no longer contains the shape it exists "
                 + "to demonstrate. Either it was rewritten (delete the exemption) or the scanner "
                 + "broke (fix that first — every count in the allow file depends on it).");
+
+            // 🚨 The exemption covers the DIRECT-await scan too, so it must still pin that shape as
+            // well. This is the half that matters most: the whole point of the pinning test is that
+            // `await source.FirstAsync()` is NOT a lighter alternative to the bridge, and an
+            // exemption that outlived that demonstration would be a hole in the newer rule.
+            Assert.True(CountDirectObservableAwaitsIn(File.ReadAllText(path)) > 0,
+                $"{relative} is exempted from the direct-await scan but no longer awaits an "
+                + "observable directly — the very shape it exists to measure. Either it was "
+                + "rewritten (delete the exemption) or the direct-await matcher broke, which would "
+                + "make NoProductionCodeAwaitsAnObservableDirectly pass on no evidence.");
         }
     }
 

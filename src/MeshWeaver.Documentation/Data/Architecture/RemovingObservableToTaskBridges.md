@@ -205,6 +205,92 @@ reads to catch one bridge. `.GetAwaiter().GetResult()` is unambiguous and *is* m
 legitimate form (`IoPool`'s sanctioned `SemaphoreSlim` gate, `HubDisposalJoin`'s deliberate
 `Task.Wait(TimeSpan)`).
 
+### 🚨🚨🚨 The lesson a third time: the bridge with NOTHING to spell
+
+Measured **2026-09-18**, and it is the same lesson one level further down. Everything above hunts a
+bridge that *exists in source* — Rx's `.ToTask(`, or a `TaskCompletionSource` somebody typed.
+**`await source` has nothing to find.** The compiler binds Rx's `GetAwaiter()` extension, which
+builds the `AsyncSubject<T>` bridge for you; the defect is synthesized, not written.
+
+The site was `src/MeshWeaver.Testing.InMesh/MeshTestContext.cs`:
+
+```csharp
+/// <summary>Awaits an observable's first value under the case deadline (Rx's own awaiter — no task bridge).</summary>
+public async Task<T> First<T>(IObservable<T> source) =>
+    await source.Take(1).Timeout(Deadline);
+```
+
+**The doc comment was half the defect.** It offered *"Rx's own awaiter — no task bridge"* as the
+**safety property** — the exact belief section 0 above exists to refute, restated as an assurance at
+a site. And this is the *in-mesh* harness: a `[MeshFact]` case executes at runtime **inside the
+portal**, not in a CI test host, so the thread that signals is a hub's action block or a grain's turn
+scheduler and the remainder of every case that called `First` continued on it.
+
+**Every instrument this repo owns was green, each for its own independent reason:**
+
+| Instrument | Why it saw nothing |
+|---|---|
+| `ObservableToTaskBridgeGuard`, `.ToTask(` marker | Not one character of it. |
+| the same guard's structural detectors | No `TaskCompletionSource` is constructed — the compiler builds one. |
+| `HubReachableAsyncGuard.NoNewAwaitOfAMeshRead` | It counts an `await` only when the awaited expression **names** a mesh entry point. This helper takes the observable as a **parameter**: the mesh call sits at the caller, which does not await. Invisible *by construction*, not by omission. |
+| `BlockingBridgeInTestRatchetGuard` | Scans `test/` only; this is `src/`. And there is no `.Wait()`/`.Result` in it. |
+| `GuidanceBridgeRatchetGuard` | Scans guidance for `.ToTask(` in C# fences. The guidance here said the *opposite* — see below. |
+
+**And the sweep that was run to look for it was keyed on a REDUCER** (`await …FirstAsync()`) and
+reported **zero for core**. That is a second, independent miss: this statement has no reducer in tail
+position at all; it ends in `.Take(1).Timeout(…)`. A parallel sweep of MeshWeaver.Plugins made the
+mirror-image mistake from the other side — of 24 raw line-grep matches, **16 were false positives**
+(the sanctioned bridge sat on the *next line*) and **4 real sites were missed** because the `await`
+and the reducer were on different lines. A statement-aware scan found **52 sites in 14 files** there,
+2 of them in product assemblies that the reducer-keyed scan had reported as zero.
+
+#### What the instrument has to do instead
+
+Read the **tail** of the awaited **statement**, not a marker on a line:
+
+1. **Mask comments *and* string literals** — every remark in this repo quotes the banned shape.
+2. **Walk balanced brackets** from the `await` keyword, so a chain spread over four lines is ONE
+   expression. It ends at a `;`, a `,` or a closing bracket **at its own depth** — the comma matters,
+   or `Foo(await ThingAsync(), other.Take(1))` reads `other`'s tail as this await's.
+3. 🚨 **Absorb a generic argument list whole**, so its commas do not truncate the expression. Without
+   this, `await source.Select<TIn, TOut>(f).Await(ct)` — *already converted* — truncates to a tail of
+   `Select` and reports as an offender. The Plugins sweep hit exactly that.
+4. **Match the tail against a named list of Rx operators** — a whitelist, because `await X` compiles
+   for a `Task` too and nothing textual separates them in general. That trades false negatives (safe:
+   a site is missed) for zero false positives (fatal: *a rule that reds on legitimate code gets
+   suppressed, and a suppressed rule is worse than no rule*). The LINQ-shaped names are safe to list
+   because an `IEnumerable<T>` is not awaitable — if it compiled under an `await`, it was Rx. The
+   names deliberately absent are the ones a **Task**-returning member also carries, `Delay` above all.
+
+`ObservableToTaskBridgeGuard.NoProductionCodeAwaitsAnObservableDirectly` is that scan, held at
+**zero** over `src/`, `tools/`, `samples/` and `clients/`.
+
+#### The guidance was self-contradicting, and the defect quotes the losing half
+
+This is why the shape spread. Until 2026-09-18 **four** places prescribed it —
+
+> Await the observable directly with a `.Timeout(...)`.  — `AGENTS.md`
+>
+> `// ✅ await the observable DIRECTLY (Rx's own awaiter), bounded so a hang is a failure`  — `/async` skill
+>
+> Await the observable directly with a `.Timeout(...)` — see …  — `/testing` skill
+>
+> Await the observable directly (`await …FirstAsync().Timeout(…)`)  — [Asynchronous Calls](../AsynchronousCalls)
+
+— while **four others** (this page's section 0, [Writing Tests](../WritingTests),
+[Reactive Test Assertions](../ReactiveTestAssertions), [Script Execution](../ScriptExecution)) said
+the exact opposite and correctly. Both halves were written after the same ruling. All four of the
+first group are corrected in the change that adds this section; **a wrong sentence in guidance is how
+a shape propagates faster than a sweep removes it**, and `MeshTestContext`'s doc comment is that
+sentence arriving at a site as an assurance.
+
+The inventory it produced is `test/DirectObservableAwaitSites.allow` — **228 sites in 67 files**
+(223 in `test/`, 5 in one `memex/` ASP.NET controller), seeded and shrink-only. Note the `memex/`
+row disagrees with `AwaitedMeshReadSites.allow`, which budgets the same file at **1**: that guard
+keys on a mesh entry point named in the expression, and four of the five name none — one of them
+because the marker is `.Query(` and the call is `.Query<MeshNode>(`. **The two counts disagreeing IS
+the instrument gap**, not a mistake in either file.
+
 ## The ratchet
 
 `ObservableToTaskBridgeGuard` (in `test/MeshWeaver.Documentation.Test`) enforces this with rules of
@@ -217,6 +303,8 @@ legitimate form (`IoPool`'s sanctioned `SemaphoreSlim` gate, `HubDisposalJoin`'s
 | `.ToTask(` | production | **ZERO**, no allow file. Rx's own bridge is never the safe form, so it is never registrable. |
 | `.ToTask(` | `test/` | Seeded inventory, may only **shrink**. `memex/` left this row when its sweep reached zero (#2764) and is now a production root — checked there by all three detectors, not just the marker that emptied it. |
 | `.Wait()` / `.GetAwaiter().GetResult()` | production | Seeded inventory, may only **shrink** (see below). |
+| `await <an observable>` (no bridge in source at all) | `src/`, `tools/`, `samples/`, `clients/` | **ZERO**, no allow file. Reached zero on 2026-09-18 when `MeshTestContext.First`, the last one, was fixed. |
+| `await <an observable>` | `memex/`, `test/` | Seeded inventory of 228, may only **shrink** — `DirectObservableAwaitSites.allow`. Guidance asked for these; see above. |
 
 **`SanctionedBridges` is a register, not an allow file.** An allow file lists sites you tolerate and
 grows by appending a line. Every entry here is machine-checked to still **exist**, to still **contain

@@ -1,0 +1,134 @@
+# DirectObservableAwaitSites.allow — the ratchet for `await <an observable>`.
+#
+# Each line is a file that still awaits an observable DIRECTLY:
+#
+#     var node = await stream.Take(1).Timeout(TestTimeouts.Convergence);
+#
+# WHY THE SHAPE IS A DEFECT, and why it is the SAME defect as `.ToTask()` rather than the cure for
+# it. `await` on an IObservable<T> binds Rx's own GetAwaiter() extension, which builds an
+# AsyncSubject<T> and completes the continuation from inside OnCompleted — INLINE, on whichever
+# thread signalled, still inside Rx's trampoline. Everything the continuation then does inherits
+# that scheduler, and because `await` captures TaskScheduler.Current when there is no
+# SynchronizationContext, so does every LATER await in the same method. That is #2301 (a grain
+# teardown holding the scheduler its own deactivation needed) and #2377 (a query walk enqueued on a
+# trampoline that could only drain after the block waiting for it returned).
+# InlineResumptionMechanismTest MEASURES all of this rather than asserting it: the bridge and the
+# direct await resume on the producer; ObserveCompletion and Await do not.
+#
+# WHY THERE ARE 228 OF THEM — this inventory was ASKED FOR. Until 2026-09-18, AGENTS.md, the
+# /async skill, the /testing skill and Doc/Architecture/AsynchronousCalls all prescribed "await the
+# observable directly with a `.Timeout(...)`" as the way OFF `.ToTask()`, while
+# ReactiveTestAssertions, WritingTests, ScriptExecution and RemovingObservableToTaskBridges said the
+# exact opposite and correctly. The change that adds this file corrects the four. The sites they
+# produced may only shrink.
+#
+# WHAT THE GUARD SEES is a STATEMENT, not a line. The awaited expression runs from the keyword to a
+# `;`, a `,` or a closing bracket AT ITS OWN DEPTH, so a chain spread over four lines is one
+# expression; a `<…>` after an identifier is absorbed whole so its commas do not truncate it. The
+# rule then reads the expression's TAIL against ObservableTails. That list is LOAD-BEARING in the
+# same way HubReachableAsyncGuard.MeshOperations is: an Rx operator missing from it is a tail the
+# scan cannot name, and those sites are silently uncounted.
+#
+# THE FIX AT A SITE, in order of preference:
+#   1. Stay reactive — Subscribe(onNext, onError), or assert through MeshWeaver.Reactive.Assertions
+#      (`await x.Should().Within(TestTimeouts.Convergence).Emit("because")`), which bridges once,
+#      correctly, inside the assertion.
+#   2. `.Await(ct)` — MeshWeaver.Messaging.ObservableAwait. A faithful ToTask (LAST value, faults on
+#      an empty sequence); where the chain already reduces to one element, LAST is FIRST and nothing
+#      but the scheduling changes.
+#   3. `.ObserveCompletion(reportLateFault, ct)` — the same guarantee plus an error arm that stays
+#      attached, for a fault that lands after the wait settled. Never pass an empty lambda.
+#
+# THIS RATCHET MAY ONLY SHRINK. A new file, a raised count, or a raised total is a failure. Lower
+# ObservableToTaskBridgeGuard.DirectAwaitTotalBudget whenever you delete or lower an entry. A line
+# that has gone stale is REPORTED, not failed — two PRs shrinking concurrently would otherwise red
+# main on whichever merged second.
+#
+# Scope: memex/ and test/. src/, tools/, samples/ and clients/ are held at ZERO by
+# NoProductionCodeAwaitsAnObservableDirectly, with no allow file and no line to add — they reached
+# zero on 2026-09-18 when MeshWeaver.Testing.InMesh.MeshTestContext.First, the last one, was fixed.
+# test/MeshWeaver.Messaging.Hub.Test/InlineResumptionMechanismTest.cs is NOT listed: it is exempt,
+# because it is the file whose entire purpose is to exhibit the shape and measure it, and the
+# exemption is verified rather than trusted by TheExemptedPinningTestStillPinsTheShape.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# memex/ — 5 sites in one file, all in the DevLogin sign-in action. It is a genuine ASP.NET edge, so
+# a bridge belongs there; these are still counted because the bridge it uses is the WRONG one. Note
+# that AwaitedMeshReadSites.allow budgets this file at 1: that guard keys on a mesh entry point
+# NAMED in the awaited expression, and four of these five name none (`_onboarding.GrantPlatformAdmin`,
+# `_meshQuery.Query<MeshNode>` — the marker is `.Query(`, not `.Query<`). The two counts disagreeing
+# is the instrument gap, not a mistake in either file.
+
+memex/Memex.Portal.Shared/Authentication/DevAuthController.cs	5
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# test/ — 223 sites in 66 files. Every one is a suite waiting on the mesh, and the thread it
+# resumes on is the thread that then runs the rest of the test, its mesh teardown, and — under
+# xUnit — the runner starting the next class. That is why a bridge "only in a test" changes what
+# the test measures (#2301, #2377), and why the retracted test exemption was never safe.
+test/Memex.Portal.Shared.Test/InstallCompletenessTest.cs	2
+test/Memex.Portal.Shared.Test/PublishedModuleVersionShelfTest.cs	1
+test/Memex.Portal.Shared.Test/RegistryReconcileDeferralTest.cs	7
+test/Memex.Portal.Shared.Test/RegistryUpdateReconcilerTest.cs	8
+test/Memex.Portal.Shared.Test/SitemapDescentTest.cs	2
+test/Memex.Portal.Shared.Test/SitemapRootWindowTest.cs	1
+test/Memex.Portal.Shared.Test/UndeliveredModuleIsRecordedTest.cs	3
+test/MeshWeaver.Compiler.Pipeline.Test/EmitReferenceCaptureBoundaryTest.cs	8
+test/MeshWeaver.Compiler.Pipeline.Test/ShortWriteIsNotAPublicationTest.cs	4
+test/MeshWeaver.ContentCollections.Test/ContentSyncIsNeverBuiltWholeTest.cs	4
+test/MeshWeaver.ContentCollections.Test/OversizedContentTravelsOutOfBandTest.cs	6
+test/MeshWeaver.Data.Test/StreamLivenessIsConsumerReachableTest.cs	2
+test/MeshWeaver.Graph.Test/AFreshGrantIsVisibleToTheNextCheckTest.cs	2
+test/MeshWeaver.Graph.Test/AccessControlGrantByEmailTest.cs	10
+test/MeshWeaver.Graph.Test/ActivityWriteTrackerTest.cs	6
+test/MeshWeaver.Graph.Test/DenialTheStoreDisagreesWithSaysSoTest.cs	1
+test/MeshWeaver.Graph.Test/EventContinuationHandlerTest.cs	5
+test/MeshWeaver.Graph.Test/EventSubscriptionRunnerTest.cs	17
+test/MeshWeaver.Graph.Test/EventSubscriptionTypeRegistrationTest.cs	2
+test/MeshWeaver.Graph.Test/FailedImportIsNotRetriedAtTheSameFingerprintTest.cs	4
+test/MeshWeaver.Graph.Test/GroupBulkInviteTest.cs	10
+test/MeshWeaver.Graph.Test/NodeMenuOffersOnlyRenderableAreasTest.cs	1
+test/MeshWeaver.Graph.Test/NodePageLosesProvenanceTest.cs	2
+test/MeshWeaver.Graph.Test/NotificationDispatchIdentityLatchTest.cs	1
+test/MeshWeaver.Graph.Test/NotificationDispatchLocalizationTest.cs	3
+test/MeshWeaver.Graph.Test/NotificationDispatchTest.cs	8
+test/MeshWeaver.Graph.Test/PartitionNameRefusalTest.cs	2
+test/MeshWeaver.Graph.Test/PartitionRootStreamTest.cs	1
+test/MeshWeaver.Graph.Test/PresentationScreenMeshTest.cs	11
+test/MeshWeaver.Graph.Test/RefusedContentSyncIsVisibleTest.cs	3
+test/MeshWeaver.Graph.Test/RetiredSourceLeavesTheMeshTest.cs	4
+test/MeshWeaver.Graph.Test/ScopedImportMarkerTest.cs	3
+test/MeshWeaver.Graph.Test/SpaceInviteServiceTest.cs	4
+test/MeshWeaver.Graph.Test/StartupErrorNotifierTest.cs	2
+test/MeshWeaver.Graph.Test/StaticRepoImportActivityWriteCountTest.cs	10
+test/MeshWeaver.Graph.Test/TerminalActivityWriterReleaseTest.cs	5
+test/MeshWeaver.Hosting.Orleans.Test/OrleansDocumentationTest.cs	1
+test/MeshWeaver.Hosting.Orleans.Test/OrleansEventSubscriptionTimerTest.cs	4
+test/MeshWeaver.Hosting.Orleans.Test/OrleansGraphDataTest.cs	2
+test/MeshWeaver.Hosting.Orleans.Test/PodHubClaimLifetimeTest.cs	1
+test/MeshWeaver.Hosting.Test/CodeNodeRoundTripTests.cs	7
+test/MeshWeaver.Hosting.Test/FileSystemAssemblyStoreAtomicityTest.cs	2
+test/MeshWeaver.Hosting.Test/FileSystemChangeFeedTest.cs	4
+test/MeshWeaver.Hosting.Test/FileSystemVersionStoreAtomicityTest.cs	3
+test/MeshWeaver.Hosting.Test/InMemoryStorageAdapterChildIndexTest.cs	5
+test/MeshWeaver.Hosting.Test/IoPoolQueueWaitTest.cs	1
+test/MeshWeaver.Hosting.Test/RecycledHubRefusalTest.cs	1
+test/MeshWeaver.Hosting.Test/StorageAdapterWriteManyTests.cs	4
+test/MeshWeaver.Layout.Test/TornDownStreamCallSitesTest.cs	4
+test/MeshWeaver.Portal.E2E.Test/AgentFilesToolingTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/ChatAtAutocompleteTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/ChatClearSkillNewComposerTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/ChatComposerSafariFocusReproTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/ChatComposerStreamingFocusTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/ChatComposerSwitchSelectionTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/ChatDelegationTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/ChatSurvivesSubmitTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/ClaudeCodeHarnessExecutesTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/DefaultHarnessIsMeshWeaverTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/HarnessLoginCommandTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/PlatformAgentsVisibleInPickerTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/SidePanelChatMultiMessageTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/SidePanelChatSubmitWhileExecutingTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/SidePanelChatTenMessagesTest.cs	1
+test/MeshWeaver.Portal.E2E.Test/SkillCatalogDiscoverableTest.cs	1
+test/MeshWeaver.Testing.InMesh.Test/MeshTestRunnerTests.cs	3
