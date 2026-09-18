@@ -1069,6 +1069,7 @@
   "apiTokens.revokeFailed": "Das Token konnte nicht widerrufen werden.",
   "apiTokens.deleting": "Wird gelöscht",
   "apiTokens.deleted": "Token gelöscht",
+  "apiTokens.deleteAlreadyGone": "Nichts zu löschen — dieses Token war bereits entfernt:",
   "apiTokens.deleteFailed": "Das Token konnte nicht gelöscht werden.",
   "instances.intro": "Registrieren Sie eine eigene MeshWeaver-Installation und geben Sie ihr einen Instanzschlüssel. Der Schlüssel identifiziert die Installation — nicht Sie — und handelt daher nie mit Ihren Berechtigungen.",
   "instances.registerHeading": "Installation registrieren",
