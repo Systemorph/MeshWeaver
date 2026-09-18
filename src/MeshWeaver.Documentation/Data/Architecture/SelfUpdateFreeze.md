@@ -5,7 +5,8 @@ Description: >-
   The September 2026 self-update investigation, measured per instance. Four portals were not taking
   new platform builds for four different reasons — two deliberate pins awaiting an approval, two
   separate defects — and none of them the reason the policy nodes appear to state. Plus the separate,
-  four-hour break in the producing half, since resolved.
+  four-hour break in the producing half, and the availability read whose cost grew with the artifact
+  store until it timed out on every candidate — both since resolved.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M4.5 4.5l15 15"/></svg>
 ---
 
@@ -252,6 +253,67 @@ seal recovers and the newest tag clears on the first read. If the timeout surviv
 set, the cause is the denominator's size and not the candidate walk, and the remedy moves from "the
 seal" to "the store". Either way the next reading decides it, and the two do not look alike.
 
+### The prediction RAN, and it went the way that moves the remedy to the store
+
+The seal recovered at 10:15Z and `3.0.0-latest` moved at ~16:35Z. The timeout survived it. Measured on
+**memex.meshweaver.cloud**'s own `Admin/UpdatePolicy`, on two freshly sealed candidates, after the
+instance's policy was restored to `Continuous` / `3.0.0-ci*` at 18:17Z:
+
+| check | trigger | verdict |
+|---|---|---|
+| 18:45:36Z | `BuildCompletion` | `HOLDING 3.0.0-ci.8931 — the artifact catalogue for release 3.0.0-ci.8931 could not be read (the availability check did not answer within 60s)` |
+| 19:16:36Z | `BuildCompletion` | `HOLDING 3.0.0-ci.8932 — … could not be read (the availability check did not answer within 60s)` |
+
+Two consecutive checks, two candidates sealed minutes earlier, the same timeout. By the prediction's
+own test that is the **denominator**, not the candidate walk — and the cost was not theoretical: the
+public instance served `3.0.0-ci.8411` (`c84c6c05`, 2026-09-12), **1,198 commits behind `main`**, while
+CD sealed a fresh set every half hour and its `Promote: tag the full set` job stayed green. Eight Store
+NodeTypes sat at `compilationStatus: Error` there as a result, `Store/Catalog` and `Store/Order` among
+them, on the instance where subscriptions happen. Filed as
+[MeshWeaver#4742](https://github.com/Systemorph/MeshWeaver/issues/4742).
+
+**Fixed at the read, not at the bound.** `SealedBundleFloorCache` — a mesh-scoped singleton the
+availability gate and the roll selector share — remembers what each **source** directory
+(`<root>/<identity>/<source>`) declared, keyed by its path and its own write stamp. A tick still
+*lists* the root and each identity, so a new identity is always seen, a new source is always seen and
+a pruned one always drops out; what it no longer does is **open** the publication pointer and the
+completion sentinel of a source whose directory has not changed. The listings are one directory
+response each; the opens were the cost.
+
+🚨 **Why the SOURCE directory's stamp, and not the identity's.** The identity directory's stamp moves
+when a source is added or removed under it and **not** when a source is republished in place — and a
+republication in place is routine, not exotic: a satellite re-bakes into a platform identity that has
+not moved every day its own build runs. Keying on the identity would freeze a newly-added package
+*out* of the denominator for as long as that identity stayed newest, which **exempts** it from the gate
+(#3461) — the one direction that must never happen. The source directory's stamp moves on every
+publication path there is: in the generation layout a republish creates `<source>/<token>/` and
+rewrites `_current`, both entries of the source directory; in the flat layout it removes and rewrites
+`_complete` in the source directory itself.
+
+And the argument closes in the direction that matters: the stamp detects any change to the source
+directory's **entry set**, and a republication that ADDS a package necessarily adds an entry — a bundle
+file, or a whole generation directory. The only change it cannot see is a rewrite of `_complete` in
+place with no entry added, which can only re-word or SHRINK a declaration, i.e. can only make the gate
+hold.
+
+🚨 **Fail-closed otherwise, clause by clause**, because a cache that turned a hold into a roll would be
+far worse than the freeze it removed. A refusal — an absent root, an unfollowable publication pointer,
+an enumeration fault — is **never** remembered, so one transient share fault cannot latch into a
+permanent verdict. A source carrying **no seal** is never remembered either: a flat-layout republish
+unseals, rewrites and re-seals, and if all of that landed inside one stamp granule a mid-way reading
+would otherwise be remembered as "declares nothing". Nothing about the CANDIDATE is cached — the
+target's own publication, its marker, its surface and its module set are read fresh per candidate per
+tick, and only the denominator's *history*, the part #3441 made monotone on purpose, is remembered.
+Eviction happens **only after a successful, complete enumeration** and only for the root it covered, so
+a share that could not be read never evicts a reading it merely failed to reach — and memory therefore
+tracks the live store rather than every publication the process has ever seen.
+
+`SelfUpdate__AvailabilityAnswerBudget` is now a configuration key with the same 60 s fail-closed
+default, rendered by the portal ConfigMap. 🚨 **It is the secondary half and never the fix** — a knob
+for an instance whose share is genuinely slow, not a remedy for a read that grows. Widening a bound
+over an append-only store buys a longer freeze with the same ending, which is what the section below
+already said and is why it is worth repeating here.
+
 🚨 **Do not read this timeout as the thing standing between the control instance and a roll.** It is
 not, and the same node said so eight hours earlier: at 01:02Z it *did* answer, *did* select
 `3.0.0-ci.8886`, *did* hand it over — and still did not patch itself, because the candidate is newer
@@ -311,6 +373,29 @@ An append-only store, a monotone walk over all of it, and a fixed 60 s budget do
 particular build. They fail once the store is big enough, and then on every build after that.
 **Raising the budget is not the remedy** — it exists to convert a stall into an honest answer, and a
 bigger one buys a longer freeze with the same ending.
+
+🚨 **Count the OPERATIONS, not the local milliseconds.** On a developer SSD with a warm page cache a
+directory listing and a file open cost about the same — both are VFS hits — so a local stopwatch
+understates this fix by construction. What decides it on Azure Files is **round trips**, and those
+track file-system operations exactly, because the cifs client's metadata cache (`actimeo`, one second
+by default) has long expired between two checks minutes apart.
+
+Measured with three sources per identity, which is the fleet's shape (`meshweaver-content`, `plugins`,
+a satellite):
+
+| store | directory listings, per tick | publication opens, per tick — before | after, steady state |
+|---|---|---|---|
+| 50 identities | 51 | 300 | **0** |
+| 200 identities | 201 | 1,200 | **0** |
+| 800 identities | 801 | 4,800 | **0** |
+
+A "publication open" is one pointer probe plus one sentinel read — two file operations per source, and
+three or more SMB round trips each. At 800 identities that is **4,800 file operations removed from
+every tick**, and a few milliseconds of round trip apiece is how the old read reached sixty seconds.
+The listings remain, and they are the honest residual: the read is no longer flat, it is one directory
+response per identity. Removing that last linear term would need the publisher to advance a stamp on
+the identity directory itself (`publish-bake-bundles.sh`), which is the follow-up if the store grows
+another order of magnitude — not something to fold into a fix for a live freeze.
 
 ### The timeout hold reports itself on the wrong side
 
@@ -375,7 +460,7 @@ skipped. Neither conclusion tells you whether a set exists.
 | every instance | a bookkeeping write must never replace a record it could not materialize — refuse and log instead | **a code fix** |
 | memex, pearl | a newer tag than `pinnedImageTag` waits for an approval | **working as designed** — approve, or clear the pin deliberately |
 | every instance | `PreWarm__PrebuiltBundleRetention__Delete` | **an operations decision**, from a ledger line, after confirming the protected set covers every instance and every CI gate pinning an older platform build |
-| the availability gate | answer inside its budget over a store that only grows | **a code fix** — the denominator is monotone over an append-only store and does not need re-walking every tick |
+| the availability gate | answer inside its budget over a store that only grows | ✅ **done** — `SealedBundleFloorCache` (#4742) remembers each SOURCE publication's declaration, so a tick lists but no longer re-opens them; `SelfUpdate__AvailabilityAnswerBudget` is the secondary knob, never the fix |
 | a timeout hold | record `heldIndeterminate: true` | **a code fix**, one call site |
 | build, pearl | MeshWeaver#4093 — `SelfUpdate__RegistryValidationUrl` on the record, then a roll onto an image carrying `830c8c402` or later | **a config change and a roll** — NOT a code fix; the platform half merged 2026-09-12 |
 
