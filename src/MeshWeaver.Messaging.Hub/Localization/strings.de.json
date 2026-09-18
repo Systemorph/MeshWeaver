@@ -1356,6 +1356,7 @@
   "activity.validation.memberInvalid": "{members} ungültig: {error}",
   "activity.delete.notFound": "Kein Node unter dem Pfad: {path}",
   "activity.delete.notFoundAtPath": "Kein Node unter dem Pfad '{path}'",
+  "activity.delete.alreadyAbsent": "Unter '{path}' gibt es nichts zu löschen: Der Node war bereits entfernt.",
   "activity.delete.permissionDenied": "Löschberechtigung für '{path}' verweigert",
   "activity.delete.permissionUnestablished": "Die Löschberechtigung für '{path}' konnte nicht ermittelt werden: {detail}. Das ist ein Verfügbarkeitsproblem und KEINE Entscheidung über Ihre Zugriffsrechte — das Löschen wurde nicht geprüft und kann erneut versucht werden.",
   "activity.delete.readOnlyProvider": "'{path}' kann nicht gelöscht werden: Der Node wird vom schreibgeschützten Storage-Provider '{provider}' bereitgestellt. Es wurde nichts gelöscht.",
