@@ -33,7 +33,10 @@ public class ATransferredIssueIsNotLostTest
 {
     private const string Repo = "https://github.com/Systemorph/MeshWeaver";
 
-    [Fact(Timeout = 30_000)]
+    // No [Fact(Timeout = …)]: a per-method literal is what TestTimeoutLiteralRatchetGuard
+    // counts, and it may only go DOWN. This case runs against a stub and completes in
+    // milliseconds, so the project's own `methodTimeout` is the right bound for it.
+    [Fact]
     public async Task TheDefaultFindIssueState_DelegatesToGetIssue_SoNoImplementerIsObliged()
     {
         var stub = new OnlyGetIssueClient(new GitHubIssue
