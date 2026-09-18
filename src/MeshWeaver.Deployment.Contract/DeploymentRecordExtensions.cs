@@ -271,14 +271,24 @@ public static class DeploymentRecordExtensions
     /// <summary>Removes every volume.</summary>
     public static DeploymentContent ClearVolumes(this DeploymentContent d) => d with { Volumes = ImmutableList<VolumeClaim>.Empty };
 
-    /// <summary>Ingress class, TLS secret, annotations (merged) and cookie-based session affinity.</summary>
+    /// <summary>
+    /// Ingress class, TLS secret, the cert-manager ClusterIssuer, annotations (merged) and
+    /// cookie-based session affinity.
+    ///
+    /// <para><paramref name="clusterIssuer"/> is a DEFAULT that is already there: a new
+    /// <see cref="IngressSpec"/> starts at <see cref="IngressSpec.DefaultClusterIssuer"/>, so an
+    /// instance declared with a host and a TLS secret asks cert-manager for its certificate with no
+    /// further call. Pass it to name a different issuer, or
+    /// <see cref="IngressSpec.NoClusterIssuer"/> when the Secret is created by other means.</para>
+    /// </summary>
     public static DeploymentContent WithIngress(
         this DeploymentContent d,
         string? className = null,
         string? tlsSecret = null,
         IEnumerable<KeyValuePair<string, string>>? annotations = null,
         bool? sessionAffinity = null,
-        string? affinityCookie = null)
+        string? affinityCookie = null,
+        string? clusterIssuer = null)
     {
         var i = d.Ingress ?? new IngressSpec();
         var merged = i.Annotations;
@@ -296,6 +306,7 @@ public static class DeploymentRecordExtensions
             {
                 ClassName = className ?? i.ClassName,
                 TlsSecret = tlsSecret ?? i.TlsSecret,
+                ClusterIssuer = clusterIssuer ?? i.ClusterIssuer,
                 Annotations = merged,
                 SessionAffinity = affinity,
             },

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# A stand-in `curl` for the hosting-verify certificate tests: answers with the status in
+# $HOSTING_VERIFY_STUB_STATUS (default 000 = no answer, which is what a refused TLS handshake
+# looks like to the real curl) and writes $HOSTING_VERIFY_STUB_ERR to the -o/2> error file.
+set -u
+printf '%s' "${HOSTING_VERIFY_STUB_STATUS:-000}"
+[ -n "${HOSTING_VERIFY_STUB_ERR:-}" ] && printf '%s\n' "$HOSTING_VERIFY_STUB_ERR" >&2
+exit 0

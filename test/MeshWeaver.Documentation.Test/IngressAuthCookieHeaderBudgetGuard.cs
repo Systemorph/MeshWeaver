@@ -99,7 +99,7 @@ public class IngressAuthCookieHeaderBudgetGuard
             $"{IngressTemplate} declares no '{PortalResourceMarker}' — the resource this guard "
             + "exists to pin was renamed or removed, and the guard now covers nothing.");
 
-        var nextDocument = template.IndexOf("---", resource, StringComparison.Ordinal);
+        var nextDocument = NextDocumentSeparator(template, resource);
         Assert.True(nextDocument > resource,
             $"The '{PortalResourceMarker}' resource in {IngressTemplate} is not followed by a YAML "
             + "document separator, so this guard cannot tell where it ends — it would otherwise "
@@ -107,6 +107,63 @@ public class IngressAuthCookieHeaderBudgetGuard
 
         Assert.Contains(".Values.ingress.annotations", template[resource..nextDocument],
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 The end of the resource is the next YAML DOCUMENT SEPARATOR — a line that <i>is</i>
+    /// <c>---</c>, not any occurrence of three hyphens.
+    ///
+    /// <para>This was <c>IndexOf("---")</c>, which matches inside a comment. The guard therefore
+    /// never once found a real separator: on <c>main</c> the first hit was the
+    /// <c># ---- Next.js React GUI</c> banner 610 characters in, which happens to sit AFTER
+    /// <c>.Values.ingress.annotations</c>, so the assertion passed by luck. Adding a
+    /// <c># ---- Which certificate …</c> banner inside the <c>annotations:</c> block — i.e. BEFORE
+    /// the reference — cut the slice to 202 characters ending at <c>annotations:\n    # </c>, and
+    /// the guard reported a value that was present as missing. A guard that passes by luck is not
+    /// a guard, and a false positive here costs an author a hunt for a defect that is not there.</para>
+    ///
+    /// <para><c>[^\S\n]</c> is whitespace other than a newline, so a CRLF line ending and any
+    /// trailing spaces are consumed before <c>$</c>; a trailing <c>#</c> comment on the separator
+    /// line is valid YAML and allowed. Four hyphens do NOT match, because the fourth is neither
+    /// whitespace nor end of line — which is exactly what makes a <c># ----</c> banner safe.</para>
+    /// </summary>
+    private static readonly Regex DocumentSeparator =
+        new(@"^---[^\S\n]*(?:#[^\n]*)?$", RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static int NextDocumentSeparator(string template, int from)
+    {
+        var match = DocumentSeparator.Match(template, from);
+        return match.Success ? match.Index : -1;
+    }
+
+    /// <summary>
+    /// The control for <see cref="NextDocumentSeparator"/> — the predicate the guard above slices
+    /// with. Without it the slicing is only ever exercised on whatever the template happens to
+    /// contain today, which is precisely how the <c>IndexOf("---")</c> version passed for as long
+    /// as it did. A comment banner must not end the resource, and a real separator must.
+    /// </summary>
+    [Fact]
+    public void TheDocumentSeparatorIsALine_NotAnyThreeHyphens()
+    {
+        // The shape that broke it: a banner whose dashes sit INSIDE a comment, before the value.
+        const string banner = "  annotations:\n    # ---- Which certificate ----\n    x: 1\n";
+        Assert.Equal(-1, NextDocumentSeparator(banner, 0));
+
+        // Four or more hyphens opening a line are still a banner, not a separator.
+        Assert.Equal(-1, NextDocumentSeparator("----\n", 0));
+        Assert.Equal(-1, NextDocumentSeparator("  --- indented\n", 0));
+
+        // A real separator is found, in each of its legal spellings. ("a: 1\n" is five characters,
+        // so the separator opens at index 5.)
+        Assert.Equal(5, NextDocumentSeparator("a: 1\n---\nb: 2\n", 0));
+        Assert.Equal(5, NextDocumentSeparator("a: 1\n---\r\nb: 2\n", 0));
+        Assert.Equal(5, NextDocumentSeparator("a: 1\n---   \nb: 2\n", 0));
+        Assert.Equal(5, NextDocumentSeparator("a: 1\n--- # the portal Ingress\nb: 2\n", 0));
+
+        // And the search honours its start offset, which is what confines the slice to ONE resource.
+        const string two = "---\nname: first\n---\nname: second\n";
+        Assert.Equal(0, NextDocumentSeparator(two, 0));
+        Assert.Equal(16, NextDocumentSeparator(two, 1));
     }
 
     private static string FindRepoRoot()

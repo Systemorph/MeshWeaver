@@ -113,6 +113,17 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "delete"]
+  # For hosting-tls, the step that gives a new instance its certificate. cert-manager's own
+  # controller does the issuing; the operator only declares the Certificate and reads it back to
+  # learn whether it went Ready. Measured 2026-09-15 on pearl, step 15/18 of its Provision:
+  #   certificates.cert-manager.io "pearl-tls" is forbidden: User
+  #   "system:serviceaccount:memex-ops:hosting-operator" cannot get resource "certificates"
+  # The run stopped there, so TLS and all three verification steps never ran and the host served
+  # another instance's certificate. No delete: a Certificate is owned by the release that renders
+  # the ingress, and removing one is not something a provisioning run may do.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
