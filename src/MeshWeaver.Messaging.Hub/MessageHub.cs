@@ -2015,6 +2015,22 @@ public sealed class MessageHub : IMessageHub
     /// <para>Same exclusions as the receiver side, because it is literally the same predicate: a
     /// heartbeat is routing liveness, and a response the router posts is the undeliverable-mail NACK
     /// — routing's own duty (see <see cref="RouterTrafficRule.RoleOf(string?, string?, object?, bool)"/>).</para>
+    ///
+    /// <para>🚨 <b>The remedy the line prints is ROLE-DEPENDENT, and printing one remedy for both
+    /// roles manufactured a misdiagnosis</b>
+    /// (<see href="https://github.com/Systemorph/MeshWeaver/issues/4697">#4697</see>). For
+    /// <c>sender</c> the call site below IS the thing to move, and there are THREE seams to move it
+    /// onto — not the two this line named until #4697 — which are not interchangeable:
+    /// <c>ReadIssuingHub()</c> registers no handlers by design, so a stream SUBSCRIPTION hopped
+    /// onto it stops reporting and stops receiving data in the same breath, the worst available
+    /// failure mode because the instrument goes quiet with the subject (#4614). For <c>target</c>
+    /// the delivery is a REPLY or a fan-out, addressed at <c>request.Subscriber</c> — which IS the
+    /// subscribe's sender — so nothing at the call site can be hopped and the hub to move is the
+    /// SUBSCRIBER. #4697 was auto-filed off this line and its "probable cause" repeated the printed
+    /// two-seam advice verbatim about a target-role fan-out, naming an innocent frame in
+    /// <c>JsonSynchronizationStream</c>; the real defect was one hub away and already fixed.
+    /// <c>RouterOriginAdviceNamesEverySeamGuard</c> holds the text to the seam vocabulary the two
+    /// <c>src/</c> ratchets read with.</para>
     /// </summary>
     /// <param name="delivery">The delivery just created by this post, or <c>null</c> if none was.</param>
     private void ReportRouterTrafficOrigin(IMessageDelivery? delivery)
@@ -2052,8 +2068,17 @@ public sealed class MessageHub : IMessageHub
         logger.LogError(
             "ROUTER_TRAFFIC ORIGIN: {MessageType} was POSTED with the mesh hub as {Role} (sender: "
             + "{Sender}, target: {Target}). The mesh hub is the ROUTER and must not be an end of a "
-            + "work delivery — hop off it with MeshExtensions.NodeOperationIssuingHub() (writes) or "
-            + "MeshExtensions.ReadIssuingHub() (reads) before posting. Reported once per role+type "
+            + "work delivery. If the role above is 'sender', hop off it before posting, onto the "
+            + "seam that matches what this delivery IS: MeshExtensions.NodeOperationIssuingHub() "
+            + "for a node LIFECYCLE write, MeshExtensions.ReadIssuingHub() for a bounded one-shot "
+            + "READ, MeshExtensions.StreamSubscribingHub() for a remote stream SUBSCRIPTION. The "
+            + "three are NOT interchangeable and the wrong one fails SILENTLY: ReadIssuingHub() "
+            + "registers no handlers by design, so a subscription hopped onto it stops reporting "
+            + "AND stops receiving data (#4614). If the role above is 'target', this delivery is a "
+            + "REPLY or a fan-out addressed at whoever asked — SubscribeAck, DataChangedEvent, "
+            + "StreamErrorEvent and StreamEndedEvent all go to request.Subscriber, which IS the "
+            + "subscribe's sender — so there is nothing to hop at the call site below: the hub to "
+            + "move is the one that SUBSCRIBED or REQUESTED (#4697). Reported once per role+type "
             + "for this hub. Call site:\n{CallSite}",
             messageType, role, delivery.Sender?.ToString() ?? "(none)",
             delivery.Target?.ToString() ?? "(none)", DescribeCallSite());

@@ -170,6 +170,28 @@ would receive it, and then queue every frame behind every write in the mesh (#29
 exists because a subscriber has to be a real, data-wired actor — the shape `MeshNodeStreamCache`'s
 own `cache/{meshId}` hub has had all along.
 
+🚨 **The ORIGIN line prints this table, and for one release it printed two thirds of it (#4697).**
+The third seam arrived with #4614; the two `src/` matchers in `RouterOriginScan` learned it and the
+runtime line did not, because nothing compared them. That is worse than stale text: the line is read
+by the incident bot as well as by people, so **#4697 was auto-filed off it and reproduced the
+two-seam advice verbatim as its own "probable cause"** — a wrong remedy manufactured into a
+production issue. Anyone who had followed it for a subscription would have hopped onto
+`ReadIssuingHub()` and lost the data *together with the reports*, the one failure mode a detector
+must never have. The seam vocabulary is now written **once**
+(`RouterOriginScan.SeamNames`), both matchers are built from it, and
+`RouterOriginAdviceNamesEverySeamGuard` reds until the printed advice names every seam registered
+there. What that does not buy is omniscience — a fourth seam nobody registers is invisible to all
+three.
+
+🚨 **And the remedy is ROLE-DEPENDENT: for `"target"` there is nothing at the call site to hop.**
+The line names the role it is reporting, and only the `"sender"` role means *this post is the one to
+move*. A `"target"` line is a REPLY or a fan-out addressed at whoever asked — `SubscribeAck`, every
+`DataChangedEvent`, `StreamErrorEvent` and the `StreamEndedEvent` announcement all go to
+`request.Subscriber`, which IS the subscribe's sender — so the frame it names is the innocent
+answering half, and the hub to move is the one that SUBSCRIBED or REQUESTED. #4697 named
+`JsonSynchronizationStream.cs:1588` for exactly this reason; the defect was one hub away, in
+`MeshOperations.RenderResolvedArea`, and #4622 had already fixed it.
+
 The hop is needed on the **sender**, not only on the target. `hub.NodeOperationTarget()` puts the
 request's destination off the router; it does nothing about where the request came FROM, and the
 `"sender"` role is reported on the request and the `"target"` role on its reply. `MeshService` hops
