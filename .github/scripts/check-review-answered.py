@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import datetime
 import json
 import os
 import re
@@ -174,16 +175,7 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
     by_id = {c.get("id"): c for c in comments}
 
     def root_of(c: dict) -> int | None:
-        seen = set()
-        while c.get("in_reply_to_id") is not None:
-            if c["id"] in seen:
-                return None
-            seen.add(c["id"])
-            parent = by_id.get(c["in_reply_to_id"])
-            if parent is None:
-                return c["in_reply_to_id"]
-            c = parent
-        return c.get("id")
+        return root_id_of(c, by_id)
 
     visible = [c for c in comments if not_after(c.get("created_at"), as_of)]
     roots = [c for c in visible if c.get("in_reply_to_id") is None and is_reviewer(c.get("user"))]
@@ -236,6 +228,125 @@ def waiting_would_help(verdict: Verdict) -> bool:
     return (not verdict.green
             and len(verdict.reasons) == 1
             and "has not landed" in verdict.reasons[0])
+
+
+UNANSWERED_REASON = "no reply from a person"
+
+
+def root_id_of(c: dict, by_id: dict) -> int | None:
+    """The id of the comment at the top of `c`'s thread. Cycle-safe (a malformed chain returns
+    None rather than spinning), and it returns the missing parent's id when the chain leaves the
+    listing — the ONE implementation, used by the answered-threads rule and by the settle
+    predicate, so the two can never disagree about what thread a reply belongs to."""
+    seen: set = set()
+    while c.get("in_reply_to_id") is not None:
+        if c["id"] in seen:
+            return None
+        seen.add(c["id"])
+        parent = by_id.get(c["in_reply_to_id"])
+        if parent is None:
+            return c["in_reply_to_id"]
+        c = parent
+    return c.get("id")
+
+
+def newest_person_reply(comments: list, as_of: str | None = None) -> str | None:
+    """The ISO-8601 stamp of the most recent reply by a person ON A THREAD THE AUTOMATIC REVIEWER
+    OPENED, or None if there is none.
+
+    🚨 All three qualifiers are load-bearing, and the third was a review finding on this very
+    change. A reply, not any comment: the reviewer's own root comments are the findings, and their
+    arrival is no evidence that anybody is answering. By a PERSON: the reviewer replying to itself
+    answers nothing. And on the REVIEWER'S thread: a conversation between two humans on some other
+    thread is not evidence that a finding is being answered, and counting it would let an unrelated
+    discussion hold the required check for the whole settle window while the finding sat untouched.
+    """
+    by_id = {c.get("id"): c for c in comments}
+    reviewer_roots = {c.get("id") for c in comments
+                      if c.get("in_reply_to_id") is None and is_reviewer(c.get("user"))}
+    stamps = [c.get("created_at") for c in comments
+              if c.get("in_reply_to_id") is not None
+              and is_person(c.get("user"))
+              and root_id_of(c, by_id) in reviewer_roots
+              and not_after(c.get("created_at"), as_of)]
+    stamps = [s for s in stamps if s]
+    return max(stamps) if stamps else None
+
+
+def replies_still_landing(verdict: Verdict, comments: list, settle_seconds: int,
+                          as_of: str | None = None, now: str | None = None) -> bool:
+    """True when the ONLY thing wrong is unanswered threads AND a person answered one moments ago —
+    i.e. this evaluation is a snapshot of a state somebody is still writing.
+
+    🚨 <b>WHY THIS WAIT EXISTS, and why it is not a bound raised to make a red go away</b>
+    (MeshWeaver#4299 follow-up; measured on #4649, 2026-09-17).
+
+    Answering N findings posts N separate `pull_request_review_comment` events, so a pull request
+    with seven findings fired this workflow eight times on ONE head sha and published eight
+    check-runs: six failures while replies were still being written, then two successes. That is not
+    a defect in the verdict — each of those reds was TRUE when it was taken — but the pull request
+    was then unmergeable, because GitHub's `statusCheckRollup` latched:
+
+        head 94fc73b4fdaa, measured 57 minutes after the last evaluation completed
+          rollup state: FAILURE
+          it carries 3 of the 8 `Automatic review answered` check-runs — 105349138004,
+          105356428131, 105356792897 — ALL FAILURES. Neither success (105356708655,
+          105356763402) appears in the rollup at all.
+
+    Eight runs, eight distinct check SUITES, and the rollup's selection is neither the newest, nor
+    the oldest, nor one-per-suite. So a later success on the same sha CANNOT be relied on to
+    displace an earlier failure, the rollup does not heal with time, and re-arming auto-merge does
+    not clear it. Only a new head does — which is why the remedy discovered under pressure that
+    night was an empty commit, and why that remedy is written down in
+    Doc/Architecture/ReviewFindingsAnswered rather than left to be rediscovered.
+
+    The durable fix therefore cannot be "make the last evaluation win" — we do not control the
+    rollup's choice. It has to be <b>make every evaluation on one sha agree</b>, and they disagree
+    for exactly one reason: the question is being asked while the answer is being typed. So the
+    evaluation waits for the answering to STOP and then judges once, which changes no verdict — an
+    unanswered thread that stays unanswered is still red when the wait ends, and the wait is bounded
+    and always ends in a verdict. Same shape, and the same justification, as `waiting_would_help`
+    above.
+
+    🚨 It waits ONLY while the unanswered threads are the whole complaint. An incomplete comment
+    listing or a review that never landed is not a state anybody is mid-way through fixing, and
+    delaying those would be the bound-raising this repository forbids.
+
+    <b>Why 60 seconds.</b> Measured over the three pull requests that answered a review that night —
+    #4649 (7 replies), #4656 (5) and #4646 (3) — every gap INSIDE an answering burst was 1–11 s
+    (#4649: 8, 10, 8, 10, 10, 9). The one long gap in the sample, 954 s on #4656, was a separate
+    later round of work rather than a pause in a burst, and deliberately falls outside this window:
+    that round gets its own evaluation, as it should. 60 s is ~5× the widest measured intra-burst
+    gap and keeps the job inside its 20-minute cap even stacked on the 15-minute review wait.
+
+    <b>It also collapses the burst, through the concurrency group already in the workflow.</b> The
+    eight runs above all executed because each finished in ~8 s, so the pending slot was free again
+    before the next event arrived. While one run holds the slot for the settle window, every further
+    arrival REPLACES the pending one — and a replaced run executes zero jobs, so it publishes NO
+    check-run at all and nothing of it can reach the rollup.
+    """
+    if settle_seconds <= 0 or verdict.green or not verdict.reasons:
+        return False
+    if any(UNANSWERED_REASON not in r for r in verdict.reasons):
+        return False
+    newest = newest_person_reply(comments, as_of)
+    if newest is None:
+        return False
+    age = reply_age_seconds(newest, now)
+    return age is not None and 0 <= age < settle_seconds
+
+
+def reply_age_seconds(stamp: str, now: str | None = None) -> float | None:
+    """Seconds between `stamp` and now (or `now`, for the self-test). None if either is unreadable —
+    an unreadable stamp must never be read as "settled", so the caller treats None as "do not wait"
+    and the verdict is published as it stands, which is the conservative direction."""
+    try:
+        then = datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")
+        current = (datetime.datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ") if now
+                   else datetime.datetime.now(datetime.UTC).replace(tzinfo=None))
+    except (ValueError, TypeError):
+        return None
+    return (current - then).total_seconds()
 
 
 def pr_from_queue_ref(ref: str) -> int:
@@ -346,11 +457,25 @@ def summary_markdown(number: int, verdict: Verdict) -> str:
 
 
 POLL_SECONDS = 30
+# The settle wait polls faster than the review wait because the thing it is waiting for is seconds
+# away, not minutes: the measured gap inside an answering burst is 1–11 s (see replies_still_landing).
+SETTLE_POLL_SECONDS = 10
+# …and it is capped at this many settle windows in total, so a person answering steadily for longer
+# than that is treated as a separate round of work rather than one very long burst. At the workflow's
+# 60 s window that is 3 minutes, which stacked on the 15-minute review wait stays inside the job's
+# 20-minute cap with room to spare.
+SETTLE_ROUNDS = 3
 
 
-def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0) -> int:
+def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0,
+        settle_seconds: int = 0) -> int:
     gh = Gh(repo)
     deadline = time.monotonic() + wait_minutes * 60
+    # The settle wait gets its OWN cap, so it can never be spent twice or chain behind the review
+    # wait into the job's 20-minute timeout: a person answering steadily for longer than this is a
+    # separate round of work and gets its own evaluation.
+    settle_deadline = time.monotonic() + max(settle_seconds, 0) * SETTLE_ROUNDS
+    settled_for = 0.0
     while True:
         try:
             pr, reviews, comments, waiver, author_role = read_inputs(gh, number, as_of)
@@ -359,13 +484,28 @@ def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0) -> int
             return 1
         verdict = evaluate(pr, reviews, comments, waiver, as_of)
         left = deadline - time.monotonic()
-        if not (waiting_would_help(verdict) and left > POLL_SECONDS):
-            break
-        print(f"  the automatic review has not landed yet; waiting up to {int(left)}s more for it "
-              f"(its own event cannot start a run here — see waiting_would_help)", flush=True)
-        time.sleep(POLL_SECONDS)
+        if waiting_would_help(verdict) and left > POLL_SECONDS:
+            print(f"  the automatic review has not landed yet; waiting up to {int(left)}s more for it "
+                  f"(its own event cannot start a run here — see waiting_would_help)", flush=True)
+            time.sleep(POLL_SECONDS)
+            continue
+        if replies_still_landing(verdict, comments, settle_seconds, as_of) \
+                and time.monotonic() < settle_deadline:
+            newest = newest_person_reply(comments, as_of)
+            age = reply_age_seconds(newest) or 0
+            print(f"  a person replied {int(age)}s ago and {len(verdict.unanswered)} thread(s) are "
+                  f"still unanswered — the answering is in progress, so this evaluation would be a "
+                  f"snapshot of a moving target. Waiting for {settle_seconds}s of quiet before "
+                  f"judging (see replies_still_landing).", flush=True)
+            time.sleep(SETTLE_POLL_SECONDS)
+            settled_for += SETTLE_POLL_SECONDS
+            continue
+        break
     if wait_minutes and waiting_would_help(verdict):
         print(f"  waited {wait_minutes} minute(s) for the automatic review and it did not land", flush=True)
+    if settled_for:
+        print(f"  waited {int(settled_for)}s for the replies to settle; judging the state as it now "
+              f"stands — the verdict below is not softened by that wait", flush=True)
     print(render(number, pr, verdict, author_role, as_of))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
@@ -521,6 +661,63 @@ def self_test() -> int:
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={'wait' if expect else 'no wait'} got={'wait' if got else 'no wait'}")
 
+    # replies_still_landing — wait ONLY while unanswered threads are the whole complaint and a
+    # person is visibly mid-answer. Every other red is published at once: delaying those would be
+    # the bound-raising this repository forbids, and a predicate that waited for them could hide a
+    # genuinely stuck pull request behind a timer.
+    NOW = "2026-09-17T19:48:00Z"
+    RECENT = "2026-09-17T19:47:55Z"     # 5 s ago — inside a burst (measured gaps are 1–11 s)
+    STALE = "2026-09-17T19:38:00Z"      # 10 min ago — nobody is answering now
+    for name, expect, pr_, reviews_, comments_, settle_ in [
+        ("wait: a thread is unanswered and a person replied 5s ago", True,
+         _pr(3), [_review()], [_comment(1), _comment(2), _comment(3, user=PERSON, reply_to=2, at=RECENT)], 60),
+        ("no wait: the last reply is 10 minutes old — nobody is answering", False,
+         _pr(3), [_review()], [_comment(1), _comment(2), _comment(3, user=PERSON, reply_to=2, at=STALE)], 60),
+        ("no wait: nobody has replied at all", False,
+         _pr(2), [_review()], [_comment(1), _comment(2)], 60),
+        ("no wait: already green", False,
+         _pr(2), [_review()], [_comment(1), _comment(2, user=PERSON, reply_to=1, at=RECENT)], 60),
+        # 🚨 The two that must NEVER wait, however busy the pull request looks.
+        ("no wait: the review never landed, recent reply or not", False,
+         _pr(3), [], [_comment(1), _comment(2), _comment(3, user=PERSON, reply_to=2, at=RECENT)], 60),
+        ("no wait: the comment listing was incomplete", False,
+         _pr(99), [_review()], [_comment(1), _comment(2), _comment(3, user=PERSON, reply_to=2, at=RECENT)], 60),
+        # The option off is the option off.
+        ("no wait: --settle-replies 0", False,
+         _pr(3), [_review()], [_comment(1), _comment(2), _comment(3, user=PERSON, reply_to=2, at=RECENT)], 0),
+        # A reviewer comment is not an answer — only a person's REPLY counts as activity.
+        ("no wait: the reviewer posted, not a person", False,
+         _pr(3), [_review()], [_comment(1), _comment(2), _comment(3, reply_to=2, at=RECENT)], 60),
+        # 🚨 …and the reply must be on a thread the REVIEWER opened. A busy conversation between two
+        # people on somebody else's thread is not somebody answering a finding, and counting it
+        # would hold the required check for the whole window while the finding sat untouched.
+        # (Review finding on this change.)
+        ("no wait: the recent reply is on a thread a PERSON opened, not the reviewer's", False,
+         _pr(4), [_review()],
+         [_comment(1), _comment(2, user=PERSON), _comment(3, user=PERSON, reply_to=2, at=RECENT),
+          _comment(4, user=PERSON, reply_to=3, at=RECENT)], 60),
+        # The positive twin, so the case above cannot pass by the predicate simply never waiting.
+        ("wait: the same reply, but on the REVIEWER's thread", True,
+         _pr(3), [_review()],
+         [_comment(1), _comment(2), _comment(3, user=PERSON, reply_to=1, at=RECENT)], 60),
+    ]:
+        got = replies_still_landing(evaluate(pr_, reviews_, comments_, NO_WAIVER), comments_, settle_, now=NOW)
+        ok = got == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={'wait' if expect else 'no wait'} got={'wait' if got else 'no wait'}")
+
+    # …and the age arithmetic itself, including the unreadable stamp that must NOT read as settled.
+    for name, stamp, expect in [
+        ("a stamp 5s old", RECENT, 5.0),
+        ("a stamp 10 min old", STALE, 600.0),
+        ("an unreadable stamp is None, never 'settled'", "not-a-date", None),
+        ("an empty stamp is None", "", None),
+    ]:
+        got = reply_age_seconds(stamp, now=NOW)
+        ok = got == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
+
     # the merge-queue ref → pull request number
     sha = "0123456789abcdef0123456789abcdef01234567"
     for name, ref, expect in [
@@ -553,6 +750,11 @@ def main(argv=None) -> int:
     ap.add_argument("--pr", help="pull request number")
     ap.add_argument("--merge-group-ref", help="a merge-queue head ref; the pull request number is read from it")
     ap.add_argument("--as-of", help="evaluate as of this ISO-8601 UTC instant (e.g. a merged_at)")
+    ap.add_argument("--settle-replies", type=int, default=0, metavar="SECONDS",
+                    help="while unanswered threads are the ONLY complaint and a person replied less "
+                         "than this long ago, wait for that many seconds of quiet before judging — so "
+                         "every evaluation on one head sha reads the same settled state and they "
+                         "cannot disagree (see replies_still_landing)")
     ap.add_argument("--wait-for-review", type=int, default=0, metavar="MINUTES",
                     help="while the ONLY thing missing is the reviewer's review, re-read for up to this "
                          "many minutes (its own event cannot start a run here — see waiting_would_help), "
@@ -581,13 +783,19 @@ def main(argv=None) -> int:
     if args.as_of and not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", args.as_of):
         print(f"::error::--as-of must be an ISO-8601 UTC instant like 2026-09-14T14:04:21Z, got {args.as_of!r}")
         return 2
+    if args.as_of and args.settle_replies:
+        print("::error::--as-of replays a past instant; --settle-replies waits for the present to stop moving. Pick one.")
+        return 2
+    if args.settle_replies < 0 or args.settle_replies > 300:
+        print(f"::error::--settle-replies must be between 0 and 300 seconds, got {args.settle_replies}")
+        return 2
     if args.as_of and args.wait_for_review:
         print("::error::--as-of replays a past instant; waiting for a review to arrive in it is meaningless")
         return 2
     if args.wait_for_review < 0 or args.wait_for_review > 30:
         print(f"::error::--wait-for-review must be between 0 and 30 minutes, got {args.wait_for_review}")
         return 2
-    return run(args.repo, number, args.as_of, args.wait_for_review)
+    return run(args.repo, number, args.as_of, args.wait_for_review, args.settle_replies)
 
 
 if __name__ == "__main__":
