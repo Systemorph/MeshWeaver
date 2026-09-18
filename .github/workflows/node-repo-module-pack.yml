@@ -1614,9 +1614,10 @@ jobs:
         run: |
           set -euo pipefail
           tar -C "$RUNNER_TEMP/platform-refs-artifact" -cf "$RUNNER_TEMP/platform-refs.tar" .
-          # The tar is deliberately UNCOMPRESSED (`-cf`, no `z`): its one entry,
-          # platform-refs.tar.gz, is already gzipped, so a second deflate pass buys nothing and
-          # costs upload minutes. The object store applies no compression of its own.
+          # The tar is deliberately UNCOMPRESSED (`-cf`, no `z`): the entry that carries the
+          # bytes, platform-refs.tar.gz, is already gzipped, so a second deflate pass buys nothing
+          # and costs upload minutes — and digest.txt beside it is a few dozen bytes. The object
+          # store applies no compression of its own.
           python3 "$ARTIFACT_STORE_PY" put --store "$ARTIFACT_STORE" \
             --key "$STORE_RUN_PREFIX/platform-refs.tar" --file "$RUNNER_TEMP/platform-refs.tar"
       # ───────── THE PLATFORM'S OWN VERSION — the denominator of the module FLOOR gate (#3554) ─────────

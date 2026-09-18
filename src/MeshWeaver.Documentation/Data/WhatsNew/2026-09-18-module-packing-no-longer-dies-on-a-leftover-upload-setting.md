@@ -38,5 +38,6 @@ The leftover setting is removed. The comment that travelled with it explained wh
 wanted; it now says that plainly, describing the archive the script actually creates, so the next
 person converting a step does not reintroduce the line it was justifying.
 
-The rest of the step is untouched: the archive is still uncompressed on purpose, because the single
-file inside it is already compressed and packing it again would cost upload time for nothing.
+The rest of the step is untouched: the archive is still uncompressed on purpose, because the entry
+carrying the assemblies is already compressed and packing it again would cost upload time for
+nothing. The small digest file stored beside it compresses to nothing either way.
