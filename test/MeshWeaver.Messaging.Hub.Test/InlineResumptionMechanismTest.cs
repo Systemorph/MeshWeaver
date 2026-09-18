@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
+using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
 
@@ -102,6 +103,48 @@ public class InlineResumptionMechanismTest
         var (signalling, resumed) = await Measure(async source => await source.FirstAsync());
 
         Assert.Equal(signalling, resumed);
+    }
+
+    /// <summary>
+    /// 🚨 THE SHAPE A REDUCER-KEYED SWEEP CANNOT SEE, measured on the same rig.
+    ///
+    /// <para>Everything above ends in a REDUCER — <c>await source.FirstAsync()</c> — and every
+    /// instrument this repo pointed at the defect keyed on one, so all of them reported zero for a
+    /// chain whose last operator is <c>.Take(1).Timeout(…)</c>. That is not a different mechanism:
+    /// the reducer is irrelevant, the awaiter is Rx's either way, and the continuation lands on the
+    /// producer either way. <c>MeshWeaver.Testing.InMesh.MeshTestContext.First</c> shipped exactly
+    /// this line — under a doc comment offering <i>"Rx's own awaiter — no task bridge"</i> as the
+    /// SAFETY property — and that assembly runs its cases INSIDE the portal, so the producer here
+    /// stands in for a hub's action block or a grain's turn scheduler.</para>
+    /// </summary>
+    [Fact]
+    public async Task AwaitingAChainWhoseTailIsAnOperator_AlsoResumesOnTheSignallingThread()
+    {
+        var (signalling, resumed) = await Measure(
+            async source => await source.Take(1).Timeout(TestTimeouts.Convergence));
+
+        // 🚨 Both halves. The equality alone would hold vacuously if the rig never ran — a pair of
+        // zeros is equal — so the thread ids are asserted to be real ones first.
+        Assert.NotEqual(0, signalling);
+        Assert.NotEqual(0, resumed);
+        Assert.Equal(signalling, resumed);
+    }
+
+    /// <summary>
+    /// The fix AT THAT SITE: the same chain, handed to the sanctioned bridge. <c>Await</c> is a
+    /// faithful <c>ToTask</c> — LAST value, faulting on an empty sequence — and the <c>Take(1)</c>
+    /// makes LAST and FIRST the same element, so only the continuation's scheduling changes.
+    /// </summary>
+    [Fact]
+    public async Task Await_DoesNotResumeOnTheSignallingThread()
+    {
+        var (signalling, resumed) = await Measure(
+            async source => await source.Take(1).Timeout(TestTimeouts.Convergence)
+                .Await(TestContext.Current.CancellationToken));
+
+        Assert.NotEqual(0, signalling);
+        Assert.NotEqual(0, resumed);
+        Assert.NotEqual(signalling, resumed);
     }
 
     /// <summary>
