@@ -323,6 +323,14 @@ defect neither causes nor would fix:
 If anything, the loop has been *over*-supplying images. What holds the portals is update policy and
 pins, and those are operational decisions, not this lane.
 
+**What is NOT established here**, said plainly: only `memex-cloud`'s instance-side
+`Admin/UpdatePolicy` was read directly. `pearl` and `build` have no MCP endpoint in reach, so their
+records' `updatePolicy: Continuous` is *intent* — and both records warn in as many words that the
+field alone changes nothing the instance does, because the operative setting is the instance's own
+node. `partnerre` reads `notScraped: true` with an empty replica list, so its live state is unknown
+rather than empty. None of that changes the finding — a fresher image cannot move an install that is
+not rolling — but it is three instances taken from their records rather than from themselves.
+
 ## See also
 
 - [The Image Tag Contract](/Doc/Architecture/ImageTagContract) — which tags the promotion publishes, and the one that
