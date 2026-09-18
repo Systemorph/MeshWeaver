@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -230,15 +230,18 @@ public static class ApiTokensSettingsTab
                         ctx.Host.UpdateData(resultDataId,
                             $"{host.Localize("apiTokens.deleting")} **{capturedForDelete.Label}**…");
 
-                        // Reactive: Subscribe to the service observable
-                        // (hub.Post + RegisterCallback under the hood). The
-                        // list re-renders automatically when the synced
-                        // query above sees the deletion.
-                        tokenService.DeleteToken(capturedForDelete.NodePath).Subscribe(
-                            _ => ctx.Host.UpdateData(resultDataId,
-                                $"{host.Localize("apiTokens.deleted")} **{capturedForDelete.Label}**"),
-                            ex => ctx.Host.UpdateData(resultDataId,
-                                $"{host.Localize("apiTokens.deleteFailed")} {ex.Message}"));
+                        // Reactive: subscribe to the factored-out observable, exactly as the
+                        // revoke button below does — Delete(...) folds the OnError path into an
+                        // emission so the test drives the SAME composition the UI subscribes to.
+                        //
+                        // 🚨 It is three-valued on purpose. DeleteToken emits what it REMOVED, not
+                        // that it ran (MeshWeaver#4668): `false` means the token was already gone —
+                        // the second admin on the same live list, or this row clicked twice.
+                        // Reporting that as "Deleted token" is the one claim this screen must not
+                        // make, because the row it names is one nobody here took away.
+                        Delete(tokenService, capturedForDelete.NodePath, capturedForDelete.Label)
+                            .Subscribe(outcome => ctx.Host.UpdateData(
+                                resultDataId, DeleteOutcomeMarkdown(host, outcome)));
                         return Task.CompletedTask;
                     }));
             }
@@ -305,4 +308,52 @@ public static class ApiTokensSettingsTab
             ? host.Localize("apiTokens.revokeFailed")
             : $"{host.Localize("apiTokens.revokeFailed")} {outcome.Message}";
     }
+
+    /// <summary>
+    /// What a delete did. Three-valued rather than the revoke path's pass/fail, because
+    /// <see cref="ApiTokenService.DeleteToken"/> reports what it REMOVED and "removed nothing" is
+    /// neither a success to announce nor a failure to apologise for — it is its own outcome, and
+    /// collapsing it into either of the other two is the whole defect this exists to prevent.
+    /// </summary>
+    internal enum TokenDeleteResult
+    {
+        /// <summary>The token was there and this click is what took it away.</summary>
+        Removed,
+
+        /// <summary>Nothing was there to remove — already deleted elsewhere, or this row clicked twice.</summary>
+        AlreadyGone,
+
+        /// <summary>The delete was refused or faulted; <see cref="TokenDeleteOutcome.Message"/> says why.</summary>
+        Failed,
+    }
+
+    /// <summary>Outcome of a token delete — surfaced to both the click handler and the test.</summary>
+    /// <param name="Result">Which of the three things happened.</param>
+    /// <param name="Label">The token's label, so the message renders without recapturing it.</param>
+    /// <param name="Message">The failure detail, when <see cref="TokenDeleteResult.Failed"/>.</param>
+    internal record TokenDeleteOutcome(TokenDeleteResult Result, string Label, string? Message = null);
+
+    /// <summary>
+    /// Factored-out delete pipeline — the single observable composition shared by the click handler
+    /// and the test, mirroring <see cref="Revoke"/>. Folds the OnError path into an emission so the
+    /// test never has to assert on observable termination semantics.
+    /// </summary>
+    internal static IObservable<TokenDeleteOutcome> Delete(
+        ApiTokenService tokenService, string nodePath, string label)
+        => tokenService.DeleteToken(nodePath)
+            .Select(removed => new TokenDeleteOutcome(
+                removed ? TokenDeleteResult.Removed : TokenDeleteResult.AlreadyGone, label))
+            .Catch<TokenDeleteOutcome, Exception>(ex =>
+                Observable.Return(new TokenDeleteOutcome(TokenDeleteResult.Failed, label, ex.Message)));
+
+    private static string DeleteOutcomeMarkdown(LayoutAreaHost host, TokenDeleteOutcome outcome)
+        => outcome.Result switch
+        {
+            TokenDeleteResult.Removed => $"{host.Localize("apiTokens.deleted")} **{outcome.Label}**",
+            TokenDeleteResult.AlreadyGone =>
+                $"{host.Localize("apiTokens.deleteAlreadyGone")} **{outcome.Label}**",
+            _ => string.IsNullOrEmpty(outcome.Message)
+                ? host.Localize("apiTokens.deleteFailed")
+                : $"{host.Localize("apiTokens.deleteFailed")} {outcome.Message}",
+        };
 }

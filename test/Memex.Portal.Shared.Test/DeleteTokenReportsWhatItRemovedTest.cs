@@ -1,5 +1,6 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using Memex.Portal.Shared.Authentication;
+using Memex.Portal.Shared.Settings;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh.Services;
@@ -80,5 +81,46 @@ public class DeleteTokenReportsWhatItRemovedTest(ITestOutputHelper output) : Mon
 
         removed.Should().BeFalse(
             "nothing was ever stored there, so nothing was removed");
+    }
+
+    /// <summary>
+    /// The value has to survive all the way to the screen, or the fix is invisible to the only
+    /// person it is for. <c>ApiTokensSettingsTab</c> subscribed with <c>_ =&gt; "Deleted token"</c>
+    /// and so announced a removal for a token that was already gone — the second admin on the same
+    /// live list, or the row clicked twice. These drive the SAME factored composition the click
+    /// handler subscribes to (as the revoke button's test already does), so a regression in the
+    /// handler cannot pass them.
+    /// </summary>
+    [Fact]
+    public async Task TheTabReportsARealRemovalAsRemoved()
+    {
+        var service = GetService();
+        var created = await service.CreateToken(
+            "delete-tab-user", "Tab User", "tab@example.com", "Tab").Should().Emit();
+
+        var outcome = await ApiTokensSettingsTab
+            .Delete(service, created.Node.Path, "Tab").Should().Emit();
+
+        outcome.Result.Should().Be(ApiTokensSettingsTab.TokenDeleteResult.Removed);
+        outcome.Label.Should().Be("Tab");
+    }
+
+    [Fact]
+    public async Task TheTabDoesNotAnnounceARemovalForATokenThatWasAlreadyGone()
+    {
+        var service = GetService();
+        var created = await service.CreateToken(
+            "delete-tab-twice", "Tab Twice", "tab-twice@example.com", "Twice").Should().Emit();
+
+        var first = await ApiTokensSettingsTab
+            .Delete(service, created.Node.Path, "Twice").Should().Emit();
+        var second = await ApiTokensSettingsTab
+            .Delete(service, created.Node.Path, "Twice").Should().Emit();
+
+        first.Result.Should().Be(ApiTokensSettingsTab.TokenDeleteResult.Removed);
+        second.Result.Should().Be(ApiTokensSettingsTab.TokenDeleteResult.AlreadyGone,
+            "nobody here took that token away, so the screen must not say it did — and "
+            + "AlreadyGone is not Failed either: nothing went wrong, there was simply nothing "
+            + "to do");
     }
 }
