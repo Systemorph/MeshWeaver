@@ -1711,6 +1711,59 @@ else
   bad "every kind the chart renders is writable by operator-rbac.yaml" "$ck_out"
 fi
 
+# ── hosting-db-release: DENIED and ABSENT are different answers (MeshWeaver#4722) ────────────────
+#
+# 🚨 The defect these pin. The platform-layer preflight reads two CLUSTER-SCOPED things — the CNPG
+# CRD and whether a `workload=db` node pool exists. The probes were written `2>/dev/null`, which
+# discards the reason, so a Forbidden (the operator's ClusterRole lacking the grant) came out as
+# "a node pool labelled workload=db" being MISSING: the operator announcing a platform layer is
+# ABSENT when it was merely NOT PERMITTED TO LOOK, sending the reader off to provision a pool that
+# already exists. Same shape as the `Not found` that closed #1391 and was re-filed as #3883.
+#
+# The grant exists now, so these do not guard today's cluster — they guard the FUTURE one. An RBAC
+# change that takes the permission away must make the script say "refused", never "absent".
+DBR_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/db-release" && pwd)"
+DBR_CHART="$(mktemp -d)"
+
+# <forbid> <absent> — run the command with the stub in front of PATH, in a subshell so the exported
+# knobs cannot leak into any later test.
+dbr() {
+  ( export PATH="$DBR_STUBS:$PATH" HOSTING_DB_CHART="$DBR_CHART" \
+           HOSTING_DB_STUB_FORBID="$1" HOSTING_DB_STUB_ABSENT="$2"
+    hosting-db-release --namespace pearl --release pearl-db --database pearl )
+}
+
+refuses_hard "a Forbidden on nodes is REFUSED, not an absent node pool" \
+  "REFUSED, not absent" dbr "nodes" ""
+refuses_hard "a Forbidden on the CNPG CRD is REFUSED, not an absent operator" \
+  "REFUSED, not absent" dbr "crd" ""
+refuses_hard "an EMPTY node list is still ABSENT — the discrimination cuts both ways" \
+  "lacks the database platform layer" dbr "" "nodes"
+refuses_hard "an absent CRD is still ABSENT" \
+  "lacks the database platform layer" dbr "" "crd"
+
+# 🚨 THE CONTROL THAT MATTERS, and the one the phrase checks above cannot make: a refusal must not
+# ALSO claim the layer is absent. Reporting both would restore the very confusion — the reader still
+# goes and provisions a node pool — while every "does it say REFUSED" assertion stayed green.
+_dbr_out="$(dbr "nodes" "" 2>&1)"
+case "$_dbr_out" in
+  *"lacks the database platform layer"*)
+    bad "a Forbidden never also claims the platform layer is absent" "it said BOTH: ${_dbr_out}" ;;
+  *"REFUSED, not absent"*)
+    ok  "a Forbidden never also claims the platform layer is absent" ;;
+  *)
+    bad "a Forbidden never also claims the platform layer is absent" "said neither: ${_dbr_out}" ;;
+esac
+
+# And the happy path reaches PAST the preflight — otherwise every assertion above would pass on a
+# command that refuses unconditionally, which is the "guard that checked nothing" shape.
+_dbr_ok="$(dbr "" "" 2>&1)"
+case "$_dbr_ok" in
+  *"REFUSED, not absent"*|*"lacks the database platform layer"*)
+    bad "a healthy platform layer passes the preflight" "it refused: ${_dbr_ok}" ;;
+  *) ok "a healthy platform layer passes the preflight" ;;
+esac
+
 # ── every kubectl verb+resource in bin/ is GRANTED by the operator's ClusterRole ─────────────────
 # The manifest lives three directories away from the scripts and is reviewed separately; twice a
 # script reached main without its grant (storageclasses for pv-resize — failed the first Reconcile

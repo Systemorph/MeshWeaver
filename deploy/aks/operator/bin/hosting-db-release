@@ -53,19 +53,65 @@ hosting::safe_name storage-class "$storage_class"
 [[ "$timeout" =~ ^[1-9][0-9]*$ ]] || hosting::die "timeout '${timeout}' is not a number of seconds"
 [ -d "$chart" ] || hosting::die "the database chart is not at ${chart} — this operator image predates deploy/helm-db; move the record's operator.image to one that ships it"
 
-# ── the platform layer: present, or refuse by name ───────────────────────────────────────────────
+# ── the platform layer: PRESENT, ABSENT, or REFUSED — three answers, never two ───────────────────
+#
+# 🚨 DENIED and ABSENT must never share a sentence. These probes used to read
+#     [ -n "$(kubectl get nodes -l workload=db -o name 2>/dev/null)" ] || missing+=(…)
+# and `2>/dev/null` discards the reason: a Forbidden — this operator's ClusterRole lacking the
+# grant — came out as "a node pool labelled workload=db" being MISSING. That is the operator
+# announcing a platform layer is ABSENT when it was merely not permitted to LOOK, and it sends the
+# reader off to provision a node pool that already exists.
+#
+# It is the denied-vs-deleted confusion that closed MeshWeaver#1391 on a `Not found` and had the
+# identical defect re-filed unchanged as #3883 four weeks later; here it is in an operator's own
+# diagnostics, the one output a reader is supposed to trust. See MeshWeaver#4722.
+#
+# The grant exists today (deploy/aks/manifests/hosting-operator/operator-rbac.yaml grants nodes and
+# customresourcedefinitions get+list). This discrimination stays anyway: a future RBAC change can
+# take the permission away again, and the script must not silently regress to lying when it does.
+#
+#   probe <any|output> <what> <cmd…>
+#     0 = present · 1 = absent (missing[]) · 2 = refused (refused[])
+#   `output` additionally requires non-empty stdout — `kubectl get nodes -l …` exits 0 and prints
+#   nothing when the selector matches no node, which is an ABSENCE, not a failure.
 missing=()
-kubectl get crd clusters.postgresql.cnpg.io >/dev/null 2>&1 \
-  || missing+=("the CloudNativePG operator (CRD clusters.postgresql.cnpg.io)")
-kubectl get storageclass "$storage_class" >/dev/null 2>&1 \
-  || missing+=("the StorageClass ${storage_class}")
-[ -n "$(kubectl get nodes -l workload=db -o name 2>/dev/null)" ] \
-  || missing+=("a node pool labelled workload=db (the db pool)")
+refused=()
+probe() {
+  local need="$1" what="$2"; shift 2
+  local out rc err errfile
+  errfile="$(mktemp)"
+  out="$("$@" 2>"$errfile")"; rc=$?
+  err="$(head -1 "$errfile")"; rm -f "$errfile"
+  if [ "$rc" -ne 0 ]; then
+    case "$err" in
+      *Forbidden*|*forbidden*) refused+=("${what} — ${err}"); return 2 ;;
+      *)                       missing+=("$what");            return 1 ;;
+    esac
+  fi
+  if [ "$need" = output ] && [ -z "$out" ]; then missing+=("$what"); return 1; fi
+  return 0
+}
+
+probe any    "the CloudNativePG operator (CRD clusters.postgresql.cnpg.io)" kubectl get crd clusters.postgresql.cnpg.io
+probe any    "the StorageClass ${storage_class}"                            kubectl get storageclass "$storage_class"
+probe output "a node pool labelled workload=db (the db pool)"               kubectl get nodes -l workload=db -o name
+
+# REFUSED is reported FIRST and on its own. When a probe could not run, NOTHING is known about the
+# platform layer — so reporting "absent" alongside it would be a guess wearing a measurement's
+# clothes, which is the whole defect this block exists to prevent.
+if [ "${#refused[@]}" -gt 0 ]; then
+  hosting::die "REFUSED, not absent: this operator's ClusterRole does not permit reading the cluster-scoped facts this step checks, so whether the database platform layer exists is UNKNOWN — nothing was created, and nothing was ruled out. Grant it in MeshWeaver deploy/aks/manifests/hosting-operator/operator-rbac.yaml (nodes and customresourcedefinitions, get+list); it reaches the cluster through Systemorph/Memex's helm-release lane, never from this Job. Refused: $(IFS=';'; echo "${refused[*]}")"
+fi
 if [ "${#missing[@]}" -gt 0 ]; then
   hosting::die "this cluster lacks the database platform layer: $(IFS=';'; echo "${missing[*]}"). Nothing was created. Install it once (MeshWeaver deploy/aks/manifests/db-platform/README.md — on the Systemorph estate through the approved lane) and re-request the action; the plan is idempotent from the top."
 fi
 
-zones="$(kubectl get nodes -l workload=db -o jsonpath='{range .items[*]}{.metadata.labels.topology\.kubernetes\.io/zone}{"\n"}{end}' 2>/dev/null | sort -u | grep -c . || true)"
+# Reached only when the nodes probe SUCCEEDED, so the permission is proven here. A failure is
+# therefore genuinely unexpected and is named, never silently counted as zero zones — zero would
+# refuse the step below with a sentence about the pool's shape that nobody measured.
+zones_raw="$(kubectl get nodes -l workload=db -o jsonpath='{range .items[*]}{.metadata.labels.topology\.kubernetes\.io/zone}{"\n"}{end}' 2>&1)" \
+  || hosting::die "reading the db pool's zones failed although listing its nodes had just succeeded: ${zones_raw%%$'\n'*}"
+zones="$(printf '%s\n' "$zones_raw" | sort -u | grep -c . || true)"
 if [ "${zones:-0}" -lt "$instances" ]; then
   hosting::die "the db pool spans ${zones:-0} zone(s) but the database asks for ${instances} instances, each in its own zone — they could never all schedule. Add a zone to the pool or lower the record's instances."
 fi
