@@ -3583,10 +3583,18 @@ public static class MeshExtensions
                                         //     subtree's budget anonymously. Derived, never a second
                                         //     constant: equal budgets are what this issue is named
                                         //     after.
+                                        //     🚨 And a THIRD rung, for one read on an error path
+                                        //     only: a leg that reported an absence is confirmed
+                                        //     against the store of record before it is allowed to
+                                        //     refuse the subtree (#4680). It runs inside the leg's
+                                        //     own .Catch — past the leg bound — so it takes the
+                                        //     rung below it, derived the same way.
+                                        var legBudget = opts.Nest(budget);
+                                        var absenceProbeBudget = opts.Nest(legBudget);
                                         var preValidate = capturedRequest.Recursive
                                             ? PreValidateDescendantsObs(
                                                 issuingHub, path, collected.ToDelete, request.AccessContext,
-                                                budget, opts.Nest(budget), logger)
+                                                budget, legBudget, storage, absenceProbeBudget, logger)
                                             : Observable.Return<(string Path, string Error, NodeDeletionRejectionReason Reason)?>(null);
 
                                         return preValidate.SelectMany(failure =>
@@ -3701,7 +3709,7 @@ public static class MeshExtensions
                                                     meshHub, issuingHub, storage, path, collected.ToDelete,
                                                     capturedRequest, executionContext,
                                                     recentlyDeleted, logger, collectedMessages,
-                                                    deletedProgress, drainProgress)
+                                                    deletedProgress, drainProgress, absenceProbeBudget)
                                                 .Select(d => (IReadOnlyList<string>?)d))
                                             .TimeoutAtStage(budget, () =>
                                             {
@@ -4158,11 +4166,12 @@ public static class MeshExtensions
         ILogger logger,
         ImmutableList<LogMessage>.Builder collectedMessages,
         ImmutableList<string>.Builder deletedProgress,
-        IObserver<string> progress)
+        IObserver<string> progress,
+        TimeSpan absenceProbeBudget)
         => RunDeletePass(
             meshHub, issuingHub, storage, rootPath, plannedPaths, baseRequest, callerAccessContext,
             recentlyDeleted, logger, collectedMessages, deletedProgress, progress,
-            pass: 1, deletedSoFar: ImmutableList<string>.Empty);
+            absenceProbeBudget, pass: 1, deletedSoFar: ImmutableList<string>.Empty);
 
     private static IObservable<IReadOnlyList<string>> RunDeletePass(
         IMessageHub meshHub,
@@ -4177,6 +4186,7 @@ public static class MeshExtensions
         ImmutableList<LogMessage>.Builder collectedMessages,
         ImmutableList<string>.Builder deletedProgress,
         IObserver<string> progress,
+        TimeSpan absenceProbeBudget,
         int pass,
         ImmutableList<string> deletedSoFar)
     {
@@ -4194,7 +4204,8 @@ public static class MeshExtensions
 
         return FanOutDeleteSubtree(
                 meshHub, issuingHub, storage, rootPath, toDelete, baseRequest, callerAccessContext,
-                logger, collectedMessages, deletedProgress, progress, rootAlreadyDeleted: pass > 1)
+                logger, collectedMessages, deletedProgress, progress, absenceProbeBudget,
+                rootAlreadyDeleted: pass > 1)
             .Catch<IReadOnlyList<string>, Exception>(ex =>
             {
                 // Fold this pass's partial deletions into the accumulated total so
@@ -4266,7 +4277,7 @@ public static class MeshExtensions
                         return RunDeletePass(
                             meshHub, issuingHub, storage, rootPath, survivorSet, baseRequest,
                             callerAccessContext, recentlyDeleted, logger, collectedMessages,
-                            deletedProgress, progress, pass + 1, acc);
+                            deletedProgress, progress, absenceProbeBudget, pass + 1, acc);
                     });
             });
     }
@@ -4313,6 +4324,7 @@ public static class MeshExtensions
         ImmutableList<LogMessage>.Builder collectedMessages,
         ImmutableList<string>.Builder deletedProgress,
         IObserver<string> progress,
+        TimeSpan absenceProbeBudget,
         bool rootAlreadyDeleted = false)
     {
         // 🚨 Record each commit AS IT LANDS, not at the end. The caller bounds this whole fan-out
@@ -4429,12 +4441,61 @@ public static class MeshExtensions
                         {
                             if (resp.Log?.Messages is { Count: > 0 } msgs)
                                 lock (collectedMessages) collectedMessages.AddRange(msgs);
+                            // 🚨 THE SECOND COMMIT-SIDE SHAPE OF THE SAME RACE (review on #4696).
+                            // The `.Catch` below only sees the leaf whose hub is GONE, so the post
+                            // does not route. When the hub is still ACTIVATED the post routes fine
+                            // and the handler answers NothingToDelete() — Success=true,
+                            // AlreadyAbsent=true (#4668) — which lands HERE, in the success branch.
+                            // Returning the path would have `.Do(RecordDeleted)` count a removal
+                            // this cascade did not perform, which is exactly the truthfulness this
+                            // fix exists to keep: the operation must say what IT removed. Somebody
+                            // else removed this one, so emit nothing, identically to the
+                            // confirmed-gone arm below.
+                            if (resp.AlreadyAbsent)
+                                return Observable.Empty<string>();
                             return Observable.Return(path);
                         }
                         var failResp = delivery.Message as DeleteNodeResponse;
                         var reason = failResp?.Error ?? "Unknown error";
                         return Observable.Throw<string>(new InvalidOperationException(
                             $"Delete failed for '{path}': {reason}"));
+                    })
+                    // 🚨 THE LEAF VANISHED WHILE THE CASCADE WAS IN FLIGHT — #4680, the commit half
+                    // of the same fact the pre-flight now settles. The plan is a snapshot, so a
+                    // concurrent delete can remove one of its leaves at ANY point after it is taken;
+                    // the pre-flight's window is merely the first one. With no row at the address
+                    // and no activated hub to short-circuit on, this post does not ROUTE, and the
+                    // whole recursive delete failed — `[DeleteNode] not-found … partial-deleted=0`
+                    // — because one node the caller wanted gone was gone.
+                    //
+                    // Confirmed against the store of record, never off the routing sentence (see
+                    // ConfirmDescendantGone), and the leg then emits NOTHING: the path is not
+                    // recorded as removed, so the operation still SAYS what it removed — this
+                    // cascade removed nothing here, somebody else did. A leaf that is genuinely
+                    // present and merely unreachable still fails the commit exactly as before.
+                    //
+                    // 🚨 This cannot make a delete report success over a live node. "Drained" is
+                    // decided by DeleteSubtreeUntilDrained's own storage RE-ENUMERATION, which is
+                    // independent of every leg's verdict: a path that is still there comes back as
+                    // a survivor and is deleted in a follow-up pass, and a subtree that never
+                    // drains still fails loudly at MaxDeleteDrainPasses.
+                    .Catch<string, Exception>(ex =>
+                    {
+                        if (ex is not DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound })
+                            return Observable.Throw<string>(ex);
+                        return ConfirmDescendantGone(storage, path, absenceProbeBudget, logger)
+                            .SelectMany(gone =>
+                            {
+                                if (!gone)
+                                    return Observable.Throw<string>(ex);
+                                logger.LogInformation(
+                                    "[DeleteNode] cascade leaf already gone {Path} — removed by "
+                                    + "another writer while the recursive delete of '{Root}' was in "
+                                    + "flight, so its postcondition already holds and this cascade "
+                                    + "reports it as removed by nobody",
+                                    path, rootPath);
+                                return Observable.Empty<string>();
+                            });
                     })
                     .Do(RecordDeleted);
             });
@@ -4465,6 +4526,63 @@ public static class MeshExtensions
     /// budget and then reports ITSELF, which ends the stage with that leaf named.</para>
     /// </summary>
     private const int PreValidateFanOutConcurrency = 64;
+
+    /// <summary>
+    /// 🚨 IS THIS PLANNED DESCENDANT ACTUALLY GONE? — the one reading that tells "already deleted"
+    /// apart from "present, and its hub will not answer" (#4680). Emits <c>true</c> ONLY when the
+    /// store of record says there is no row at <paramref name="path"/>.
+    ///
+    /// <para><b>Why the question exists.</b> A recursive delete plans its subtree by enumerating
+    /// storage ONCE, and every later stage — the bulk-atomic pre-flight, then the bottom-up commit
+    /// — addresses that snapshot. A concurrent delete that removes one of the planned leaves in
+    /// between leaves the operation holding a path that really is gone, and both stages then
+    /// refused the WHOLE subtree over a node that is already in exactly the state the caller asked
+    /// for. That is #4668's decision one level down: an absent node satisfies the delete's
+    /// postcondition for ITSELF.</para>
+    ///
+    /// <para>🚨 <b>The refusal's own wording cannot decide it</b>, which is why this takes a read.
+    /// The absence arrives in two vocabularies and both are ambiguous. While the leaf's per-node
+    /// hub is still activated, routing short-circuits on the hosted address, the request IS
+    /// delivered, and the handler answers <see cref="NodeDeletionRejectionReason.NodeNotFound"/> —
+    /// a verdict about what the handler could read, not evidence that the row is gone. Otherwise
+    /// the post does not route at all and the caller sees <c>"No node found at 'X'. Closest
+    /// ancestor is … This usually means the node is missing, has no NodeType, or has an invalid
+    /// NodeType"</c> — three different facts in one sentence, and the last two are precisely what
+    /// the pre-flight exists to refuse BEFORE any storage side effect fires (#1198/#1446: a
+    /// partially destroyed subtree). Treating either as "already gone" would wave a present-but-
+    /// broken node straight into the commit.</para>
+    ///
+    /// <para>🚨 <b>It FAILS CLOSED, and the return type is what makes that structural.</b> The
+    /// value is "confirmed gone", not "exists" — so a probe that errors, or does not answer within
+    /// <paramref name="probeBudget"/>, emits <c>false</c> and the caller's original refusal stands.
+    /// "I could not tell" can never be read as "it was gone".</para>
+    ///
+    /// <para>The read costs nothing on the healthy path: it is taken ONLY on a leg that has already
+    /// failed, never per planned descendant.</para>
+    /// </summary>
+    /// <param name="storage">The store of record — the same adapter the plan was enumerated from.</param>
+    /// <param name="path">The planned descendant whose absence is being confirmed.</param>
+    /// <param name="probeBudget">Bound on this one read. Derived with
+    /// <c>MeshOperationOptions.Nest</c> from the bound of the leg it runs inside, because it runs
+    /// in that leg's <c>.Catch</c> — past the point the leg's own bound still covers.</param>
+    /// <param name="logger">Where an unreadable store is reported.</param>
+    private static IObservable<bool> ConfirmDescendantGone(
+        IStorageAdapter storage,
+        string path,
+        TimeSpan probeBudget,
+        ILogger logger)
+        => storage.Exists(path)
+            .Take(1)
+            .Select(exists => !exists)
+            .Timeout(probeBudget)
+            .Catch<bool, Exception>(ex =>
+            {
+                logger.LogWarning(ex,
+                    "[DeleteNode] existence probe failed {Path} — the store could not say whether "
+                    + "the node is there, so it is NOT confirmed gone and the original refusal stands",
+                    path);
+                return Observable.Return(false);
+            });
 
     /// <summary>
     /// Bulk-atomic pre-flight: post <see cref="ValidateDeleteRequest"/> at every
@@ -4511,6 +4629,11 @@ public static class MeshExtensions
     /// <param name="legTimeout">One leg's bound. Must be strictly smaller than
     /// <paramref name="timeout"/> — derive it with <c>MeshOperationOptions.Nest</c> rather than
     /// configuring a second value, because equal budgets are not an ordering (#1198).</param>
+    /// <param name="storage">The store of record, consulted ONLY on a leg that reported an
+    /// absence — see <c>AlreadyGoneBlocksNothing</c> below (#4680).</param>
+    /// <param name="absenceProbeBudget">Bound on that one existence read. One rung inside
+    /// <paramref name="legTimeout"/>, derived by <c>MeshOperationOptions.Nest</c> at the call site:
+    /// the read runs INSIDE the leg's <c>.Catch</c>, which the leg's own bound no longer covers.</param>
     /// <param name="logger">Where a per-leaf refusal is reported.</param>
     private static IObservable<(string Path, string Error, NodeDeletionRejectionReason Reason)?> PreValidateDescendantsObs(
         IMessageHub issuingHub,
@@ -4519,6 +4642,8 @@ public static class MeshExtensions
         AccessContext? callerAccessContext,
         TimeSpan timeout,
         TimeSpan legTimeout,
+        IStorageAdapter storage,
+        TimeSpan absenceProbeBudget,
         ILogger logger)
     {
         var descendants = allPaths
@@ -4526,6 +4651,33 @@ public static class MeshExtensions
             .ToArray();
         if (descendants.Length == 0)
             return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(null);
+
+        // A DESCENDANT THAT IS ALREADY GONE BLOCKS NOTHING (#4680) — see ConfirmDescendantGone for
+        // why the verdict has to come from storage and never from the refusal's own wording. This
+        // wrapper is the pre-flight's half: gone ⇒ no blocker, otherwise the refusal stands
+        // verbatim, reason and message untouched.
+        IObservable<(string, string, NodeDeletionRejectionReason)?> AlreadyGoneBlocksNothing(
+            string leaf, string error, NodeDeletionRejectionReason reason)
+        {
+            var asRefused = ((string, string, NodeDeletionRejectionReason)?)(leaf, error, reason);
+            return ConfirmDescendantGone(storage, leaf, absenceProbeBudget, logger)
+                .Select(gone =>
+                {
+                    if (!gone)
+                        return asRefused;
+                    // Information, at the same rung as the delete's own outcome lines: a plan that
+                    // named a path nobody could delete because it had already been deleted is a
+                    // fact an operator reading this delete must be able to see. One line per
+                    // vanished leaf, on a path that is rare by construction.
+                    logger.LogInformation(
+                        "[DeleteNode] pre-flight descendant already gone {Path} — it vanished "
+                        + "between the plan and the pre-flight, so the delete's postcondition "
+                        + "already holds for it and it blocks the recursive delete of '{Root}' "
+                        + "no more than a leaf this operation had removed itself",
+                        leaf, rootPath);
+                    return null;
+                });
+        }
 
         // 🚨 Who has NOT answered yet — filled when a leg is actually POSTED, never seeded up
         // front (issue #1198). The merge below is capped, so at any instant some legs have not
@@ -4564,30 +4716,25 @@ public static class MeshExtensions
                         : o.WithTarget(new Address(p)).WithAccessContext(callerAccessContext));
             })
             .Take(1)
-            .Select(d =>
+            .SelectMany(d =>
             {
                 var resp = d.Message as ValidateDeleteResponse;
                 if (resp is null || resp.IsValid)
-                    return ((string, string, NodeDeletionRejectionReason)?)null;
-                // 🚨 KNOWN GAP, MEASURED AND DELIBERATELY NOT FIXED HERE — see #4680. A descendant
-                // that vanished between the plan and this fan-out still refuses the WHOLE recursive
-                // delete, which is #4668's defect one level down. It is NOT fixed by relaxing this
-                // verdict: a repro (an adapter removing one planned leaf after the enumeration is
-                // taken and before it is answered) showed the leg does not reach a
-                // ValidateDeleteResponse at all — the post to the absent address fails to ROUTE, so
-                // it lands in the Catch below as `Cannot delete 'X': No node found at 'X' …`. That
-                // message is ambiguous by its own wording ("missing, has no NodeType, or has an
-                // invalid NodeType"), so telling "already gone" from "its type will not load" needs
-                // a storage read the pre-flight does not take today — a change to the bulk-atomic
-                // refusal semantics of #1198/#1446, not a one-line relaxation. #4668's own path
-                // does not come through here: IMeshService.DeleteNode leaves IncludeSatellites
-                // false, so a `_Comment` satellite is never part of a recursive plan.
-                //
+                    return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(null);
+                // 🚨 THE LEAF ITSELF SAYS IT IS NOT THERE (#4680). This half is reached only while
+                // the leaf's per-node hub is still activated — routing short-circuits on an
+                // already-hosted address, so the request IS delivered, the handler reads null and
+                // answers NodeNotFound. The other half of the same fact arrives as a routing
+                // failure in the Catch below; both are confirmed the same way, against storage,
+                // because a verdict is not evidence that the row is gone.
+                if (resp.Reason == NodeDeletionRejectionReason.NodeNotFound)
+                    return AlreadyGoneBlocksNothing(p, resp.Errors[0], resp.Reason);
                 // 🚨 The descendant's OWN reason, not a blanket ValidationFailed (#1198). When its
                 // permission fold could not be established it says so, and that is the answer the
                 // operator needs — re-labelling it as a validation verdict is what makes the next
                 // occurrence unreadable all over again.
-                return (p, resp.Errors[0], resp.Reason);
+                return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(
+                    (p, resp.Errors[0], resp.Reason));
             })
             // 🚨 ONE BOUND PER LEG — the behavioural half of issue #1198. Before this the whole
             // fan-out shared ONE bound, so a single silent per-node hub consumed the entire
@@ -4623,6 +4770,16 @@ public static class MeshExtensions
                     return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(
                         (p, ex.Message, NodeDeletionRejectionReason.Unauthorized));
                 }
+                // 🚨 THE POST DID NOT ROUTE — the dominant shape of a vanished descendant (#4680),
+                // and the one a repro measured: with no row at the address and no activated hub to
+                // short-circuit on, routing refuses before any handler is reached and the leg sees
+                // `No node found at 'X'. Closest ancestor is …`. That sentence names THREE possible
+                // facts, so it decides nothing on its own; AlreadyGoneBlocksNothing asks the store
+                // which one it is, and keeps today's refusal — reason and message unchanged — for
+                // a node that IS there and merely will not load.
+                if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound })
+                    return AlreadyGoneBlocksNothing(
+                        p, ex.Message, NodeDeletionRejectionReason.ValidationFailed);
                 // 🚨 The leg's own bound lapsed: this leaf never spoke. That is an AVAILABILITY
                 // failure, not a verdict — same vocabulary and the same reasoning as
                 // NodeDeletionRejectionReason.Unavailable everywhere else on this path, and the
