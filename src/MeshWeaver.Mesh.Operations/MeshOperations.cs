@@ -4049,7 +4049,7 @@ public class MeshOperations
                     {
                         status = "Recycled",
                         path = resolvedPath,
-                        message = "DisposeRequest posted + cache invalidation broadcast via MeshChangeFeed. Wait ~100ms before the next access."
+                        message = "DisposeRequest posted + cache invalidation broadcast via MeshChangeFeed. A NodeType's recycle cascades to its dependency network (the NodeTypes sharing its sources and every instance of each): only the activations that EXIST are torn down, nothing is instantiated to be recycled. Wait ~100ms before the next access."
                     },
                     hub.JsonSerializerOptions);
             });

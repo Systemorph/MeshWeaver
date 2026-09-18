@@ -80,6 +80,8 @@ Full reference: [/ci](.claude/skills/ci/SKILL.md) · [NodeTypeCompilation.md](sr
 Full reference: <!--slot:reference-->[StaleStateUntilRecycle.md](src/MeshWeaver.Documentation/Data/Architecture/StaleStateUntilRecycle.md) · [/deployment](.claude/skills/deployment/SKILL.md) · [/mesh-data](.claude/skills/mesh-data/SKILL.md)<!--/slot-->.
 <!-- shared-rule:end dispose-to-serve-new-state -->
 
+**Recycle the MAIN BIT and the mesh does the rest (core-only note, 2026-09-18; the fleet block above is mirrored and changes in three steps):** a `DisposeRequest` on a NodeType definition cascades to its dependency network — the NodeTypes sharing its sources, transitively, and every instance of each — and only the activations that EXIST are torn down; a cold address is a no-op at the router and instantiates nothing (`RecycleCascade`, `NodeTypeRecycleCascade`, `HubDisposalModel` → "A recycle of the main bit"). Do not recycle instances one by one, and never pin an image because a page still answers the old way — recycle the type, then follow the mesh skill `Skill/recycle-after-deploy`.
+
 ## 🚨🚨🚨 ABSOLUTE: No band-aids — root cause only, literally always
 
 **The user is LITERALLY NEVER interested in a band-aid, workaround, mitigation, or symptom-suppression.** When something hangs, deadlocks, flakes, or errors, find the EXACT defect and fix THAT. These are band-aids, and proposing one as "the fix" is forbidden:

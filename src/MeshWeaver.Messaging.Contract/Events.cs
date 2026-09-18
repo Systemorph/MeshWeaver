@@ -310,6 +310,20 @@ public record DisposeRequest
     public string? Reason { get; init; }
 
     /// <summary>
+    /// The path of the node whose recycle CASCADED to this one — or <c>null</c> for a recycle that
+    /// was asked for directly (an operator's Recycle, a self-heal, a rebind).
+    ///
+    /// <para>A recycle of a NodeType definition tears down its whole dependency network — the
+    /// NodeTypes that share its sources and every instance of each — through ONE request on the
+    /// definition (<see cref="RecycleCascade"/>). Every request that fans out from it carries the
+    /// definition's path here, and a request that carries a path never cascades again: the network
+    /// is computed ONCE, at the main node, so a cycle among NodeTypes cannot turn one recycle into
+    /// a storm. Only activations that EXIST are torn down — a cascaded request reaching an address
+    /// with no live hub is a no-op at the routing layer, and it instantiates nothing.</para>
+    /// </summary>
+    public string? CascadedFrom { get; init; }
+
+    /// <summary>
     /// What <c>[QUIESCE-START]</c> prints for a <see cref="DisposeRequest"/> whose poster supplied
     /// no <see cref="Reason"/>. Spelled once so a log reader and a log QUERY agree on the token.
     /// </summary>

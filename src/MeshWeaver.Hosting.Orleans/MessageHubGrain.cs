@@ -95,6 +95,16 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     private IDisposable? _activationSubscription;
 
     /// <summary>
+    /// The deferred hub build: composed by <see cref="OnActivateAsync"/>, RUN by the first delivery
+    /// that needs a hub (<see cref="EnsureActivationStarted"/>). A <see cref="DisposeRequest"/> is
+    /// not one — see <see cref="DeliverMessage"/>.
+    /// </summary>
+    private Action? _startActivation;
+
+    /// <summary>Whether <see cref="_startActivation"/> has run — i.e. whether this activation ever began building its hub.</summary>
+    private bool _activationStarted;
+
+    /// <summary>
     /// The activation's own "I am completely gone" signal, handed to hub code as
     /// <see cref="GrainDeactivationCompleted"/> so anything that has to wait for THIS activation to
     /// die can <c>Subscribe</c> to it instead of sampling the silo catalog on an interval.
@@ -342,43 +352,69 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // the source emits, Amb commits to it and the timer is unsubscribed, so a
         // legitimately slow enrichment (cold compile, bounded internally by the
         // slow-path budgets) is never cut short.
-        _activationSubscription = BuildActivationChain(
-                sourceStream,
-                addressPath,
-                FirstNodeResolutionTimeout,
-                node =>
-                {
-                    logger.LogDebug("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
-                        streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
-                    return ResolveHubConfigurationObservable(node);
-                })
-            .Subscribe(
-                node => CompleteActivation(streamId, address, grainScheduler, node),
-                ex =>
-                {
-                    logger.LogError(ex, "[ACTIVATE] Grain {StreamId}: activation faulted for {Path}", streamId, addressPath);
-                    // Defect 3: stash the REAL cause so a caller whose delivery only ever sees the
-                    // raw Orleans rejection (grain mid-deactivation) still gets the actionable error.
-                    activationFailures?.Record(streamId, ex.Message);
-                    _hubReadyRaw.OnError(ex);
-                    // Retry-on-next-access: without this the grain stays a parked
-                    // corpse answering Failed until idle collection; deactivating
-                    // lets the next caller re-run resolution from scratch.
-                    TryDeactivateOnIdle();
-                },
-                () =>
-                {
-                    if (_hub is not null) return;
-                    logger.LogWarning("[ACTIVATE] Grain {StreamId}: source completed with no usable node for {Path}",
-                        streamId, addressPath);
-                    var noNodeError =
-                        $"No MeshNode resolvable for address '{addressPath}'. Either the node does not exist or no query provider claims its partition.";
-                    activationFailures?.Record(streamId, noNodeError);
-                    _hubReadyRaw.OnError(new InvalidOperationException(noNodeError));
-                    TryDeactivateOnIdle();
-                });
+        // 🚨 COMPOSED here, RUN by the first delivery that needs a hub (EnsureActivationStarted).
+        // Orleans activates a grain for ANY call, and until now that call also built the hub —
+        // node resolution, NodeType binding, assembly load — whatever the message was. For a
+        // DisposeRequest that is exactly backwards: a recycle exists to make an existing activation
+        // re-read its node, and an address with no hub is already in the state a recycle produces.
+        // So the hub is instantiated by the first message that is NOT a dispose; a dispose arriving
+        // first is answered without building anything (DeliverMessage). A NodeType's recycle
+        // cascade (RecycleCascade) fans out to every instance of the type and relies on this: only
+        // the sub-bits that were instantiated are recycled. The Monolith host answers the same
+        // question in its router (MonolithRoutingService.RouteImpl); here it must be the grain,
+        // because a silo's local route table is not the cluster's.
+        _startActivation = () =>
+            _activationSubscription = BuildActivationChain(
+                    sourceStream,
+                    addressPath,
+                    FirstNodeResolutionTimeout,
+                    node =>
+                    {
+                        logger.LogDebug("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
+                            streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
+                        return ResolveHubConfigurationObservable(node);
+                    })
+                .Subscribe(
+                    node => CompleteActivation(streamId, address, grainScheduler, node),
+                    ex =>
+                    {
+                        logger.LogError(ex, "[ACTIVATE] Grain {StreamId}: activation faulted for {Path}", streamId, addressPath);
+                        // Defect 3: stash the REAL cause so a caller whose delivery only ever sees the
+                        // raw Orleans rejection (grain mid-deactivation) still gets the actionable error.
+                        activationFailures?.Record(streamId, ex.Message);
+                        _hubReadyRaw.OnError(ex);
+                        // Retry-on-next-access: without this the grain stays a parked
+                        // corpse answering Failed until idle collection; deactivating
+                        // lets the next caller re-run resolution from scratch.
+                        TryDeactivateOnIdle();
+                    },
+                    () =>
+                    {
+                        if (_hub is not null) return;
+                        logger.LogWarning("[ACTIVATE] Grain {StreamId}: source completed with no usable node for {Path}",
+                            streamId, addressPath);
+                        var noNodeError =
+                            $"No MeshNode resolvable for address '{addressPath}'. Either the node does not exist or no query provider claims its partition.";
+                        activationFailures?.Record(streamId, noNodeError);
+                        _hubReadyRaw.OnError(new InvalidOperationException(noNodeError));
+                        TryDeactivateOnIdle();
+                    });
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Runs the deferred hub build composed by <see cref="OnActivateAsync"/> — once. Every delivery
+    /// except a <see cref="DisposeRequest"/> to a hub that was never built goes through here, so the
+    /// self-routed own-address read the build issues (see <see cref="ComposeActivationSource"/>)
+    /// finds the build already started and parks on <see cref="HubReady"/> exactly as before.
+    /// </summary>
+    private void EnsureActivationStarted()
+    {
+        if (_activationStarted || _deactivated)
+            return;
+        _activationStarted = true;
+        _startActivation?.Invoke();
     }
 
     /// <summary>
@@ -850,6 +886,23 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// </summary>
     public Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
     {
+        // 🚨 A DisposeRequest to an activation that never built its hub instantiates nothing: it is
+        // answered Ignored and the activation is released. Building the hub only to tear it down
+        // would cost a full activation for no change — and a NodeType's recycle cascade fans out
+        // to every instance of the type on the strength of this (see OnActivateAsync).
+        if (!_activationStarted && DisposeRequestEnvelope.TryRead(delivery, out var dispose))
+        {
+            logger.LogInformation(
+                "Grain {GrainId}: DisposeRequest arrived before this activation built its hub — nothing "
+                + "to dispose, and the hub is deliberately NOT built to be torn down "
+                + "(cascadedFrom={CascadedFrom}; reason: {Reason})",
+                this.GetPrimaryKeyString(), dispose!.CascadedFrom ?? "(direct)",
+                dispose.Reason ?? DisposeRequest.ReasonNotStated);
+            TryDeactivateOnIdle();
+            return Task.FromResult(Acknowledge(delivery).Ignored());
+        }
+        EnsureActivationStarted();
+
         // Apply user identity from Orleans RequestContext to the delivery up-front.
         var userId = RequestContext.Get("UserId") as string;
         var userName = RequestContext.Get("UserName") as string;
