@@ -4441,6 +4441,18 @@ public static class MeshExtensions
                         {
                             if (resp.Log?.Messages is { Count: > 0 } msgs)
                                 lock (collectedMessages) collectedMessages.AddRange(msgs);
+                            // 🚨 THE SECOND COMMIT-SIDE SHAPE OF THE SAME RACE (review on #4696).
+                            // The `.Catch` below only sees the leaf whose hub is GONE, so the post
+                            // does not route. When the hub is still ACTIVATED the post routes fine
+                            // and the handler answers NothingToDelete() — Success=true,
+                            // AlreadyAbsent=true (#4668) — which lands HERE, in the success branch.
+                            // Returning the path would have `.Do(RecordDeleted)` count a removal
+                            // this cascade did not perform, which is exactly the truthfulness this
+                            // fix exists to keep: the operation must say what IT removed. Somebody
+                            // else removed this one, so emit nothing, identically to the
+                            // confirmed-gone arm below.
+                            if (resp.AlreadyAbsent)
+                                return Observable.Empty<string>();
                             return Observable.Return(path);
                         }
                         var failResp = delivery.Message as DeleteNodeResponse;
