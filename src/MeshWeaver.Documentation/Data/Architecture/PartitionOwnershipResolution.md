@@ -199,6 +199,28 @@ arises only when the create could not have succeeded anyway, and never because o
 property the thread asked for: the refusal is **fail-closed**, and enforcement does **not** vary with
 which hubs happen to be warm.
 
+🚨 **That is a property of the shipped ADAPTERS, not of the seam — and a stand-in falsified it.**
+`IStorageAdapter.ReadMany` and `IStorageAdapter.Exists` are independent interface members. Every
+adapter that ships reaches the same store through both, which is what makes the paragraph above true
+in production — but nothing in the contract *makes* them fail together, and any layer that sits
+between this call and the store can break the pairing. Measured 2026-09-17: a test stand-in in
+MeshWeaver.Plugins armed "the install's bulk read fails" as EVERY `ReadMany` throwing, while `Read`
+and `Exists` kept answering. `NodeTypeResolution.Resolves` therefore succeeded, this one-path read
+did not, and the nested create of the package's typed instance was refused
+`access.partitionCreate.undetermined` — a create that would otherwise have landed, and a red that
+read for hours like a defect in this design. It was not one: the refusal was correct for what the
+store told it. The lesson is about the sentence above, which is an assumption to RE-CHECK per adapter
+stack rather than an invariant this seam enforces (fixed in the stand-in as
+Systemorph/MeshWeaver.Plugins#2047).
+
+**What the refusal SAYS, and why it names both arms.** `.Timeout(ProbeTimeout, null)` and
+`.Catch(_ => null)` fold into the same `null`, so by the time a validator sees the answer the code
+genuinely cannot tell a fault from a timeout. `access.partitionCreate.undetermined` therefore names
+both — *"the read of its NodeType definition failed, or did not answer within {1} s"* — and
+deliberately does not claim a bound it cannot know. Until 2026-09-18 it named only the timeout, and
+the fault case above surfaced it in 148 ms wearing a sentence about 10 s; the next reader's first
+move on such a message is to reach for the bound, which is never the fix here.
+
 **Why reading the row is not a CQRS violation.** The [CQRS](/Doc/Architecture/CqrsAndContentAccess)
 rule forbids reading `Content` off a QUERY row, whose index trails the store; the durable row is what
 the index trails. The same page already names `IStorageAdapter.Read(path, options)` as the read that

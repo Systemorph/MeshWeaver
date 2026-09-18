@@ -89,7 +89,7 @@
   "error.validationFailed": "Validierung fehlgeschlagen",
   "error.ownerUnreachable": "Besitzer nicht erreichbar",
   "access.partitionCreate.signInRequired": "Melden Sie sich an, um '{0}' zu erstellen: Nur ein angemeldetes Konto kann eine Partition erstellen.",
-  "access.partitionCreate.undetermined": "Ob '{0}' eine eigene Partition besitzt, konnte nicht festgestellt werden — die NodeType-Definition konnte nicht innerhalb von {1} s gelesen werden. '{2}' wurde nicht erstellt; bitte versuchen Sie es erneut.",
+  "access.partitionCreate.undetermined": "Ob '{0}' eine eigene Partition besitzt, konnte nicht festgestellt werden — der Lesevorgang für die NodeType-Definition ist fehlgeschlagen oder blieb länger als {1} s ohne Antwort. '{2}' wurde nicht erstellt; bitte versuchen Sie es erneut.",
   "access.partitionCreate.notOwningTopLevel": "'{0}' kann nicht auf oberster Ebene erstellt werden: Die oberste Ebene ist Partitionen vorbehalten, und ein '{1}' besitzt keine. Dort kann nur ein Typ erstellt werden, dessen Definition ownsPartition deklariert (Space, User oder ein Typ aus einem Paket, etwa ein CRM-Kunde). Erstellen Sie stattdessen einen Space, oder legen Sie Ihre Inhalte in Ihrem eigenen Space ab ({2}).",
   "access.partitionCreate.ownerUnestablished": "'{0}' konnte nicht als Partition eingerichtet werden: Ob '{1}' eine eigene Partition besitzt, konnte nicht festgestellt werden, daher wurde kein Besitzer eingetragen. Bitte versuchen Sie es erneut.",
   "access.partitionCreate.noCreator": "'{0}' kann nicht ohne eine angemeldete Person erstellt werden, die zum Besitzer wird.",
