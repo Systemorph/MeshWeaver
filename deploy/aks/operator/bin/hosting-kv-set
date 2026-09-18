@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# hosting-kv-set --vault <name> --object <name> [--object <name> …]
+#                [--namespace <ns> --wait <object>=<syncedSecret>/<configKey> …]
+#
+# Write HUMAN-SUPPLIED secret values into Key Vault (MeshWeaver.Plugins — the onboarding secret
+# step). A person pastes a value into a write-only field on the control instance — the sign-in
+# app's client secret, a mail app's secret, an AI provider key, a connection string — the mesh
+# stores it ENCRYPTED on the request node, decrypts it for exactly this Job, and this step is what
+# puts it into the vault the instance's Deployment record names. Nobody needs a vault permission of
+# their own: the operator identity writes, as it already does for every other object.
+#
+#   THE VALUES ARRIVE IN THE ENVIRONMENT, NEVER AS ARGUMENTS. `HOSTING_SECRETS` is base64 of a JSON
+#   object {"<vault object>": "<value>", …}. Every process in the pod can read another process's
+#   argv; an environment value is the process's own. Each value goes from that JSON straight into a
+#   mode-600 temporary file and reaches az through --file — never --value, never a log line.
+#
+# 🚨 IT DOES OVERWRITE. `hosting-kv-ensure` refuses to touch an existing object because the master
+# key seals stored credentials and regenerating it destroys them. A value a PERSON pasted is
+# different in kind: they hold the new credential and mean to replace the old one (a rotated
+# client secret, a corrected connection string), and Key Vault keeps the previous version for a
+# rollback. That is why this is a separate verb, and why kv-ensure must never grow a --force.
+#
+# 🚨 EVERY named object must have a value, or NOTHING is written. A plan that names three objects
+# and finds two values is a bug in the caller, and writing two of three would leave an instance
+# half-configured with a green step above it.
+#
+# 🚨 NEVER PRINTS A VALUE. Not on success, not on failure, not in a `set -x` (deliberately not
+# enabled), not in a `::hosting::` fact. What crosses back to the mesh is the object NAME and a
+# SHA-256 prefix of what was written, so a reader can tell "the vault holds what was pasted" from
+# "something else is in there" without either being shown.
+#
+# --wait <object>=<syncedSecret>/<configKey>: after the write, wait until the Key Vault CSI driver
+# has synced the new value into <syncedSecret>'s <configKey> in --namespace (compared by hash). A
+# pod restarted before the sync would read the OLD synced Secret (DeploymentAKS → "KeyVault CSI env
+# timing"); the plan restarts only after this step returns.
+# shellcheck source=_common.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-kv-set"
+
+vault="" namespace="" objects=() waits=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --vault)     vault="${2:-}";        shift 2 ;;
+    --namespace) namespace="${2:-}";    shift 2 ;;
+    --object)    objects+=("${2:-}");   shift 2 ;;
+    --wait)      waits+=("${2:-}");     shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+hosting::need_flag vault "$vault"
+hosting::safe_name vault "$vault"
+[ ${#objects[@]} -gt 0 ] || hosting::die "missing required flag --object — a secret write that names nothing is a bug in the caller, not a no-op"
+for object in "${objects[@]}"; do
+  [ -n "$object" ] || hosting::die "missing required flag --object — an empty object name names nothing"
+  hosting::safe_name object "$object"
+done
+[ -z "$namespace" ] || hosting::safe_name namespace "$namespace"
+# Every --wait is validated up front, whether or not the write turns out to succeed: its three
+# parts are interpolated into kubectl arguments, and a malformed one refuses BEFORE the vault is
+# touched.
+for entry in "${waits[@]}"; do
+  [[ "$entry" == *=*/* ]] || hosting::die "wait '${entry}' is not <object>=<syncedSecret>/<configKey>"
+  w_object="${entry%%=*}"; w_rest="${entry#*=}"; w_secret="${w_rest%%/*}"; w_key="${w_rest#*/}"
+  hosting::safe_name wait-object "$w_object"
+  hosting::safe_name wait-secret "$w_secret"
+  hosting::safe_name wait-key "$w_key"
+  [ -n "$namespace" ] || hosting::die "--wait needs --namespace — the synced Secret lives in the instance's namespace"
+  found=0
+  for object in "${objects[@]}"; do [ "$object" = "$w_object" ] && found=1; done
+  [ "$found" = "1" ] || hosting::die "wait names '${w_object}', which no --object writes — refusing to wait for a value this step does not set"
+done
+
+if hosting::dry; then
+  for object in "${objects[@]}"; do
+    hosting::log "(dry run) would set ${object} in vault ${vault} from the pasted value (through --file, never shown)"
+  done
+  for entry in "${waits[@]}"; do
+    hosting::log "(dry run) would wait for ${entry#*=} in ${namespace} to carry the new ${entry%%=*}"
+  done
+  hosting::say kv_set_count "${#objects[@]}"
+  exit 0
+fi
+
+command -v jq >/dev/null 2>&1 \
+  || hosting::die "jq is not installed in this image — the pasted values arrive as JSON"
+[ -n "${HOSTING_SECRETS:-}" ] \
+  || hosting::die "HOSTING_SECRETS is empty — the control plane hands the pasted values to this Job in the environment, and an empty one means the action reached the cluster with nothing to write. Nothing was written."
+
+# Everything below touches the values. umask first: every temporary this step creates is 0600.
+umask 077
+work="$(mktemp -d)" || hosting::die "could not create a private working directory"
+cleanup() { rm -rf "$work"; unset HOSTING_SECRETS; }
+trap cleanup EXIT
+
+if ! printf '%s' "$HOSTING_SECRETS" | base64 -d > "$work/secrets.json" 2>/dev/null; then
+  hosting::die "HOSTING_SECRETS is not valid base64. Nothing was written."
+fi
+unset HOSTING_SECRETS
+jq -e 'type == "object"' "$work/secrets.json" >/dev/null 2>&1 \
+  || hosting::die "HOSTING_SECRETS did not decode to a JSON object of {object: value}. Nothing was written."
+
+# ── every object has a non-empty value, or nothing is written ──────────────────────────────────
+missing=()
+for object in "${objects[@]}"; do
+  if ! jq -e --arg k "$object" 'has($k) and (.[$k] | type == "string" and length > 0)' "$work/secrets.json" >/dev/null 2>&1; then
+    missing+=("$object")
+  fi
+done
+if [ ${#missing[@]} -gt 0 ]; then
+  hosting::die "no value was handed over for $(IFS=,; echo "${missing[*]}") — the plan names an object the request carries no value for. Nothing was written; re-enter the secret and re-request the action."
+fi
+
+# ── the writes, through --file ─────────────────────────────────────────────────────────────────
+written=0
+for object in "${objects[@]}"; do
+  hosting::step "Set ${object}"
+  # -j: raw and WITHOUT a trailing newline — a client secret with a newline appended fails every
+  # token exchange, and az stores the file byte-for-byte.
+  jq -rj --arg k "$object" '.[$k]' "$work/secrets.json" > "$work/value" \
+    || hosting::die "could not extract the value for ${object}. ${written} of ${#objects[@]} object(s) were written before this one."
+  hash="$(hosting::sha256 < "$work/value")"
+  if ! az keyvault secret set --vault-name "$vault" --name "$object" --file "$work/value" --output none 2>"$work/az.err"; then
+    rm -f "$work/value"
+    hosting::die "could not set ${object} in vault ${vault}: $(tr -d '\n' < "$work/az.err" | cut -c1-300). ${written} of ${#objects[@]} object(s) were written before this one; the operator identity needs Key Vault Secrets Officer on ${vault}."
+  fi
+  rm -f "$work/value"
+  # Read back BY ID, so a write az reported and the vault did not keep is a failure here, not a
+  # pod that cannot start later.
+  version="$(az keyvault secret show --vault-name "$vault" --name "$object" --query id -o tsv 2>/dev/null)" \
+    || hosting::die "set ${object} in vault ${vault}, but it does not read back — refusing to report a write the vault does not confirm"
+  hosting::log "set       ${object} in vault ${vault} (${version##*/}; sha256 ${hash:0:12}…)"
+  hosting::say kv_set "${object}:${hash:0:12}"
+  written=$((written + 1))
+  echo "$hash" > "$work/hash.$object"
+done
+hosting::say kv_set_count "$written"
+
+# ── the CSI sync, by hash ──────────────────────────────────────────────────────────────────────
+attempts="${HOSTING_KV_SYNC_ATTEMPTS:-40}" interval="${HOSTING_KV_SYNC_INTERVAL:-15}"
+for entry in "${waits[@]}"; do
+  w_object="${entry%%=*}"; w_rest="${entry#*=}"; w_secret="${w_rest%%/*}"; w_key="${w_rest#*/}"
+  hosting::step "Wait for ${w_secret}/${w_key} to carry the new ${w_object}"
+  expected="$(cat "$work/hash.$w_object")"
+  synced_hash=""
+  for i in $(seq 1 "$attempts"); do
+    synced_hash="$(hosting::secret_value "$namespace" "$w_secret" "$w_key" | hosting::sha256)"
+    if [ "$synced_hash" = "$expected" ]; then
+      hosting::log "synced    ${w_secret}/${w_key} carries the new value (attempt ${i})"
+      break
+    fi
+    [ "$i" -lt "$attempts" ] && sleep "$interval"
+  done
+  [ "$synced_hash" = "$expected" ] \
+    || hosting::die "synced Secret ${w_secret} in ${namespace} did not pick up ${w_object} within $((attempts * interval))s. The vault HOLDS the new value; the pods still read the old one until the Key Vault CSI driver syncs it. The SecretProviderClass must list ${w_object} under ${w_key} and the driver's rotation must be enabled — then re-request the action (idempotent: the same value is written again)."
+  hosting::say kv_synced "$w_object"
+done

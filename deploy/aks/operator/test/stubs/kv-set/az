@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# A stand-in `az` for hosting-kv-set's behaviour tests. Records every invocation VERBATIM — argv
+# is how a test proves a pasted value never travels on a command line — and answers the vault
+# from a small state:
+#
+#   HOSTING_KVS_STATE      directory: az.log (every argv), set.<name> (what a `set --file` wrote)
+#   HOSTING_KVS_SET_FAIL   space-separated object names whose `keyvault secret set` refuses
+#
+# `keyvault secret show --query id` answers for anything this run wrote (the read-back), and
+# refuses everything else — a set the vault did not keep must be a failed step.
+set -uo pipefail
+state="${HOSTING_KVS_STATE:?the az stub needs HOSTING_KVS_STATE}"
+printf 'az %s\n' "$*" >> "$state/az.log"
+case "${1:-} ${2:-} ${3:-}" in
+  "keyvault secret set")
+    name="" file=""; while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; --file) file="${2:-}"; shift 2 ;; --value) echo "az stub: hosting-kv-set must write through --file, never --value" >&2; exit 1 ;; *) shift ;; esac; done
+    for f in ${HOSTING_KVS_SET_FAIL:-}; do [ "$f" = "$name" ] && { echo "ERROR: (Forbidden) The user, group or application does not have secrets set permission on key vault" >&2; exit 1; }; done
+    [ -n "$file" ] || { echo "az stub: hosting-kv-set must write through --file, never --value" >&2; exit 1; }
+    [ -f "$file" ] || { echo "az stub: --file ${file} does not exist" >&2; exit 1; }
+    cp "$file" "$state/set.$name"; exit 0 ;;
+  "keyvault secret show")
+    name=""; while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; *) shift ;; esac; done
+    [ -f "$state/set.$name" ] && { printf 'https://vault.test/secrets/%s/7f3a\n' "$name"; exit 0; }
+    echo "ERROR: (SecretNotFound) A secret with (name/id) ${name} was not found in this key vault." >&2; exit 3 ;;
+esac
+echo "az stub: unexpected invocation: $*" >&2
+exit 1
