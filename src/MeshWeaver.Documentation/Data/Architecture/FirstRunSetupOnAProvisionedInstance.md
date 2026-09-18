@@ -153,6 +153,45 @@ The tier is read from the deployment record, and it drives both *which* requirem
 *who is expected to answer them*. Asking everything everywhere is how a person ends up typing a
 connection string for a database they do not own.
 
+## Where each secret comes from
+
+**Every secret lives in the client's own Key Vault. What differs is who puts it there** — and the
+wizard shows which, because a field whose source is invisible is a field somebody will type into.
+
+| Source | Who writes the value | In the wizard |
+|---|---|---|
+| **GitHub** | the client's config repository declares the mapping (`keyVaultSecrets`: config key → vault object, with the vault named in `deployments/aks/envs.json`) and its own pipeline creates the value | **pre-populated and READ-ONLY**, labelled *GitHub* — changing it means changing the repository |
+| **Registry** | issued when the instance registers at the plugin registry | read-only: a typed value boots an instance nothing trusts |
+| **Setup** | the client provides it | the field they fill, written to their vault through the control instance |
+
+Measured on PartnerRe's live instance, 2026-09-18 — vault `memexaks-kv-i6gzgik26ydg`, prefix
+`memex-`:
+
+- **From the repository**, created by the estate's pipeline: `memex-db-connection`,
+  `memex-orleans-connection`, `memex-postgres-password`, `memex-Ai-KeyProtection-MasterKey`,
+  `memex-Bootstrap-Secret`, `memex-Hosting-PlatformWebhookSecret`, `memex-AzureFoundry-ApiKey`,
+  `memex-Anthropic-ApiKey`.
+- **From registration**: `memex-PluginCatalog-RegistryToken`.
+- **Asked**: the Entra sign-in app — client id, tenant id and `memex-Authentication-Microsoft-ClientSecret`
+  — the mail credentials, and any model key the client brings rather than the estate's Foundry.
+
+This is the enterprise shape. On the SME tier the estate is ours, so the same list is platform-provided
+and shorter to ask about; the tier still drives what is a question at all.
+
+### Two things the wizard must not repeat
+
+🚨 **A config key declared TWICE is an outage.** PartnerRe's values carried
+`Authentication__Microsoft__ClientSecret: ""` beside the vault mapping for the same key. The empty
+one won: the sign-in handler threw on every request and the portal went down (2026-09-18). So a value
+whose source is GitHub shows the ONE source that wins, and the platform must not render a second
+empty placeholder for a key the vault already supplies. The wizard reports both variants — an empty
+placeholder and a literal second value — and never echoes the value into the problem text.
+
+🚨 **The vault OBJECT name is shown beside every field.** It is derived from the instance's prefix,
+and a mapping that names an object the vault does not hold fails the **whole CSI mount**: every new
+pod stays pending with no IP and no log line, not merely that one key. A name nobody can see is a
+name nobody can check.
+
 ## The plugin catalog in the wizard
 
 The wizard shows the catalog of the registry the instance is mounted on, lets the person select what
