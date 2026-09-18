@@ -1,0 +1,9 @@
+apiVersion: v2
+name: memex-db
+description: >-
+  One instance's PostgreSQL, as its OWN Helm release beside the portal release — a CloudNativePG
+  Cluster (primary + standby across two zones on the `db` node pool), the `vector` extension, and
+  optional Barman Cloud backups to Azure Blob. See Doc/Architecture/InClusterDatabases.
+type: application
+version: 0.1.0
+appVersion: "17"

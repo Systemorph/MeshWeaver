@@ -1,0 +1,23 @@
+# The instance's OWN database release (Doc/Architecture/InClusterDatabases): the portal release on
+# an EXTERNAL-to-this-release database that is a CloudNativePG Cluster in the same namespace, named
+# by `database.release`. The pearl shape after 2026-09-15. AdoNet is on so the composed orleans
+# string renders too. Invariant 19 asserts the credentials come from `<release>-app` in env, BEFORE
+# the strings that expand them, and that the gate probes the host those strings name.
+postgres:
+  enabled: false
+database:
+  release: pearl-db
+config:
+  memex_portal:
+    MEMEX_HOST: pearl-db-rw
+    MEMEX_PORT: "5432"
+    MEMEX_DATABASENAME: pearl
+    MEMEX_USERNAME: memex
+    MEMEX_JDBCCONNECTIONSTRING: jdbc:postgresql://pearl-db-rw:5432/pearl
+    Deployment__Orleans__Clustering: AdoNet
+  memex_migration:
+    MEMEX_HOST: pearl-db-rw
+    MEMEX_PORT: "5432"
+    MEMEX_DATABASENAME: pearl
+    MEMEX_USERNAME: memex
+    MEMEX_JDBCCONNECTIONSTRING: jdbc:postgresql://pearl-db-rw:5432/pearl

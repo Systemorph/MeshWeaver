@@ -91,6 +91,7 @@ spec:
           image: "{{ .Values.migration.image }}"
           imagePullPolicy: "IfNotPresent"
           env:
+            {{- include "memex.dbReleaseEnv" (dict "root" $ "half" "memex_migration") | nindent 12 }}
             - name: "MIGRATION_MODE"
               value: "rehearse"
             - name: "MIGRATION_BUDGET_MINUTES"
@@ -119,6 +120,7 @@ spec:
         - image: "{{ .Values.migration.image }}"
           name: "memex-migration"
           env:
+            {{- include "memex.dbReleaseEnv" (dict "root" $ "half" "memex_migration") | nindent 12 }}
             - name: "MIGRATION_BUDGET_MINUTES"
               value: {{ .Values.migration.budgetMinutes | int | quote }}
           envFrom:

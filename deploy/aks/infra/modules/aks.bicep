@@ -64,6 +64,23 @@ param minNodeCount int = 3
 @description('Autoscaler maximum node count.')
 param maxNodeCount int = 6
 
+// ── the optional `db` pool (Doc/Architecture/InClusterDatabases) ─────────────────────────────────
+// Where each instance's database runs as its own release (deploy/helm-db, a CloudNativePG Cluster):
+// memory-optimised nodes, one per zone so a primary and its standby never share a failure domain,
+// tainted so nothing but a database lands there, and FIXED — the autoscaler must never remove the
+// node a primary's zonal disk is attached to. 0 = no pool (every estate predating the pattern).
+@description('db pool node count — 0 = no db pool. One node per entry in dbPoolZones is the fleet shape.')
+param dbPoolCount int = 0
+
+@description('db pool VM size — memory-optimised with a local temp disk (E-series, ds).')
+param dbPoolVmSize string = 'Standard_E4ds_v5'
+
+@description('Zones the db pool spans; a database asks for at most this many instances.')
+param dbPoolZones array = [
+  '1'
+  '2'
+]
+
 @description('Tags applied to the cluster.')
 param tags object = {}
 
@@ -215,6 +232,29 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
 // Grant the auto-created kubelet identity AcrPull on the ACR so nodes can pull
 // private images imported into the registry.
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+
+resource dbPool 'Microsoft.ContainerService/managedClusters/agentPools@2024-09-01' = if (dbPoolCount > 0) {
+  parent: aks
+  name: 'db'
+  properties: {
+    mode: 'User'
+    osType: 'Linux'
+    osSKU: 'AzureLinux'
+    type: 'VirtualMachineScaleSets'
+    vmSize: dbPoolVmSize
+    count: dbPoolCount
+    enableAutoScaling: false
+    availabilityZones: dbPoolZones
+    vnetSubnetID: aksSubnetId
+    maxPods: 30
+    nodeLabels: {
+      workload: 'db'
+    }
+    nodeTaints: [
+      'workload=db:NoSchedule'
+    ]
+  }
+}
 
 resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' existing = if (!empty(acrId)) {
   name: last(split(acrId, '/'))
