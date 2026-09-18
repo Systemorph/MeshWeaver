@@ -3,6 +3,8 @@ using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Settings;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,6 +36,18 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class DeleteTokenReportsWhatItRemovedTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>The user whose token this suite's validator refuses to delete.</summary>
+    private const string RefusedUser = "delete-refused-user";
+
+    private const string RefusalReason = "this token is spoken for";
+
+    private readonly RefuseDeletingThisUsersTokens refusing = new(RefusedUser, RefusalReason);
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder).ConfigureServices(services => services
+            .AddSingleton<INodeValidator>(refusing));
+
     private ApiTokenService GetService() =>
         new(
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
@@ -123,4 +137,67 @@ public class DeleteTokenReportsWhatItRemovedTest(ITestOutputHelper output) : Mon
             + "AlreadyGone is not Failed either: nothing went wrong, there was simply nothing "
             + "to do");
     }
+
+    /// <summary>
+    /// MeshWeaver#4707, and the reason the outcome is three-valued rather than two. A REFUSED
+    /// delete — a permission denial, a validator verdict — is a statement about a token that is
+    /// STILL THERE and still authenticates. <c>DeleteToken</c> used to fold every fault into
+    /// <c>false</c>, so the screen said <i>"was already gone"</i> about a live credential and
+    /// <see cref="ApiTokensSettingsTab.TokenDeleteResult.Failed"/> was unreachable by construction.
+    ///
+    /// <para>The refusal is a real one — a registered <see cref="INodeValidator"/>, the same
+    /// extension point production rules use — not a stub standing in for the mesh.</para>
+    ///
+    /// <para><b>SHOULD-FAIL-IF</b> the swallowing <c>.Catch</c> returns: this renders
+    /// <c>AlreadyGone</c> instead of <c>Failed</c>. And the assertion is written in BOTH
+    /// directions on purpose — a regression that answered <c>Failed</c> for everything would
+    /// satisfy this test alone, so <see cref="ASecondDeleteOfTheSamePath_RemovesNothing"/> is its
+    /// other half and must keep passing.</para>
+    /// </summary>
+    [Fact]
+    public async Task ARefusedDeleteIsAFailure_NotAQuietAlreadyGone()
+    {
+        var service = GetService();
+        var created = await service.CreateToken(
+            RefusedUser, "Refused", "refused@example.com", "Refused").Should().Emit();
+
+        refusing.Armed = true;
+
+        var outcome = await ApiTokensSettingsTab
+            .Delete(service, created.Node.Path, "Refused").Should().Emit();
+
+        outcome.Result.Should().Be(ApiTokensSettingsTab.TokenDeleteResult.Failed,
+            "the delete was refused — the token is still there, so this is a failure the operator "
+            + "has to see, not a no-op");
+        outcome.Result.Should().NotBe(ApiTokensSettingsTab.TokenDeleteResult.AlreadyGone,
+            "saying 'already gone' about a credential that still authenticates is the exact "
+            + "misreport #4707 is about");
+        outcome.Message.Should().Contain(RefusalReason,
+            "the refusing validator's own sentence has to survive to the screen, or the operator "
+            + "is told something failed without being told what");
+    }
+}
+
+/// <summary>
+/// Refuses the delete of one user's token nodes, once armed, and accepts everything else — the
+/// registered-extension-point way to produce a REAL refusal. Instance state, never static: the mesh
+/// owns this singleton for the life of this test's mesh, so nothing bleeds into another suite.
+///
+/// <para>Matched by NAMESPACE prefix rather than by exact path because a token's id is minted
+/// during the test, long after the mesh is configured.</para>
+/// </summary>
+internal sealed class RefuseDeletingThisUsersTokens(string userId, string reason) : INodeValidator
+{
+    /// <summary>Off until the token exists: a create must not be refused.</summary>
+    public bool Armed { get; set; }
+
+    /// <inheritdoc />
+    public IReadOnlyCollection<NodeOperation> SupportedOperations { get; } = [NodeOperation.Delete];
+
+    /// <inheritdoc />
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
+        => Observable.Return(
+            Armed && context.Node.Path?.StartsWith($"{userId}/", StringComparison.OrdinalIgnoreCase) == true
+                ? NodeValidationResult.Invalid(reason)
+                : NodeValidationResult.Valid());
 }
