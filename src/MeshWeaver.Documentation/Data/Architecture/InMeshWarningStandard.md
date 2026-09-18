@@ -55,7 +55,7 @@ The maintainer chose two over one combined gate, and the split is by diagnostic 
 
 - **`warnings`** — everything except `CS1591`. `CS0219` (an assigned-but-unused local), `CS1574` /
   `CS1584` (a `cref` that resolves to nothing), `CS1570` (badly formed XML in a doc comment),
-  `CS1573` (a `<param>` tag naming a parameter that does not exist). These are latent bugs, or doc
+  `CS1572` (a `<param>` tag naming a parameter that does not exist). These are latent bugs, or doc
   comments that EXIST and are WRONG — the exact breakage a cross-repo move causes.
 - **`doc-comments`** — `CS1591` alone. Documentation debt: nothing is broken, the member simply is
   not described.
@@ -64,9 +64,21 @@ They are evaluated, reported and failed **independently**, so paying down (or ca
 never in the same verdict as a latent bug, and a missing doc comment can never be the reason an
 unrelated change cannot merge.
 
-> 🚨 Only `CS1591` is documentation debt. `CS1574` and `CS1573` look like doc diagnostics and are
+> 🚨 Only `CS1591` is documentation debt. `CS1574` and `CS1572` look like doc diagnostics and are
 > not — a `cref` pointing at a type that moved is a broken link in shipped API documentation, and it
 > belongs with the bugs.
+>
+> 🚨 **`CS1572` and `CS1573` are opposites, and this page said the second where it meant the
+> first.** `CS1572` is a `<param>` tag naming a parameter that **does not exist** — a tag that is
+> WRONG, so it belongs with the bugs and does reach the `warnings` ratchet. `CS1573` is a parameter
+> with **no** `<param>` tag — doc COMPLETENESS, suppressed for `src/` by `Directory.Build.props`
+> and therefore in `CompileWarning.NotReported`, where `EmitPipeline.Collect` filters it out before
+> the inventory is built. **A `CS1573` Roslyn emits can never enter the inventory, so it can never be
+> a NEW warning against either ratchet** — which is what the *Doc COMPLETENESS* row of the parity
+> table below records. (The guarantee is that filter, not the classifier: `WarningClasses.Of` is not
+> an enumerated list, so a `CS1573` written into a baseline BY HAND classifies as `Real` and fails as
+> a STALE entry.) Naming it here sent a reader after a code that is structurally unable to appear,
+> and never named the one that actually matters (#4737).
 
 ## The baseline, and why it can only shrink
 
