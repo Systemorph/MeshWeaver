@@ -171,6 +171,46 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
         _every.Runs.Should().Be(before, "an unauthenticated caller is not a logon");
     }
 
+    /// <summary>
+    /// The first user of a fresh instance: signed in, authenticated, and with NO profile node —
+    /// because onboarding is the thing that creates it and they have not filled the form in yet.
+    ///
+    /// <para>🚨 This is the FIRST-RUN DEADLOCK, measured on a brand-new deployment
+    /// (PartnerRe, 2026-09-18 10:04Z). The runner read the missing profile as "no action has run
+    /// yet", <c>SeedDefaultAppsLogonAction</c> wrote <c>{user}/_App/Store</c>, creating a node
+    /// inside an empty partition bootstrapped the Space root at the bare path <c>{user}</c> — and
+    /// the onboarding form the same person was looking at probes <c>path:{username}</c> and refused
+    /// them their own name: "Username 'rbuergi' is already taken." The platform had claimed it three
+    /// seconds earlier, no other name was acceptable, and the instance ended up with no
+    /// administrator at all.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task A_signed_in_caller_with_no_profile_runs_no_logon_actions()
+    {
+        const string NotOnboarded = "notonboarded";
+        var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
+        var before = _every.Runs;
+
+        await runner.RunFor(IdentityFor(NotOnboarded))
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await(TestContext.Current.CancellationToken);
+
+        _every.Runs.Should().Be(before,
+            "a signed-in caller with no profile has not onboarded yet — running actions for them "
+            + "writes into a partition that must not exist until onboarding creates it");
+
+        // The observable half of the same statement, and the one the incident was about: nothing
+        // may stand at the user's bare path, because the onboarding username probe reads exactly
+        // that path and refuses a name any node occupies.
+        var root = await Mesh.GetWorkspace().GetMeshNodeStream(NotOnboarded)
+            .Select(node => (MeshNode?)node)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+        root.Should().BeNull("the logon run must not have materialised the caller's partition root");
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private static AccessContext IdentityFor(string userPath) =>
