@@ -237,9 +237,9 @@ list.** Roslyn still emits `CS1591`/`CS1573`/`CS1712` and `CS1701`/`CS1702` on b
 `CompileWarning.NotReported` drops them in `EmitPipeline.Collect` — the single point every consumer
 reads warnings through — so they never enter the `WarningInventory` the ratchets judge, and the
 zeroes above are counts of REPORTED warnings. The paragraph below is that difference in numbers:
-362 `CS1591` occurrences, emitted and unmeasured. `TheRuntimeCompileStaysLenientTest
-.ACentrallySuppressedCode_IsNotReported` asserts both halves on one run — the compiler DID produce
-the diagnostic, and `Collect` did NOT carry it — and
+362 `CS1591` occurrences, emitted and unmeasured.
+`TheRuntimeCompileStaysLenientTest.ACentrallySuppressedCode_IsNotReported` asserts both halves on
+one run — the compiler DID produce the diagnostic, and `Collect` did NOT carry it — and
 `ACodeThatIsNotSuppressed_StillReachesTheGate` is its control, so "nothing was reported" can never
 quietly become "nothing is reported".
 
