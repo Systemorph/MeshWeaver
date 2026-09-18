@@ -1,5 +1,6 @@
 using System;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -45,6 +46,16 @@ public sealed class MeshTestContext
 
     /// <summary>Per-case deadline; a case past it fails naming the deadline.</summary>
     public TimeSpan Deadline { get; }
+
+    /// <summary>
+    /// The token of the case running right now — cancelled the moment the case's bound elapses, so a
+    /// wait that observes it ends WITH the verdict instead of outliving it. The in-mesh counterpart of
+    /// xunit's <c>TestContext.Current.CancellationToken</c> (xUnit1069): a timed case that never
+    /// observes it is reported by <see cref="MeshTestRunner"/> as having IGNORED its cancellation,
+    /// because the runner cannot stop what the case started — it can only name it. Set by the runner
+    /// before each case; <see cref="System.Threading.CancellationToken.None"/> outside a case.
+    /// </summary>
+    public CancellationToken CancellationToken { get; internal set; }
 
     internal MeshTestContext(LayoutAreaHost host, string partition, Action<string> output, TimeSpan deadline)
     {

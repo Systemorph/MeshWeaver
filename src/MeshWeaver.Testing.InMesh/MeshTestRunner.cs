@@ -1,11 +1,16 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Testing.InMesh;
 
@@ -73,32 +78,77 @@ public static class MeshTestRunner
                 var reason = $"the class could not be constructed: {Unwrap(ex).Message}";
                 return cases.Select(c => new CaseResult(cls.Name, c.Name, "❌ FAIL", reason, TimeSpan.Zero)).ToObservable();
             }
-            return cases.Select(c => RunCase(instance, cls, c, output, deadline)).Concat();
+            // A case is ONE leaf on the mesh's Tests pool — never Observable.FromAsync (an ABSOLUTE in
+            // AGENTS.md: it runs the prologue on the subscribing thread with no bound). The pool links
+            // the leaf's token to the subscription, which is what lets the bound below CANCEL a case
+            // rather than abandon it. Host-less runs (the runner's own tests) have no registry.
+            var pool = host?.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Tests) ?? IoPool.Unbounded;
+            return cases.Select(c => RunCase(instance, cls, c, output, deadline, context, pool)).Concat();
         });
     }
 
-    private static IObservable<CaseResult> RunCase(object? instance, Type cls, TestCase c, List<string> output, TimeSpan deadline)
+    /// <summary>
+    /// How long the runner waits, after a case's bound elapsed and its token was cancelled, for the
+    /// case to unwind before reporting that it IGNORED the token. A case that observes
+    /// <see cref="MeshTestContext.CancellationToken"/> (or its trailing <see cref="CancellationToken"/>
+    /// parameter) ends inside this grace; one that does not is still running when it ends, and the
+    /// runner says so in the verdict — it cannot stop what the case started, only name it.
+    /// </summary>
+    public static readonly TimeSpan CancellationGrace = TimeSpan.FromSeconds(2);
+
+    private static IObservable<CaseResult> RunCase(object? instance, Type cls, TestCase c, List<string> output, TimeSpan deadline, MeshTestContext? context, IIoPool pool)
     {
         if (c.Skip is not null)
             return Observable.Return(new CaseResult(cls.Name, c.Name, "⏭ skipped", c.Skip, TimeSpan.Zero));
         var bound = c.TimeoutSeconds > 0 ? TimeSpan.FromSeconds(c.TimeoutSeconds) : deadline;
         var started = DateTimeOffset.UtcNow;
         output.Clear();
-        return Observable.FromAsync(async () =>
+        // The leaf signals its own unwinding. When the bound elapses, Timeout disposes the leaf's
+        // subscription, the pool cancels the token it handed the case, and the runner waits the grace
+        // on this signal: a case that observed the token completes it; one that did not leaves it
+        // pending — the shape xUnit1069 names on xunit, named here at run time instead.
+        var unwound = new AsyncSubject<Unit>();
+        var work = pool.Invoke(async ct =>
+        {
+            try
             {
-                var result = c.Method.Invoke(instance, c.Arguments);
+                if (context is not null)
+                    context.CancellationToken = ct;
+                var result = c.Method.Invoke(instance, Arguments(c, ct));
                 switch (result)
                 {
                     case Task t: await t; break;
                     case ValueTask vt: await vt; break;
                 }
-            })
+                return Unit.Default;
+            }
+            finally
+            {
+                if (context is not null)
+                    context.CancellationToken = CancellationToken.None;
+                unwound.OnNext(Unit.Default);
+                unwound.OnCompleted();
+            }
+        });
+        CaseResult Fail(string detail) => new(cls.Name, c.Name, "❌ FAIL", detail + (output.Count > 0 ? " · " + string.Join(" · ", output) : ""), DateTimeOffset.UtcNow - started);
+        return work
             .Timeout(bound)
             .Select(_ => new CaseResult(cls.Name, c.Name, "✅ pass", string.Join(" · ", output), DateTimeOffset.UtcNow - started))
-            .Catch<CaseResult, Exception>(ex => Observable.Return(new CaseResult(cls.Name, c.Name, "❌ FAIL",
-                (ex is TimeoutException ? $"no verdict within {bound.TotalSeconds:F0}s — " : "") + Unwrap(ex).Message
-                + (output.Count > 0 ? " · " + string.Join(" · ", output) : ""),
-                DateTimeOffset.UtcNow - started)));
+            .Catch<CaseResult, TimeoutException>(_ => unwound
+                .Timeout(CancellationGrace)
+                .Select(_ => Fail($"no verdict within {bound.TotalSeconds:F0}s — cancelled and unwound"))
+                .Catch<CaseResult, TimeoutException>(_ => Observable.Return(Fail(
+                    $"no verdict within {bound.TotalSeconds:F0}s — and the case IGNORED its cancellation token: still running {CancellationGrace.TotalSeconds:F0}s after it was cancelled. Pass MeshTestContext.CancellationToken (or a trailing CancellationToken parameter) into what the case awaits"))))
+            .Catch<CaseResult, Exception>(ex => Observable.Return(Fail(Unwrap(ex).Message)));
+    }
+
+    /// <summary>The case's arguments, plus the runner's token when the method declares a trailing <see cref="CancellationToken"/> parameter.</summary>
+    private static object?[] Arguments(TestCase c, CancellationToken ct)
+    {
+        var parameters = c.Method.GetParameters();
+        return parameters.Length == c.Arguments.Length + 1 && parameters[^1].ParameterType == typeof(CancellationToken)
+            ? [.. c.Arguments, ct]
+            : c.Arguments;
     }
 
     private static object? Instantiate(Type cls, MeshTestContext? context)
