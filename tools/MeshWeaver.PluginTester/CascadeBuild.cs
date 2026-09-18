@@ -20,10 +20,13 @@ namespace MeshWeaver.PluginTester;
 /// for node repos (maintainer, 2026-08-30): <b>build always means compile AND run tests</b>, per
 /// package, over the package dependency network, as a reactive cascade, inside the container the
 /// platform build produced. Nothing here imports a node into a mesh. The sources are read from the
-/// checkout on disk, composed into Roslyn compilations exactly as the portal composes them
+/// checkout on disk and composed into Roslyn compilations exactly as the portal composes them
 /// (<see cref="NodeSetCompiler"/> — the same skeleton, the same options, the same
-/// <c>/app</c> reference set), and each package compiles against the assemblies its dependency
-/// packages just emitted.
+/// <c>/app</c> reference set), which since Systemorph/MeshWeaver.Plugins#1970 is the WHOLE of the
+/// reference set: the framework and its modules, and nothing a dependency package emitted. The
+/// sentence that used to end this paragraph — "each package compiles against the assemblies its
+/// dependency packages just emitted" — described the one place this lane did NOT match the portal,
+/// while the words around it asserted that it did.
 ///
 /// <para><b>The cascade.</b> <see cref="Cascade"/> gives every package a result stream; a package
 /// subscribes to its dependencies' streams and starts the moment the last one completes green.
