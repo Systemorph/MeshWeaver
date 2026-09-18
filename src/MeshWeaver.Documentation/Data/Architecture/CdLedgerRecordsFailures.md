@@ -47,14 +47,20 @@ All four shared one exit code. So did the reconciler's verdict, and so did the a
 ### Window 1 — the pair tag is unsatisfiable in steady state
 
 `gate` resolves `MeshWeaver.Plugins` `main` **afresh on every tick** and demands the pair tag for
-*that* commit. Measured on 2026-09-14…18, `MeshWeaver.Plugins` `main` takes **43–48 pull-request
-merges a day** — a median interval near 30 minutes. A CD publish takes about **43 minutes**
+*that* commit. Measured per day over 2026-09-10…17, `MeshWeaver.Plugins` `main` takes
+**25, 42, 39, 61, 48, 48, 18 and 43 pull-request merges** — a mean of 40 a day, so a mean interval
+near 36 minutes and under 25 on the busiest day. A CD publish takes about **43 minutes**
 (run `35282036886`: started 22:26:33Z, promote tags written 23:02:57Z, closed 23:06:50Z).
 
-A publish is therefore slower than the ref it is racing. The pair tag a run writes names a plugins
-commit that has already been superseded before `verify-images` reads it back, so the next tick
-finds the pairing stale again — **forever, by construction**. It is the shape the memory note
-*"a LIVE CENSUS cannot measure PROGRESS — an arrival cancels a completion one-for-one"* describes.
+So on a normal day the ref moves at least once while a publish is running. The pair tag a run
+writes names a plugins commit that has typically been superseded before `verify-images` reads it
+back, and the next tick finds the pairing stale again. It is the shape the memory note *"a LIVE
+CENSUS cannot measure PROGRESS — an arrival cancels a completion one-for-one"* describes; the
+quietest day measured (18 merges, one per 80 minutes) is the one where a tick could occasionally
+find it current.
+
+That is the rate. The **observation** is stronger than the rate and does not depend on it: three
+consecutive hourly ticks on one unchanged core commit each resolved a *different* plugins HEAD.
 
 The registry records it plainly. Core commit `0dadacc` sat as main's HEAD for four hours on
 2026-09-17 and was built **three times**:
@@ -206,7 +212,7 @@ tracked on [#4688](https://github.com/Systemorph/MeshWeaver/issues/4688), which 
 three options and the measurements below.
 
 The reconciler still rebuilds the portal image whenever `MeshWeaver.Plugins` `main` has moved —
-so, at 43–48 merges a day against an hourly tick, up to 24 full multi-arch builds a day, each
+so, at a mean 40 merges a day against an hourly tick, up to 24 full multi-arch builds a day, each
 publishing a `3.0.0-ci.N` and each a publication event the fleet rolls on. The measured sample of
 plugins merges driving those rebuilds is dominated by commits that cannot change the portal image
 at all: lock regeneration, i18n mirror syncs, doc and CI changes, `Merge main into <branch> — only

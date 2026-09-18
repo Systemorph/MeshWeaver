@@ -1047,10 +1047,12 @@ jobs:
           # and the issue this used to file said in as many words that one was.
           #
           # 🚨 IT DOES NOT CONVERGE, AND THAT IS A CADENCE QUESTION THIS BRANCH DELIBERATELY DOES
-          # NOT ANSWER. MeshWeaver.Plugins `main` takes 43–48 merges a day — a median interval of
-          # about 30 minutes — and a CD publish takes ~43, so the pair tag this run writes names a
-          # plugins commit that has already been superseded by the time `verify-images` reads it
-          # back. Every tick therefore finds the pairing stale again. That is 24 full multi-arch
+          # NOT ANSWER. MeshWeaver.Plugins `main` took 25/42/39/61/48/48/18/43 merges a day over
+          # 2026-09-10…17 — a mean interval near 36 minutes — and a CD publish takes ~43, so the
+          # pair tag this run writes usually names a plugins commit already superseded by the time
+          # `verify-images` reads it back. Ticks therefore keep finding it stale (measured directly:
+          # three consecutive ticks on ONE unchanged core commit resolved three DIFFERENT plugins
+          # HEADs, which does not depend on the rate at all). That is up to 24 full multi-arch
           # rebuilds a day of trees that are often identical (measured: 418 publishing builds over
           # 340 distinct core commits; `0dadacc` was built three times in three hours on
           # 2026-09-17, minting ci.8883, ci.8885 and ci.8886 and moving its own sha tag twice).
