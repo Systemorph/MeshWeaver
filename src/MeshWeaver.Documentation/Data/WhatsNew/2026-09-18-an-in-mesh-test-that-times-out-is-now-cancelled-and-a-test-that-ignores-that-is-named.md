@@ -28,5 +28,10 @@ to remove the warning without removing the defect.
   which of two things happened: "cancelled and unwound", or "the case IGNORED its cancellation
   token: still running after it was cancelled" with the remedy spelled out.
 
+- The pool does not order the cases; the runner does. It has room for cases that ignore their
+  cancellation, so one such case no longer blocks every case after it. If ignoring cases do fill the
+  pool, the next case is reported at once as not run, naming the cases that are still running,
+  instead of timing out half a minute later without ever having executed.
+
 The runner cannot stop what a case started without the case's cooperation. What it can do is
 refuse to let that go unnoticed, which is what the verdict now does.

@@ -56,10 +56,21 @@ public static class MeshTestRunner
 
     /// <summary>Executes the cases, one at a time, emitting each verdict as it lands.</summary>
     /// <remarks>A null host runs the classes that need no mesh (parameterless constructors) — the runner's own tests use it.</remarks>
-    public static IObservable<CaseResult> Run(LayoutAreaHost? host, IEnumerable<Type> classes, TimeSpan deadline) =>
-        classes.Select(cls => RunClass(host, cls, deadline)).Concat();
+    /// <param name="host">The area host; null runs the classes that need no mesh.</param>
+    /// <param name="classes">The test classes, run one after another.</param>
+    /// <param name="deadline">The per-case bound when a case declares none.</param>
+    /// <param name="pool">The pool the cases run on. Null resolves the mesh's <see cref="IoPoolNames.Tests"/>
+    /// pool (or <see cref="IoPool.Unbounded"/> without a host); the runner's own tests pass a bounded one.</param>
+    public static IObservable<CaseResult> Run(LayoutAreaHost? host, IEnumerable<Type> classes, TimeSpan deadline, IIoPool? pool = null) =>
+        Observable.Defer(() =>
+        {
+            // The cases of THIS run that ignored their cancellation and are therefore still holding a
+            // pool slot. Per run, never static: two Tests areas rendering at once do not share it.
+            var leaked = new List<string>();
+            return classes.Select(cls => RunClass(host, cls, deadline, pool, leaked)).Concat();
+        });
 
-    private static IObservable<CaseResult> RunClass(LayoutAreaHost? host, Type cls, TimeSpan deadline)
+    private static IObservable<CaseResult> RunClass(LayoutAreaHost? host, Type cls, TimeSpan deadline, IIoPool? requestedPool, List<string> leaked)
     {
         var partition = $"{MeshTestContext.TestRoot}/{cls.Name}-{Guid.NewGuid():N}"[..Math.Min(80, MeshTestContext.TestRoot.Length + 1 + cls.Name.Length + 33)];
         var cases = Cases(cls).ToList();
@@ -82,8 +93,8 @@ public static class MeshTestRunner
             // AGENTS.md: it runs the prologue on the subscribing thread with no bound). The pool links
             // the leaf's token to the subscription, which is what lets the bound below CANCEL a case
             // rather than abandon it. Host-less runs (the runner's own tests) have no registry.
-            var pool = host?.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Tests) ?? IoPool.Unbounded;
-            return cases.Select(c => RunCase(instance, cls, c, output, deadline, context, pool)).Concat();
+            var pool = requestedPool ?? host?.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Tests) ?? IoPool.Unbounded;
+            return cases.Select(c => RunCase(instance, cls, c, output, deadline, context, pool, leaked)).Concat();
         });
     }
 
@@ -96,10 +107,17 @@ public static class MeshTestRunner
     /// </summary>
     public static readonly TimeSpan CancellationGrace = TimeSpan.FromSeconds(2);
 
-    private static IObservable<CaseResult> RunCase(object? instance, Type cls, TestCase c, List<string> output, TimeSpan deadline, MeshTestContext? context, IIoPool pool)
+    private static IObservable<CaseResult> RunCase(object? instance, Type cls, TestCase c, List<string> output, TimeSpan deadline, MeshTestContext? context, IIoPool pool, List<string> leaked)
     {
         if (c.Skip is not null)
             return Observable.Return(new CaseResult(cls.Name, c.Name, "⏭ skipped", c.Skip, TimeSpan.Zero));
+        // 🚨 A case that ignored its cancellation still HOLDS its pool slot — the runner could name it,
+        // not stop it. If such leaks have filled the pool, this case would queue behind them and die
+        // as an anonymous "no verdict" without ever executing; say what is true instead, at once.
+        if (leaked.Count > 0 && pool is IoPool bounded && bounded.CurrentInFlight >= bounded.MaxConcurrency)
+            return Observable.Return(new CaseResult(cls.Name, c.Name, "❌ FAIL",
+                $"not run — every slot of the Tests pool ({bounded.MaxConcurrency}) is held, {leaked.Count} of them by case(s) of this run that ignored their cancellation and are still running: {string.Join(", ", leaked)}. Fix those cases; this one never executed",
+                TimeSpan.Zero));
         var bound = c.TimeoutSeconds > 0 ? TimeSpan.FromSeconds(c.TimeoutSeconds) : deadline;
         var started = DateTimeOffset.UtcNow;
         output.Clear();
@@ -137,9 +155,16 @@ public static class MeshTestRunner
             .Catch<CaseResult, TimeoutException>(_ => unwound
                 .Timeout(CancellationGrace)
                 .Select(_ => Fail($"no verdict within {bound.TotalSeconds:F0}s — cancelled and unwound"))
-                .Catch<CaseResult, TimeoutException>(_ => Observable.Return(Fail(
-                    $"no verdict within {bound.TotalSeconds:F0}s — and the case IGNORED its cancellation token: still running {CancellationGrace.TotalSeconds:F0}s after it was cancelled. Pass MeshTestContext.CancellationToken (or a trailing CancellationToken parameter) into what the case awaits"))))
+                .Catch<CaseResult, TimeoutException>(_ => Observable.Return(Leak(leaked, $"{cls.Name}.{c.Name}", Fail(
+                    $"no verdict within {bound.TotalSeconds:F0}s — and the case IGNORED its cancellation token: still running {CancellationGrace.TotalSeconds:F0}s after it was cancelled. Pass MeshTestContext.CancellationToken (or a trailing CancellationToken parameter) into what the case awaits")))))
             .Catch<CaseResult, Exception>(ex => Observable.Return(Fail(Unwrap(ex).Message)));
+    }
+
+    /// <summary>Records a case that is still running after its cancellation, so a pool it fills can be NAMED.</summary>
+    private static CaseResult Leak(List<string> leaked, string name, CaseResult verdict)
+    {
+        leaked.Add(name);
+        return verdict;
     }
 
     /// <summary>The case's arguments, plus the runner's token when the method declares a trailing <see cref="CancellationToken"/> parameter.</summary>

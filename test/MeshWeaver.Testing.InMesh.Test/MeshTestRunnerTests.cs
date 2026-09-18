@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Testing.InMesh;
 using MeshWeaver.Fixture;
+using MeshWeaver.Mesh.Threading;
 using Xunit;
 
 namespace MeshWeaver.Testing.InMesh.Test;
@@ -64,6 +65,54 @@ public class MeshTestRunnerTests
         var table = MeshTestRunner.Table(list);
         Assert.Contains("| ✅ pass |", table); Assert.Contains("| ❌ FAIL |", table); Assert.Contains("| ⏭ skipped |", table);
         Assert.NotNull(MeshTestRunner.Render("Sample", list));
+    }
+
+    // 🚨 SUBJECT, not a test of this assembly. `AIgnoresItsToken` is the xUnit1069 shape with an END:
+    // it never observes the runner's token, so it outlives its 1 s bound and the grace, and it still
+    // holds its pool slot while the next case is due — but it finishes by itself, so the pool below
+    // can be disposed. `ZRunsAfterTheLeak` sorts after it and is what the leak must not take down.
+    public class Leaky
+    {
+        [MeshFact(TimeoutSeconds = 1)] public async Task AIgnoresItsToken() => await Task.Delay(MeshTestRunner.CancellationGrace * 3);
+        [MeshFact] public void ZRunsAfterTheLeak() { }
+    }
+
+    /// <summary>
+    /// #4719 review: on a ONE-slot Tests pool a case that ignores its token kept the only slot, and
+    /// every later case queued behind it and died as an anonymous "no verdict" without executing —
+    /// invisible to the host-less test above, which runs on <see cref="IoPool.Unbounded"/>. The pool
+    /// is not the serializer (the runner is), so a pool with room runs the next case normally.
+    /// </summary>
+    [Fact]
+    public async Task A_case_that_ignores_its_token_does_not_take_the_next_case_down_with_it()
+    {
+        using var pool = new IoPool(new IoPoolOptions().MaxConcurrencyFor(IoPoolNames.Tests));
+        var results = await MeshTestRunner.Run(null, [typeof(Leaky)], TestTimeouts.Quick, pool).ToList();
+        var byName = results.ToDictionary(r => r.Name);
+
+        Assert.Contains("IGNORED its cancellation token", byName["AIgnoresItsToken"].Detail);
+        Assert.True(byName["ZRunsAfterTheLeak"].Passed,
+            $"the configured Tests pool has room for a leaked case, so the next case must RUN and pass: {byName["ZRunsAfterTheLeak"].Detail}");
+        Assert.True(new IoPoolOptions().MaxConcurrencyFor(IoPoolNames.Tests) > 1,
+            "a one-slot Tests pool lets a single token-ignoring case block every later case of every suite on the mesh");
+    }
+
+    /// <summary>
+    /// And when leaks DO fill the pool, the next case is reported at once as not run, naming the
+    /// leaked case — never as an anonymous timeout thirty seconds later.
+    /// </summary>
+    [Fact]
+    public async Task A_pool_filled_by_leaked_cases_is_named_not_timed_out()
+    {
+        using var pool = new IoPool(1);
+        var results = await MeshTestRunner.Run(null, [typeof(Leaky)], TestTimeouts.Quick, pool).ToList();
+        var blocked = results.Single(r => r.Name == "ZRunsAfterTheLeak");
+
+        Assert.StartsWith("❌", blocked.Result);
+        Assert.Contains("not run", blocked.Detail);
+        Assert.Contains("Leaky.AIgnoresItsToken", blocked.Detail);
+        Assert.DoesNotContain("no verdict within", blocked.Detail);
+        Assert.Equal(TimeSpan.Zero, blocked.Elapsed);
     }
 
     [Fact]
