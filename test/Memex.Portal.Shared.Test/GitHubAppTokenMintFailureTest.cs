@@ -118,6 +118,27 @@ public class GitHubAppTokenMintFailureTest
         Assert.Equal(0, handler.Exchanges);
     }
 
+    [Theory]
+    [InlineData("""{"expires_at": "2026-09-18T12:00:00+00:00"}""")]          // no 'token' at all
+    [InlineData("""{"token": 12345, "expires_at": "2026-09-18T12:00:00+00:00"}""")]   // present, not a string
+    public async Task AnExchangeThatSucceedsWithNoUsableToken_IsAMintFailure_NamingTheResponse(string body)
+    {
+        using var rsa = RSA.Create(2048);
+        var handler = new FakeGitHub { ExchangeBody = body };
+        var service = Service(handler, rsa.ExportRSAPrivateKeyPem());
+
+        var failure = await Assert.ThrowsAsync<GitHubAppTokenMintException>(
+            () => service.GetInstallationToken().Timeout(Budget).Await());
+
+        Assert.Equal(GitHubAppTokenMintStage.Response, failure.Stage);
+        // 🚨 NULL, and the null is the assertion. StatusCode is set only where GitHub REFUSED
+        // something; here the exchange SUCCEEDED, so a 201 attached to this failure would be an
+        // accurate number under a misleading claim — the very confusion #4736 is about.
+        Assert.Null(failure.StatusCode);
+        // The exchange was really walked: this cannot pass on a service that stopped earlier.
+        Assert.Equal(1, handler.Exchanges);
+    }
+
     [Fact]
     public async Task AMintThatNeverReachesAVerdict_IsStillAMintFailure()
     {
@@ -166,6 +187,10 @@ public class GitHubAppTokenMintFailureTest
         /// <summary>Status for <c>POST /app/installations/{id}/access_tokens</c>.</summary>
         public HttpStatusCode ExchangeStatus { get; init; } = HttpStatusCode.Created;
 
+        /// <summary>When set, the body a SUCCESSFUL exchange answers with — so a 2xx carrying no
+        /// usable token can be exercised without pretending GitHub refused anything.</summary>
+        public string? ExchangeBody { get; init; }
+
         /// <summary>When set, the request dies in transport instead of answering a status.</summary>
         public Func<Exception>? Transport { get; init; }
 
@@ -199,11 +224,13 @@ public class GitHubAppTokenMintFailureTest
                 if (Transport is { } deadExchange)
                     return Task.FromException<HttpResponseMessage>(deadExchange());
                 var expires = DateTimeOffset.UtcNow.AddHours(1).ToString("o");
+                var success = ExchangeBody
+                    ?? $$"""{"token": "ghs_test", "expires_at": "{{expires}}"}""";
                 return Task.FromResult(new HttpResponseMessage(ExchangeStatus)
                 {
                     Content = new StringContent(
                         ExchangeStatus == HttpStatusCode.Created
-                            ? $$"""{"token": "ghs_test", "expires_at": "{{expires}}"}"""
+                            ? success
                             : """{"message": "Bad credentials", "status": "401"}""",
                         Encoding.UTF8, "application/json"),
                 });
