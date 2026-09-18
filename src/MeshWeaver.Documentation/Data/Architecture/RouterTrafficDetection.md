@@ -170,6 +170,44 @@ would receive it, and then queue every frame behind every write in the mesh (#29
 exists because a subscriber has to be a real, data-wired actor — the shape `MeshNodeStreamCache`'s
 own `cache/{meshId}` hub has had all along.
 
+🚨 **The ORIGIN line prints this table, and for one release it printed two thirds of it (#4697).**
+The third seam arrived with #4614; the two `src/` matchers in `RouterOriginScan` learned it and the
+runtime line did not, because nothing compared them. That is worse than stale text: the line is read
+by the incident bot as well as by people, so **#4697 was auto-filed off it and reproduced the
+two-seam advice verbatim as its own "probable cause"** — a wrong remedy manufactured into a
+production issue. Anyone who had followed it for a subscription would have hopped onto
+`ReadIssuingHub()` and lost the data *together with the reports*, the one failure mode a detector
+must never have. The seam vocabulary is now written **once**
+(`RouterOriginScan.SeamNames`), both matchers are built from it, and
+`RouterOriginAdviceNamesEverySeamGuard` reds until the printed advice names every seam registered
+there. What that does not buy is omniscience — a fourth seam nobody registers is invisible to all
+three.
+
+🚨 **The remedy is ROLE-DEPENDENT, and `"target"` is TWO populations with OPPOSITE fixes.** The line
+names the role it is reporting. `"sender"` means *this post left the router* and the call site is
+what moves, onto one of the three seams. `"target"` means the delivery was **addressed at** the
+router, and that covers both of:
+
+| the target was | who is at fault | the fix |
+|---|---|---|
+| **chosen** by this call site — it posted work AT `mesh/{id}` | the call site | address the owning node: `MeshExtensions.NodeOperationTarget()` |
+| **read off** an incoming request or subscription — `request.Subscriber`, `ResponseFor(delivery)` | whoever SUBSCRIBED or REQUESTED | move that hub; the frame named here is the innocent answering half |
+
+`RouterTrafficRule.RoleOf` says so itself, in the `isResponse` remark: *"real work SENT TO the router
+is still reported at request time via the `target` role"*. **Nothing at the detector separates the
+two** — a `DataChangedEvent` fan-out carries no request-id, so `isResponse` is not that
+discriminator — which is exactly why the line hands the reader the question rather than a verdict:
+at the call site, "did I choose this address or echo it back?" is answered in one look.
+`"sender AND target"` means both halves apply.
+
+#4697 is the second row: it named `JsonSynchronizationStream.cs:1588`, an owner fanning out to
+`request.Subscriber`, while the defect was one hub away in `MeshOperations.RenderResolvedArea` and
+#4622 had already fixed it. 🚨 **The first draft of this very section asserted the second row for
+every `target` line** — the identical over-generalisation, pointed the other way, and it would have
+sent anyone holding a genuine posted-AT-the-router report hunting a subscriber that does not exist
+(caught by Copilot on #4712). A remedy stated more confidently than the evidence supports is the
+defect this page is about, and writing the page is not an exemption from it.
+
 The hop is needed on the **sender**, not only on the target. `hub.NodeOperationTarget()` puts the
 request's destination off the router; it does nothing about where the request came FROM, and the
 `"sender"` role is reported on the request and the `"target"` role on its reply. `MeshService` hops
