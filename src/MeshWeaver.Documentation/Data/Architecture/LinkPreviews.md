@@ -37,6 +37,22 @@ Blazor circuit exists:
    else `poster`/`thumbnail`), and otherwise **`/api/og/{path}.png`** — a 1200×630 card the
    portal draws itself (`OgCardRenderer`, SkiaSharp with an embedded font). *Having* a share
    image is the default, not something each page remembers to author.
+
+   **The card draws everything the node can say about itself** (`SeoEndpoints.CardContent`):
+   the node's name as the title; its description — `Description`, else the content's
+   `abstract`/`description`, else the catalog copy `tagline`/`summary`/`headline`; its
+   category (else the type's leaf) as the eyebrow; its **own mark**, the same backplated
+   `<svg>` the favicon route rasterizes, drawn large on the right; a price chip when `price`
+   is positive; and the instance name plus the path in the footer. A node with no mark gets a
+   **default badge** — a rounded tile in the card's accent carrying the page's initial — so no
+   card is ever text on a dark rectangle (2026-09-18: the Store shared into iMessage as a bare
+   title beside the site favicon). The head declares `og:image:type/width/height` for the drawn
+   card (an authored image's size is unknown) and mirrors it as `twitter:image`.
+
+   **Every page has a card.** The home page, a route that is no node, and a node the anonymous
+   gate withholds all share as the INSTANCE — `og:title` is the site name and `og:image` is
+   **`/api/og.png`**, the site card (name + host, nothing read from the mesh). A private page's
+   name, description and mark never reach that block.
 3. **`SeoNoScriptBody`** serves the page's pre-rendered markdown inside `<noscript>`, so non-JS
    crawlers index actual content rather than an empty Blazor shell.
 
