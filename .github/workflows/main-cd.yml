@@ -738,7 +738,7 @@ jobs:
           # later phase legitimately has not written. `verify-images` runs after phase C and is where
           # the pointer set is asserted. See Doc/Architecture/ImageTagContract.
           #
-          # 🚨 THREE ANSWERS, NOT TWO (MeshWeaver#4679). Exit 2 means every image of the set is
+          # 🚨 THREE ANSWERS, NOT TWO (MeshWeaver#4687). Exit 2 means every image of the set is
           # present and good and ONLY the pair tag is behind — the set is DELIVERABLE, the host
           # pairing is stale. That used to arrive as exit 1, i.e. as "main's HEAD has no deployable
           # image", and it is what made `gate` file 28 of the 109 `incomplete image set` issues ever
@@ -758,7 +758,7 @@ jobs:
       # ── Has a publisher ALREADY TRIED this commit and not finished? (reconcile only) ────────
       #
       # 🚨 THE LEDGER RECORDS A DELIVERY THAT FAILED, NOT ONE THAT HAS NOT HAPPENED YET
-      # (MeshWeaver#4679). `decide`'s alarm branch used to fire on "main's HEAD has no image set
+      # (MeshWeaver#4687). `decide`'s alarm branch used to fire on "main's HEAD has no image set
       # right now", which is the NORMAL state of every commit between its required check going
       # green and its publisher finishing — a window that is minutes wide for the run's creation
       # alone and ~43 minutes wide for the build. Measured over the 25 most recent such issues:
@@ -899,7 +899,7 @@ jobs:
           CONCL: ${{ steps.required.outputs.conclusion }}
           AGE_MIN: ${{ steps.required.outputs.age_min }}
           COMPLETE: ${{ steps.acr.outputs.complete }}
-          # Deliverability and provenance, separately (MeshWeaver#4679). `COMPLETE` is now only ever
+          # Deliverability and provenance, separately (MeshWeaver#4687). `COMPLETE` is now only ever
           # about images an install can PULL; `HOSTS_STALE` is "the newest one was built from an
           # older MeshWeaver.Plugins commit". `ATTEMPTED` is the ledger's evidence: has a publisher
           # already staged layers for this commit and not finished?
@@ -1036,7 +1036,7 @@ jobs:
           # `rebuild` stays as the operator escape hatch (it is still the only way to force a
           # rebuild for a reason no tag encodes), but it is no longer the ONLY way this case is
           # noticed, which is what made it a structural no-op before.
-          # 🚨 A STALE HOST PAIRING IS CADENCE, NOT A DELIVERY HOLE (MeshWeaver#4679), and this
+          # 🚨 A STALE HOST PAIRING IS CADENCE, NOT A DELIVERY HOLE (MeshWeaver#4687), and this
           # branch exists so that the two stop sharing a verdict — and a ledger entry.
           #
           # `HOSTS_STALE` means every image of the set resolved and only `<core>-p<plugins>` is
@@ -1091,7 +1091,7 @@ jobs:
           fi
 
           # 🚨 THE LEDGER RECORDS A DELIVERY THAT FAILED, NOT ONE THAT HAS NOT HAPPENED YET
-          # (MeshWeaver#4679). Everything below this line writes to the `ci-failure` issue, and for
+          # (MeshWeaver#4687). Everything below this line writes to the `ci-failure` issue, and for
           # a year the only thing it asked before doing so was "is the set in ACR right now?" —
           # which is the normal state of every green commit whose publisher has not finished. There
           # are two such windows and both are wide: GitHub takes minutes to CREATE the

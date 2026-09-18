@@ -489,7 +489,7 @@ def run_decide_cases(root, case) -> None:
     case("...and with nothing in flight the same reconcile still builds",
          rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
 
-    # ── THE LEDGER RECORDS A FAILURE, NOT A CADENCE (MeshWeaver#4679) ────────────────────────
+    # ── THE LEDGER RECORDS A FAILURE, NOT A CADENCE (MeshWeaver#4687) ────────────────────────
     #
     # 🚨 <b>109 issues of a 109-issue population recorded a delivery that had not failed.</b>
     # `CD: main <sha> has an incomplete image set` says, in its body, *every self-updating install

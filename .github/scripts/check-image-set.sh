@@ -7,7 +7,7 @@
 #   exit 2 = every image of the set is present and good, and ONLY the pair tag is behind
 #
 # 🚨 EXIT 2 IS DELIVERABILITY vs PROVENANCE, AND THEY WERE CONFLATED FOR 109 ALARMS
-# (MeshWeaver#4679). The three sha-tagged indexes are what an install PULLS; the pair tag is a
+# (MeshWeaver#4687). The three sha-tagged indexes are what an install PULLS; the pair tag is a
 # fact about how the newest one was BUILT. Reporting a missing pair tag through the same exit
 # code as a missing image told `gate` that main's HEAD had no deployable image — and `gate` then
 # filed `CD: main <sha> has an incomplete image set`, whose body says *every self-updating install

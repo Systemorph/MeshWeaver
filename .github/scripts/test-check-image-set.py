@@ -80,7 +80,7 @@ print(os.environ['INDEX'])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not a linux amd64+arm64 image index", result.stdout)
 
-    # ── deliverability vs provenance (MeshWeaver#4679) ──────────────────────────────────────
+    # ── deliverability vs provenance (MeshWeaver#4687) ──────────────────────────────────────
     #
     # 🚨 THE CASE THAT WOULD HAVE FAILED BEFORE THE FIX. A missing pair tag used to exit 1 —
     # the same answer a torn image set gives — so `gate` read "main's HEAD has no deployable
