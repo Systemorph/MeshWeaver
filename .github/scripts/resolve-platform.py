@@ -693,7 +693,19 @@ def misdirects_to_main(text: str) -> bool:
     if "fix main" in text[:first.start() if first else 0].lower():
         return True          # said before ANY remedy, so before any test that could falsify it
     blaming = [block for block in blocks if "fix main" in block.lower()]
-    return not all("only if" in block.lower() or "did carry" in block.lower() for block in blaming)
+    return not all(_cites_why_main(block) for block in blaming)
+
+
+def _cites_why_main(block: str) -> bool:
+    """Does this remedy carry what makes `main` the suspect?
+
+    🚨 A `DID carry` claim over ZERO runs is not evidence, it is the same misdirection wearing the
+    marker (Copilot review on #4681): a mixed page can leave every row unread and still produce the
+    sentence. So the count is read, not just the phrase."""
+    low = block.lower()
+    if "only if" in low:
+        return True
+    return "did carry" in low and not re.search(r"\b0 of the\b", low)
 
 
 def ceiling_refusal(evidence: CeilingEvidence) -> str:
@@ -746,9 +758,13 @@ def ceiling_refusal(evidence: CeilingEvidence) -> str:
         f"    the earlier attempt's artefacts (MeshWeaver#4303). The resolver does NOT re-read by "
         f"itself —\n"
         f"    a run listing is its INPUT, and a gate never tests its own inputs.")
-    listing_first = (ev.examined == 0
-                     or ev.predating == ev.examined
-                     or ev.unreadable == ev.examined)
+    # 🚨 THE TEST IS "WAS ANY EVIDENCE ABOUT MAIN READ AT ALL", not "which single skip reason
+    # covered the whole page" (Copilot review on #4681). Counting `predating == examined` and
+    # `unreadable == examined` separately left a MIXED page — 6 rows predating the job, 6 whose
+    # annotations GitHub refused — leading with `main` while naming ZERO runs that could implicate
+    # it. Only a row that CARRIED the reporting job and still named no set says anything about
+    # main; where there is none, the listing leads.
+    listing_first = (ev.silent + ev.ambiguous) == 0
     if listing_first:
         remedies = [
             listing_test,
@@ -2199,6 +2215,38 @@ def self_test() -> int:
     if "stale page" not in _refusal_of(_SILENT):
         failures.append("even the main-first refusal must keep the listing test — a stale page "
                         "can produce this shape too, and the reader must be able to falsify it")
+
+    # 🚨 A MIXED page reads as no evidence at all, and must lead with the listing (Copilot, #4681).
+    # One row predates the job, one row's annotations GitHub refuses: neither skip reason covers the
+    # whole page, yet not one row was read for content. Counting the reasons separately put this on
+    # the MAIN'S OWN ANSWER branch, naming ZERO runs that carried the job while saying "Fix main".
+    def _fetch_main_mixed(path: str):
+        core = _fetch_for(two, sealed_two)
+        if f"/repos/{SATELLITE}/" not in path:
+            return core(path)
+        if "/actions/workflows/" in path:
+            return {"total_count": 2, "workflow_runs": [
+                {"id": 555, "created_at": "2026-08-19T06:00:00Z"},
+                {"id": 556, "created_at": "2026-09-14T08:00:00Z"}]}
+        if "/actions/runs/555/jobs" in path:
+            return {"total_count": 0, "jobs": []}
+        if "/actions/runs/556/jobs" in path:
+            return {"total_count": 1, "jobs": [{"id": 778, "name": PLATFORM_REF_JOB}]}
+        if "/check-runs/778/annotations" in path:
+            raise ResolutionError("HTTP 500 (GitHub server error)")
+        raise AssertionError(path)
+
+    total += 1
+    _mixed = _refusal_of(_fetch_main_mixed)
+    if misdirects_to_main(_mixed) or "TEST THE LISTING" not in (remedy_blocks(_mixed) or [""])[0]:
+        failures.append("a MIXED page — one row predating the job, one with unreadable "
+                        "annotations, neither reason covering it alone — must still lead with the "
+                        f"LISTING: no row that could implicate main was read\n{_mixed}")
+    total += 1
+    if not misdirects_to_main("  1 · MAIN'S OWN ANSWER — 0 of the 12 run(s) examined DID carry the "
+                              "job and named no set. Fix main."):
+        failures.append("a `DID carry` claim over ZERO runs is not evidence about main — the guard "
+                        "must reject it, or the marker becomes a way to say `Fix main` for free")
 
     def _contradicting(path: str):
         if f"/repos/{SATELLITE}/" in path and "/actions/workflows/" in path:

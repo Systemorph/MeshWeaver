@@ -83,12 +83,15 @@ WHAT WAS READ (one call, no re-read):
 
 Three things make it hold:
 
-- **The discriminator is structural and carries no clock.** A page whose every row lacks the job
-  that publishes the verdict cannot have been read for its content at all; a page whose rows *do*
-  carry that job is `main` answering for itself, and then the refusal leads with `main` — citing
-  the runs that implicate it. No threshold was invented to sort the two messages: a bound picked
-  for wording is a bound nobody can tune, and it would eventually flip the text on a healthy
-  repository that happened to be quiet.
+- **The discriminator is structural and carries no clock.** The question it asks is *was any
+  evidence about `main` read at all* — only a run that **carried** the reporting job and still
+  named no set says anything about `main`. Where there is none — every row predating the job, or
+  unreadable, **or any mixture of the two** — the listing leads; where there is one, `main` leads,
+  citing the count. (Counting the skip reasons separately instead left a mixed page leading with
+  `main` while naming zero runs that implicated it; found in review of the fix itself.) No
+  threshold was invented to sort the two messages: a bound picked for wording is a bound nobody
+  can tune, and it would eventually flip the text on a healthy repository that happened to be
+  quiet.
 - **The evidence is printed, in the sentence the reader acts on.** The month-old run ids were the
   tell that unlocked the 2026-09-17 investigation, and they were found by digging. The newest run's
   id, date, **age** and URL are now in the refusal itself, not only in the skip notes above it.
