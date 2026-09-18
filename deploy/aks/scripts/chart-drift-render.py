@@ -72,14 +72,24 @@ import argparse, copy, json, os, subprocess, sys, tempfile
 
 import yaml
 
-# The objects check-chart-drift.sh / chart-drift-compare.py read from the rendered chart. Kept as
-# (kind, name) with None meaning "whichever one of this kind the chart renders", exactly as the
-# comparator picks the PodDisruptionBudget and the ScaledObject.
+# The objects check-chart-drift.sh / chart-drift-compare.py read from the rendered chart, as
+# (kind, name, required). `name` of None means "whichever one of this kind the chart renders",
+# exactly as the comparator picks the PodDisruptionBudget and the ScaledObject.
+#
+# 🚨 `required` is not decoration. The first two are what the comparator REFUSES to run without
+# ("the rendered chart contains no memex-portal-config ConfigMap and/or no memex-portal-deployment
+# Deployment … 'compared nothing' must never read as 'found no drift'"), so a render that dropped
+# one of them would make the independence proof below VACUOUS — every surviving object would still
+# match across the two renders and this script would print "PROVED" over a chart that cannot be
+# compared at all. That is the same "an answer that reads like a pass" shape the whole file exists
+# to refuse, one level in, and it was caught in review on the PR that introduced it. The other two
+# are legitimately absent on a namespace that runs no KEDA and no budget — the comparator treats
+# their absence as a POSITIVE finding, so requiring them here would red a correct deployment.
 COMPARED_OBJECTS = [
-    ("ConfigMap", "memex-portal-config"),
-    ("Deployment", "memex-portal-deployment"),
-    ("PodDisruptionBudget", None),
-    ("ScaledObject", None),
+    ("ConfigMap", "memex-portal-config", True),
+    ("Deployment", "memex-portal-deployment", True),
+    ("PodDisruptionBudget", None, False),
+    ("ScaledObject", None, False),
 ]
 
 # Paths inside a compared object that ARE a function of the placeholder and cannot be otherwise.
@@ -226,10 +236,16 @@ def compared_objects(path):
                 continue
             kind = doc.get("kind")
             name = (doc.get("metadata") or {}).get("name")
-            for want_kind, want_name in COMPARED_OBJECTS:
+            for want_kind, want_name, _required in COMPARED_OBJECTS:
                 if kind == want_kind and want_name in (None, name):
                     found[f"{kind}/{name}"] = doc
     return found
+
+
+def missing_required(found):
+    """The objects the comparator refuses to run without, that this render did not produce."""
+    return [f"{kind}/{name}" for kind, name, required in COMPARED_OBJECTS
+            if required and f"{kind}/{name}" not in found]
 
 
 def strip_expected(kind, obj):
@@ -274,11 +290,26 @@ def prove_independent(first, second):
     a, b = compared_objects(first), compared_objects(second)
     if not a:
         err("the rendered chart contains none of the objects this check compares "
-            f"({', '.join(k for k, _ in COMPARED_OBJECTS)}).",
+            f"({', '.join(k for k, _, _ in COMPARED_OBJECTS)}).",
             "Nothing could be proved independent of the placeholder, and nothing could be compared",
             "against the cluster either. Treating as FAILURE: 'rendered nothing' must never read as",
             "'found no drift'.")
         return False
+    # 🚨 A NON-EMPTY render is not a COMPARABLE one, and the difference is the whole verdict.
+    # Without this, a chart that dropped memex-portal-config while still rendering a PDB would let
+    # every surviving object match across the two renders and this script would announce
+    # "independence PROVED" — a proof about a chart the comparator then refuses to read. The
+    # emptiness test above is necessary and NOT sufficient; naming the missing object here is what
+    # makes the claim mean something. (Copilot review, #4683.)
+    for label, render in (("first", a), ("second", b)):
+        absent = missing_required(render)
+        if absent:
+            err(f"the {label} render does not contain {', '.join(absent)}.",
+                "chart-drift-compare.py REFUSES to run without these two objects, so this render",
+                "cannot be compared against the cluster at all — and an independence proof over",
+                "whatever else happens to be present would be vacuous. Treating as FAILURE rather",
+                "than reporting a proof about a chart nothing can read.")
+            return False
     if set(a) != set(b):
         err("the set of compared objects CHANGED between two renders that differ only in a "
             "render-only placeholder.",

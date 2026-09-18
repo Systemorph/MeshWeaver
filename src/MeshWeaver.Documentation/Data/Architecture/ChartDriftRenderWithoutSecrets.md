@@ -112,18 +112,29 @@ verdict — `chart-drift-compare.py` reads no pod-template annotation at all.
 | 1 (control) | the real chart, the record-driven shape, no vault half | render, and **state** the proof it made |
 | 2 | copies the chart and templates the placeholder into a compared ConfigMap key | go **RED**, naming the leaking key |
 | 3 | copies the chart so the placeholder decides whether a compared object exists at all | go **RED** on the object-set comparison |
-| 4 | values with no `MEMEX_HOST` | **refuse**, and write no render |
+| 4 | empties a template so a **required** compared object is not rendered | go **RED**, and *not* announce a proof |
+| 5 | values with no `MEMEX_HOST` | **refuse**, and write no render |
 
-Case 1 is the control for 2–4: without something that passes, a script that failed unconditionally
+Case 1 is the control for 2–5: without something that passes, a script that failed unconditionally
 would satisfy every other assertion.
 
 Case 3 exists because a field-by-field diff over the *intersection* would miss it, and it has its
 own trap: the poisoned condition must match placeholder A **exactly**, or the object is absent from
 both renders, the sets match, and the case passes having tested nothing.
 
-Both negative controls were themselves verified by sabotage — the independence check and the
-object-set check were each disabled in turn, and each time the corresponding case went red and no
-other did.
+**Case 4 is the subtlest, and it came out of review rather than design.** The first version of the
+proof failed only when the render contained *none* of the compared objects. A render that dropped
+`memex-portal-config` while still emitting the Deployment and the PDB would have had every surviving
+object match across both renders — so the script would have announced *"Placeholder independence
+PROVED"* about a chart `chart-drift-compare.py` then refuses to read. **Non-empty is not
+comparable**, and the emptiness test is necessary but not sufficient; the proof now names any
+required object a render is missing. The two objects the comparator refuses to run without are
+marked `required` in `COMPARED_OBJECTS`; the `PodDisruptionBudget` and `ScaledObject` are not,
+because their absence is a legitimate state the comparator reports as a *positive* finding.
+
+Every one of the three detectors was verified by sabotage — the independence check, the object-set
+check and the required-object check were each disabled in turn, and each time the corresponding case
+went red and no other did.
 
 ## The second defect, and the one that actually cost 34 days
 

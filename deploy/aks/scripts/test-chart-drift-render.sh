@@ -14,11 +14,13 @@
 # happily on a version that had lost the ability to notice a leak — which is the failure class this
 # repository keeps meeting. So case 2 POISONS the chart so the placeholder reaches a compared
 # ConfigMap key, and REQUIRES the render to go red naming it. Case 3 poisons it one step further
-# out, where the placeholder changes which objects exist at all. Case 4 asserts the script refuses
-# rather than inventing a database host when the committed overlay has none — the #3780 rule
-# applied to the checker itself.
+# out, where the placeholder changes which objects exist at all. Case 4 is the subtlest: a render
+# that is NOT empty but is missing an object the comparator refuses to run without, so the proof
+# would be announced over a chart nothing can read. Case 5 asserts the script refuses rather than
+# inventing a database host when the committed overlay has none — the #3780 rule applied to the
+# checker itself.
 #
-# Case 1 is the control for cases 2–4: without a case that PASSES, a script that failed
+# Case 1 is the control for cases 2–5: without a case that PASSES, a script that failed
 # unconditionally would satisfy every other assertion here.
 set -uo pipefail
 SELF_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,6 +60,16 @@ poisoned_chart() {  # poisoned_chart <name> <template-relative-path> <line...>
   rm -rf "$dir"
   cp -R "$CHART" "$dir"
   printf '%s\n' "$@" >> "$dir/$template"
+  echo "$dir"
+}
+
+# The other poison shape: a template that renders NOTHING, so an object simply disappears.
+emptied_chart() {  # emptied_chart <name> <template-relative-path>
+  local name="$1" template="$2"
+  local dir="$WORK/$name"
+  rm -rf "$dir"
+  cp -R "$CHART" "$dir"
+  : > "$dir/$template"
   echo "$dir"
 }
 
@@ -135,7 +147,7 @@ PYEOF
   fi
 else
   echo "::error::no placeholder in the render at all — the fixture no longer exercises the"
-  echo "    injection path, so cases 2 and 3 below would be proving nothing."
+  echo "    injection path, so cases 2–4 below would be proving nothing."
   fail=1
 fi
 
@@ -181,7 +193,26 @@ out="$(run_render "$poison" "$WORK/poisoned-existence.yaml")"; rc=$?
 expect_red "an object whose existence depends on the placeholder" "$out" "$rc" \
   "set of compared objects CHANGED"
 
-# ---- 4. REFUSAL: no host in the values, and none invented ------------------
+# ---- 4. NEGATIVE CONTROL: a render that is non-empty but not COMPARABLE ----
+# The vacuous-proof shape, and the subtlest of the three: the placeholder influences nothing, every
+# surviving object matches across both renders, and the proof would be announced over a chart
+# chart-drift-compare.py then refuses to read. Emptying config.yaml drops memex-portal-config while
+# the Deployment and the PDB still render, so the "did it render anything at all?" test passes and
+# only the per-object requirement can catch it. (Copilot review, #4683.)
+echo "case: a render missing a REQUIRED compared object must go RED, not report a proof"
+poison="$(emptied_chart drop-required-configmap templates/memex-portal/config.yaml)"
+out="$(run_render "$poison" "$WORK/poisoned-missing.yaml")"; rc=$?
+expect_red "a render with no memex-portal-config" "$out" "$rc" \
+  "does not contain ConfigMap/memex-portal-config"
+case "$out" in
+  *"independence PROVED"*)
+    echo "::error::it went red, but it ALSO announced the independence proof — the vacuous claim"
+    echo "    is exactly what this case exists to stop being printed."
+    fail=1 ;;
+  *) echo "  ok   did not announce a proof it could not make" ;;
+esac
+
+# ---- 5. REFUSAL: no host in the values, and none invented ------------------
 # The checker's own #3780 rule. Without config.<half>.MEMEX_HOST there is no secret-free source for
 # the endpoint, and a checker that manufactured one would be committing the defect it guards.
 echo "case: no MEMEX_HOST in the values — refuse, never invent a database host"
@@ -199,7 +230,7 @@ fi
 echo
 if [ "$fail" -eq 0 ]; then
   echo "chart-drift-render: the record-driven shape renders, the placeholder is provably inert, and"
-  echo "both leak controls plus the no-host refusal hold."
+  echo "all four controls hold — two leaks, the uncomparable render, and the no-host refusal."
 else
   echo "::error::chart-drift-render self-test FAILED — see the findings above."
 fi
