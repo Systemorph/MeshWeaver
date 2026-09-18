@@ -38,11 +38,8 @@ public class BootstrapController(
         [FromQuery] string? name,
         [FromQuery] string? username)
     {
-        var expected = config["Bootstrap:Secret"];
-        if (string.IsNullOrWhiteSpace(expected))
-            return NotFound();                       // disabled unless a secret is configured
-        if (!string.Equals(secret, expected, StringComparison.Ordinal))
-            return Unauthorized("invalid or missing secret");
+        if (Gate(secret) is { } refusal)
+            return refusal;
         if (string.IsNullOrWhiteSpace(email))
             return BadRequest("email query parameter is required");
 
@@ -110,11 +107,8 @@ public class BootstrapController(
         [FromQuery] string? description,
         [FromServices] IMessageHub hub)
     {
-        var expected = config["Bootstrap:Secret"];
-        if (string.IsNullOrWhiteSpace(expected))
-            return NotFound();                       // disabled unless a secret is configured
-        if (!string.Equals(secret, expected, StringComparison.Ordinal))
-            return Unauthorized("invalid or missing secret");
+        if (Gate(secret) is { } refusal)
+            return refusal;
         if (string.IsNullOrWhiteSpace(username))
             return BadRequest("username query parameter is required (the minted key's owner)");
 
@@ -163,4 +157,36 @@ public class BootstrapController(
             return StatusCode(500, $"Minting failed: {ex.Message} — check portal logs.");
         }
     }
+
+    /// <summary>
+    /// The <c>Bootstrap:Secret</c> door, applied identically at both endpoints — the refusal to
+    /// return, or null when the caller may proceed.
+    ///
+    /// <para>The secret is taken from the <c>X-Bootstrap-Secret</c> HEADER first and from the query
+    /// string only as a fallback, because every proxy on the path logs a URL and this fleet ships
+    /// its ingress access logs to Loki. A caller using the query form is warned, by shape and never
+    /// by value: the secret itself is not logged here or anywhere else.</para>
+    /// </summary>
+    /// <param name="querySecret">The <c>secret</c> query parameter, or null.</param>
+    private IActionResult? Gate(string? querySecret)
+    {
+        var header = Request.Headers[BootstrapSecretGate.HeaderName].ToString();
+        var (presented, fromQuery) = BootstrapSecretGate.Present(header, querySecret);
+        switch (BootstrapSecretGate.Decide(config["Bootstrap:Secret"], presented))
+        {
+            case BootstrapAuthResult.Disabled:
+                return NotFound();                   // disabled unless a secret is configured
+            case BootstrapAuthResult.Accepted:
+                if (fromQuery)
+                    logger.LogWarning(
+                        "Bootstrap: the secret was presented in the QUERY STRING. Every proxy on "
+                        + "the path logs the URL, and this fleet ships ingress access logs to Loki "
+                        + "— present it in the {Header} header instead. Treat the value as exposed "
+                        + "and rotate it.", BootstrapSecretGate.HeaderName);
+                return null;
+            default:
+                return Unauthorized("invalid or missing secret");
+        }
+    }
+
 }
