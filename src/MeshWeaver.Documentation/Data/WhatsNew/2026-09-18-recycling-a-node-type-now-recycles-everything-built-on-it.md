@@ -1,7 +1,11 @@
 ---
 Name: Recycling a node type now recycles everything built on it
 Category: Feature
-Description: "Recycle" on a node type used to restart only that type's own hub, while every page and node built on it kept serving the old build until each was recycled by hand. One recycle now reaches the whole network — the node types that share its sources and every instance — and touches only what is actually running.
+Description: >-
+  "Recycle" on a node type used to restart only that type's own hub, while every page and node
+  built on it kept serving the old build until each was recycled by hand. One recycle now reaches
+  the whole network — the node types that share its sources and every instance — and touches only
+  what is actually running.
 Icon: ArrowSync
 Order: -20260918
 ---

@@ -81,15 +81,15 @@ public class AColdGrainAnswersADisposeWithoutBuildingItsHubTest(ITestOutputHelpe
 
         // 2. A read builds the hub (the stream appears); the same request then recycles it, and the
         //    next read builds a fresh one.
-        (await access.RunAsSystem(() => SiloMesh.GetMeshNode(path, TimeSpan.FromSeconds(30))).FirstAsync().Await(ct)).Should().NotBeNull();
+        (await access.RunAsSystem(() => SiloMesh.GetMeshNode(path, TestTimeouts.Convergence)).FirstAsync().Await(ct)).Should().NotBeNull();
         var live = LiveHub(address);
         live.Should().NotBeNull("a read is what instantiates the hub");
 
         issuing.Post(new DisposeRequest { Reason = "recycle the live grain" }, o => o.WithTarget(address));
-        await live!.DisposalCompleted.FirstOrDefaultAsync().Timeout(TimeSpan.FromSeconds(30)).Await(ct);
+        await live!.DisposalCompleted.FirstOrDefaultAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         live.RunLevel.Should().Be(MessageHubRunLevel.Dead, "a live hub IS torn down by the same request");
 
-        (await access.RunAsSystem(() => SiloMesh.GetMeshNode(path, TimeSpan.FromSeconds(30))).FirstAsync().Await(ct)).Should().NotBeNull();
+        (await access.RunAsSystem(() => SiloMesh.GetMeshNode(path, TestTimeouts.Convergence)).FirstAsync().Await(ct)).Should().NotBeNull();
         var reactivated = LiveHub(address);
         reactivated.Should().NotBeNull("the address comes back on the next access");
         reactivated.Should().NotBeSameAs(live, "…as a FRESH activation, which is the whole point of a recycle");

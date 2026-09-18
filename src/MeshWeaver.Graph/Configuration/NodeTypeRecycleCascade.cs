@@ -191,7 +191,8 @@ public static class NodeTypeRecycleCascade
         // 🚨 The SURVIVOR issues the requests. The definition hub is on its way out; the mesh hub's
         // node-operation hub outlives it and is the one seam every documented recycle posts from
         // (HubRecycleExtensions, MeshOperations.Recycle).
-        var issuing = definitionHub.GetMeshHub().NodeOperationIssuingHub();
+        var mesh = definitionHub.GetMeshHub();
+        var issuing = mesh.NodeOperationIssuingHub();
         var reason = $"RecycleCascade from '{nodeTypePath}': {request.Reason ?? DisposeRequest.ReasonNotStated}";
 
         DependencyNetwork(definitionHub, nodeTypePath)

@@ -35,7 +35,7 @@ public class RecycleCascadeTest(ITestOutputHelper output) : HubTestBase(output)
                 disposingWhenCascaded = h.IsDisposing;
             }))));
         main.Should().NotBeNull();
-        await main!.Started.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await main!.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
 
         host.Post(new DisposeRequest { Reason = "the operator recycled the main bit" },
             o => o.WithTarget(MainAddress));
@@ -64,7 +64,7 @@ public class RecycleCascadeTest(ITestOutputHelper output) : HubTestBase(output)
         var sub = host.GetHostedHub(CascadedAddress, c => c.WithInitialization(h =>
             h.Set(new RecycleCascade(_ => Interlocked.Increment(ref cascades)))));
         sub.Should().NotBeNull();
-        await sub!.Started.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await sub!.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
 
         host.Post(new DisposeRequest { Reason = "cascade", CascadedFrom = "SomeType" },
             o => o.WithTarget(CascadedAddress));
@@ -87,7 +87,7 @@ public class RecycleCascadeTest(ITestOutputHelper output) : HubTestBase(output)
         var direct = host.GetHostedHub(DirectAddress, c => c.WithInitialization(h =>
             h.Set(new RecycleCascade(_ => Interlocked.Increment(ref cascades)))));
         direct.Should().NotBeNull();
-        await direct!.Started.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await direct!.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
 
         direct.Dispose();
         await direct.DisposalCompleted.FirstOrDefaultAsync()
