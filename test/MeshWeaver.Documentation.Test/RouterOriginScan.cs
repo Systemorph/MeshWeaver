@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -52,7 +53,14 @@ internal static class RouterOriginScan
     /// the single list buys is that a seam registered for the ratchets CANNOT be missing from the
     /// advice: the guard reds until the line names it.</para>
     /// </summary>
-    internal static readonly string[] SeamNames =
+    /// <remarks>
+    /// 🚨 <c>ImmutableArray</c>, not <c>string[]</c>, and that is not style. <see cref="Seams"/> is
+    /// computed ONCE from this list at type-init while the guards enumerate it later, so a mutable
+    /// array would let an in-process write leave the matchers and the printed advice disagreeing
+    /// about what a seam is — the single vocabulary would be single in name only. It is also the
+    /// repo's collections policy (Copilot on #4712).
+    /// </remarks>
+    internal static readonly ImmutableArray<string> SeamNames =
         ["NodeOperationIssuingHub", "ReadIssuingHub", "StreamSubscribingHub"];
 
     /// <summary>The seam names as a regex alternation — the one substring every matcher below shares.</summary>
