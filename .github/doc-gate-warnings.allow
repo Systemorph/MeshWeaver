@@ -1,33 +1,46 @@
 # The in-mesh WARNING debt the embedded Doc tree carries, for `mw-plugin-test compile
 # --warning-baseline`. Format: `<NodeType path> <diagnostic id>`, `#` comments, blanks ignored.
 #
+# ── THIS FILE IS DELIBERATELY EMPTY OF ENTRIES ─────────────────────────────────────────────────
+# An EMPTY baseline is the strictest setting there is, and it is spelled as an empty FILE on
+# purpose: nothing is tolerated, so EVERY in-mesh warning this tree produces fails the bake. It is
+# not the same as omitting `--warning-baseline`, which would be OBSERVE-ONLY — "no known debt" and
+# "the bake never read a baseline" must never render the same, which is why the file stays here
+# rather than being deleted. `bake-then-gate.sh` asserts both ratchets print ENFORCED.
+#
 # 🚨 SHRINK-ONLY: an unlisted (type, code) pair FAILS the bake, and a listed pair whose type
 # compiled clean of that code is STALE and FAILS it until the line is deleted. A listed type that
-# did not compile this run is UNVERIFIABLE, never stale.
+# did not compile this run is UNVERIFIABLE, never stale. With no lines at all, the first half is
+# the whole contract: any warning, anywhere in this tree, is an error.
 #
-# The rules, the two ratchets and the three diagnostic codes that were fixed at the ROOT rather
-# than baselined are documented once, in Doc/Architecture/InMeshWarningStandard — and repeated in
-# .github/samples-gate-warnings.allow, which is the bigger of this repo's two baselines.
+# ── WHERE THE SEVEN LINES WENT (2026-09-18) ────────────────────────────────────────────────────
+# They were NOT fixed by writing anything, and they were not swept away either. Every one of them
+# named CS1591 or CS1701 — the two families #4591 added to `CompileWarning.NotReported`, the
+# in-mesh compile's PARITY list, so that in-mesh C# is held to the standard `src/` C# is held to
+# rather than a stricter one. A raw CSharpCompilation applies no NoWarn at all; those two families
+# are the ones no `dotnet build` in this fleet reports, so the in-mesh compile had been the only
+# compiler in the fleet still reporting them.
 #
-# Measured on this tree before/after those root-cause fixes: 143 raw occurrences over 4 of 4
-# compiled types → 66 over 4.
-
-# ── CS1591 · missing XML doc comment (the doc-comments ratchet) ────────────────────────────────
-# 62 occurrences over 60 distinct members in 3 NodeTypes. These are the executable examples the
-# documentation ships; their public members are illustrative rather than API, which is why the doc
-# debt is carried rather than paid down in this change.
+# The tester names such a line INERT: it tolerates nothing (nothing can produce the code) and hides
+# nothing, and it prints "Delete the lines" on every run. Deleting them is that instruction carried
+# out, and it leaves the file exactly consistent with what the bake measures.
 #
-# 🚨 Doc/DataMesh/PythonPandasNode/PandasExplorer is DELIBERATELY ABSENT: it compiles clean of
-# CS1591 and listing it would be a stale entry on the first run. Adding a line "to be safe" is the
-# one edit this file punishes — the ratchet reads an unearned entry as debt that was already paid.
-Doc/Architecture/BusinessRules/Cession  CS1591
-Doc/DataMesh/SocialMedia/Post           CS1591
-Doc/DataMesh/SocialMedia/Profile        CS1591
-
-# ── CS1701 · assembly-reference version skew (the warnings ratchet) ────────────────────────────
-# System.Reactive compiled against .NET 8's System.Linq.Expressions, running on .NET 10. A property
-# of the reference set, not of the content — see the long note in samples-gate-warnings.allow.
-Doc/Architecture/BusinessRules/Cession    CS1701
-Doc/DataMesh/PythonPandasNode/PandasExplorer  CS1701
-Doc/DataMesh/SocialMedia/Post             CS1701
-Doc/DataMesh/SocialMedia/Profile          CS1701
+# Measured on this tree at e8fce8130d, with `MW_LOG_LEVEL=Information`:
+#
+#   before  warnings: 0 raw occurrence(s) folded to 0 distinct site(s), over 0 of 4 compiled type(s)
+#           warnings: 7 INERT baseline entr(ies) naming CS1591, CS1701 — … Delete the lines.
+#           warnings: warnings     ratchet — ENFORCED against 0 baseline entr(ies): 0 NEW, 0 stale
+#           warnings: doc-comments ratchet — ENFORCED against 0 baseline entr(ies): 0 NEW, 0 stale
+#   after   the same three measured lines, and no INERT line.
+#
+# Both ratchets were already enforcing against ZERO entries before the trim — `WarningBaseline.For`
+# excludes a retired code — so nothing this file used to say was being relied on by anything. The
+# tree itself produces NO warnings at all: 4 of 4 NodeTypes compile clean.
+#
+# 🚨 What this file is NOT. It is not a record that the Doc tree's public members are documented —
+# CS1591 is suppressed, so nobody is measuring that. Writing those doc comments is worth doing and
+# changes NO verdict here; do not read an empty file as a claim that it was done.
+#
+# 🚨 ADD A LINE ONLY FOR A WARNING A RUN ACTUALLY REPORTED, and prefer fixing it. The rules, the two
+# ratchets, the parity list and the three diagnostic codes that were fixed at the ROOT rather than
+# baselined are documented once, in Doc/Architecture/InMeshWarningStandard.

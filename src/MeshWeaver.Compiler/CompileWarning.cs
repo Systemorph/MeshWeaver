@@ -78,11 +78,25 @@ public readonly record struct CompileWarning(string Id, string Message, int Line
     /// 'A, Version=X' … matches identity 'A, Version=Y'". A property of the REFERENCE SET, never of
     /// the content: <c>System.Reactive</c> is built against .NET 8's <c>System.Linq.Expressions</c>
     /// and runs on .NET 10, so every NodeType that touches Rx earns one. No author can fix it and no
-    /// <c>#pragma</c> belongs in their source. The .NET SDK has always suppressed both by default —
+    /// <c>#pragma</c> belongs in their source. No <c>dotnet build</c> in this fleet reports one:
+    /// measured on core at <c>e8fce8130d</c>, a 28-project <c>-c Release -warnaserror</c> build
+    /// covering the Rx-referencing assemblies emits <c>0 Warning(s)</c> and zero <c>CS1701</c>. The
+    /// 95 baseline entries this list retires were the in-mesh compile being the only compiler in
+    /// the fleet that saw them.</para>
+    ///
+    /// <para>🚨 That parity is NOT core's <c>NoWarn</c>, and assuming it was is a trap worth
+    /// naming. The .NET SDK does ship the default —
     /// <c>Microsoft.NET.Sdk.CSharp.props</c>: <c>&lt;NoWarn Condition=" '$(NoWarn)' == ''
-    /// "&gt;1701;1702&lt;/NoWarn&gt;</c> — so every <c>src/</c> project in the fleet is already
-    /// blind to them, and the 95 baseline entries this list retires were the in-mesh compile being
-    /// the only compiler in the fleet that saw them.</para>
+    /// "&gt;1701;1702&lt;/NoWarn&gt;</c> — but the condition is <c>'$(NoWarn)' == ''</c>, and
+    /// core's <c>Directory.Build.props</c> SETS <c>NoWarn</c> before it evaluates, so the default
+    /// never applies here. Measured: core's effective <c>$(NoWarn)</c> is
+    /// <c>649;CA2255;NU5104;NU1510;CS1591;CS1573;CS1712;;NU1608</c> — no 1701, no 1702. A real
+    /// project build is clean because MSBuild's reference resolution hands <c>csc</c> a COHERENT
+    /// set, never because the code is suppressed; this compile assembles its reference set by hand
+    /// (the host's <c>TRUSTED_PLATFORM_ASSEMBLIES</c>) and so is shown a skew a project build never
+    /// presents. The parity conclusion holds on the measurement, not on the SDK line — which does
+    /// govern <c>compile-check.py</c>'s synthesized projects, since those carry no
+    /// <c>Directory.Build.props</c> and append to <c>$(NoWarn)</c> rather than setting it.</para>
     ///
     /// <para><b>Doc COMPLETENESS — <c>CS1591</c>, <c>CS1573</c>, <c>CS1712</c>.</b> A public member
     /// with no doc comment, a parameter with no <c>&lt;param&gt;</c> tag, a type parameter with no
