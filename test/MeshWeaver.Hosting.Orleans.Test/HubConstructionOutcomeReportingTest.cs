@@ -74,4 +74,82 @@ public class HubConstructionOutcomeReportingTest
         => MessageHubGrain.HubConstructionFailureLevel(outcome)
             .Should().Be(LogLevel.Error,
                 "only a KNOWN shutdown is benign; an unknown must never be quietly downgraded");
+
+    // ── The SIBLING reporter (#3243, second half) ────────────────────────────────────────────────
+    //
+    // 🚨 Why the first half did not close the incident. The fingerprint identifies the FAULT, not
+    // the reporter: with a frame present the reporting category is excluded from the identity, and
+    // the discriminating text is the EXCEPTION's message rather than the reporter's prose
+    // (Doc/Architecture/LogWatchTriage) — deliberately, so one fault printed by two catch sites
+    // stays one ticket (#1170/#1171). The activation chain's error arm reported EVERY fault at
+    // fail level, so the same teardown-race ObjectDisposedException kept landing on
+    // e2028eb86d6a85a6 through the arm the classification had not reached. Measured: the
+    // 2026-09-18T05:39:52Z sighting is that arm's line, `activation faulted for
+    // Admin/_Notification/…`, on a pod rolling.
+
+    /// <summary>The #3243 signature exactly: Autofac's scope is gone underneath the activation.</summary>
+    private static Exception DisposedScope() =>
+        new ObjectDisposedException("LifetimeScope",
+            "Instances cannot be resolved and nested lifetimes cannot be created from this "
+            + "LifetimeScope as it (or one of its parent scopes) has already been disposed.");
+
+    /// <summary>
+    /// 🚨 THE PIN. Pre-fix this arm was an unconditional <c>LogError</c>, so the expected teardown
+    /// race was ticketed on every rollout — through the sibling of the line the first half fixed.
+    /// </summary>
+    [Fact]
+    public void AnActivationAbandonedByTeardown_IsNotReportedAsAFault()
+    {
+        MessageHubGrain.ActivationFaultLevel(DisposedScope())
+            .Should().Be(LogLevel.Debug,
+                "a scope closed underneath an activation is the same expected race the missing-hub "
+                + "line already excuses — and this arm is where it was still being ticketed");
+
+        var reason = MessageHubGrain.ActivationFaultReason("Admin/_Notification/abc", DisposedScope());
+        reason.Should().Contain("Admin/_Notification/abc");
+        reason.Should().Contain("tearing", "the reader must be told WHICH condition fired");
+        reason.Should().Contain("re-activates", "and that nothing is lost");
+    }
+
+    /// <summary>
+    /// The hub announcing its own disposal is the other half of the same fact, and
+    /// <c>IsHubDisposal</c> walks the CHAIN because this arm receives the fault wrapped.
+    /// </summary>
+    [Fact]
+    public void AHubDisposalRace_CountsToo_EvenWrapped()
+        => MessageHubGrain.ActivationFaultLevel(
+                new InvalidOperationException("wrapped",
+                    new HubDisposingException(new Address("test", "1"), "stream")))
+            .Should().Be(LogLevel.Debug,
+                "the fault reaches this arm wrapped, so the classifier must walk the chain");
+
+    /// <summary>
+    /// 🚨 THE CONTROL, and the thing that keeps this from being a mute button: a real activation
+    /// failure — a node that never resolved, a configuration that threw — stays red and keeps the
+    /// wording somebody has already learned to grep for.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(TimeoutException))]
+    [InlineData(typeof(InvalidOperationException))]
+    public void ARealActivationFailure_StaysAtFailLevel(Type faultType)
+    {
+        var ex = (Exception)Activator.CreateInstance(faultType)!;
+
+        MessageHubGrain.ActivationFaultLevel(ex)
+            .Should().Be(LogLevel.Error,
+                "only a teardown race is benign; everything else is a defect someone must fix");
+        MessageHubGrain.ActivationFaultReason("Admin/PlatformVersion", ex)
+            .Should().Be("activation faulted for Admin/PlatformVersion",
+                "the unclassified wording is unchanged, so an existing search still finds it");
+    }
+
+    /// <summary>
+    /// A null fault is an UNKNOWN, not a shutdown — the same trap
+    /// <see cref="EverythingElse_StaysAtFailLevel"/> guards on the other arm.
+    /// </summary>
+    [Fact]
+    public void ANullFault_IsNotTreatedAsBenign()
+        => MessageHubGrain.ActivationFaultLevel(null)
+            .Should().Be(LogLevel.Error,
+                "no evidence of a teardown is not evidence of one");
 }
