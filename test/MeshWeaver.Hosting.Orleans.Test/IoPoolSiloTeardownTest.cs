@@ -203,4 +203,87 @@ public class IoPoolSiloTeardownTest
             e => e.Message.Contains("pooled I/O joined", StringComparison.Ordinal),
             "nothing was joined, so nothing may claim it was");
     }
+
+    /// <summary>
+    /// 🚨 THE REGRESSION PIN FOR #2480: when the join budget EXPIRES, the report must name the pool
+    /// that is still holding a leaf AND where that leaf is.
+    ///
+    /// <para>This is the only path the production fault ever takes, and it named nothing for three
+    /// weeks and 18 occurrences. The per-pool attribution added for #2480 is subscribed to each
+    /// pool's own <c>Disposed</c> — and <c>IoPool.TryFinishDisposal</c>'s own remarks say a pool
+    /// whose leaf never unwinds never fires it. So the residual attribution was published on the
+    /// SUCCESS signal: the failing case was precisely the case that could not report. Meanwhile
+    /// <c>IoPoolRegistry.Dispose</c> clears <c>_pools</c>, so by expiry there was nothing left for
+    /// the caller to enumerate either.</para>
+    ///
+    /// <para>Against the previous shape the assertions below fail on a message that is the bare
+    /// sentence with no pool and no site — exactly the 18 production lines.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task WhenTheJoinBudgetExpires_TheReportNamesThePoolAndTheLeaf()
+    {
+        // 🚨 The budget is shrunk ONLY so the expiry path is reachable at all: at the production
+        // 30 s no test can observe this report under xunit's 30 s methodTimeout, which is how its
+        // wording went unchecked. The default is unchanged — this is the same reason DrainTimeout
+        // and DrainGrace are settable.
+        var registry = new IoPoolRegistry(new IoPoolOptions
+        {
+            SiloJoinBudget = TimeSpan.FromMilliseconds(300)
+        });
+        var services = new ServiceCollection();
+        services.AddSingleton(registry);
+        await using var provider = services.BuildServiceProvider();
+
+        var logger = new CapturingLogger();
+        var observer = (ILifecycleObserver)new IoPoolSiloTeardown(provider, logger);
+        await observer.OnStart(TestContext.Current.CancellationToken);
+
+        // A leaf that IGNORES its cancellation token — the defect this issue is named for. `entered`
+        // travels leaf → test, so it is an AsyncSubject the leaf completes and the test awaits
+        // reactively; `release` travels test → the deliberately parked leaf, so it is a volatile int
+        // under a bounded SpinUntil, written in a finally so a failed assertion cannot strand it.
+        var entered = new AsyncSubject<Unit>();
+        var release = 0;
+        using var leaf = registry.Get(IoPoolNames.Query)
+            .InvokeBlocking(ct =>
+            {
+                entered.OnNext(Unit.Default);
+                entered.OnCompleted();
+                // `ct` is deliberately never observed: that IS the fault under test.
+                SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, Budget);
+                return 0;
+            })
+            .Subscribe(_ => { }, _ => { });
+
+        try
+        {
+            await entered.Should().Within(Budget).Emit(
+                "precondition: the leaf must be running before the join is asked to wait for it");
+
+            await observer.OnStop(TestContext.Current.CancellationToken);
+
+            var expiry = logger.Entries.Should().ContainSingle(
+                e => e.Level == LogLevel.Error
+                     && e.Message.Contains("did not finish within", StringComparison.Ordinal),
+                "the expiry must be reported as an error — the silo is releasing over live work")
+                .Subject;
+
+            expiry.Message.Should().Contain(IoPoolNames.Query,
+                "the report must NAME the pool that is still holding a leaf. Before this fix the only "
+                + "attribution rode each pool's Disposed, which a pool whose leaf never unwinds never "
+                + "fires — so the one path this fault takes named nothing at all (#2480)");
+            expiry.Message.Should().Contain(
+                nameof(WhenTheJoinBudgetExpires_TheReportNamesThePoolAndTheLeaf),
+                "and it must name WHERE the leaf is: a lambda's compiler-generated method name "
+                + "carries its enclosing method, which is the pointer 'fix the leaf' needs");
+            expiry.Message.Should().NotContain("every pool reported",
+                "a pool IS still holding a leaf, so the report must not claim the opposite finding");
+        }
+        finally
+        {
+            // In a finally so a failing assertion above cannot leave the pool thread parked for the
+            // whole Budget and take the shard's teardown with it.
+            Volatile.Write(ref release, 1);
+        }
+    }
 }
