@@ -140,12 +140,18 @@ Measured on `samples/Graph/Data`, before → after those three fixes:
 | types producing a warning | 27 of 27 | **18 of 27** |
 | distinct codes | 5 | **2** |
 
-What remains is genuine: `CS1591` on authored sample content (362 occurrences over 271 members in
-17 types), and `CS1701` — *"assuming assembly reference 'System.Linq.Expressions, Version=8.0.0.0'
-used by 'System.Reactive' matches identity '…Version=10.0.0.0'"*. That last one is the ONE class of
-entry whose owner is the **reference set** rather than the content: `System.Reactive` is compiled
-against .NET 8 and runs on .NET 10. No content author can fix it and no `#pragma` belongs in their
-source, so the honest outcome is that the bake RECORDS it.
+> 🚨 **This table is the measurement AS IT STOOD BEFORE the parity list below, and the two codes it
+> ends on are both on that list now.** It is kept because it is what the three fixes were worth on
+> their own; read the next section for what the bake reports TODAY.
+
+What remained after those three fixes was `CS1591` on authored sample content (362 occurrences over
+271 members in 17 types) and `CS1701` — *"assuming assembly reference 'System.Linq.Expressions,
+Version=8.0.0.0' used by 'System.Reactive' matches identity '…Version=10.0.0.0'"*. That second one
+is the ONE class of entry whose owner is the **reference set** rather than the content:
+`System.Reactive` is compiled against .NET 8 and runs on .NET 10, so no content author can fix it
+and no `#pragma` belongs in their source. Recording it was the honest outcome only while there was
+nothing better; the parity list below is better, and **both codes are now filtered before the
+inventory is built** — the bake records neither.
 
 ## 🚨 The parity list: what the in-mesh compile does NOT report
 
@@ -331,8 +337,16 @@ green. The postcondition makes that edit red instead — a gate that cannot fail
 
 `InMeshWarningRatchetTest` runs the real bake over a two-NodeType fixture and pins, end to end:
 
-- an EMPTY baseline over one deliberate `CS0219` and one deliberate `CS1591` → **RED**, each ratchet
-  naming its own and printing the exact line to add;
+- an EMPTY baseline over one deliberate `CS0219` and one deliberate `CS1574` → **RED**, naming both
+  and printing the exact line to add. 🚨 **The debt fixture's second code is `CS1574` — a `cref`
+  resolving to nothing — and not `CS1591`, since the parity list.** A missing doc comment now
+  measures nothing at all, so a fixture built on one would assert a ratchet that can never fire;
+- its companion pins exactly that: a NodeType with a missing doc comment produces **no `CS1591`
+  site and no `doc-comments` NEW entry**, so the suppression is proven by the bake rather than
+  asserted about the filter. The `doc-comments` ratchet is therefore vacuous BY POLICY today — it
+  stays armed for the day a doc-completeness code leaves the parity list;
+- a baseline line naming a SUPPRESSED code is **INERT — never STALE**, so retiring a code at the
+  compiler cannot red a repo that has not yet trimmed its allow file;
 - the same source with both pairs baselined → **GREEN**;
 - a baseline entry whose type compiles clean → **RED as STALE**, and only on *its own* ratchet — the
   other stays green, which is what the two-ratchet split is for;
