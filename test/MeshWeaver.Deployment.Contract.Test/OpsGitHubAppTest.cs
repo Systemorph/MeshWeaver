@@ -43,6 +43,39 @@ public class OpsGitHubAppTest
         }
     }
 
+    /// <summary>
+    /// 🚨 The channel that actually reaches a portal is the whole <c>Deployment__Record</c> document,
+    /// not the derived PortalConfig maps (Copilot on #4453). Asserting on the maps alone passed while
+    /// <c>DeploymentRecordJson.Write</c> still carried <c>opsGitHubApp</c> into that document — the
+    /// invariant this class is named for was false on the one channel that mattered. So this pins
+    /// the PAYLOAD: the portal-bound projection has no ops block, the portal's own App survives it,
+    /// and the control-side form still carries the block, because those are two audiences.
+    /// </summary>
+    [Fact]
+    public void TheDeploymentRecordDocumentHandedToThePortalCarriesNoOpsApp()
+    {
+        var record = Client().WithOpsGitHubApp(
+            "ops-client-id",
+            privateKeySecret: "client-GitHub-App-PrivateKey",
+            privateKeyConfigKey: "GitHub__Apps__client__PrivateKey");
+
+        var portal = JsonNode.Parse(DeploymentRecordJson.WritePortal(record))!.AsObject();
+        Assert.False(portal.ContainsKey("opsGitHubApp"),
+            "the described portal must not receive the App that dispatches its own pipelines");
+        Assert.DoesNotContain("ops-client-id", DeploymentRecordJson.WritePortal(record));
+        Assert.DoesNotContain("PrivateKey", DeploymentRecordJson.WritePortal(record));
+        Assert.Equal("portal-client-id", (string?)portal["gitHubApp"]!["clientId"]);
+
+        // The control-side form is a different audience and keeps the block.
+        var control = JsonNode.Parse(DeploymentRecordJson.Write(record))!.AsObject();
+        Assert.Equal("ops-client-id", (string?)control["opsGitHubApp"]!["clientId"]);
+
+        // And the projection is a projection: nothing else moved.
+        var stripped = DeploymentRecordJson.ForPortal(record);
+        Assert.Null(stripped.OpsGitHubApp);
+        Assert.Equal(record with { OpsGitHubApp = null }, stripped);
+    }
+
     [Fact]
     public void TheOpsAppSurvivesTheContractWithItsPemPointers()
     {

@@ -109,7 +109,11 @@ public static class MemexHostingExtensions
         portal.WithEnvironment(context =>
         {
             var r = resource.Record;
-            context.EnvironmentVariables[DeploymentRecordJson.EnvironmentKey] = DeploymentRecordJson.Write(r);
+            // 🚨 The PORTAL's copy, not the control-side record: the ops App block is about this
+            // deployment, for the control instance that dispatches its pipelines, and must not be
+            // in this deployment's own configuration. PublishRecord below keeps it — that file goes
+            // to the control instance.
+            context.EnvironmentVariables[DeploymentRecordJson.EnvironmentKey] = DeploymentRecordJson.WritePortal(r);
             foreach (var (key, value) in DeploymentPortalConfig.PortalConfig(r, PortalConfigOptions.Aspire(mcpBaseUrl: null)))
                 context.EnvironmentVariables[key] = value;
             // The MCP back-connection URL is the endpoint Aspire allocates (substituted at publish);
