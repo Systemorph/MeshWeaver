@@ -409,6 +409,39 @@ the record *more* than the acceptances do: *real* (fix it), *real but cosmetic*,
 against the current file and quote the evidence), *wrong* (say so, with the measurement). A merged
 finding nobody answered and nobody declined is indistinguishable from one nobody read.
 
+#### 🚨 `-F`, never `-f` — the reply that posts its own filename
+
+```bash
+gh api -X POST repos/Systemorph/<repo>/pulls/<n>/comments/<id>/replies -F body=@reply.md
+```
+
+**`-f body=@reply.md` sends the literal seven-to-twenty-character string `@reply.md` as the comment
+body**, and the POST returns a normal comment id with a 201. So it reads as a successful reply; the
+thread's root now has a comment whose `in_reply_to_id` points at it; and **every detector built on
+`in_reply_to_id` — including the sweep query above, and `check-review-answered.py`'s own predicate —
+counts the finding as answered.** The finding is untreated and nothing says so.
+
+Measured on 2026-09-19: of 208 replies posted during one sweep, **74 were these stubs** (38 in Memex,
+23 in Crm, 13 in Manufacturing), each one a `@`-prefixed filename or absolute path. Three of the four
+sessions that hit it believed they had replied and reported thread counts to prove it — the proof
+being the very field that cannot distinguish the two. The fourth caught it only by reading one reply
+back.
+
+So the verification is **read the body back and check its length**, never the reply's existence:
+
+```bash
+gh api "repos/Systemorph/<repo>/pulls/<n>/comments?per_page=100" \
+  --jq '.[]|select(.in_reply_to_id!=null)|"\(.id) \(.body|length)"'
+```
+
+A length near 20 is the bug. **Repair with `PATCH /repos/{o}/{r}/pulls/comments/{reply_id}`, not a
+second reply** — re-posting leaves the stub standing beside the real answer, and the thread then reads
+as two answers, one of them noise.
+
+This is the sweep's own instance of the defect class it exists to find: an answer that reads like a
+pass. The question to ask of any reply mechanism is the one that applies to a gate — *if this had
+failed, would the output differ?* Here it would not have.
+
 ### 🚨 One defect, five copies — fix the canonical, then RE-COPY IMMEDIATELY
 
 Findings cluster hard on vendored files, because the reviewer reads each repository's copy
