@@ -111,6 +111,18 @@ Evidence, not time. A set is promoted when all three hold:
 3. **The canary is clean** — the canary lane reports today and gates nothing; here it becomes a
    signal.
 
+🚨 **The promoter's verdict must distinguish "computed and empty" from "NOT COMPUTED".** These are
+opposite facts that look identical in a count, and the fleet has now been bitten by that twice in the
+same job: a ten-minute lane that keeps the set each satellite's main last passed reported `pinned=0`
+— indistinguishable from "nothing needed pinning" — while the rule it names had in fact raised and
+run for **zero** repositories, every ten minutes, for a day. Both times the number that meant
+*crashed* was read as *nothing to do*.
+
+So `stable`'s promotion answers with a verdict, not a tally: *promoted to N*, *evaluated and nothing
+qualified*, or *could not evaluate* — and the third is a failure that is reported as one. A rule that
+cannot read its input is RED, which is the same principle the platform resolver already applies when
+it refuses rather than falling back.
+
 Promotion is **monotonic**: `stable` never moves backwards. A set is never un-promoted, because a
 consumer that already took it cannot un-take it.
 
