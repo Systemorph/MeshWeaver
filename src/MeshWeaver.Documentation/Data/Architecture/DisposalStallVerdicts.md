@@ -271,7 +271,8 @@ and reaches exactly one verdict:
 | **quiescing, reply owed** | a pending callback is owed by a shutting-down local hub | Information `[DISPOSE-BUSY]` |
 | **wedged turn, first strike** | a turn held the block for a whole budget | **Error** `[DISPOSE-WEDGE]` (7311) |
 | **wedged turn, ignores cancellation** | same turn, a budget later | **Error** (7312) |
-| **ShutDown phase blocked** | the turn on the block *is* the `ShutdownRequest` | **Error** (7314) |
+| **ShutDown phase blocked** | the turn on the block *is* the `ShutdownRequest`, **and** `RunLevel >= ShutDown` | **Error** (7314) |
+| **phase below ShutDown blocked** | the turn on the block *is* the `ShutdownRequest`, **and** `RunLevel < ShutDown` | **Error** (7318) |
 | **the pump is not turning** | queue non-empty, `draining` latched, nothing dequeued for a whole budget, nothing on the block | **Error** (7316) |
 | **stalled below** | none of the above, **and there is something below** | **Error** (7313) |
 | **unclassified** | none of the above | **Error** (7317) |
@@ -305,6 +306,69 @@ reader to trust a claim it never earned; an explicit unknown that prints the mea
 more than a confident wrong one. Its usual real cause is a pending callback owed from outside this
 mesh, which the attached recursive snapshot lists.
 
+**7314 is now guarded too, and 7318 is the half it used to swallow.** This is the same repair as
+7313's, one row down, and it went unmade for twelve days because nothing tested 7314 at all — there
+was no reference to `DisposalShutDownPhaseBlocked` anywhere outside the site that emits it.
+
+`DisposeImpl` → `disposables.Dispose` and `messageService.Dispose` are reached **only** from
+`case MessageHubRunLevel.ShutDown:` in `HandleShutdownCore`. So below that phase the hub has not
+touched its registrants, and 7314's *"a registered cleanup is BLOCKING inside DisposeImpl or
+messageService.Dispose … find the registrant"* is **false by construction** — there is no registrant
+to find. It was nonetheless printed for any `ShutdownRequest` turn at any phase, because the branch
+keyed on the message type alone.
+
+The cost was a full investigation: on 2026-09-19 a hub reported `RunLevel=Quiescing` with
+`Executing(ShutdownRequest, 253055ms)`, and the search went through every disposal registrant of a
+`sync/*` hub — a dozen of them, in `SynchronizationStream` and `JsonSynchronizationStream`, none
+reachable at that phase — before the phase in the report's own text settled it.
+
+7318 states what IS true below ShutDown: no registrant has run, so the finding is the phase
+**transition**. It also states the ceiling the elapsed should be read against — `QuiesceTimeout`
+(default 2 s) × `MaxQuiesceRearms` (20) ≈ 42 s — and names the two readings that separate the causes:
+
+- `[QUIESCE-START]` with **no** `[QUIESCE-OK]` / `[QUIESCE-WAIT]` / `[QUIESCE-TIMEOUT]` ⇒ the quiesce
+  wait never completed.
+- a `[QUIESCE-OK]` or `[QUIESCE-TIMEOUT]` ⇒ it did, and the phase-advancing `Post` is what did not
+  land — which is why that `Post` is now wrapped (below).
+
+### The Quiescing→DisposeHostedHubs advance is now as fault-tolerant as its sibling
+
+`PostShutDownPhase` has always caught a failed `Post` and called `SignalDisposalFaulted`, so waiters
+on `DisposalCompleted` are released rather than hanging. The transition one phase earlier was a bare
+`Post` in the Quiescing branch's `finally` — and the `catch` a few lines above it exists precisely
+because a throw there *"would wedge the dispose state machine at Quiescing forever (worse than the
+original hang)"*. **The one statement that comment is about sat outside it.**
+
+A lost `Post` there leaves exactly the 2026-09-19 shape: `RunLevel=Quiescing`, `Disposal=Pending`,
+`buffer=0`, `drainsInFlight=0`, `draining=False` — nothing queued, nothing running, no further line
+of its own — with every ancestor blocked behind it in `DisposeHostedHubs` until an outer bound ends
+the process. `PostDisposeHostedHubsPhase` now force-faults instead, which is the opposite of
+swallowing: the fault is reported and the waiters above are freed.
+
+### `Executing(T, ms)` could describe a turn no thread was in
+
+The 2026-09-19 snapshot is **self-contradictory** under this file's own invariants, and that is the
+finding rather than a curiosity: `Executing(ShutdownRequest, 253055ms)` together with
+`drainsInFlight=0` and `draining=False`. A handler holding the block synchronously requires
+`drainsInFlight >= 1` (a turn runs only inside `DrainOne`); a turn parked asynchronously leaves
+`DrainLoop` without clearing the latch, so it requires `draining=True`. Neither held.
+
+The cause is that the tracker's stamp and its clear were not one operation: `RunHandler` set
+`currentlyExecutingMessageType` near its top and cleared it in a `.Finally` attached some 260 lines
+later, so any throw between the two left the field set with nothing to clear it — `Observable.Defer`
+turns such a throw into a downstream `OnError` with the `Finally` never attached. The elapsed then
+reads as "time since a stamp nobody cleared", and a verdict keys on it.
+
+`ExecuteOnTarget` now stamps through `Observable.Using`, which disposes its resource both when the
+sequence terminates and when the observable factory throws, so no exit path can stamp without arming
+the clear. `turnsCompleted` deliberately stays in `RunHandler`'s `Finally`: it counts HANDLER
+completions and is meant to be blind to a turn that never reached one — that asymmetry is what lets
+the watchdog tell *the pump is busy* from *the pump never handed work over*.
+
+🚨 **Read `Executing(T, ms)` against `drainsInFlight` before believing the elapsed.** The pair being
+inconsistent is itself a report about the reporter, and it is the second time a field on this snapshot
+has described something it could not measure — the first was `exec=0`, a hard-coded literal.
+
 ---
 
 ## The order to read a 7313 / 7316 in
@@ -315,7 +379,11 @@ mesh, which the attached recursive snapshot lists.
 2. **The dequeue count in the line.** Zero since `Dispose()` means nothing this hub was asked to do
    has begun; a non-zero count with a frozen `RunLevel` means work is moving and something specific
    is not.
-3. **`Executing(T, ms)`.** Present ⇒ read 7311/7312/7314 instead; the turn is named.
+3. **`Executing(T, ms)`.** Present ⇒ read 7311/7312/7314/7318 instead; the turn is named. 🚨 But check
+   it against `drainsInFlight` first: `Executing(…)` with `drainsInFlight=0` **and** `draining=False`
+   is impossible for a live turn, so the elapsed is a stale stamp and the verdict keyed on a turn no
+   thread is in. And `T == ShutdownRequest` splits on the phase — 7314 (at or past ShutDown) means a
+   blocking registrant; 7318 (below it) means no registrant has run and the finding is the transition.
 4. **The recursive snapshot below the line.** It carries every hosted hub's `RunLevel`, queue
    depths, executing turn and pending callbacks — that is the reproduction.
 5. **`last progress`** — last, and only for the address. Its *level* may be the `BehaviorSubject`

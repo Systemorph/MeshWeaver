@@ -2505,6 +2505,12 @@ public sealed class MessageHub : IMessageHub
     internal static readonly EventId DisposalQuiesceWaitCutOff = new(7315, nameof(DisposalQuiesceWaitCutOff));
     internal static readonly EventId DisposalPumpNeverDequeued = new(7316, nameof(DisposalPumpNeverDequeued));
     internal static readonly EventId DisposalStalledUnclassified = new(7317, nameof(DisposalStalledUnclassified));
+    // 7318 — a ShutdownRequest turn stalled BELOW the ShutDown phase, where no registrant has run.
+    // Its own event so it files as its own incident: 7314's finding is a blocking registrant and
+    // this one's is a phase transition that was never made, which are different investigations
+    // (#3593). Sharing 7314 would fold both onto one issue titled after the wrong one.
+    internal static readonly EventId DisposalPhaseBelowShutDownBlocked =
+        new(7318, nameof(DisposalPhaseBelowShutDownBlocked));
     private readonly Stopwatch disposalStopwatch = new();
 
     private bool DisposalSignalled => Volatile.Read(ref disposalSignalled) != 0;
@@ -2763,24 +2769,58 @@ public sealed class MessageHub : IMessageHub
         {
             if (current == nameof(ShutdownRequest))
             {
-                // The turn on the block IS the shutdown phase itself. Its handler runs the
-                // registered cleanups synchronously (DisposeImpl → disposables.Dispose, then
-                // messageService.Dispose), so a ShutdownRequest that has held the block for a
-                // whole budget is a registrant that blocks — a subscription's Dispose waiting on
-                // a lock, a stream teardown joining something that needs this very turn. It runs
-                // with CancellationToken.None by design, so there is nothing to cancel; the
-                // finding is the blocking registrant, and the snapshot names the phase it is in.
-                // Measured in production (memex-cloud, 2026-08-29 → 09-03): sync/* hubs reported
-                // `(last progress: sync/… → ShutDown). RunLevel=ShutDown` dozens of times per
-                // shutdown, and the predecessor then tore them down out of band after 8–23 s.
-                logger.LogError(DisposalShutDownPhaseBlocked,
+                // The turn on the block IS a shutdown phase. Which phase decides what the finding
+                // is, and this verdict used to assert the ShutDown one unconditionally.
+                //
+                // 🚨 ONLY the ShutDown phase walks the registrants. `DisposeImpl` →
+                // disposables.Dispose and messageService.Dispose are reached exclusively from
+                // `case MessageHubRunLevel.ShutDown:` in HandleShutdownCore — so at Quiescing or
+                // DisposeHostedHubs the hub has not touched `disposables` at all, and "a registered
+                // cleanup is BLOCKING inside DisposeImpl" is false BY CONSTRUCTION. This is the
+                // same defect #3615 removed from the pump verdict (7313) and left in its sibling:
+                // a verdict asserting a cause the snapshot cannot support. It sent this issue's
+                // investigation through every disposal registrant of a `sync/*` hub — there are a
+                // dozen, none of them reachable — for a hub the report itself showed at Quiescing
+                // (#3593, measured 2026-09-19: `RunLevel=Quiescing … Executing(ShutdownRequest,
+                // 253055ms)`).
+                if (RunLevel >= MessageHubRunLevel.ShutDown)
+                {
+                    // Measured in production (memex-cloud, 2026-08-29 → 09-03): sync/* hubs reported
+                    // `(last progress: sync/… → ShutDown). RunLevel=ShutDown` dozens of times per
+                    // shutdown, and the predecessor then tore them down out of band after 8–23 s.
+                    // It runs with CancellationToken.None by design, so there is nothing to cancel;
+                    // the finding is the blocking registrant.
+                    logger.LogError(DisposalShutDownPhaseBlocked,
+                        "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
+                        + "(last progress: {LastProgress}). RunLevel={RunLevel}. The ShutDown phase itself has "
+                        + "held the action block for {ElapsedMs}ms — a registered cleanup is BLOCKING inside "
+                        + "DisposeImpl or messageService.Dispose (a Dispose waiting on a lock, a teardown "
+                        + "joining a turn it is itself occupying). Disposal is NOT forced; find the registrant.\n{Diagnostics}",
+                        Address, DisposalWatchdogTimeout, lastProgress, RunLevel,
+                        snapshot.Value.CurrentMessageElapsedMs, DescribeWedge());
+                    return;
+                }
+
+                // Below ShutDown. No registrant has run, so the only work this turn does is the
+                // phase transition itself — and the phase is BOUNDED: QuiesceTimeout (default 2 s)
+                // × MaxQuiesceRearms (20) ≈ 42 s, every re-arm logging [QUIESCE-WAIT]. An elapsed
+                // far past that ceiling with an idle pump is therefore not a slow quiesce; it means
+                // the transition was never made. The two readings that separate the causes are the
+                // [QUIESCE-*] lines named below, and the snapshot's own self-consistency, which the
+                // wedge dump now reports rather than leaving the reader to assume.
+                logger.LogError(DisposalPhaseBelowShutDownBlocked,
                     "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
-                    + "(last progress: {LastProgress}). RunLevel={RunLevel}. The ShutDown phase itself has "
-                    + "held the action block for {ElapsedMs}ms — a registered cleanup is BLOCKING inside "
-                    + "DisposeImpl or messageService.Dispose (a Dispose waiting on a lock, a teardown "
-                    + "joining a turn it is itself occupying). Disposal is NOT forced; find the registrant.\n{Diagnostics}",
+                    + "(last progress: {LastProgress}). RunLevel={RunLevel} — BELOW ShutDown, so NO registered "
+                    + "cleanup has run and none can be blocking: DisposeImpl and messageService.Dispose are "
+                    + "reached only in the ShutDown phase. The ShutdownRequest turn has been on the block for "
+                    + "{ElapsedMs}ms, against a Quiescing ceiling of QuiesceTimeout x {Rearms} re-arms. The "
+                    + "finding is the phase TRANSITION, not a registrant: read this hub's [QUIESCE-START] / "
+                    + "[QUIESCE-OK] / [QUIESCE-WAIT] / [QUIESCE-TIMEOUT] lines — a [QUIESCE-START] with none of "
+                    + "the others means the quiesce wait never completed, while a [QUIESCE-OK] or "
+                    + "[QUIESCE-TIMEOUT] means it did and the phase-advancing Post is what did not land. "
+                    + "Disposal is NOT forced.\n{Diagnostics}",
                     Address, DisposalWatchdogTimeout, lastProgress, RunLevel,
-                    snapshot.Value.CurrentMessageElapsedMs, DescribeWedge());
+                    snapshot.Value.CurrentMessageElapsedMs, MaxQuiesceRearms, DescribeWedge());
                 return;
             }
             if (!wedgedTurnCancelled)
@@ -3770,8 +3810,57 @@ public sealed class MessageHub : IMessageHub
             // shutting-down sibling still owes. Registered subscriptions are disposed
             // synchronously later, in the ShutDown phase (DisposeImpl →
             // disposables.Dispose) — there is no async dispose-action drain to await.
+            //
+            // 🚨 WRAPPED, for the reason the catch above states about itself: a throw here "would
+            // wedge the dispose state machine at Quiescing forever (worse than the original hang)"
+            // — and this Post sat OUTSIDE that catch, in the finally, so the one statement whose
+            // failure that comment warns about was the one statement not covered. Its sibling for
+            // the very next transition, PostShutDownPhase, has always force-faulted disposal on a
+            // failed Post so subscribers to DisposalCompleted never hang; this transition just did
+            // not. #3593's 2026-09-19 population is a hub parked at Quiescing with an EMPTY queue
+            // and an idle pump for 253 s — i.e. the request was never queued and nothing was
+            // running, which is exactly the shape a lost Post here leaves behind.
+            //
+            // This is not a swallow: SignalDisposalFaulted TERMINATES disposal with the fault, so
+            // the ancestors stop waiting and the failure is reported, instead of a silent park with
+            // no further line of its own.
             if (advance)
-                Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+                PostDisposeHostedHubsPhase();
+        }
+    }
+
+    /// <summary>
+    /// Posts the DisposeHostedHubs phase once quiescing is done — the Quiescing→DisposeHostedHubs
+    /// half of what <see cref="PostShutDownPhase"/> does for the next transition, and wrapped for
+    /// the same reason (#3593).
+    ///
+    /// <para>🚨 This used to be a bare <c>Post</c> in the Quiescing branch's <c>finally</c>. The
+    /// <c>catch</c> a few lines above it exists because a throw in that branch <i>"would wedge the
+    /// dispose state machine at Quiescing forever (worse than the original hang)"</i> — and the
+    /// <c>Post</c> sat outside it, so the single statement that comment is about was the one
+    /// statement unprotected. A lost Post leaves the hub at <c>Quiescing</c> with an EMPTY queue, an
+    /// idle pump and <c>Disposal=Pending</c>, emitting no further line of its own: no queued
+    /// request, nothing running, and every ancestor blocked behind it in DisposeHostedHubs until an
+    /// outer bound ends the process.</para>
+    ///
+    /// <para>Force-faulting is the opposite of swallowing: <see cref="SignalDisposalFaulted"/>
+    /// terminates <see cref="DisposalCompleted"/> with the fault, so the waiters above are released
+    /// and the failure is REPORTED rather than becoming a silent permanent park.</para>
+    /// </summary>
+    private void PostDisposeHostedHubsPhase()
+    {
+        try
+        {
+            Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+        }
+        catch (Exception postEx)
+        {
+            TryLog(LogLevel.Warning, postEx,
+                "[POSTED-DISPOSE-HOSTED-FAILED] {Address}: posting the DisposeHostedHubs request faulted — "
+                + "the disposal state machine cannot advance out of Quiescing on its own, so disposal is "
+                + "force-faulted instead of parking here forever.",
+                Address);
+            SignalDisposalFaulted(postEx);
         }
     }
 
