@@ -354,6 +354,35 @@ into a shell string. Two consequences worth stating plainly:
   were refused at 09:11Z with `/rate_limit` reporting `core: 5000/5000`. Neither one predicts the
   other, and the read meter reports neither.
 
+🚨 **And the refusal wears a DIFFERENT SHAPE per endpoint, so never key a retry or a watcher on its
+text.** Measured 2026-09-19, one limiter with three faces:
+
+| what you called | how it refuses |
+|---|---|
+| `POST …/issues` over REST | `403`, and the body names the secondary limit |
+| `POST …/pulls/{n}/comments/{id}/replies` | **`422 {"resource":"PullRequestReview","code":"abuse","field":"base"}`** — not a 403, and it names no rate limit at all |
+| `gh issue create` (GraphQL porcelain) | exit 0, both streams empty, nothing created |
+
+A review reply was refused four times over 43 minutes that way and landed on the fifth attempt. A
+watcher grepping for *"secondary rate limit"* sees nothing in that case, and a watcher checking only for
+`403` sees nothing either. **So key the decision on whether the `id` or `number` you asked for came
+back, not on what the refusal said.**
+
+🚨 **But an absent id means NOT CONFIRMED, never "it did not happen"** — and that difference decides
+whether a retry is safe. A response can be lost or suppressed *after* the server has committed, so
+retrying on the absent id is how a duplicate gets created. It matters most in the case this section is
+about: a stub reply is repaired with `PATCH`, and a second `POST` leaves the first standing beside it.
+**Before retrying, re-read the collection and look for your own content** — the same baseline rule
+stated below for auditing somebody else's posts, applied to your own retry.
+
+The two API-boundary shapes above, the `403` and the `422`, genuinely did create nothing. It is the
+porcelain's silent exit 0 that is ambiguous, because silence from a wrapper says nothing about what the
+server did.
+
+The read limit is independent of the creation one and can land immediately after a successful write — it
+did, six seconds after that reply finally posted, delaying its verification by eight minutes. So budget
+for the verification read as well as the write, and do not treat a failed read-back as a failed write.
+
 **Verify every creation by reading it back — and note that this is TWO questions, not one.**
 
 - **Did THIS write create a comment?** Only the `id` (or `number`) in the write's own REST response
