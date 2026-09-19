@@ -634,6 +634,25 @@ def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
     return next(iter(sources))
 
 
+def attribution_of(fetch: Fetch, jobs: list[dict], run_number: int,
+                   receipts: dict[tuple[int, int], PublicationSource]
+                   ) -> tuple[PublicationSource | None, ProvenanceUnavailable | None]:
+    """`publication_source` as a VALUE rather than a raise — exactly one of the two is set.
+
+    🚨 Why this exists at all (#4780): under `--verify-source` a sha freeze has to be tested against
+    the RECEIPT's source-sha, which means the attribution must be read BEFORE the decisions the
+    freeze governs — while a run that cannot produce a receipt must not abort the scan there, since
+    measured on live core CD (2026-09-13) eleven of the newest fourteen main-cd runs cannot produce
+    one and almost none of them is the frozen run. A caller therefore needs to *hold* the failure
+    and decide later, which an exception crossing two decision points cannot express. The caller
+    memoizes the pair, so the receipt is fetched once per run however many times it is consulted.
+    """
+    try:
+        return publication_source(fetch, jobs, run_number, receipts), None
+    except ProvenanceUnavailable as error:
+        return None, error
+
+
 # ──────────────── WHAT THIS REPO'S OWN `main` HAS ALREADY PASSED ON (#3842 → Roland, 2026-09-12)
 #
 # 🚨 A PULL REQUEST RESOLVES THE NEWEST SEALED SET **THAT `main` HAS ALREADY PASSED**, not simply
@@ -1659,9 +1678,18 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
             # the honest answer for a run that cannot produce a receipt is "no evidence that this is
             # the frozen run" — so the scan continues, and if no run's receipt matches, the terminal
             # "the freeze matched no verified sealed set" says that, which is true.
-            freeze_names_this_run = bool(freeze_kind) and (
-                freeze_kind == "set" or not verify_source or sha == freeze_value)
-
+            # 🚨 …and under `--verify-source` the sha the freeze is tested against is the RECEIPT's,
+            # not `head_sha` (#4780). `head_sha` was the only thing known here, so a run whose
+            # receipt names the frozen sha while its head does not was judged NOT to be the frozen
+            # run — by the definition of the very option that was passed. The consequence was
+            # silent: at `plugins_pending` below, a frozen run whose platform trio is sealed while
+            # its Plugins seal is still running was passed over as an ordinary candidate, its
+            # receipt never read, and resolution fell through to an OLDER set. A freeze is an
+            # instruction for an incident, and that is the path most likely to be used during one
+            # and least likely to be noticed. So the attribution moves ahead of the decision for
+            # exactly that case; `head_sha` matching still counts, so the ordinary run where the
+            # two agree behaves as before, and a receipt that cannot be read leaves the honest "no
+            # evidence that this is the frozen run" rather than inventing one.
             jobs = run_jobs(fetch, int(run["id"]))
             v = verdict(jobs, run)
             # A run that is still sealing is worth waiting for on a release trigger: the dispatch
@@ -1677,6 +1705,34 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 run = {**run, **{k: fresh[k] for k in ("status", "conclusion") if k in fresh}}
                 jobs = run_jobs(fetch, int(run["id"]))
                 v = verdict(jobs, run)
+            # The receipt, read at most once per run and only where the answer can CHANGE a decision
+            # — a sha freeze under `--verify-source`. Every other path asks for no extra read and
+            # behaves byte-identically. `attributed`/`attribution_error` are the memo the
+            # `verify_source` block below reuses, so the receipt is never fetched twice.
+            attributed: PublicationSource | None = None
+            attribution_error: ProvenanceUnavailable | None = None
+            if verify_source and freeze_kind == "sha":
+                attributed, attribution_error = attribution_of(fetch, jobs, number, receipts)
+            if not freeze_kind:
+                freeze_names_this_run = False
+            elif freeze_kind == "set" or not verify_source:
+                # A set freeze is already down to one run number and an unverified sha freeze is
+                # already down to one head sha — both filters ran above, so the scan is on that run.
+                freeze_names_this_run = True
+            elif attributed is not None:
+                # 🚨 A RECEIPT THAT EXISTS IS THE ANSWER, and `head_sha` is NOT a second chance
+                # (Copilot's review of #4920). Accepting either would resurrect #4242 from the other
+                # side: a run whose HEAD matches the freeze while its receipt names a different
+                # source — an ordinary re-bake — would be judged the frozen run, and if it is
+                # unsealed the escalation below aborts the whole scan before the run whose receipt
+                # actually matches is ever reached. Under `--verify-source` the set's sha IS the
+                # receipt's, and that is the option's entire definition.
+                freeze_names_this_run = attributed[0] == freeze_value
+            else:
+                # No receipt could be read, so `head_sha` is the only evidence there is. An
+                # escalation here is still right: the ProvenanceUnavailable arm below says
+                # "unverified" rather than claiming the set is something it could not read.
+                freeze_names_this_run = sha == freeze_value
             # The Plugins publication is found on its own, over the same runs: the newest one whose
             # seal succeeded — even where the platform trio did not (a red platform bake beside a
             # green seal leaves a publication for that identity, and it is newer than the set
@@ -1724,8 +1780,12 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 # The publication's OWN statement of what it published. A set that cannot make it
                 # is passed over, not taken unattributed; under a freeze it is fatal, because a
                 # freeze names one set and may never substitute another.
+                if attributed is None and attribution_error is None:
+                    attributed, attribution_error = attribution_of(fetch, jobs, number, receipts)
                 try:
-                    sha, version, set_name = publication_source(fetch, jobs, number, receipts)
+                    if attribution_error is not None:
+                        raise attribution_error
+                    sha, version, set_name = attributed
                 except ProvenanceUnavailable as error:
                     skipped.append(f"{label}: source/release unverified — {error}")
                     log(f"  skip {skipped[-1]}")
@@ -3279,6 +3339,36 @@ def self_test() -> int:
     _ceiling_case("…and a listing that is ALL non-vouching still refuses, naming the events",
                   _fetch_main_events(*(["workflow_run"] * 5)), None, "no successful run")
 
+    # 🚨 …AND THE READ MUST ACTUALLY KEEP READING (#4783). The case above holds 21 rows, which fit
+    # inside one `MAIN_PAGE_SIZE` slice — so it pins *filter-after-read* and says nothing about the
+    # page loop. The only case that DID page exercised the refusal path (budget exhausted). A
+    # regression that broke "keep reading until enough vouch" while leaving the single-page path
+    # intact would therefore have been caught by nothing.
+    #
+    # Both cases ASSERT THE PAGE PARAMETER as well as the number, so neither can pass on a widened
+    # `MAIN_PAGE_SIZE` — which would put the evidence back on page 1 and make the assertion about
+    # the ceiling vacuous while reading exactly as little as before.
+    _page_2: list[str] = []
+    _ceiling_case("the evidence on page 2 is found — the read does not stop at page 1",
+                  _fetch_main_events(*(["workflow_run"] * (MAIN_PAGE_SIZE + 10)), "push",
+                                     seen=_page_2), 8203, "8203")
+    total += 1
+    if not any("&page=2" in path for path in _page_2):
+        failures.append("the ceiling read resolved without ever REQUESTING page 2 — the evidence "
+                        f"was placed beyond MAIN_PAGE_SIZE ({MAIN_PAGE_SIZE}) on purpose, so this "
+                        "case would otherwise prove nothing about the page loop")
+
+    _last_page: list[str] = []
+    _ceiling_case("…and evidence on the LAST page inside the budget still resolves",
+                  _fetch_main_events(
+                      *(["workflow_run"] * (MAIN_PAGE_SIZE * (MAIN_PAGES_EXAMINED - 1) + 10)),
+                      "push", seen=_last_page), 8203, "8203")
+    total += 1
+    if not any(f"&page={MAIN_PAGES_EXAMINED}" in path for path in _last_page):
+        failures.append(f"the ceiling read resolved without requesting page {MAIN_PAGES_EXAMINED}, "
+                        "the last one inside the budget — an off-by-one there would silently stop "
+                        "one page early and report that main had passed nothing")
+
     # 🚨 A BOUNDED read that stopped early must not read as "main passed nothing" (Copilot on
     # #4773). Page budget exhausted with the listing still going is a DIFFERENT fact from an
     # exhausted listing, and only the second is evidence about main.
@@ -3607,6 +3697,63 @@ def self_test() -> int:
          lambda: choose(verified, _registry(full), tester, portal, freeze=RECEIPT_SHA,
                         log=logs.append, verify_source=True),
          lambda c: c.sha == RECEIPT_SHA)
+
+    # 🚨 #4780 — …AND IT MUST BE THE RECEIPT'S SHA *BEFORE* THE DECISIONS THE FREEZE GOVERNS, not
+    # only after them. `freeze_names_this_run` was computed from `head_sha` alone, so a frozen run
+    # whose receipt names the frozen sha while its head does not was judged NOT frozen — by the
+    # definition of the very option that was passed. The case above does not reach it: that run is
+    # fully sealed, so nothing consults `freeze_names_this_run` before the attribution happens.
+    #
+    # The one that does is the bounded `plugins_pending` exception. Fixture: #8207's platform trio
+    # is sealed, its Plugins seal is still running, its receipt names the frozen sha and its head
+    # (A) does not — and #8203 is a fully sealed re-bake of the SAME source at an older release.
+    # On the pre-fix code #8207 is "not the frozen run", so it is passed over as an ordinary
+    # candidate and #8203 is taken: a GREEN resolution at an OLDER set than the one the freeze
+    # named, with no warning. A freeze is an instruction for an incident, and this is the path most
+    # likely to be used during one and least likely to be noticed.
+    pending_plugins_jobs = {1000 + 8207: _jobs_with_bake_id(id_8207, plugins="in progress"),
+                            1000 + 8203: _jobs_with_bake_id(id_8203)}
+    frozen_pending = _fetch_with_logs(
+        {id_8207: _receipt(), id_8203: _receipt(RECEIPT_SHA, "3.0.0-ci.8203")},
+        jobs=pending_plugins_jobs)
+    case("a sha freeze the RECEIPT names is honoured even while its plugins seal is pending", True,
+         lambda: choose(frozen_pending, _registry(full), tester, portal, freeze=RECEIPT_SHA,
+                        log=logs.append, verify_source=True),
+         lambda c: c.sha == RECEIPT_SHA and c.set_name == "3.0.0-ci.8207")
+    total += 1
+    if not any("Frozen set is still sealing its plugins" in line for line in logs):
+        failures.append("#4780: the frozen set was taken while its plugins seal was pending, but "
+                        "the `Frozen set is still sealing its plugins` warning was not spoken — a "
+                        "reader has to be told the upstream fetch may not find it yet")
+
+    # 🚨 …AND A RECEIPT THAT EXISTS IS THE ANSWER, so `head_sha` is not a second chance (Copilot's
+    # review of #4920). Accepting either resurrects #4242 from the other side: a run whose HEAD
+    # matches the freeze while its receipt names a different source — an ordinary re-bake — is judged
+    # the frozen run, and if it is UNSEALED the escalation aborts the whole scan before the run whose
+    # receipt actually matches is reached.
+    #
+    # Fixture: #8530 is the newest, its head IS the frozen sha, it has a successful platform bake (so
+    # a receipt exists) naming a DIFFERENT source, and its promote leg failed — unsealed. #8506 is
+    # fully sealed and its receipt names the frozen sha. The freeze must resolve to #8506.
+    head_only = "f" * 40
+    decoy = [_run(8530, head_only), _run(8506, C)]
+    id_decoy, id_real = 70011, 70012
+    decoy_jobs = {
+        1000 + 8530: _jobs_with_bake_id(id_decoy, promote="failure"),   # unsealed, receipt exists
+        1000 + 8506: _jobs_with_bake_id(id_real),                       # sealed, the frozen one
+    }
+    decoy_logs = {
+        id_decoy: _receipt("d" * 40, "3.0.0-ci.8530"),   # a re-bake: head != what it published
+        id_real: _receipt(head_only, "3.0.0-ci.8506"),   # the run the freeze actually names
+    }
+    decoy_full = dict(full)
+    decoy_full[("mw-plugin-test", "3.0.0-ci.8506")] = D1
+    decoy_full[("memex-portal-ai", "3.0.0-ci.8506")] = D2
+    case("a run whose HEAD matches the freeze but whose RECEIPT does not must not abort the scan", True,
+         lambda: choose(_fetch_with_logs(decoy_logs, runs=decoy, jobs=decoy_jobs),
+                        _registry(decoy_full), tester, portal, freeze=head_only,
+                        log=logs.append, verify_source=True),
+         lambda c: c.sha == head_only and c.set_name == "3.0.0-ci.8506")
     total += 1
     if MAX_LOG_BYTES <= 0 or FINAL_BAKE_RECEIPT.search(_receipt()) is None:
         failures.append("the receipt pattern must match the line publish-bake-bundles.sh writes")
@@ -3622,11 +3769,13 @@ def self_test() -> int:
           "an unsealed or purged newer set is passed over and SAID, a sealing set is waited for on "
           "request, a freeze never substitutes, a re-run takes a newer set and keeps its baseline "
           "otherwise, the OPTIONAL main ceiling counts EVERY full main run and not `push` "
-          "alone, changes nothing unless asked for and refuses "
+          "alone, keeps READING until enough runs vouch (proved on page 2 and on the last "
+          "page inside the budget, by the page it requested), changes nothing unless asked for and refuses "
           "rather than falling back when main has passed nothing — naming what it read and leading "
           "with the remedy the evidence points at, never at `main` when the LISTING is what failed, "
           "the OPTIONAL source verification "
-          "reads no job log unless asked for and passes over a set it cannot attribute, a main run "
+          "reads no job log unless asked for and passes over a set it cannot attribute, and a sha "
+          "freeze is tested against the RECEIPT before the decisions the freeze governs, a main run "
           "whose annotations name two DIFFERENT sets is SKIPPED rather than guessed at, a set below "
           "this repository's declared FLOOR is refused on every path including under a freeze, a transient "
           "GitHub 5xx is retried (bounded) and named as a server error, a run "
