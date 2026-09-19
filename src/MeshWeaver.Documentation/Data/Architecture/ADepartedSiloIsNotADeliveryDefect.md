@@ -139,6 +139,37 @@ Both arms are pinned by `DepartedSiloClassificationTest`, in both directions:
 If Orleans re-words a phrase this returns to the previous answer rather than misclassifying anything —
 the safe direction to fail in.
 
+## A THIRD site asks the same question, and is deliberately left alone
+
+`ClassifyDeliveryException` lives on the silo side. The **caller** side has its own exception arm —
+`OrleansRoutingService`'s dispatch `Catch`, which classifies with
+
+```csharp
+var shuttingDown = IsHostStopping;
+…
+    SendDeliveryFailure(delivery, $"Failed to deliver to {address}: {ex.Message}",
+        shuttingDown ? ErrorType.ShuttingDown : ErrorType.Failed);
+```
+
+`IsHostStopping` is a statement about **this** process, so a departed-silo rejection there is reported
+terminally exactly as it was on the silo side. And it is reachable: `RoutingGrain` carries no placement
+attribute and its key is the single `"default"`, so a caller's `RouteMessage` can be addressed to a
+routing-grain activation on **another** silo, which can depart while this process is perfectly healthy.
+
+It is left unchanged on purpose, and the reason is worth keeping:
+
+- **No incident is fingerprinted on it.** Both of these are on `RoutingGrain`'s verdict and on Orleans'
+  addressing log. Changing a classification in the one place that NACKs *in bulk while a silo is
+  leaving* — which is when the mesh can least afford an answering storm — on no evidence is the wrong
+  trade.
+- **The dependency runs the wrong way for a cheap fix.** `MeshWeaver.Hosting.Orleans` references
+  `MeshWeaver.Connection.Orleans`, not the reverse, so that site cannot call the classifier; a fix
+  today would mint a **third** mirrored predicate. Mirror drift is the documented historical failure
+  mode here (*"a fix landed on one site and missed the other is precisely how #2346 outlived both of
+  its earlier fixes"*). If evidence for this site ever appears, the fix is to move the classifier
+  **down** into the shared assembly beside `IsTransientFailure` and `IsDirectoryUnstable` — removing a
+  mirror rather than adding one.
+
 ## The reading traps these two incidents taught
 
 - 🚨 **A `LogIncident`'s `namespace` field is the FIRST-seen namespace, not a per-sample one.** Both
