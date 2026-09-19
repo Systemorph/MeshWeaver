@@ -2,5 +2,5 @@
   "parallelizeAssembly": false,
   "parallelizeTestCollections": false,
   "maxParallelThreads": 1,
-  "methodTimeout": 252000
+  "methodTimeout": 316000
 }

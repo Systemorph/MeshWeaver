@@ -185,23 +185,31 @@ public static class TestTimeouts
     /// elapsed was killed before it could report, so the failure read
     /// <c>Test execution timed out after 30000 milliseconds</c> and named nothing.</para>
     ///
-    /// <para>🚨 It is <see cref="CrossSilo"/> and NOT <see cref="TestMilliseconds"/> that this has
-    /// to clear, and they are numerically EQUAL — both are <c>Convergence × 2</c>. Setting the cap
-    /// to <see cref="TestMilliseconds"/> would leave a plain <c>[Fact]</c> waiting
-    /// <see cref="CrossSilo"/> killed at exactly the instant its wait expired: the equal case this
-    /// file already calls anonymous by construction, reintroduced one level up.</para>
+    /// <para>🚨 It clears the LARGEST shared budget, which is <see cref="WriteConvergence"/> — not
+    /// <see cref="CrossSilo"/> and not <see cref="TestMilliseconds"/>. Two wrong answers were tried
+    /// on the way (#4740 review): <see cref="TestMilliseconds"/> is numerically EQUAL to
+    /// <see cref="CrossSilo"/> (both are <c>Convergence × 2</c>), and a cap equal to a budget kills
+    /// the wait at the instant it expires — the anonymous case one level up. And clearing
+    /// <see cref="CrossSilo"/> alone still left six plain <c>[Fact]</c> tests that await
+    /// <see cref="WriteConvergence"/> (280 s on CI) under a 252 s cap, on the ASSUMPTION that every
+    /// such test carries its own literal. It does not:
+    /// <c>DeletePreflightNamesTheSilentDescendantTest</c> and five others declare nothing.</para>
+    ///
+    /// <para>So the rule is universal and has no per-test convention to remember: <b>the default
+    /// outer bound dominates every shared budget in this file.</b> A rule with an exception is a
+    /// rule somebody has to know about, and the exception here was invisible from the budget's own
+    /// documentation.</para>
     ///
     /// <para>The margin is ADDITIVE, for the reason <see cref="LocalConvergence"/> gives: what has
     /// to be covered is one terminal PROPAGATING to the assertion, and that cost does not scale
     /// with the bound. A ratio would put this past nine minutes on CI and every wedged test would
     /// pay it.</para>
     ///
-    /// <para><b>Not a ceiling for every wait.</b> <see cref="WriteConvergence"/> is larger still
-    /// (a re-enqueue legitimately costs more), and a test using it carries its own literal bounded
-    /// by <see cref="WriteTestMilliseconds"/> — see that property. This bound governs the tests
-    /// that declare nothing, which is what the runner's default is for.</para>
+    /// <para><see cref="WriteTestMilliseconds"/> remains what a <see cref="WriteConvergence"/> test
+    /// uses when it wants an explicit, tighter bound of its own; it is no longer the only thing
+    /// standing between such a test and an anonymous kill.</para>
     /// </summary>
-    public static TimeSpan DefaultOuterBound => CrossSilo + LocalConvergence;
+    public static TimeSpan DefaultOuterBound => WriteConvergence + LocalConvergence;
 
     /// <summary>
     /// <see cref="DefaultOuterBound"/> in milliseconds — the value the runner configs and

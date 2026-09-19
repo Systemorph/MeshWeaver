@@ -266,15 +266,17 @@ public class TestTimeoutsTest
         using var __ = new EnvironmentVariable("MW_TEST_TIMEOUT_FACTOR", null);
         var required = TestTimeouts.DefaultOuterBoundMilliseconds;
 
-        // 🚨 The bound this has to clear is CrossSilo, and CrossSilo == TestMilliseconds exactly
-        // (both are Convergence × 2). Asserting it here keeps the two from silently converging
-        // again: a cap EQUAL to a budget kills the wait at the instant it expires, which is the
-        // anonymous case this file exists to prevent, one level up.
+        // 🚨 EVERY shared budget, with no exception — including WriteConvergence, the largest.
+        // Leaving it out was the #4740 review's finding: six plain [Fact] tests await it with no
+        // timeout of their own (DeletePreflightNamesTheSilentDescendantTest among them), so a cap
+        // that cleared only CrossSilo still killed them before their assertion fired. A budget
+        // absent from this list is a budget nothing is checking.
         foreach (var (name, budget) in new (string, TimeSpan)[]
                  {
                      (nameof(TestTimeouts.Quick), TestTimeouts.Quick),
                      (nameof(TestTimeouts.Convergence), TestTimeouts.Convergence),
                      (nameof(TestTimeouts.CrossSilo), TestTimeouts.CrossSilo),
+                     (nameof(TestTimeouts.WriteConvergence), TestTimeouts.WriteConvergence),
                  })
             Assert.True(TestTimeouts.DefaultOuterBound > budget,
                 $"{name} ({budget}) is not STRICTLY dominated by the default outer bound "
