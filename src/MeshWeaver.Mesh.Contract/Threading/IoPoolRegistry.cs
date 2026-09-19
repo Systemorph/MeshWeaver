@@ -23,6 +23,17 @@ public sealed class IoPoolRegistry : IDisposable
     private int _disposing;
     private readonly System.Reactive.Subjects.AsyncSubject<int> _disposed = new();
 
+    // 🚨 THE POOLS Dispose() IS WAITING ON, kept so the TIMEOUT path can still name them — issue
+    // #2480. Dispose() clears _pools (a handed-out pool after disposal would never be joined by
+    // anyone), so by the time a caller's bounded wait expires there was nothing left to enumerate
+    // and the report named neither pool nor leaf. That is the whole reason #2480's 18 occurrences
+    // are all the bare "pooled I/O did not finish within 00:00:30" line with nothing beside it.
+    private volatile IReadOnlyList<KeyValuePair<string, IoPool>> _draining = [];
+
+    // Which of _draining have completed their own Disposed. A pool that never unwinds never
+    // reports, so this is what separates "joined" from "still holding a thread" WITHOUT waiting.
+    private readonly ConcurrentDictionary<string, byte> _reported = new(StringComparer.Ordinal);
+
     /// <summary>
     /// Emits the TOTAL number of leaves that did not unwind across every pool, once all of them
     /// have been drained AND released, then completes. <c>0</c> is the contract: no pool thread is
@@ -283,6 +294,44 @@ public sealed class IoPoolRegistry : IDisposable
                 : $"{Pool}={Residual} [{string.Join(" | ", Sites)}]";
     }
 
+    /// <summary>
+    /// The pools that <see cref="Dispose"/> asked to unwind and which have NOT reported yet — name,
+    /// how many leaves are still in flight, and WHERE those leaves are — readable at ANY moment
+    /// after disposal began, without waiting for anything.
+    ///
+    /// <para>🚨 <b>This is the attribution the TIMEOUT path needs, and it exists because the other
+    /// one cannot reach it</b> (issue #2480). <see cref="Dispose"/> subscribes a per-pool warning to
+    /// each pool's own <c>Disposed</c>, and that is sound for a pool that unwinds LATE — but a pool
+    /// whose leaf never unwinds never completes <c>Disposed</c> at all, so on the one path this
+    /// issue ever fires on the per-pool line is never written. The residual attribution was
+    /// published on the SUCCESS signal, which is the #4466 inversion pointed at a report: the
+    /// failure case is exactly the case that names nothing. Measured: all 18 occurrences of #2480
+    /// are the bare <c>pooled I/O did not finish within 00:00:30</c> line, over three weeks, with no
+    /// pool, no site and no stack — so "fix the leaf" could never be acted on because nothing ever
+    /// said WHICH leaf.</para>
+    ///
+    /// <para>Empty before <see cref="Dispose"/> is called, and empty once every pool has reported —
+    /// so a non-empty result means live pool work outlived the caller's join, which is the finding.
+    /// Reads lock-free counters and a <see cref="ConcurrentDictionary{TKey,TValue}"/> only: a
+    /// diagnostic must never be the reason a teardown blocks.</para>
+    /// </summary>
+    /// <summary>
+    /// The budget a host's terminal drain holds shutdown for while waiting on <see cref="Disposed"/>
+    /// — see <see cref="IoPoolOptions.SiloJoinBudget"/>. Read from the registry so the waiter needs
+    /// no DI resolution of its own: <c>IoPoolSiloTeardown</c> captures this registry while the
+    /// container is provably alive and its stop must resolve NOTHING (#1898/#1899).
+    /// </summary>
+    public TimeSpan SiloJoinBudget => _options.SiloJoinBudget;
+
+    public IReadOnlyList<PoolResidual> UnreportedResiduals() =>
+        _draining
+            .Where(kvp => !_reported.ContainsKey(kvp.Key))
+            .Select(kvp => new PoolResidual(kvp.Key, kvp.Value.CurrentInFlight)
+            {
+                Sites = kvp.Value.PendingLeafSites
+            })
+            .ToArray();
+
     /// <summary>Disposes every created pool and clears the registry; called when the mesh is torn down.</summary>
     public void Dispose()
     {
@@ -296,6 +345,9 @@ public sealed class IoPoolRegistry : IDisposable
         // deadlock on a small runner. The WAIT lives on Disposed, awaited asynchronously.
         var pools = _pools.ToArray();
         _pools.Clear();
+        // Published BEFORE anything is cancelled, so a caller whose join expires can always
+        // enumerate what it was waiting on — _pools is now empty and would name nothing (#2480).
+        _draining = pools;
         if (pools.Length == 0)
         {
             _disposed.OnNext(0);
@@ -313,6 +365,11 @@ public sealed class IoPoolRegistry : IDisposable
             var name = kvp.Key;
             kvp.Value.Disposed.Subscribe(residual =>
             {
+                // 🚨 Recorded FIRST, and unconditionally — UnreportedResiduals() subtracts this set,
+                // so a pool that reported must leave it whatever its residual was. Doing it inside
+                // the `residual != 0` branch below would leave every CLEAN pool looking un-joined
+                // to the timeout report, which is the opposite lie to the one #2480 is about.
+                _reported[name] = 0;
                 if (residual != 0)
                     _logger?.LogWarning(
                         "IoPoolSiloTeardown: pool '{PoolName}' left {Residual} leaf(es) still "
