@@ -534,6 +534,11 @@ def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
 # said so — never read as "main passed nothing", which would silently take the newest set again.
 SATELLITE_CD_WORKFLOW = "ci.yml"
 MAIN_RUNS_EXAMINED = 12          # ~a day of merges; deep enough to survive a red patch on main
+# How the page is READ so that `MAIN_RUNS_EXAMINED` runs actually survive the event filter below.
+# The page is deliberately wider than the limit (most main runs vouch, so one page is normally
+# enough and the extra costs nothing), and the page count is a bound, not a target.
+MAIN_PAGE_SIZE = 50
+MAIN_PAGES_EXAMINED = 3
 # 🚨 EVERY main run that goes through the FULL gate set vouches, not `push` alone. The daily poll,
 # the release dispatch and a manual dispatch never NARROW what they build (node-repo invariant #9:
 # a publishing or release-follow trigger builds EVERYTHING), and each publishes the same verdict
@@ -884,43 +889,87 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
     notes: list[str] = []
     best: int | None = None
     predating = unreadable_runs = silent = ambiguous = unparseable = 0
-    # 🚨 THE LISTING IS READ INSIDE THE REFUSAL (Copilot review on MeshWeaver.SocialMedia#186).
-    # Every per-run read below already turns a `ResolutionError` into a SKIP with a named reason.
-    # This one did not, and it is the FIRST call the option makes — so a GitHub failure here left
-    # `main()` as an uncaught traceback: no `::error`, no step summary, no sentence saying whether
-    # `main` had passed nothing or GitHub had simply not answered. Those are opposite remedies, and
-    # the option whose entire purpose is to fail with a NAMED red verdict failed with a stack trace.
-    # It is also the module's standing discipline: a read that failed proves nothing, and is said.
-    try:
-        data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
-                     f"?branch=main&status=success&per_page={limit}")
-    except ResolutionError as error:
-        notes.append(f"the run listing for {repo} main could not be read: {error}")
-        return Ceiling(None, notes, (
-            f"❌ WHICH SET {repo}'s `main` HAS PASSED COULD NOT BE READ — the run LISTING itself "
-            f"did not answer.\n"
-            f"    GitHub said: {error}\n"
-            f"    This is NOT evidence about main. Nothing was read, so nothing is known about "
-            f"what main has\n"
-            f"    passed — and taking the newest sealed set on a failed read is precisely what "
-            f"this rule exists\n"
-            f"    to prevent. The run is RED instead.\n"
-            f"    REMEDY: re-run this run. A listing read that failed is transient far more often "
-            f"than not;\n"
-            f"    re-run the WHOLE run, not just the failed jobs (MeshWeaver#4303). If it fails "
-            f"again with the\n"
-            f"    same status, check https://www.githubstatus.com/ before looking at this "
-            f"repository.\n"
-            f"    TO PROCEED WITHOUT EITHER: set the repository VARIABLE MW_PLATFORM_REF to one "
-            f"set (`X.Y.Z-ci.N`)."))
     # The event filter is applied HERE, not in the query: the API takes ONE event, and every event
     # in MAIN_EVENTS_THAT_VOUCH counts. `branch=main` already excludes pull-request and merge-queue
     # runs; the filter says so anyway, because a run that did not go through the full gate set must
     # never vouch for a platform set.
-    listed = list(data.get("workflow_runs") or [])
-    total = data.get("total_count")
-    runs = [run for run in listed
-            if str(run.get("event") or "push") in MAIN_EVENTS_THAT_VOUCH]
+    #
+    # 🚨 SO THE PAGE MUST BE READ UNTIL `limit` runs SURVIVE THE FILTER, not once. Asking for
+    # `per_page={limit}` and then filtering was a silent under-read: every non-vouching run on the
+    # page consumed one of the twelve slots, so a page carrying enough of them yields fewer examined
+    # runs than intended — and, in the limit, NONE, which this function reports as "main has
+    # published no passing run to follow". That refusal is a RED on every satellite pull request,
+    # and it would be describing the page's composition rather than main's state. Filtering in the
+    # query cannot fix it either, because the API takes one event and four of them vouch.
+    listed: list[dict] = []
+    runs: list[dict] = []
+    total = None
+    exhausted = False
+    for page in range(1, MAIN_PAGES_EXAMINED + 1):
+        # 🚨 THE LISTING IS READ INSIDE THE REFUSAL (Copilot review on MeshWeaver.SocialMedia#186).
+        # Every per-run read below already turns a `ResolutionError` into a SKIP with a named
+        # reason. This one did not — and it is the FIRST call the option makes, so a GitHub failure
+        # here left `main()` as an uncaught traceback: no `::error`, no step summary, and no sentence
+        # saying whether `main` had passed nothing or GitHub had simply not answered. Those are
+        # opposite remedies, and the option whose entire purpose is to fail with a NAMED red verdict
+        # failed with a stack trace instead.
+        #
+        # The page loop gives the two cases their own answers, and the distinction is the one this
+        # function was just taught to make: page 1 failing means NOTHING was read, which is a
+        # refusal naming the listing. A LATER page failing means the read stopped early with rows
+        # already in hand — which `exhausted` stays False for, so it falls through to the
+        # "not an exhaustion condition" note rather than being reported as main's state.
+        try:
+            data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
+                         f"?branch=main&status=success&per_page={MAIN_PAGE_SIZE}&page={page}")
+        except ResolutionError as error:
+            if page == 1:
+                notes.append(f"the run listing for {repo} main could not be read: {error}")
+                return Ceiling(None, notes, (
+                    f"❌ WHICH SET {repo}'s `main` HAS PASSED COULD NOT BE READ — the run LISTING "
+                    f"itself did not answer.\n"
+                    f"    GitHub said: {error}\n"
+                    f"    This is NOT evidence about main. Nothing was read, so nothing is known "
+                    f"about what main\n"
+                    f"    has passed — and taking the newest sealed set on a failed read is "
+                    f"precisely what this rule\n"
+                    f"    exists to prevent. The run is RED instead.\n"
+                    f"    REMEDY: re-run this run. A listing read that failed is transient far more "
+                    f"often than not;\n"
+                    f"    re-run the WHOLE run, not just the failed jobs (MeshWeaver#4303). If it "
+                    f"fails again with\n"
+                    f"    the same status, check https://www.githubstatus.com/ before looking at "
+                    f"this repository.\n"
+                    f"    TO PROCEED WITHOUT EITHER: set the repository VARIABLE MW_PLATFORM_REF "
+                    f"to one set (`X.Y.Z-ci.N`)."))
+            notes.append(f"page {page} of the {repo} main listing could not be read ({error}) — "
+                         f"the read stopped there with {len(runs)} vouching run(s) already in hand")
+            break
+        if total is None:
+            total = data.get("total_count")
+        got = list(data.get("workflow_runs") or [])
+        listed.extend(got)
+        runs.extend(run for run in got
+                    if str(run.get("event") or "push") in MAIN_EVENTS_THAT_VOUCH)
+        # Enough have SURVIVED the filter, or the listing is genuinely exhausted — a short page, or
+        # every row `total_count` promised already read.
+        if len(runs) >= limit or len(got) < MAIN_PAGE_SIZE or (
+                isinstance(total, int) and len(listed) >= total):
+            exhausted = True
+            break
+    runs = runs[:limit]
+    # 🚨 THE BOUND IS NOT AN EXHAUSTION CONDITION, and saying otherwise would re-make the very bug
+    # this function was just fixed for. If the page budget ran out while the listing still had rows,
+    # "not enough vouching runs were FOUND" and "there are none" are different facts: the first is a
+    # read that stopped early, the second is a statement about main. Reporting the first as the
+    # second is how a bounded read becomes a false RED.
+    if not exhausted and len(runs) < limit:
+        notes.append(
+            f"read {len(listed)} run(s) over {MAIN_PAGES_EXAMINED} page(s) of "
+            f"{SATELLITE_CD_WORKFLOW} on {repo} main and found {len(runs)} that vouch "
+            f"({'/'.join(MAIN_EVENTS_THAT_VOUCH)}) — the listing was NOT exhausted, so this is a "
+            "read that stopped early, not evidence that main has passed on nothing. Raise "
+            "MAIN_PAGES_EXAMINED or MAIN_PAGE_SIZE if this recurs.")
 
     def evidence() -> CeilingEvidence:
         """The refusal's inputs — computed from what was ALREADY read, never from a second call."""
@@ -2918,9 +2967,14 @@ def self_test() -> int:
             if "/actions/workflows/" in path:
                 if seen is not None:
                     seen.append(path)
+                # Paging-aware, so a case can put the vouching run beyond the first slice and the
+                # reader has to keep reading rather than give up on what one page happened to hold.
+                size = int(re.search(r"per_page=(\d+)", path).group(1)) if "per_page=" in path else 100
+                number = int(re.search(r"[?&]page=(\d+)", path).group(1)) if "page=" in path else 1
+                window = list(enumerate(events))[(number - 1) * size: number * size]
                 return {"workflow_runs": [
                     {"id": 900 + index, "created_at": "2026-09-16T08:00:00Z", "event": event}
-                    for index, event in enumerate(events)]}
+                    for index, event in window]}
             if "/jobs" in path:
                 return {"total_count": 1, "jobs": [{"id": 777, "name": PLATFORM_REF_JOB}]}
             if "/check-runs/777/annotations" in path:
@@ -2937,6 +2991,54 @@ def self_test() -> int:
                   _fetch_main_events("workflow_dispatch"), 8203, "8203")
     _ceiling_case("a pull-request run never vouches, however it came to be listed on main",
                   _fetch_main_events("pull_request"), None, "no successful run")
+    # 🚨 THE UNDER-READ. Non-vouching runs on the page must not consume the examined budget. With a
+    # page pinned to the limit and the filter applied after, twenty `workflow_run` rows ahead of the
+    # real evidence meant the reader saw NONE of it and reported "main has published no passing run
+    # to follow" — a RED on every satellite pull request, describing the page's composition rather
+    # than main's state. Both arms matter: the ceiling resolves, and it resolves to the RIGHT set.
+    _ceiling_case("non-vouching runs ahead of the evidence do not starve the read",
+                  _fetch_main_events(*(["workflow_run"] * 20), "push"), 8203, "8203")
+    _ceiling_case("…and a listing that is ALL non-vouching still refuses, naming the events",
+                  _fetch_main_events(*(["workflow_run"] * 5)), None, "no successful run")
+
+    # 🚨 A BOUNDED read that stopped early must not read as "main passed nothing" (Copilot on
+    # #4773). Page budget exhausted with the listing still going is a DIFFERENT fact from an
+    # exhausted listing, and only the second is evidence about main.
+    _ceiling_case("a read that ran out of pages says so, rather than claiming main passed nothing",
+                  _fetch_main_events(*(["workflow_run"] * 400)), None, "was NOT exhausted")
+    _ceiling_case("…while a listing that genuinely ends still refuses on main's own terms",
+                  _fetch_main_events(*(["workflow_run"] * 5)), None, "no successful run")
+
+    # 🚨 …AND A PAGE THAT DID NOT ANSWER IS THE SAME KIND OF FACT (this change, over the review on
+    # MeshWeaver.SocialMedia#186). The two failures are not one: page 1 failing means NOTHING was
+    # read, so the refusal names the LISTING. A LATER page failing means the read stopped early with
+    # rows in hand — indistinguishable, from the outside, from the page budget running out, and it
+    # must reach the same "not exhausted" sentence rather than a claim about main.
+    def _fetch_pages_then_error(fails_at: int, events: tuple[str, ...]) -> Fetch:
+        core = _fetch_for(two, sealed_two)
+
+        def fetch(path: str):
+            if f"/repos/{SATELLITE}/" not in path:
+                return core(path)
+            if "/actions/workflows/" in path:
+                page = int(path.rsplit("page=", 1)[1]) if "page=" in path else 1
+                if page >= fails_at:
+                    raise ResolutionError("HTTP 503 (GitHub server error) after 4 attempts")
+                return {"total_count": 10_000, "workflow_runs": [
+                    {"id": 900 + i, "created_at": "2026-09-14T08:00:00Z",
+                     "event": events[i % len(events)]}
+                    for i in range(MAIN_PAGE_SIZE)]}
+            raise AssertionError(path)
+        return fetch
+
+    _ceiling_case("page 1 failing is a refusal naming the LISTING — nothing about main was read",
+                  _fetch_pages_then_error(1, ("workflow_run",)), None, "run LISTING")
+    _ceiling_case("a LATER page failing is a read that stopped early, not a verdict on main",
+                  _fetch_pages_then_error(2, ("workflow_run",)), None, "the read stopped there")
+    _ceiling_case("…and it does NOT claim the listing itself could not be read, because page 1 did",
+                  _fetch_pages_then_error(2, ("workflow_run",)), None,
+                  absent="the run LISTING itself did not answer")
+
     _seen_paths: list[str] = []
     _ceiling_case("…and a push still vouches, listed beside a poll",
                   _fetch_main_events("schedule", "push", seen=_seen_paths), 8203, "8203")
