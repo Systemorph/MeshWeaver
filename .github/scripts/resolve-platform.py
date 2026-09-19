@@ -881,6 +881,7 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
     listed: list[dict] = []
     runs: list[dict] = []
     total = None
+    exhausted = False
     for page in range(1, MAIN_PAGES_EXAMINED + 1):
         data = fetch(f"/repos/{repo}/actions/workflows/{SATELLITE_CD_WORKFLOW}/runs"
                      f"?branch=main&status=success&per_page={MAIN_PAGE_SIZE}&page={page}")
@@ -890,10 +891,25 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
         listed.extend(got)
         runs.extend(run for run in got
                     if str(run.get("event") or "push") in MAIN_EVENTS_THAT_VOUCH)
-        # Stop as soon as enough have SURVIVED the filter, or the listing is exhausted.
-        if len(runs) >= limit or len(got) < MAIN_PAGE_SIZE:
+        # Enough have SURVIVED the filter, or the listing is genuinely exhausted — a short page, or
+        # every row `total_count` promised already read.
+        if len(runs) >= limit or len(got) < MAIN_PAGE_SIZE or (
+                isinstance(total, int) and len(listed) >= total):
+            exhausted = True
             break
     runs = runs[:limit]
+    # 🚨 THE BOUND IS NOT AN EXHAUSTION CONDITION, and saying otherwise would re-make the very bug
+    # this function was just fixed for. If the page budget ran out while the listing still had rows,
+    # "not enough vouching runs were FOUND" and "there are none" are different facts: the first is a
+    # read that stopped early, the second is a statement about main. Reporting the first as the
+    # second is how a bounded read becomes a false RED.
+    if not exhausted and len(runs) < limit:
+        notes.append(
+            f"read {len(listed)} run(s) over {MAIN_PAGES_EXAMINED} page(s) of "
+            f"{SATELLITE_CD_WORKFLOW} on {repo} main and found {len(runs)} that vouch "
+            f"({'/'.join(MAIN_EVENTS_THAT_VOUCH)}) — the listing was NOT exhausted, so this is a "
+            "read that stopped early, not evidence that main has passed on nothing. Raise "
+            "MAIN_PAGES_EXAMINED or MAIN_PAGE_SIZE if this recurs.")
 
     def evidence() -> CeilingEvidence:
         """The refusal's inputs — computed from what was ALREADY read, never from a second call."""
@@ -2662,6 +2678,14 @@ def self_test() -> int:
     _ceiling_case("non-vouching runs ahead of the evidence do not starve the read",
                   _fetch_main_events(*(["workflow_run"] * 20), "push"), 8203, "8203")
     _ceiling_case("…and a listing that is ALL non-vouching still refuses, naming the events",
+                  _fetch_main_events(*(["workflow_run"] * 5)), None, "no successful run")
+
+    # 🚨 A BOUNDED read that stopped early must not read as "main passed nothing" (Copilot on
+    # #4773). Page budget exhausted with the listing still going is a DIFFERENT fact from an
+    # exhausted listing, and only the second is evidence about main.
+    _ceiling_case("a read that ran out of pages says so, rather than claiming main passed nothing",
+                  _fetch_main_events(*(["workflow_run"] * 400)), None, "was NOT exhausted")
+    _ceiling_case("…while a listing that genuinely ends still refuses on main's own terms",
                   _fetch_main_events(*(["workflow_run"] * 5)), None, "no successful run")
 
     _seen_paths: list[str] = []
