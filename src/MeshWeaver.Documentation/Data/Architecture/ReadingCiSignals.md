@@ -96,6 +96,69 @@ gh pr view <N> --repo <repo> --json statusCheckRollup \
 Every required name must be **present** and read `=SUCCESS`. Count them — a missing row is a fail,
 not an absence.
 
+### 🚨 A skip-trapdoor made by STEP ORDERING — the first failing step silences every guard behind it
+
+A gate that carries no `continue-on-error:` and no `if:` can still stop enforcing, and nothing in the
+file looks wrong. **GitHub's implicit condition on a step is `success()`**, so in a job that runs many
+*independent* guards as consecutive steps, the first failure skips all of them — and a `skipped` step
+publishes no failure, while the job's one required context reports a single red about whichever guard
+happened to be first.
+
+**Measured 2026-09-19 on MeshWeaver.SocialMedia#210**, run `35431670104`, job `105867277548`. The
+shared `validate` lane's vendored-resolver drift check failed with `32 code line(s) differ` and **16
+steps reported `skipped` behind it**, among them:
+
+| step | what stopped being enforced |
+|---|---|
+| `Every PR-reachable secret in this repo is asserted by a preflight` | the gate for the shape that bit Reinsurance#128 |
+| `Every manifest.lock is current (and carries a version)` | a stale lock reaching a publish |
+| `Every module's version matches its content` | a feature shipping to nobody (#878) |
+| `No mapping in this repo's workflows writes a key twice` | the duplicate-key guard |
+| `No pin comment names a commit this repo no longer pins` | abbreviated-sha / pin drift |
+| `This repo's no-op set agrees with the platform's` | no-op parity |
+
+`validate / Validate node repos` is a **required** context in all five satellites. Because
+`platform-ref` defaults to `main` and the drift check fetches the canonical live, *every* satellite is
+drifted from the instant a canonical change merges — so for the length of each re-copy wave, every
+pull request in that repository was unguarded by all six of those checks, with one red about an
+unrelated file as the only symptom.
+
+**The reading to take from it:** a red does not tell you what a job *checked*. Only the steps that
+reported a verdict were checked, and in a long guard job the count of `skipped` steps is the count of
+guards that said nothing. `.../actions/jobs/<id>` lists each step's own conclusion — read that, not
+the job's.
+
+**The fix is two halves, and `!cancelled()` alone is only the first.** Dropping the implicit
+`success()` also stops the *prerequisites* from masking, so a failed checkout would let every guard run
+against an empty workspace — a wall of secondary reds, and for any guard that passes on an empty tree a
+vacuous pass. So the last prerequisite publishes one output and every guard requires it:
+
+```yaml
+- name: The workspace and the tools are present — the ONE prerequisite every guard shares
+  id: ready
+  run: echo "ok=true" >> "$GITHUB_OUTPUT"
+- name: <any independent guard>
+  if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}
+```
+
+That keeps the two failure modes apart, which is the whole property:
+
+| what failed | what happens |
+|---|---|
+| a **prerequisite** (checkout, its history fetch, the tool/Python setup) | `ready` is skipped, its output is empty, every guard is skipped, and the prerequisite's own red is the verdict |
+| a **guard** | `ready` is untouched, so every other guard still reports |
+
+`.github/scripts/check-guard-step-masking.py` enforces both halves on two declared subjects —
+`node-repo-validate.yml`'s `validate` (36 guards) and `dotnet-test.yml`'s `workflow-shell` (60 guards,
+the job that gates `main-cd.yml`, the module lanes and every script a satellite fetches). It also
+requires the prerequisites to *be* a prefix, matched exactly (a prefix comparison let
+`actions/checkout-foo` satisfy `uses:actions/checkout`), refuses a job whose guard list is empty so it
+cannot pass by having nothing to check, and refuses a readiness step that stopped publishing `ok=true`.
+
+A guard's own *fetch* is deliberately **not** a prerequisite: its consumers run and fail naming the file
+they could not open, which is a second red rather than a silent skip, and the fetch's `::error::` is the
+root.
+
 ## Required ≠ meaningful, in both directions
 
 Two independent facts, and confusing them costs time in both directions:
