@@ -237,6 +237,29 @@ TEMPLATED_RE = re.compile(r"\{\{")
 # today would pin the wrong bytes forever. These are reported as "floating", never locked.
 FLOATING_TAGS = {"latest", "main", "master", "edge", "stable", "nightly"}
 
+# 🚨 A LINE POINTER IS FLOATING TOO, and membership alone never saw it. CD publishes `3-latest`,
+# `3.0-latest` and `3.0.0-latest` on every promote (main-cd.yml Phase D / Hosting/Deployment's
+# `ImageLine`, whose `PointerSuffix` is literally "-latest" over a one-to-three-part numeric line).
+# None of those is IN the set, so `tag.lower() in FLOATING_TAGS` classified every one of them as an
+# ordinary PIN and locked it to whichever digest it happened to name at that moment — protecting a
+# manifest the pointer has already left, and reading in the report as a protected pin. Measured on
+# this file before the fix: `latest` floating, `3.0.0-latest` LOCKED.
+#
+# The shape is deliberately narrow — a numeric line of one to three parts, then one of the floating
+# words — so it cannot swallow an immutable tag. `3.0.0-ci.8702` does not match (its last segment is
+# `ci.8702`), nor does a sha, nor `staging-<sha>-<run>`.
+LINE_POINTER_RE = re.compile(
+    r"^\d+(?:\.\d+){0,2}-(?:" + "|".join(sorted(FLOATING_TAGS)) + r")$")
+
+
+def is_floating_tag(tag: str) -> bool:
+    """Whether `tag` names a MOVING manifest — a bare floating word, or a version-line pointer.
+
+    A floating tag has no fixed manifest to protect, so it is never locked and never counted as a
+    pin. Compared case-insensitively, the way the bare words always were."""
+    lowered = tag.strip().lower()
+    return lowered in FLOATING_TAGS or bool(LINE_POINTER_RE.match(lowered))
+
 # Where a deployment overlay lives. Narrow ON PURPOSE — see the module docstring: widening this to
 # every YAML/JSON under `deploy/` drags in test fixtures whose tags never existed.
 OVERLAY_DIR_SEGMENTS = ("deploy", "deployments")
@@ -385,7 +408,7 @@ def extract_overlay_pins(text: str, registry: str = "") -> tuple[list[tuple[str,
 
     def add(repo: str, tag: str) -> None:
         pair = (repo, tag)
-        if tag.lower() in FLOATING_TAGS:
+        if is_floating_tag(tag):
             if pair not in floating:
                 floating.append(pair)
         elif pair not in pins:
@@ -1972,7 +1995,7 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
                 # PRESERVES a moving tag, and `main`/`master`/`edge`/`stable`/`nightly` move exactly
                 # as `latest` does — checking one spelling reports the other five as ordinary pins.
                 # One set, shared with the ACR path, so the two cannot drift apart.
-                moving = tag.strip().lower() in FLOATING_TAGS
+                moving = is_floating_tag(tag)
                 emit(f"        {repo}:{tag}"
                      + ("   🚨 a MOVING tag — outside this model (#3438)" if moving else ""))
                 emit(f"          pinned by {where}")
@@ -4898,7 +4921,10 @@ ingress:
 
     # 🚨 EVERY floating tag, not the string `latest` (#4324 review). `main`, `master`, `edge`,
     # `stable` and `nightly` move exactly as `latest` does and are PRESERVED by the extractor.
-    for _moving in sorted(FLOATING_TAGS):
+    # …and every LINE POINTER, which membership alone missed: `3.0.0-latest` is what CD actually
+    # publishes and what a record seeded by `ImageLine.PointerFor` names, and it was being locked.
+    for _moving in sorted(FLOATING_TAGS) + ["3-latest", "3.0-latest", "3.0.0-latest",
+                                            "3.0.0-stable"]:
         _scan = _scan2("Systemorph/Memex",
                        FIXTURE_OVERLAY_FOREIGN.replace("3.0.0-ci.8411", _moving),
                        "deployments/aks/build/values.build.public.yaml")
