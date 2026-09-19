@@ -42,7 +42,7 @@ namespace MeshWeaver.Graph.Test;
 ///
 /// <para><b>What this pins.</b> Not "the leg is fast" — that would be a bound tuned to make a gate
 /// pass, and this repo does not do that. It pins the CONTRACT
-/// <see cref="NodeTypeReleaseExtensions.ObserveNodeTypeRelease"/> already states about itself and
+/// <see cref="NodeTypeReleaseExtensions.ObserveNodeTypeRelease(MeshWeaver.Messaging.IMessageHub,string,bool,string,System.Action{string})"/> already states about itself and
 /// did not keep: <i>exactly one emission, always</i>. Rx has four outcomes, not three; the closing
 /// <c>DefaultIfEmpty(false)</c> covers "completed empty" and the two <c>Catch</c>es cover "faulted",
 /// and nothing covered "never terminated". The first test below is the DEFECT — the wave composed

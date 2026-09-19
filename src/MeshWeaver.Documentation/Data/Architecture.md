@@ -498,6 +498,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Reopening on Image Provenance](ReopeningOnImageProvenance) — the third reopen predicate: an occurrence counts only if it came from an image whose commit contains the fix, and why a staleness window would close live defects
 - [Registry-key rotation — two phases, at the registry that holds the instance](RegistryKeyRotation)
 - [The Release Event Bus](ReleaseEventBus)
+- [Release Failure Classes](ReleaseFailureClasses) — one log line carried four unrelated defects, so its issue could never be closed; what an incident's identity is really computed from (including the second line that never reaches it) and the rule that puts the failure CLASS in the template
 - [The Release Gate's Denominator](ReleaseGateDenominator)
 - [Release to Production — the whole path](ReleaseToProductionPipeline)
 - [Renaming a Required Status Check](RenamingARequiredCheck)
