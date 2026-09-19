@@ -162,9 +162,20 @@ number that reads like an answer and measured nothing.
 
 Classifying by the timestamp is cheap and splits the backlog usefully. Of fifteen old incident
 issues checked the same day, three more sit in the roll window (#1126, #1840, #2833 — two compile-at-
-boot, one shutdown quiescence), while four fired at 08:54–09:03Z, *after* the image then running was
-built, and are therefore live on it (#1246, #2307, #2480, #3045). The first group tells you nothing
-between rolls; the second is firing now.
+boot, one shutdown quiescence), while four fired at 08:54–09:03Z, after the image then running was
+built (#1246, #2307, #2480, #3045).
+
+🚨 **But "fired after the image was built" does NOT imply "fires on that image", and for a teardown
+fault it implies close to the opposite.** The pod that emits a teardown fault is the pod being
+REPLACED — it is running the image the roll is replacing, by construction. #2480 is exactly that
+shape: its subject is the mesh drain *at silo shutdown*, and its 08:59Z occurrence sits right after
+an 08:32Z roll, so the likeliest reading is the old replica tearing down, not the new one failing.
+The timestamp separates "during a roll" from "between rolls"; deciding WHICH image was running still
+needs the pod→image mapping, which the incident comments do not carry.
+
+So the classification gives three buckets, not two: silent-between-rolls, fires-during-normal-
+operation, and fires-at-teardown-on-the-outgoing-image — and only the middle one is evidence about
+the image now serving.
 
 ## How to read one, until both predicates exist
 
