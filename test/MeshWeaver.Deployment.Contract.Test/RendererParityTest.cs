@@ -179,6 +179,7 @@ public class RendererParityTest
             .WithSignIn("Custom", microsoftClientId: "ms", microsoftTenantId: "tenant", googleClientId: "google", linkedInClientId: "linkedin", appleClientId: "apple", enableDevLogin: false)
             .WithEmail(true, "portal@example.com", "email-client", "tenant", useManagedIdentity: false, inboundEnabled: true, webhookBaseUrl: "https://portal.example.com", inboundForwardAddress: "inbox@example.com")
             .WithGitHubApp("gh-client", "12345", "Systemorph")
+            .WithOpsGitHubApp("ops-client", "67890", "Systemorph", "client-GitHub-App-PrivateKey", "GitHub__Apps__client__PrivateKey")
             .WithSocialLinkedIn("linkedin")
             .WithAi(a => a.OpenRouter(["anthropic/claude-sonnet-4"]).Anthropic(["claude-sonnet-4"], enabled: true).AzureFoundry(["gpt-5"], enabled: true).AzureAis(["deepseek"]).Tiers("heavy", "standard", "light", "utility"))
             .WithOperator(true, "hosting", "hosting-operator", "ghcr.io/systemorph/hosting-operator:1")

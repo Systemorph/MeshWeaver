@@ -481,6 +481,33 @@ public static class DeploymentRecordExtensions
     public static DeploymentContent WithGitHubApp(this DeploymentContent d, string clientId, string installationId, string? installationOwner = null) =>
         d with { GitHubApp = new GitHubAppIdentity { ClientId = clientId, InstallationId = installationId, InstallationOwner = installationOwner ?? d.GitHubApp?.InstallationOwner } };
 
+    /// <summary>
+    /// The App a CONTROL instance dispatches THIS deployment's pipelines as — a client estate's own
+    /// App, installed on that client's config repository only. The PEM never passes through here:
+    /// <paramref name="privateKeySecret"/> names the Key Vault object, and
+    /// <paramref name="privateKeyConfigKey"/> the key the control instance reads it from. Both may
+    /// be left to their derived defaults (<c>{keyVaultSecretPrefix}GitHub-App-PrivateKey</c> and
+    /// <c>GitHub__Apps__{id}__PrivateKey</c>).
+    /// </summary>
+    public static DeploymentContent WithOpsGitHubApp(
+        this DeploymentContent d,
+        string clientId,
+        string? installationId = null,
+        string? installationOwner = null,
+        string? privateKeySecret = null,
+        string? privateKeyConfigKey = null) =>
+        d with
+        {
+            OpsGitHubApp = new GitHubAppIdentity
+            {
+                ClientId = clientId,
+                InstallationId = installationId ?? d.OpsGitHubApp?.InstallationId,
+                InstallationOwner = installationOwner ?? d.OpsGitHubApp?.InstallationOwner,
+                PrivateKeySecret = privateKeySecret ?? d.OpsGitHubApp?.PrivateKeySecret,
+                PrivateKeyConfigKey = privateKeyConfigKey ?? d.OpsGitHubApp?.PrivateKeyConfigKey,
+            },
+        };
+
     /// <summary>The LinkedIn client id the Social plugin posts with.</summary>
     public static DeploymentContent WithSocialLinkedIn(this DeploymentContent d, string? clientId) => d with { SocialLinkedInClientId = clientId };
 

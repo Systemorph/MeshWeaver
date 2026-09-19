@@ -692,6 +692,30 @@ public sealed record GitHubAppIdentity
     /// <summary>The installation's owner (organisation).</summary>
     [Description("Installation owner")]
     public string? InstallationOwner { get; init; }
+
+    /// <summary>
+    /// The Key Vault object holding this App's PEM — read only when this identity is a record's
+    /// <see cref="DeploymentContent.OpsGitHubApp"/>, i.e. the App a CONTROL instance dispatches
+    /// this deployment's pipelines as. It names WHICH object the control instance must mount; it
+    /// is never a secret itself. Blank on a record that states <c>keyVaultSecretPrefix</c> means
+    /// the fleet's own name, <c>{keyVaultSecretPrefix}GitHub-App-PrivateKey</c>.
+    /// <para>On <see cref="DeploymentContent.GitHubApp"/> — this portal's own identity — it is
+    /// inert: that PEM arrives as <c>GitHub__App__PrivateKey</c> through the portal's secret
+    /// mount, not through a record field.</para>
+    /// </summary>
+    [Description("Key Vault object holding the PEM (ops identity only)")]
+    public string? PrivateKeySecret { get; init; }
+
+    /// <summary>
+    /// The configuration key the CONTROL instance reads this App's PEM from — the key its own
+    /// record maps <see cref="PrivateKeySecret"/> onto (<c>GitHub__Apps__{id}__PrivateKey</c> in a
+    /// <c>keyVaultSecrets</c> entry, read in-process as <c>GitHub:Apps:{id}:PrivateKey</c>). Blank
+    /// means that derived default for the deployment's id. A control instance that has not mounted
+    /// it refuses the dispatch NAMING both this key and the vault object — a dispatch as the wrong
+    /// App would be worse than no dispatch.
+    /// </summary>
+    [Description("Configuration key the control instance reads the PEM from (ops identity only)")]
+    public string? PrivateKeyConfigKey { get; init; }
 }
 
 /// <summary>
