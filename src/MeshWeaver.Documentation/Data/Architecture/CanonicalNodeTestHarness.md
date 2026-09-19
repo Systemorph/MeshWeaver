@@ -116,6 +116,36 @@ than assuming a path — the three copies did not agree on a location (`scripts/
 check"* for the one repository whose copy was still running against the abandoned model. A repository
 with no copy at all passes with a notice: that is an end state, not a gap.
 
+## Eight things the review found, and what each one was
+
+Centralizing the harness put one file under review that had never had one, and the automatic review
+of #4916 found **eight** defects — six of them false-pass or false-red paths that had been shipping in
+all three copies. They are listed because the pattern is the point: every one is *the gate grew, and
+the harness did not follow*, or *a check that could not fail*.
+
+| # | what it was | measured |
+|---|---|---|
+| 1 | the collision detector **collapsed byte-identical copies** and compiled the narrowed set; the gate compiles both paths → CS0101 | 0 of 243 NodeTypes exercise it — latent, removed anyway |
+| 2 | `BEGIN` printed **before** reflection, so a type-load failure left no summary and the all-zero tally read as *a set that ran* | a runtime death exiting 0 with full-coverage colours |
+| 3 | an all-`UNVERIFIABLE` run still printed `✓ 0 test(s) passed` and returned 0 | the new state opened the hole it was added to close |
+| 4 | the gate compiles an image-shaped set with `DisableImplicitFrameworkReferences`; the harness cannot, because it also RUNS | not mirrorable — **named** in a notice instead |
+| 5 | the declaration regex allowed any indentation, so a **nested** type of the same name under two outer types read as one top-level duplicate | **10 of 243** NodeTypes refused, all in Plugins; one of the "types" was the keyword `with` |
+| 6 | an `OSError` on a declared source was swallowed and the file **dropped from the set** | green over source never compiled |
+| 7 | `--self-test` asserted **4** of the symbols the file imports from `compile-check.py` | the list is now derived from this file's own AST — 11 symbols, and it cannot go stale |
+| 8 | the gate adds `discover_module_refs` + a refusal for the three registry-served assemblies; the harness had an ad-hoc overlay | a short set reported those as broken NodeType content |
+
+Finding 5 is the one with a live cost. `Edu/CourseCatalog`, `Edu/CourseInvite`, `Governance/Activity`,
+`Hosting/Backup`, `Hosting/Deployment`, `Hosting/FleetConsole`, `Hosting/InstanceAction`,
+`Hosting/InstanceRequest`, `Hosting/PlatformBuildInbox` and `Store/Maintenance` could not be run
+locally at all — the harness refused them, which reads as deliberate. MeshWeaver.Plugins' own copy
+could never have surfaced it, because it merged a whole package into one compile and never reached the
+per-type refusal. `declarations` now tracks brace depth (string literals and comments blanked first,
+so a `"{"` in a text table cannot shift it; both `namespace X {` and its next-line form discounted,
+because keying on the same-line brace alone would put every declaration at depth 1 and the detector
+would record *nothing*). Verified as a strict subset: over the same 243 NodeTypes the new detector
+refuses **0**, the old refused **10**, and **nothing is newly refused** — and `Store/Maintenance`,
+previously refused, runs **44 tests, 44 passed**.
+
 ## How a satellite reaches it
 
 `MW_PLATFORM_SCRIPTS` (a core checkout's `.github/scripts`) always wins — that is the offline route

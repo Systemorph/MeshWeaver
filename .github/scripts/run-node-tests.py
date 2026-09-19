@@ -57,6 +57,7 @@ under the test harness" the same sentence rather than two implementations that a
 from __future__ import annotations
 
 import argparse
+import ast
 import glob
 import hashlib
 import json
@@ -397,11 +398,85 @@ DECLARATION = re.compile(
     r"(?:record[ \t]+class|record[ \t]+struct|record|class|interface|struct|enum)[ \t]+"
     r"(?P<name>\w+)", re.M)
 
+# A namespace declaration, either style. Its brace (this line's or the next line's) is not a type
+# scope, so `declarations` discounts that depth; a file-scoped `namespace X;` opens no brace and the
+# `;` clears the pending flag.
+_NAMESPACE_DECL = re.compile(r"^[ \t]*namespace[ \t]+[\w.]+[ \t]*(\{|;)?[ \t]*$")
+
+
+_LINE_COMMENT = re.compile(r"//[^\n]*")
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+_STRING = re.compile(r'@?"(?:""|\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'')
+
+
+def _scannable(text: str) -> str:
+    """`text` with string literals and comments blanked, keeping every NEWLINE and every brace that
+    is really code.
+
+    Strings go FIRST: a `"http://x"` would otherwise lose its tail to the line-comment pattern, and
+    a `"{"` in a text table would then be counted as a brace and shift the depth of everything after
+    it. Comments go second, because a `//` comment may contain an unbalanced quote. Neither pattern
+    has to be a C# lexer — it has to keep the BRACE COUNT right, which is all `declarations` reads."""
+    text = _STRING.sub(lambda m: '"' + " " * max(0, len(m.group(0)) - 2) + '"', text)
+    text = _BLOCK_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
+    return _LINE_COMMENT.sub("", text)
+
+
+# 🚨 WHICH WAY THIS FAILS, on purpose. `_STRING` does not understand a C# 11 RAW string (`"""…"""`),
+# so braces inside one can still shift the depth — and then declarations AFTER it sit at a non-zero
+# depth and are NOT recorded. That direction is a MISSED duplicate (Roslyn then emits the CS0101 the
+# detector meant to pre-empt, which is noisy but true), never a FALSE REFUSAL of a set the gate
+# compiles, which is the failure that blocks work. Verified as a subset over every NodeType with
+# resolved sources in the three repos: the new detector refuses 0 where the old refused 10, and
+# refuses nothing the old one did not.
+
 
 def declarations(text: str) -> set[tuple[frozenset[str], str]]:
-    """Every type declared in one file, as (its modifiers, its name). Deduplicated per file."""
-    return {(frozenset(m.group("mods").split()), m.group("name"))
-            for m in DECLARATION.finditer(text)}
+    """Every TOP-LEVEL type declared in one file, as (its modifiers, its name). Deduped per file.
+
+    🚨 TOP-LEVEL, BY BRACE DEPTH — indentation is not a scope (MeshWeaver#4785, Copilot review of
+    #4916). The regex allows arbitrary leading whitespace, so a NESTED `public sealed class FieldRow`
+    used by two different outer types in two files read as ONE top-level type declared twice, and the
+    harness then REFUSED a set the gate compiles: measured over every NodeType with resolved sources
+    in MeshWeaver.Reinsurance, MeshWeaver.Crm and MeshWeaver.Plugins, **10 of 243** were refused for
+    exactly that, all in Plugins — `Edu/CourseCatalog`, `Edu/CourseInvite`, `Governance/Activity`,
+    `Hosting/{Backup,Deployment,FleetConsole,InstanceAction,InstanceRequest,PlatformBuildInbox}`,
+    `Store/Maintenance` — so ten NodeTypes' suites could not be run locally at all. That is the
+    mirror image of the CS0101 wall this detector exists to replace, and it is worse, because a
+    refusal looks deliberate. One of the names was `with`, a keyword the regex captured off an
+    expression.
+
+    A block `namespace X { }` opens a brace that is not a type scope, so its depth is discounted; a
+    file-scoped `namespace X;` opens nothing and needs no special case. Modifiers stay as they were —
+    `private`/`protected` are still absent from the pattern, which is now belt AND braces rather than
+    the only guard."""
+    out: set[tuple[frozenset[str], str]] = set()
+    depth = 0                       # every open brace
+    namespace_braces: list[int] = []  # the depths at which a NAMESPACE brace was opened
+    pending_namespace = False       # a `namespace X` whose `{` has not been seen yet
+    for line in _scannable(text).split("\n"):
+        match = DECLARATION.match(line)
+        if match and depth - len(namespace_braces) == 0:
+            out.add((frozenset(match.group("mods").split()), match.group("name")))
+        # 🚨 BOTH brace styles. `namespace X {` and `namespace X` + `{` on the NEXT line are both
+        # common, and keying on the same-line brace alone is not a smaller guard, it is a BLIND SPOT:
+        # the namespace's brace would count as a type scope, every declaration in the file would sit
+        # at depth 1, and the detector would record NOTHING — refusing nothing, ever, in that file.
+        if _NAMESPACE_DECL.match(line):
+            pending_namespace = True
+        for char in line:
+            if char == "{":
+                if pending_namespace:
+                    namespace_braces.append(depth)
+                    pending_namespace = False
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                while namespace_braces and depth <= namespace_braces[-1]:
+                    namespace_braces.pop()
+            elif char == ";" and pending_namespace:
+                pending_namespace = False    # file-scoped `namespace X;` — opens no brace at all
+    return out
 
 
 def collisions_within(cs_files, module_dir: Path):
@@ -414,26 +489,62 @@ def collisions_within(cs_files, module_dir: Path):
     ~150 CS0101/CS0111 lines that read like broken content — and points it at the only scope where
     a collision is now a real defect.
 
-    Returns (sources, problems): `sources` collapses byte-identical copies (a file declared twice,
-    e.g. by both `Source` and a `shared=@…/Source` that overlaps it, carries no information the
-    compilation needs twice); `problems` is a list of human-readable refusals."""
+    Returns (sources, problems): `sources` is EVERY path the set declares, and `problems` a list of
+    human-readable refusals.
+
+    🚨 `sources` USED TO COLLAPSE byte-identical copies, and that was a false-pass divergence
+    (MeshWeaver#4785, Copilot review of #4916). The gate hands `build_unit` the resolved frozenset of
+    PATHS; two DISTINCT paths with identical bytes are therefore a duplicate declaration in the unit
+    the gate and the mesh compile — CS0101 — and collapsing them here compiled once and ran green.
+    Measured over every NodeType with resolved sources in the three repos, 0 of 243 exercise it, so
+    nothing in the fleet changes; it is removed anyway, because "this harness compiles what the gate
+    compiles" cannot hold with an exception in it. A byte-identical copy is now refused and NAMED
+    like every other collision, which is the same verdict the gate reaches and a legible one.
+
+    🚨 AND AN UNREADABLE SOURCE FAILS CLOSED. An `OSError` on a declared source used to be swallowed
+    and the file dropped from the set, so if another file supplied the tests the run went green over
+    source that was never compiled — while the gate's `read_source` raises on the same path. It is a
+    refusal naming the path."""
     paths = sorted((Path(p) for p in cs_files), key=str)
     problems: list[str] = []
-
-    by_content: dict[str, list[Path]] = {}
-    for path in paths:
-        try:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError:
-            continue
-        by_content.setdefault(digest, []).append(path)
-    sources = sorted(str(ps[0]) for ps in by_content.values())
+    sources = sorted(str(p) for p in paths)
 
     def where(p: Path) -> str:
         try:
             return str(p.relative_to(ROOT))
         except ValueError:
             return str(p)
+
+    by_content: dict[str, list[Path]] = {}
+    unreadable: list[Path] = []
+    for path in paths:
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            unreadable.append(path)
+            continue
+        by_content.setdefault(digest, []).append(path)
+    if unreadable:
+        lines = [f"{len(unreadable)} declared source(s) could not be READ, so this NodeType's unit "
+                 f"cannot be assembled:"]
+        lines += [f"    {where(p)}" for p in unreadable[:10]]
+        lines.append("  The gate reads the same paths and raises on this one. Running the set without")
+        lines.append("  it would compile a program the mesh never builds, and pass.")
+        problems.append("\n".join(lines))
+
+    # Two DISTINCT paths, identical bytes, both declared by this one type: the unit carries every
+    # declaration twice, which is CS0101 on the gate and on the mesh.
+    duplicated = sorted((ps for ps in by_content.values() if len(ps) > 1), key=lambda ps: str(ps[0]))
+    if duplicated:
+        lines = [f"{len(duplicated)} file(s) are declared TWICE, byte for byte, inside this ONE "
+                 f"NodeType's declared sources:"]
+        for group in duplicated[:10]:
+            for p in group:
+                lines.append(f"      {where(p)}")
+            lines.append("      ↑ identical contents")
+        lines.append("  The mesh concatenates a type's declared sources by PATH, so every type in")
+        lines.append("  them is declared twice. Narrow the `sources` entry that pulls the copy in.")
+        problems.append("\n".join(lines))
 
     # Same file NAME, different bytes, both declared by this one type: the compilation would carry
     # two different files claiming the same role and this harness cannot know which was meant.
@@ -454,14 +565,14 @@ def collisions_within(cs_files, module_dir: Path):
         problems.append("\n".join(lines))
 
     # The harder half: the SAME TYPE declared in two DIFFERENTLY-NAMED files that this ONE NodeType
-    # declares. Collapsing identical files cannot help — the files differ; only the type is shared.
+    # declares. A byte-identical pair is already refused above; this is the differing-files case.
     declared_in: dict[str, set[str]] = {}
     partials: set[str] = set()
     for path in (Path(x) for x in sources):
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
-            continue
+            continue           # already refused above, by path, with its own message
         for mods, name in declarations(text):
             declared_in.setdefault(name, set()).add(where(path))
             if "partial" in mods:
@@ -589,13 +700,25 @@ def run_set(work: Path, sources, refs_xml, analyzers, cc, ai_available, list_onl
         return None, errors, proc.stdout[-2000:], unverifiable
 
     body = out.split(BEGIN, 1)[1]
+    # 🚨 THE SUMMARY MARKER IS REQUIRED, NOT OPTIONAL (MeshWeaver#4785, Copilot review of #4916).
+    # `BEGIN` is printed BEFORE reflection starts, so a `ReflectionTypeLoadException` out of
+    # `Assembly.GetTypes()` — or anything else thrown between the two markers — leaves `BEGIN`
+    # present and `##NODETESTS-SUMMARY` absent. Defaulting the tally to zeros then returned a
+    # non-None tally, the set counted as EXECUTED, and the command exited 0 having run no test at
+    # all: a runtime failure wearing full coverage's clothes. The runner emits the summary on every
+    # path it can reach, list mode included, so its absence means the process died mid-flight.
+    if SUMMARY not in body:
+        tail = "\n".join(l for l in body.splitlines() if l.strip())
+        return None, ["the runner printed its BEGIN marker and then died before its summary — it "
+                      "BUILT and failed at run time (a type load or a static initializer), so no "
+                      "test in this set executed"], tail[-2000:], False
     tally = {"suites": 0, "cases": 0, "passed": 0, "failed": 0, "skipped": 0}
     lines = []
     for line in body.splitlines():
         if line.startswith(SUMMARY):
             for kv in line[len(SUMMARY):].split():
                 k, _, v = kv.partition("=")
-                if k in tally:
+                if k in tally and v.isdigit():
                     tally[k] = int(v)
             continue
         if line.strip():
@@ -733,11 +856,25 @@ def self_test() -> int:
     # 🚨 FIRST, because it is the case that was not covered. Loading compile-check.py is itself part
     # of the assertion: the removal that broke this script would be caught here by the load or by the
     # missing `build_unit`, either way RED and named, instead of by a developer's first real run.
+    #
+    # 🚨 THE LIST IS DERIVED, NOT HAND-KEPT (Copilot review of #4916). A hand-written four-name list
+    # asserted `build_unit`, `resolve_sources`, `discover_refs` and `UNIT_FILE` while the file also
+    # called `is_nodetype`, `node_dir`, `short_reference_set_refusal`, `discover_ai_refs`,
+    # `discover_module_refs`, `_is_ai_error`, `MODULE_REFS_NOT_IN_IMAGE` and `IMPLICIT_USINGS` — any
+    # of which could be renamed with `--self-test` still green, deferring the break to whoever next
+    # ran a real module. Which is `usings_union` again, in the very check meant to prevent it. So the
+    # names come from THIS FILE'S OWN SOURCE: every `cc.<name>` it references. A newly-used symbol is
+    # asserted the moment it is used, and the list cannot go stale.
     print("── the harness compiles what the gate compiles (#4785) ──")
     cc = load_compile_check()
-    for attr in ("build_unit", "resolve_sources", "discover_refs", "UNIT_FILE"):
+    used = sorted({node.attr for node in ast.walk(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+                   if isinstance(node, ast.Attribute)
+                   and isinstance(node.value, ast.Name) and node.value.id == "cc"})
+    case("this file's own `cc.<name>` references could be collected (the list is derived, not kept)",
+         len(used) >= 8, f"{len(used)} found: {used}")
+    for attr in used:
         case(f"compile-check.py still offers `{attr}`", hasattr(cc, attr),
-             f"the canonical moved — follow it, do not re-derive it locally")
+             "the canonical moved — follow it, do not re-derive it locally")
     if not failures:
         hoist_self_test(cc, case)
     print("\n── colliding sources inside ONE NodeType (Reinsurance#113) ──")
@@ -751,8 +888,15 @@ def self_test() -> int:
         (d / "b" / "Shared.cs").write_text(same, encoding="utf-8")
         srcs, problems = collisions_within(
             [str(d / "a" / "Shared.cs"), str(d / "b" / "Shared.cs")], d)
-        case("byte-identical copies collapse to one and are NOT refused",
-             len(srcs) == 1 and not problems, f"{len(srcs)} source(s), {len(problems)} problem(s)")
+        # 🚨 THIS CASE IS INVERTED FROM WHAT IT ASSERTED BEFORE #4785. It used to demand that
+        # byte-identical copies COLLAPSE to one and pass — which was the divergence: the gate compiles
+        # both paths and hits CS0101. The set the harness compiles is now the set the gate compiles,
+        # and the duplicate is refused and NAMED.
+        case("byte-identical copies are KEPT (the gate compiles both) and REFUSED, naming both paths",
+             len(srcs) == 2 and len(problems) >= 1
+             and any("byte for byte" in p and "a/Shared.cs" in p.replace(os.sep, "/")
+                     and "b/Shared.cs" in p.replace(os.sep, "/") for p in problems),
+             f"{len(srcs)} source(s), {len(problems)} problem(s): {problems[0][:120] if problems else ''}")
 
         (d / "b" / "Shared.cs").write_text("public record Shared(int Y);\n", encoding="utf-8")
         _, problems = collisions_within(
@@ -815,6 +959,63 @@ def self_test() -> int:
         _, problems = collisions_within([str(d / "a" / "D1.cs"), str(d / "b" / "D2.cs")], d)
         case("a PARTIAL `record struct` split across two files is NOT refused",
              not problems, f"{len(problems)} problem(s)")
+
+        # 🚨 INDENTATION IS NOT A SCOPE (#4785, Copilot review of #4916). A NESTED type of the same
+        # name under two DIFFERENT outer types is legal C#, and the indentation-blind regex refused
+        # 10 of 243 real NodeTypes for it — all in MeshWeaver.Plugins, whose own copy could not
+        # surface it because it merged a whole package into one compile. Both directions matter: the
+        # nested pair must pass, and a genuinely top-level pair beside it must still be refused.
+        (d / "a" / "N1.cs").write_text(
+            "public sealed class OuterOne\n{\n    public sealed class FieldRow { public int A; }\n}\n",
+            encoding="utf-8")
+        (d / "b" / "N2.cs").write_text(
+            "public sealed class OuterTwo\n{\n    public sealed class FieldRow { public int B; }\n}\n",
+            encoding="utf-8")
+        _, problems = collisions_within([str(d / "a" / "N1.cs"), str(d / "b" / "N2.cs")], d)
+        case("a NESTED type of the same name under two DIFFERENT outer types is NOT refused",
+             not problems, f"{len(problems)} problem(s): {problems[0][:120] if problems else ''}")
+        case("…and the nested name is not recorded as a declaration at all",
+             "FieldRow" not in {n for _m, n in declarations((d / "a" / "N1.cs").read_text())},
+             str(sorted(n for _m, n in declarations((d / "a" / "N1.cs").read_text()))))
+        (d / "b" / "N3.cs").write_text("public sealed class OuterOne { }\n", encoding="utf-8")
+        _, problems = collisions_within([str(d / "a" / "N1.cs"), str(d / "b" / "N3.cs")], d)
+        case("CONTROL: the OUTER type duplicated IS still refused, and named",
+             len(problems) == 1 and "OuterOne" in problems[0],
+             f"{len(problems)} problem(s): {problems[0][:120] if problems else ''}")
+
+        # A BLOCK namespace opens a brace that is not a type scope, and so does its next-line form —
+        # keying on the same-line brace alone would put every declaration in such a file at depth 1
+        # and the detector would record NOTHING, refusing nothing ever, silently.
+        for label, text in (
+            ("same-line brace", "namespace Nm {\npublic sealed class Inside { }\n}\n"),
+            ("next-line brace", "namespace Nm\n{\npublic sealed class Inside { }\n}\n"),
+            ("file-scoped", "namespace Nm;\npublic sealed class Inside { }\n"),
+        ):
+            case(f"a type in a {label} namespace is still seen as top-level",
+                 "Inside" in {n for _m, n in declarations(text)},
+                 str(sorted(n for _m, n in declarations(text))))
+
+        # Braces inside a STRING must not shift the depth — a text table full of `{` would otherwise
+        # bury every declaration after it.
+        case("braces inside a string literal do not shift the depth",
+             "AfterTheString" in {n for _m, n in declarations(
+                 'public sealed class Before { public const string S = "{{{{"; }\n'
+                 'public sealed class AfterTheString { }\n')},
+             str(sorted(n for _m, n in declarations(
+                 'public sealed class Before { public const string S = "{{{{"; }\n'
+                 'public sealed class AfterTheString { }\n'))))
+        case("a declaration inside a // comment is not a declaration",
+             "Commented" not in {n for _m, n in declarations(
+                 "// public sealed class Commented { }\npublic sealed class Real { }\n")},
+             "the comment stripper let it through")
+
+        # An UNREADABLE declared source fails CLOSED — it used to be dropped from the set, so a run
+        # could go green over source that was never compiled while the gate raises on the same path.
+        missing = d / "a" / "GoneMissing.cs"
+        _, problems = collisions_within([str(d / "a" / "N1.cs"), str(missing)], d)
+        case("an UNREADABLE declared source is refused, naming the path",
+             len(problems) >= 1 and any("GoneMissing.cs" in p for p in problems),
+             f"{len(problems)} problem(s): {problems[0][:140] if problems else ''}")
 
     print(f"\n{'✓ self-test green' if not failures else '✗ ' + str(len(failures)) + ' self-test case(s) FAILED'}")
     return 0 if not failures else 1
@@ -933,6 +1134,41 @@ def main() -> int:
     ai_refs = cc.discover_ai_refs(search_roots)
     refs.update(ai_refs)
     ai_available = bool(ai_refs)
+    # 🚨 THE REGISTRY-SERVED MODULES, AND THE GATE'S OWN REFUSAL (MeshWeaver#4785, Copilot review of
+    # #4916). `MeshWeaver.AI`, `MeshWeaver.Markdown.Collaboration` and `MeshWeaver.Maps` are no
+    # longer in the platform image (#2276 / #3175), so `compile-check.py` adds `discover_module_refs`
+    # and REFUSES when one is still missing — because their absence does not look like an absence, it
+    # looks like fifteen NodeTypes breaking, named against the CONTENT. This harness had only its own
+    # best-effort `sibling_plugin_refs` overlay, so the same short set reported those as broken
+    # NodeType source, on the very content the gate compiles clean. Same discovery, same refusal.
+    module_refs = cc.discover_module_refs(search_roots)
+    for name, path in module_refs.items():
+        refs.setdefault(name, path)   # never clobber a copy the reference set already carries
+    missing_modules = [m for m in cc.MODULE_REFS_NOT_IN_IMAGE if f"{m}.dll" not in refs]
+    if missing_modules:
+        print("\n✗ the reference set is missing "
+              f"{len(missing_modules)} module assembl{'y' if len(missing_modules) == 1 else 'ies'} "
+              "that the platform image no longer ships:\n"
+              + "".join(f"    {m}.dll\n" for m in missing_modules)
+              + "  These are registry-served, so `/app` does not carry them. Every NodeType that\n"
+                "  binds one fails CS0246/CS0103 naming the CONTENT — which reads as this repo\n"
+                "  breaking when the real fault is a short reference set. Refusing to run suites\n"
+                "  against it, exactly as compile-check.py refuses to report those as breaks.\n"
+                "\n  Build them once in the framework checkout, then re-run:\n"
+              + "".join(f"    dotnet build src/{m} -c Release\n" for m in missing_modules))
+        return 2
+    if layout == "image":
+        # 🚨 A DIVERGENCE THAT CANNOT BE MIRRORED, SO IT IS NAMED. Given an image-shaped set the gate
+        # switches to implementation frameworks (`DisableImplicitFrameworkReferences`) and compiles
+        # against the image's own assemblies. This harness COMPILES AND RUNS, and `dotnet run`
+        # against a Linux image's implementation assemblies does not execute on the host this loop
+        # exists for — so mirroring the mode would trade a silent compile difference for a harness
+        # that cannot run at all with the set CI uses. Say which compile you are looking at instead.
+        print("  ⚠ this is an IMAGE-shaped reference set. The gate compiles it with "
+              "DisableImplicitFrameworkReferences against the image's own framework; this harness "
+              "cannot, because it also RUNS the result. A CS0012/CS1701-shaped diagnostic here is "
+              "therefore a property of this csproj, not of the content — a sibling source build is "
+              "the set that answers about it.")
     if not args.refs:
         # Only for AUTO-discovery. An explicit --refs (CI passes the platform image's assembly set)
         # is authoritative and is never second-guessed.
@@ -1039,11 +1275,27 @@ def main() -> int:
         if build_failed:
             print(f"\n✗ {len(build_failed)} NodeType(s) failed to BUILD: "
                   + ", ".join(n for n, _ in build_failed))
-        if not refused and not build_failed and total["failed"] == 0:
+        # 🚨 THE ✓ IS EARNED BY SOMETHING HAVING RUN (MeshWeaver#4785, Copilot review of #4916).
+        # `UNVERIFIABLE` was added in this PR so an absent Microsoft.Extensions.AI stops being
+        # reported as broken content — and then the verdict still printed `✓ 0 test(s) passed` and
+        # returned 0 when EVERY set was unverifiable, which is the same lie one layer along: a missing
+        # local framework rendering as successful coverage. So the checkmark is suppressed whenever
+        # anything is unverified, the verdict names both numbers, and a run where NO set executed at
+        # all is a non-zero exit. "Nothing could be verified" is not a pass.
+        clean = not refused and not build_failed and total["failed"] == 0
+        if clean and unverified:
+            print(f"\n⚠ {total['cases']} test(s) {'listed' if args.list else 'passed'} across "
+                  f"{total['suites']} suite(s) — and {len(unverified)} NodeType(s) were NOT "
+                  f"verified (see above). This run does not cover them.")
+        elif clean:
             print(f"\n✓ {total['cases']} test(s) listed across {total['suites']} suite(s)."
                   if args.list else
                   f"\n✓ {total['passed']} test(s) passed across {total['suites']} suite(s).")
-        return 0 if not refused and not build_failed and total["failed"] == 0 else 1
+        if clean and executed_sets == 0:
+            print(f"\n✗ {args.module}: NOTHING was verified — 0 of {len(ordered)} source set(s) ran. "
+                  "A run that could not execute a single suite is not a pass.")
+            return 1
+        return 0 if clean else 1
     finally:
         if args.keep:
             print(f"\nproject kept at {work}")
