@@ -79,6 +79,29 @@ same `TimeoutException` — and that was exactly the reading being laundered int
 path.** Check the domain, not the API surface: two different methods on two different interfaces
 can be one Orleans hop apart.
 
+🚨 **Correction, measured 2026-09-19: `AddPartitionStorageHubs` is wired by NOTHING today, so the
+paragraph above describes a wiring that is not in force on any host.** `AddPartitionStorageHubs` has
+exactly one definition (`src/MeshWeaver.Hosting/Persistence/PartitionStorage/PartitionStorageServiceExtensions.cs`)
+and no caller in core's `src/`, in core's `test/`, or in any `.cs` source of `MeshWeaver.Plugins` —
+`PartitionStorageRouter.AddressFor` says the same about itself in a comment (*"Stage 1 stub … is
+currently dead code on the main message path"*). The `IStorageAdapter` a deployed portal resolves is
+`PersistenceService` behind its guard decorators, so the durable read is a Postgres round-trip, not
+a hub request, and it is **not** on the `SubscribeRequest` transport. The generalisation — check the
+domain, not the API surface — holds unchanged; the specific instance is what needs re-measuring
+before it is cited again, and #3404's five candidates have to be re-argued against
+`PersistenceService` rather than against a proxy.
+
+🚨 **And the seam would break this page's own rule the day it IS wired.** `ReadNodeResponse` has no
+`Error` member, and `PartitionStorageHubExtensions.HandleReadNode` answers a FAULTED adapter read
+with `new ReadNodeResponse(null)` — discarding the exception — which `RoutingProxyAdapter.ReadMany`
+then drops as "this path is absent". `ExistsResponse` is the same shape (`false` on a fault) and
+`RoutingProxyAdapter.Delete` reports a path as deleted when `DeleteBatchResponse.Error` is set,
+while the three siblings in the same file — `WriteMany`, `Delete`'s own batch response and
+`ListDescendantPaths` — all carry an `Error` and re-throw it. That is #4200's defect (a half-
+provisioned partition spelled exactly like an absent node, turning `InstallCompleteness` from
+`NotObserved` into an ABSENT name) recreated one layer deeper. It is latent only because the seam is
+unwired, and `PersistenceServiceReadManyBatchTest` pins the facade, not this.
+
 ## What the third state does at a gate
 
 The house rule for a readiness gate is unambiguous and stays unchanged:

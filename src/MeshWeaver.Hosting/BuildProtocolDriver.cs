@@ -187,15 +187,20 @@ public static class BuildProtocolDriver
     /// negative ("the durable witness carries no GO"). That is the same defect the door was built to
     /// close, one level down: a read that never completed rendered as an answer.</para>
     ///
-    /// <para>🚨 <b>And the second door is NOT in a different failure domain from the first.</b> In
-    /// the fleet's portal wiring <c>AddPartitionStorageHubs</c> replaces
-    /// <see cref="IStorageAdapter"/> with <c>RoutingProxyAdapter</c>, which serves
-    /// <c>ReadBuildGo</c> as <c>hub.Observe&lt;ReadNodeResponse&gt;(…)</c> over the SAME hub
-    /// transport a <c>SubscribeRequest</c> travels on. The candidates for #3404's silence are a
-    /// routing loss, a wedged per-node hub, a lost reply, the deferred-queue ordering defect
-    /// (#3408) and a root that stops emitting — and the first, fourth and fifth take both doors
-    /// down together. So on the very fault this door exists for, the expected reading is
-    /// <c>Undetermined</c>, not <c>NoGo</c>.</para>
+    /// <para>🚨 <b>Whether the second door is in a different failure domain from the first is OPEN,
+    /// and the reading this comment used to assert is measurably wrong today.</b> It said that the
+    /// fleet's portal wiring replaces <see cref="IStorageAdapter"/> with <c>RoutingProxyAdapter</c>
+    /// via <c>AddPartitionStorageHubs</c>, so <c>ReadBuildGo</c> would travel the SAME hub transport
+    /// a <c>SubscribeRequest</c> does. Measured 2026-09-19: <c>AddPartitionStorageHubs</c> has no
+    /// caller anywhere — not in this repository's <c>src/</c> or <c>test/</c>, not in any <c>.cs</c>
+    /// source of <c>MeshWeaver.Plugins</c> — and <c>PartitionStorageRouter</c> says so about itself
+    /// ("Stage 1 stub … currently dead code on the main message path"). So the durable read is
+    /// <c>PersistenceService</c> over its backend, i.e. a store round-trip rather than a hub
+    /// request. The candidates for #3404's silence — a routing loss, a wedged per-node hub, a lost
+    /// reply, the deferred-queue ordering defect (#3408), a root that stops emitting — therefore
+    /// have to be re-argued against THAT path before any of them is said to take both doors down;
+    /// what is unchanged is that <c>Undetermined</c> must not be rendered as <c>NoGo</c>, which is
+    /// this door's actual rule and does not depend on the domain question.</para>
     ///
     /// <para><b>What the process does with <c>Undetermined</c>: it MEASURES rather than guesses.</b>
     /// Fail-open ("grant, lazy compile covers correctness") and fail-closed ("refuse, finding

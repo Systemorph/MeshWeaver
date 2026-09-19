@@ -1,7 +1,7 @@
 ---
 Name: Reading a Recurrence Reopen
 Category: Architecture
-Description: What a bot reopen does and does not assert, measured over the 2026-09-17 wave. Two predicates are needed, not one — the fault must have been seen AFTER the close, and it must have been seen RECENTLY — and the residue of that wave passes the first on all 51 counts while failing the second on 41. The honest triple for the fleet, the per-issue evidence behind it, and why 15 of the 51 point at a third predicate nobody has written yet.
+Description: What a bot reopen does and does not assert, measured over the 2026-09-17 wave. Two predicates are needed, not one — the fault must have been seen AFTER the close, and it must have been seen RECENTLY — and the residue of that wave passes the first on all 51 counts while failing the second on 41. The honest triple for the fleet, the per-issue evidence behind it, and why 15 of the 51 point at a third predicate nobody has written yet. Plus the prior question both predicates assume away — whether this issue is still the thing the evidence lands on — after an identity change re-addressed three of core's oldest bot tickets on 2026-09-19.
 Icon: ArrowSync
 ---
 
@@ -129,6 +129,80 @@ the rule for the three that are live. It also explains why Plugins#2014's predic
 correct, leaves a residue that still reads wrong: a close and a delivery are different events, and
 the reopen rule compares against the earlier one.
 
+## A fourth check that is not a predicate: the fingerprint may have been RE-ADDRESSED under the issue
+
+The three checks above all ask *what does the evidence on this issue mean*. This one asks the prior
+question — **is this issue still the thing the evidence lands on** — and on 2026-09-19 the answer
+changed for three of core's oldest bot tickets at once.
+
+Between **11:41:37Z and 11:44:05Z on 2026-09-19** a new incident-identity function
+([MeshWeaver.Plugins#1796](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1796))
+re-addressed the fleet's high-volume fingerprints: a mega-fingerprint that had been folding several
+different log SHAPES was split per shape, the old node was marked `Superseded`, and each surviving
+shape either inherited the old issue or filed its own. Read off the nodes on the control instance
+the same afternoon:
+
+| incident node | carries issue | `status` | newest `lastSeen` | `namespace` |
+|---|---|---|---|---|
+| `d1cd36f53a5f3a6c` | #1246 | **Superseded** → `c3a4225a446594c7` | 2026-09-19 05:20:00Z | memex-cloud |
+| `465a6677047a571b` (Feedback gating, 2 paths) | **#1246**, inherited | Filed | 2026-09-19 08:59:06Z | memex-cloud |
+| `c3a4225a446594c7` (Feedback gating, 1 path) | **#4814**, new (already closed) | Filed | 2026-09-19 07:49:05Z | memex-cloud |
+| `4ff70ec1124b1b3c` (Feedback gating, 3 paths) | **#4806**, new | Filed | 2026-09-19 09:40:44Z | memex |
+| `b03482717d5ba39a` | #3659 | superseded (its own fold comment says so) | 2026-09-19 07:41:12Z | memex-cloud |
+| `fc3bfaea16374d50` (`DefaultViews` absence) | **#3659**, inherited | Filed | 2026-09-19 07:41:12Z | **memex** |
+| `c93238020fe2f0b5` (`ClaimsDeepfield` absence) | **#4812**, new | Filed | 2026-09-19 09:09:51Z | memex-cloud |
+
+Three consequences, each of which reverses a reading a triage pass would otherwise make.
+
+1. **"It will just be reopened" stops being true for a superseded node.** The fold comment says it in
+   so many words — *"Those nodes are superseded and will not fold, file or comment again."* The
+   recurrence pressure a session declines to close against may already be gone, and the only place
+   that is written is `content.status` / `content.supersededBy` on the node. The issue's own history
+   cannot show it: the last fold comment looks exactly like every earlier one.
+2. **The residue that held a ticket open may have MOVED to another ticket.** #3659 was held open on
+   2026-09-17 for one operator item — `ClaimsDeepfield`, 82 of 83 declared nodes absent on
+   memex-cloud, unhealed for three weeks. That shape is now its own fingerprint with its own,
+   correctly-titled issue (**#4812**), still folding as of 09:09:51Z. Closing #3659 no longer buries
+   it. So check every successor's `issueNumber` before concluding a ticket still owns its residue —
+   and before concluding that closing it would lose something.
+3. **Inheriting an issue and filing a new one are indistinguishable from GitHub.** Both arrive as an
+   ordinary bot comment on some issue. The binding is written only on the node
+   (`issueNumber`, `reporterFingerprint`, `foldedFrom`).
+
+### The fingerprint's `namespace` is not the deployment its NEWEST samples came from
+
+`content.namespace` is one value on a node whose samples accumulate for weeks, and a split can hand
+a successor a namespace that no longer matches the sample you are reading. **Pod names do not
+discriminate either:** on 2026-09-19 both portals ran a deployment called
+`memex-portal-deployment` and both produced the replicaset hash `69956b6dbc` (same image, same pod
+template) with different suffixes, so `…-69956b6dbc-gx6z6` and `…-69956b6dbc-v5r29` are not
+necessarily the same cluster.
+
+**The discriminator that works is a record version quoted in the log line.** #3659's 05:29:06Z
+sample says `taken over Plugins/DefaultViews v48 (written 2026-09-19T00:24:55Z)`. Read the same hour
+on both portals, `Plugins/DefaultViews` is **v31** (written 2026-09-18T21:31:10Z) on
+memex.meshweaver.cloud and **v54** (2026-09-19T07:50:02Z) on memex.systemorph.com. memex-cloud never
+held a v48, so that sample is the other portal's — and an ancestry argument about *memex-cloud's*
+running image says nothing about it. The same trick works on any line that names a node version, a
+module version or an `installedAtUtc`.
+
+### The positive control for "no recurrence since the roll" lives on OTHER tickets
+
+A close review at 2026-09-19T10:35Z could not establish *"not seen since the roll"* for twelve
+issues, because no incident anywhere in the readable population had folded a sighting since
+07:28:51Z — a reading indistinguishable from a stopped watcher, and correctly refused as evidence.
+By 15:41Z the same instrument had folded sightings from memex-cloud's three CURRENT replicas (pods
+started 08:34:53 / 08:39:58 / 08:39:59Z on `3.0.0-ci.8969`): `465a6677047a571b` at 08:57:30Z and
+08:59:06Z from `…-gx6z6`, `c93238020fe2f0b5` at 09:09:51Z from `…-g6bbb`, `4ff70ec1124b1b3c` at
+09:40:44Z.
+
+🚨 **The control does not have to be the fingerprint you are judging.** Any fold naming a pod from
+the current generation establishes that ingestion is alive for that generation, which is exactly
+what converts a silence on your own fingerprint from "unusable" into evidence. Sort the readable
+`Admin/_LogIncident` population by `lastModified` descending and read the newest nodes'
+`content.lastSeen` and `content.samples[].pod` — a node rewritten without its `occurrences`
+advancing is triage bookkeeping and is NOT such a control.
+
 ## How to read one, until both predicates exist
 
 - A reopen means **"re-read the record"**. It does not mean a fix regressed
@@ -142,6 +216,15 @@ the reopen rule compares against the earlier one.
   recent?), and the image the reporting pod was running (could the fix have been in it?).
 - A burn-down or "zero issues" reading across 2026-09-17T07:51Z is comparing two different
   populations. Say which side of the wave a count was taken on.
+- **Read the incident NODE, not only the issue.** `content.status`, `content.supersededBy` and
+  `content.issueNumber` on `Admin/_LogIncident/{fingerprint}` are the only place it is written
+  whether this issue is still what the evidence lands on. A superseded node folds nothing further,
+  and a successor may have carried the residue to a new ticket.
+- **Name the deployment from a record version in the line**, never from the incident's `namespace`
+  or from a pod name — two portals can share a replicaset hash.
+- **Take the positive control off a DIFFERENT fingerprint.** "Not seen since the roll" needs one
+  fold from a current pod somewhere in the readable population; without it the silence is
+  indistinguishable from a stopped watcher.
 
 ## Appendix — the 51, one row each
 
