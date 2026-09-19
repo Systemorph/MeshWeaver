@@ -185,7 +185,7 @@ the image now serving.
 
 ## A fourth check that is not a predicate: the fingerprint may have been RE-ADDRESSED under the issue
 
-The three checks above all ask *what does the evidence on this issue mean*. This one asks the prior
+Every check above asks *what does the evidence on this issue mean*. This one asks the prior
 question — **is this issue still the thing the evidence lands on** — and on 2026-09-19 the answer
 changed for three of core's oldest bot tickets at once.
 
@@ -230,13 +230,20 @@ a successor a namespace that no longer matches the sample you are reading. It is
 **one fingerprint can span deployments while that field holds a single value.** `4ff70ec1124b1b3c`
 carries `namespace: memex` and its pod list contains both `…-6cd5d8f887-2kcwk` (in
 `Ops/Status/memex`'s roster, `3.0.0-ci.8968`) and `…-69956b6dbc-{v5r29,s246c}` (in
-`Ops/Status/memex-cloud`'s, `3.0.0-ci.8969`). No single value can be right for that node. **Pod names do not
-discriminate either:** on 2026-09-19 both portals ran a deployment called
-`memex-portal-deployment` and both produced the replicaset hash `69956b6dbc` (same image, same pod
-template) with different suffixes, so `…-69956b6dbc-gx6z6` and `…-69956b6dbc-v5r29` are not
-necessarily the same cluster.
+`Ops/Status/memex-cloud`'s, `3.0.0-ci.8969`). No single value can be right for that node.
 
-**The discriminator that works is a record version quoted in the log line.** #3659's 05:29:06Z
+🚨 **A pod name IS decisive — but only once you resolve it against a roster, never by reading it.**
+Every portal runs a Deployment called `memex-portal-deployment`, so the name carries no cluster; what
+separates them is the replicaset hash, and which hash belongs to which deployment is knowable only
+from `Ops/Status/<deployment>`'s `replicas[]`. Measured 2026-09-19: memex-cloud was on
+`…-69956b6dbc-*` (`3.0.0-ci.8969`, commit `c25f86ae85b7…`) and memex on `…-6cd5d8f887-*`
+(`3.0.0-ci.8968`, `96f88406b4…`). So a sample naming `…-69956b6dbc-s246c` is memex-cloud's **even
+though the node it sits on says `namespace: memex`** — and an earlier draft of this paragraph had it
+backwards, inferring the pod's cluster from the node's namespace, which is the error the paragraph
+exists to name.
+
+**The second discriminator, and the only one left when the pod is gone or the namespace is not being
+scraped, is a record version quoted in the log line.** #3659's 05:29:06Z
 sample says `taken over Plugins/DefaultViews v48 (written 2026-09-19T00:24:55Z)`. Read the same hour
 on both portals, `Plugins/DefaultViews` is **v31** (written 2026-09-18T21:31:10Z) on
 memex.meshweaver.cloud and **v54** (2026-09-19T07:50:02Z) on memex.systemorph.com. memex-cloud never
@@ -307,8 +314,10 @@ is the mis-attribution above.
   `content.issueNumber` on `Admin/_LogIncident/{fingerprint}` are the only place it is written
   whether this issue is still what the evidence lands on. A superseded node folds nothing further,
   and a successor may have carried the residue to a new ticket.
-- **Name the deployment from a record version in the line**, never from the incident's `namespace`
-  or from a pod name — two portals can share a replicaset hash.
+- **Name the deployment from the pod resolved against `Ops/Status/<deployment>`'s roster**, or from
+  a record version quoted in the line — never from the incident's `namespace`, which holds one value
+  for a fingerprint whose samples span deployments, and never from a pod name read on its own (every
+  portal's Deployment has the same name).
 - **Take the positive control off a DIFFERENT fingerprint.** "Not seen since the roll" needs one
   fold from a current pod somewhere in the readable population; without it the silence is
   indistinguishable from a stopped watcher.
