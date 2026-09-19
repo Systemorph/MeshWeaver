@@ -307,6 +307,58 @@ maintainer's waiver from an agent's. The label event in the pull request's timel
   Read that file's diff yourself.
 - **Pull requests into other branches.** The ruleset reviews only the default branch, so a pull
   request into another branch reads red; the check is not required there.
+- 🚨 **Every other repository in the fleet.** This check exists here and nowhere else. See below.
+
+## 🚨 This is a CORE-ONLY gate, and the rest of the fleet shows what that costs
+
+Measured 2026-09-19, from `branches/main/protection` and every active ruleset:
+
+| repo | mechanism | requires `Automatic review answered`? | carries `review-answered.yml`? |
+|---|---|---|---|
+| MeshWeaver | ruleset `2128472` | **yes** | yes |
+| MeshWeaver.Plugins | classic, 8 contexts | no | **no** |
+| MeshWeaver.Reinsurance | classic, 6 contexts | no | no |
+| MeshWeaver.Crm | classic, 6 contexts | no | no |
+| MeshWeaver.SocialMedia | classic, 7 contexts | no | no |
+| MeshWeaver.Manufacturing | classic, 6 contexts | no | no |
+| MeshWeaver.Education | ruleset, 4 contexts | no | no |
+
+🚨 **MeshWeaver.Plugins is NOT covered**, against the common assumption that it is. Every satellite
+carries a `Copilot review for default branch` ruleset, so the review is *requested* everywhere —
+nothing outside core requires it to be *answered*.
+
+What that produces, over the last 20 merged pull requests of each of six repositories:
+
+| repo | merged sampled | carried findings | merged with ≥1 unanswered |
+|---|---|---|---|
+| MeshWeaver.Reinsurance | 20 | 11 | 7 |
+| MeshWeaver.Crm | 20 | 13 | 11 |
+| MeshWeaver.SocialMedia | 20 | 11 | 10 |
+| MeshWeaver.Manufacturing | 20 | 11 | 9 |
+| MeshWeaver.Education | 20 | 11 | 11 |
+| MeshWeaver.Plugins | 20 | 15 | 7 |
+| **total** | **120** | **72** | **55** |
+
+**In all 55 the ratio is N of N** — not one finding answered on any of them, never a partial. So
+outside core, findings are not *occasionally* missed, they are *structurally not read*: about twice
+the rate this repository measured before the gate landed (32 of 60, above).
+
+It is not cosmetic. On 2026-09-18, five satellite pull requests merged with 13 unanswered findings
+between them. Assessed on the code: **11 of the 13 were real**, and only two could be declined — one
+whose premise `git` itself rules out, one whose failure branch is unreachable. Those 11 reduce to
+**6 distinct defects**, because three were raised twice (independently, on two repositories' copies
+of one file) and three were three sites of one root. **Three of the six are in the platform's own
+canonical `gen-manifests.py`**, replicated byte-identically into four repositories — including a
+`--resolve` that reported `✓ … the merge can be committed` whenever git could not answer. Answered
+and fixed in #4775 after the merges; the remaining vintages in #4777.
+
+**Porting it is a workflow_call lane, never six copies** — the predicate is ~900 lines with its own
+self-test, the settle wait and the event-class concurrency split derived from #4649. Six hand-copies
+is how `gen-manifests.py` reached five vintages (#1426). 🚨 And the rollout order is not optional:
+five of the six use CLASSIC protection, where an *absent* required context blocks every pull request
+in the repository forever (measured on Plugins#1453), so the lane lands observe-only, is watched
+publishing its context on live pull requests in that repo, and only then is the context added.
+Proposed with the full measurement in #4776.
 
 ## Controls
 
