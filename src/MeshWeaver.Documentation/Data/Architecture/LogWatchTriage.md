@@ -477,13 +477,32 @@ it works on any incident that carries one.
 
 `StructuralLogIncidentIdentity.Compute` is a pure function of the burst, so its payload is a dated
 artefact of the binary that computed it. Take the fingerprint out of a refused report's evidence line
-— `refused undiagnosable report <fp> for category <cat> …` — and test the candidate payloads:
+— `refused undiagnosable report <fp> for category <cat> …` — and test the candidate payloads.
+
+The 2026-08-09 payload is `{category}\n{eventId}\n{discriminator}`, and the discriminator switches on
+the PAIR `(exceptionType, topFrame)` — four branches, all four of which occur in the live record:
 
 | payload hashed (`sha256`, first 8 bytes, lower hex) | in force |
 |---|---|
-| `{category}\n{eventId}\n` | 2026-08-09 (core `8115e39425`, "Stop deriving incident identity from prose") |
-| `{category}\n{eventId}\n{exceptionType}` | same change, when the burst carried an exception |
+| `{category}\n{eventId}\n` — neither present | 2026-08-09 (core `8115e39425`, "Stop deriving incident identity from prose") |
+| `{category}\n{eventId}\n{exceptionType}` | same change, exception but no application frame |
+| `{category}\n{eventId}\n{topFrame}` | same change, **frame but no exception type** |
+| `{category}\n{eventId}\n{exceptionType}\|{topFrame}` | same change, both |
 | `site\n{category}\n{eventId}\n{fault}\n{detail}` — or `frame\n{frame}\n{fault}\n{detail}` | current |
+
+🚨 **The frame-only row is easy to miss and it addresses one of the busiest ids in the record.**
+Measured 2026-09-19, `Admin/_LogIncident/92c0e9442e275f65` ([#3110](https://github.com/Systemorph/MeshWeaver/issues/3110)):
+
+```
+SHA256("MeshWeaver.Messaging.MessageService\n0\n"
+     + "MeshWeaver.Messaging.MessageHub.HandleMessageAsync(IMessageDelivery delivery, "
+     + "AsyncDelivery[] ruleChain, CancellationToken cancellationToken)")[..8]  = 92c0e9442e275f65
+```
+
+No exception type in the key at all — so that one id addresses **every fault of every type that
+surfaces inside `MessageHub.HandleMessageAsync`**, the most-travelled method in the mesh. An issue
+filed from such an id is titled after whichever fault arrived first, and two occurrences of it can
+share nothing but the method they died in.
 
 Measured 2026-09-14 against `Admin/_LogIncident/log-burst-header-only-{memex,memex-cloud}` on the
 control instance, every refused fingerprint on both namespaces reproduced from the **first** row:
@@ -542,16 +561,18 @@ Two things this is good for beyond dating:
 
 ### 🚨 One log SITE holds TWO buckets, and the second one's TITLE reads like a per-caller ticket
 
-The 2026-08-09 discriminator is `(exceptionType, topFrame)`, so a site that emits *both* shapes —
-some lines with an exception body attached, some bodyless — mints **two** fingerprints, each of which
-then files its own GitHub issue about the same defect class. Measured 2026-09-19 on
-memex.systemorph.com, `MeshWeaver.Hosting.PostgreSql.PostgreSqlPartitionedMeshQuery` has exactly two,
-both reproducible locally:
+Because the discriminator switches on the pair, a site that emits *both* shapes — some lines with an
+exception body attached, some bodyless — takes **two different branches of the table above** and mints
+**two** fingerprints, each of which then files its own GitHub issue about the same defect class.
+Measured 2026-09-19 on memex.systemorph.com,
+`MeshWeaver.Hosting.PostgreSql.PostgreSqlPartitionedMeshQuery` has exactly two, both reproducible
+locally (the site logs no application frame either way, so these are the exception-only and
+neither-present rows):
 
-| fingerprint | payload | issue | what folds onto it |
+| fingerprint | payload (branch) | issue | what folds onto it |
 |---|---|---|---|
-| `d4c8f6f74ecfa422` | `{category}\n0\n{UnanchoredQueryException}` | [#3545](https://github.com/Systemorph/MeshWeaver/issues/3545), titled `nodeType:*Post` | every unanchored query **with** the exception body, whatever the caller |
-| `5d52ad4396af9a59` | `{category}\n0\n` | [#4443](https://github.com/Systemorph/MeshWeaver/issues/4443), titled `nodeType:Skill` | every **bodyless** one, whatever the caller |
+| `d4c8f6f74ecfa422` | `{category}\n0\n{UnanchoredQueryException}` — exception, no frame | [#3545](https://github.com/Systemorph/MeshWeaver/issues/3545), titled `nodeType:*Post` | every unanchored query **with** the exception body, whatever the caller |
+| `5d52ad4396af9a59` | `{category}\n0\n` — neither present | [#4443](https://github.com/Systemorph/MeshWeaver/issues/4443), titled `nodeType:Skill` | every **bodyless** one, whatever the caller |
 
 `search 'namespace:Admin/_LogIncident nodeType:LogIncident content.category:*PartitionedMeshQuery* select:name,lastModified limit:50'`
 → `count: 2`, `truncated: false`, `coverage.partitions: ["admin"]`. Two buckets, two tickets, one site.
