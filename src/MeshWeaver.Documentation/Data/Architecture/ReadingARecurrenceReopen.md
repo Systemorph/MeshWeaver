@@ -129,6 +129,43 @@ the rule for the three that are live. It also explains why Plugins#2014's predic
 correct, leaves a residue that still reads wrong: a close and a delivery are different events, and
 the reopen rule compares against the earlier one.
 
+## The mirror image: dormancy is only evidence if the trigger happened
+
+The section above is about a close that races the *delivery* — post-close lines coming from replicas
+still running the old image. This is its inverse, measured on 2026-09-19, and it bites the closing
+side rather than the reopening one.
+
+**Five issues were closed partly on dormancy and every one of them reopened within a day:**
+
+| issue | closed | reopened | newest occurrence |
+|---|---|---|---|
+| #1449 | 09-18 06:07:05 | 09-18 15:36:25 | 09-18 15:35:29Z |
+| #1540 | 09-18 05:58:27 | 09-19 05:08:26 | 09-19 05:07:01Z |
+| #1547 | 09-18 05:57:08 | 09-19 05:07:26 | 09-19 05:10:25Z |
+| #1548 | 09-18 05:57:09 | 09-19 05:05:27 | 09-19 05:12:06Z |
+| #1422 | 09-17 11:27:46 | 09-19 05:36:25 | 09-19 05:35:41Z |
+
+Every reopen is **correct** by the post-close predicate — each occurrence genuinely postdates its
+close. The mistake is upstream, in the reasoning that closed them: one carried the words *"15 days
+with no occurrence"*.
+
+🚨 **All five fired inside a single 31-minute window, 05:05–05:36Z, and that window is a roll.**
+These are teardown and boot faults — `ObjectDisposedException` unregistering a grain from the
+directory, a route leg outliving the quiescence budget, a NodeType recompile at pod start. They fire
+when pods stop and start, and they are silent when nothing is stopping or starting. Fifteen quiet
+days meant fifteen days without a roll, not fifteen days of health.
+
+**The predicate:** silence is evidence only over a window in which the fault's trigger actually
+occurred. For a roll-triggered fault, a dormancy argument has to name the rolls it survived. Without
+that it is the same shape as [a sweep's zero with no denominator](../SearchCoverageAndRefusal) — a
+number that reads like an answer and measured nothing.
+
+Classifying by the timestamp is cheap and splits the backlog usefully. Of fifteen old incident
+issues checked the same day, three more sit in the roll window (#1126, #1840, #2833 — two compile-at-
+boot, one shutdown quiescence), while four fired at 08:54–09:03Z, *after* the image then running was
+built, and are therefore live on it (#1246, #2307, #2480, #3045). The first group tells you nothing
+between rolls; the second is firing now.
+
 ## How to read one, until both predicates exist
 
 - A reopen means **"re-read the record"**. It does not mean a fix regressed
@@ -140,6 +177,9 @@ the reopen rule compares against the earlier one.
   September, with the same headline.
 - **Compare it to three timestamps, in this order:** the close (was it even after?), today (is it
   recent?), and the image the reporting pod was running (could the fix have been in it?).
+- 🚨 **And before closing one on quiet, ask what the fault needs in order to fire.** A teardown or
+  boot fault is silent by construction while nothing rolls, so dormancy across a roll-free window is
+  not evidence — see the section above for five issues closed that way and reopened within a day.
 - A burn-down or "zero issues" reading across 2026-09-17T07:51Z is comparing two different
   populations. Say which side of the wave a count was taken on.
 
