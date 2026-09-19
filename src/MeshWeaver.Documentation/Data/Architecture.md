@@ -417,6 +417,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Onboarding a New Environment](OnboardingNewEnvironment)
 - [Unclaimed Control-Plane Requests](UnclaimedControlPlaneRequests) — an InstanceAction at version 1 with an empty log means "queued", "nobody is listening" and "the operator died holding it" in the same bytes; the 2026-09-10 measurement, the `Ops/Status` staleness that DOES discriminate, and the acceptance signal that does not exist
 - [Release & Self-Update Strategy](ReleaseStrategy)
+- [Release Channels](ReleaseChannels) — a channel is a named, moving pointer to an immutable release; `latest` is derived and only `stable` is promoted, and a channel names what to SELECT while the selection always resolves to an immutable id that is what gets pinned, recorded and run
 - [Release Support Policy](/Doc/Architecture/SupportPolicy)
 - [Released Artifact Retention](ReleasedArtifactRetention) — retain artifacts for at least 30 days, supported releases for their support lifetime, and every artifact still needed by a published set or consumer
 - [Self-Update Target Selection](SelfUpdateTargetSelection) — candidates are ranked by the CD run number, not the version string; a mislabelled line outranked every sealed set for ever, and an install on a withdrawn tag could never see anything newer
