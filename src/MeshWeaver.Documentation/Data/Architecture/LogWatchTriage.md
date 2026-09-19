@@ -967,9 +967,26 @@ each produced a steady ticket stream:
   can still resolve. A live scope that threw that type for its own reasons still reads as a fault,
   and a probe that cannot answer leaves the outcome LOUD.
 
+- 🚨 **Classify EVERY reporter of the fault, or the ticket does not stop — and this is the identity
+  rule above working as designed, not a bug.** Because the fingerprint identifies the fault and not
+  the reporter (the category is excluded once a frame is present, and the discriminating text is the
+  *exception's* message rather than the reporter's prose), downgrading one site leaves the incident
+  firing through every other site that prints the same exception. Measured on #3243: the missing-hub
+  line was classified on 2026-09-04, and the incident reopened on 2026-09-18 carrying
+  `[ACTIVATE] Grain Admin/_Notification/…: activation faulted for …` — the *activation chain's*
+  error arm, a few lines away in the same grain, still an unconditional `LogError`. The same
+  `ObjectDisposedException`, a different `catch`, one fingerprint. So when you downgrade an expected
+  condition, grep the component for its SIBLING arms first: the thing that keeps a ticket alive is
+  the one you did not classify. `MessageHubGrain.ActivationFaultLevel` is that arm's classifier and
+  shares the two existing predicates — `HubDisposingException.IsHubDisposal` (the hub announced its
+  own disposal) and `IsDisposedContainer` (a scope closed underneath live work) — rather than
+  re-deriving the fact a third time.
+
 `CancellationIsNotAFaultTest` pins the cancellation directions, including the timeout impostor;
 `HubCreationDuringTeardownIsNotAFaultTest` and `HubConstructionOutcomeReportingTest` pin the
-hub-creation ones, including the configuration-throw that must stay red.
+hub-creation ones, including the configuration-throw that must stay red and the activation arm's
+own control — a `TimeoutException` or an unresolvable node stays red, and a null fault is an unknown
+rather than a shutdown.
 
 ## What this is not
 
